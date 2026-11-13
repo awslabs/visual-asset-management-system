@@ -129,6 +129,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_UPLOAD,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceBindingApply as binding_apply
 from handlers.compliance import complianceEvaluationStore as store
@@ -468,6 +469,7 @@ class TriggerBatch:
         return self._file_targets[asset_id]
 
 
+@audited_handler
 def lambda_handler(event, context):
     """Process one SQS batch of indexer-topic messages and report the records an infrastructure
     error failed (`batchItemFailures`), so only those are redelivered. A compliance job's message
@@ -488,6 +490,15 @@ def lambda_handler(event, context):
     batch.evaluate_all()
     batch.count_binding_evaluations()
     return {"batchItemFailures": batch.failures()}
+
+
+def _record(action, **fields):
+    """Record one compliance system action of this handler (`common/auditActions.py`) with
+    `log_action`, on the event of the request's audit context (the queue batch this Lambda serves,
+    or the API request a sweep or an evaluation runs in), so it is delivered with the request's
+    other records. Silent on failure, as every audit write is."""
+    ctx = current_audit_context()
+    log_action(getattr(ctx, "event", None) or {}, action, **fields)
 
 
 def drop_job_message(record) -> bool:
@@ -808,6 +819,9 @@ def _delete_record_of_deleted_asset(live, asset_id, detected_by=None):
     details = {"reason": "asset_permanently_deleted", "schemaSource": removed.get("schemaSource")}
     if detected_by:
         details["detectedBy"] = detected_by
+    _record("complianceRecordRemove", database_id=live, asset_id=asset_id, details=details,
+            previous={"complianceState": removed.get("complianceState"),
+                      "schemaName": removed.get("schemaName")})
     store.write_audit(
         live, asset_id,
         event_type=AUDIT_EVENT_ASSET_DELETED,
@@ -1361,11 +1375,23 @@ def trigger_evaluation(database_id, asset_id, schema_name):
     logger.info(
         f"Evaluation {result.get('evaluationId')} for {database_id}:{asset_id}: "
         f"verdict={result.get('verdict')}")
+    _record_evaluation(database_id, asset_id, schema_name, result, trigger="assetChange")
     if not result.get("error") and result.get("verdict") != EvaluationVerdict.error.value:
         try:
             check_and_trigger_cascade(database_id, asset_id)
         except Exception as e:
             logger.exception(f"Failed opening a cascade for {database_id}:{asset_id}: {e}")
+
+
+def _record_evaluation(database_id, asset_id, schema_name, result, **details):
+    """The `complianceAutoEvaluate` record of one automatic evaluation: its evaluation id and the
+    state it set, or `failed` with a generic reason when it could not run."""
+    failed = bool(result.get("error"))
+    _record("complianceAutoEvaluate", outcome="failed" if failed else "success",
+            reason="internal" if failed else None, database_id=database_id, asset_id=asset_id,
+            evaluationId=result.get("evaluationId"), schemaName=schema_name,
+            changes=None if failed else {"complianceState": result.get("complianceState")},
+            details={"verdict": result.get("verdict"), **details})
 
 
 def check_and_trigger_cascade(database_id: str, asset_id: str):
@@ -1416,6 +1442,9 @@ def check_and_trigger_cascade(database_id: str, asset_id: str):
         logger.info(f"Asset {asset_key} already has a cascade awaiting approval; not opening another")
         return
 
+    _record("complianceCascadeAutoCreate", database_id=database_id, asset_id=asset_id,
+            cascadeId=cascade_id, changes={"requireApproval": True},
+            details={"childCount": details.get("childCount")})
     store.write_audit(
         database_id, asset_id,
         event_type="cascade_auto_triggered",

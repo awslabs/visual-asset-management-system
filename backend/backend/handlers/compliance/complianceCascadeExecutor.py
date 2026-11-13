@@ -21,6 +21,7 @@ from botocore.config import Config
 from common.compliance.cascadeAuditSummary import completion_details, other_database_node_count
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceEvaluationStore as store
 from handlers.compliance.complianceTrigger import (
@@ -75,6 +76,21 @@ cascade_table = dynamodb.Table(cascade_table_name)
 # Lambda handler
 #######################
 
+def _record(action, **fields):
+    """Record this handler's compliance system action (`common/auditActions.py`) with `log_action`,
+    on the event of the invocation's audit context, so it is delivered with its other records."""
+    ctx = current_audit_context()
+    log_action(getattr(ctx, "event", None) or {}, action, **fields)
+
+
+def _started_by(cascade: Dict[str, Any]) -> Any:
+    """The user who started the cascade (its approver, or the creator of one started at once), for
+    `onBehalfOf`; None for the system."""
+    user = cascade.get("approvedBy") or cascade.get("actor")
+    return user if user and user != store.SYSTEM_ACTOR else None
+
+
+@audited_handler
 def lambda_handler(event, context) -> Dict[str, Any]:
     """Run the cascade named by the event. An event that does not carry a UUID `cascadeId` is
     rejected without a write; a run that raises leaves the row `aborted` rather than `executing`."""
@@ -89,6 +105,9 @@ def lambda_handler(event, context) -> Dict[str, Any]:
     except Exception as e:
         logger.exception(f"Cascade {cascade_id} execution failed: {e}")
         abort_cascade(cascade_id, EXECUTION_FAILED_ABORT_REASON)
+        _record("complianceCascadeRun", outcome="failed", reason="internal", cascadeId=cascade_id,
+                changes={"state": CASCADE_STATE_ABORTED},
+                details={"abortReason": EXECUTION_FAILED_ABORT_REASON})
         return {"cascadeId": cascade_id, "status": CASCADE_STATE_ABORTED,
                 "error": EXECUTION_FAILED_ABORT_REASON}
 
@@ -203,9 +222,13 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
     source_db = cascade["triggeredByDatabaseId"]
     source_asset = cascade["triggeredByAssetId"]
 
+    started_by = _started_by(cascade)
     descendants = discover_all_descendants(source_db, source_asset)
     if not descendants:
         _complete_cascade(cascade_id, [])
+        _record("complianceCascadeRun", database_id=source_db, asset_id=source_asset,
+                cascadeId=cascade_id, item_count=0, on_behalf_of=started_by,
+                changes={"state": CASCADE_STATE_COMPLETED})
         return {"cascadeId": cascade_id, "status": CASCADE_STATE_COMPLETED, "evaluated": 0,
                 "results": []}
 
@@ -271,6 +294,15 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
             else:
                 evaluation = store.run_evaluation(
                     node["databaseId"], node["assetId"], schema_name, "cascade")
+                failed = bool(evaluation.get("error"))
+                _record("complianceAutoEvaluate", outcome="failed" if failed else "success",
+                        reason="internal" if failed else None, database_id=node["databaseId"],
+                        asset_id=node["assetId"], evaluationId=evaluation.get("evaluationId"),
+                        schemaName=schema_name, on_behalf_of=started_by,
+                        changes=None if failed else {
+                            "complianceState": evaluation.get("complianceState")},
+                        details={"verdict": evaluation.get("verdict"), "trigger": "cascade",
+                                 "cascadeId": cascade_id})
                 node_state = _node_state_for(evaluation)
                 nodes[node_key] = node_state
                 results.append({"node": node_key, "status": node_state,
@@ -282,6 +314,13 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
         _write_nodes(cascade_id, nodes)
 
     _complete_cascade(cascade_id, results)
+    # One record of the run, with its counts by node status (never the other databases' node ids).
+    statuses = {}
+    for entry in results:
+        statuses[entry["status"]] = statuses.get(entry["status"], 0) + 1
+    _record("complianceCascadeRun", database_id=source_db, asset_id=source_asset,
+            cascadeId=cascade_id, item_count=len(results), on_behalf_of=started_by,
+            changes={"state": CASCADE_STATE_COMPLETED}, details={"nodeStatuses": statuses})
     # The descendants skipped as archived are recorded per database, outside the summary and the
     # node count every reader shares: the audit service counts each only for a reader who may see
     # that archived asset, and the notification, one message for every subscriber, not at all.

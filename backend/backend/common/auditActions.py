@@ -530,6 +530,24 @@ CORE_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
     SystemAction("handlers.workflows.sfn.handleExecutionError", spec("workflowExecutionEnd", "execution")),
     SystemAction("handlers.workflows.importGlobalPipelineWorkflow", spec("pipelineImport", "pipeline")),
     SystemAction("handlers.auth.apiOriginVerifyRotation", _auth("originVerifyRotate", "system")),
+    # Compliance work that runs without an API request. The automatic evaluation the trigger runs
+    # on an asset change, and each descendant a cascade evaluates.
+    SystemAction("handlers.compliance.complianceTrigger", spec("complianceAutoEvaluate", "complianceEvaluation")),
+    SystemAction("handlers.compliance.complianceCascadeExecutor",
+                 spec("complianceAutoEvaluate", "complianceEvaluation")),
+    # The compliance record of a permanently deleted asset removed, and a cascade opened awaiting
+    # approval when an evaluated asset has downstream children.
+    SystemAction("handlers.compliance.complianceTrigger", spec("complianceRecordRemove", "complianceState")),
+    SystemAction("handlers.compliance.complianceTrigger", spec("complianceCascadeAutoCreate", "complianceCascade")),
+    # A pipeline rule's workflow completion recorded on its evaluation (which may finalize it).
+    SystemAction("handlers.compliance.complianceWorkflowCallback",
+                 spec("compliancePipelineRuleComplete", "complianceEvaluation")),
+    # An approved cascade run to its end (completed or aborted).
+    SystemAction("handlers.compliance.complianceCascadeExecutor", spec("complianceCascadeRun", "complianceCascade")),
+    # The background jobs: a database binding change applied to the database's records, and a
+    # deleted database's compliance data moved under `<databaseId>#deleted`.
+    SystemAction("handlers.compliance.complianceJobs", spec("complianceBindingApply", "complianceBinding")),
+    SystemAction("handlers.compliance.complianceJobs", spec("complianceDatabaseRetire", "database")),
 )
 
 # Handlers that serve no API route and record no action, with the reason.

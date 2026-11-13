@@ -39,6 +39,7 @@ from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.workflows import executionAccess
 from common.workflows.executionRecords import WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceEvaluationStore as store
 from models.executions import WorkflowExecutionCompletedDetailModel
@@ -65,6 +66,7 @@ workflow_executions_table = dynamodb.Table(workflow_executions_table_name)
 workflow_execution_inputs_table = dynamodb.Table(workflow_execution_inputs_table_name)
 
 
+@audited_handler
 def lambda_handler(event, context):
     """Finalize the pipeline rule a completed workflow execution belongs to.
 
@@ -163,6 +165,13 @@ def parse_completion_detail(raw_detail) -> Optional[WorkflowExecutionCompletedDe
         return None
 
 
+def _record(action, **fields):
+    """Record this handler's compliance system action (`common/auditActions.py`) with `log_action`,
+    on the event of the invocation's audit context, so it is delivered with its other records."""
+    ctx = current_audit_context()
+    log_action(getattr(ctx, "event", None) or {}, action, **fields)
+
+
 def process_completed_execution(execution_id: str, execution_status: str,
                                 started_at: Optional[str], completed_at: Optional[str],
                                 execution_group_id: Optional[str] = None) -> Dict[str, Any]:
@@ -195,6 +204,11 @@ def process_completed_execution(execution_id: str, execution_status: str,
     if removed:
         store.close_evaluation_of_removed_asset(evaluation, removed)
         logger.info(f"Evaluation {evaluation['evaluationId']} closed: its asset is {removed}")
+        _record("compliancePipelineRuleComplete", database_id=evaluation.get("databaseId"),
+                asset_id=evaluation.get("assetId"), evaluationId=evaluation.get("evaluationId"),
+                executionId=execution_id,
+                details={"ruleName": rule_name, "executionStatus": execution_status,
+                         "closed": removed})
         return {"statusCode": 200, "body": "Asset removed; evaluation closed"}
 
     compliance_output = None
@@ -213,6 +227,15 @@ def process_completed_execution(execution_id: str, execution_status: str,
     logger.info(
         f"Evaluation {outcome.get('evaluationId')} rule '{rule_name}' recorded "
         f"(finalized={outcome.get('finalized')}, verdict={outcome.get('verdict')})")
+    # The failure reason itself stays on the evaluation, which the compliance reads gate (D163).
+    _record("compliancePipelineRuleComplete", database_id=evaluation.get("databaseId"),
+            asset_id=evaluation.get("assetId"),
+            evaluationId=outcome.get("evaluationId") or evaluation.get("evaluationId"),
+            executionId=execution_id,
+            changes=({"complianceState": outcome.get("complianceState")}
+                     if outcome.get("finalized") and outcome.get("complianceState") else None),
+            details={"ruleName": rule_name, "executionStatus": execution_status,
+                     "finalized": bool(outcome.get("finalized")), "verdict": outcome.get("verdict")})
     return {"statusCode": 200, "body": json.dumps(outcome)}
 
 

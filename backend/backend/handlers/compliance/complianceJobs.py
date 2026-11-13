@@ -37,6 +37,7 @@ from botocore.config import Config
 from common.compliance import databaseRetirement
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceBindingApply as binding_apply
 from handlers.compliance import complianceEvaluationStore as store
@@ -54,6 +55,14 @@ trigger_queue_url = os.environ.get("COMPLIANCE_TRIGGER_QUEUE_URL", "")
 logger = safeLogger(service_name="ComplianceJobs")
 
 
+def _record(action, **fields):
+    """Record this handler's compliance system action (`common/auditActions.py`) with `log_action`,
+    on the event of the invocation's audit context, so it is delivered with its other records."""
+    ctx = current_audit_context()
+    log_action(getattr(ctx, "event", None) or {}, action, **fields)
+
+
+@audited_handler
 def lambda_handler(event, context):
     """Run the job each record of one SQS batch names, and report the records whose run failed
     (`batchItemFailures`), so only those are redelivered."""
@@ -115,7 +124,13 @@ def run_binding_apply(database_id, apply_id, run_id, context, receive_count=1) -
                                  queue_url=trigger_queue_url, receive_count=receive_count)
     except Exception as e:
         logger.exception(f"Compliance binding apply of database {database_id} failed: {e}")
+        _record("complianceBindingApply", outcome="failed", reason="internal",
+                database_id=database_id, details={"applyId": apply_id, "runId": run_id})
         return False
+    # One record per run of the change (a change too large for one invocation runs again from its
+    # saved progress, and records that run).
+    _record("complianceBindingApply", database_id=database_id,
+            details={"applyId": apply_id, "runId": run_id, "done": bool(done)})
     if not done:
         record = binding_apply.get_record(database_id) or {}
         if record.get("applyId") != apply_id or record.get("runId") != run_id:
@@ -159,7 +174,12 @@ def run_database_move(database_id, context) -> bool:
         done = databaseRetirement.run(tables, database_id, deadline)
     except Exception as e:
         logger.exception(f"Compliance move of deleted database {database_id} failed: {e}")
+        _record("complianceDatabaseRetire", outcome="failed", reason="internal",
+                database_id=database_id)
         return False
+    # One record per run of the move, which continues across runs from its saved page.
+    _record("complianceDatabaseRetire", database_id=database_id,
+            details={"movedTo": databaseRetirement.deleted_id(database_id), "done": bool(done)})
     if not done:
         if not job_queue_url:
             logger.error("No compliance job queue to continue the compliance move on")
