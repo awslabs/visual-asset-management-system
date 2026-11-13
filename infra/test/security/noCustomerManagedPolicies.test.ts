@@ -4,24 +4,22 @@
  */
 
 /**
- * VAMS creates no customer managed IAM policy, in any template it synthesizes.
+ * VAMS creates no customer managed IAM policy of its own, in any template it synthesizes (#1499).
  *
  * A stack-created managed policy complicates a deployment in a customer account: some organizations
  * restrict who may create one, pre-create roles, or apply permission boundaries and policy-count limits
- * that it runs into. VAMS uses role inline policies, resource-based policies, and AWS managed policies
- * (infra/CLAUDE.md, "No customer managed policies"). A role that outgrows IAM's inline quota is split by
- * route instead (the execution service functions, lambdaBuilder/workflowFunctions.ts).
+ * that it runs into. VAMS grants roles inline, with resource-based policies, and with AWS managed
+ * policies (infra/CLAUDE.md, "No customer managed policies").
  *
- * The check is on the resource type, so it also catches the AWS::IAM::ManagedPolicy "OverflowPolicy"
- * CDK creates on its own when a role's default policy outgrows CDK's size estimate. The cells are the
- * shipped templates, the commercial worst case for policy size (a customer managed key, the Deadline
- * Cloud execution type and every Lambda in the VPC), and the commercial template with every optional
- * pipeline enabled, so a pipeline construct cannot add one unseen.
- *
- * A policy VAMS code creates explicitly (iam.ManagedPolicy, or addManagedPolicy() / managedPolicies:
- * with a stack-created policy) is never allowed and cannot be waived. A CDK-generated OverflowPolicy is
- * the only kind that may appear, and only as a tracked, owner-waived exception named in
- * WAIVED_OVERFLOW_POLICIES; it is not a pattern to copy.
+ * The one kind allowed is the overflow policy CDK generates itself (aws-iam Role.splitLargePolicy):
+ * when a role's default policy outgrows CDK's size estimate, CDK moves statements into
+ * `AWS::IAM::ManagedPolicy` resources it names `OverflowPolicy<n>` under the role, attached through the
+ * policy's own `Roles`. cdk.json sets `@aws-cdk/aws-iam.arnSizeEstimate` so that estimate splits a
+ * default policy before its deployed size nears IAM's 10,240-byte inline limit in every partition.
+ * A policy VAMS code creates (`new iam.ManagedPolicy`, or `addManagedPolicy()` / `managedPolicies:`
+ * with a stack-created policy) fails here. The cells are the shipped templates, the commercial worst
+ * case for policy size (a customer managed key, the Deadline Cloud execution type and every Lambda in
+ * the VPC), and the commercial template with every optional pipeline enabled.
  */
 
 import { SynthResult, TemplateName, synthTemplate } from "../support/templateSynth";
@@ -70,42 +68,26 @@ const CELLS: Cell[] = [
     },
 ];
 
-interface WaivedOverflowPolicy {
-    /** Logical id of the CDK-generated overflow policy (CDK names it <role>OverflowPolicy<n><hash>). */
-    logicalId: RegExp;
-    /** Why it is waived, with the tracking issue and the owner's waiver. */
-    reason: string;
+/** CDK's generated overflow policy: logical id `<role id>OverflowPolicy<n><8 hex>`. */
+const OVERFLOW_LOGICAL_ID = /OverflowPolicy\d+[0-9A-F]{8}$/;
+
+/** The construct path CDK gives it, under the role it splits: `.../<role>/OverflowPolicy<n>/Resource`. */
+const OVERFLOW_PATH = /\/OverflowPolicy\d+\/Resource$/;
+
+/** Whether a managed policy resource is CDK's own overflow of a role in the same stack. */
+function isCdkOverflow(synth: SynthResult, policy: any): boolean {
+    if (!OVERFLOW_LOGICAL_ID.test(policy.logicalId)) return false;
+    const path = (policy.raw?.Metadata ?? {})["aws:cdk:path"];
+    if (path !== undefined && !OVERFLOW_PATH.test(String(path))) return false;
+    const roles = (policy.properties.Roles ?? []) as any[];
+    if (roles.length !== 1 || typeof roles[0]?.Ref !== "string") return false;
+    const roleId: string = roles[0].Ref;
+    // CDK names the overflow after the role it splits.
+    if (!policy.logicalId.startsWith(roleId.replace(/[0-9A-F]{8}$/, ""))) return false;
+    return synth
+        .ofType("AWS::IAM::Role")
+        .some((r) => r.logicalId === roleId && r.stack === policy.stack);
 }
-
-/**
- * CDK-generated overflow policies that are tracked, owner-waived exceptions. Only an OverflowPolicy may
- * be listed (an explicitly created managed policy is never waived), and the list may only shrink
- * (MAX_WAIVED). Remove an entry once its role no longer overflows.
- */
-const WAIVED_OVERFLOW_POLICIES: WaivedOverflowPolicy[] = [
-    {
-        logicalId: /^assetServiceServiceRoleOverflowPolicy[0-9]+[0-9A-F]{8}$/,
-        reason:
-            "#1264: the asset service role is above IAM's inline quota once CDK's overflow policy is folded " +
-            "back in (iamInlinePolicyBudget.test.ts, BUDGET_EXCEPTIONS) and needs a route split; deferred " +
-            "and waived as an exception by the owner (2026-11-10).",
-    },
-];
-const MAX_WAIVED = 1;
-
-test("the waived list does not grow", () => {
-    expect(WAIVED_OVERFLOW_POLICIES.length).toBeLessThanOrEqual(MAX_WAIVED);
-});
-
-test("only CDK-generated overflow policies can be waived, each with a tracked reason", () => {
-    for (const w of WAIVED_OVERFLOW_POLICIES) {
-        expect(w.logicalId.source).toMatch(/OverflowPolicy\[0-9\]\+\[0-9A-F\]\{8\}\$$/);
-        expect(w.reason).toMatch(/#\d+/);
-        expect(w.reason).toMatch(/waived/);
-    }
-});
-
-const isWaived = (id: string) => WAIVED_OVERFLOW_POLICIES.some((w) => w.logicalId.test(id));
 
 const synthCell = (cell: Cell): SynthResult =>
     cell.mutate
@@ -124,21 +106,21 @@ describe.each(CELLS)("no customer managed policies ($name)", (cell) => {
         expect(synth.ofType("AWS::IAM::Policy").length).toBeGreaterThan(50);
     });
 
-    test("no template creates an AWS::IAM::ManagedPolicy beyond the waived overflow", () => {
+    test("every AWS::IAM::ManagedPolicy is a CDK-generated overflow policy", () => {
         const created = synth
             .ofType("AWS::IAM::ManagedPolicy")
-            .map((p) => p.logicalId)
-            .filter((id) => !isWaived(id));
+            .filter((p) => !isCdkOverflow(synth, p))
+            .map((p) => `${p.stack} ${p.logicalId}`);
         expect(created).toEqual([]);
     });
 
-    test("each waived overflow policy is still synthesized (remove it from the list once it is gone)", () => {
-        const ids = synth.ofType("AWS::IAM::ManagedPolicy").map((p) => p.logicalId);
-        expect(
-            WAIVED_OVERFLOW_POLICIES.filter((w) => !ids.some((id) => w.logicalId.test(id))).map(
-                (w) => w.reason
-            )
-        ).toEqual([]);
+    test("no role holds more than two overflow policies (IAM attaches at most 10 per role)", () => {
+        const perRole = new Map<string, number>();
+        for (const p of synth.ofType("AWS::IAM::ManagedPolicy")) {
+            const role = JSON.stringify((p.properties.Roles ?? [])[0] ?? "");
+            perRole.set(role, (perRole.get(role) ?? 0) + 1);
+        }
+        expect(Math.max(0, ...Array.from(perRole.values()))).toBeLessThanOrEqual(2);
     });
 
     test("every managed policy a role or user names is an AWS managed policy", () => {
@@ -157,4 +139,59 @@ describe.each(CELLS)("no customer managed policies ($name)", (cell) => {
         const notAwsManaged = named.filter(([, arn]) => !/:iam::aws:policy\//.test(arn));
         expect(notAwsManaged).toEqual([]);
     });
+});
+
+describe("the overflow check tells CDK's overflow from a hand-written policy (control)", () => {
+    const role = { logicalId: "fooServiceRole12345678", stack: "s", type: "AWS::IAM::Role" };
+    const fake = (policies: any[]) =>
+        ({ ofType: (t: string) => (t === "AWS::IAM::Role" ? [role] : policies) } as any);
+    const policy = (logicalId: string, path: string, roles: any[] = [{ Ref: role.logicalId }]) => ({
+        logicalId,
+        stack: "s",
+        properties: { Roles: roles },
+        raw: { Metadata: { "aws:cdk:path": path } },
+    });
+
+    test("CDK's overflow of a role passes", () => {
+        const p = policy(
+            "fooServiceRoleOverflowPolicy1ABCDEF12",
+            "core/Api/foo/ServiceRole/OverflowPolicy1/Resource"
+        );
+        expect(isCdkOverflow(fake([p]), p)).toBe(true);
+    });
+
+    test("a hand-written managed policy fails", () => {
+        const p = policy("fooTableReadPolicyABCDEF12", "core/Api/foo/TableReadPolicy/Resource");
+        expect(isCdkOverflow(fake([p]), p)).toBe(false);
+    });
+
+    test("a policy named like an overflow but placed elsewhere fails", () => {
+        const p = policy(
+            "fooServiceRoleOverflowPolicy1ABCDEF12",
+            "core/Api/foo/OverflowPolicy1x/Resource"
+        );
+        expect(isCdkOverflow(fake([p]), p)).toBe(false);
+    });
+
+    test("an overflow-named policy attached to another role, or to none, fails", () => {
+        const other = policy(
+            "fooServiceRoleOverflowPolicy1ABCDEF12",
+            "core/Api/foo/ServiceRole/OverflowPolicy1/Resource",
+            [{ Ref: "barServiceRole87654321" }]
+        );
+        const none = policy(
+            "fooServiceRoleOverflowPolicy1ABCDEF12",
+            "core/Api/foo/ServiceRole/OverflowPolicy1/Resource",
+            []
+        );
+        expect(isCdkOverflow(fake([other]), other)).toBe(false);
+        expect(isCdkOverflow(fake([none]), none)).toBe(false);
+    });
+});
+
+test("cdk.json sets the ARN size estimate CDK's overflow split uses, for every stack and partition", () => {
+    // App-wide context, so every template (commercial, GovCloud, EU Sovereign) splits on it.
+    const cdkJson = require("../../cdk.json");
+    expect(cdkJson.context["@aws-cdk/aws-iam:minimizePolicies"]).toBe(true);
+    expect(cdkJson.context["@aws-cdk/aws-iam.arnSizeEstimate"]).toBeGreaterThanOrEqual(280);
 });

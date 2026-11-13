@@ -10,7 +10,8 @@
  * pipeline rule's outcome and release the run's locks; a role without the grant leaves the rule
  * pending.
  *
- * Every grant is inline: no publisher holds a customer managed policy (#1499).
+ * Every grant is the role's own: inline, or in the overflow policy CDK generates for the role
+ * (#1499); no publisher holds a hand-written managed policy.
  */
 
 import { ALL_TEMPLATES, SynthResult, synthTemplate } from "../support/templateSynth";
@@ -58,9 +59,13 @@ describe.each(ALL_TEMPLATES)("workflow completion event grants (%s template)", (
         expect(putsToBus(docs)).toBe(true);
     });
 
-    test.each(PUBLISHERS)("%s publishes through an inline statement only (#1499)", (construct) => {
+    test.each(PUBLISHERS)("%s holds no hand-written managed policy (#1499)", (construct) => {
+        // Inline, or in the overflow policy CDK generates for the role; never a policy of our own.
         const { roleId, stack } = roleOf(synth, construct);
-        expect(putsToBus(inlinePolicies(synth, roleId, stack))).toBe(true);
-        expect(managedPolicies(synth, roleId, stack)).toEqual([]);
+        expect(
+            managedPolicies(synth, roleId, stack).filter(
+                ([id]) => !/OverflowPolicy\d+[0-9A-F]{8}$/.test(id)
+            )
+        ).toEqual([]);
     });
 });

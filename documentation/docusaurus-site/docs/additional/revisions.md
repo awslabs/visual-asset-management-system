@@ -151,6 +151,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **No customer managed IAM policies of its own** — Roles are granted inline, and CDK's generated overflow policies hold what does not fit an inline policy, so every role stays within IAM's inline policy limit in every partition (#1499).
 -   **Needle USD viewer error messages are readable** — The error panel shows its whole message at any panel width; the 3D canvas no longer stays above the text and pushes it out of view. (issue #1234)
 -   **Refused tag writes answer 403** — Creating, editing or deleting a tag that the caller's role does not allow on that tag answers `403 Not Authorized` instead of `500`. (issue #1452)
 -   **Asset notification topics** — Asset creation and subscriptions share sanitized SNS topic names with a 16-character hash suffix on every new topic. Truncation preserves the suffix, separating IDs that sanitize alike or share a long prefix; existing stored topic ARNs remain unchanged. (issue #839)

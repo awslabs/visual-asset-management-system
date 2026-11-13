@@ -264,10 +264,11 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
         expect(grants).toEqual(EXECUTE_WORKFLOW_GRANTS);
     });
 
-    test("the execution service's table reads are inline, in no customer managed policy (#1499)", () => {
+    test("the execution service's table reads are on its role: inline or in CDK's overflow (#1499)", () => {
         const role = roleId(synth, stack, "executionService");
-        expect(managedPolicies(synth, role, stack)).toEqual([]);
-        const actions = inlinePolicies(synth, role, stack)
+        const managed = managedPolicies(synth, role, stack);
+        expect(managed.filter(([id]) => !/OverflowPolicy\d+[0-9A-F]{8}$/.test(id))).toEqual([]);
+        const actions = [...inlinePolicies(synth, role, stack), ...managed]
             .flatMap(([, doc]) => (doc?.Statement ?? []) as any[])
             .flatMap((st) => ([] as string[]).concat(st.Action ?? []));
         expect(actions).toEqual(

@@ -1041,8 +1041,9 @@ describe("EDH AMI builds", () => {
     });
 
     test("Image Builder grants are scoped to the deployment prefix", () => {
+        // Inline, or in the overflow policy CDK splits a large role's statements into (#1499).
         const policies = edhStackResources(withAmiBuilds).filter(
-            (r) => r.type === "AWS::IAM::Policy"
+            (r) => r.type === "AWS::IAM::Policy" || r.type === "AWS::IAM::ManagedPolicy"
         );
         const text = JSON.stringify(policies.map((p) => p.properties.PolicyDocument));
         expect(text).toContain("imagebuilder:StartImagePipelineExecution");

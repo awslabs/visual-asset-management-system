@@ -83,22 +83,11 @@ const API_STACKS = ["ApiBuilder", "ApiBuilder2"];
  * with a reason the reviewer accepts; MAX_EXCEPTIONS pins its length.
  */
 const BUDGET_EXCEPTIONS: Record<string, { ceiling: number; reason: string }> = {
-    processWorkflowExecutionOutputServiceRole: {
-        ceiling: 9550,
-        reason:
-            "The workflow end-state handler writes the output records of every pipeline, so its role " +
-            "reads and writes most execution tables; above the budget in the GovCloud and EU Sovereign " +
-            "templates only. To be narrowed the way the execution service's role was.",
-    },
-    assetServiceServiceRole: {
-        ceiling: 9300,
-        reason:
-            "The asset service reads and writes the asset, version and link tables and every asset " +
-            "bucket; above the budget in the GovCloud template only. To be narrowed the way the " +
-            "execution service's role was.",
-    },
+    // Empty since #1499: with the ARN size estimate in cdk.json, CDK moves what does not fit a role's
+    // inline budget into its generated overflow policies, so the end-state handler (was 9,550) and the
+    // asset service (was 9,300) are back under the budget in every cell.
 };
-const MAX_EXCEPTIONS = 2;
+const MAX_EXCEPTIONS = 0;
 
 const synthCell = (cell: Cell): SynthResult =>
     cell.mutate

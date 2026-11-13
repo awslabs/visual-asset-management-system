@@ -35,8 +35,9 @@ const ADDON_PATH = /\/AddonBuilder\/EdhWorkstationsBuilderNestedStack\//;
 const PROJECT_PATH =
     /\/EdhWorkstationsBuilderNestedStack\/ImageBuild-sim-worker\/CodeBuild-Edh-sim-worker\//;
 const AMI_ROLE_PATH = /\/EdhWorkstationsBuilderNestedStack\/EdhAmiBuild\/EdhAmiBuildInstanceRole\//;
+// The role's default policy, or an overflow policy CDK split it into (#1499).
 const AMI_LAMBDA_PATH =
-    /\/EdhWorkstationsBuilderNestedStack\/(edhAmiRecipeService|edhAmiBuildRegistrar)\/ServiceRole\/DefaultPolicy\//;
+    /\/EdhWorkstationsBuilderNestedStack\/(edhAmiRecipeService|edhAmiBuildRegistrar)\/ServiceRole\/(DefaultPolicy|OverflowPolicy\d+)\//;
 
 /**
  * Logged suppressions the image build project raises: the project resource's default-encryption
@@ -172,7 +173,10 @@ describe("CDK Nag over the EDH Workstations add-on", () => {
 
         // The build Lambdas' IAM5 entries scope Image Builder to the deployment prefix; the
         // statement that starts a pipeline is the one those entries cover.
-        const startsPipelines = s.where("AWS::IAM::Policy", (r) =>
+        const startsPipelines = [
+            ...s.where("AWS::IAM::Policy", () => true),
+            ...s.where("AWS::IAM::ManagedPolicy", () => true),
+        ].filter((r) =>
             (r.properties.PolicyDocument?.Statement ?? []).some((st: any) =>
                 [st.Action].flat().includes("imagebuilder:StartImagePipelineExecution")
             )

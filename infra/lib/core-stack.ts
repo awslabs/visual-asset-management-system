@@ -5,6 +5,8 @@
  */
 
 import * as cdk from "aws-cdk-lib";
+import { AspectPriority } from "aws-cdk-lib";
+import { OverflowPolicyNagSuppressionAspect } from "./aspects/overflow-policy-nag.aspect";
 import * as cloudTrail from "aws-cdk-lib/aws-cloudtrail";
 import * as logs from "aws-cdk-lib/aws-logs";
 import { ApiBuilderNestedStack } from "./nestedStacks/apiLambda/apiBuilder-nestedStack";
@@ -96,6 +98,12 @@ export class CoreVAMSStack extends cdk.Stack {
 
         // Apply the aspect to set log retention for all Log Groups in this stack
         Aspects.of(this).add(new LogRetentionAspect(logs.RetentionDays.ONE_YEAR));
+
+        // CDK's overflow policies carry the cdk-nag suppressions of the role they are split from
+        // (#1499). Mutating priority, so it runs on each overflow policy before cdk-nag checks it.
+        Aspects.of(this).add(new OverflowPolicyNagSuppressionAspect(), {
+            priority: AspectPriority.MUTATING,
+        });
 
         //Setup GovCloud Feature Enabled
         if (props.config.app.govCloud.enabled) {

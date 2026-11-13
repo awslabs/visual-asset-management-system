@@ -467,6 +467,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
+-   **CDK** VAMS creates no customer managed IAM policies of its own: the execution service's table reads, the workflow end-state completion event and the compliance engine's table reads are granted on their roles, and what does not fit a role's inline policy goes to the overflow policies CDK generates. ([#1499](https://github.com/awslabs/visual-asset-management-system/issues/1499))
+    -   Note: On upgrade, eight managed policies (`TableReadPolicy`, `OrchestrationEventsPolicy` and six compliance `Engine*TableReadPolicy`) are replaced by CDK overflow policies, about 30 per deployment. Roles pre-created through `iamRoleConfig.json` need the same permissions.
 -   **CDK** The EDH Workstations AMI build upload-exclusion tests synthesize their own app instead of taking a shared cached synth, so they no longer fail when another test file synthesized the same configuration first in the same run. ([#1371](https://github.com/awslabs/visual-asset-management-system/issues/1371))
 -   **CLI** `.vamsignore` matching uses `pathspec.GitIgnoreSpec` instead of the deprecated `gitwildmatch` factory, so a directory re-include such as `!tmp/a/` no longer re-includes files `tmp/**` matches; patterns use gitignore-style syntax; `pathspec` is bounded below 2. ([#1006](https://github.com/awslabs/visual-asset-management-system/pull/1006))
 -   **Backend** Two validator test literals use raw strings instead of invalid escape sequences. ([#1006](https://github.com/awslabs/visual-asset-management-system/pull/1006))
