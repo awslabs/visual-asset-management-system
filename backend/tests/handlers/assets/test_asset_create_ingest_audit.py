@@ -105,4 +105,3 @@ class TestHistoryRecord:
         m.log_action = MagicMock()
         assert m.lambda_handler(_history_event(), MagicMock())["statusCode"] == 403
         m.log_action.assert_not_called()
-

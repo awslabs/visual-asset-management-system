@@ -3748,6 +3748,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
         logger.info(f"Returning {len(file_items)} files in detailed mode from version {asset_version_id}")
         return ListAssetFilesResponseModel(items=file_items, NextToken=None)
 
+
 def _log_per_file(event, action, path_params, response, requested_path, **kwargs):
     """One record per file the operation acted on (a folder operation lists each), all in the request's
     flush; the requested path when the response names none."""
@@ -3835,7 +3836,8 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
         )
         
         _log_per_file(event, "fileDelete", path_params, response, request_model.filePath,
-                       changes={"isPrefix": request_model.isPrefix, "confirmPermanentDelete": request_model.confirmPermanentDelete})
+                      changes={"isPrefix": request_model.isPrefix,
+                               "confirmPermanentDelete": request_model.confirmPermanentDelete})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4017,7 +4019,7 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
         )
         
         _log_per_file(event, "fileArchive", path_params, response, request_model.filePath,
-                       changes={"isPrefix": request_model.isPrefix})
+                      changes={"isPrefix": request_model.isPrefix})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4111,7 +4113,7 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
         )
         
         log_action(event, "fileCopy", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
-                   file_path=request_model.sourcePath, 
+                   file_path=request_model.sourcePath,
                    targetFilePath=request_model.destinationPath,
                    targetAssetId=request_model.destinationAssetId or path_params['assetId'],
                    targetDatabaseId=request_model.destinationDatabaseId or path_params['databaseId'],
@@ -4207,8 +4209,9 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
         )
         
         log_action(event, "fileMove", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
-                   file_path=request_model.sourcePath, 
-                   targetFilePath=request_model.destinationPath, file_count=len(getattr(response, "affectedFiles", None) or []) or None)
+                   file_path=request_model.sourcePath,
+                   targetFilePath=request_model.destinationPath,
+                   file_count=len(getattr(response, "affectedFiles", None) or []) or None)
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4319,7 +4322,7 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
         )
         
         log_action(event, "fileInfoGet", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
-                   file_path=request_model.filePath, 
+                   file_path=request_model.filePath,
                    request_parameters={"includeVersions": request_model.includeVersions, "showArchived": show_archived})
         return success(body=response.dict())
     
@@ -4421,7 +4424,7 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
         )
         
         log_action(event, "fileVersionRevert", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
-                   file_path=request_model.filePath, 
+                   file_path=request_model.filePath,
                    versionId=path_params['versionId'],
                    changes={"versionId": response.newVersionId},
                    previous={"versionId": response.revertedFromVersionId})
@@ -4870,7 +4873,7 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
         )
         
         log_action(event, "filePrimarySet", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
-                   file_path=request_model.filePath, 
+                   file_path=request_model.filePath,
                    changes={"primaryType": request_model.primaryType,
                             "primaryTypeOther": request_model.primaryTypeOther})
         return success(body=response.dict())
@@ -4969,7 +4972,7 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
         )
         
         log_action(event, "fileList", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
-                   item_count=len(response.items), 
+                   item_count=len(response.items),
                    request_parameters={**query_params, "showArchived": show_archived})
         return success(body=response.dict())
     

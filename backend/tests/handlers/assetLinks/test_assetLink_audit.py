@@ -31,8 +31,8 @@ def link_table(monkeypatch):
     table = MagicMock()
     table.get_item.return_value = {"Item": dict(LINK)}
     monkeypatch.setattr(svc, "asset_links_table", table, raising=False)
-    monkeypatch.setattr(svc, "get_asset_details", lambda asset_id, database_id: {"assetId": asset_id,
-                                                                                  "databaseId": database_id})
+    monkeypatch.setattr(svc, "get_asset_details",
+                        lambda asset_id, database_id: {"assetId": asset_id, "databaseId": database_id})
     monkeypatch.setattr(svc, "check_asset_permission", lambda asset, claims, action="GET": True)
     monkeypatch.setattr(svc, "delete_asset_link_metadata", lambda link_id: None)
     return table
@@ -69,10 +69,10 @@ class TestAssetLinkRecords:
         recorder.assert_not_called()
 
     def test_a_create_records_the_written_link(self, recorder, monkeypatch):
-        monkeypatch.setattr(create_svc, "create_asset_link", lambda model, claims: create_svc.CreateAssetLinkResponseModel(
-            assetLinkId=LINK_ID, message="created"))
-        body = {k: LINK[k] for k in ("fromAssetId", "fromAssetDatabaseId", "toAssetId", "toAssetDatabaseId",
-                                      "relationshipType")}
+        created = create_svc.CreateAssetLinkResponseModel(assetLinkId=LINK_ID, message="created")
+        monkeypatch.setattr(create_svc, "create_asset_link", lambda model, claims: created)
+        fields = ("fromAssetId", "fromAssetDatabaseId", "toAssetId", "toAssetDatabaseId", "relationshipType")
+        body = {k: LINK[k] for k in fields}
         event = {"body": json.dumps(body)}
         assert create_svc.handle_post_request(event)["statusCode"] == 200
         kwargs = recorder.call_args.kwargs

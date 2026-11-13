@@ -86,9 +86,10 @@ class TestFileRecords:
 @pytest.mark.unit
 class TestVersionRecords:
     def test_a_version_create_records_the_request_without_the_file_list(self, recorder, monkeypatch):
-        monkeypatch.setattr(versions_svc, "create_asset_version", lambda *args: versions_svc.AssetVersionOperationResponseModel(
+        created = versions_svc.AssetVersionOperationResponseModel(
             success=True, message="ok", assetId="asset-01", assetVersionId="3", operation="create",
-            timestamp="2026-11-13T00:00:00Z"))
+            timestamp="2026-11-13T00:00:00Z")
+        monkeypatch.setattr(versions_svc, "create_asset_version", lambda *args: created)
         event = _event({"useLatestFiles": True, "comment": "Release 3"})
         assert versions_svc.handle_create_version(event, None)["statusCode"] == 200
         kwargs = recorder.call_args.kwargs

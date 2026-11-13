@@ -47,7 +47,8 @@ ASSET = {"assetId": "asset-01", "databaseId": "db1"}
 def _event(method, body=None, path=None, query=None):
     return {"body": body, "queryStringParameters": query or {},
             "pathParameters": path or {"assetId": "asset-01", "assetVersionId:commentId": "ver-01:cmt-0001"},
-            "requestContext": {"http": {"method": method, "path": "/comments/assets/asset-01/assetVersionId:commentId/ver-01:cmt-0001"}}}
+            "requestContext": {"http": {"method": method,
+                                        "path": "/comments/assets/asset-01/assetVersionId:commentId/ver-01:cmt-0001"}}}
 
 
 @pytest.fixture

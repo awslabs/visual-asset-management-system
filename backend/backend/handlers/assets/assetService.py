@@ -1280,6 +1280,7 @@ def get_all_assets(query_params, showArchived=False):
         logger.exception(f"Error scanning all assets: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving all assets.")
 
+
 def update_asset(databaseId, assetId, update_data, claims_and_roles, event=None):
     """Update an existing asset with new data
     

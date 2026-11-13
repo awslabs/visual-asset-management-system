@@ -690,6 +690,7 @@ def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestM
 # DELETE Operations
 #######################
 
+
 def delete_asset_link(asset_link_id: str, claims_and_roles: dict, event=None) -> DeleteAssetLinkResponseModel:
     """Delete an asset link by ID"""
     try:

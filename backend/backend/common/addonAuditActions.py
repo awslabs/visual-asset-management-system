@@ -82,10 +82,16 @@ ADDON_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
         POST: spec("edhWorkstationRenew", "workstation", legacy_type="edhWorkstationRenew"),
     }),
     # Connect and OS sign-in hand out a connection credential, so they are recorded as writes.
-    **route_entries(API_EDH_WORKSTATION_CONNECT, {GET: spec("edhWorkstationConnect", "workstation", legacy_type=_PROXY)}),
-    **route_entries(API_EDH_WORKSTATION_OS_SIGN_IN, {GET: spec("edhWorkstationOsSignIn", "workstation", legacy_type=_PROXY)}),
+    **route_entries(API_EDH_WORKSTATION_CONNECT, {
+        GET: spec("edhWorkstationConnect", "workstation", legacy_type=_PROXY),
+    }),
+    **route_entries(API_EDH_WORKSTATION_OS_SIGN_IN, {
+        GET: spec("edhWorkstationOsSignIn", "workstation", legacy_type=_PROXY),
+    }),
     **route_entries(API_EDH_CATALOG_IMAGES, {GET: read("edhCatalogImageList", "catalog", legacy_type=_PROXY)}),
-    **route_entries(API_EDH_CATALOG_INSTANCE_TYPES, {GET: read("edhCatalogInstanceTypeList", "catalog", legacy_type=_PROXY)}),
+    **route_entries(API_EDH_CATALOG_INSTANCE_TYPES, {
+        GET: read("edhCatalogInstanceTypeList", "catalog", legacy_type=_PROXY),
+    }),
     **route_entries(API_EDH_CATALOG_LEASE, {GET: read("edhCatalogLeaseGet", "catalog", legacy_type=_PROXY)}),
     **route_entries(API_EDH_CATALOG_CAPACITY_RESERVATIONS, {
         GET: read("edhCatalogCapacityReservationList", "catalog", legacy_type=_PROXY),
@@ -99,7 +105,9 @@ ADDON_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
     **route_entries(API_EDH_ADMIN_INSTANCES, {GET: read("edhInstanceList", "instance", legacy_type=_PROXY)}),
     **route_entries(API_EDH_ADMIN_INSTANCES_STALE, {GET: read("edhInstanceList", "instance", legacy_type=_PROXY)}),
     **route_entries(API_EDH_ADMIN_INSTANCE_STOP, {POST: spec("edhInstanceStop", "instance", legacy_type=_PROXY)}),
-    **route_entries(API_EDH_ADMIN_INSTANCE_DEACTIVATE, {POST: spec("edhInstanceDeactivate", "instance", legacy_type=_PROXY)}),
+    **route_entries(API_EDH_ADMIN_INSTANCE_DEACTIVATE, {
+        POST: spec("edhInstanceDeactivate", "instance", legacy_type=_PROXY),
+    }),
     **route_entries(API_EDH_ADMIN_CAPACITY, {GET: read("edhCapacityGet", "capacityReservation", legacy_type=_PROXY)}),
     **route_entries(API_EDH_ADMIN_HEALTH, {GET: read("edhHealthGet", "system", legacy_type=_PROXY)}),
     **route_entries(API_EDH_ADMIN_SETTINGS, {
@@ -143,7 +151,9 @@ ADDON_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
         GET: read("edhContainerJobList", "containerJob", legacy_type=_PROXY),
         POST: spec("edhContainerJobCreate", "containerJob", legacy_type=_PROXY),
     }),
-    **route_entries(API_EDH_CONTAINERS_JOB, {DELETE: spec("edhContainerJobCancel", "containerJob", legacy_type=_PROXY)}),
+    **route_entries(API_EDH_CONTAINERS_JOB, {
+        DELETE: spec("edhContainerJobCancel", "containerJob", legacy_type=_PROXY),
+    }),
 }
 
 ADDON_AUDIT_EXEMPT: Dict[RouteMethod, str] = {}

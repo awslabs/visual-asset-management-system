@@ -1845,6 +1845,7 @@ def export_assets(
 # Request Handlers
 #######################
 
+
 def _exported_files(asset) -> List:
     files = asset.get('files') if isinstance(asset, dict) else getattr(asset, 'files', None)
     return files if isinstance(files, list) else []
