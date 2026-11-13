@@ -3221,3 +3221,60 @@ class TestTheEvaluationsABindingChangeQueues:
             assert result.exit_code == 0
             assert 'Evaluations: stalled (400 of 2500 queued)' in result.output
             assert 'Evaluations Reason: Its last step failed on every delivery' in result.output
+
+
+class TestAForbiddenComplianceCallThroughTheEntryPoint:
+    """A 403 the API client classifies (#1409) reaches the compliance commands as the
+    `PermissionDeniedError` it raises: the global handler prints it as a permission denial and the
+    installed CLI exits 1, including while `bind --wait` follows a change (D167). These go through
+    `main()` as the console script does."""
+
+    DENIED = ("Access forbidden. You do not have permission to perform this action. "
+              "Check your role's constraints.")
+
+    @pytest.fixture
+    def no_sleep(self, monkeypatch):
+        monkeypatch.setattr('vamscli.commands.compliance.time.sleep', lambda seconds: None)
+
+    @staticmethod
+    def _exit_code(monkeypatch, argv):
+        """main()'s exit status. Under pytest the global handler raises a ClickException with exit
+        code 1 where the installed CLI calls `sys.exit(1)` (`utils/global_exceptions.py`)."""
+        import click
+        try:
+            return TestTheWaitsExitStatusThroughTheEntryPoint._exit_code(monkeypatch, argv)
+        except click.ClickException as raised:
+            return raised.exit_code
+
+    @pytest.mark.parametrize('json_output', [False, True], ids=['text', 'json'])
+    def test_a_denied_read_exits_1_as_a_permission_denial(self, monkeypatch, generic_command_mocks,
+                                                         capsys, json_output):
+        from vamscli.utils.exceptions import PermissionDeniedError
+        argv = ['compliance', 'state', '-d', 'my-database', '-a', 'asset-1'] + (
+            ['--json-output'] if json_output else [])
+        with generic_command_mocks('compliance') as mocks:
+            denied = PermissionDeniedError(self.DENIED)
+            mocks['api_client'].get_compliance_state.side_effect = denied
+            code = self._exit_code(monkeypatch, argv)
+        assert code == 1
+        out = capsys.readouterr().out
+        if json_output:
+            document = json.loads(out)
+            assert document['error_type'] == 'PermissionDeniedError'
+            assert self.DENIED in document['error']
+        else:
+            assert f"Permission Denied: {self.DENIED}" in out
+
+    def test_a_wait_whose_read_is_denied_exits_1(self, monkeypatch, generic_command_mocks, no_sleep,
+                                                capsys):
+        from vamscli.utils.exceptions import PermissionDeniedError
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            denied = PermissionDeniedError(self.DENIED)
+            mocks['api_client'].get_compliance_bindings.side_effect = denied
+            code = self._exit_code(
+                monkeypatch, [*TestTheWaitsExitStatusThroughTheEntryPoint.BIND, '--wait'])
+        assert code == 1
+        out = capsys.readouterr().out
+        assert f"Permission Denied: {self.DENIED}" in out
+        assert 'The binding change was applied' not in out
