@@ -301,6 +301,16 @@ E2E_VIEWER_ASSET=<databaseId>/<assetId> npx playwright test e2e/viewers.spec.ts 
 E2E_WEBGPU=1 E2E_REQUIRE_WEBGPU=1 npx playwright test e2e/viewers.spec.ts       # SuperSplat render checks
 ```
 
+Opt-in variables of `zipdownloads.spec.ts` (Download as Zip). Without them each case that needs them
+skips with the reason; the rest of the spec mutates nothing and discovers its data (the first
+distributable asset with a top-level file), skipping when the deployment has none or has the
+`ZIPDOWNLOADS` switch off:
+
+| Variable                                      | Effect                                                                            |
+| --------------------------------------------- | --------------------------------------------------------------------------------- |
+| `E2E_ZIP_CREATE=1`                            | Creates one zip job on that asset and deletes it again (cancel, then delete)      |
+| `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD` | A second user for the ownership check (signs in with `signInAs`; never hardcoded) |
+
 The SuperSplat Editor renders only through WebGPU, which headless Chromium hides. `E2E_WEBGPU=1` runs
 the SuperSplat cases in a separate `chromium-webgpu` project launched with WebGPU on, and takes them out
 of the `chromium` project, so every other case still runs in a browser without WebGPU. Without an
