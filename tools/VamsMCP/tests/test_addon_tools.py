@@ -502,3 +502,17 @@ async def test_the_reload_restores_the_shipped_add_on_modules(server_with_switch
     with server_with_switches([module.FEATURE for module in addon_tools.ADDON_TOOL_MODULES]) as server:
         names = {tool.name for tool in await server.mcp.list_tools()}
     assert shipped and shipped <= names
+
+
+def test_add_on_outcome_checks_come_from_the_add_on_modules():
+    """The core server's own outcome-check rows name no add-on tool; each add-on module declares its rows,
+    and they are matched before the core ones."""
+    from vams_mcp import addon_tools, server
+
+    add_on_rows = addon_tools.addon_outcome_checks()
+    assert add_on_rows and server._OUTCOME_CHECKS[: len(add_on_rows)] == add_on_rows
+    add_on_names = {name for module in addon_tools.ADDON_TOOL_MODULES for name in vars(module)}
+    for fragment, check in server._CORE_OUTCOME_CHECKS:
+        assert not any(module.__name__.rsplit(".", 1)[-1] in fragment + check for module in addon_tools.ADDON_TOOL_MODULES)
+    assert server.outcome_check_tool("create_edh_workstation") == "list_edh_workstations"
+    assert add_on_names  # the modules were read

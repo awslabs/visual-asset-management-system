@@ -72,7 +72,7 @@ From here, [CLI Getting Started](../cli/getting-started.md) covers profiles for 
 
 The VAMS MCP server exposes the VAMS API to an AI agent as a set of tools, so you can ask questions about a deployment in natural language -- finding assets matching a description, summarizing what a workflow produced, or checking which assets lack required metadata -- and have the agent gather the answer.
 
-It stores no credentials of its own. It reuses the CLI's profile and sign-in, so set up and authenticate the CLI first.
+It stores no credentials of its own. It reuses the CLI's profile and sign-in, so set up and authenticate the CLI first. For MCP clients that connect only to remote servers, such as Amazon Quick, an operator can host the server remotely, where each user signs in with OAuth; see [Remote MCP Server](../mcp/remote-mcp-server.md).
 
 :::warning[Read-only until you enable more]
 The MCP server exposes only read tools by default. Write tools (create and update) require `VAMS_ENABLE_WRITES`, and destructive tools (archive and delete) additionally require `VAMS_ENABLE_DESTRUCTIVE`. Leave both off unless an agent genuinely needs to change data, and turn on destructive tools only against a deployment you can afford to have modified.

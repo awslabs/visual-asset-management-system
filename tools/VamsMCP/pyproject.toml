@@ -22,6 +22,9 @@ dependencies = [
     # the backend's pydantic v1 pin does not apply here).
     "pydantic>=2.11.0,<3.0.0",
     "requests>=2.25.0",
+    # Remote mode verifies each request's OAuth token (RS256 signatures against the issuer's JWKS).
+    # The same release the VAMS API authorizer layer pins.
+    "PyJWT[crypto]==2.15.1",
     # vamscli provides the battle-tested APIClient this server reuses.
     # Install it into the same environment: `pip install -e ../VamsCLI`
     "vamscli",
@@ -34,7 +37,8 @@ dev = [
 ]
 
 [project.scripts]
-vams-mcp = "vams_mcp.server:main"
+# `vams-mcp` runs the server; `vams-mcp setup-remote` writes a remote server's auth configuration.
+vams-mcp = "vams_mcp.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["vams_mcp*"]

@@ -750,14 +750,75 @@ class TestDataFiles:
         assert document["counts"]["dataFiles"] == 1
         assert [row["kind"] for row in document["skippedFiles"]] == ["dataFile", "textureOrOther"]
 
+    @staticmethod
+    def _spider_like_fbx():
+        """A binary FBX naming each texture twice, as exporters write it: the authoring machine's
+        absolute FileName and the RelativeFilename."""
+        import struct
+
+        def record(text):  # a binary FBX string property: 'S', uint32 length, bytes
+            return b"S" + struct.pack("<I", len(text)) + text
+
+        body = b"Kaydara FBX Binary  \x00\x1a\x00" + b"\x00\x05\x00\x00\x00"
+        for name in (b"Body.jpg", b"Eyes.jpg"):
+            body += record(b"C:\\Users\\artist\\spider\\" + name) + b"\x00\x00" + record(name) + b"\x00\x01"
+        return body
+
+    def test_fbx_textures_all_fetched_report_a_complete_preview(self, tmp_path):
+        """Every texture is beside the FBX; the absolute name stored with each is refused, as before,
+        but the preview misses nothing."""
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/spider/spider.fbx", self._spider_like_fbx())
+        bucket.put("xid/spider/Body.jpg", b"j")
+        bucket.put("xid/spider/Eyes.jpg", b"j")
+        report = _fetch(tmp_path, bucket, "xid/spider/spider.fbx", ".fbx")
+        assert set(report.fetched) == {"spider/Body.jpg", "spider/Eyes.jpg"}
+        assert report.rejected  # the absolute names
+        assert dependencies.incomplete_preview(report) is None
+
+    def test_missing_fbx_textures_do_not_make_the_preview_incomplete(self, tmp_path):
+        """The FBX loader does not sample textures, so a missing one removes nothing."""
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/spider/spider.fbx", self._spider_like_fbx())
+        report = _fetch(tmp_path, bucket, "xid/spider/spider.fbx", ".fbx")
+        assert report.missing and not report.fetched
+        assert dependencies.incomplete_preview(report) is None
+
     def test_missing_lcc_data_files_are_data_files(self, tmp_path):
         bucket = FakeBucket(tmp_path / "bucket")
-        bucket.put("xid/scan/meta.lcc", json.dumps({"version": "x"}))
+        bucket.put("xid/scan/meta.lcc", json.dumps({"version": "x", "fileType": "Quality"}))
         bucket.put("xid/scan/index.bin", b"i")
         incomplete = dependencies.incomplete_preview(_fetch(tmp_path, bucket, "xid/scan/meta.lcc", ".lcc"))
-        expected = {"scan/data.bin", "scan/shcoef.bin", "scan/environment.bin"}
+        expected = {"scan/data.bin", "scan/shcoef.bin"}
         assert set(_entries(incomplete.data_files)) == expected
         assert incomplete.other_files == [] and incomplete.geometry_layers == []
+
+    @pytest.mark.parametrize("meta,present", [
+        ({"fileType": "Quality", "attributes": [{"name": "shcoef"}]}, ("shcoef.bin",)),
+        ({"fileType": "Portable", "attributes": [{"name": "shcoef"}]}, ()),
+        ({"attributes": [{"name": "position"}, {"name": "shcoef"}]}, ("shcoef.bin",)),
+        ({"attributes": [{"name": "position"}]}, ()),
+    ])
+    def test_a_complete_lcc_scene_reports_a_complete_preview(self, tmp_path, meta, present):
+        """Only the files splat-transform reads are asked for: index.bin and data.bin, and shcoef.bin
+        when the scene carries spherical harmonics (fileType Quality, or a shcoef attribute without a
+        fileType). environment.bin is never read, so a scene without it is complete."""
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/scan/meta.lcc", json.dumps({"version": "5", **meta}))
+        for name in ("index.bin", "data.bin") + present:
+            bucket.put(f"xid/scan/{name}", b"d")
+        report = _fetch(tmp_path, bucket, "xid/scan/meta.lcc", ".lcc")
+        assert dependencies.incomplete_preview(report) is None
+        assert set(report.fetched) == {f"scan/{name}" for name in ("index.bin", "data.bin") + present}
+
+    def test_environment_bin_is_not_fetched(self, tmp_path):
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/scan/meta.lcc", json.dumps({"fileType": "Portable", "environment": "env.bin"}))
+        for name in ("index.bin", "data.bin", "environment.bin", "env.bin", "shcoef.bin"):
+            bucket.put(f"xid/scan/{name}", b"d")
+        report = _fetch(tmp_path, bucket, "xid/scan/meta.lcc", ".lcc")
+        assert sorted(bucket.downloads) == ["xid/scan/data.bin", "xid/scan/index.bin"]
+        assert dependencies.incomplete_preview(report) is None
 
 
 # --------------------------------------------------------------------------------------------------
