@@ -14,6 +14,7 @@ from common.resourceNames import get_table_name, ResourceKeys
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.dynamodb import validate_pagination_info
 from common.tagScope import GLOBAL_SCOPE, normalize_scope
 
@@ -362,7 +363,10 @@ def handle_get_request(event):
         response = {"Items": formatted_items}
         if 'NextToken' in result:
             response['NextToken'] = result['NextToken']
-        
+
+        log_action(event, "tagTypeList", item_count=len(formatted_items),
+                   request_parameters={key: value for key, value in query_params.items() if value is not None})
+
         return success(body={"message": response})
         
     except VAMSGeneralErrorResponse as v:
@@ -409,7 +413,8 @@ def handle_delete_request(event):
 
         # Delete tag type
         result = delete_tag_type(tag_type_name, claims_and_roles, database_id)
-        
+        log_action(event, "tagTypeDelete", tagTypeId=tag_type_name, database_id=database_id)
+
         return success(body=result.dict())
         
     except VAMSGeneralErrorResponse as v:
@@ -419,6 +424,8 @@ def handle_delete_request(event):
         logger.exception(f"Error handling DELETE request: {e}")
         return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for tag type service operations (GET, DELETE)"""
     global claims_and_roles

@@ -29,7 +29,7 @@ from common.searchAuthzFilter import (
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import deferred_authorization_audit
+from customLogging.auditLogging import deferred_authorization_audit, audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, service_unavailable, VAMSGeneralErrorResponse, validation_error_message
 from models.search import (
     SearchRequestModel, SimpleSearchRequestModel, SearchResponseModel, SearchHitModel, SearchHitExplanationModel,
@@ -2840,6 +2840,14 @@ def handle_get_request(event: Dict[str, Any], search_manager: DualIndexSearchMan
         logger.exception(f"Error handling GET request: {e}")
         return internal_error(event=event)
 
+
+def _log_search(event: Dict[str, Any], request_model: Any, processed_response: Any) -> None:
+    """Record a search: the request it asked and the number of hits returned, never the hits."""
+    hits = getattr(getattr(processed_response, "hits", None), "hits", None)
+    log_action(event, "search", item_count=len(hits) if isinstance(hits, list) else None,
+               request_parameters=request_model.dict(by_alias=True, exclude_none=True))
+
+
 def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchManager, 
                        query_builder: DualIndexQueryBuilder, response_processor: DualIndexResponseProcessor,
                        claims_and_roles: Dict[str, Any]) -> APIGatewayProxyResponseV2:
@@ -2887,7 +2895,8 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
             processed_response = response_processor.process_dual_search_response(
                 opensearch_response, request_model, claims_and_roles, authz_filters=authz_filters
             )
-        
+
+        _log_search(event, request_model, processed_response)
         # by_alias so `_shards` serializes under the OpenSearch key rather than the
         # pydantic-legal field name it has to be declared with.
         return success(body=processed_response.dict(by_alias=True))
@@ -2962,6 +2971,7 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
                 opensearch_response, compatible_request, claims_and_roles, authz_filters=authz_filters
             )
 
+        _log_search(event, request_model, processed_response)
         # by_alias so `_shards` serializes under the OpenSearch key rather than the
         # pydantic-legal field name it has to be declared with.
         return success(body=processed_response.dict(by_alias=True))
@@ -2980,6 +2990,8 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for dual-index search API"""
     global claims_and_roles

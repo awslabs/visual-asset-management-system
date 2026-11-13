@@ -13,7 +13,8 @@ as one auditFallback line and counted in the VAMS/Audit AuditWriteFailures metri
 log_action writes action records in the record contract (auditVersion 1): the
 action, its outcome, the actor, the request and the entity, with what a write
 changed. audit_request opens a request's audit context, which resolves the actor
-once and writes the request's successful action records together when it ends.
+once and writes the request's successful action records and allowed authorization
+records together when it ends.
 The action registry is common/auditActions.py.
 """
 
@@ -30,13 +31,16 @@ from concurrent.futures import ThreadPoolExecutor, wait as wait_for_futures
 import boto3
 from botocore.config import Config
 from common.timestamps import utc_now
-from typing import Dict, Any, Callable, Iterator, Optional, List, Tuple
+from typing import Dict, Any, Callable, Iterator, Optional, List, Set, Tuple
 from handlers.auth import request_to_claims, AUTH_METHOD_API_KEY
 from customLogging.logger import mask_sensitive_data, safeLogger
 from common.resourceNames import ResourceKeys, get_log_group_name
 from common.auditActions import (
+    AUDIT_PENDING_ACTIONS,
     AuditSpec,
     GROUP_ACTIONS,
+    GROUP_AUTH_CHANGES,
+    GROUP_AUTH_OTHER,
     GROUP_AUTHORIZATION,
     GROUP_ERRORS,
     GROUP_FILE_DOWNLOAD,
@@ -282,6 +286,8 @@ def _write_audit_entry(key, event_type: str, user_context: Dict[str, Any], custo
             ctx, canonical.get("action"), canonical.get("outcome", OUTCOME_SUCCESS),
             canonical.get("entityType")))
     log_type = _audit_log_type(key)
+    if ctx is not None and log_type != GROUP_ERRORS:
+        _note_recorded(ctx, canonical.get("action"))
     message = _format_log_message(event_type, user_context, custom_data, log_type)
     if ctx is not None:
         _enqueue_records(ctx, log_type, _records_with_echo([message], event), buffer=buffer)
@@ -742,6 +748,11 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
     """
     Log authorization events with silent failure using claims_and_roles directly.
 
+    Inside the request audit context of this thread, an allowed decision is buffered and written in
+    the request's end-of-request flush, also inside deferred_authorization_audit(). A denial is
+    written at once, or at the end of a deferred_authorization_audit() block. Outside a context the
+    behaviour is unchanged. The record is the same either way.
+
     Args:
         claims_and_roles: The claims and roles dictionary
         authorized: Whether authorization was successful
@@ -756,9 +767,7 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
         }
         
         event_type = _event_type(("AUTHORIZATION", None), ("authorized", authorized))
-        message = _format_log_message(event_type, user_context, custom_data,
-                                      _audit_log_type(ResourceKeys.AUDIT_LOG_AUTHORIZATION))
-        
+
         # Create a minimal mock event for CloudWatch logging
         mock_event = {
             'requestContext': {
@@ -771,6 +780,13 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
                 }
             }
         }
+
+        if _buffer_allowed_authorization(current_audit_context(), authorized, event_type, user_context,
+                                         custom_data, mock_event):
+            return
+
+        message = _format_log_message(event_type, user_context, custom_data,
+                                      _audit_log_type(ResourceKeys.AUDIT_LOG_AUTHORIZATION))
 
         log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
         if not log_group_name:
@@ -820,6 +836,10 @@ def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: 
     """
     Log API authorization events with silent failure using full API Gateway event.
 
+    Inside the request audit context opened for this event, an allowed decision is buffered and
+    written in the request's end-of-request flush; a denial is written at once. Outside a context
+    every decision is written at once. The record is the same either way.
+
     Args:
         event: The API Gateway event
         authorized: Whether authorization was successful
@@ -828,12 +848,34 @@ def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: 
     try:
         user_context = _extract_user_context(event)
         event_type = _event_type(("AUTHORIZATION", None), ("authorized", authorized))
+        if _buffer_allowed_authorization(_context_for(event), authorized, event_type, user_context,
+                                         custom_data, event):
+            return
         _write_audit_entry(ResourceKeys.AUDIT_LOG_AUTHORIZATION, event_type, user_context, custom_data, event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log authorization audit event: {e}")
         report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHORIZATION, "unexpectedError", [None])
+
+
+def _buffer_allowed_authorization(ctx: Optional["AuditContext"], authorized: Any, event_type: str,
+                                  user_context: Dict[str, Any], custom_data: Any,
+                                  event: Optional[Dict[str, Any]]) -> bool:
+    """
+    Hand an allowed authorization record to the request audit context's end-of-request flush.
+
+    Only a decision that is exactly ``True`` and made inside an open context is buffered; a denial,
+    or any decision outside a context, is left to the caller to write at once. The record is
+    formatted exactly as an immediate write formats it (same prefix, payload and event echo, no
+    contract keys); only when it is written changes. Returns True when the record was handed over.
+    """
+    if ctx is None or authorized is not True:
+        return False
+    log_type = _audit_log_type(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+    message = _format_log_message(event_type, user_context, custom_data, log_type)
+    _enqueue_records(ctx, log_type, _records_with_echo([message], event), buffer=True)
+    return True
 
 
 def log_file_upload(
@@ -973,6 +1015,7 @@ def log_file_download_bulk(
 
         if ctx is not None:
             # One record per file, all delivered in the request's flush.
+            _note_recorded(ctx, canonical["action"])
             _enqueue_records(ctx, log_type, _records_with_echo(messages, event), buffer=True)
             return
 
@@ -1072,7 +1115,8 @@ def log_auth_changes(event: Dict[str, Any], secondary_type: str, custom_data: Op
         report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHCHANGES, "unexpectedError", [None])
 
 
-def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None) -> None:
+def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None,
+                outcome: str = "success") -> None:
     """
     Log general actions with silent failure.
 
@@ -1080,13 +1124,15 @@ def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optiona
         event: The API Gateway event
         secondary_type: The secondary type of action
         custom_data: Additional data to log (optional)
+        outcome: Inside an audit context, the outcome the record carries (success or failed); a
+            failed record is written at once rather than buffered
     """
     try:
         user_context = _extract_user_context(event)
         event_type = _event_type(("ACTIONS", None), ("type", secondary_type))
-        canonical = _legacy_canonical(event, secondary_type=secondary_type)
+        canonical = _legacy_canonical(event, secondary_type=secondary_type, outcome=outcome)
         _write_audit_entry(ResourceKeys.AUDIT_LOG_ACTIONS, event_type, user_context, custom_data, event,
-                           canonical=canonical, buffer=True)
+                           canonical=canonical, buffer=outcome == "success")
         
     except Exception as e:
         # Silent failure - log locally but don't raise
@@ -1308,6 +1354,9 @@ class AuditContext:
         # Set when the buffer must not hold records any longer (the request ended, or the function
         # is too close to its timeout to wait); a record recorded after that is written at once.
         self.write_through = False
+        # The actions this request has recorded outside the errors group, so audited_handler records
+        # a failed outcome for the route's action only when the handler recorded none.
+        self.recorded_actions: Set[str] = set()
 
 
 _audit_context: contextvars.ContextVar = contextvars.ContextVar("_audit_context", default=None)
@@ -1331,6 +1380,12 @@ def _get_flush_executor() -> ThreadPoolExecutor:
 def current_audit_context() -> Optional[AuditContext]:
     """The audit context of the request being served on this thread, or None."""
     return _audit_context.get()
+
+
+def _note_recorded(ctx: Optional[AuditContext], action: Optional[str]) -> None:
+    if ctx is not None and action:
+        with ctx.lock:
+            ctx.recorded_actions.add(action)
 
 
 def _context_for(event: Any) -> Optional[AuditContext]:
@@ -1368,6 +1423,28 @@ def _user_context_from_claims(claims: Dict[str, Any]) -> Dict[str, Any]:
         "roles": claims.get("roles", []),
         "mfaEnabled": claims.get("mfaEnabled", False),
     }
+
+
+# The key a handler sets on the event it forwards to another VAMS Lambda function with its caller's
+# authorizer context (an execute reading metadata, an ingest creating the asset). The forwarded call is
+# recorded as a cross-call on behalf of the caller, with the caller's request id, rather than as the
+# caller's own API action. It names who the work is attributed to only; authorization reads the
+# forwarded authorizer context as before. A Lambda invoke payload is set by its invoker, not by an API
+# client, so the key cannot arrive from the API.
+AUDIT_INTERNAL_CALL_KEY = "vamsAuditInternalCall"
+
+
+def internal_call_marker(event: Any = None) -> Dict[str, Any]:
+    """The marker a handler puts under AUDIT_INTERNAL_CALL_KEY on a call it forwards for this request
+    (the request ``event`` was opened for, or the current request when none is given)."""
+    marker: Dict[str, Any] = {}
+    ctx = _context_for(event) if event is not None else _audit_context.get()
+    if ctx is not None:
+        if ctx.request.get("requestId"):
+            marker["requestId"] = ctx.request["requestId"]
+        if ctx.actor.get("userId"):
+            marker["onBehalfOf"] = ctx.actor["userId"]
+    return marker
 
 
 def _resolve_actor(event: Dict[str, Any], claims: Dict[str, Any],
@@ -1411,6 +1488,12 @@ def _resolve_actor(event: Dict[str, Any], claims: Dict[str, Any],
         else:
             actor["authMethod"] = AUTH_METHOD_EXTERNAL_IDP
 
+    internal = event.get(AUDIT_INTERNAL_CALL_KEY) if is_event else None
+    if isinstance(internal, dict):
+        actor["crossCall"] = True
+        caller = internal.get("onBehalfOf") or user_context["user"]
+        if caller and caller not in (SYSTEM_USER, "UNKNOWN"):
+            actor["onBehalfOf"] = str(caller)
     if on_behalf_of:
         actor["onBehalfOf"] = str(on_behalf_of)
     actor = {"userId": user_context["user"], **actor}
@@ -1435,7 +1518,9 @@ def _request_facts(event: Dict[str, Any], lambda_context: Any) -> Dict[str, Any]
         route_key = request_context.get("routeKey")
         if not template_hint and isinstance(route_key, str) and " " in route_key:
             template_hint = route_key.split(" ", 1)[1]
-        request["requestId"] = request_context.get("requestId")
+        internal = event.get(AUDIT_INTERNAL_CALL_KEY)
+        request["requestId"] = request_context.get("requestId") or (
+            internal.get("requestId") if isinstance(internal, dict) else None)
         request["method"] = method.upper() if isinstance(method, str) else None
         if path:
             request["route"] = resolve_route_template(path, template_hint) or "unmatched"
@@ -1502,9 +1587,10 @@ def audit_request(event: Dict[str, Any], lambda_context: Any = None, *,
     Inside it the actor (user, roles, MFA, auth method, API key id, cross-call and on-behalf-of) and
     the request facts (request id, method, route template, source IP, Lambda request id) are
     resolved once, and every audit function reuses them instead of resolving claims per record.
-    Successful action records are buffered and written when the block ends, one parallel write per
-    audit log group, bounded by AUDIT_FLUSH_DEADLINE_SECONDS; denials, failures and errors are
-    written at once. A record the flush cannot confirm in time is reported as undelivered.
+    Successful action records and allowed authorization records are buffered and written when the
+    block ends, one parallel write per audit log group, bounded by AUDIT_FLUSH_DEADLINE_SECONDS;
+    denials, failures and errors are written at once. A record the flush cannot confirm in time is
+    reported as undelivered.
 
     A nested block joins the outer one. Outside a context every audit function writes as it is
     called, as before. Records written from another thread (a worker pool) are written at once,
@@ -1546,14 +1632,85 @@ def audit_request(event: Dict[str, Any], lambda_context: Any = None, *,
 
 
 def audited_handler(handler: Callable) -> Callable:
-    """Decorate a Lambda entrypoint ``handler(event, context)`` to run inside :func:`audit_request`."""
+    """
+    Decorate a Lambda entrypoint ``handler(event, context)`` to run inside :func:`audit_request`.
+
+    When the request's route registers an action and the handler recorded none for it, an error
+    response (or an exception) is recorded as that action with ``outcome="failed"`` and a generic
+    ``reason`` from the status code (``validation``, ``notFound``, ``conflict``, ``internal`` ...),
+    in the action's own group, with the path's id fields. A 401 or 403 is not: the authorization
+    record is the denial's record. An action still on ``AUDIT_PENDING_ACTIONS`` is skipped.
+    """
 
     @functools.wraps(handler)
     def wrapper(event, context=None, *args, **kwargs):
-        with audit_request(event, context):
-            return handler(event, context, *args, **kwargs)
+        outermost = _audit_context.get() is None
+        with audit_request(event, context) as ctx:
+            try:
+                response = handler(event, context, *args, **kwargs)
+            except Exception:
+                if outermost:
+                    _record_route_failure(ctx, event, 500)
+                raise
+            if outermost:
+                status = _response_status(response)
+                if status is not None and status >= 400:
+                    _record_route_failure(ctx, event, status)
+            return response
 
     return wrapper
+
+
+# The generic reason a failed record names for an error status; any other 4xx is clientError and
+# every 5xx is internal.
+_FAILURE_REASONS = {400: "validation", 404: "notFound", 405: "validation", 409: "conflict",
+                    410: "notFound", 412: "conflict", 413: "tooLarge", 415: "validation",
+                    422: "validation", 429: "throttled"}
+_DENIAL_STATUSES = frozenset({401, 403})
+# The auth change and auth other records keep their current shape until they move to the record
+# contract, so a failed request on those routes adds no action record yet.
+_OUTCOME_KEPT_GROUPS = frozenset({GROUP_AUTH_CHANGES, GROUP_AUTH_OTHER})
+
+
+def audit_failure_reason(status: int) -> str:
+    """The generic reason category of an error status code."""
+    if status >= 500:
+        return "internal"
+    return _FAILURE_REASONS.get(status, "clientError")
+
+
+def _response_status(response: Any) -> Optional[int]:
+    status = response.get("statusCode") if isinstance(response, dict) else getattr(response, "statusCode", None)
+    if isinstance(status, bool):
+        return None
+    try:
+        return int(status)
+    except (TypeError, ValueError):
+        return None
+
+
+def _path_ids(event: Any) -> Dict[str, Any]:
+    """The path parameters that are record id fields (databaseId, assetId, workflowId, ...)."""
+    path_parameters = event.get("pathParameters") if isinstance(event, dict) else None
+    if not isinstance(path_parameters, dict):
+        return {}
+    return {key: value for key, value in path_parameters.items()
+            if key in AUDIT_ID_FIELDS and isinstance(value, str) and value}
+
+
+def _record_route_failure(ctx: Optional[AuditContext], event: Any, status: int) -> None:
+    """Record the route's action as failed when the handler recorded nothing for it. Never raises."""
+    try:
+        if ctx is None or ctx.route_spec is None or status in _DENIAL_STATUSES:
+            return
+        action = ctx.route_spec.action
+        if (action in AUDIT_PENDING_ACTIONS or action in ctx.recorded_actions
+                or ctx.route_spec.group in _OUTCOME_KEPT_GROUPS):
+            return
+        log_action(ctx.event, action, outcome=OUTCOME_FAILED, reason=audit_failure_reason(status),
+                   **_path_ids(ctx.event))
+    except Exception as e:
+        logger.exception(f"Failed to record the request's failed action: {e}")
 
 
 def _flush_deadline_seconds(ctx: Optional[AuditContext]) -> float:
@@ -1925,6 +2082,7 @@ def log_action(
     previous: Optional[Dict[str, Any]] = None,
     request_parameters: Optional[Dict[str, Any]] = None,
     details: Optional[Dict[str, Any]] = None,
+    on_behalf_of: Optional[str] = None,
     **ids: Any,
 ) -> None:
     """
@@ -1956,6 +2114,8 @@ def log_action(
         database_id, asset_id, file_path: The ids of the asset data the action touched
         bytes, file_count, item_count, duration_ms: Sizes and counts the handler already knows
         changes, previous, request_parameters, details: The record's value sections
+        on_behalf_of: The user a system action ran for (an execution's initiator, a queued
+            upload's uploader), recorded as actor.onBehalfOf on this record
         **ids: Further id fields by their record key (``AUDIT_ID_FIELDS``, e.g. ``versionId``);
             any other keyword is recorded in details
     """
@@ -1966,6 +2126,7 @@ def log_action(
             logger.error("log_action called without an action outside a registered route")
             return
         action_name = action or audit_spec.action
+        _note_recorded(ctx, action_name)
         if audit_spec is None:
             logger.error(f"Audit action {action_name!r} is not registered in common/auditActions.py")
         group = audit_spec.group if audit_spec else GROUP_ACTIONS
@@ -1988,6 +2149,8 @@ def log_action(
         else:
             user_context, actor = _resolve_actor(event, _claims_for(event))
             request = _request_facts(event, None)
+        if on_behalf_of:
+            actor = {**actor, "onBehalfOf": str(on_behalf_of)}
 
         all_ids = {key: value for key, value in ids.items() if key in AUDIT_ID_FIELDS}
         extra = {key: value for key, value in ids.items() if key not in AUDIT_ID_FIELDS}

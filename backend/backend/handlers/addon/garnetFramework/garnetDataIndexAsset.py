@@ -22,6 +22,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from common.batchItemFailures import (
     all_batch_item_failures,
     batch_item_identifier,
@@ -74,8 +75,14 @@ def live_database_id(database_id: str) -> str:
 
 def _record_sync(object_type, action, success, database_id, asset_id=None,
                  file_path=None, s3_version_id=None, entity_id=None):
-    """Best-effort outbound sync tracking record. Success means the entity was
-    queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    """Best-effort outbound sync tracking record, and the audit record of this one entity. Success
+    means the entity was queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    ctx = current_audit_context()
+    if ctx is not None:
+        log_action(ctx.event, "garnetAssetSync", outcome="success" if success else "failed",
+                   reason=None if success else "internal", database_id=database_id, asset_id=asset_id,
+                   file_path=file_path, details={"operation": action, "objectType": object_type,
+                                                 "entityId": entity_id})
     write_outbound_sync_record(
         object_type,
         database_id,
@@ -1265,6 +1272,8 @@ def handle_asset_link_metadata_stream(event_record: Dict[str, Any]) -> bool:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     """
     Lambda handler for Garnet Framework asset indexing.
