@@ -215,7 +215,7 @@ Every point cloud reader keeps at most the run's point budget (see [Compute and 
 -   **PTX**: every scan's ten header lines are parsed and its 4x4 transform is applied to its points; `0 0 0` (no return) is dropped. In S3 mode a PTX file is streamed from Amazon S3 and parsed in blocks of one million lines, with no local copy.
 -   **PCD**: read with Open3D, then sampled.
 
-Every reader drops points with a NaN or infinite coordinate, and their colours, before sampling and framing (`pointcloud_handler.finite_points`): an organized cloud, such as a PCD from a depth camera, stores NaN for each pixel that saw nothing. A cloud with no valid point fails with "The point cloud has no valid points".
+Every reader drops points with a NaN or infinite coordinate, and their colours, before sampling and framing (`pointcloud_handler.finite_points`): an organized cloud, such as a PCD from a depth camera, stores NaN for each pixel that saw nothing. A cloud with no valid point fails with "The point cloud has no valid points". The point clouds the mesh handler loads (the point geometry of a glTF/GLB scene, a vertex-only OBJ, a Draco file without faces) go through the same filter; in a scene that also holds meshes, a point cloud with no valid point is left out and the meshes render.
 
 Points are rendered as colored spheres using per-point RGB colors when available, or colored by elevation (Y-axis) using the viridis colormap.
 
