@@ -1113,3 +1113,31 @@ class TestLegacyActionOutcome:
             assert clients.flush.calls == []
         _, payload, _ = parse(clients.flush.messages(group_name("auditActions"))[0])
         assert payload["outcome"] == "success"
+
+
+@pytest.mark.unit
+class TestInternalCalls:
+    def test_a_forwarded_call_is_recorded_as_a_cross_call_for_the_caller(self, clients):
+        caller = api_event(path="/workflows/execute", method="POST")
+        with auditLogging.audit_request(caller, LAMBDA_CONTEXT):
+            marker = auditLogging.internal_call_marker(caller)
+            assert auditLogging.internal_call_marker() == marker, "the current request is the default"
+        forwarded = api_event(path="/database/db1/assets/a1/metadata", method="GET")
+        forwarded["requestContext"].pop("requestId")
+        forwarded[auditLogging.AUDIT_INTERNAL_CALL_KEY] = marker
+        with auditLogging.audit_request(forwarded, LAMBDA_CONTEXT):
+            auditLogging.log_action(forwarded, "metadataGet", database_id="db1", asset_id="a1")
+        _, payload, _ = parse(clients.flush.messages(group_name("auditActions"))[0])
+        assert payload["actor"]["crossCall"] is True and payload["actor"]["onBehalfOf"] == "alice"
+        assert payload["actor"]["authMethod"] == "cognito", "the forwarded identity is unchanged"
+        assert payload["request"]["requestId"] == "req-1", "the caller's request id ties the records together"
+
+    def test_a_direct_call_is_not_a_cross_call(self, clients):
+        event = api_event(method="GET")
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_action(event, "assetGet")
+        _, payload, _ = parse(clients.flush.messages(group_name("auditActions"))[0])
+        assert "crossCall" not in payload["actor"] and "onBehalfOf" not in payload["actor"]
+
+    def test_no_marker_outside_a_request(self):
+        assert auditLogging.internal_call_marker() == {}

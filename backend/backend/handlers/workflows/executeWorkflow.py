@@ -56,7 +56,8 @@ from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import audited_handler, log_actions
+from customLogging.auditLogging import (AUDIT_INTERNAL_CALL_KEY, audited_handler, internal_call_marker,
+                                        log_actions)
 from common.workflows import executionRecords as er
 from common.workflows import executionValidation as ev
 from common.workflows import templateResolution as tres
@@ -520,6 +521,7 @@ def _metadata_service_payload(path, path_parameters, event):
     else:
         payload["requestContext"]["authorizer"] = (
             event.get("requestContext") or {}).get("authorizer")
+        payload[AUDIT_INTERNAL_CALL_KEY] = internal_call_marker(event)
     return payload
 
 

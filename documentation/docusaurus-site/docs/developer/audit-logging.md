@@ -164,6 +164,8 @@ A handler entrypoint opens the request's audit context with `audit_request(event
 -   Denials, failures and error records are written at once.
 -   A record not confirmed by the deadline is kept in the function log as an [undelivered entry](#monitoring-audit-logging-health) with reason `flushDeadlineExceeded`. Its write may still complete, so a record can appear twice; `recordId` identifies the copy.
 
+When a handler forwards a call to another VAMS function with its caller's authorization (an execute reading the asset's metadata, an ingest creating the asset and its upload), the forwarded call is recorded as the work of that request, not as a separate request by the user: its records carry `actor.crossCall` `true`, `actor.onBehalfOf` naming the user and the caller's `request.requestId`. The marker sets attribution only; the forwarded call is authorized as before.
+
 If a function stops without returning (out of memory, a crash), records held for it are lost; the API-level authorization record of the call is written before the handler runs and is not affected.
 
 ### Request Outcomes

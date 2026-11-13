@@ -107,3 +107,34 @@ class TestHistoryRecord:
         m.log_action = MagicMock()
         assert m.lambda_handler(_history_event(), MagicMock())["statusCode"] == 403
         m.log_action.assert_not_called()
+
+
+@pytest.mark.unit
+class TestIngestForwardedCalls:
+    def test_the_asset_create_and_upload_calls_are_marked_internal(self):
+        from backend.backend.handlers.assets import ingestAsset as ia
+        payloads = []
+
+        def invoke(function_name, payload, invocation_type="RequestResponse"):
+            payloads.append(payload)
+            if payload["requestContext"]["http"]["path"] == "/assets":
+                return {"statusCode": 200, "body": "{}"}
+            return {"statusCode": 200, "body": json.dumps({"uploadId": "up-1", "files": []})}
+
+        marker = {"requestId": "req-1", "onBehalfOf": "u1"}
+        request = ia.IngestAssetInitializeRequestModel(
+            databaseId="db-one", assetId="asset-1", assetName="Asset 1", description="an asset",
+            files=[{"relativeKey": "asset-1/a.glb", "file_size": 1024}])
+        with patch.object(ia, "verify_database_exists", return_value=True), \
+                patch.object(ia, "verify_asset_exists", return_value=False), \
+                patch.object(ia, "invoke_lambda", side_effect=invoke), \
+                patch.object(ia, "internal_call_marker", return_value=marker):
+            try:
+                ia.initialize_ingest(request, {"tokens": ["u1"]}, {"lambda": {}})
+            except Exception:
+                pass  # the response shape is not under test; the forwarded payloads are
+        create, upload = payloads
+        assert (create["requestContext"]["http"]["path"], upload["requestContext"]["http"]["path"]) == (
+            "/assets", "/uploads")
+        assert create[ia.AUDIT_INTERNAL_CALL_KEY] == marker and upload[ia.AUDIT_INTERNAL_CALL_KEY] == marker
+        assert create["requestContext"]["authorizer"] == upload["requestContext"]["authorizer"] == {"lambda": {}}

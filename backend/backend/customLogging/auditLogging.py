@@ -1388,6 +1388,28 @@ def _user_context_from_claims(claims: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# The key a handler sets on the event it forwards to another VAMS Lambda function with its caller's
+# authorizer context (an execute reading metadata, an ingest creating the asset). The forwarded call is
+# recorded as a cross-call on behalf of the caller, with the caller's request id, rather than as the
+# caller's own API action. It names who the work is attributed to only; authorization reads the
+# forwarded authorizer context as before. A Lambda invoke payload is set by its invoker, not by an API
+# client, so the key cannot arrive from the API.
+AUDIT_INTERNAL_CALL_KEY = "vamsAuditInternalCall"
+
+
+def internal_call_marker(event: Any = None) -> Dict[str, Any]:
+    """The marker a handler puts under AUDIT_INTERNAL_CALL_KEY on a call it forwards for this request
+    (the request ``event`` was opened for, or the current request when none is given)."""
+    marker: Dict[str, Any] = {}
+    ctx = _context_for(event) if event is not None else _audit_context.get()
+    if ctx is not None:
+        if ctx.request.get("requestId"):
+            marker["requestId"] = ctx.request["requestId"]
+        if ctx.actor.get("userId"):
+            marker["onBehalfOf"] = ctx.actor["userId"]
+    return marker
+
+
 def _resolve_actor(event: Dict[str, Any], claims: Dict[str, Any],
                    on_behalf_of: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
@@ -1429,6 +1451,12 @@ def _resolve_actor(event: Dict[str, Any], claims: Dict[str, Any],
         else:
             actor["authMethod"] = AUTH_METHOD_EXTERNAL_IDP
 
+    internal = event.get(AUDIT_INTERNAL_CALL_KEY) if is_event else None
+    if isinstance(internal, dict):
+        actor["crossCall"] = True
+        caller = internal.get("onBehalfOf") or user_context["user"]
+        if caller and caller not in (SYSTEM_USER, "UNKNOWN"):
+            actor["onBehalfOf"] = str(caller)
     if on_behalf_of:
         actor["onBehalfOf"] = str(on_behalf_of)
     actor = {"userId": user_context["user"], **actor}
@@ -1453,7 +1481,9 @@ def _request_facts(event: Dict[str, Any], lambda_context: Any) -> Dict[str, Any]
         route_key = request_context.get("routeKey")
         if not template_hint and isinstance(route_key, str) and " " in route_key:
             template_hint = route_key.split(" ", 1)[1]
-        request["requestId"] = request_context.get("requestId")
+        internal = event.get(AUDIT_INTERNAL_CALL_KEY)
+        request["requestId"] = request_context.get("requestId") or (
+            internal.get("requestId") if isinstance(internal, dict) else None)
         request["method"] = method.upper() if isinstance(method, str) else None
         if path:
             request["route"] = resolve_route_template(path, template_hint) or "unmatched"

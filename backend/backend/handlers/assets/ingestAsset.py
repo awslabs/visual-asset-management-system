@@ -9,7 +9,7 @@ from botocore.config import Config
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import audited_handler, log_action
+from customLogging.auditLogging import AUDIT_INTERNAL_CALL_KEY, audited_handler, internal_call_marker, log_action
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from models.common import (
@@ -145,7 +145,8 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
                     "method": "POST"
                 },
                 "authorizer": event_auth
-            }
+            },
+            AUDIT_INTERNAL_CALL_KEY: internal_call_marker()
         }
         
         # Invoke createAsset lambda
@@ -174,7 +175,8 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
                 "method": "POST"
             },
             "authorizer": event_auth
-        }
+        },
+        AUDIT_INTERNAL_CALL_KEY: internal_call_marker()
     }
     
     # Invoke fileUpload lambda to initialize the upload
@@ -231,7 +233,8 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
                     "method": "POST"
                 },
                 "authorizer": event_auth
-            }
+            },
+            AUDIT_INTERNAL_CALL_KEY: internal_call_marker()
         }
         
         # Invoke createAsset lambda
@@ -263,7 +266,8 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
                 "method": "POST"
             },
             "authorizer": event_auth
-        }
+        },
+        AUDIT_INTERNAL_CALL_KEY: internal_call_marker()
     }
     
     # Invoke fileUpload lambda to complete the upload
