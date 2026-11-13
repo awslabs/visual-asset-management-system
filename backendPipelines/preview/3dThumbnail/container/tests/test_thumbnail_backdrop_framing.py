@@ -1,15 +1,13 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""A model that sits on a large ground or environment plane.
+"""Framing a model that sits on a large ground or environment plane.
 
 A scene of a robot about 1 m across on a 50 m ground plane framed the whole plane, so the robot
-rendered as a dot. The preview now leaves a backdrop out: a near-flat sheet whose largest extent is at
-least ``scene_parts.BACKDROP_SCALE`` times the rest of the scene and centred on it is cut out right
-after loading (``scene_parts.without_backdrop``), so the model appears alone on the transparent
-background, framed as a file holding the model alone. When the parts cannot be cut out the camera
-still leaves the backdrop out of its framing and draws it. A scene with no such part renders exactly
-as before, and so does a scene made only of flat parts (a sign, a floor plan).
+rendered as a dot. The camera now leaves a backdrop out of its framing: a near-flat sheet whose
+largest extent is at least ``scene_parts.BACKDROP_SCALE`` times the rest of the scene. The backdrop
+is still drawn. A scene with no such part frames exactly as before, and so does a scene made only of
+flat parts (a sign, a floor plan).
 
 The rule tests run anywhere; the loading and render tests need the real pyvista/VTK/trimesh/pxr and
 run inside the pipeline image (or a venv holding its requirements).
@@ -246,85 +244,15 @@ GROUND_RGB = (40, 40, 230)
 @pytest.mark.unit
 @requires_real("pyvista", "vtk")
 class TestRender:
-    def test_the_model_fills_the_preview_and_the_ground_is_not_drawn(self):
+    def test_the_model_fills_the_preview_and_the_ground_is_still_drawn(self):
         from preview_pipeline import renderer
 
-        data = scene_parts.without_backdrop(_merged(MODEL, GROUND, colours=[MODEL_RGB, GROUND_RGB]))
+        data = _merged(MODEL, GROUND, colours=[MODEL_RGB, GROUND_RGB])
         frame = renderer.generate_static_frame(data, resolution=(200, 150))
         model_share, ground_share = colour_shares(frame, [MODEL_RGB, GROUND_RGB])
         # Framed on the whole plane the model covered well under 1% of the frame.
         assert model_share > 0.1
-        assert ground_share == 0.0
-        assert (frame[..., 3] == 0).mean() > 0.3  # the transparent background shows around the model
-
-    def test_every_orbit_frame_matches_the_model_rendered_alone(self):
-        """The ground's pixels are gone and the model's silhouette is the model-alone one (IoU >= 0.99)
-        in every frame of the orbit."""
-        from preview_pipeline import renderer
-
-        model = _merged(MODEL, _box((-0.3, 0.7, -0.2), (0.3, 1.0, 0.2)), colours=[MODEL_RGB, MODEL_RGB])
-        scene = _merged(MODEL, _box((-0.3, 0.7, -0.2), (0.3, 1.0, 0.2)), GROUND,
-                        colours=[MODEL_RGB, MODEL_RGB, GROUND_RGB])
-        treated = renderer.generate_rotating_frames(scene_parts.without_backdrop(scene), n_frames=12,
-                                                    resolution=(160, 120))
-        alone = renderer.generate_rotating_frames(model, n_frames=12, resolution=(160, 120))
-        for treated_frame, alone_frame in zip(treated, alone):
-            assert colour_shares(treated_frame, [GROUND_RGB])[0] == 0.0
-            a, t = alone_frame[..., 3] > 0, treated_frame[..., 3] > 0
-            assert (a & t).sum() / (a | t).sum() >= 0.99
-            assert 0.05 < a.mean() < 0.95
-
-    def test_the_ground_drawn_before_covered_the_whole_frame(self):
-        """Without the cut, the ground fills the background behind the model."""
-        from preview_pipeline import renderer
-
-        frame = renderer.generate_static_frame(_merged(MODEL, GROUND, colours=[MODEL_RGB, GROUND_RGB]),
-                                               resolution=(200, 150))
-        assert colour_shares(frame, [GROUND_RGB])[0] > 0.1
-
-
-@pytest.mark.unit
-@requires_real("pyvista", "vtk")
-class TestWithoutBackdrop:
-    def test_the_ground_plane_is_cut_out_and_the_model_kept_whole(self, caplog):
-        data = _merged(MODEL, GROUND)
-        with caplog.at_level("INFO"):
-            result = scene_parts.without_backdrop(data)
-        assert result.n_cells == data.n_cells // 2
-        np.testing.assert_allclose(result.bounds, (-0.5, 0.5, 0.0, 0.7, -0.3, 0.3), atol=1e-9)
-        assert scene_parts.part_bounds(result) is None  # one part remains
-        assert "Backdrop left out of the preview: 1 of 2 parts" in caplog.text
-        assert "(50.00, 0.00, 50.00)" in caplog.text
-
-    def test_scenes_the_rule_keeps_whole_are_left_as_they_are(self):
-        board = _box((0.0, 0.0, 0.0), (100.0, 0.0, 100.0))
-        chip = _box((0.0, 0.0, 0.0), (4.0, 1.4, 4.0))
-        furniture = _box((-4.0, 0.0, -3.0), (4.0, 2.5, 3.0))
-        floor = _box((-5.0, 0.0, -4.0), (5.0, 0.0, 4.0))
-        sign = _box((0.0, 0.0, 0.0), (2.0, 1.0, 0.0))
-        tiles = [_box((i - 5.0, 0.0, j - 5.0), (i - 4.0, 0.0, j - 4.0)) for i in range(10) for j in range(10)]
-        thing = _box((-0.52, 0.0, -0.52), (-0.48, 0.04, -0.48))
-        for boxes in ((chip, board), (furniture, floor), (GROUND, sign), (thing, *tiles)):
-            data = _merged(*boxes)
-            assert scene_parts.without_backdrop(data) is data
-
-    def test_a_scene_over_the_part_cap_is_left_as_it_is(self):
-        import pyvista as pv
-
-        model = pv.Box(bounds=(-0.5, 0.5, 0, 0.7, -0.3, 0.3)).triangulate()
-        ground = pv.Plane(i_size=50, j_size=50, direction=(0, 1, 0)).triangulate()
-        data = model.append_polydata(ground)
-        scene_parts.record_parts(data, [model.n_points, ground.n_points], max_parts=1)
-        assert scene_parts.without_backdrop(data) is data
-
-    def test_counts_that_no_longer_match_leave_the_ground_drawn_and_out_of_the_framing(self):
-        from preview_pipeline import renderer
-
-        data = _merged(MODEL, GROUND)
-        del data.field_data[scene_parts.PART_POINTS]
-        assert scene_parts.without_backdrop(data) is data
-        _, radius, _ = renderer._compute_camera_framing(data, use_full_bounds=True)
-        assert radius < 5.0
+        assert ground_share > 0.1
 
 
 _PLANE_AND_CUBE_USDA = """
@@ -521,8 +449,7 @@ class TestSceneLoaders:
 @pytest.mark.unit
 @requires_real("pyvista", "vtk", "cadquery")
 class TestStepAssembly:
-    def test_a_step_assembly_loads_without_its_ground(self, tmp_path):
-        """The loader records the two parts, finds the ground a backdrop and tessellates the model alone."""
+    def test_a_step_assembly_records_its_parts(self, tmp_path):
         import cadquery as cq
 
         from preview_pipeline import core
@@ -533,8 +460,10 @@ class TestStepAssembly:
         path = tmp_path / "assembly.step"
         assembly.save(str(path))
         data = core._load_file(str(path), ".step")
-        assert scene_parts.part_bounds(data) is None  # the model alone, one part
-        np.testing.assert_allclose(data.bounds, (-0.5, 0.5, -0.3, 0.3, 0.0, 0.7), atol=1e-6)
+        bounds = scene_parts.part_bounds(data)
+        assert bounds is not None and len(bounds) == 2
+        mask = scene_parts.backdrop_parts(bounds)
+        assert mask.sum() == 1
         from preview_pipeline import renderer
 
         _, radius, _ = renderer._compute_camera_framing(data, use_full_bounds=True)
@@ -557,63 +486,3 @@ class TestFbxScene:
             materials=[(30, (1, 0, 0)), (31, (0, 1, 0))],
             connections=[(20, 0), (21, 0), (10, 20), (11, 21), (30, 20), (31, 21)]))
         _assert_frames_the_model(core._load_file(str(path), ".fbx", budgets=_budgets()), ".fbx")
-
-
-@pytest.mark.unit
-@requires_real("pyvista", "vtk", "pxr")
-class TestUsdGroundCut:
-    def test_a_z_up_stage_with_a_ground_plane_loads_as_the_robot_alone(self, tmp_path):
-        from preview_pipeline import core
-        from preview_pipeline.format_handlers import usd_handler
-
-        path = tmp_path / "robot.usda"
-        path.write_text(f'#usda 1.0\n(\n    upAxis = "Z"\n)\n{_PLANE_AND_CUBE_USDA}\n')
-        data = scene_parts.without_environment(usd_handler.load(str(path)))
-        np.testing.assert_allclose(data.bounds, (-0.5, 0.5, 0.0, 1.0, -0.5, 0.5), atol=1e-6)
-        source = __import__("inspect").getsource(core._run_preview_stage)
-        assert "scene_parts.without_environment(pv_data)" in source
-
-    def test_a_coloured_ground_under_an_uncoloured_robot_leaves_the_robot_as_drawn_alone(self, tmp_path):
-        """The loader fills the robot with a neutral colour only because the ground has one; once the
-        ground is cut out the robot draws as from a stage holding it alone, in every orbit frame."""
-        from preview_pipeline import renderer
-        from preview_pipeline.format_handlers import usd_handler
-
-        coloured = _PLANE_AND_CUBE_USDA.replace(
-            "point3f[] points", "color3f[] primvars:displayColor = [(0.1, 0.6, 0.1)]\n        point3f[] points")
-        on_ground, alone = tmp_path / "on-ground.usda", tmp_path / "alone.usda"
-        on_ground.write_text(f'#usda 1.0\n(\n    upAxis = "Z"\n)\n{coloured}\n')
-        alone.write_text('#usda 1.0\n(\n    upAxis = "Z"\n    subLayers = [@./on-ground.usda@]\n)\n'
-                         'over "World"\n{\n    over "GroundPlane" (\n        active = false\n    )\n    {\n    }\n}\n')
-        loaded = usd_handler.load(str(on_ground))
-        assert "RGB" in loaded.point_data
-        cut = scene_parts.without_environment(loaded)
-        reference = usd_handler.load(str(alone))
-        assert "RGB" not in cut.point_data and "RGB" not in reference.point_data
-        for a, b in zip(renderer.generate_rotating_frames(cut, n_frames=8, resolution=(120, 90)),
-                        renderer.generate_rotating_frames(reference, n_frames=8, resolution=(120, 90))):
-            assert np.array_equal(a, b)
-
-
-@pytest.mark.unit
-@requires_real("pyvista", "vtk", "cadquery")
-class TestStepGroundCut:
-    def test_a_part_on_a_ground_slab_tessellates_as_if_alone(self, tmp_path):
-        """The ground slab is left out and the part is tessellated again at its own size."""
-        import cadquery as cq
-
-        from preview_pipeline import core
-
-        def save(with_ground):
-            assembly = cq.Assembly()
-            assembly.add(cq.Workplane().cylinder(0.7, 0.5).translate((0, 0, 0.35)), name="model")
-            if with_ground:
-                assembly.add(cq.Workplane().box(50, 50, 0.01).translate((0, 0, -0.005)), name="ground")
-            path = tmp_path / f"assembly-{with_ground}.step"
-            assembly.save(str(path))
-            return path
-
-        on_ground = scene_parts.without_environment(core._load_file(str(save(True)), ".step"))
-        alone = core._load_file(str(save(False)), ".step")
-        assert on_ground.n_points == alone.n_points
-        np.testing.assert_allclose(np.asarray(on_ground.points), np.asarray(alone.points), atol=1e-9)

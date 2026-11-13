@@ -419,7 +419,7 @@ def _scene_parts_to_pyvista(trimeshes: list, clouds: list) -> pv.PolyData:
     for cloud in clouds:
         parts.append(_with_rgb(_pointcloud_to_pyvista(cloud), _MIXED_SCENE_POINT_RGB))
     merged = parts[0] if len(parts) == 1 else parts[0].append_polydata(*parts[1:])
-    scene_parts.record_parts(merged, [part.n_points for part in parts], fill_rgb=_MIXED_SCENE_MESH_RGB)
+    scene_parts.record_parts(merged, [part.n_points for part in parts])
     logger.info(f"Loaded scene with {len(trimeshes)} meshes and {len(clouds)} point clouds: "
                 f"{merged.n_points} points, {merged.n_cells} cells")
     return merged
@@ -527,8 +527,7 @@ def _load_fbx_open3d(file_path: str, max_triangles: int = None) -> pv.PolyData:
         default = np.asarray(_MIXED_SCENE_MESH_RGB, dtype=np.uint8)
         pv_mesh.point_data["RGB"] = np.concatenate(
             [rgb if rgb is not None else np.tile(default, (len(vertices), 1)) for vertices, _, rgb in parts])
-    scene_parts.record_parts(pv_mesh, [len(vertices) for vertices, _, _ in parts],
-                             fill_rgb=_MIXED_SCENE_MESH_RGB)
+    scene_parts.record_parts(pv_mesh, [len(vertices) for vertices, _, _ in parts])
 
     logger.info(f"Loaded FBX scene via Open3D: {len(parts)} meshes, {len(points)} vertices, "
                 f"{len(triangles)} faces")

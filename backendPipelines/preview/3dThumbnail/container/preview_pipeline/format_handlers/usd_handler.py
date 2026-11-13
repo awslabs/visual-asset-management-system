@@ -100,7 +100,7 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
 
     pv_mesh = _merge_parts(parts)
     pv_mesh = _normalize_usd_up_axis(stage, pv_mesh)
-    scene_parts.record_parts(pv_mesh, [len(points) for points, _, _ in parts], fill_rgb=NEUTRAL_RGB)
+    scene_parts.record_parts(pv_mesh, [len(points) for points, _, _ in parts])
     logger.info(f"Loaded USD model: {pv_mesh.n_points} vertices, {pv_mesh.n_cells} faces "
                 f"from {len(parts)} prims")
     return pv_mesh

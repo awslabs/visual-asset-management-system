@@ -13,13 +13,11 @@ of the parts in merge order. The bounds travel with the data: an up-axis rotatio
 (``carry_parts``). A loader that does not record parts, a scene of one part and a scene of more
 parts than ``part_limit`` frame exactly as before.
 
-The preview leaves out a part that is a backdrop (``backdrop_parts``, ``without_backdrop``): a
-near-flat sheet, such as a ground or environment plane, far larger than the rest of the scene and
-centred on it. A backdrop whose removal leaves the scene's bounds as they are stays. When the
-recorded part point counts no longer match the points (the backdrop could not be cut out), the camera
-still leaves the backdrop out of its framing (``framing_bounds``) and draws it.
+The camera leaves out of its framing a part that is a backdrop (``backdrop_parts``): a near-flat
+sheet, such as a ground or environment plane, far larger than the rest of the scene and centred on
+it. The part is still drawn.
 
-The preview also leaves out environment geometry that encloses the content (``without_enclosure``): a room
+The preview leaves out environment geometry that encloses the content (``without_enclosure``): a room
 or environment box, a sky sphere or dome, with any light cards or pictures on its walls, around a much
 smaller model. Framed on the whole scene, the camera stood outside the enclosure and showed its
 outside. The renderer's background is transparent and its lights are its own, so the enclosure adds
@@ -30,9 +28,6 @@ is looked at further: no environment point may lie inside the content's bounds, 
 drawn in far finer detail than the environment, and rays cast from the content must meet the
 environment in nearly every direction (a closed or near-closed shell, not an open backdrop or a
 floor). Any doubt, such as a hollow product whose shell is the asset, leaves the scene as it is.
-``without_environment`` applies both, the enclosure first, right after loading. What remains is the
-model alone, so the renderer's transparent background shows around it, as in a file holding only the
-model.
 """
 
 import numpy as np
@@ -46,8 +41,6 @@ logger = get_logger()
 # point count in merge order (valid until the triangle budget reduces the points).
 PART_BOUNDS = "vamsPreviewPartBounds"
 PART_POINTS = "vamsPreviewPartPoints"
-# The colour a loader filled colourless parts with because another part had a colour.
-FILL_RGB = "vamsPreviewFillRgb"
 
 # A part is a near-flat sheet when its smallest extent is at most FLAT_RATIO of its largest and its
 # middle extent at least SHEET_RATIO of its largest: a plane, not a rod or a cable. A circuit board
@@ -102,13 +95,11 @@ def part_limit(memory_bytes: int) -> int:
     return max(2, min(MAX_PARTS, int(memory_bytes * PART_MEMORY_FRACTION / BYTES_PER_PART)))
 
 
-def record_parts(pv_data, point_counts, max_parts: int = None, fill_rgb=None):
+def record_parts(pv_data, point_counts, max_parts: int = None):
     """Record on ``pv_data`` the bounds of the parts it was merged from, given each part's point count
     in merge order. Nothing is recorded for fewer than two parts, for more than ``max_parts`` (default:
     ``part_limit`` of the running container's memory), or when the counts do not add up to the data's
-    points. ``fill_rgb`` is the colour the loader gave parts with no colour of their own because
-    another part had one (``without_environment`` drops it when only such parts remain). Costs one
-    min and one max over the points, as framing on the full bounds does."""
+    points. Costs one min and one max over the points, as framing on the full bounds does."""
     counts = np.asarray(point_counts, dtype=np.int64).reshape(-1)
     counts = counts[counts > 0]
     if len(counts) < 2 or int(counts.sum()) != int(pv_data.n_points):
@@ -126,8 +117,6 @@ def record_parts(pv_data, point_counts, max_parts: int = None, fill_rgb=None):
     np.maximum.reduceat(points, starts, axis=0, out=bounds[:, 3:])
     pv_data.field_data[PART_BOUNDS] = bounds
     pv_data.field_data[PART_POINTS] = counts
-    if fill_rgb is not None and ("RGB" in pv_data.point_data or "RGB" in pv_data.cell_data):
-        pv_data.field_data[FILL_RGB] = np.asarray(fill_rgb, dtype=np.uint8).reshape(-1)[:3]
     return pv_data
 
 
@@ -375,130 +364,6 @@ def _finer(content_points, other_points, content_extent, scene_extent) -> bool:
     return content_points / content_area >= DETAIL_RATIO * other_points / scene_area
 
 
-def _loaded_counts(pv_data):
-    """(bounds, point counts) of a freshly loaded scene whose recorded part point counts still match
-    its points, or None."""
-    bounds = part_bounds(pv_data)
-    if bounds is None or PART_POINTS not in pv_data.field_data or pv_data.n_cells == 0:
-        return None
-    counts = np.asarray(pv_data.field_data[PART_POINTS], dtype=np.int64)
-    if len(counts) != len(bounds) or int(counts.sum()) != int(pv_data.n_points):
-        return None
-    return bounds, counts
-
-
-def _enclosure_kept(pv_data, bounds, counts):
-    """The parts to keep when ``pv_data`` holds environment geometry that encloses its content, with
-    the log line, or None. See ``without_enclosure``."""
-    screen = enclosure_screen(bounds)
-    if screen is None:
-        return None
-    lo, hi, kept, contact = screen
-    point_keep = np.repeat(kept, counts)
-    environment_points = np.asarray(pv_data.points)[~point_keep]
-    eps = 1e-3 * float((hi - lo).max())
-    if np.any(np.all((environment_points > lo + eps) & (environment_points < hi - eps), axis=1)):
-        logger.debug("Enclosure screen passed, but environment geometry reaches into the content")
-        return None
-    content_points = int(point_keep.sum())
-    scene_extent = bounds[:, 3:].max(axis=0) - bounds[:, :3].min(axis=0)
-    if (content_points < CONTENT_POINT_SHARE * len(point_keep)
-            or not _finer(content_points, len(point_keep) - content_points, hi - lo, scene_extent)):
-        logger.debug(f"Enclosure screen passed, but the content holds {content_points:,} of "
-                     f"{len(point_keep):,} points, too few or too coarse next to the environment")
-        return None
-    environment = _subset(pv_data, ~point_keep)
-    if environment.n_cells == 0:
-        return None
-    coverage = _rays_meet(environment, lo, hi, contact, scene_extent)
-    if coverage < ENCLOSURE_COVERAGE:
-        logger.debug(f"Enclosure screen passed, but rays from the content meet it in {coverage:.0%} of directions")
-        return None
-    message = (f"Enclosure left out of the preview: {int((~kept).sum())} of {len(bounds)} parts, scene "
-               f"extents {_extents(scene_extent)}, around content of extents {_extents(hi - lo)} "
-               f"({content_points:,} of {len(point_keep):,} points)")
-    return kept, message
-
-
-def _backdrop_kept(bounds):
-    """The parts to keep when ``bounds`` hold a backdrop (``backdrop_parts``) whose removal changes the
-    scene's bounds, with the log line, or None. A backdrop that leaves the bounds as they are (a tile
-    at the centre of a tiled floor) is part of a larger surface and stays."""
-    mask = backdrop_parts(bounds)
-    if not mask.any():
-        return None
-    kept = bounds[~mask]
-    lo, hi = kept[:, :3].min(axis=0), kept[:, 3:].max(axis=0)
-    if np.array_equal(lo, bounds[:, :3].min(axis=0)) and np.array_equal(hi, bounds[:, 3:].max(axis=0)):
-        return None
-    left_out = bounds[mask]
-    extents = ", ".join(_extents(b[3:] - b[:3]) for b in left_out[:5])
-    more = f" and {len(left_out) - 5} more" if len(left_out) > 5 else ""
-    message = (f"Backdrop left out of the preview: {len(left_out)} of {len(bounds)} parts (near-flat, at "
-               f"least {BACKDROP_SCALE:g}x the rest of the scene and centred on it); extents {extents}{more}")
-    return ~mask, message
-
-
-def environment_kept(pv_data, enclosure=True, backdrop=True):
-    """A boolean mask over the recorded parts of a freshly loaded ``pv_data``: True for a part the
-    preview keeps, or None when it keeps every part. An enclosure (``without_enclosure``) is looked for
-    first, then a backdrop (``without_backdrop``) among the parts that remain. Logs what is left out."""
-    loaded = _loaded_counts(pv_data)
-    if loaded is None:
-        return None
-    bounds, counts = loaded
-    keep = np.ones(len(bounds), dtype=bool)
-    messages = []
-    if enclosure:
-        found = _enclosure_kept(pv_data, bounds, counts)
-        if found is not None:
-            keep, message = found
-            messages.append(message)
-    if backdrop and keep.sum() >= 2:
-        found = _backdrop_kept(bounds[keep])
-        if found is not None:
-            kept_rows = np.flatnonzero(keep)
-            keep = keep.copy()
-            keep[kept_rows[~found[0]]] = False
-            messages.append(found[1])
-    if keep.all() or not keep.any():
-        return None
-    for message in messages:
-        logger.info(message)
-    return keep
-
-
-def _cut(pv_data, keep):
-    """``pv_data`` holding only the parts in ``keep``, with their part bounds and counts when two or
-    more remain, or ``pv_data`` itself when no cell would remain. When the loader coloured parts that
-    carry no colour of their own with a fill colour, only because another part carried one
-    (``record_parts``' ``fill_rgb``), and every kept part is that fill, the colours are dropped, so the
-    kept parts draw as from a file holding them alone."""
-    bounds, counts = _loaded_counts(pv_data)
-    content = _subset(pv_data, np.repeat(keep, counts))
-    if content.n_cells == 0:
-        return pv_data
-    if keep.sum() >= 2:
-        content.field_data[PART_BOUNDS] = bounds[keep]
-        content.field_data[PART_POINTS] = counts[keep]
-    if FILL_RGB in content.field_data:
-        fill = np.asarray(content.field_data[FILL_RGB]).reshape(-1)[:3]
-        for data in (content.point_data, content.cell_data):
-            if "RGB" in data.keys() and np.all(np.asarray(data["RGB"])[:, :3] == fill):
-                del data["RGB"]
-        del content.field_data[FILL_RGB]
-    return content
-
-
-def without_environment(pv_data):
-    """``pv_data`` without environment geometry, or ``pv_data`` itself: the enclosure around its content
-    (``without_enclosure``), then a backdrop under it (``without_backdrop``). The result holds the
-    model alone, as if the file held only the model, so it is budgeted, framed, lit and drawn on the
-    transparent background as an ordinary preview."""
-    keep = environment_kept(pv_data)
-    return pv_data if keep is None else _cut(pv_data, keep)
-
-
 def without_enclosure(pv_data):
     """``pv_data`` without the environment geometry that encloses its content, or ``pv_data`` itself.
 
@@ -506,17 +371,48 @@ def without_enclosure(pv_data):
     scene passes the bounds screen (``enclosure_screen``); no environment point lies inside the
     content's bounds; the content holds at least ``CONTENT_POINT_SHARE`` of the points and is drawn at
     least ``DETAIL_RATIO`` times finer than the environment; and at least ``ENCLOSURE_COVERAGE`` of the
-    rays cast from the content meet the environment (a closed or near-closed shell). Any doubt leaves
-    the scene as it is. Only a scene that passes the screen pays for a pass over its points and a tree
-    over the environment's cells, which is coarse by the detail test."""
-    keep = environment_kept(pv_data, backdrop=False)
-    return pv_data if keep is None else _cut(pv_data, keep)
-
-
-def without_backdrop(pv_data):
-    """``pv_data`` without its backdrop parts (``backdrop_parts``: a near-flat ground or environment
-    sheet far larger than the rest of the scene and centred on it), or ``pv_data`` itself. A scene of
-    flat parts only, a scene whose backdrop leaves its bounds unchanged and a scene of more parts than
-    ``part_limit`` (no parts recorded) keep every part."""
-    keep = environment_kept(pv_data, enclosure=False)
-    return pv_data if keep is None else _cut(pv_data, keep)
+    rays cast from the content meet the environment (a closed or near-closed shell). The result holds
+    the content alone, as if the file held only the model, so it is framed, lit and drawn as an
+    ordinary preview. Any doubt leaves the scene as it is. Only a scene that passes the screen pays for
+    a pass over its points and a tree over the environment's cells, which is coarse by the detail
+    test."""
+    bounds = part_bounds(pv_data)
+    if bounds is None or PART_POINTS not in pv_data.field_data:
+        return pv_data
+    counts = np.asarray(pv_data.field_data[PART_POINTS], dtype=np.int64)
+    if len(counts) != len(bounds) or int(counts.sum()) != int(pv_data.n_points) or pv_data.n_cells == 0:
+        return pv_data
+    screen = enclosure_screen(bounds)
+    if screen is None:
+        return pv_data
+    lo, hi, kept, contact = screen
+    point_keep = np.repeat(kept, counts)
+    environment_points = np.asarray(pv_data.points)[~point_keep]
+    eps = 1e-3 * float((hi - lo).max())
+    if np.any(np.all((environment_points > lo + eps) & (environment_points < hi - eps), axis=1)):
+        logger.debug("Enclosure screen passed, but environment geometry reaches into the content")
+        return pv_data
+    content_points = int(point_keep.sum())
+    scene_extent = bounds[:, 3:].max(axis=0) - bounds[:, :3].min(axis=0)
+    if (content_points < CONTENT_POINT_SHARE * len(point_keep)
+            or not _finer(content_points, len(point_keep) - content_points, hi - lo, scene_extent)):
+        logger.debug(f"Enclosure screen passed, but the content holds {content_points:,} of "
+                     f"{len(point_keep):,} points, too few or too coarse next to the environment")
+        return pv_data
+    environment = _subset(pv_data, ~point_keep)
+    if environment.n_cells == 0:
+        return pv_data
+    coverage = _rays_meet(environment, lo, hi, contact, scene_extent)
+    if coverage < ENCLOSURE_COVERAGE:
+        logger.debug(f"Enclosure screen passed, but rays from the content meet it in {coverage:.0%} of directions")
+        return pv_data
+    content = _subset(pv_data, point_keep)
+    if content.n_cells == 0:
+        return pv_data
+    if kept.sum() >= 2:
+        content.field_data[PART_BOUNDS] = bounds[kept]
+        content.field_data[PART_POINTS] = counts[kept]
+    logger.info(f"Enclosure left out of the preview: {int((~kept).sum())} of {len(bounds)} parts, scene "
+                f"extents {_extents(scene_extent)}, around content of extents {_extents(hi - lo)} "
+                f"({content_points:,} of {len(point_keep):,} points)")
+    return content
