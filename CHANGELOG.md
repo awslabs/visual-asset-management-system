@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
--   Behavior changes to review before upgrading: on a deployment with an external OAuth identity provider, VAMS identifies each user by the token's `cognito:username`, `username` or `sub` claim and no longer reads a `vams:tokens` claim; an identity provider that issued `vams:tokens` with a different value must have its users' role assignments keyed by the username claim (see the update guide). ([PR #TBD-PR](https://github.com/awslabs/visual-asset-management-system/pull/TBD-PR))
+-   Behavior changes to review before upgrading: on a deployment with an external OAuth identity provider, VAMS identifies each user by the token's `cognito:username`, `username` or `sub` claim and no longer reads a `vams:tokens` claim; an identity provider that issued `vams:tokens` with a different value must have its users' role assignments keyed by the username claim (see the update guide). ([PR #1491](https://github.com/awslabs/visual-asset-management-system/pull/1491))
 
 ### ⚠ BREAKING CHANGES
 
@@ -96,7 +96,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CLI** VamsCLI checks the path of each request before sending it and refuses one with an empty, `.` or `..` segment (`InvalidRequestPathError`). ([#554](https://github.com/awslabs/visual-asset-management-system/pull/554))
 -   **Pipelines** The Splat Toolbox container's job log lists the pipeline definition's top-level keys and the names of its `INPUT_*`, `VAMS_*`, `AWS_*` and `TASK_*` environment variables instead of their values; only the AWS Region and AWS Batch job ID and attempt are printed with values. A definition that does not parse is reported by its length. ([#1446](https://github.com/awslabs/visual-asset-management-system/pull/1446))
 -   **Pipelines** The NVIDIA Cosmos 3, Cosmos Predict 2.5, Cosmos Reason, Cosmos Transfer and GR00T containers' job logs list the pipeline definition's top-level keys and say whether it came inline or as a file and its length, instead of printing the definition; a definition that does not parse is reported by its length. The Isaac Lab container's launch banner prints the job configuration's length instead of its text, and the Isaac Lab Batch job submission log masks the job environment's callback value by its variable name, whatever its length. ([#1454](https://github.com/awslabs/visual-asset-management-system/pull/1454))
--   **Backend/Auth** The API authorizer derives the caller's identity only from the token's username claim and ignores claims a token carries under the reserved `vams:` prefix. ([PR #TBD-PR](https://github.com/awslabs/visual-asset-management-system/pull/TBD-PR))
+-   **Backend/Auth** The API authorizer derives the caller's identity only from the token's username claim and ignores claims a token carries under the reserved `vams:` prefix. ([PR #1491](https://github.com/awslabs/visual-asset-management-system/pull/1491))
     -   Note: the username claim is the first present of `cognito:username`, `username` and `sub`; a verified token with none of them is refused. Amazon Cognito users and API keys keep their identity. See the update guide for external OAuth identity providers.
 
 ### Chores
