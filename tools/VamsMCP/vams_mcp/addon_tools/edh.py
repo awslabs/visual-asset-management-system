@@ -35,6 +35,21 @@ from ..annotations import COMPUTE, DESTRUCTIVE, DESTRUCTIVE_COMPUTE, READ, WRITE
 # The switch whose presence in the profile's snapshot registers these tools.
 FEATURE = FEATURE_EDH_WORKSTATIONS
 
+# The read tool that shows whether a non-read call of these tools took effect, by the first fragment
+# of the tool name that matches (addon_tools.addon_outcome_checks). Each read tool is in every tool
+# set that holds the tools it checks (tests/test_toolsets.py).
+OUTCOME_CHECKS = (
+    ("edh_container", "list_edh_container_jobs"),
+    ("edh_ami_recipe_build", "list_edh_ami_recipe_builds"),
+    ("edh_ami_recipe", "list_edh_ami_recipes"),
+    ("edh_capacity_reservation", "list_edh_admin_capacity_reservations"),
+    ("edh_admin_instance", "list_edh_admin_instances"),
+    ("edh_admin_settings", "get_edh_admin_settings"),
+    ("edh_vdi_image", "list_edh_admin_images"),
+    ("edh_simulation_image", "list_edh_admin_images"),
+    ("edh_workstation", "list_edh_workstations"),
+)
+
 
 def register(
     mcp: Any,

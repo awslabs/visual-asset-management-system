@@ -7,11 +7,14 @@ destructive tools additionally require VAMS_ENABLE_DESTRUCTIVE=true.
 
 from __future__ import annotations
 
+import contextvars
 import functools
 import inspect
 import json
 import logging
 import sys
+import threading
+import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -43,16 +46,21 @@ from .client import (  # noqa: E402
     OverrideTokenError,
     SearchDisabledError,
     TokenExpiredError,
+    RequestScopedClient,
     describe_profile,
     login_step_for,
     sign_in_marker,
+    silence_cli_request_log,
 )
 from . import __version__ as MCP_VERSION  # noqa: E402
+from . import request_context  # noqa: E402
 from . import results  # noqa: E402
+from . import toolsets  # noqa: E402
 from .annotations import COMPUTE, DESTRUCTIVE, DESTRUCTIVE_COMPUTE, READ, WRITE  # noqa: E402
 from .config import Config, ConfigError  # noqa: E402
+from .remote_auth import RemoteAuthSettings  # noqa: E402
 from .addon_tools import register_addon_tools  # noqa: E402
-from .addon_tools import ADDON_TOOL_MODULES, addon_deployed  # noqa: E402
+from .addon_tools import ADDON_TOOL_MODULES, addon_deployed, addon_outcome_checks  # noqa: E402
 from .custom_tools import register_custom_tools  # noqa: E402
 
 # The CLI's own selection parsing, so a tool and `vamscli zip-download create` build the same body.
@@ -74,18 +82,31 @@ except ImportError:  # mcp 1.x
 # configured vamscli profile. Without one the server still starts (degraded): vams_status answers,
 # and every other tool returns a NotAuthenticated error asking the agent to have the USER sign in,
 # retrying the profile on each call so a sign-in made later is picked up without a restart.
+#
+# In remote mode (VAMS_MCP_TRANSPORT=streamable-http) no profile is read. CLIENT is a
+# RequestScopedClient: every attribute a tool reads from it comes from the client of the request being
+# served, built from that request's verified token (http_app.RemoteGate). A remote configuration that
+# cannot be read stops the server here, before anything listens.
 CONFIG = Config.from_env()
 STARTUP_ERROR: Optional[str] = None
 STARTUP_REASON: Optional[str] = None
 STARTUP_USER_STEP: Optional[str] = None
+REMOTE_SETTINGS: Optional[RemoteAuthSettings] = None
 
-try:
-    CLIENT = VamsClient(CONFIG)
-except ConfigError as exc:
-    CLIENT = None  # type: ignore[assignment]
-    STARTUP_ERROR = str(exc)
-    STARTUP_REASON = exc.reason
-    STARTUP_USER_STEP = exc.user_step
+if CONFIG.remote:
+    REMOTE_SETTINGS = RemoteAuthSettings.load(CONFIG.auth_config_path)
+    # One process serves many users: the CLI's shared request log would mix their requests.
+    silence_cli_request_log()
+    logging.getLogger("vams_mcp.remote").setLevel(logging.INFO)
+    CLIENT = RequestScopedClient(CONFIG, REMOTE_SETTINGS.api_url)
+else:
+    try:
+        CLIENT = VamsClient(CONFIG)
+    except ConfigError as exc:
+        CLIENT = None  # type: ignore[assignment]
+        STARTUP_ERROR = str(exc)
+        STARTUP_REASON = exc.reason
+        STARTUP_USER_STEP = exc.user_step
 
 # What the server tells every connecting client, once, before any tool call (MCP `instructions`).
 # Agent-facing, held to SERVER_INSTRUCTIONS_MAX_CHARS by tests/test_agent_surface.py. Update it when
@@ -123,7 +144,39 @@ vamscli CLI. Create, update and delete tools exist only when the operator enable
 (execute_workflow, rerun_execution, abort_execution) need the user's confirmation first.
 """
 
-mcp = McpServer("vams", instructions=SERVER_INSTRUCTIONS)
+
+class _ToolSetServer(McpServer):
+    """The SDK server, registering only the tools of the selected tool sets (VAMS_MCP_TOOLSETS).
+
+    Every tool — core, add-on and a fork's — is defined through ``mcp.tool(...)``, so filtering here
+    applies the selection to all of them with no change at the definition sites. A tool outside the
+    selection is left an ordinary function, never registered, so no client lists it. The write and
+    destructive gates still decide independently whether a tool is defined at all.
+    """
+
+    def tool(self, *args: Any, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        register = super().tool(*args, **kwargs)
+        explicit = kwargs.get("name") or (args[0] if args and isinstance(args[0], str) else None)
+
+        annotations = kwargs.get("annotations")
+        read_only = bool(annotations is not None and annotations.model_dump(by_alias=True).get("readOnlyHint"))
+
+        def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+            name = explicit or fn.__name__
+            # Recorded for every defined tool: a remote call past its time budget is answered by tier.
+            _READ_ONLY_TOOLS[name] = read_only
+            if not TOOLSET_SELECTION.includes(name):
+                return fn
+            return register(fn)
+
+        return decorator
+
+
+TOOLSET_SELECTION = toolsets.Selection(CONFIG.toolsets)
+# Tool name -> whether it carries readOnlyHint (a tool without annotations counts as not read-only).
+_READ_ONLY_TOOLS: Dict[str, bool] = {}
+
+mcp = _ToolSetServer("vams", instructions=SERVER_INSTRUCTIONS)
 
 # The workflow-executions endpoint rejects a larger page size (Step Functions throttling).
 WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE = 50
@@ -163,6 +216,12 @@ SEARCH_DISABLED_MESSAGE = (
 SUBSCRIBED_MESSAGE = "success"
 NOT_SUBSCRIBED_MESSAGE = "Subscription doesn't exists."
 
+# The two kinds of file record the file metadata routes keep (their `type` parameter); attributes take
+# string values only.
+FILE_METADATA_TYPES = ("metadata", "attribute")
+# The values the set-primary-file route accepts for primaryType ('' removes it; 'other' needs a name).
+PRIMARY_FILE_TYPES = ("", "primary", "lod1", "lod2", "lod3", "lod4", "lod5", "other")
+
 
 def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a tool so API/client errors are returned as data, not exceptions.
@@ -174,6 +233,9 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
     deployment's AWS WAF web ACL blocked) carries ``blockedBy`` and, when
     known, ``requestId``.
     """
+
+    if CONFIG.remote:
+        return _remote_tool(fn)
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Dict[str, Any]:
@@ -211,6 +273,239 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+# --- Remote tool calls -----------------------------------------------------
+#
+# In remote mode a tool runs for the request's verified user, within a time budget, in a worker
+# thread so one slow call does not hold up other users' requests (mcp 1.x runs a synchronous tool on
+# the event loop). The body reads CLIENT, which resolves to that request's own client; nothing a tool
+# does in remote mode changes state shared between requests.
+
+REMOTE_SIGN_IN_STEP = "Sign in to VAMS again in your MCP client (reconnect the VAMS connector), then retry."
+# Grace past the budget before a call that is still running is answered with a timeout, so the
+# cooperative stop in paginate() (which leaves a NextToken) wins whenever it can.
+_REMOTE_TIMEOUT_GRACE_SECONDS = 5
+
+
+def _remote_not_authenticated(reason: str) -> Dict[str, Any]:
+    return {
+        "error": f"Not signed in to VAMS: {reason}. Ask the user to sign in again, then call the tool again.",
+        "error_type": "NotAuthenticated",
+        "user_action": REMOTE_SIGN_IN_STEP,
+    }
+
+
+def _scrub(text: str) -> str:
+    """Error text with any credential-shaped substring removed (a token never reaches a result)."""
+    from vamscli.utils.logging import scrub_text
+
+    return scrub_text(text)
+
+
+def _run_remote_body(fn: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return fn(*args, **kwargs)
+    except _SIGN_IN_ERRORS_TUPLE:
+        # The API refused this request's token (it expired, or was revoked). Nothing is remembered:
+        # the next request carries its own token.
+        return _remote_not_authenticated("VAMS did not accept this sign-in (it may have expired)")
+    except Exception as exc:  # noqa: BLE001 - surface any failure cleanly
+        if _timed_out(exc):
+            # A request that ran into the HTTP timeout is answered like a call past its budget: a read
+            # may be narrowed and retried, while a non-read call may still have been carried out by the
+            # API, so its outcome is unknown and no retry is invited.
+            return _remote_timeout(fn.__name__)
+        result = {"error": _scrub(str(exc)), "error_type": type(exc).__name__}
+        fields = getattr(exc, "json_fields", None)
+        if isinstance(fields, dict):
+            for key, value in fields.items():
+                result.setdefault(key, value)
+        return result
+
+
+def _timed_out(exc: BaseException) -> bool:
+    """Whether ``exc`` is, or was raised while handling, an HTTP request timeout.
+
+    The CLI turns a ``requests`` timeout into an ``APIError`` (and some client methods wrap that once
+    more), so the exception chain is walked rather than the outer type checked.
+    """
+    import requests
+
+    seen = 0
+    current: Optional[BaseException] = exc
+    while current is not None and seen < 10:
+        if isinstance(current, (requests.exceptions.Timeout, TimeoutError)):
+            return True
+        current = current.__cause__ or current.__context__
+        seen += 1
+    return False
+
+
+# The read tool that shows whether a write, destructive or compute call took effect, by the first
+# fragment of its name that matches. A non-read call past its budget may still complete in its
+# worker thread, so its timeout answer names this tool instead of inviting a retry. The add-ons'
+# own rows (each add-on module's OUTCOME_CHECKS) come first, so a core fragment such as "file"
+# never claims an add-on tool.
+_CORE_OUTCOME_CHECKS: Tuple[Tuple[str, str], ...] = (
+    # Before "file": a zip job is checked with its own list (a create's request id is not yet known).
+    ("zip_download", "list_zip_downloads"),
+    ("execution", "list_executions"),
+    ("execute_workflow", "list_executions"),
+    ("workflow_trigger", "list_workflow_triggers"),
+    ("pipeline_template", "list_pipeline_templates"),
+    ("pipeline", "list_pipelines"),
+    ("workflow", "list_workflows"),
+    ("metadata_schema", "list_metadata_schemas"),
+    ("file_metadata", "get_file_metadata"),
+    ("asset_metadata", "get_asset_metadata"),
+    ("asset_link", "get_asset_links"),
+    ("asset_version", "list_asset_versions"),
+    ("file", "list_asset_files"),
+    ("folder", "list_asset_files"),
+    ("tag_type", "list_tag_types"),
+    ("tag", "list_tags"),
+    ("comment", "list_asset_comments"),
+    ("subscri", "list_subscriptions"),
+    ("subscri", "check_subscription"),
+    ("user_api_key", "list_user_api_keys"),
+    ("api_key", "list_api_keys"),
+    ("database", "get_database"),
+    ("asset", "get_asset"),
+)
+_OUTCOME_CHECKS: Tuple[Tuple[str, str], ...] = addon_outcome_checks() + _CORE_OUTCOME_CHECKS
+
+
+def outcome_check_tool(tool_name: str) -> Optional[str]:
+    """The read tool that shows whether a non-read call of ``tool_name`` took effect.
+
+    The tool named is in every named tool set that holds ``tool_name``, so whichever set registered
+    the call also lists its check. Earlier entries of ``_OUTCOME_CHECKS`` win.
+    """
+    holding = [members for members in toolsets.TOOLSETS.values() if tool_name in members]
+    return next(
+        (
+            check
+            for fragment, check in _OUTCOME_CHECKS
+            if fragment in tool_name and all(check in members for members in holding)
+        ),
+        None,
+    )
+
+
+def _remote_timeout(tool_name: str) -> Dict[str, Any]:
+    budget = CONFIG.tool_timeout
+    if _READ_ONLY_TOOLS.get(tool_name, False):
+        return {
+            "error": (
+                f"The call did not finish within this server's time budget of {budget} seconds. Narrow the "
+                "request (filters, max_items) and call the tool again."
+            ),
+            "error_type": "ToolTimeout",
+        }
+    check = outcome_check_tool(tool_name)
+    how = f"Check with {check} whether it took effect" if check else "Check whether it took effect"
+    return {
+        "error": (
+            f"The call did not finish within this server's time budget of {budget} seconds, and its OUTCOME "
+            f"IS UNKNOWN: the change may still be made. Do not call {tool_name} again. {how}, and tell the user."
+        ),
+        "error_type": "ToolTimeout",
+        "outcomeUnknown": True,
+        **({"checkWith": check} if check else {}),
+    }
+
+
+# Tool calls in progress per user, counted until the worker thread really ends (a call answered at
+# its budget keeps counting while its thread runs on), so one user cannot occupy every thread.
+_CALLS_IN_FLIGHT: Dict[str, int] = {}
+_CALLS_LOCK = threading.Lock()
+# Worker threads for remote tool bodies, apart from the default pool and from token verification.
+REMOTE_TOOL_THREADS = 64
+_TOOL_LIMITER: Any = None
+
+
+def _tool_limiter() -> Any:
+    """The tool-body thread limiter of the running event loop."""
+    import anyio
+    from anyio.lowlevel import RunVar
+
+    global _TOOL_LIMITER
+    if _TOOL_LIMITER is None:
+        _TOOL_LIMITER = RunVar("vams_mcp_tool_limiter")
+    try:
+        return _TOOL_LIMITER.get()
+    except LookupError:
+        limiter = anyio.CapacityLimiter(REMOTE_TOOL_THREADS)
+        _TOOL_LIMITER.set(limiter)
+        return limiter
+
+
+def _claim_call(user_id: str) -> bool:
+    with _CALLS_LOCK:
+        if _CALLS_IN_FLIGHT.get(user_id, 0) >= CONFIG.max_calls_per_user:
+            return False
+        _CALLS_IN_FLIGHT[user_id] = _CALLS_IN_FLIGHT.get(user_id, 0) + 1
+        return True
+
+
+def _release_call(user_id: str) -> None:
+    with _CALLS_LOCK:
+        left = _CALLS_IN_FLIGHT.get(user_id, 1) - 1
+        if left > 0:
+            _CALLS_IN_FLIGHT[user_id] = left
+        else:
+            _CALLS_IN_FLIGHT.pop(user_id, None)
+
+
+def _run_counted(user_id: str, fn: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
+    try:
+        return _run_remote_body(fn, args, kwargs)
+    finally:
+        _release_call(user_id)
+
+
+def _remote_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
+    import anyio
+
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        identity = request_context.current_identity()
+        if identity is None:
+            return _remote_not_authenticated("this request carries no verified sign-in")
+        started = time.monotonic()
+        if not _claim_call(identity.user_id):
+            # Nothing ran, so calling again later is safe for every tier.
+            result: Dict[str, Any] = {
+                "error": (
+                    f"This user already has {CONFIG.max_calls_per_user} calls in progress on this server. Wait for "
+                    "them to finish, then call the tool again."
+                ),
+                "error_type": "TooManyConcurrentCalls",
+            }
+        else:
+            with request_context.time_budget(CONFIG.tool_timeout):
+                # Copied after the budget is set, so the worker thread sees the identity and the deadline.
+                context = contextvars.copy_context()
+                with anyio.move_on_after(CONFIG.tool_timeout + _REMOTE_TIMEOUT_GRACE_SECONDS) as scope:
+                    result = await anyio.to_thread.run_sync(
+                        context.run, _run_counted, identity.user_id, fn, args, kwargs,
+                        abandon_on_cancel=True, limiter=_tool_limiter(),
+                    )
+            if scope.cancelled_caught:
+                result = _remote_timeout(fn.__name__)
+        outcome = result.get("error_type", "ok") if isinstance(result, dict) else "ok"
+        _REMOTE_LOG.info(
+            "[vams-mcp] tool=%s user=%s client=%s outcome=%s ms=%d",
+            fn.__name__, identity.user_id, identity.client_id, outcome, (time.monotonic() - started) * 1000,
+        )
+        return result
+
+    wrapper.__doc__ = inspect.cleandoc(fn.__doc__) if fn.__doc__ else fn.__doc__
+    return wrapper
+
+
+_REMOTE_LOG = logging.getLogger("vams_mcp.remote")
+
+
 # (reason, sign_in_marker) of the last API call VAMS refused for its sign-in, until a later call
 # succeeds or the profile holds a newer sign-in. A profile can hold a sign-in that VAMS no longer
 # accepts; vams_status reads this so it does not say authenticated while the tools answer
@@ -246,6 +541,9 @@ def _current_client() -> Optional[VamsClient]:
     cheap. Add-on tools are registered at start, so they still need a restart after the sign-in.
     """
     global CLIENT, STARTUP_ERROR, STARTUP_REASON, STARTUP_USER_STEP
+    if isinstance(CLIENT, RequestScopedClient):
+        # Remote mode: the client of the request being served, None outside one.
+        return CLIENT.current()
     if CLIENT is None:
         try:
             CLIENT = VamsClient(CONFIG)
@@ -414,6 +712,39 @@ def _tag_body(names: Dict[str, Any], database_id: Optional[str]) -> Dict[str, An
     return {**body, **({"databaseId": database_id} if database_id else {})}
 
 
+def _gates() -> Dict[str, Any]:
+    """Which tiers, add-ons and tool sets this server registered (vams_status)."""
+    return {
+        "reads": True,
+        "writes": CONFIG.enable_writes,
+        "destructive": CONFIG.enable_destructive,
+        "addons": [m.__name__.rsplit(".", 1)[-1] for m in ADDON_TOOL_MODULES if _ADDONS_REGISTERED.get(m)],
+        "toolsets": list(CONFIG.toolsets),
+    }
+
+
+def _remote_status() -> Dict[str, Any]:
+    """vams_status of a remote server: the request's verified user, with no API request and no profile."""
+    identity = request_context.current_identity()
+    status: Dict[str, Any] = {
+        "authenticated": identity is not None,
+        "mode": "remote",
+        "apiUrl": REMOTE_SETTINGS.api_url if REMOTE_SETTINGS else None,
+        "userId": identity.user_id if identity else None,
+        "clientId": identity.client_id if identity else None,
+        "gates": _gates(),
+        "mcpVersion": MCP_VERSION,
+        "cliVersion": CLI_VERSION,
+    }
+    snapshot = CLIENT.features.peek() if isinstance(CLIENT, RequestScopedClient) else None
+    if snapshot is not None:
+        status["featureSwitches"] = snapshot["enabled"]
+    if identity is None:
+        status["reason"] = "this request carries no verified sign-in"
+        status["user_action"] = REMOTE_SIGN_IN_STEP
+    return status
+
+
 # =========================================================================
 # READ / SEARCH TOOLS (always available)
 # =========================================================================
@@ -427,17 +758,15 @@ def vams_status() -> results.Status:
     Makes no API request and works signed out. Says who the tools act as (`userId`), which deployment
     (`apiUrl`), the feature switches, and which tool tiers and add-ons are registered (`gates`). When
     `authenticated` is false, `reason` says why and `user_action` is the step to ask the user to take.
-    `tokenExpired` true: the next call renews the sign-in or answers NotAuthenticated."""
+    `tokenExpired` true: the next call renews the sign-in or answers NotAuthenticated. Remote: `mode`,
+    `clientId`."""
+    if CONFIG.remote:
+        return _remote_status()
     status = describe_profile(CONFIG)
     client = _current_client()
     refused = _refused_sign_in() if client is not None else None
     status["authenticated"] = client is not None and refused is None
-    status["gates"] = {
-        "reads": True,
-        "writes": CONFIG.enable_writes,
-        "destructive": CONFIG.enable_destructive,
-        "addons": [m.__name__.rsplit(".", 1)[-1] for m in ADDON_TOOL_MODULES if _ADDONS_REGISTERED.get(m)],
-    }
+    status["gates"] = _gates()
     status["mcpVersion"] = MCP_VERSION
     status["cliVersion"] = CLI_VERSION
     if client is None:
@@ -547,8 +876,8 @@ def list_assets(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> results.AssetPage:
-    """Use to browse assets in one database, or in every database the user can read. To find an asset
-    by name use search_assets. Rows: databaseId, assetId, assetName, description, tags, status.
+    """Use to browse assets in one database, or every database the user can read (by name:
+    search_assets). Rows: databaseId, assetId, assetName, description, tags, status.
     include_archived adds archived assets.
 
     BOUNDED: `truncated`: pass
@@ -620,6 +949,32 @@ def get_file_info(
     if include_archived:
         params["showArchived"] = "true"
     return CLIENT.api.get_file_info(database_id, asset_id, params)
+
+
+@mcp.tool(title="Get file metadata", annotations=READ)
+@tool_result
+def get_file_metadata(
+    database_id: str,
+    asset_id: str,
+    file_key: str,
+    metadata_type: str = "metadata",
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+    include_archived: bool = False,
+) -> results.MetadataPage:
+    """Use to read one file's metadata, or with metadata_type="attribute" its attributes.
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
+    if metadata_type not in FILE_METADATA_TYPES:
+        return {"error": f"metadata_type must be one of {list(FILE_METADATA_TYPES)}", "error_type": "ValueError"}
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.get_file_metadata_v2(
+            database_id, asset_id, file_key, metadata_type=metadata_type, page_size=params["pageSize"],
+            starting_token=params.get("startingToken"), show_archived=include_archived,
+        ),
+        items_key="metadata",
+        max_items=max_items,
+        starting_token=starting_token,
+    )
 
 
 @mcp.tool(title="Get asset metadata", annotations=READ)
@@ -735,6 +1090,27 @@ def get_asset_links(
     )
 
 
+@mcp.tool(title="Get asset link metadata", annotations=READ)
+@tool_result
+def get_asset_link_metadata(
+    asset_link_id: str,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+    include_archived: bool = False,
+) -> results.MetadataPage:
+    """Use to read an asset link's metadata (assetLinkId from get_asset_links).
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.get_asset_link_metadata_v2(
+            asset_link_id, page_size=params["pageSize"], starting_token=params.get("startingToken"),
+            show_archived=include_archived,
+        ),
+        items_key="metadata",
+        max_items=max_items,
+        starting_token=starting_token,
+    )
+
+
 # Smaller than the CLI's defaults (100 assets, 2000 files): an export page carries every file's and
 # asset's metadata, and the whole page lands in the agent's context.
 EXPORT_DEFAULT_MAX_ASSETS = 25
@@ -766,7 +1142,7 @@ def export_asset(
 ) -> results.AssetExport:
     """Use to read an asset and its children in one call: `assets` (metadata, files), `relationships`,
     `totalAssetsInTree`. One child level unless fetch_entire_subtrees; fetch_relationships=False: the
-    asset alone. ONE PAGE per call, capped at 100 assets and 1000 files: `truncated` + `NextToken` mean
+    asset alone. ONE PAGE per call (at most 100 assets and 1000 files): `truncated` + `NextToken` mean
     more; pass it as `starting_token` (files_truncated assets continue there)."""
     params: Dict[str, Any] = {
         "generatePresignedUrls": False,
@@ -981,8 +1357,7 @@ def list_workflow_executions(
     starting_token: Optional[str] = None,
 ) -> results.ExecutionPage:
     """Use to see the workflow runs of ONE asset (list_executions covers every asset). A workflow id
-    is unique across every database, so workflow_id alone identifies it; workflow_database_id is a
-    narrowing filter, and a value that is not its database empties the result.
+    is unique across every database; workflow_database_id is a narrowing filter (a wrong one empties it).
 
     `filterStartDate` is the applied window (90 days by default); widen it with filter_start_date
     (UTC "YYYY-MM-DDTHH:MM:SSZ"). Filters, SKIPPED rows and system runs: as on list_executions.
@@ -1096,9 +1471,9 @@ def generate_download_url(
     """Use only when the user asked to download a file: a time-limited presigned download URL for an
     asset file (file_key = its relativePath).
 
-    The URL is a bearer credential: anyone holding it can download the object until it expires (at
-    most `presignedUrlTimeoutSeconds`, 24 hours by default, or sooner if the credentials that signed it
-    expire). It lands in the agent transcript and the host's logs, so treat it as disclosed.
+    The URL is a bearer credential: anyone holding it can download the object until it expires, at
+    most `presignedUrlTimeoutSeconds` (24 hours by default) or sooner if the credentials that signed it
+    expire. It lands in transcripts and host logs: treat it as disclosed.
     `presignedUrlNetworkRestrictions` (allowedIpRanges / allowedVpceIds) can limit where it works."""
     return CLIENT.api.download_asset_file(
         database_id, asset_id, file_key=file_key, version_id=version_id
@@ -1149,12 +1524,17 @@ def find_and_summarize(query: str, database_id: Optional[str] = None, size: int 
     trimmed = CLIENT.trim_search_results(CLIENT.api.search_query(request), max_hits=effective_size)
 
     enriched: List[Dict[str, Any]] = []
+    skipped_for_time = 0
     for hit in trimmed.get("results", []):
         source = hit.get("source", {}) or {}
         db = source.get("str_databaseid") or database_id
         aid = source.get("str_assetid") or hit.get("id")
         entry: Dict[str, Any] = {"asset_id": aid, "database_id": db, "score": hit.get("score"), "source": source}
-        if db and aid:
+        if db and aid and request_context.budget_low():
+            # A remote call near its time budget answers with the hits it has rather than timing out.
+            entry["version_count_skipped"] = True
+            skipped_for_time += 1
+        elif db and aid:
             try:
                 # One page per hit. Without max_items each inner walk may issue up to max_pages
                 # requests, so the fan-out multiplies rather than adds — and only `count` is used
@@ -1183,6 +1563,8 @@ def find_and_summarize(query: str, database_id: Optional[str] = None, size: int 
             f"size was clamped from {size} to {effective_size}: this tool issues one paginated "
             "request per hit. Use search_assets(from_offset=...) to page a larger result set."
         )
+    if skipped_for_time:
+        result["version_counts_skipped"] = skipped_for_time
     return result
 
 
@@ -1301,8 +1683,8 @@ def list_executions(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> results.ExecutionPage:
-    """Use to find workflow runs across every workflow and asset, newest first (e.g. "the last failed
-    run"). For ONE asset's runs use list_workflow_executions().
+    """Use to find workflow runs across every workflow and asset, newest first. For ONE asset's runs
+    use list_workflow_executions().
 
     Equality filters: status (RUNNING, SUCCEEDED, FAILED, ABORTED, SKIPPED), workflow_id,
     workflow_database_id, trigger_type ('manual' or 'fileUpload'), group_id, triggered_by_user_id;
@@ -1471,14 +1853,15 @@ def get_execution_results(execution_id: str,
                           starting_token: Optional[str] = None) -> results.ExecutionResults:
     """Use for "what did the run output" from a pipeline that writes text, not files:
     {resultContent, resultContentTruncated, resultRowCount, resultContentBytes, pageCount}, at most
-    5 MiB per call; a `NextToken` means more text remains (pass it as `starting_token`).
-    `resultContentTruncated` true: the text was stored cut. No result: resultContent "", not an
-    error."""
+    5 MiB per call: a `NextToken` means more remains (pass it as `starting_token`).
+    `resultContentTruncated` true means text was stored cut and cannot be read. A run with no result
+    returns resultContent "", not an error."""
     parts = []
     truncated = False
     row_count = byte_count = pages = sent_bytes = 0
     next_token = starting_token
     over_budget = False
+    out_of_time = False
     while True:
         params = {"startingToken": next_token} if next_token else {}
         page = CLIENT.unwrap_message(CLIENT.api.get_execution_results(execution_id, params=params))
@@ -1499,6 +1882,9 @@ def get_execution_results(execution_id: str,
         next_token = page.get("NextToken")
         if not next_token or pages >= CONFIG.max_pages:
             break
+        if request_context.budget_low():
+            out_of_time = True
+            break
     result: Dict[str, Any] = {
         "resultContent": "".join(parts),
         "resultContentTruncated": truncated,
@@ -1508,8 +1894,12 @@ def get_execution_results(execution_id: str,
     }
     if next_token:
         result["NextToken"] = next_token
-        bound = ("the 5 MiB result budget" if over_budget
-                 else f"the max_pages work bound on this server (VAMS_MAX_PAGES={CONFIG.max_pages})")
+        if over_budget:
+            bound = "the 5 MiB result budget"
+        elif out_of_time:
+            bound = "the time budget of one call on this server"
+        else:
+            bound = f"the max_pages work bound on this server (VAMS_MAX_PAGES={CONFIG.max_pages})"
         result["note"] = (f"stopped after {pages} page(s) at {bound}; more result text remains — "
                           f"pass NextToken as starting_token to continue")
     return result
@@ -1809,6 +2199,53 @@ if CONFIG.enable_writes:
         ]
         return CLIENT.api.update_asset_metadata_v2(database_id, asset_id, items, update_type="update")
 
+    @mcp.tool(title="Set file metadata", annotations=WRITE)
+    @tool_result
+    def set_file_metadata(
+        database_id: str,
+        asset_id: str,
+        file_key: str,
+        metadata: Dict[str, Any],
+        metadata_type: str = "metadata",
+    ) -> Dict[str, Any]:
+        """Use to upsert key/value pairs on one file's metadata, or with metadata_type="attribute" its
+        attributes; keys not listed are untouched."""
+        if metadata_type not in FILE_METADATA_TYPES:
+            return {"error": f"metadata_type must be one of {list(FILE_METADATA_TYPES)}", "error_type": "ValueError"}
+        items = [
+            {"metadataKey": k, "metadataValue": str(v), "metadataValueType": "string"}
+            for k, v in metadata.items()
+        ]
+        return CLIENT.api.update_file_metadata_v2(
+            database_id, asset_id, file_key, metadata_type, items, update_type="update"
+        )
+
+    @mcp.tool(title="Set primary file", annotations=WRITE)
+    @tool_result
+    def set_primary_file(
+        database_id: str,
+        asset_id: str,
+        file_key: str,
+        primary_type: str,
+        primary_type_other: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Use to mark a file's role: primary_type "primary", "lod1" to "lod5", "other" (with
+        primary_type_other naming it), or "" to remove the mark."""
+        value = (primary_type or "").strip().lower()
+        if value not in PRIMARY_FILE_TYPES:
+            return {"error": f"primary_type must be one of {list(PRIMARY_FILE_TYPES)}", "error_type": "ValueError"}
+        payload: Dict[str, Any] = {"filePath": file_key, "primaryType": value}
+        if value == "other":
+            payload["primaryTypeOther"] = primary_type_other
+        return CLIENT.api.set_primary_file(database_id, asset_id, payload)
+
+    @mcp.tool(title="Revert file version", annotations=WRITE)
+    @tool_result
+    def revert_file_version(database_id: str, asset_id: str, file_key: str, version_id: str) -> Dict[str, Any]:
+        """Use to restore an earlier version of one file (version_id from get_file_info with
+        include_versions) as its new current version; no version is removed."""
+        return CLIENT.api.revert_file_version(database_id, asset_id, version_id, {"filePath": file_key})
+
     @mcp.tool(title="Create folder", annotations=WRITE)
     @tool_result
     def create_folder(database_id: str, asset_id: str, folder_path: str) -> Dict[str, Any]:
@@ -2033,8 +2470,8 @@ if CONFIG.enable_writes:
     def execute_workflow(
         workflow_database_id: str, workflow_id: str, body: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Use to run a workflow on input files; returns the executionId. This starts real compute.
-        Confirm with the user before calling it.
+        """Use to run a workflow on input files. Returns the new executionId. This starts real compute:
+        confirm with the user first.
 
         `body`: inputFiles (each databaseId, assetId, relativeFileKey ("/" = the whole asset), optional
         versionId), outputAssetId + outputDatabaseId (REQUIRED when inputs span more than one asset), and
@@ -2055,10 +2492,10 @@ if CONFIG.enable_writes:
         """Use to re-run ONE execution from its stored inputs, as a NEW execution, with the CALLER's
         permissions: returns the new id. This starts real compute; confirm with the user first.
 
-        execution_group_id ASSIGNS the new run's group; it does not select what to re-run. There is no
-        re-run-the-whole-group operation: call this once per execution id. A file the original launch
-        pinned is read at that version again, every other file at its current version (before 2.7.0:
-        current versions). Relay the response's `warnings`."""
+        execution_group_id ASSIGNS the new run's group; it does not select what to re-run (call this
+        once per execution id). A file the original launch
+        pinned is read at that version again, every other file at its current version (executions from
+        before 2.7.0 use current versions). Relay the response's `warnings`."""
         return CLIENT.unwrap_message(CLIENT.api.rerun_execution(execution_id, execution_group_id=execution_group_id))
 
     @mcp.tool(title="Abort execution", annotations=COMPUTE)
@@ -2330,6 +2767,12 @@ if CONFIG.enable_destructive:
         reversible."""
         return CLIENT.api.delete_asset_link(asset_link_id)
 
+    @mcp.tool(title="Delete asset metadata", annotations=DESTRUCTIVE)
+    @tool_result
+    def delete_asset_metadata(database_id: str, asset_id: str, metadata_keys: List[str]) -> Dict[str, Any]:
+        """Use only when asked to remove metadata keys from an asset. Not reversible."""
+        return CLIENT.api.delete_asset_metadata_v2(database_id, asset_id, list(metadata_keys))
+
     @mcp.tool(title="Delete tag", annotations=DESTRUCTIVE)
     @tool_result
     def delete_tag(tag_name: str, database_id: Optional[str] = None) -> Dict[str, Any]:
@@ -2493,7 +2936,10 @@ if CONFIG.enable_destructive:
 
 register_addon_tools(mcp, CLIENT, CONFIG, tool_result)
 # Which add-ons registered tools at start (vams_status reports it; a later sign-in does not add them).
-_ADDONS_REGISTERED = {module: addon_deployed(CLIENT, module) for module in ADDON_TOOL_MODULES}
+_ADDONS_REGISTERED = {
+    module: addon_deployed(CLIENT, module) and TOOLSET_SELECTION.includes_addon(module.__name__.rsplit(".", 1)[-1])
+    for module in ADDON_TOOL_MODULES
+}
 
 
 # =========================================================================
@@ -2504,17 +2950,36 @@ register_custom_tools(mcp, CLIENT, CONFIG, tool_result)
 
 
 def main() -> None:
-    """Entry point: run the MCP server over stdio.
+    """Entry point: run the MCP server over stdio, or as a remote server over streamable HTTP.
 
-    Starts even when no profile is signed in: the tools then answer NotAuthenticated (and vams_status
-    says why) instead of the server exiting with no tools, which left an agent nothing to call but a
-    shell. The reason goes to stderr for the person who configured the host.
+    Over stdio it starts even when no profile is signed in: the tools then answer NotAuthenticated
+    (and vams_status says why) instead of the server exiting with no tools, which left an agent nothing
+    to call but a shell. The reason goes to stderr for the person who configured the host.
     """
+    if CONFIG.remote:
+        from . import http_app
+
+        count = len(_registered_tool_names())
+        if count > toolsets.MAX_TOOLS_PER_SET:
+            logging.getLogger("vams_mcp").warning(
+                "[vams-mcp] the selected tool sets register %d tools; some remote clients list at most %d "
+                "and drop the rest silently. Select fewer tool sets (VAMS_MCP_TOOLSETS).",
+                count, toolsets.MAX_TOOLS_PER_SET,
+            )
+        http_app.run(mcp, REMOTE_SETTINGS, CONFIG)
+        return
     if CLIENT is None:
         logging.getLogger("vams_mcp").warning(
             "[vams-mcp] starting without a VAMS sign-in: %s", STARTUP_ERROR
         )
     mcp.run()
+
+
+def _registered_tool_names() -> List[str]:
+    """The names of the tools this server registered, as a client lists them."""
+    import asyncio
+
+    return [tool.name for tool in asyncio.run(mcp.list_tools())]
 
 
 if __name__ == "__main__":

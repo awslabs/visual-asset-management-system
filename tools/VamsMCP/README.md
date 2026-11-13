@@ -12,7 +12,8 @@ This server **does not store any keys, tokens, or URLs**. It reuses the
 [`vamscli`](../VamsCLI) profile you already configured on your machine — the
 same one you use for the CLI. Each user runs the server against **their own**
 VAMS account using **their own** vamscli login, which makes it safe to
-distribute publicly.
+distribute publicly. (A [remote](#remote-mode) server reads an auth configuration file of URLs and
+client ids that its operator writes; it holds no secret either.)
 
 ```
 MCP host ──stdio──> vams-mcp (FastMCP) ──> vamscli APIClient + ProfileManager ──HTTPS──> your VAMS API
@@ -23,12 +24,24 @@ MCP host ──stdio──> vams-mcp (FastMCP) ──> vamscli APIClient + Profi
 The server reuses the CLI's `APIClient`, so it inherits retries, 429 backoff,
 typed errors, and automatic token refresh.
 
+The server can also be **hosted remotely** for MCP clients that connect over HTTP (for example
+Amazon Quick). In that mode it reads no profile: each request carries its user's OAuth access token,
+which the server verifies itself and sends on to the VAMS API for that request only, so every call
+still runs as that user under that user's VAMS permissions. See [Remote mode](#remote-mode).
+
+```
+MCP client ──HTTPS──> your front end (TLS, port 443) ──> vams-mcp (streamable HTTP, 127.0.0.1:8000)
+                                                            │ verifies the user's token, then
+                                                            └── APIClient(bearer_token=<that token>) ──HTTPS──> VAMS API
+```
+
 ## Requirements
 
 -   Python 3.12+
 -   [`vamscli`](../VamsCLI) installed and configured (see below)
 -   `mcp` 1.10.0+ or 2.x and `pydantic` 2.11+, installed with the server. `mcp` 1.10.0 to 1.21.1
     need `pydantic` below 2.12.
+-   `PyJWT[crypto]` 2.15.1, installed with the server (remote mode verifies tokens with it).
 
 The full installation, client registration, configuration, upgrade and troubleshooting guide is the
 documentation site's **MCP Server** page
@@ -85,19 +98,83 @@ have you sign in; `user_action` names the command you run (`vamscli auth login -
 add-on tools appear after a restart. `vams_status` always answers: profile, API URL, signed-in user,
 feature switches, which tool tiers are on, and the MCP and CLI versions.
 
+## Remote mode
+
+VAMS does not deploy a remote MCP server; an operator hosts one. The full recipe (container image,
+HTTPS front end, private networks, client registration for Amazon Cognito and external IdPs,
+connecting Amazon Quick, and a threat model) is the documentation site's **Remote MCP Server** page
+(`documentation/docusaurus-site/docs/mcp/remote-mcp-server.md`). The short form:
+
+1. Register an OAuth client for remote MCP clients (user sign-in: authorization code with PKCE; never
+   a client credentials client), and list its client id in
+   `app.authProvider.useCognito.additionalTokenAudiences` (or `useExternalOAuthIdp`), then deploy VAMS.
+2. Write the server's auth configuration from the deployment's own settings, and note the values it
+   prints for the MCP client:
+
+    ```bash
+    vams-mcp setup-remote --vams-url https://<your-vams-url> \
+        --resource-url https://mcp.example.com/mcp --client-id <app-client-id> \
+        --cognito-domain <your-domain>.auth.<region>.amazoncognito.com --output /etc/vams-mcp/auth.json
+    ```
+
+3. Start the server behind an HTTPS front end that forwards to it:
+
+    ```bash
+    VAMS_MCP_TRANSPORT=streamable-http VAMS_MCP_AUTH_CONFIG=/etc/vams-mcp/auth.json vams-mcp
+    ```
+
+The server listens on `127.0.0.1:8000` by default and serves MCP at `/mcp`. Every request needs
+`Authorization: Bearer <access token>`, which the server verifies (signature against the issuer's
+keys, issuer, audience, expiry, token use, and a named user) before any tool runs; without one it
+answers `401` with `WWW-Authenticate: Bearer resource_metadata="..."`, pointing at the OAuth
+Protected Resource Metadata (RFC 9728) at `/.well-known/oauth-protected-resource/mcp`, the only route
+answered without a token. If the issuer's keys cannot be read, every request is refused with `503`.
+The default tool set is the read-only `consumer` set, and each call has a time budget
+(`VAMS_MCP_TOOL_TIMEOUT`, 240 seconds): a list stops early with a `NextToken` rather than run past it. A write,
+delete or compute call still running at the budget may yet complete, so its answer says the outcome is
+unknown (`outcomeUnknown`) and names the read tool to check with (`checkWith`) instead of inviting a
+retry. One user may have at most `VAMS_MCP_MAX_CALLS_PER_USER` (8) calls in progress.
+
 ## Configure (optional)
 
 All configuration is via environment variables — none are required. Set them in the `env` block
 of your MCP host's server entry (see the `mcpServers` sample below); no `.env` file is read.
 `.env.example` lists every supported variable for reference.
 
-| Variable                  | Description                                                                          |
-| ------------------------- | ------------------------------------------------------------------------------------ |
-| `VAMS_PROFILE`            | vamscli profile to use (default: active profile)                                     |
-| `VAMS_ENABLE_WRITES`      | `true` to expose create/update tools and tools that issue a credential (default off) |
-| `VAMS_ENABLE_DESTRUCTIVE` | `true` to expose archive/delete tools (needs writes on; default off)                 |
-| `VAMS_MAX_PAGES`          | Max pages auto-followed for list endpoints (default 20)                              |
-| `VAMS_PAGE_SIZE`          | Page size per paginated call (default 100, clamped to 1000)                          |
+| Variable                      | Description                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------------- |
+| `VAMS_PROFILE`                | vamscli profile to use (default: active profile). Refused in remote mode                      |
+| `VAMS_ENABLE_WRITES`          | `true` to expose create/update tools and tools that issue a credential (default off)          |
+| `VAMS_ENABLE_DESTRUCTIVE`     | `true` to expose archive/delete tools (needs writes on; default off)                          |
+| `VAMS_MAX_PAGES`              | Max pages auto-followed for list endpoints (default 20)                                       |
+| `VAMS_PAGE_SIZE`              | Page size per paginated call (default 100, clamped to 1000)                                   |
+| `VAMS_MCP_TOOLSETS`           | Comma-separated [tool sets](#tool-sets) (default `all` over stdio, `consumer` in remote mode) |
+| `VAMS_MCP_TRANSPORT`          | `stdio` (default) or `streamable-http` ([remote mode](#remote-mode))                          |
+| `VAMS_MCP_AUTH_CONFIG`        | Remote mode: the auth configuration file `vams-mcp setup-remote` writes (required)            |
+| `VAMS_MCP_HOST`               | Remote mode: listen address (default `127.0.0.1`; wider only behind an HTTPS front end)       |
+| `VAMS_MCP_PORT`               | Remote mode: listen port (default `8000`)                                                     |
+| `VAMS_MCP_TOOL_TIMEOUT`       | Remote mode: seconds one tool call may take (default `240`, 10 to 1800)                       |
+| `VAMS_MCP_MAX_CALLS_PER_USER` | Remote mode: tool calls one user may have in progress (default `8`, 1 to 64)                  |
+
+### Tool sets
+
+`VAMS_MCP_TOOLSETS` selects which tools the server registers. Sets combine (`consumer,edh`), and the
+write and destructive gates still apply inside a set. Each named set holds at most 100 tools and
+30,000 characters of descriptions with every gate and add-on on, so it fits a client that lists at
+most 100 tools per connection.
+
+| Set         | Tools                                                                                                                                         |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `consumer`  | Read-only: databases, assets, files, metadata, versions, links, search, download links, workflows and runs, tags, comments, zip download jobs |
+| `operator`  | `consumer` plus the writes and deletes of asset content, comments, subscriptions, zip downloads, and running workflows                        |
+| `admin`     | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions, API keys                                         |
+| `edh`       | EDH Workstations add-on: workstations, catalog and container jobs                                                                             |
+| `edh-admin` | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances, settings                                                      |
+| `custom`    | The tools a fork adds in `custom_tools.py`                                                                                                    |
+| `all`       | Every tool the gates allow (the stdio default)                                                                                                |
+
+`vams_status` reports the selected sets in `gates.toolsets`. `vams_mcp/toolsets.py` lists each set's
+tools; `tests/test_toolsets.py` holds every set to the limits.
 
 ## Register with Kiro / Claude Desktop
 
@@ -124,12 +201,14 @@ secrets** — just the command:
                 "get_asset",
                 "list_asset_files",
                 "get_file_info",
+                "get_file_metadata",
                 "get_asset_metadata",
                 "get_database_metadata",
                 "list_asset_versions",
                 "get_asset_version",
                 "get_asset_history",
                 "get_asset_links",
+                "get_asset_link_metadata",
                 "export_asset",
                 "search_assets",
                 "search_files",
@@ -189,9 +268,9 @@ call it, or why none does, or that it is not exposed yet.
 
 `vams_status`, `list_features`, `list_allowed_api_routes`, `list_api_routes`,
 `list_constraint_permission_objects`, `list_databases`, `get_database`, `list_buckets`,
-`list_assets`, `get_asset`, `list_asset_files`, `get_file_info`, `get_asset_metadata`,
-`get_database_metadata`, `list_asset_versions`, `get_asset_version`, `get_asset_history`,
-`get_asset_links`, `export_asset`,
+`list_assets`, `get_asset`, `list_asset_files`, `get_file_info`, `get_file_metadata`,
+`get_asset_metadata`, `get_database_metadata`, `list_asset_versions`, `get_asset_version`,
+`get_asset_history`, `get_asset_links`, `get_asset_link_metadata`, `export_asset`,
 `search_assets`, `search_files`, `get_search_fields`, `list_workflows`,
 `list_workflow_executions`, `list_tags`, `list_tag_types`, `list_metadata_schemas`,
 `generate_download_url`, `generate_download_urls_bulk`, `find_and_summarize`.
@@ -206,6 +285,11 @@ list and a `note` saying none are known.
 last-modified time, archive state, `primaryType`, preview file and how its current version
 was made (`changeSource`). `include_versions` adds the file's versions, and
 `include_archived` reads a file of an archived asset.
+
+`get_file_metadata` reads one file's metadata rows, or with `metadata_type="attribute"` its
+attributes, and `get_asset_link_metadata` an asset link's metadata (`assetLinkId` from
+`get_asset_links`). Both page like `get_asset_metadata`: `max_items`, `starting_token`, and
+`include_archived` for an archived asset.
 
 `export_asset` returns an asset and its child assets in one call: each asset's metadata
 and files, the parent/child `relationships` and `totalAssetsInTree`. It takes the export
@@ -437,6 +521,15 @@ paginated request per hit, so its `size` is clamped to 25; use
 `create_database`, `create_asset`, `update_asset`, `set_asset_metadata`,
 `create_folder`, `create_asset_version`.
 
+File metadata and roles: `set_file_metadata`, `set_primary_file`, `revert_file_version`.
+
+`set_file_metadata` upserts key/value pairs on one file's metadata, or with
+`metadata_type="attribute"` its attributes (string values); keys not listed are untouched.
+`set_primary_file` marks a file's role (`primary_type` `primary`, `lod1` to `lod5`, `other` with
+`primary_type_other` naming it, or `""` to remove the mark). `revert_file_version` restores an
+earlier version of one file (`version_id` from `get_file_info` with `include_versions`): it writes
+that content as a new current version and removes none.
+
 Files and links: `move_file`, `copy_file`, `create_asset_link`.
 
 `move_file` moves or renames a file inside its asset (the source path then stays
@@ -575,8 +668,11 @@ archive to a file without exposing the URL.
 
 `archive_asset`, `unarchive_asset`, `delete_asset`, `delete_database`.
 
-Files, links and tags: `archive_file`, `unarchive_file`, `delete_file`,
-`delete_asset_link`, `delete_tag`, `delete_tag_type`.
+Files, links, metadata and tags: `archive_file`, `unarchive_file`, `delete_file`,
+`delete_asset_link`, `delete_asset_metadata`, `delete_tag`, `delete_tag_type`.
+
+`delete_asset_metadata` removes the named metadata keys from an asset (`set_asset_metadata` only
+adds and changes keys). Not reversible.
 
 `archive_file` is the soft delete: the file is hidden and can be restored with
 `unarchive_file`. `delete_file` PERMANENTLY removes the file and every one of its
@@ -632,7 +728,15 @@ and is the better first move.
 
 ## Security notes
 
--   Authorization is exactly your vamscli user's VAMS permissions (RBAC/ABAC).
+-   Authorization is exactly your vamscli user's VAMS permissions (RBAC/ABAC). In remote mode it is
+    exactly the permissions of the user whose token the request carries: the server never decides a
+    permission, and the VAMS API's authorizer and Casbin policy check every call.
+-   Remote mode: the server verifies every token itself, accepts only tokens issued to the clients in
+    its auth configuration (not the web application's client), never reads a profile, never logs or
+    returns a token, and writes no CLI request log (one process serves many users). It logs one line
+    per request and per tool call: user, client, tool, outcome and duration. Bind beyond `127.0.0.1`
+    only inside a container or private network behind an HTTPS front end, and keep the write and
+    destructive tool sets off unless they are needed.
 -   Writes and destructive tools are **off by default**. Keep destructive tools
     out of `autoApprove`.
 -   `generate_download_url` and `generate_download_urls_bulk` return presigned Amazon S3 URLs
