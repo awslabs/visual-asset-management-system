@@ -11,7 +11,10 @@ claims a slot writes its workflowExecute record, and a launch refused for good (
 a 400) writes its failure once.
 
 executeWorkflow is driven through the perInputFileVersion suite's harness, with the production audit
-decorator, context and writer in place of the test tree's stand-in (as test_vectorSearch_audit does)."""
+decorator, context and writer in place of the test tree's stand-in (as test_vectorSearch_audit does), and
+with the production `log_errors` behind `models.common.general_error`, which writes the errors group's
+record of a refused request with the request's action and outcome (D103: the slot wait wrote one there
+per wait while the actions group stayed empty)."""
 
 import pytest
 
@@ -34,11 +37,18 @@ def audited(monkeypatch):
     monkeypatch.setattr(ewv2, "lambda_handler", lambda event, context: decorated(event, LAMBDA_CONTEXT))
     monkeypatch.setattr(ewv2, "skip_route_outcome", real_audit.skip_route_outcome)
     monkeypatch.setattr(ewv2, "log_actions", real_audit.log_actions)
+    monkeypatch.setitem(ewv2.general_error.__globals__, "log_errors", real_audit.log_errors)
 
 
-def _records(clients):  # noqa: F811 -- the fixture of the same name
-    group = group_name("auditActions")
+def _records(clients, group_key="auditActions"):  # noqa: F811 -- the fixture of the same name
+    group = group_name(group_key)
     return [parse(message)[1] for message in clients.flush.messages(group) + clients.module.messages(group)]
+
+
+def _failed_anywhere(clients):  # noqa: F811
+    """Every record with outcome failed, in any audit group."""
+    return [parse(message)[1] for message in clients.flush.messages() + clients.module.messages()
+            if parse(message)[1].get("outcome") == "failed"]
 
 
 @pytest.mark.unit
@@ -50,6 +60,8 @@ class TestASlotWaitIsNoOutcome:
         assert response["statusCode"] == 429
         sfn.start_execution.assert_not_called()
         assert _records(clients) == [], "a wait for a slot is not a failed launch"
+        assert _records(clients, "auditErrors") == [], "nor an error"
+        assert _failed_anywhere(clients) == []
         assert clients.flush.messages() + clients.module.messages() == []
 
     def test_the_launch_that_claims_a_slot_writes_one_workflow_execute(self, audited, clients):  # noqa: F811
@@ -70,6 +82,9 @@ class TestASlotWaitIsNoOutcome:
         records = _records(clients)
         assert [(r["action"], r["outcome"], r["reason"]) for r in records] == [
             ("workflowExecute", "failed", "validation")]
+        errors = _records(clients, "auditErrors")
+        assert [(r["statusCode"], r["action"], r["outcome"]) for r in errors] == [
+            (400, "workflowExecute", "failed")]
 
 
 @pytest.mark.unit

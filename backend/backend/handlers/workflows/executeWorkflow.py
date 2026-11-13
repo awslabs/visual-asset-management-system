@@ -77,6 +77,7 @@ from common.workflows.defaultBucket import (
 )
 from models.common import (
     APIGatewayProxyResponseV2,
+    commonHeaders,
     internal_error,
     success,
     validation_error,
@@ -2560,6 +2561,19 @@ def _holder_still_running(workflow_database_id, workflow_id):
     return _running
 
 
+def _reindex_slot_wait_response():
+    """The 429 a reindex launch gets when every reindex slot is held: the launcher's cue to send it
+    again later. No outcome of the launch, so it writes no audit record of any group (the handler marks
+    it with skip_route_outcome for the actions group, and does not go through general_error, which
+    writes one to the errors group)."""
+    return APIGatewayProxyResponseV2(
+        isBase64Encoded=False,
+        statusCode=429,
+        headers=commonHeaders(),
+        body=json.dumps({"message": el.REINDEX_SLOTS_BUSY_MESSAGE}),
+    )
+
+
 def _reindex_slot_keys_for(event, request_model, workflow_database_id, workflow_id):
     """The slot keys a reindex launch may claim, in the order to try them; None for any other launch.
 
@@ -3263,9 +3277,12 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
         # outcome of the launch either: the attempt that claims a slot records workflowExecute, and one
         # refused for good (a 400) records its failure, so a backfill that waits writes no failed record
         # per wait (skip_route_outcome).
+        # The answer is built here rather than by general_error, which would write an errors-group
+        # record with the request's action and outcome failed for every wait (D103); the INFO line
+        # above is the wait's only trace.
         logger.info(f"Reindex launch of workflow {workflow_database_id}:{workflow_id} waits for a slot")
         skip_route_outcome(event)
-        return general_error(status_code=429, body={"message": el.REINDEX_SLOTS_BUSY_MESSAGE}, event=event)
+        return _reindex_slot_wait_response()
     except el.ExecutionLockConflict as conflict:
         # The key and the holder are for the log; the caller gets a fixed body naming only the scope
         # (asset / file / file version). The trigger dispatcher drops a 400, which for a repeated delivery
