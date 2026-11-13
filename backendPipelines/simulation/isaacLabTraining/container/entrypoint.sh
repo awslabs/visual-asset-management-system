@@ -19,7 +19,7 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-echo "Job Config: $1"
+echo "Job Config: ${#1} characters"
 echo "=============================================="
 
 # Execute main training script using Isaac Sim Python
