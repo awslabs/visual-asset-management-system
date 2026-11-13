@@ -105,8 +105,10 @@ class TestAllUsersList:
         missing = _all_users(env, "alice", asset_id="nosuchasset")
         assert denied["statusCode"] == missing["statusCode"] == 404
         assert h.body_of(denied) == h.body_of(missing)
-        denials = [c[0][2] for c in env.audit.call_args_list if c[0][1] == "zipDownloadNotFound"]
-        assert {"databaseId": "db1", "assetId": "asset1", "operation": "listAllUsers"} in denials
+        # The unreadable asset is recorded as a denial; the missing one by the request outcome.
+        denials = [(c.args[1], c.kwargs.get("asset_id")) for c in env.audit.call_args_list
+                   if c.kwargs.get("outcome") == "denied"]
+        assert denials == [("zipDownloadListAllUsers", "asset1")]
 
     def test_without_the_route_grant_it_is_403(self, env):
         _create(env, "bob")
@@ -154,18 +156,23 @@ class TestOtherUsersArchive:
         response = _job_route(env, "POST", theirs, "alice", "/url")
         assert response["statusCode"] == 200
         assert env.s3.presigned[-1][1]["Key"] == row["archiveKey"]
-        issued = [c[0][2] for c in env.audit.call_args_list if c[0][1] == "zipDownloadUrl"]
-        assert issued and issued[0]["requestedBy"] == "bob" and issued[0]["downloadedBy"] == "alice"
-        assert issued[0]["shared"] is True
+        issued = [c.kwargs for c in env.audit.call_args_list if c.args[1] == "zipDownloadUrl"]
+        assert len(issued) == 1 and issued[0].get("outcome", "success") == "success"
+        assert issued[0]["details"] == {"shared": True, "requestedBy": "bob", "downloadedBy": "alice"}
+        assert issued[0]["entity_id"] == theirs and issued[0]["bytes"] == 4242
 
     def test_refused_without_asset_download(self, env):
         theirs = _create(env, "bob")
         _succeed(env, "bob", theirs)
         h.AUTH.denied_routes.add(DOWNLOAD_ROUTE)
+        env.audit.reset_mock()
         response = _job_route(env, "POST", theirs, "alice", "/url")
         assert response["statusCode"] == 404
         assert h.body_of(response)["message"] == env.zd.MSG_NOT_FOUND
         assert env.s3.presigned == []
+        denials = [(c.args[1], c.kwargs["outcome"], c.kwargs["details"]) for c in env.audit.call_args_list]
+        assert denials == [("zipDownloadUrl", "denied",
+                            {"shared": True, "requestedBy": "bob", "downloadedBy": "alice"})]
 
     def test_refused_without_asset_read(self, env):
         theirs = _create(env, "bob")
@@ -191,8 +198,10 @@ class TestOtherUsersArchive:
         assert response["statusCode"] == 400
         assert h.body_of(response)["message"] == env.zd.MSG_ARCHIVED_IN_SELECTION
         assert env.s3.presigned == []
-        refused = [c[0][2] for c in env.audit.call_args_list if c[0][1] == "zipDownloadUrlRefused"]
-        assert refused and refused[0]["requestedBy"] == "bob"
+        refused = [c.kwargs for c in env.audit.call_args_list if c.args[1] == "zipDownloadUrl"]
+        assert len(refused) == 1
+        assert (refused[0]["outcome"], refused[0]["reason"]) == ("failed", "validation")
+        assert refused[0]["details"]["requestedBy"] == "bob"
 
     def test_refused_when_the_asset_is_no_longer_distributable(self, env):
         theirs = _create(env, "bob")

@@ -89,7 +89,7 @@ from common.s3 import (deployment_region, region_routing_s3_client, register_buc
 from common.validators import validate
 from common.workflows import executionLocks as el
 from common.workflows import systemPipelines as sp
-from customLogging.auditLogging import log_actions
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -263,13 +263,21 @@ def _not_found(event):
     return general_error(status_code=404, body={"message": zd.MSG_NOT_FOUND}, event=event)
 
 
-def _asset_not_found(event, database_id, asset_id, operation):
+def _deny(event, action, database_id, asset_id, request_id=None, details=None):
+    """Record a data-level denial of ``action`` (written at once, to the authorization group). The
+    caller still answers 404, so the response never tells a denial from a miss."""
+    log_action(event, action, outcome="denied", reason="forbidden", database_id=database_id,
+               asset_id=asset_id, entity_id=request_id, details=details)
+
+
+def _asset_not_found(event, action, database_id, asset_id, asset):
     """The one answer for an asset that does not exist and one the caller may not read (Tier-2 GET):
-    the same 404 "Asset not found", so a caller cannot tell the two apart (#1125 D29). Audited as a
-    denial (zipDownloadNotFound) with the operation."""
-    # AUDIT LOG: a zip download route on an asset the caller may not read, or that does not exist.
-    log_actions(event, "zipDownloadNotFound", {"databaseId": database_id, "assetId": asset_id,
-                                               "operation": operation})
+    the same 404 "Asset not found", so a caller cannot tell the two apart (#1125 D29).
+
+    The audit record tells them apart: an asset that exists is recorded as a denial of ``action``;
+    a missing one is recorded by the request outcome (``@audited_handler``) as failed, notFound."""
+    if asset:
+        _deny(event, action, database_id, asset_id)
     return general_error(status_code=404, body={"message": ASSET_NOT_FOUND_MESSAGE}, event=event)
 
 
@@ -811,6 +819,7 @@ def _reconcile(row, run_check_budget=None):
             if zd.finalize_row(zip_table, row["userId"], row["requestId"], zd.STATUS_FAILED,
                                error_message=zd.MSG_LAUNCH_FAILED, unless_cancel_requested=True):
                 zd.delete_working_objects(s3, aux_bucket_name, row, logger)
+                _record_reconcile(row, zd.STATUS_FAILED)
                 row = dict(row, status=zd.STATUS_FAILED, errorMessage=zd.MSG_LAUNCH_FAILED)
         return row
     main = _main_row(execution_id)
@@ -818,28 +827,41 @@ def _reconcile(row, run_check_budget=None):
             and _run_check_due(row, run_check_budget) and _check_run_ended(execution_id):
         main = _main_row(execution_id)
     # Aborts the job's open uploads before deciding, so a landed archive wins (finalize_ended_run).
-    status, _ = zd.finalize_ended_run(zip_table, s3, aux_bucket_name, row,
-                                      main.get("executionStatus", ""),
-                                      main.get("executionError", "") or "", logger)
+    status, changed = zd.finalize_ended_run(zip_table, s3, aux_bucket_name, row,
+                                            main.get("executionStatus", ""),
+                                            main.get("executionError", "") or "", logger)
     if not status:
         return row
+    if changed:
+        _record_reconcile(row, status)
     fresh = zip_table.get_item(Key=zd.row_key(row["userId"], row["requestId"]),
                                ConsistentRead=True).get("Item")
     return fresh or row
 
 
-def _owned_row(event, database_id, asset_id, request_id, operation):
+def _record_reconcile(row, status):
+    """Record a job this request finalized (zipDownloadReconcile, a secondary action): a read, list
+    or create of any user that found the job's run ended. Written for the request's own event, and
+    only when the finalize write took effect, so a job is recorded as finalized once."""
+    ctx = current_audit_context()
+    if ctx is None:
+        return
+    log_action(ctx.event, "zipDownloadReconcile", database_id=row.get("databaseId"),
+               asset_id=row.get("assetId"), entity_id=row.get("requestId"),
+               changes={"status": status}, previous={"status": row.get("status")},
+               executionId=row.get("workflowExecutionId"),
+               details={"requestedBy": row.get("userId", "")})
+
+
+def _owned_row(database_id, asset_id, request_id):
     """The caller's own, unexpired job under this asset path, or None.
 
     A miss answers the same 404 whatever the reason (no such job, another user's, another asset's
-    path, expired), so nothing about other users' jobs leaks; it is audited as a denial
-    (zipDownloadNotFound) with the operation, like the Tier-1/Tier-2 denials Casbin audits."""
+    path, expired), so nothing about other users' jobs leaks. The lookup is keyed by the caller, so
+    another user's job is never read here; the request outcome records the 404 as failed, notFound."""
     row = zip_table.get_item(Key=zd.row_key(_caller_id(), request_id), ConsistentRead=True).get("Item")
     if (not row or row.get("databaseId") != database_id or row.get("assetId") != asset_id
             or zd.is_expired(row)):
-        # AUDIT LOG: a job lookup that is not the caller's own, unexpired job on this path.
-        log_actions(event, "zipDownloadNotFound", {"databaseId": database_id, "assetId": asset_id,
-                                                   "requestId": request_id, "operation": operation})
         return None
     return row
 
@@ -891,7 +913,7 @@ def create_job(event, database_id, asset_id):
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     asset = _get_asset(database_id, asset_id)
     if not _can_read_asset(asset):
-        return _asset_not_found(event, database_id, asset_id, "create")
+        return _asset_not_found(event, "zipDownloadCreate", database_id, asset_id, asset)
     user_id = _caller_id()
     try:
         asset_location = require_distributable_asset(asset)
@@ -906,7 +928,7 @@ def create_job(event, database_id, asset_id):
         else:
             entries, files, total, complete = _resolve_current(bucket, base_key, request)
     except VAMSGeneralErrorResponse as e:
-        log_actions(event, "zipDownloadRefused", {"databaseId": database_id, "assetId": asset_id})
+        # The request outcome records the refusal as failed, with the status's generic reason.
         return general_error(status_code=getattr(e, "status_code", 400), body={"message": str(e)},
                              event=event)
 
@@ -982,9 +1004,7 @@ def create_job(event, database_id, asset_id):
         retryable = isinstance(refused, ZipLaunchRetryable)
         logger.warning(f"Zip download {request_id} refused at launch: {refused}")
         _discard_unlaunched_job(row)
-        log_actions(event, "zipDownloadRefused", {
-            "databaseId": database_id, "assetId": asset_id,
-            "reason": "launchRetryable" if retryable else "launchRefused"})
+        # The request outcome records the 400 or 503 as failed; the refusal text stays in this log.
         if retryable:
             return general_error(status_code=503, body={"message": zd.MSG_LAUNCH_BUSY}, event=event)
         return general_error(status_code=400, body={"message": zd.MSG_LAUNCH_REFUSED}, event=event)
@@ -1010,12 +1030,13 @@ def create_job(event, database_id, asset_id):
         row.update(workflowExecutionId=execution_id, startedAt=started)
     except ClientError as e:
         logger.exception(f"Could not record the run of zip download {request_id}: {e}")
-    # AUDIT LOG: the requester of a run that executes as SYSTEM_USER.
-    log_actions(event, "zipDownloadCreate", {
-        "databaseId": database_id, "assetId": asset_id, "requestId": request_id,
-        "workflowExecutionId": execution_id, "archiveFormat": row["archiveFormat"],
-        "files": files, "bytes": total, "resolutionComplete": complete,
-        "assetVersionId": asset_version_id})
+    # AUDIT LOG: the job this user created; its run executes as SYSTEM_USER, so this record is what
+    # names the requester. The selection itself is summarized (it can hold thousands of entries).
+    created = {key: row[key] for key in ("status", "archiveFormat", "compression", "archiveFileName",
+                                         "selectionSummary", "assetVersionId") if row.get(key)}
+    log_action(event, "zipDownloadCreate", database_id=database_id, asset_id=asset_id,
+               entity_id=request_id, file_count=files, bytes=total, changes=created,
+               executionId=execution_id, details={"resolutionComplete": complete})
     return success(body=zd.to_job_item(row))
 
 
@@ -1056,7 +1077,18 @@ def list_jobs(event, database_id=None, asset_id=None):
     result = {"Items": items}
     if "LastEvaluatedKey" in response:
         result["NextToken"] = _encode_token(response["LastEvaluatedKey"])
+    log_action(event, "zipDownloadList", database_id=database_id, asset_id=asset_id,
+               item_count=len(items), request_parameters=_list_parameters(query))
     return success(body=result)
+
+
+def _list_parameters(query) -> dict:
+    """What a list asked for: the page bounds, and whether it continued a walk (the token itself is
+    an opaque copy of a table key, so it is not recorded)."""
+    asked = {"maxItems": query.maxItems, "pageSize": query.pageSize}
+    if query.startingToken:
+        asked["continued"] = True
+    return asked
 
 
 def list_all_users_jobs(event, database_id, asset_id):
@@ -1074,7 +1106,7 @@ def list_all_users_jobs(event, database_id, asset_id):
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     asset = _get_asset(database_id, asset_id)
     if not _can_read_asset(asset):
-        return _asset_not_found(event, database_id, asset_id, "listAllUsers")
+        return _asset_not_found(event, "zipDownloadListAllUsers", database_id, asset_id, asset)
     partition = zd.asset_key(database_id, asset_id)
     kwargs = {"IndexName": ASSET_INDEX, "KeyConditionExpression": Key("assetKey").eq(partition),
               "ScanIndexForward": False, "Limit": min(query.maxItems, query.pageSize)}
@@ -1108,12 +1140,14 @@ def list_all_users_jobs(event, database_id, asset_id):
     result = {"Items": items}
     if "LastEvaluatedKey" in response:
         result["NextToken"] = _encode_token(response["LastEvaluatedKey"])
+    log_action(event, "zipDownloadListAllUsers", database_id=database_id, asset_id=asset_id,
+               item_count=len(items), request_parameters=_list_parameters(query))
     return success(body=result)
 
 
-def _shared_row(event, database_id, asset_id, request_id):
+def _shared_row(database_id, asset_id, request_id):
     """Another user's unexpired job under this asset (the asset index, one bounded query), or None.
-    A miss is audited like _owned_row's."""
+    A miss answers 404 like _owned_row's, recorded by the request outcome."""
     response = zip_table.query(
         IndexName=ASSET_INDEX,
         KeyConditionExpression=(Key("assetKey").eq(zd.asset_key(database_id, asset_id))
@@ -1123,8 +1157,6 @@ def _shared_row(event, database_id, asset_id, request_id):
     row = items[0] if items else None
     if (not row or row.get("databaseId") != database_id or row.get("assetId") != asset_id
             or zd.is_expired(row)):
-        log_actions(event, "zipDownloadNotFound", {"databaseId": database_id, "assetId": asset_id,
-                                                   "requestId": request_id, "operation": "url"})
         return None
     # The index projects every attribute but is eventually consistent: read the row itself.
     fresh = zip_table.get_item(Key=zd.row_key(row["userId"], request_id),
@@ -1221,12 +1253,15 @@ def _recheck_members(asset, row) -> bool:
 
 
 def get_job(event, database_id, asset_id, request_id):
-    row = _owned_row(event, database_id, asset_id, request_id, "get")
+    row = _owned_row(database_id, asset_id, request_id)
     if not row:
         return _not_found(event)
     if not _can_read_asset(_get_asset(database_id, asset_id)):
+        _deny(event, "zipDownloadGet", database_id, asset_id, request_id)
         return _not_found(event)
-    return success(body=zd.to_job_item(_reconcile(row)))
+    item = zd.to_job_item(_reconcile(row))
+    log_action(event, "zipDownloadGet", database_id=database_id, asset_id=asset_id, entity_id=request_id)
+    return success(body=item)
 
 
 def job_url(event, database_id, asset_id, request_id):
@@ -1236,14 +1271,16 @@ def job_url(event, database_id, asset_id, request_id):
     own = zip_table.get_item(Key=zd.row_key(caller, request_id), ConsistentRead=True).get("Item")
     shared = not (own and own.get("databaseId") == database_id and own.get("assetId") == asset_id
                   and not zd.is_expired(own))
-    row = _shared_row(event, database_id, asset_id, request_id) if shared else own
+    row = _shared_row(database_id, asset_id, request_id) if shared else own
     if not row:
         return _not_found(event)
+    # A download of another user's archive names both users.
+    users = {"shared": True, "requestedBy": row.get("userId", ""), "downloadedBy": caller} if shared else None
     asset = _get_asset(database_id, asset_id)
     if not _can_read_asset(asset) or (shared and not _may_download_from_asset(database_id, asset_id)):
         # AUDIT LOG: a download URL refused (the caller may not read, or download from, the asset).
-        log_actions(event, "zipDownloadUrlDenied", {"databaseId": database_id, "assetId": asset_id,
-                                                    "requestId": request_id, "shared": shared})
+        # The answer is the same 404 as a missing job.
+        _deny(event, "zipDownloadUrl", database_id, asset_id, request_id, details=users)
         return _not_found(event)
     try:
         require_distributable_asset(asset)
@@ -1254,9 +1291,8 @@ def job_url(event, database_id, asset_id, request_id):
         return general_error(status_code=409, body={"message": zd.MSG_NOT_READY}, event=event)
     if shared and not _recheck_members(asset, row):
         # AUDIT LOG: another user's archive refused because a member is no longer downloadable.
-        log_actions(event, "zipDownloadUrlRefused", {"databaseId": database_id, "assetId": asset_id,
-                                                     "requestId": request_id,
-                                                     "requestedBy": row.get("userId", "")})
+        log_action(event, "zipDownloadUrl", outcome="failed", reason="validation",
+                   database_id=database_id, asset_id=asset_id, entity_id=request_id, details=users)
         return general_error(status_code=400, body={"message": zd.MSG_ARCHIVED_IN_SELECTION},
                              event=event)
     exists, size = zd.archive_head(s3, aux_bucket_name, row.get("archiveKey", ""))
@@ -1270,22 +1306,17 @@ def job_url(event, database_id, asset_id, request_id):
         Params={"Bucket": aux_bucket_name, "Key": row["archiveKey"],
                 "ResponseContentDisposition": disposition},
         ExpiresIn=PRESIGNED_URL_TIMEOUT_SECONDS)
-    # AUDIT LOG: a download URL was issued (the URL itself is never logged). A download of another
-    # user's archive names both users.
-    audit = {"databaseId": database_id, "assetId": asset_id, "requestId": request_id,
-             "archiveSizeBytes": size}
-    if shared:
-        audit.update(shared=True, requestedBy=row.get("userId", ""), downloadedBy=caller)
-    log_actions(event, "zipDownloadUrl", audit)
+    # AUDIT LOG: a download URL was issued (the URL itself is never logged).
+    log_action(event, "zipDownloadUrl", database_id=database_id, asset_id=asset_id,
+               entity_id=request_id, bytes=size, details=users)
     return success(body={"url": url, "expiresIn": PRESIGNED_URL_TIMEOUT_SECONDS,
                          "archiveFileName": file_name, "archiveSizeBytes": size})
 
 
 def _ended_answer(event, database_id, asset_id, request_id, status):
     """A cancel that found the job finished: the job is kept with its outcome (#1125 D22, D23)."""
-    log_actions(event, "zipDownloadCancel", {"databaseId": database_id, "assetId": asset_id,
-                                             "requestId": request_id, "outcome": "ended",
-                                             "status": status})
+    log_action(event, "zipDownloadCancel", database_id=database_id, asset_id=asset_id,
+               entity_id=request_id, details={"result": "ended", "status": status})
     return success(body={"message": zd.MSG_ALREADY_FINISHED, "action": "ended", "status": status})
 
 
@@ -1296,10 +1327,14 @@ def delete_job(event, database_id, asset_id, request_id):
         logger.error(f"Validation error: {v}")
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     cancel_intent = query.intent == "cancel"
-    row = _owned_row(event, database_id, asset_id, request_id, "delete")
+    row = _owned_row(database_id, asset_id, request_id)
     if not row:
         return _not_found(event)
     if not _can_read_asset(_get_asset(database_id, asset_id)):
+        if cancel_intent or row.get("status") in zd.ACTIVE_STATUSES:
+            _deny(event, "zipDownloadCancel", database_id, asset_id, request_id)
+        else:
+            _deny(event, "zipDownloadDelete", database_id, asset_id, request_id)
         return _not_found(event)
     prefix = _job_prefix(row)
     if cancel_intent and row.get("status") not in zd.ACTIVE_STATUSES:
@@ -1307,6 +1342,8 @@ def delete_job(event, database_id, asset_id, request_id):
         # while a confirm dialog was open: a cancel never deletes, so the job keeps its outcome
         # (#1125 D23). A repeated cancel of a CANCELLED job answers cancelled.
         if row.get("status") == zd.STATUS_CANCELLED:
+            log_action(event, "zipDownloadCancel", database_id=database_id, asset_id=asset_id,
+                       entity_id=request_id, details={"result": "alreadyCancelled"})
             return success(body={"message": "Zip download cancelled", "action": "cancelled"})
         return _ended_answer(event, database_id, asset_id, request_id, row.get("status", ""))
     if row.get("status") in zd.ACTIVE_STATUSES:
@@ -1321,8 +1358,10 @@ def delete_job(event, database_id, asset_id, request_id):
             zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
             # cancel_job removed the working objects; again, for any the container wrote since.
             zd.delete_working_objects(s3, aux_bucket_name, row, logger)
-            log_actions(event, "zipDownloadCancel", {"databaseId": database_id, "assetId": asset_id,
-                                                     "requestId": request_id})
+            log_action(event, "zipDownloadCancel", database_id=database_id, asset_id=asset_id,
+                       entity_id=request_id, changes={"status": zd.STATUS_CANCELLED},
+                       previous={"status": row.get("status")},
+                       executionId=row.get("workflowExecutionId"))
             return success(body={"message": "Zip download cancelled", "action": "cancelled"})
         fresh = zip_table.get_item(Key=zd.row_key(row["userId"], request_id),
                                    ConsistentRead=True).get("Item") or {}
@@ -1339,8 +1378,9 @@ def delete_job(event, database_id, asset_id, request_id):
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
             raise
-    log_actions(event, "zipDownloadDelete", {"databaseId": database_id, "assetId": asset_id,
-                                             "requestId": request_id})
+    log_action(event, "zipDownloadDelete", database_id=database_id, asset_id=asset_id,
+               entity_id=request_id, previous={"status": row.get("status"),
+                                               "archiveFileName": row.get("archiveFileName")})
     return success(body={"message": "Zip download deleted", "action": "deleted"})
 
 
@@ -1363,6 +1403,15 @@ def handle_sweep(event) -> dict:
                                        final=bool(event.get("final")), logger=logger)
     logger.info(f"Zip download delayed sweep ({'final' if event.get('final') else 'first'} pass): "
                 f"{result}")
+    if result.get("swept"):
+        # AUDIT LOG: a pass that aborted (or found) the job's leftover archive uploads; a pass with
+        # nothing to do changes nothing and records nothing.
+        job = event.get("zipSweep") or {}
+        log_action(event, "zipDownloadSweep", database_id=job.get("databaseId"),
+                   asset_id=job.get("assetId"), entity_id=job.get("requestId"),
+                   on_behalf_of=job.get("userId"),
+                   details={"pass": "final" if event.get("final") else "first",
+                            "aborted": result.get("aborted", 0), "remaining": result.get("remaining", 0)})
     return result
 
 
@@ -1381,6 +1430,7 @@ def _is_internal_event(event, key, value) -> bool:
     return isinstance(event, dict) and "requestContext" not in event and event.get(key) == value
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext):
     # Dispatch on the envelope, never on the body: an API request is always an API request, whatever
     # its body imitates, and the internal branches run before any request handling or request log.
@@ -1435,8 +1485,9 @@ def handle_api_request(event, context: LambdaContext) -> APIGatewayProxyResponse
             if method == "POST":
                 return create_job(event, database_id, asset_id)
             if method == "GET":
-                if not _can_read_asset(_get_asset(database_id, asset_id)):
-                    return _asset_not_found(event, database_id, asset_id, "list")
+                asset = _get_asset(database_id, asset_id)
+                if not _can_read_asset(asset):
+                    return _asset_not_found(event, "zipDownloadList", database_id, asset_id, asset)
                 return list_jobs(event, database_id, asset_id)
         elif API_ZIP_DOWNLOADS_ASSET_REQUEST.matches(path) or API_ZIP_DOWNLOADS_ASSET_REQUEST_URL.matches(path):
             message = _validate_path(database_id, asset_id, request_id)

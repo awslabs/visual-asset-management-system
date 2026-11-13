@@ -128,6 +128,11 @@ from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_RERUN,
     API_WORKFLOW_TRIGGER,
     API_WORKFLOW_TRIGGERS,
+    API_ZIP_DOWNLOADS_ASSET,
+    API_ZIP_DOWNLOADS_ASSET_ALL_USERS,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
+    API_ZIP_DOWNLOADS_GLOBAL,
 )
 from common.apiRouteTypes import DELETE, GET, HEAD, POST, PUT
 from common.auditActionTypes import *  # noqa: F401,F403
@@ -214,6 +219,22 @@ CORE_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
                   legacy_function="log_file_download_streamed"),
     }),
     **route_entries(API_ASSET_EXPORT, {POST: spec("assetExport", "export", KIND_DOWNLOAD)}),
+    # Download as Zip jobs (an export of the asset's files). The URL hands out the archive, so it is
+    # a download written to the file download group with the other file content surfaces; the
+    # DELETE route's cancel is the secondary action zipDownloadCancel.
+    **route_entries(API_ZIP_DOWNLOADS_ASSET, {
+        GET: read("zipDownloadList", "export"),
+        POST: spec("zipDownloadCreate", "export"),
+    }),
+    **route_entries(API_ZIP_DOWNLOADS_GLOBAL, {GET: read("zipDownloadList", "export")}),
+    **route_entries(API_ZIP_DOWNLOADS_ASSET_ALL_USERS, {GET: read("zipDownloadListAllUsers", "export")}),
+    **route_entries(API_ZIP_DOWNLOADS_ASSET_REQUEST, {
+        GET: read("zipDownloadGet", "export"),
+        DELETE: spec("zipDownloadDelete", "export"),
+    }),
+    **route_entries(API_ZIP_DOWNLOADS_ASSET_REQUEST_URL, {
+        POST: spec("zipDownloadUrl", "export", KIND_DOWNLOAD, GROUP_FILE_DOWNLOAD),
+    }),
     **route_entries(API_GET_ASSET_HISTORY, {GET: read("assetHistoryGet", "asset")}),
     # Asset files
     **route_entries(API_LIST_FILES, {GET: read("fileList", "file")}),
@@ -450,6 +471,10 @@ CORE_AUDIT_SECONDARY_ACTIONS: Tuple[AuditSpec, ...] = (
     spec("workflowRedeploy", "workflow"),
     # DELETE /workflows/executions/{executionId} on an execution group stops every member.
     spec("workflowExecutionGroupAbort", "executionGroup"),
+    # DELETE .../download/zip/{requestId} on a job still running (or with intent=cancel) cancels it.
+    spec("zipDownloadCancel", "export"),
+    # A zip download read, list or create that found the job's run ended finalizes the job.
+    spec("zipDownloadReconcile", "export"),
 )
 
 # Actions recorded by handlers that serve no API route. The actor is the system; onBehalfOf names
@@ -466,6 +491,9 @@ CORE_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
     SystemAction("handlers.workflows.sfn.handleExecutionError", spec("workflowExecutionEnd", "execution")),
     SystemAction("handlers.workflows.importGlobalPipelineWorkflow", spec("pipelineImport", "pipeline")),
     SystemAction("handlers.auth.apiOriginVerifyRotation", _auth("originVerifyRotate", "system")),
+    # A delayed sweep pass of a zip download (its state machine invokes the service directly) that
+    # aborted the job's leftover archive uploads.
+    SystemAction("handlers.assets.zipDownloadService", spec("zipDownloadSweep", "export")),
 )
 
 # Handlers that serve no API route and record no action, with the reason.

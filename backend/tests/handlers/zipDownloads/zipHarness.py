@@ -401,7 +401,7 @@ def load_handlers(enabled=True, env=None):
     svc.asset_table = env_obj.assets
     svc.buckets_table = env_obj.buckets
     svc.executions_table = env_obj.executions
-    svc.log_actions = env_obj.audit
+    svc.log_action = env_obj.audit
     svc.validateUnallowedFileExtensionAndContentType = blocklist
     env_obj.zd = svc.zd
     # The abort sweep (abort_until_gone, #1125 D16) waits between repeats while a double keeps an

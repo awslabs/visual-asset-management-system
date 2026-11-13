@@ -113,35 +113,36 @@ class TestAuthorization:
             assert h.body_of(response)["message"] == env.zd.MSG_NOT_FOUND
         assert len(env.zip.items) == 1
 
-    def test_every_ownership_miss_is_audited_with_its_operation(self, env):
-        # #1125 L3: the 404 for another user's job is audited on get, url and delete alike.
+    def test_an_ownership_miss_writes_no_handler_record(self, env):
+        # #1125 L3: another user's job answers 404 on get and delete, and the handler writes no
+        # record for it: the lookup is keyed by the caller, so the miss is a miss, and the request
+        # outcome (@audited_handler) records the 404 as the route's action, failed, notFound.
+        request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
+        for method in ("GET", "DELETE"):
+            env.audit.reset_mock()
+            assert _job_route(env, method, request_id, user="mallory")["statusCode"] == 404
+            assert env.audit.call_args_list == [], method
+
+    def test_a_url_refused_for_another_users_job_is_recorded_as_a_denial(self, env):
+        # The URL route looks another user's job up through the asset index (shared view); without
+        # the asset's file download route the refusal is a denial of zipDownloadUrl, answered 404.
         request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
         h.AUTH.denied_routes.add(("POST", r"/database/db1/assets/asset1/download"))
         env.audit.reset_mock()
-        for method, suffix, operation in (("GET", "", "get"), ("DELETE", "", "delete")):
-            env.audit.reset_mock()
-            _job_route(env, method, request_id, user="mallory", suffix=suffix)
-            denials = [c for c in env.audit.call_args_list if c[0][1] == "zipDownloadNotFound"]
-            assert len(denials) == 1, (method, suffix)
-            assert denials[0][0][2] == {"databaseId": "db1", "assetId": "asset1",
-                                        "requestId": request_id, "operation": operation}
-        # The URL route looks another user's job up through the asset index (shared view) and
-        # audits its refusal as a URL denial.
-        env.audit.reset_mock()
-        _job_route(env, "POST", request_id, user="mallory", suffix="/url")
-        denials = [c[0][2] for c in env.audit.call_args_list if c[0][1] == "zipDownloadUrlDenied"]
-        assert denials == [{"databaseId": "db1", "assetId": "asset1", "requestId": request_id,
-                            "shared": True}]
+        assert _job_route(env, "POST", request_id, user="mallory", suffix="/url")["statusCode"] == 404
+        recorded = [(c.args[1], c.kwargs["outcome"], c.kwargs["reason"], c.kwargs["entity_id"],
+                     c.kwargs["details"]) for c in env.audit.call_args_list]
+        assert recorded == [("zipDownloadUrl", "denied", "forbidden", request_id,
+                             {"shared": True, "requestedBy": "alice", "downloadedBy": "mallory"})]
 
-    def test_the_owners_own_lookup_writes_no_denial(self, env):
+    def test_the_owners_read_is_recorded_once_as_a_get(self, env):
         request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
         env.audit.reset_mock()
         assert _job_route(env, "GET", request_id)["statusCode"] == 200
         assert _job_route(env, "GET", request_id, user="mallory")["statusCode"] == 404
-        # Exactly one denial across both reads: mallory's, so the owner's read wrote none.
-        denials = [c[0][2]["requestId"] for c in env.audit.call_args_list
-                   if c[0][1] == "zipDownloadNotFound"]
-        assert denials == [request_id]
+        # One record across both reads: the owner's get. Mallory's miss writes none here.
+        recorded = [(c.args[1], c.kwargs.get("entity_id")) for c in env.audit.call_args_list]
+        assert recorded == [("zipDownloadGet", request_id)]
 
     def test_second_user_list_is_empty(self, env):
         _create(env, FILE_SELECTION)
@@ -187,8 +188,16 @@ class TestCreate:
         manifest = json.loads(env.s3.puts[(h.AUX, row["manifestKey"])])
         assert manifest["entries"] == [{"type": "file", "key": "xasset1/a.glb", "relativePath": "/a.glb"}]
         assert ".exe" in manifest["blockedExtensions"]
-        env.audit.assert_called()
-        assert env.audit.call_args[0][1] == "zipDownloadCreate"
+        created = [c for c in env.audit.call_args_list if c.args[1] == "zipDownloadCreate"]
+        assert len(created) == 1
+        record = created[0].kwargs
+        assert (record["database_id"], record["asset_id"], record["entity_id"]) == (
+            "db1", "asset1", item["requestId"])
+        assert (record["file_count"], record["bytes"], record["executionId"]) == (1, 100, "exec-1")
+        assert record["changes"] == {"status": "QUEUED", "archiveFormat": "zip",
+                                     "compression": row["compression"],
+                                     "archiveFileName": "My Export_.zip",
+                                     "selectionSummary": {"files": 1, "folders": 0, "wholeAsset": False}}
 
     def test_launch_event_is_a_marked_system_cross_call(self, env):
         _create(env, {"selection": [{"type": "folder", "relativePath": "/textures/"}]})
@@ -230,7 +239,8 @@ class TestCreate:
         logged = " ".join(str(c.args[0]) for c in logger.warning.call_args_list)
         assert "Workflow does not allow folder selection." in logged
         assert "answered 400" in logged
-        assert any(c.args[1] == "zipDownloadRefused" for c in env.audit.call_args_list)
+        # The handler records only successes: the request outcome records the 400 as failed.
+        assert env.audit.call_count == 0
 
     def test_a_refusal_string_is_logged_too(self, env, monkeypatch):
         logger = MagicMock()
@@ -558,9 +568,11 @@ class TestUrl:
         op, params, expires = env.s3.presigned[0]
         assert params["Bucket"] == h.AUX and params["Key"] == row["archiveKey"]
         assert params["ResponseContentDisposition"].startswith("attachment; filename=")
-        # The URL is never written to the audit log.
-        logged = json.dumps([c[0][2] for c in env.audit.call_args_list], default=str)
-        assert "X-Amz-Signature" not in logged
+        # The URL is never written to the audit log; the issue is recorded once, with the size.
+        issued = [c.kwargs for c in env.audit.call_args_list if c.args[1] == "zipDownloadUrl"]
+        assert len(issued) == 1 and issued[0]["bytes"] == 4242 and issued[0]["details"] is None
+        logged = json.dumps([c.kwargs for c in env.audit.call_args_list], default=str)
+        assert "X-Amz-Signature" not in logged and body["url"] not in logged
 
     def test_url_refused_until_succeeded(self, env):
         request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]

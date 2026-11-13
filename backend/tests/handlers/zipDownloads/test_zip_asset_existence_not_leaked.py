@@ -5,8 +5,9 @@
 
 For every asset-scoped route, an asset that does not exist and one the caller may not read (Tier-2
 GET denied) get the same status and the same body. The asset routes (create, per-asset list,
-all-users list) answer 404 "Asset not found" and audit the call as zipDownloadNotFound with the
-operation; the job routes (get, url, delete) answer the job-level 404 for both.
+all-users list) answer 404 "Asset not found"; the job routes (get, url, delete) answer the job-level
+404 for both. Only the audit record tells them apart: an unreadable asset is recorded as a denial
+of the route's action, and a missing one by the request outcome (@audited_handler, failed notFound).
 """
 
 import pytest
@@ -54,9 +55,14 @@ def _call(e, route, asset_id):
     return response["statusCode"], h.body_of(response)
 
 
-def _audited(e, operation):
-    return [c.args[2] for c in e.audit.call_args_list
-            if c.args[1] == "zipDownloadNotFound" and c.args[2].get("operation") == operation]
+ROUTE_ACTIONS = {"create": "zipDownloadCreate", "list": "zipDownloadList",
+                 "listAllUsers": "zipDownloadListAllUsers"}
+
+
+def _audited(e):
+    """(action, outcome, reason, databaseId, assetId) of every record the handler wrote."""
+    return [(c.args[1], c.kwargs.get("outcome", "success"), c.kwargs.get("reason"),
+             c.kwargs.get("database_id"), c.kwargs.get("asset_id")) for c in e.audit.call_args_list]
 
 
 @pytest.mark.unit
@@ -70,12 +76,16 @@ def test_a_missing_and_an_unreadable_asset_answer_alike(env, route):
 
 @pytest.mark.unit
 @pytest.mark.parametrize("route", ["create", "list", "listAllUsers"])
-def test_the_asset_routes_answer_asset_not_found_and_audit_both(env, route):
+def test_the_asset_routes_answer_asset_not_found_and_record_the_denial(env, route):
     for asset_id in (MISSING, DENIED):
         env.audit.reset_mock()
         status, body = _call(env, route, asset_id)
         assert (status, body["message"]) == (404, "Asset not found")
-        assert _audited(env, route) == [{"databaseId": "db1", "assetId": asset_id, "operation": route}]
+        # An asset that exists is a denial of the route's action; a missing one writes nothing here
+        # (the request outcome records the 404 as failed, notFound).
+        expected = ([(ROUTE_ACTIONS[route], "denied", "forbidden", "db1", asset_id)]
+                    if asset_id == DENIED else [])
+        assert _audited(env) == expected, (route, asset_id)
 
 
 @pytest.mark.unit
