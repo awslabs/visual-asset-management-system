@@ -1800,8 +1800,26 @@ export function buildZipDownloadServiceFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc: inVpc(config) ? vpc : undefined,
         vpcSubnets: inVpc(config) ? { subnets: subnets } : undefined,
-        environment: zipDownloadServiceEnvironment(config),
+        environment: {
+            ...zipDownloadServiceEnvironment(config),
+            // Compliance's quarantine block covers zip downloads like every other download route
+            // (common/compliance/quarantineGuard.py); the asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
+        },
     });
+
+    if (config.app.compliance.quarantineBlocksDownload) {
+        // check_quarantine_block reads one asset-state row by key, at create and at URL time.
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["dynamodb:GetItem"],
+                resources: [storageResources.dynamo.complianceAssetStateStorageTable.tableArn],
+            })
+        );
+    }
 
     const zipTable = storageResources.dynamo.zipDownloadRequestsStorageTable;
     fun.addToRolePolicy(

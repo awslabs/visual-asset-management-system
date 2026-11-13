@@ -82,6 +82,9 @@ from common.downloadEligibility import (
     require_distributable_asset,
     resolve_asset_file_key,
 )
+from common.compliance.quarantineGuard import (
+    QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
+)
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_bucket_name, get_table_name
 from common.s3 import (deployment_region, region_routing_s3_client, register_bucket_region,
@@ -923,7 +926,9 @@ def create_job(event, database_id, asset_id):
         return _asset_not_found(event, "zipDownloadCreate", database_id, asset_id, asset)
     user_id = _caller_id()
     try:
-        asset_location = require_distributable_asset(asset)
+        # A quarantined asset is refused as on every download route (a no-op while the block is off).
+        asset_location = require_distributable_asset(asset, check_quarantine=check_quarantine_block,
+                                                     database_id=database_id, asset_id=asset_id)
         bucket = _bucket_details(asset.get("bucketId"))["bucketName"]
         base_key = asset_location.get("Key")
         if _cap_reached(user_id):
@@ -934,6 +939,8 @@ def create_job(event, database_id, asset_id):
             entries, files, total, complete = [], len(pinned), sum(p["size"] for p in pinned), True
         else:
             entries, files, total, complete = _resolve_current(bucket, base_key, request)
+    except QuarantineBlockedResponse as refusal:
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as e:
         # The request outcome records the refusal as failed, with the status's generic reason.
         return general_error(status_code=getattr(e, "status_code", 400), body={"message": str(e)},
@@ -1288,7 +1295,11 @@ def job_url(event, database_id, asset_id, request_id):
         # The answer is the same 404 as a missing job.
         return _denied(event, "zipDownloadUrl", database_id, asset_id, request_id, details=users)
     try:
-        require_distributable_asset(asset)
+        # Checked again when signing: the asset may have been quarantined since the job was created.
+        require_distributable_asset(asset, check_quarantine=check_quarantine_block,
+                                    database_id=database_id, asset_id=asset_id)
+    except QuarantineBlockedResponse as refusal:
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as e:
         return general_error(body={"message": str(e)}, event=event)
     row = _reconcile(row)
