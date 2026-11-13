@@ -18,6 +18,7 @@ import * as workflowService from "./workflows";
 import * as executionService from "./executions";
 import * as databaseService from "./databases";
 import * as assetService from "./assets";
+import { ServiceCallError, failureStatus } from "./client";
 import type {
     Pipeline,
     PipelineCreateRequest,
@@ -200,10 +201,17 @@ export function computeListRefetchInterval(rows: any[], pageCount: number): numb
     return base * Math.max(1, pageCount);
 }
 
-// Helper to throw on service [false, msg] tuple for query error state
+// Helper to throw on service [false, msg] tuple for query error state. The thrown error carries the call's HTTP status, so the query client's retry rule
+// (utils/queryRetry.ts) gives up at once on a final answer such as a 403 or 404.
 async function callService<T>(serviceFn: () => Promise<[boolean, T | string]>): Promise<T> {
-    const [ok, data] = await serviceFn();
-    if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
+    const result = await serviceFn();
+    const [ok, data] = result;
+    if (!ok) {
+        throw new ServiceCallError(
+            typeof data === "string" ? data : "Service call failed",
+            failureStatus(result)
+        );
+    }
     return data as T;
 }
 
@@ -640,8 +648,7 @@ export function useExecutions(scope: ExecutionScope, filters?: Record<string, st
             }
 
             if (scope.kind === "global") {
-                const [ok, data] = await executionService.listExecutionsGlobal(params);
-                if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
+                const data = await callService(() => executionService.listExecutionsGlobal(params));
                 return withItems<ExecutionListResponse>(data);
             } else if (scope.kind === "workflow") {
                 // The global-list endpoint matches workflowId and workflowDatabaseId independently.
@@ -654,17 +661,15 @@ export function useExecutions(scope: ExecutionScope, filters?: Record<string, st
                     workflowId: scope.workflowId,
                     workflowDatabaseId: scope.databaseId,
                 };
-                const [ok, data] = await executionService.listExecutionsGlobal(workflowParams);
-                if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
+                const data = await callService(() =>
+                    executionService.listExecutionsGlobal(workflowParams)
+                );
                 return withItems<ExecutionListResponse>(data);
             } else {
                 // Asset scope
-                const [ok, data] = await executionService.listExecutionsForAsset(
-                    scope.databaseId,
-                    scope.assetId,
-                    params
+                const data = await callService(() =>
+                    executionService.listExecutionsForAsset(scope.databaseId, scope.assetId, params)
                 );
-                if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
                 return withItems<ExecutionListResponse>(data);
             }
         },

@@ -7,12 +7,37 @@ export function unwrapMessage(resp: any): any {
     return resp && typeof resp === "object" && "message" in resp ? resp.message : resp;
 }
 
+/**
+ * The HTTP status a failed call answered with, carried on its `[false, message]` tuple so a query
+ * can tell a final answer (a 403 or 404) from a transient failure without parsing the message.
+ * Non-enumerable, so destructuring, equality checks and serialization see the plain tuple.
+ */
+const FAILURE_STATUS = Symbol("failureStatus");
+
+/** The `[false, message]` tuple for a thrown call, tagged with its HTTP status when it has one. */
+function failureTuple(e: any): [false, string] {
+    const tuple: [false, string] = [false, e?.message || "Request failed"];
+    if (typeof e?.status === "number") {
+        Object.defineProperty(tuple, FAILURE_STATUS, { value: e.status, enumerable: false });
+    }
+    return tuple;
+}
+
+/**
+ * The HTTP status of a failed `toTuple` / `toTupleWithWarnings` result, or undefined when the call
+ * failed without a response (a network failure) or the tuple was rebuilt by its service.
+ */
+export function failureStatus(result: readonly unknown[]): number | undefined {
+    const status = (result as any)?.[FAILURE_STATUS];
+    return typeof status === "number" ? status : undefined;
+}
+
 export async function toTuple<T = any>(fn: () => Promise<any>): Promise<[boolean, T | string]> {
     try {
         return [true, unwrapMessage(await fn()) as T];
     } catch (e: any) {
         console.log(e);
-        return [false, e?.message || "Request failed"];
+        return failureTuple(e);
     }
 }
 
@@ -62,7 +87,20 @@ export async function toTupleWithWarnings<T = any>(
         return [true, result];
     } catch (e: any) {
         console.log(e);
-        return [false, e?.message || "Request failed"];
+        return failureTuple(e);
+    }
+}
+
+/**
+ * The error a query hook throws for a failed service tuple: the service's message plus the HTTP
+ * status, when the call got one, so the query client's retry rule can see a final answer. Keeps
+ * the plain `Error` name, so pages that print the error show the same text as before.
+ */
+export class ServiceCallError extends Error {
+    status?: number;
+    constructor(message: string, status?: number) {
+        super(message);
+        this.status = status;
     }
 }
 
