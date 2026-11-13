@@ -145,6 +145,24 @@ class ReindexContinuationFailed(Exception):
     `resumePayload`, the payload that continues the run after the last file this invocation sent."""
 
 
+# What `common.auth.apiEvent.normalize_event` writes into an event in place when `audited_handler`
+# resolves the caller's claims before the handler runs: an absent or null `pathParameters` and
+# `queryStringParameters` become `{}`, and the decoded-path flag is set. A direct or continuation
+# payload carries none of them, so they are the decorator's, not the caller's.
+NORMALIZE_EVENT_DEFAULTS = {'pathParameters': {}, 'queryStringParameters': {},
+                            'vamsPathParametersDecoded': True}
+
+
+def payload_as_given(event: Any) -> Any:
+    """The payload the caller sent: `event` without the keys `normalize_event` added, each dropped
+    only while it holds the value that function writes. A caller's own `pathParameters` with
+    content, or any other key, stays and is refused by `validate_payload`."""
+    if not isinstance(event, dict):
+        return event
+    return {key: value for key, value in event.items()
+            if not (key in NORMALIZE_EVENT_DEFAULTS and value == NORMALIZE_EVENT_DEFAULTS[key])}
+
+
 def validate_payload(event: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """(normalized params, None) or (None, error message)."""
     if not isinstance(event, dict):
@@ -488,6 +506,8 @@ def lambda_handler(event, context) -> Dict[str, Any]:
     request does nothing and writes none."""
     if is_cfn_event(event):
         return handle_cfn_event(event, context)
+    # The audit decorator normalized the event in place before this body runs (D102).
+    event = payload_as_given(event)
     params, error = validate_payload(event)
     if error:
         logger.warning(f"Rejected vector reindex payload: {error}")
