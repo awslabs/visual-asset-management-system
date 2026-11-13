@@ -122,6 +122,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   GenAI 3D Metadata Labeling's Amazon Bedrock permission covers the model in the deployment Region and the `global.` profile's model only. With a geographic cross-Region inference profile (`us.`, `eu.`, `apac.` or `us-gov.`) as `bedrockModelId`, a run whose request is routed to another Region fails with `AccessDeniedException`; use a `global.` profile or a foundation-model id offered on demand in the deployment Region. (issue #1390)
 -   An asset create that fails after writing the asset's empty folder object in Amazon S3 leaves that object behind, and every later create with the same asset ID returns `400` "Asset identifier is not unique for the given S3 bucket location" although no asset exists. An asset ID with a dot that v2.6.6 refused this way stays refused after the update until the folder object is removed; see [Asset ID Refused as Not Unique Although No Asset Exists](../troubleshooting/common-issues.md#asset-id-refused-as-not-unique-although-no-asset-exists). (issue #1385)
     -   Note: remove every version of the folder object; a delete without a version ID leaves a delete marker, which still blocks the asset ID.
+-   VamsCLI and VamsMCP send asset IDs in request paths without encoding them, so an asset ID that ends in `#` loses the `#`. Reading or updating such an asset, or listing its files, reaches the asset with the same ID without the `#` when one exists, and archiving or deleting it fails. (issue #1476)
+    -   Note: do not create asset IDs that end in `#`.
 
 ### 2.6.6
 
