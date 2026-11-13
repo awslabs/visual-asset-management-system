@@ -850,6 +850,18 @@ const CORE_RULES: Rule[] = [
         appliesWhen: (c) => g(c, "app.govCloud.enabled") && g(c, "app.useLocationService.enabled"),
         message: "GovCloud must have app.useLocationService.enabled set to false.",
     },
+    // ----- Audit logging (config.ts resolveAuditLoggingConfig: absent = true, else a boolean) -----
+    {
+        id: "audit-logging-record-reads-boolean",
+        severity: "error",
+        fieldPaths: ["app.auditLogging.recordReads"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.auditLogging.recordReads");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message:
+            "app.auditLogging.recordReads must be true or false (a JSON boolean). Leave it out to record reads.",
+    },
     {
         id: "govcloud-no-deadline-cloud",
         severity: "error",

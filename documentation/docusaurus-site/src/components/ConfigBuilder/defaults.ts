@@ -459,6 +459,9 @@ const COMMERCIAL: ConfigShape = {
                 additionalTokenAudiences: [],
             },
         },
+        auditLogging: {
+            recordReads: true,
+        },
         webUi: {
             optionalBannerHtmlMessage: "",
             allowUnsafeEvalFeatures: false,

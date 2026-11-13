@@ -385,6 +385,14 @@ const CORE_FIELDS: FieldMeta[] = [
         help: "Create a dedicated CloudWatch Logs group and CloudTrail trail for this stack. CloudTrail allows five trails per Region; turn this off in a Region that already has five.",
     },
     {
+        path: "app.auditLogging.recordReads",
+        label: "Record reads in the audit log",
+        input: "boolean",
+        section: "security",
+        advanced: true,
+        help: "Write an audit record for every read (gets, lists and searches): the request and the number of items returned, never the content. On by default, and when the setting is absent. Turning it off cuts audit log volume; writes, denials, failures, downloads and exports are recorded either way.",
+    },
+    {
         path: "app.useKmsCmkEncryption.enabled",
         label: "Customer-managed KMS encryption",
         input: "boolean",

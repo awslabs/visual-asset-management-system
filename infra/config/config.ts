@@ -1032,6 +1032,36 @@ export function validatePermissionBoundaryArn(value: unknown, partition: string)
     }
 }
 
+/**
+ * Defaults and validates `app.auditLogging`: an absent block or `recordReads` key means `true`; any
+ * value that is not a JSON boolean is a configuration error rather than being read as truthy.
+ * Exported for the config tests.
+ */
+export function resolveAuditLoggingConfig(config: ConfigPublic): void {
+    const app = config.app as ConfigPublic["app"] & { auditLogging?: unknown };
+    if (app.auditLogging === undefined || app.auditLogging === null) {
+        app.auditLogging = { recordReads: true };
+        return;
+    }
+    if (typeof app.auditLogging !== "object" || Array.isArray(app.auditLogging)) {
+        throw new Error(
+            "Configuration Error: app.auditLogging must be an object, for example " +
+                '{"recordReads": true}.'
+        );
+    }
+    const block = app.auditLogging as { recordReads?: unknown };
+    if (block.recordReads === undefined || block.recordReads === null) {
+        block.recordReads = true;
+        return;
+    }
+    if (typeof block.recordReads !== "boolean") {
+        throw new Error(
+            "Configuration Error: app.auditLogging.recordReads must be true or false (a JSON " +
+                `boolean), not ${JSON.stringify(block.recordReads)}.`
+        );
+    }
+}
+
 export function getConfig(app: cdk.App): Config {
     // CDK context `configFile` names the file (`-c configFile=config.staging.json`); default config.json.
     const configFilePath = resolveConfigFilePath(app.node.tryGetContext(CONFIG_FILE_CONTEXT_KEY));
@@ -2177,6 +2207,11 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.webUi.allowUnsafeEvalFeatures == undefined) {
         config.app.webUi.allowUnsafeEvalFeatures = false;
     }
+
+    // Audit records of reads (gets, lists and searches): recorded unless the deployment turns them
+    // off. An absent block or key records reads, so a config.json from before the switch keeps the
+    // behaviour. Downloads and exports keep their file-download records either way.
+    resolveAuditLoggingConfig(config);
 
     // Whether http://localhost:3001 is registered as a Cognito callback and logout URL. It exists so a
     // developer running the web front locally can complete a federated sign-in against a deployed
@@ -5867,6 +5902,10 @@ export interface ConfigPublic {
             optionalBannerHtmlMessage: string;
             allowUnsafeEvalFeatures: boolean;
             allowLocalhostAuthCallbacks: boolean;
+        };
+        auditLogging: {
+            // Whether read actions (gets, lists, searches) write audit records. Absent = true.
+            recordReads: boolean;
         };
         api: {
             apiType: string;
