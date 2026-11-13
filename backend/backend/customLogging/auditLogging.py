@@ -842,8 +842,8 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
         ctx = current_audit_context()
         echo_event = mock_event
         if ctx is not None:
-            custom_data = _with_canonical_keys(custom_data, _authorization_keys(ctx, authorized))
-            echo_event = _short_echo_event(ctx.event) or mock_event
+            custom_data = _with_authorization_keys(custom_data, ctx, authorized)
+            echo_event = _short_echo_or(ctx.event, mock_event)
 
         if _buffer_allowed_authorization(ctx, authorized, event_type, user_context, custom_data, echo_event):
             return
@@ -918,9 +918,9 @@ def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: 
         event_type = _event_type(("AUTHORIZATION", None), ("authorized", authorized))
         ctx = _context_for(event)
         if ctx is not None:
-            custom_data = _with_canonical_keys(custom_data, _authorization_keys(ctx, authorized))
+            custom_data = _with_authorization_keys(custom_data, ctx, authorized)
         if _buffer_allowed_authorization(ctx, authorized, event_type, user_context,
-                                         custom_data, _short_echo_event(event)):
+                                         custom_data, _short_echo_or(event, None)):
             return
         _write_audit_entry(ResourceKeys.AUDIT_LOG_AUTHORIZATION, event_type, user_context, custom_data, event)
         
@@ -948,6 +948,28 @@ def _buffer_allowed_authorization(ctx: Optional["AuditContext"], authorized: Any
     message = _format_log_message(event_type, user_context, custom_data, log_type)
     _enqueue_records(ctx, log_type, _records_with_echo([message], event), buffer=True)
     return True
+
+
+def _with_authorization_keys(custom_data: Any, ctx: "AuditContext", authorized: Any) -> Any:
+    """
+    The authorization payload with the contract keys of its request (_authorization_keys). When
+    building them fails, the payload is returned unchanged, so the record is written in its form
+    without the contract keys rather than dropped; a denial is still recorded.
+    """
+    try:
+        return _with_canonical_keys(custom_data, _authorization_keys(ctx, authorized))
+    except Exception as e:
+        logger.warning(f"Could not add the contract keys to an authorization record: {type(e).__name__}")
+        return custom_data
+
+
+def _short_echo_or(event: Any, fallback: Any) -> Any:
+    """The short request echo of the event, or ``fallback`` when it is empty or cannot be built."""
+    try:
+        return _short_echo_event(event) or fallback
+    except Exception as e:
+        logger.warning(f"Could not build the short request echo: {type(e).__name__}")
+        return fallback
 
 
 def _authorization_keys(ctx: "AuditContext", authorized: Any) -> Dict[str, Any]:

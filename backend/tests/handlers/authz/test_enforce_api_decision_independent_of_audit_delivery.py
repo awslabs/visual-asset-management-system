@@ -253,6 +253,9 @@ class TestDecisionIndependentOfTheRecordContractKeys:
         monkeypatch.setattr(real_audit, "_authorization_keys", failing_keys)
         assert _decisions(enforcer, real_audit, inside_context=True) == expected
         assert _data_decisions(enforcer, real_audit, inside_context=True) == expected_data
+        denials = [m for m in clients.module.messages() + clients.flush.messages()
+                   if m.startswith("[AUTHORIZATION][authorized: False]")]
+        assert len(denials) == 8, "every denial is still recorded, inside a context without the keys"
 
     def test_data_level_decisions_are_the_same_with_and_without_a_context(self, enforcer, real_audit, clients):
         outside = _data_decisions(enforcer, real_audit, inside_context=False)

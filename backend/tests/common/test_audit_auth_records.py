@@ -455,6 +455,50 @@ class TestAuthorizationRecords:
         assert payload == {"action": "GET", "obj": {}}
         assert echo == ' --- [event: {"requestContext": {"authorizer": {"jwt": {"claims": {"sub": "alice"}}}}}]'
 
+    @pytest.mark.parametrize("authorized", [True, False])
+    def test_an_api_record_is_written_without_the_keys_when_building_them_fails(self, clients, monkeypatch,
+                                                                                authorized):
+        def failing_keys(*args, **kwargs):
+            raise RuntimeError("keys failed")
+
+        monkeypatch.setattr(auditLogging, "_authorization_keys", failing_keys)
+        event = _event("/database/db1/assets/a1", "PUT", path_parameters={"databaseId": "db1", "assetId": "a1"})
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_authorization_api(event, authorized, _api_check(event))
+        match, payload, echo = _only(clients, "auditAuthorization")
+        assert match.group("prefix") == f"[AUTHORIZATION][authorized: {authorized}]"
+        assert payload == _api_check(event), "the record keeps its form without the contract keys"
+        assert '"requestId": "req-1"' in echo and "body-marker" not in echo
+
+    def test_a_data_level_denial_is_written_without_the_keys_when_building_them_fails(self, clients,
+                                                                                      monkeypatch):
+        def failing_keys(*args, **kwargs):
+            raise RuntimeError("keys failed")
+
+        monkeypatch.setattr(auditLogging, "_authorization_keys", failing_keys)
+        event = _event("/database/db1/assets/a1", "PUT", path_parameters={"databaseId": "db1", "assetId": "a1"})
+        claims_and_roles = {"tokens": ["alice"], "roles": ["admin"], "mfaEnabled": True}
+        check = {"action": "PUT", "obj": {"object__type": "asset", "databaseId": "db1", "assetName": "a1"}}
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_authorization(claims_and_roles, False, check)
+        match, payload, _ = _only(clients, "auditAuthorization")
+        assert match.group("prefix") == "[AUTHORIZATION][authorized: False]"
+        assert payload == check
+
+    def test_a_data_level_denial_falls_back_to_the_user_echo_when_the_short_echo_fails(self, clients,
+                                                                                       monkeypatch):
+        def failing_echo(*args, **kwargs):
+            raise RuntimeError("echo failed")
+
+        monkeypatch.setattr(auditLogging, "_short_echo_event", failing_echo)
+        event = _event("/database/db1/assets/a1", "PUT", path_parameters={"databaseId": "db1", "assetId": "a1"})
+        claims_and_roles = {"tokens": ["alice"], "roles": ["admin"], "mfaEnabled": True}
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_authorization(claims_and_roles, False, {"action": "PUT", "obj": {}})
+        _, payload, echo = _only(clients, "auditAuthorization")
+        assert payload["outcome"] == "denied"
+        assert echo == ' --- [event: {"requestContext": {"authorizer": {"jwt": {"claims": {"sub": "alice"}}}}}]'
+
     def test_a_large_body_does_not_reach_the_authorization_or_error_record(self, clients):
         big = {"password": BODY_SECRET, "blob": "x" * 95000}
         event = _event("/database/db1/assets/a1/metadata", "PUT", body=big,
