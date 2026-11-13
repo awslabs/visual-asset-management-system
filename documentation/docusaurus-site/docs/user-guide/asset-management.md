@@ -212,9 +212,19 @@ Select **(versions)** beside the **Version Date** to open the file's version his
 
 To add files to an existing asset:
 
-1. In the File Manager, use the upload controls to select files or folders.
-2. Files are uploaded to the current directory location in the asset's file hierarchy.
-3. Upload progress is displayed for each file.
+1. In the File Manager, select the folder to add files to (or the asset root), then select **Upload Files**. The **Modify Asset Files** page opens with that folder as the **Destination folder**.
+2. Change the destination if needed. It is also kept in the page address as `?folder=/scene/`, so a refresh or a shared link keeps it. Relative segments (`.`, `..`) and backslashes are refused.
+3. Add files with **Add files**, **Add folder**, or by dropping files and folders onto the upload zone. A picked folder and a dropped folder land at the same path:
+    - **A folder keeps its name** under the destination: `textures/` added at `/scene/` lands under `/scene/textures/`. For a single folder you can switch to **Upload folder contents** to put its files directly in the destination instead.
+    - **Loose files** land directly in the destination: `notes.txt` added at `/scene/` becomes `/scene/notes.txt`.
+4. Review the preview. Every path includes the destination, and changing the destination moves every previewed file. Files whose path already exists in the asset are marked before the upload starts, and you can remove them from the selection:
+
+    - **Exists: uploads a new version** -- the upload adds a new version of that file. The earlier versions stay in its history, and existing asset versions keep pointing at the version they captured.
+    - **Archived: uploading restores it with a new version** -- the archived file becomes visible and current again, with the uploaded content as its new version.
+
+    If VAMS cannot check every existing file (for example, the listing is refused or the folder holds more than 10,000 files), an info alert says so and no rows are marked; the upload still works the same way. Duplicate paths within the selection are errors and block the upload until removed. See [File versions](../concepts/files-and-versions.md#file-versions-amazon-s3).
+
+5. Select **Finalize and Upload**. Upload progress is displayed for each file.
 
 :::tip
 You can also navigate to the dedicated upload page for the asset from the asset detail page to use the full upload wizard with metadata and relationship options.

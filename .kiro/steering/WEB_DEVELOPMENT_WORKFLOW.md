@@ -98,7 +98,7 @@ web/
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
       createupdate/         # CreateDatabase, UpdateAsset + form definitions
       filemanager/          # File tree and file operations
-      form/
+      form/                 # Shared upload control + uploadPaths.ts (the one upload path rule)
       list/
       loading/
       metadata/

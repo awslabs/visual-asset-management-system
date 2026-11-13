@@ -120,17 +120,26 @@ The **Select Files to Upload** step lets you attach files to your asset. This st
 
 ### Selecting Files
 
-1. Choose an upload mode using the toggle:
+1. Add what you want to upload, in any combination:
 
-    - **File Upload** -- Select one or more individual files.
-    - **Folder Upload** -- Select an entire folder, preserving the directory structure within the asset.
+    - **Add files** -- Pick one or more individual files.
+    - **Add folder** -- Pick a folder. Its subfolders and their files come along, with the folder structure kept. This works in every current browser.
+    - **Drop** files and folders together onto the upload zone.
 
-2. Drag and drop files onto the upload zone, or select the upload zone to open the file picker.
+    You can add more items at any time; each addition joins the current selection.
 
-3. Selected files appear in a table below the upload zone, showing the file name, path, and size. You can:
-    - **Remove individual files** by selecting the remove button on each row.
-    - **Remove all files** to clear the selection and start over.
-    - **Add more files** by dragging additional files or using the file picker again. Duplicate files (same relative path) are automatically skipped.
+2. Check where the files will land. A picked folder and a dropped folder always land at the same path:
+
+    - **A single folder added on its own** becomes the asset's contents, so its own name is dropped. For a folder `pack/` holding `scene.usda` and `props/pallet.usda`, the asset gets `/scene.usda` and `/props/pallet.usda`.
+    - **Every other selection** keeps each folder's name as its top-level folder: several folders, or folders mixed with loose files. If you add a loose file after a single folder, the folder switches to keeping its name (`/pack/scene.usda`), and an info line says why.
+    - **Loose files** keep their file name only, at the asset root.
+
+3. For a single folder, choose **Upload folder contents** (the default here, name dropped) or **Upload folder** (name kept). The preview updates as you switch.
+
+4. Review the preview table below the upload zone. It lists the final asset path, size, and status of every file, sorted by path, with the total file count and size. You can filter by path, show only rows with errors, and remove single files, selected files, or all files.
+
+    - **Duplicate paths are errors.** When two files would land at the same path (for example, two different folders with the same name), both rows are marked **Duplicate path** and **Next** stays blocked until you remove one. Nothing is skipped silently.
+    - **Multi-file formats.** When a loose file can reference other files by relative path (`.usd*`, `.gltf`, `.obj`, `.fbx`, `.dae`, STEP, IFC, IGES and CAD assemblies, or `tileset.json`), an info alert suggests adding the whole folder with **Add folder** instead, so those references keep working. The alert does not block the upload.
 
 ### File Extension Restrictions
 
@@ -147,7 +156,7 @@ VAMS supports two types of preview files:
 -   **Overall asset preview** -- Use the **Asset Overall Preview File** uploader on the right side to select a single image (`.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`, maximum 5 MB) that represents the entire asset.
 -   **File-level previews** -- Include files named with the `.previewFile.{ext}` convention in your upload. For example, `model.gltf.previewFile.png` is automatically used as the preview thumbnail for `model.gltf`.
 
-4. Select **Next** to proceed to the review step.
+5. Select **Next** to proceed to the review step, which lists the same final paths.
 
 ---
 
