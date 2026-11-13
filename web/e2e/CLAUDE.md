@@ -306,10 +306,10 @@ skips with the reason; the rest of the spec mutates nothing and discovers its da
 distributable asset with a top-level file), skipping when the deployment has none or has the
 `ZIPDOWNLOADS` switch off:
 
-| Variable                                      | Effect                                                                            |
-| --------------------------------------------- | --------------------------------------------------------------------------------- |
-| `E2E_ZIP_CREATE=1`                            | Creates one zip job on that asset and deletes it again (cancel, then delete)      |
-| `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD` | A second user for the ownership check (signs in with `signInAs`; never hardcoded) |
+| Variable                                      | Effect                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `E2E_ZIP_CREATE=1`                            | Creates one zip job on that asset and deletes it again (cancel, then delete)                                                                                                                                                                                                                       |
+| `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD` | A second user for the ownership check (signs in with `signInAs`; never hardcoded): get and delete of the admin's job answer 404, and its URL follows the API's own decision, the all-users list's `canDownload` for that job (200, or 400 when a member is no longer downloadable; 404 without it) |
 
 The SuperSplat Editor renders only through WebGPU, which headless Chromium hides. `E2E_WEBGPU=1` runs
 the SuperSplat cases in a separate `chromium-webgpu` project launched with WebGPU on, and takes them out

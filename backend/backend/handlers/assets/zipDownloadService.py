@@ -263,21 +263,28 @@ def _not_found(event):
     return general_error(status_code=404, body={"message": zd.MSG_NOT_FOUND}, event=event)
 
 
-def _deny(event, action, database_id, asset_id, request_id=None, details=None):
-    """Record a data-level denial of ``action`` (written at once, to the authorization group). The
-    caller still answers 404, so the response never tells a denial from a miss."""
+def _denied(event, action, database_id, asset_id, request_id=None, details=None,
+            message=zd.MSG_NOT_FOUND):
+    """Record a data-level denial of ``action`` (written at once, to the authorization group) and
+    answer the same 404 as a miss, so the response never tells a denial from a miss (#1125 D29).
+
+    ``action`` is the route's own action, so the request outcome (``@audited_handler``) sees it as
+    recorded and adds no failed record. The 404 is built without the event, so the errors group gets
+    no failed record for the request either: the denial is the request's one outcome (#1125 D34)."""
     log_action(event, action, outcome="denied", reason="forbidden", database_id=database_id,
                asset_id=asset_id, entity_id=request_id, details=details)
+    return general_error(status_code=404, body={"message": message})
 
 
 def _asset_not_found(event, action, database_id, asset_id, asset):
     """The one answer for an asset that does not exist and one the caller may not read (Tier-2 GET):
     the same 404 "Asset not found", so a caller cannot tell the two apart (#1125 D29).
 
-    The audit record tells them apart: an asset that exists is recorded as a denial of ``action``;
-    a missing one is recorded by the request outcome (``@audited_handler``) as failed, notFound."""
+    The audit record tells them apart: an asset that exists is recorded as a denial of ``action``
+    (its only record); a missing one is recorded by the request outcome (``@audited_handler``) as
+    failed, notFound, with the errors-group record every error response writes."""
     if asset:
-        _deny(event, action, database_id, asset_id)
+        return _denied(event, action, database_id, asset_id, message=ASSET_NOT_FOUND_MESSAGE)
     return general_error(status_code=404, body={"message": ASSET_NOT_FOUND_MESSAGE}, event=event)
 
 
@@ -1257,8 +1264,7 @@ def get_job(event, database_id, asset_id, request_id):
     if not row:
         return _not_found(event)
     if not _can_read_asset(_get_asset(database_id, asset_id)):
-        _deny(event, "zipDownloadGet", database_id, asset_id, request_id)
-        return _not_found(event)
+        return _denied(event, "zipDownloadGet", database_id, asset_id, request_id)
     item = zd.to_job_item(_reconcile(row))
     log_action(event, "zipDownloadGet", database_id=database_id, asset_id=asset_id, entity_id=request_id)
     return success(body=item)
@@ -1280,8 +1286,7 @@ def job_url(event, database_id, asset_id, request_id):
     if not _can_read_asset(asset) or (shared and not _may_download_from_asset(database_id, asset_id)):
         # AUDIT LOG: a download URL refused (the caller may not read, or download from, the asset).
         # The answer is the same 404 as a missing job.
-        _deny(event, "zipDownloadUrl", database_id, asset_id, request_id, details=users)
-        return _not_found(event)
+        return _denied(event, "zipDownloadUrl", database_id, asset_id, request_id, details=users)
     try:
         require_distributable_asset(asset)
     except VAMSGeneralErrorResponse as e:
@@ -1331,11 +1336,12 @@ def delete_job(event, database_id, asset_id, request_id):
     if not row:
         return _not_found(event)
     if not _can_read_asset(_get_asset(database_id, asset_id)):
-        if cancel_intent or row.get("status") in zd.ACTIVE_STATUSES:
-            _deny(event, "zipDownloadCancel", database_id, asset_id, request_id)
-        else:
-            _deny(event, "zipDownloadDelete", database_id, asset_id, request_id)
-        return _not_found(event)
+        # The DELETE route's action, whatever the call would have done: a denied cancel recorded
+        # under zipDownloadCancel would leave the route's own action unrecorded, so the request
+        # outcome would add a failed zipDownloadDelete (#1125 D34). The intent is in details.
+        cancel = cancel_intent or row.get("status") in zd.ACTIVE_STATUSES
+        return _denied(event, "zipDownloadDelete", database_id, asset_id, request_id,
+                       details={"intent": "cancel" if cancel else "delete"})
     prefix = _job_prefix(row)
     if cancel_intent and row.get("status") not in zd.ACTIVE_STATUSES:
         # The caller asked for a cancel (intent=cancel) and the job had already finished, for example

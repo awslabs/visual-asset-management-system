@@ -477,11 +477,19 @@ test.describe("Download as Zip", () => {
 test.describe("Download as Zip (second user)", () => {
     const username = process.env.E2E_SECOND_USERNAME;
     const password = process.env.E2E_SECOND_PASSWORD;
+    // The shared view's URL refusal: a member of the archive is no longer downloadable.
+    const NO_LONGER_DOWNLOADABLE = "The selection includes an archived or deleted item";
 
-    test("another user cannot see, read or download the admin's zip download", async ({
+    test("another user reads the admin's zip download only as the API's shared view allows", async ({
         browser,
         page,
     }) => {
+        // #1125 D33. Get, cancel and delete stay the requester's own. The URL follows the API's own
+        // decision for the second user, read from the all-users list's per-row canDownload: with
+        // it, the archive is signed (200) or refused because a member is no longer downloadable
+        // (400); without it, the answer is the same 404 as a missing job (or 403 when the role is
+        // not granted the URL route at all). The job is the one created here (E2E_ZIP_CREATE=1) or
+        // one of the admin's existing jobs, picked by id: which job is newest does not matter.
         test.skip(
             !username || !password,
             "Set E2E_SECOND_USERNAME and E2E_SECOND_PASSWORD to run the ownership check"
@@ -490,9 +498,9 @@ test.describe("Download as Zip (second user)", () => {
 
         const admin = await apiCaller(page);
         test.skip(!admin, "No API context for the admin user");
-        let job = ((await admin!.get("/download/zip?maxItems=10")).body?.Items ?? [])[0];
+        let job: any = null;
         let created = false;
-        if (!job && process.env.E2E_ZIP_CREATE === "1") {
+        if (process.env.E2E_ZIP_CREATE === "1") {
             const found = await findAssetsWithFiles(page, 1);
             if (found && found.length) {
                 const ref = found[0];
@@ -505,10 +513,18 @@ test.describe("Download as Zip (second user)", () => {
                     created = true;
                 }
             }
+        } else {
+            const own = (await admin!.get("/download/zip?maxItems=50")).body?.Items ?? [];
+            // A finished job when there is one, so the URL decision is the signing one; by id.
+            job =
+                own.find((j: any) => j.status === "SUCCEEDED" && j.requestId) ??
+                own.find((j: any) => j.requestId) ??
+                null;
         }
         test.skip(!job, "The admin has no zip download (set E2E_ZIP_CREATE=1 to create one)");
 
-        const jobPath = `/database/${job.databaseId}/assets/${job.assetId}/download/zip/${job.requestId}`;
+        const assetPath = `/database/${job.databaseId}/assets/${job.assetId}`;
+        const jobPath = `${assetPath}/download/zip/${job.requestId}`;
         const other = await browser.newContext({ storageState: { cookies: [], origins: [] } });
         try {
             const otherPage = await other.newPage();
@@ -516,26 +532,51 @@ test.describe("Download as Zip (second user)", () => {
             const second = await apiCaller(otherPage);
             expect(second, "API context for the second user").toBeTruthy();
 
-            // Reading, downloading or deleting it by id answers as if it does not exist (or the
-            // role may not call the route at all); it never comes back.
-            for (const res of [
-                await second!.get(jobPath),
-                await second!.post(`${jobPath}/url`),
-                await second!.del(jobPath),
-            ]) {
+            // The API's decision for this job and this caller (absent when the caller may not list
+            // the asset's jobs at all).
+            const shared = await second!.get(`${assetPath}/download/zip-all-users?maxItems=1000`);
+            const row =
+                shared.status === 200
+                    ? (shared.body?.Items ?? []).find((j: any) => j.requestId === job.requestId)
+                    : undefined;
+            if (row) {
+                expect(row.isOwn).toBe(false);
+                expect(row.canRemove).toBe(false);
+            }
+
+            // Get and delete are the requester's own: as if the job did not exist (403 only when the
+            // role may not call the route).
+            for (const res of [await second!.get(jobPath), await second!.del(jobPath)]) {
                 expect([403, 404], JSON.stringify(res.body)).toContain(res.status);
                 expect(JSON.stringify(res.body ?? "")).not.toContain(job.archiveFileName);
             }
+
+            const url = await second!.post(`${jobPath}/url`);
+            if (row?.canDownload === true) {
+                expect([200, 400], JSON.stringify(url.body)).toContain(url.status);
+                if (url.status === 200) expect(url.body?.url).toBeTruthy();
+                else expect(JSON.stringify(url.body)).toContain(NO_LONGER_DOWNLOADABLE);
+            } else if (row && row.status !== "SUCCEEDED") {
+                // Not finished: the shared view may answer "not ready" (409) where it would sign it.
+                expect([403, 404, 409], JSON.stringify(url.body)).toContain(url.status);
+                expect(url.body?.url).toBeUndefined();
+            } else {
+                expect([403, 404], JSON.stringify(url.body)).toContain(url.status);
+                expect(url.body?.url).toBeUndefined();
+            }
+
+            // The second user's own list does not hold it.
             const list = await second!.get("/download/zip?maxItems=1000");
             const ids = (list.body?.Items ?? []).map((j: any) => j.requestId);
             expect(ids).not.toContain(job.requestId);
 
-            // The page does not show it either.
+            // My Download Queue does not show it either.
             await openDeepLink(otherPage, "/zipdownloads");
             await expect(
                 otherPage
                     .getByRole("heading", { level: 1, name: "My Download Queue" })
                     .or(otherPage.getByText("You do not have access to this page"))
+                    .first()
             ).toBeVisible({ timeout: 45_000 });
             await otherPage.waitForLoadState("networkidle").catch(() => undefined);
             await expect(otherPage.getByText(job.archiveFileName, { exact: true })).toHaveCount(0);
