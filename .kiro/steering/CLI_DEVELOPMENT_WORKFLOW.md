@@ -25,6 +25,7 @@ tools/VamsCLI/
 │   └── utils/               # Shared utilities
 │       ├── __init__.py
 │       ├── api_client.py    # HTTP client and API methods
+│       ├── request_paths.py # route_path(): one path segment per value; imports nothing from the package
 │       ├── profile.py       # Configuration and profile management
 │       └── exceptions.py    # Custom exception hierarchy
 ├── tests/                   # Test files (mirror command structure)
@@ -221,11 +222,13 @@ def get_user_assets(self):
 # ✅ CORRECT - Import from constants
 from ..constants import API_LOGIN_PROFILE, API_USER_ASSETS
 
-# ✅ CORRECT - Use constants in methods
+# ✅ CORRECT - Use constants in methods; a value joined onto a prefix constant is one segment
 def call_login_profile(self, user_id: str):
-    endpoint = f"{API_LOGIN_PROFILE}/{user_id}"
+    endpoint = f"{API_LOGIN_PROFILE}/{_path_segment(user_id)}"
     return self.get(endpoint)
 ```
+
+Before anything is sent, `_make_request` refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded), a control character (raw or percent-encoded), or a raw `?` or `#` with `InvalidRequestPathError`, an `APIError`: the URL join drops or resolves such a segment and changes a path that contains a control character, and a `?` or `#` ends the path, so a path value carrying one would address another route. Query parameters go in `params=`. Endpoints are built with `route_path(API_X, name=value)`, never `API_X.format(...)`, which percent-encodes a `/`, `?`, `#` or `%` in each value (`tests/test_api_request_path.py`; VamsMCP's `tests/test_path_value_encoding.py` holds `vams_mcp` to the same rule). `route_path` lives in `utils/request_paths.py`; `api_client` re-exports it.
 
 ### **Command Implementation Standards**
 
@@ -1949,7 +1952,7 @@ def call_new_endpoint(self, param: str) -> Dict[str, Any]:
         APIError: When API call fails
     """
     try:
-        endpoint = f"{API_NEW_ENDPOINT}/{param}"
+        endpoint = f"{API_NEW_ENDPOINT}/{_path_segment(param)}"
         response = self.get(endpoint, include_auth=True)
         return response.json()
 

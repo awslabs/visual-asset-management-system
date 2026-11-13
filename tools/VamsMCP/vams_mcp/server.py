@@ -37,6 +37,7 @@ from .client import (  # noqa: E402
     SUBSCRIPTION_ENTITY_ASSET,
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
     SearchDisabledError,
+    route_path,
 )
 from .config import Config, ConfigError  # noqa: E402
 
@@ -296,7 +297,7 @@ def list_assets(
     `truncated` means rows were not seen, `note` says which bound stopped it, and `NextToken`
     continues the walk — pass it back as `starting_token`. Do not report an asset count, or conclude
     an asset does not exist, from a truncated result; use search_assets() to look one up by name."""
-    endpoint = API_DATABASE_ASSETS.format(databaseId=database_id) if database_id else API_ASSETS
+    endpoint = route_path(API_DATABASE_ASSETS, databaseId=database_id) if database_id else API_ASSETS
 
     def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
         if include_archived:
