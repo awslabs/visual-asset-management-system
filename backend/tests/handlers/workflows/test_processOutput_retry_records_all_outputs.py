@@ -142,7 +142,7 @@ class _Never(Exception):
 
 def _run(first_attempt, with_preview=False, with_large=False, old_code_first=False, real_stamp=False,
          run_bucket_versioned=True, fail_upload_of=None, retry_remaining_ms=900_000,
-         kill_every_ingestion=False):
+         kill_every_ingestion=False, record_override=None):
     """Run attempt 0, which `first_attempt` ends, then the retries until one answers.
 
     'after_ingest' | 'mid_move' | 'during_record' kill attempt 0 at that point; 'finished' lets it
@@ -234,7 +234,8 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
         # create=True keeps the harness runnable against code without these seams (the base branch).
         sleep = p(po, "_wait_sleep", create=True)
         p(po, "_now_epoch", create=True, side_effect=lambda: clock[0])
-        record = p(po, "record_execution_outputs")
+        record = (p(po, "record_execution_outputs", record_override) if record_override is not None
+                  else p(po, "record_execution_outputs"))
         if first_attempt == "during_record":
             # The attempt saw the ingestion response and is killed while it records.
             def record_or_die(**_kwargs):
@@ -509,6 +510,22 @@ class TestOverlappingAttempts:
             assert len(landed["versions"][_asset_key(name)]) == 1, landed["versions"]
         assert landed["recorded"] == sorted(
             [("file", name) for name in SMALL] + [("preview", PREVIEW)])
+
+    def test_the_run_end_is_recorded_once(self):
+        # Audit contract: one workflowExecutionEnd per run. The attempt whose status write was refused
+        # (an overlapping attempt already recorded the end) records its ingest only.
+        writes = iter([True, False, False, False])
+        with mock_aws(), patch.object(po, "log_action") as log_action:
+            real_record = po.record_execution_outputs
+            try:
+                po.record_execution_outputs = MagicMock(side_effect=lambda **_k: next(writes))
+                landed = _run("finished", record_override=po.record_execution_outputs)
+            finally:
+                po.record_execution_outputs = real_record
+        actions = [c.args[1] for c in log_action.call_args_list]
+        assert landed["answer"]["statusCode"] == 200
+        assert actions.count("workflowExecutionEnd") == 1
+        assert actions.count("workflowOutputIngest") == 2
 
     def test_attempt_two_after_attempt_one_finished_ingests_nothing_new(self):
         with mock_aws():

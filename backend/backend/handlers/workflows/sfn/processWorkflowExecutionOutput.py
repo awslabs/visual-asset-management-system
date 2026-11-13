@@ -1410,13 +1410,16 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
     The error still propagates to the caller.
 
     No-op when no execution context is present (non-workflow/direct invocations).
+
+    Returns False when the main row already held a status this write may not replace (the abort or
+    error path ended the run, or an overlapping attempt of this step already recorded it), else True.
     """
     if not workflow_execution_id or not end_state_pipeline_execution_id:
         logger.info("No workflow execution context; skipping execution-output recording")
-        return
+        return True
 
     try:
-        _write_execution_outputs(
+        return _write_execution_outputs(
             dynamo, workflow_execution_id, end_state_pipeline_execution_id, workflow_database_id,
             workflow_id, bucket_name, output_files, output_metadata, output_results, result_log,
             execution_log, log_group_arn, log_stream_name, execution_status, execution_error)
@@ -1538,10 +1541,12 @@ def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
             ConditionExpression=condition,
             ExpressionAttributeValues=values,
         )
+        return True
     except Exception as e:
         if not eo.is_conditional_check_failure(e):
             raise
         logger.info("Main execution row already holds a terminal status; completion write skipped")
+        return False
 
 
 def _terminal_status(output_failures):
@@ -2290,6 +2295,7 @@ def lambda_handler(event, context):
 
             # Record end-state pipeline outputs + completion status.
             execution_start_date = ""
+            end_recorded = True
             try:
                 # The workflow SFN log group is the same for every workflow; read it from
                 # env (not the ASL event) so this works even for workflows not redeployed
@@ -2318,7 +2324,7 @@ def lambda_handler(event, context):
                     or baseline.get(f.get("s3Key", "")) != f.get("s3VersionId", "")
                 ]
                 status, error_summary = _terminal_status(output_failures)
-                record_execution_outputs(
+                end_recorded = record_execution_outputs(
                     dynamo=dynamodb,
                     workflow_execution_id=workflow_execution_id,
                     end_state_pipeline_execution_id=end_state_pipeline_execution_id,
@@ -2343,12 +2349,16 @@ def lambda_handler(event, context):
                 logger.exception(f"Error recording execution outputs (non-critical): {e}")
 
             final_status, _ = _terminal_status(output_failures)
+            # One end record per run: an overlapping attempt of this step whose status write was
+            # refused (another attempt, the abort or the error path recorded the end) records its
+            # ingest, not a second end (#1271).
             log_action(audit_event, "workflowOutputIngest",
                        outcome="success" if not output_failures else "failed",
                        reason="internal" if output_failures else None, on_behalf_of=_initiator(event),
                        **_execution_ids(event), file_count=len(collected_output_files),
                        item_count=len(collected_output_metadata) + len(collected_output_results))
-            _log_execution_end(audit_event, event, final_status, execution_start_date)
+            if end_recorded:
+                _log_execution_end(audit_event, event, final_status, execution_start_date)
             return success(body={"message": "Workflow Execution Output Processing Complete"})
 
         else:

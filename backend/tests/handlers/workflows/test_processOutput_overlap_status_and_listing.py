@@ -110,7 +110,7 @@ def _status_tables(ddb):
 
 
 def _end_state_write(ddb, status, error=""):
-    po._write_execution_outputs(
+    return po._write_execution_outputs(
         ddb, EXEC, PEXEC, WF_DB, WF_ID, "bucket", [], [], [], "log", "", "", "", status, error)
 
 
@@ -128,6 +128,16 @@ class TestOverlappingStatusWrites:
         assert row["executionStatus"] == "SUCCEEDED"
         assert "executionError" not in row and "executionFailedBy" not in row
         assert prow["executionStatus"] == "SUCCEEDED" and "executionFailedBy" not in prow
+
+    def test_the_write_reports_whether_it_recorded_the_end(self):
+        # The handler records workflowExecutionEnd only when its own status write took effect.
+        with mock_aws():
+            ddb = boto3.resource("dynamodb", region_name=REGION)
+            _status_tables(ddb)
+            assert _end_state_write(ddb, "FAILED", "Listing the pipeline file output failed.") is True
+            assert _end_state_write(ddb, "SUCCEEDED") is True
+            assert _end_state_write(ddb, "SUCCEEDED") is False
+            assert _end_state_write(ddb, "FAILED", "x") is False
 
     def test_a_later_failure_never_replaces_a_success(self):
         with mock_aws():
