@@ -31,6 +31,9 @@ import {
     UploadFlow,
     UploadRoot,
     FolderNameMode,
+    DUPLICATE_PATH_ERROR,
+    INVALID_PATH_ERROR,
+    PREVIEW_EXTENSION_ERROR,
     defaultFolderNameMode,
     isSingleFolderSelection,
     looseReferencingFiles,
@@ -62,13 +65,23 @@ export function formatBytes(n: number): string {
     return `${k > 0 ? value.toFixed(1) : value} ${unit}`;
 }
 
-/** Errors that block the upload, in one sentence; undefined when none. */
+/** Errors that block the upload, in one sentence naming their kinds; undefined when none. */
 export function blockingReason(planned: PlannedFile[]): string | undefined {
-    const withErrors = planned.filter((p) => p.errors.length > 0).length;
-    if (withErrors === 0) return undefined;
-    return `${withErrors} ${
-        withErrors === 1 ? "file has a path error" : "files have path errors"
-    }. Remove them from the selection before uploading.`;
+    const withErrors = planned.filter((p) => p.errors.length > 0);
+    if (withErrors.length === 0) return undefined;
+    const kinds = new Set<string>();
+    for (const p of withErrors) {
+        for (const e of p.errors) {
+            if (e === DUPLICATE_PATH_ERROR) kinds.add("duplicate path");
+            else if (e === INVALID_PATH_ERROR) kinds.add("invalid path");
+            else if (e === PREVIEW_EXTENSION_ERROR) kinds.add("preview file format not allowed");
+            else kinds.add("extension not allowed");
+        }
+    }
+    const n = withErrors.length;
+    return `${n} ${n === 1 ? "file can't" : "files can't"} be uploaded (${Array.from(kinds).join(
+        ", "
+    )}). Remove them from the selection before uploading.`;
 }
 
 function statusCell(item: PlannedFile) {

@@ -136,6 +136,49 @@ describe("planUploadPaths", () => {
     });
 });
 
+describe("planUploadPaths extension rule (D3)", () => {
+    const withRestriction = (restrictFileUploadsToExtensions?: string): PathContext => ({
+        ...create,
+        restrictFileUploadsToExtensions,
+    });
+    const errorsOf = (roots: UploadRoot[], ctx: PathContext) =>
+        Object.fromEntries(planUploadPaths(roots, ctx).map((p) => [p.finalPath, p.errors]));
+
+    it("marks a file the restriction refuses, and leaves allowed files alone", () => {
+        expect(
+            errorsOf([loose("a.gltf"), loose("b.usda")], withRestriction(".usda, .png"))
+        ).toEqual({
+            "/a.gltf": ["Extension .gltf not allowed"],
+            "/b.usda": [],
+        });
+    });
+
+    it("exempts preview files from the list but still requires a preview image format", () => {
+        const errors = errorsOf(
+            [loose("m.gltf.previewFile.png"), loose("m.gltf.previewFile.bmp")],
+            withRestriction(".usda")
+        );
+        expect(errors["/m.gltf.previewFile.png"]).toEqual([]);
+        expect(errors["/m.gltf.previewFile.bmp"][0]).toMatch(/^Preview files must be /);
+    });
+
+    it("applies the preview format rule even without a restriction, and nothing else", () => {
+        for (const r of [undefined, "", ".all"]) {
+            const errors = errorsOf(
+                [loose("a.gltf"), loose("x.previewFile.tif")],
+                withRestriction(r)
+            );
+            expect(errors["/a.gltf"]).toEqual([]);
+            expect(errors["/x.previewFile.tif"]).toHaveLength(1);
+        }
+    });
+
+    it("keeps duplicate and extension errors together on one row", () => {
+        const plan = planUploadPaths([loose("a.gltf"), loose("a.gltf")], withRestriction(".usda"));
+        expect(plan[0].errors).toEqual(["Extension .gltf not allowed", DUPLICATE_PATH_ERROR]);
+    });
+});
+
 describe("normalizeDestination", () => {
     it.each(["scene", "/scene", "scene/", "//scene//", " /scene/ "])("%s -> /scene/", (input) => {
         expect(normalizeDestination(input)).toEqual({ value: "/scene/" });

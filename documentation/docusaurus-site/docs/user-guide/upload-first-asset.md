@@ -141,7 +141,7 @@ The **Select Files to Upload** step lets you attach files to your asset. This st
 4. Review the preview table below the upload zone. It lists the final asset path of every file, sorted by path, with its status and size underneath, and the total file count and size. You can filter by path, remove single files, selected files, or all files, and switch the view:
 
     - **All** -- every file in the selection.
-    - **Errors (n)** -- the files that block the upload: **Duplicate path** and **Invalid path**.
+    - **Errors (n)** -- the files that block the upload: **Duplicate path**, **Invalid path**, and an extension the database does not allow (for example **Extension .gltf not allowed**, or a preview file that is not one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`).
 
     Also note:
 
@@ -152,7 +152,7 @@ The **Select Files to Upload** step lets you attach files to your asset. This st
 
 ### File Extension Restrictions
 
-If the selected database has file upload extension restrictions, an alert banner displays the allowed extensions. Files with disallowed extensions are flagged with validation errors and cannot be uploaded.
+If the selected database has file upload extension restrictions, an alert banner displays the allowed extensions. Files with disallowed extensions are marked with an error on their row in the preview table (for example **Extension .gltf not allowed**), count toward its errors, and block the upload until you remove them.
 
 :::note
 Preview files (filenames containing `.previewFile.`) are exempt from the database's extension restrictions, but must still be one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`. A preview file with any other extension is flagged before the upload starts, and rejects the whole upload request if it reaches the API.

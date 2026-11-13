@@ -45,10 +45,8 @@ import { Metadata } from "../../components/single/Metadata";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
 import { fetchAsset, fetchDatabase } from "../../services/APIService";
 import {
-    validateFiles,
     getPreviewFileExtension,
     isPreviewExtensionAllowed,
-    ValidationResult,
 } from "../../utils/fileExtensionValidation";
 import { usePageTitle } from "../../hooks/usePageTitle";
 
@@ -131,24 +129,28 @@ export default function ModifyAssetsUploadsPage() {
     const [folderNameMode, setFolderNameMode] = useState<FolderNameMode>("auto");
     const [existingPaths, setExistingPaths] = useState<Map<string, ExistingState> | null>(null);
     const [existingCheck, setExistingCheck] = useState<ExistingCheckState>("none");
+    // The database's extension restriction; files it refuses are errors on their preview rows.
+    const [restrictFileUploadsToExtensions, setRestrictFileUploadsToExtensions] =
+        useState<string>("");
 
     const planned = useMemo(
         () =>
             markExisting(
-                planUploadPaths(roots, { flow: "addFiles", destination, folderNameMode }),
+                planUploadPaths(roots, {
+                    flow: "addFiles",
+                    destination,
+                    folderNameMode,
+                    restrictFileUploadsToExtensions,
+                }),
                 existingPaths
             ),
-        [roots, destination, folderNameMode, existingPaths]
+        [roots, destination, folderNameMode, existingPaths, restrictFileUploadsToExtensions]
     );
     const fileItems: FileUploadTableItem[] = useMemo(
         () => plannedToUploadItems(planned),
         [planned]
     );
     const pathErrorReason = blockingReason(planned);
-
-    const [restrictFileUploadsToExtensions, setRestrictFileUploadsToExtensions] =
-        useState<string>("");
-    const [fileValidationResult, setFileValidationResult] = useState<ValidationResult | null>(null);
 
     const applySelection = (nextRoots: UploadRoot[], nextMode: FolderNameMode) => {
         // The override only applies to a single folder; reset it once the selection changes shape.
@@ -312,16 +314,6 @@ export default function ModifyAssetsUploadsPage() {
         fetchDatabaseRestrictions();
     }, [databaseId]);
 
-    // Validate files whenever fileItems or restrictions change
-    useEffect(() => {
-        if (fileItems && fileItems.length > 0) {
-            const validationResult = validateFiles(fileItems, restrictFileUploadsToExtensions);
-            setFileValidationResult(validationResult);
-        } else {
-            setFileValidationResult(null);
-        }
-    }, [fileItems, restrictFileUploadsToExtensions]);
-
     // Clear preview file when not uploading to root path
     useEffect(() => {
         if (destination !== "/" && previewFile) {
@@ -405,8 +397,8 @@ export default function ModifyAssetsUploadsPage() {
         nothingSelected ||
         !!previewFileError ||
         !!destinationError ||
-        !!pathErrorReason ||
-        !!(fileValidationResult && !fileValidationResult.isValid);
+        // Path and extension errors on the preview rows (D3).
+        !!pathErrorReason;
     // The reason shown next to Finalize and Upload while it is disabled for one of these causes.
     const uploadBlockedReason = nothingSelected
         ? isRootPath
@@ -486,28 +478,6 @@ export default function ModifyAssetsUploadsPage() {
             <strong>{restrictFileUploadsToExtensions}</strong>. Preview files (containing{" "}
             {PREVIEW_FILE_PATTERN} in the filename) are exempt, but must still be one of{" "}
             {previewFileFormatsStr}.
-        </Alert>
-    );
-
-    const invalidFilesAlert = fileValidationResult && !fileValidationResult.isValid && (
-        <Alert header="Invalid Files Selected" type="error">
-            <SpaceBetween direction="vertical" size="xs">
-                <div>The following files cannot be uploaded:</div>
-                <ul style={{ marginTop: "8px", marginBottom: "8px" }}>
-                    {fileValidationResult.invalidFiles.map((file, index) => (
-                        <li key={index}>
-                            <strong>{file.fileName}</strong> -{" "}
-                            {file.errorMessage || `Extension ${file.extension} not allowed`}
-                        </li>
-                    ))}
-                </ul>
-                {fileValidationResult.allowedExtensions !== null && (
-                    <div>
-                        <strong>Allowed extensions:</strong>{" "}
-                        {fileValidationResult.allowedExtensions.join(", ")}
-                    </div>
-                )}
-            </SpaceBetween>
         </Alert>
     );
 
@@ -620,8 +590,6 @@ export default function ModifyAssetsUploadsPage() {
                                     </SpaceBetween>
                                 </Grid>
                             </Container>
-
-                            {invalidFilesAlert}
 
                             {/* Every file's final asset path, before the upload starts */}
                             {planned.length > 0 && (

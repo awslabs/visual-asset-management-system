@@ -80,11 +80,8 @@ import { AssetLinksTab } from "../../components/asset/tabs/AssetLinksTab";
 import Alert from "@cloudscape-design/components/alert";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import {
-    validateFiles,
-    formatValidationErrors,
     getPreviewFileExtension,
     isPreviewExtensionAllowed,
-    ValidationResult,
 } from "../../utils/fileExtensionValidation";
 import { usePageTitle } from "../../hooks/usePageTitle";
 
@@ -1065,7 +1062,7 @@ export const AssetFileInfo = ({
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState, assetDetailDispatch } = assetDetailContext;
     const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
-    const [fileValidationResult, setFileValidationResult] = useState<ValidationResult | null>(null);
+    const restriction = assetDetailState.restrictFileUploadsToExtensions;
 
     // The selection (what the user added) lives in the wizard state so it survives moving between
     // steps; the final paths are always derived from the whole selection (uploadPaths.ts).
@@ -1077,8 +1074,9 @@ export const AssetFileInfo = ({
                 flow: "createAsset",
                 destination: "/",
                 folderNameMode,
+                restrictFileUploadsToExtensions: restriction,
             }),
-        [roots, folderNameMode]
+        [roots, folderNameMode, restriction]
     );
 
     const applySelection = (nextRoots: UploadRoot[], nextMode: FolderNameMode) => {
@@ -1111,23 +1109,12 @@ export const AssetFileInfo = ({
 
     const pathErrorReason = blockingReason(planned);
 
-    // Validate files whenever Asset files or restrictions change
+    // Every row error blocks the step: duplicate and invalid paths, and files the database's
+    // extension restriction refuses (the planner applies the same rule as validateFiles).
     useEffect(() => {
-        if (assetDetailState.Asset && assetDetailState.Asset.length > 0) {
-            const validationResult = validateFiles(
-                assetDetailState.Asset,
-                assetDetailState.restrictFileUploadsToExtensions
-            );
-            setFileValidationResult(validationResult);
-            // Extension errors and path errors (duplicates, invalid paths) both block the step.
-            setValid(validationResult.isValid && !pathErrorReason);
-        } else {
-            // No files selected, clear validation and set as valid
-            setFileValidationResult(null);
-            setValid(true);
-        }
+        setValid(!pathErrorReason);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [assetDetailState.Asset, assetDetailState.restrictFileUploadsToExtensions, pathErrorReason]);
+    }, [pathErrorReason]);
 
     // Function to handle preview file selection with size and extension validation
     const handlePreviewFileSelection = (file: File | null) => {
@@ -1185,30 +1172,6 @@ export const AssetFileInfo = ({
                             </SpaceBetween>
                         </Alert>
                     )}
-
-                {/* Display file extension validation errors */}
-                {fileValidationResult && !fileValidationResult.isValid && (
-                    <Alert header="Invalid Files Selected" type="error">
-                        <SpaceBetween direction="vertical" size="xs">
-                            <div>The following files cannot be uploaded:</div>
-                            <ul style={{ marginTop: "8px", marginBottom: "8px" }}>
-                                {fileValidationResult.invalidFiles.map((file, index) => (
-                                    <li key={index}>
-                                        <strong>{file.fileName}</strong> -{" "}
-                                        {file.errorMessage ||
-                                            `Extension ${file.extension} not allowed`}
-                                    </li>
-                                ))}
-                            </ul>
-                            {fileValidationResult.allowedExtensions !== null && (
-                                <div>
-                                    <strong>Allowed extensions:</strong>{" "}
-                                    {fileValidationResult.allowedExtensions.join(", ")}
-                                </div>
-                            )}
-                        </SpaceBetween>
-                    </Alert>
-                )}
 
                 <Alert header="Preview File Information" type="info">
                     <p>

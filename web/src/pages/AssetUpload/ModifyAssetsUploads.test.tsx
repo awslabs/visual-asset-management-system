@@ -175,7 +175,9 @@ describe("Add Files page", () => {
         mount({ folder: "/scene/" });
         addFiles([makeFile("b.txt")]);
         addFiles([makeFile("b.txt")]);
-        expect(screen.getAllByText(/2 files have path errors/).length).toBeGreaterThan(0);
+        expect(
+            screen.getAllByText(/2 files can.t be uploaded \(duplicate path\)/).length
+        ).toBeGreaterThan(0);
         expect(
             (screen.getByRole("button", { name: "Finalize and Upload" }) as HTMLButtonElement)
                 .disabled
@@ -222,6 +224,33 @@ describe("Add Files page", () => {
         const upload = screen.getByRole("button", { name: "Finalize and Upload" });
         expect((upload as HTMLButtonElement).disabled).toBe(true);
         expect(screen.getByText(/Please select at least one asset file to upload/i)).toBeTruthy();
+    });
+
+    it("D3: a refused extension is an error row and the reason shows next to the disabled Finalize", async () => {
+        const { fetchDatabase } = jest.requireMock("../../services/APIService");
+        fetchDatabase.mockResolvedValue({
+            databaseId: "db1",
+            restrictFileUploadsToExtensions: ".txt,.png",
+        });
+        mount({ folder: "/scene/" });
+        await waitFor(() => expect(screen.getByText("File upload restrictions")).toBeTruthy());
+        addFiles([makeFile("model.gltf"), makeFile("notes.txt")]);
+
+        expect(screen.getByText("Extension .gltf not allowed")).toBeTruthy();
+        expect(screen.getByText(/1 with errors/)).toBeTruthy();
+        expect(screen.queryByText("Invalid Files Selected")).toBeNull();
+        const reasons = screen.getAllByText(/1 file can.t be uploaded \(extension not allowed\)/);
+        // The preview banner and the inline reason beside Finalize and Upload.
+        expect(reasons).toHaveLength(2);
+        expect(
+            (screen.getByRole("button", { name: "Finalize and Upload" }) as HTMLButtonElement)
+                .disabled
+        ).toBe(true);
+
+        fireEvent.click(screen.getByRole("button", { name: "Show errors only" }));
+        expect(screen.getByText("/scene/model.gltf")).toBeTruthy();
+        expect(screen.queryByText("/scene/notes.txt")).toBeNull();
+        fetchDatabase.mockResolvedValue({ databaseId: "db1" });
     });
 
     it("the single-folder override drops the folder name under the destination", () => {

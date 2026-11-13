@@ -40,10 +40,19 @@ const makeFile = (name: string, rel?: string) => {
     return file;
 };
 
-function Harness({ setValid, onItems }: { setValid: jest.Mock; onItems: jest.Mock }) {
+function Harness({
+    setValid,
+    onItems,
+    restriction,
+}: {
+    setValid: jest.Mock;
+    onItems: jest.Mock;
+    restriction?: string;
+}) {
     const [state, dispatch] = useReducer(assetDetailReducer, {
         isMultiFile: false,
         isDistributable: true,
+        restrictFileUploadsToExtensions: restriction,
     });
     return (
         <AssetDetailContext.Provider
@@ -58,10 +67,10 @@ function Harness({ setValid, onItems }: { setValid: jest.Mock; onItems: jest.Moc
     );
 }
 
-const mount = () => {
+const mount = (restriction?: string) => {
     const setValid = jest.fn();
     const onItems = jest.fn();
-    render(<Harness setValid={setValid} onItems={onItems} />);
+    render(<Harness setValid={setValid} onItems={onItems} restriction={restriction} />);
     return { setValid, onItems };
 };
 
@@ -108,7 +117,7 @@ describe("Create Asset, Select Files step", () => {
         addFiles([makeFile("a.txt")]);
         addFiles([makeFile("a.txt")]);
         expect(screen.getAllByText("Duplicate path")).toHaveLength(2);
-        expect(screen.getByText(/2 files have path errors/)).toBeTruthy();
+        expect(screen.getByText(/2 files can.t be uploaded \(duplicate path\)/)).toBeTruthy();
         await waitFor(() => expect(setValid).toHaveBeenLastCalledWith(false));
 
         fireEvent.click(screen.getAllByRole("button", { name: "Remove /a.txt" })[0]);
@@ -125,5 +134,31 @@ describe("Create Asset, Select Files step", () => {
         const hint = screen.getByText(/can\s+reference other files/);
         expect(within(hint).queryByText(/model\.gltf/)).toBeNull();
         expect(hint.textContent).toContain("loose.gltf");
+    });
+
+    it("D3: a file the database's extension restriction refuses is an error row that blocks the step", async () => {
+        const { setValid } = mount(".usda,.png");
+        addFolder([
+            makeFile("scene.usda", "pack/scene.usda"),
+            makeFile("model.gltf", "pack/model.gltf"),
+            makeFile("model.gltf.previewFile.png", "pack/model.gltf.previewFile.png"),
+            makeFile("thumb.previewFile.bmp", "pack/thumb.previewFile.bmp"),
+        ]);
+        expect(screen.getByText("Extension .gltf not allowed")).toBeTruthy();
+        expect(screen.getByText(/^Preview files must be \.png/)).toBeTruthy();
+        expect(screen.getAllByText("Ready")).toHaveLength(2);
+        expect(
+            screen.getByText(
+                /2 files can.t be uploaded \(extension not allowed, preview file format not allowed\)/
+            )
+        ).toBeTruthy();
+        expect(screen.getByText(/2 with errors/)).toBeTruthy();
+        // One banner names the errors; the separate Invalid Files Selected alert is gone.
+        expect(screen.queryByText("Invalid Files Selected")).toBeNull();
+        await waitFor(() => expect(setValid).toHaveBeenLastCalledWith(false));
+
+        fireEvent.click(screen.getByRole("button", { name: "Show errors only" }));
+        expect(screen.getByText("/model.gltf")).toBeTruthy();
+        expect(screen.queryByText("/scene.usda")).toBeNull();
     });
 });

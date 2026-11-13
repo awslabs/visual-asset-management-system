@@ -75,7 +75,7 @@ describe("UploadPreview", () => {
             { kind: "file", name: "file-000.txt", handle: new File(["x"], "file-000.txt") },
         ];
         renderPreview(dup);
-        const alert = screen.getByText(/2 files have path errors/);
+        const alert = screen.getByText(/2 files can.t be uploaded \(duplicate path\)/);
         expect(alert).toBeTruthy();
         // The duplicate rows sort to the top, but the count is stated outside the table either way.
         fireEvent.click(screen.getByRole("button", { name: "Show errors only" }));

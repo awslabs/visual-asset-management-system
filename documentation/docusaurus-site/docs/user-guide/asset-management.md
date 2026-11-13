@@ -228,7 +228,7 @@ To add files to an existing asset:
     The view switch above the table narrows the list:
 
     - **All** -- every file in the selection.
-    - **Errors (n)** -- the files that block the upload: **Duplicate path** and **Invalid path**. The error alert's **Show errors only** action switches to this view.
+    - **Errors (n)** -- the files that block the upload: **Duplicate path**, **Invalid path**, and an extension the database does not allow (for example **Extension .gltf not allowed**). The reason also shows beside the disabled **Finalize and Upload** button. The error alert's **Show errors only** action switches to this view.
     - **Existing (n)** -- appears once the existing-file check has finished, and lists the files marked **Exists** or **Archived**. These marks are warnings, not errors: they do not block the upload.
 
 5. Select **Finalize and Upload**, or **Cancel** to return to the asset. While the button is disabled, the reason is shown beside it. Upload progress is displayed for each file.

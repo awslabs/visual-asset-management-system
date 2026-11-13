@@ -23,9 +23,11 @@
  */
 
 import {
+    previewFileFormats,
     referencingFileExtensions,
     referencingFileNames,
 } from "../../common/constants/fileFormats";
+import { extensionViolation, parseAllowedExtensions } from "../../utils/fileExtensionValidation";
 
 export interface UploadRootFile {
     /** The browser File. */
@@ -48,6 +50,11 @@ export interface PathContext {
     destination: string;
     /** Only honoured when the selection is a single folder. */
     folderNameMode: FolderNameMode;
+    /**
+     * The database's extension restriction (restrictFileUploadsToExtensions). Files it refuses,
+     * and preview files without a preview image extension, carry an extension error.
+     */
+    restrictFileUploadsToExtensions?: string;
 }
 
 export type ExistingState = "exists" | "archived";
@@ -70,6 +77,10 @@ export interface PlannedFile {
 
 export const DUPLICATE_PATH_ERROR = "Duplicate path";
 export const INVALID_PATH_ERROR = "Invalid path";
+export const PREVIEW_EXTENSION_ERROR = `Preview files must be ${previewFileFormats.join(", ")}`;
+/** The row error for a file whose extension the database does not allow. */
+export const extensionNotAllowedError = (extension: string) =>
+    `Extension ${extension || "(none)"} not allowed`;
 
 // Characters that never belong in an asset path: control characters and a backslash.
 // eslint-disable-next-line no-control-regex
@@ -151,6 +162,19 @@ export function planUploadPaths(roots: UploadRoot[], ctx: PathContext): PlannedF
             );
         });
     });
+
+    // The same extension rule as validateFiles, so a refused file is an error on its row.
+    const allowedExtensions = parseAllowedExtensions(ctx.restrictFileUploadsToExtensions);
+    for (const p of planned) {
+        const violation = extensionViolation(p.name, allowedExtensions);
+        if (violation) {
+            p.errors.push(
+                violation.isPreviewFile
+                    ? PREVIEW_EXTENSION_ERROR
+                    : extensionNotAllowedError(violation.extension)
+            );
+        }
+    }
 
     const counts = new Map<string, number>();
     for (const p of planned) counts.set(p.finalPath, (counts.get(p.finalPath) ?? 0) + 1);
