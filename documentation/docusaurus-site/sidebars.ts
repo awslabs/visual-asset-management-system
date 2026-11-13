@@ -220,6 +220,7 @@ const sidebars: SidebarsConfig = {
                     ],
                 },
                 "mcp/mcp-server",
+                "mcp/remote-mcp-server",
                 {
                     type: "category",
                     label: "API Reference",

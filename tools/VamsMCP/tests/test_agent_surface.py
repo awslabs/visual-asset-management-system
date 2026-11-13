@@ -29,8 +29,11 @@ ALL_SWITCHES = ["AUTHPROVIDER_COGNITO", addon_constants.FEATURE_EDH_WORKSTATIONS
 # --- Budgets (Mandatory Rule 11) --------------------------------------------------------------------
 
 MAX_DESCRIPTION_CHARS = 1200
-# 30,000 until search_nlp (natural-language search) joined the core tools.
-MAX_CORE_TOTAL_CHARS = 31000
+# Every core tool together: the whole surface a stdio client with every gate on reads. The 30,000
+# character budget a client reads at the start of a session holds per tool set
+# (toolsets.MAX_DESCRIPTION_CHARS_PER_SET, tests/test_toolsets.py); this ceiling only keeps the full
+# surface from growing unnoticed.
+MAX_CORE_TOTAL_CHARS = 32000
 # The only tools allowed past MAX_DESCRIPTION_CHARS, each with its own ceiling and the reason. Keep
 # this list short: a long description is read on every session by every connected agent.
 DESCRIPTION_EXCEPTIONS = {

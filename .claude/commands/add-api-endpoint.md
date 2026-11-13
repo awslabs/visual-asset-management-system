@@ -369,7 +369,8 @@ The MCP server and the two external connectors sit downstream of the CLI, and no
 3. Check pagination: `VamsClient.paginate()` is driven by the list field name the handler returns the list under, passed as `items_key` (in use today: `Items`, `items`, `versions` and `metadata`), and unwraps the legacy `message` envelope, so read the handler's response model and confirm the `items_key` matches the new response. Use `_paginate_with_page_metadata(...)` for a list endpoint that reports `warnings` or other out-of-band bound signals, or they are dropped.
 4. Add a unit test in `tools/VamsMCP/tests/` asserting the params that reach the `APIClient`, and add the tool to the `tools/VamsMCP/README.md` tool list (plus the `autoApprove` array of that README's sample host config if it is a safe read).
 5. Record the method in `tools/VamsMCP/tests/api_coverage.py` (`tools/VamsMCP/CLAUDE.md` Rule 15): under `TOOLS` with the tool that calls it, or, when agents should not get it, under `EXCLUDED` with a one-line reason (uploads and user, role and constraint administration stay CLI-only), or under `NOT_YET_EXPOSED`. `tests/test_api_coverage.py` fails on a public `APIClient` method with no entry and on any difference between `TOOLS` and the tools' calls.
-6. If the server's contract with the CLI changed, roll `tools/VamsMCP/pyproject.toml`, `tools/VamsMCP/vams_mcp/__init__.py`, and `tools/VamsCLI/vamscli/version.py` together.
+6. Place the tool in a tool set in `tools/VamsMCP/vams_mcp/toolsets.py` (`tools/VamsMCP/CLAUDE.md` Rule 17); `tests/test_toolsets.py` fails on a tool in no set and on a set past 100 tools.
+7. If the server's contract with the CLI changed, roll `tools/VamsMCP/pyproject.toml`, `tools/VamsMCP/vams_mcp/__init__.py`, and `tools/VamsCLI/vamscli/version.py` together.
 
 For an add-on endpoint, the tool goes in the add-on's module `tools/VamsMCP/vams_mcp/addon_tools/<addon>.py` (listed in `ADDON_TOOL_MODULES`) rather than `server.py`: its `register(mcp, client, config, tool_result)` keeps the same gate sections under `config.enable_writes` and `config.enable_destructive`, each tool first calls `client.require_feature(<switch>, <message>)`, and `tests/test_addon_tools.py` holds the module to that layout.
 
@@ -455,7 +456,7 @@ After creating all files, verify:
 -   [ ] Import statement in the api builder stack matches the export in the lambdaBuilder file
 -   [ ] `VAMS_API.yaml` AND `docs/api/{domain}.md` both updated
 -   [ ] CLI endpoint constant in `constants.py` (if CLI-exposed)
--   [ ] MCP tool added in the correct gate section of `tools/VamsMCP/vams_mcp/server.py`, with a title, its tier's annotation, an agent-facing description within the budget, a unit test and a `tools/VamsMCP/README.md` tool-list entry (if agent-exposed)
+-   [ ] MCP tool added in the correct gate section of `tools/VamsMCP/vams_mcp/server.py`, with a title, its tier's annotation, an agent-facing description within the budget, a unit test, a `tools/VamsMCP/README.md` tool-list entry and a tool set (if agent-exposed)
 -   [ ] Every new `APIClient` method recorded in `tools/VamsMCP/tests/api_coverage.py` (tool, exclusion with reason, or not-yet-exposed gap)
 -   [ ] MCP pagination `items_key` matches the handler's list field name
 -   [ ] Both external connectors validated if a CLI command name, flag, or `--json-output` key changed (Isaac Sim `vams_cli_service.py`, ArcGIS Pro `VamsCliService.cs` + `Models/VamsModels.cs`)

@@ -42,9 +42,14 @@ TOOLS = {
     "export_asset": ("export_asset",),
     "get_asset_metadata_v2": ("get_asset_metadata",),
     "update_asset_metadata_v2": ("set_asset_metadata",),
+    "delete_asset_metadata_v2": ("delete_asset_metadata",),
     # --- Files ---
     "list_asset_files": ("list_asset_files",),
     "get_file_info": ("get_file_info",),
+    "get_file_metadata_v2": ("get_file_metadata",),
+    "update_file_metadata_v2": ("set_file_metadata",),
+    "set_primary_file": ("set_primary_file",),
+    "revert_file_version": ("revert_file_version",),
     "create_folder": ("create_folder",),
     "move_file": ("move_file",),
     "copy_file": ("copy_file",),
@@ -61,6 +66,7 @@ TOOLS = {
     "get_asset_links_for_asset": ("get_asset_links",),
     "create_asset_link": ("create_asset_link",),
     "delete_asset_link": ("delete_asset_link",),
+    "get_asset_link_metadata_v2": ("get_asset_link_metadata",),
     # --- Search ---
     "search_query": ("find_and_summarize", "search_assets", "search_files"),
     "search_nlp": ("search_nlp",),
@@ -227,6 +233,11 @@ EXCLUDED = {
     # --- Covered by another tool ---
     "get_metadata_schema": "the same rows as list_metadata_schemas(database_id=...)",
     "search_simple": "search_assets / search_files send the full search request (search_query)",
+    "get_single_asset_link": "get_asset_links returns every link of an asset with the same fields",
+    "get_metadata_schema_by_id": "list_metadata_schemas returns each schema in full",
+    # --- Preview images, which the web app shows and the pipelines regenerate ---
+    "download_asset_preview": "a presigned URL of the preview image the web app shows; agents read the asset's files",
+    "delete_auxiliary_preview_files": "removes generated preview files a pipeline rebuilds; maintenance, not an agent task",
     # --- Never returned to an agent ---
     "get_edh_workstation_os_sign_in": "the desktop sign-in (a Windows password) is shown to its owner only",
 }
@@ -236,23 +247,13 @@ NOT_YET_EXPOSED = {
     "update_database": "change a database's description, default bucket or restrictions",
     "delete_database_metadata_v2": "delete database metadata keys",
     "update_database_metadata_v2": "set database metadata keys",
-    "delete_asset_metadata_v2": "delete asset metadata keys (set_asset_metadata only upserts)",
-    "get_file_metadata_v2": "read a file's metadata or attributes",
-    "update_file_metadata_v2": "set a file's metadata or attributes",
     "delete_file_metadata_v2": "delete a file's metadata or attribute keys",
-    "set_primary_file": "set or remove a file's primaryType",
-    "revert_file_version": "revert a file to an earlier version",
     "update_asset_version": "change an asset version's comment or alias",
     "archive_asset_version": "archive an asset version",
     "unarchive_asset_version": "restore an archived asset version",
     "revert_asset_version": "revert an asset to an earlier version",
-    "download_asset_preview": "presigned URL of the asset's preview image",
     "delete_asset_preview": "delete the asset's preview image",
-    "delete_auxiliary_preview_files": "delete a file's generated preview files",
-    "get_single_asset_link": "read one asset link by assetLinkId (get_asset_links lists them per asset)",
     "update_asset_link": "change an asset link's tags or alias",
-    "get_asset_link_metadata_v2": "read an asset link's metadata",
     "update_asset_link_metadata_v2": "set an asset link's metadata",
     "delete_asset_link_metadata_v2": "delete an asset link's metadata keys",
-    "get_metadata_schema_by_id": "read one metadata schema by id",
 }
