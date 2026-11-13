@@ -19,7 +19,7 @@ from common.auth.authorizerCore import (
     FAILURE_UNAUTHENTICATED,
     IGNORED_PATHS,
 )
-from common.auth.clientIp import resolve_client_ip
+from common.auth.clientIp import origin_verify_audit_context, resolve_client_ip
 from customLogging.auditLogging import log_authorization_gateway
 from customLogging.logger import safeLogger
 
@@ -141,7 +141,8 @@ def lambda_handler(event, context):
         # After authenticate_request so nothing the auth decision reads is touched first.
         _set_audit_client_ip(event)
         log_authorization_gateway(event, res["authorized"], res.get("reason"),
-                                  token_audience=res.get("tokenAudience"))
+                                  token_audience=res.get("tokenAudience"),
+                                  verified_context=res.get("context"))
         if not res["authorized"]:
             if res.get("failure") != FAILURE_UNAUTHENTICATED:
                 return _policy("user", "Deny", resource)
@@ -152,8 +153,11 @@ def lambda_handler(event, context):
                     _ignored_path_resources(method_arn) if method_arn != "*" else "*"
                 )
                 return _policy("user", "Allow", ignored_resource)
-            ctx = res.get("context") or {}
+            ctx = dict(res.get("context") or {})
             principal = ctx.get("sub") or ctx.get("cognito:username") or "user"
+            # Lets the handler's audit records name the CloudFront viewer (audit only; see
+            # common/auth/viewerAddress.py). Added after the decision, never read by one.
+            ctx.update(origin_verify_audit_context(event, fronted=API_FRONTED))
             return _policy(principal, "Allow", resource, ctx)
     except Exception as e:
         logger.error(f"Authorizer error: {str(e)}")

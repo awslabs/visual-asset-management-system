@@ -108,6 +108,9 @@ class RecordingClient:
             self.calls.append(kwargs)
         return {}
 
+    def messages(self):
+        return [event["message"] for call in self.calls for event in call["logEvents"]]
+
 
 @pytest.fixture
 def clients(real_audit, monkeypatch):
@@ -118,6 +121,7 @@ def clients(real_audit, monkeypatch):
     monkeypatch.setattr(real_audit, "request_to_claims", lambda event: dict(CLAIMS))
     monkeypatch.setattr(authz, "request_to_claims", lambda event: dict(CLAIMS))
     monkeypatch.setattr(authz, "log_authorization_api", real_audit.log_authorization_api)
+    monkeypatch.setattr(authz, "log_authorization", real_audit.log_authorization)
     return SimpleNamespace(module=module_client, flush=flush_client)
 
 
@@ -213,3 +217,47 @@ class TestEnforceApiDecisionIndependentOfAuditDelivery:
         monkeypatch.setattr(authz, "log_authorization_api", failing_log)
         assert _decisions(enforcer, real_audit, inside_context=True) == expected
         assert _decisions(enforcer, real_audit, inside_context=False) == expected
+
+
+def _data_decisions(enforcer, real_audit, inside_context):
+    decisions = []
+    for method, path in ROUTES:
+        obj = {"object__type": "api", "route__path": path}
+        if inside_context:
+            event = api_event(method, path)
+            with real_audit.audit_request(event, LAMBDA_CONTEXT):
+                decisions.append(enforcer.enforce(obj, method))
+        else:
+            decisions.append(enforcer.enforce(obj, method))
+    return decisions
+
+
+@pytest.mark.unit
+class TestDecisionIndependentOfTheRecordContractKeys:
+    """The authorization records gain the request's contract keys; the decisions do not move."""
+
+    def test_inside_a_context_the_api_records_carry_the_keys(self, enforcer, real_audit, clients):
+        _decisions(enforcer, real_audit, inside_context=True)
+        messages = clients.module.messages() + clients.flush.messages()
+        assert len(messages) == 4
+        assert all('"outcome": ' in message and '"request": ' in message for message in messages)
+
+    def test_the_decision_is_unchanged_when_building_the_keys_raises(
+            self, enforcer, real_audit, clients, monkeypatch):
+        expected = _decisions(enforcer, real_audit, inside_context=False)
+        expected_data = _data_decisions(enforcer, real_audit, inside_context=False)
+
+        def failing_keys(*args, **kwargs):
+            raise RuntimeError("keys failed")
+
+        monkeypatch.setattr(real_audit, "_authorization_keys", failing_keys)
+        assert _decisions(enforcer, real_audit, inside_context=True) == expected
+        assert _data_decisions(enforcer, real_audit, inside_context=True) == expected_data
+
+    def test_data_level_decisions_are_the_same_with_and_without_a_context(self, enforcer, real_audit, clients):
+        outside = _data_decisions(enforcer, real_audit, inside_context=False)
+        inside = _data_decisions(enforcer, real_audit, inside_context=True)
+        assert outside == inside == [True, True, False, False]
+        denials = [m for m in clients.module.messages() if m.startswith("[AUTHORIZATION][authorized: False]")]
+        assert len(denials) == 4, "two denials outside and two inside, each written at once"
+        assert sum('"outcome": "denied"' in m for m in denials) == 2, "the two inside carry the keys"
