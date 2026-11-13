@@ -16,7 +16,6 @@ a queue batch into one `workflowExecution` stamp per asset, which starts no eval
 """
 
 import ast
-import importlib
 import json
 import re
 from pathlib import Path
@@ -44,16 +43,6 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 SYSTEM_PIPELINE_DIR = REPO_ROOT / "backendPipelines" / "system"
 GENERATE_METADATA = SYSTEM_PIPELINE_DIR / "genAiMetadata" / "lambda" / "generateMetadata.py"
 METADATA_SERVICE = REPO_ROOT / "backend" / "backend" / "handlers" / "metadata" / "metadataService.py"
-
-
-def _metadata_service():
-    """The metadata service module, imported when a test runs rather than when this file is collected.
-
-    tests/handlers/metadata/conftest.py installs its own `common.*` modules when pytest enters that
-    directory, after this one. Importing the service here at collection would bind it to the root
-    conftest's `common.metadataSchemaValidation`, whose schema cache the metadata tests' fixtures do not
-    clear, and their cached schemas would then leak between those tests."""
-    return importlib.import_module("backend.backend.handlers.metadata.metadataService")
 
 
 # The asset the end-state harness writes back into (EndState's outputDatabaseId / outputAssetId).
@@ -99,19 +88,6 @@ def _call_rows(call):
     return [row["metadataKey"] for row in json.loads(call["body"])["metadata"]]
 
 
-def _call_table(call):
-    """The table the metadata service writes a captured call's rows to."""
-    body = json.loads(call["body"])
-    if body.get("type") == "attribute":
-        return _metadata_service().file_attribute_table_name
-    return _metadata_service().asset_file_metadata_table_name
-
-
-def _call_composite(call):
-    body = json.loads(call["body"])
-    return ":".join((DB, ASSET, body.get("filePath") or "/"))
-
-
 @pytest.mark.unit
 class TestTheSystemPipelineWritesNoRowItself:
 
@@ -139,9 +115,10 @@ class TestEveryOutputFileIsWrittenBackAsTheExecutions:
         assert end_state.status == "SUCCEEDED"
         assert len(end_state.metadata_calls) == expected_calls
         for call in end_state.metadata_calls:
+            # The shape tests/handlers/metadata/test_metadataService_systemWorkflow_writeBack.py
+            # feeds the metadata service, which tags every row it writes or deletes for it.
             assert call["lambdaCrossCall"] == {"userName": "SYSTEM_USER",
                                                "workflowExecutionId": EXECUTION_ID}
-            assert _metadata_service().workflow_execution_writer(call) == EXECUTION_ID
 
     def test_every_staged_row_travels_on_one_of_those_calls(self, objects, expected_calls):
         end_state = EndState(objects)
@@ -149,35 +126,6 @@ class TestEveryOutputFileIsWrittenBackAsTheExecutions:
         staged = sorted(row["metadataKey"] for body in objects.values()
                         for row in json.loads(body)["metadata"])
         assert sent == staged
-
-    def test_the_metadata_service_tags_every_row_those_calls_write(self, objects, expected_calls):
-        metadataService = _metadata_service()
-        for call in EndState(objects).metadata_calls:
-            table = _call_table(call)
-            batch = [{"PutRequest": {"Item": {
-                "metadataKey": {"S": key},
-                "databaseId:assetId:filePath": {"S": _call_composite(call)},
-                "metadataValue": {"S": "v"}}}} for key in _call_rows(call)]
-            # An "update" run also replaces a stale key the previous run wrote.
-            batch.append({"DeleteRequest": {"Key": {
-                "metadataKey": {"S": "genai_stale"},
-                "databaseId:assetId:filePath": {"S": _call_composite(call)}}}})
-            client = MagicMock()
-            client.batch_write_item.return_value = {"UnprocessedItems": {}}
-            with patch.object(metadataService, "dynamodb_client", client), \
-                    patch.object(metadataService, "writing_workflow_execution_id",
-                                 metadataService.workflow_execution_writer(call)):
-                metadataService.batch_write_with_retry(table, batch)
-            written = [request for c in client.batch_write_item.call_args_list
-                       for request in c.kwargs["RequestItems"][table]]
-            puts = [r["PutRequest"]["Item"] for r in written if "PutRequest" in r]
-            assert len(puts) == len(_call_rows(call))
-            assert all(item[METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE] == {"S": EXECUTION_ID}
-                       for item in puts)
-            mark = client.update_item.call_args.kwargs
-            assert mark["ExpressionAttributeNames"]["#deletedBy"] == \
-                METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE
-            assert mark["ExpressionAttributeValues"] == {":executionId": {"S": EXECUTION_ID}}
 
 
 @pytest.mark.unit
