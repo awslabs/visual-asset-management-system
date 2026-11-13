@@ -124,8 +124,10 @@ describe("compliance list toolbars", () => {
             "Entries from",
             "Entries to",
         ]);
-        // The event type filter keeps its visible label in the toolbar.
-        expect(group("filters")!.textContent).toContain("Event type");
+        // The event type filter says what it filters through its "Any event type" option, with no
+        // inline label: an inline label makes it taller than the other filters in the row.
+        expect(group("filters")!.textContent).toContain("Any event type");
+        expect(group("filters")!.textContent).not.toContain("Event type");
         // Its five filters do not fit beside the search at 1440 px; on their own line they stay
         // at the right (D190).
         expect(group("filters")!.style.marginLeft).toBe("auto");

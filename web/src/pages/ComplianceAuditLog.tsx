@@ -82,7 +82,7 @@ export const auditDetailLines = (
  * and ComplianceAuditLog.test.tsx holds this list to the table.
  */
 export const eventTypeOptions: SelectProps.Option[] = [
-    { label: "All Events", value: "" },
+    { label: "Any event type", value: "" },
     { label: "Compliance Check", value: "compliance_check" },
     { label: "Evaluation Error", value: "evaluation_error" },
     { label: `Schema Bound to ${Synonyms.Database}`, value: "schema_bound_to_database" },
@@ -284,7 +284,10 @@ const ComplianceAuditLog: React.FC = () => {
                                         }
                                         options={eventTypeOptions}
                                         filteringType="auto"
-                                        inlineLabelText="Event type"
+                                        // No inline label: it makes this control taller than the
+                                        // other filters in the toolbar row. The "Any event type"
+                                        // option says what the control filters, as "Any schema"
+                                        // does on the database overview.
                                         ariaLabel="Filter audit entries by event type"
                                     />
                                     <DatabaseFilter

@@ -129,7 +129,13 @@ describe("ComplianceAuditLog pagination", () => {
         await waitFor(() => {
             expect(screen.getByText("No audit entries")).toBeInTheDocument();
         });
-        expect(screen.getByText("Event type")).toBeInTheDocument();
+        // The filter reads "Any event type" until one is chosen, and carries no inline label,
+        // which would make it taller than the toolbar's other filters.
+        expect(screen.getByText("Any event type")).toBeInTheDocument();
+        expect(screen.queryByText("Event type")).not.toBeInTheDocument();
+        expect(
+            screen.getByRole("button", { name: /Filter audit entries by event type/ })
+        ).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Refresh audit log" })).toBeInTheDocument();
     });
 
