@@ -159,12 +159,14 @@ Reads are the most frequent API calls, so they make up most of the action record
 A handler entrypoint opens the request's audit context with `audit_request(event, context)`. Inside it:
 
 -   The caller's identity is resolved once per request instead of once per record.
--   Successful action records are held and written when the handler returns, in one write per audit log group, all groups in parallel, bounded by a 1.5-second deadline. A request that touches three groups costs about one write's time, not three.
+-   Successful action records, and the allowed authorization record of the call's API-level route check, are held and written when the handler returns, in one write per audit log group, all groups in parallel, bounded by a 1.5-second deadline. A request that touches three groups costs about one write's time, not three, and a request whose only record is its allowed route check makes one write. A held authorization record is the same record, byte for byte, that an immediate write produces; only its write time changes. An authorization record carries no time of its own, so its CloudWatch `@timestamp` is the time the request finished, not the time of the check; the request time stays in the echoed event's `requestContext.requestTimeEpoch`. Data-level checks record denials only, so no allowed data-level record is held.
 -   A timer writes the held records 750 milliseconds before the function times out, so a timing-out request still delivers them. A write never waits past 250 milliseconds before the timeout: the deadline is the shorter of 1.5 seconds and the time left less 250 milliseconds, so the records it could not confirm are written to the function log, and counted, while the function still runs.
--   Denials, failures and error records are written at once.
--   A record not confirmed by the deadline is kept in the function log as an [undelivered entry](#monitoring-audit-logging-health) with reason `flushDeadlineExceeded`. Its write may still complete, so a record can appear twice; `recordId` identifies the copy.
+-   Denials (authorization denials included), failures and error records are written at once.
+-   A record not confirmed by the deadline is kept in the function log as an [undelivered entry](#monitoring-audit-logging-health) with reason `flushDeadlineExceeded`. Its write may still complete, so a record can appear twice. `recordId` identifies the copy of an action record; an authorization record carries no `recordId`, and its copy is the same text: the same `requestContext.requestId` in the echo, the same prefix and the same payload.
 
-If a function stops without returning (out of memory, a crash), records held for it are lost; the API-level authorization record of the call is written before the handler runs and is not affected.
+Outside an audit context (a function that does not open one, or a record written from a worker thread) every record, allowed authorization records included, is written at once as before. Inside `deferred_authorization_audit()` (search's per-hit checks) denials are still collected and written together when the block ends; allowed checks join the request's flush.
+
+If a function stops without returning (out of memory, a crash), records held for it are lost, the allowed authorization record of the call included. Authorization denials are never held for the request's flush: a route or data-level denial is written before the handler continues, and the denials collected inside `deferred_authorization_audit()` are written when that block ends, so a crash inside the block loses them.
 
 ### Action Registry
 
@@ -563,7 +565,7 @@ An entry that cannot be written to its audit log group is not dropped. The AWS L
 | `createLogStreamFailed` | The day's log stream could not be created.                                                                                        |
 | `clientUnavailable`     | The Amazon CloudWatch Logs client could not be created when the function started.                                                 |
 | `logGroupUnresolved`    | The audit log group name could not be read from AWS Systems Manager Parameter Store.                                              |
-| `flushDeadlineExceeded` | The request's held action records were not confirmed within the 1.5-second deadline. The write may still complete.                |
+| `flushDeadlineExceeded` | The request's held records were not confirmed within the 1.5-second deadline. The write may still complete.                       |
 | `formatFailed`          | The entry could not be formatted; a `[ERROR: Failed to format message]` entry was written in its place.                           |
 | `unexpectedError`       | Any other failure. `record` is `null` when the entry was never formatted.                                                         |
 
