@@ -8,6 +8,7 @@ destructive tools additionally require VAMS_ENABLE_DESTRUCTIVE=true.
 from __future__ import annotations
 
 import functools
+import inspect
 import json
 import logging
 import sys
@@ -35,12 +36,23 @@ from .client import (  # noqa: E402
     VamsClient,
     API_ASSETS,
     API_DATABASE_ASSETS,
+    CLI_VERSION,
     SUBSCRIPTION_ENTITY_ASSET,
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
+    AuthenticationError,
+    OverrideTokenError,
     SearchDisabledError,
+    TokenExpiredError,
+    describe_profile,
+    login_step_for,
+    sign_in_marker,
 )
+from . import __version__ as MCP_VERSION  # noqa: E402
+from . import results  # noqa: E402
+from .annotations import COMPUTE, DESTRUCTIVE, READ, WRITE  # noqa: E402
 from .config import Config, ConfigError  # noqa: E402
 from .addon_tools import register_addon_tools  # noqa: E402
+from .addon_tools import ADDON_TOOL_MODULES, addon_deployed  # noqa: E402
 from .custom_tools import register_custom_tools  # noqa: E402
 
 # The CLI's own selection parsing, so a tool and `vamscli zip-download create` build the same body.
@@ -59,18 +71,59 @@ except ImportError:  # mcp 1.x
 # --- Bootstrap -----------------------------------------------------------
 
 # Config parsing is env-only and always safe. Building the client requires a
-# configured vamscli profile; defer failures to run time so the module can be
-# imported (e.g. for tests) without a live profile.
+# configured vamscli profile. Without one the server still starts (degraded): vams_status answers,
+# and every other tool returns a NotAuthenticated error asking the agent to have the USER sign in,
+# retrying the profile on each call so a sign-in made later is picked up without a restart.
 CONFIG = Config.from_env()
 STARTUP_ERROR: Optional[str] = None
+STARTUP_REASON: Optional[str] = None
+STARTUP_USER_STEP: Optional[str] = None
 
 try:
     CLIENT = VamsClient(CONFIG)
 except ConfigError as exc:
     CLIENT = None  # type: ignore[assignment]
     STARTUP_ERROR = str(exc)
+    STARTUP_REASON = exc.reason
+    STARTUP_USER_STEP = exc.user_step
 
-mcp = McpServer("vams")
+# What the server tells every connecting client, once, before any tool call (MCP `instructions`).
+# Agent-facing, held to SERVER_INSTRUCTIONS_MAX_CHARS by tests/test_agent_surface.py. Update it when
+# a tool family is added (Mandatory Rule 14).
+SERVER_INSTRUCTIONS_MAX_CHARS = 2000
+SERVER_INSTRUCTIONS = """\
+VAMS (Visual Asset Management System) stores 3D, point-cloud, image and other files as ASSETS \
+inside DATABASES, runs WORKFLOWS (made of pipelines) on them, and records each run as an \
+EXECUTION. These tools call the VAMS API as the signed-in user; that user's permissions bound every \
+answer, and a 403 means this user may not do it.
+
+Identifiers: an asset is addressed by databaseId + assetId; a file by its relativePath inside the \
+asset (the file_key); a version by its Version id. Workflows and pipelines may live in a database or \
+in the shared "GLOBAL" catalog.
+
+Start points:
+- Find assets: search_assets (by name, text or metadata), or list_databases then list_assets.
+- Then: get_asset -> list_asset_files / get_asset_metadata / list_asset_versions.
+- Download: generate_download_url, only when a download was asked.
+- Runs: list_executions (newest first, last 90 days) -> get_execution_details -> \
+get_execution_logs.
+- vams_status says who is signed in, which deployment, and which tool tiers are on.
+
+Results are BOUNDED. When a result has truncated=true, a NextToken, or warnings, rows exist that you \
+did not see: never report its count as a total or conclude something does not exist. Continue with \
+starting_token, or narrow the query. Search totals with total_is_lower_bound are minimums.
+
+Errors come back as data with error and error_type. NotAuthenticated means nobody is signed in: ask \
+the user to sign in (user_action says how) and stop; do not try to sign in yourself.
+
+Use these tools, not shell commands, the vamscli CLI or the VAMS source code, to answer questions \
+about this deployment. If no tool covers what is asked, say so plainly instead of working around it. \
+Uploads, sync and user, role or constraint administration have no tools: the user runs them in the \
+vamscli CLI. Create, update and delete tools exist only when the operator enabled them; tools that start compute \
+(execute_workflow, rerun_execution, abort_execution) need the user's confirmation first.
+"""
+
+mcp = McpServer("vams", instructions=SERVER_INSTRUCTIONS)
 
 # The workflow-executions endpoint rejects a larger page size (Step Functions throttling).
 WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE = 50
@@ -124,8 +177,19 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        if fn.__name__ not in _WORKS_WITHOUT_SIGN_IN and _current_client() is None:
+            return _not_authenticated(STARTUP_REASON or "no VAMS profile is signed in", STARTUP_USER_STEP)
+        global _SIGN_IN_FAILURE
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
+        except _SIGN_IN_ERRORS_TUPLE as exc:
+            # The stored sign-in stopped working mid-session (expired refresh token, a 401 that
+            # survives a refresh). The exception's own text tells the reader to run vamscli, which is
+            # an instruction for the USER, so it goes to user_action and not to the agent's error.
+            reason = next(text for cls, text in _SIGN_IN_ERRORS.items() if isinstance(exc, cls))
+            # Remembered so vams_status reports the same state the tools answer with.
+            _SIGN_IN_FAILURE = (reason, sign_in_marker(CONFIG))
+            return _not_authenticated(reason, login_step_for(CONFIG))
         except Exception as exc:  # noqa: BLE001 - surface any failure cleanly
             result = {"error": str(exc), "error_type": type(exc).__name__}
             # Machine-readable facts the exception carries (for example blockedBy and requestId), as
@@ -135,8 +199,77 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
                 for key, value in fields.items():
                     result.setdefault(key, value)
             return result
+        if fn.__name__ not in _WORKS_WITHOUT_SIGN_IN:
+            # A call that reached the API without a sign-in error: the sign-in works again.
+            _SIGN_IN_FAILURE = None
+        return result
 
+    # The MCP description is the docstring. Python 3.13 strips a docstring's common indentation at
+    # compile time and 3.12 does not, so without this a 3.12 host publishes every description with
+    # its source indentation: characters every agent reads, and over the Rule 11 budget.
+    wrapper.__doc__ = inspect.cleandoc(fn.__doc__) if fn.__doc__ else fn.__doc__
     return wrapper
+
+
+# (reason, sign_in_marker) of the last API call VAMS refused for its sign-in, until a later call
+# succeeds or the profile holds a newer sign-in. A profile can hold a sign-in that VAMS no longer
+# accepts; vams_status reads this so it does not say authenticated while the tools answer
+# NotAuthenticated.
+_SIGN_IN_FAILURE: Optional[Tuple[str, Any]] = None
+
+
+def _refused_sign_in() -> Optional[str]:
+    """Why VAMS refused the stored sign-in, or None when it was not refused or was replaced since."""
+    global _SIGN_IN_FAILURE
+    if _SIGN_IN_FAILURE is not None and sign_in_marker(CONFIG) != _SIGN_IN_FAILURE[1]:
+        _SIGN_IN_FAILURE = None
+    return _SIGN_IN_FAILURE[0] if _SIGN_IN_FAILURE else None
+
+
+# Tools that answer without a signed-in profile. Every other tool returns NotAuthenticated then.
+_WORKS_WITHOUT_SIGN_IN = frozenset({"vams_status"})
+
+# The CLI's sign-in failures, each with the sentence the agent reads instead of the CLI's own text.
+_SIGN_IN_ERRORS: Dict[type, str] = {
+    AuthenticationError: "VAMS did not accept the stored sign-in (it was refused or has been cleared)",
+    TokenExpiredError: "the VAMS sign-in has expired and could not be refreshed",
+    OverrideTokenError: "the VAMS override token has expired or was refused",
+}
+_SIGN_IN_ERRORS_TUPLE = tuple(_SIGN_IN_ERRORS)
+
+
+def _current_client() -> Optional[VamsClient]:
+    """The client, building it again when the server started without one.
+
+    A server started before the user signed in would otherwise answer NotAuthenticated until it is
+    restarted. Building the client reads only the local profile files, so retrying on each call is
+    cheap. Add-on tools are registered at start, so they still need a restart after the sign-in.
+    """
+    global CLIENT, STARTUP_ERROR, STARTUP_REASON, STARTUP_USER_STEP
+    if CLIENT is None:
+        try:
+            CLIENT = VamsClient(CONFIG)
+            STARTUP_ERROR = STARTUP_REASON = STARTUP_USER_STEP = None
+        except ConfigError as exc:
+            STARTUP_ERROR, STARTUP_REASON, STARTUP_USER_STEP = str(exc), exc.reason, exc.user_step
+    return CLIENT
+
+
+def _not_authenticated(reason: str, user_step: Optional[str]) -> Dict[str, Any]:
+    """The structured error of a call made with nobody signed in.
+
+    `error` states the fact and tells the agent what to do (ask the user); it names no command, so the
+    agent does not go and run one. The command is in `user_action`, as the step the USER takes.
+    """
+    step = user_step or login_step_for(CONFIG)
+    return {
+        "error": f"Not signed in to VAMS: {reason}. Ask the user to sign in, then call the tool again.",
+        "error_type": "NotAuthenticated",
+        "user_action": (
+            f"Ask the user to sign in to VAMS: the user runs {step} in their own terminal. "
+            "Tools of an add-on appear only after the MCP server is restarted."
+        ),
+    }
 
 
 # --- Response-shape helpers ----------------------------------------------
@@ -261,58 +394,123 @@ def _paginate_with_page_metadata(
     return result
 
 
+# list_tags marks the tag type of a required type with this suffix (tagService), and an agent copies it
+# back. The write routes reject it (a name cannot contain brackets), so it is removed as the CLI's
+# `tag update` does.
+REQUIRED_TAG_TYPE_SUFFIX = " [R]"
+
+
+def _tag_type_name(name: str) -> str:
+    """A tag type name as the write routes take it: the list_tags required marker removed."""
+    return name.replace(REQUIRED_TAG_TYPE_SUFFIX, "")
+
+
+def _tag_body(names: Dict[str, Any], database_id: Optional[str]) -> Dict[str, Any]:
+    """The flat object the tag and tag-type write routes take: a database_id scopes it, none is global.
+    A tagTypeName copied from list_tags loses its required marker."""
+    body = dict(names)
+    if isinstance(body.get("tagTypeName"), str):
+        body["tagTypeName"] = _tag_type_name(body["tagTypeName"])
+    return {**body, **({"databaseId": database_id} if database_id else {})}
+
+
 # =========================================================================
 # READ / SEARCH TOOLS (always available)
 # =========================================================================
 
 
-@mcp.tool()
+@mcp.tool(title="VAMS connection status", annotations=READ)
+@tool_result
+def vams_status() -> results.Status:
+    """Check the VAMS connection: call this first, or when a tool returns NotAuthenticated.
+
+    Answers without any API request and also when nobody is signed in. Returns `authenticated`,
+    `profile`, `apiUrl` (the deployment), `userId` (who the tools act as), `featureSwitches` (what the
+    deployment enabled at the last sign-in), `gates` (whether create/update and delete tools and
+    which add-ons are registered), `mcpVersion` and `cliVersion`. When `authenticated` is false,
+    `reason` says why and `user_action` is the step to ask the user to take. `tokenExpired` true with
+    a `note`: the next call renews the sign-in or answers NotAuthenticated."""
+    status = describe_profile(CONFIG)
+    client = _current_client()
+    refused = _refused_sign_in() if client is not None else None
+    status["authenticated"] = client is not None and refused is None
+    status["gates"] = {
+        "reads": True,
+        "writes": CONFIG.enable_writes,
+        "destructive": CONFIG.enable_destructive,
+        "addons": [m.__name__.rsplit(".", 1)[-1] for m in ADDON_TOOL_MODULES if _ADDONS_REGISTERED.get(m)],
+    }
+    status["mcpVersion"] = MCP_VERSION
+    status["cliVersion"] = CLI_VERSION
+    if client is None:
+        unauthenticated = _not_authenticated(STARTUP_REASON or "no VAMS profile is signed in", STARTUP_USER_STEP)
+        status["reason"] = STARTUP_REASON
+        status["user_action"] = unauthenticated["user_action"]
+    elif refused is not None:
+        status["reason"] = refused
+        status["user_action"] = _not_authenticated(refused, login_step_for(CONFIG))["user_action"]
+    elif status.get("tokenExpired"):
+        status["note"] = (
+            "The stored sign-in has expired. The next call renews it, or answers NotAuthenticated "
+            "when VAMS refuses the renewal."
+        )
+    return status
+
+
+@mcp.tool(title="List feature switches", annotations=READ)
+@tool_result
+def list_features() -> results.Features:
+    """Use to see the deployment's enabled feature switches (`enabled`), as of `fetched_at` (the
+    last sign-in)."""
+    snapshot = CLIENT.feature_switches()
+    result: Dict[str, Any] = {key: snapshot[key] for key in ("enabled", "total", "fetched_at")}
+    if not snapshot["has_feature_switches"]:
+        result["note"] = (
+            "The sign-in holds no feature switches, so none are known (not: none are enabled). "
+            "Ask the user to sign in again to record them."
+        )
+    return result
+
+
+@mcp.tool(title="List my allowed API routes", annotations=READ)
 @tool_result
 def list_allowed_api_routes() -> Dict[str, Any]:
-    """List the VAMS API routes and methods the authenticated user is authorized
-    to call. Call this first to scope what this session can actually do — the
-    user's two-tier permissions bound every other tool, and a route missing here
-    will be refused with a 403. Exception: each {param} segment is checked as the
-    placeholder 'vams:any', so when the user's api constraints name a concrete
-    value in a parameter position (e.g. starts_with '/database/projA/'), a route
-    can be missing although calls on those concrete paths are allowed, or listed
-    although they are refused with 403."""
+    """Use to see what this user may do: the API routes and methods the user's permissions allow; a
+    route missing here is refused with 403. Each {param} is checked as 'vams:any', so a permission for
+    a concrete path value can make a route look missing although calls on that path are allowed."""
     return CLIENT.api.list_allowed_api_routes()
 
 
-@mcp.tool()
+@mcp.tool(title="List all API routes", annotations=READ)
 @tool_result
 def list_api_routes() -> Dict[str, Any]:
-    """List EVERY VAMS API route — `path` template, HTTP `methods`, `category`, and whether it is
-    `unauthenticated` — regardless of what the current user may call. This is the vocabulary an `api`
-    constraint is written against: its criteria match these route paths. It says nothing about what
-    this session is permitted to do; use list_allowed_api_routes for that."""
+    """Use when writing an `api` permission constraint: EVERY VAMS API route (`path`, `methods`,
+    `category`, `unauthenticated`), regardless of what the current user may call; use
+    list_allowed_api_routes for that."""
     return CLIENT.api.list_api_routes()
 
 
-@mcp.tool()
+@mcp.tool(title="List constraint vocabulary", annotations=READ)
 @tool_result
 def list_constraint_permission_objects() -> Dict[str, Any]:
-    """List the vocabulary a permission constraint is written in: `objectTypes` (each with the
-    `fields` its criteria may test), `operators`, `permissions`, and `permissionTypes`, all as
-    `{label, value}` pairs. Send the `value` when building a constraint — the `label` is display text.
-    The lists are fixed per deployment, so one call per session is enough."""
+    """Use when building a permission constraint: `objectTypes` (with their `fields`), `operators`,
+    `permissions` and `permissionTypes` as `{label, value}` pairs. Send the `value`."""
     return CLIENT.api.list_constraint_permission_objects()
 
 
-@mcp.tool()
+@mcp.tool(title="List databases", annotations=READ)
 @tool_result
 def list_databases(
     include_deleted: bool = False,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
-) -> Dict[str, Any]:
-    """List VAMS databases (auto-paginated). Returns database IDs, descriptions,
-    asset counts, and bucket info.
+) -> results.DatabasePage:
+    """Use to find databases (most asset tools need a databaseId). Rows: databaseId, description,
+    assetCount, defaultBucketId. include_deleted adds deleted ones.
 
-    The walk is BOUNDED. `truncated` in the result means rows were not seen, `note` says which bound
-    stopped it, and `NextToken` (when present) continues the walk — pass it back as `starting_token`.
-    Never report a count, or conclude something does not exist, from a truncated result."""
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    Never report a count, or conclude something does not exist, from a truncated
+    result."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_databases(show_deleted=include_deleted, params=params),
         max_items=max_items,
@@ -320,25 +518,22 @@ def list_databases(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Get database", annotations=READ)
 @tool_result
-def get_database(database_id: str, include_deleted: bool = False) -> Dict[str, Any]:
-    """Get details for a single database by ID."""
+def get_database(database_id: str, include_deleted: bool = False) -> results.Database:
+    """Use to read one database: databaseId, description, assetCount, defaultBucketId, bucketName,
+    restrictMetadataOutsideSchemas (keys outside a schema refused), restrictFileUploadsToExtensions."""
     return CLIENT.api.get_database(database_id, include_deleted)
 
 
-@mcp.tool()
+@mcp.tool(title="List asset buckets", annotations=READ)
 @tool_result
 def list_buckets(
     max_items: Optional[int] = None, starting_token: Optional[str] = None
 ) -> Dict[str, Any]:
-    """List asset storage buckets available for creating databases.
-
-    Each item carries `bucketRegion` and, for a bucket in another account, `bucketAccountId`;
-    a bucket in the deployment Region registered without a Region reports neither.
-
-    The walk is BOUNDED: `truncated` means rows were not seen, and `NextToken` continues it via
-    `starting_token`. Do not report a count from a truncated result."""
+    """Use before create_database to pick a default_bucket_id. Rows carry the bucket id, name,
+    `bucketRegion` and, for another account's bucket, `bucketAccountId`.
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_buckets(params=params),
         max_items=max_items,
@@ -346,21 +541,21 @@ def list_buckets(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="List assets", annotations=READ)
 @tool_result
 def list_assets(
     database_id: Optional[str] = None,
     include_archived: bool = False,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
-) -> Dict[str, Any]:
-    """List assets, scoped to a database when database_id is given, otherwise
-    across all databases the user can read (auto-paginated).
+) -> results.AssetPage:
+    """Use to browse assets in one database, or in every database the user can read. To find an asset
+    by name use search_assets. Rows: databaseId, assetId, assetName, description, tags, status.
+    include_archived adds archived assets.
 
-    The walk is BOUNDED, and a large deployment holds far more assets than one walk returns.
-    `truncated` means rows were not seen, `note` says which bound stopped it, and `NextToken`
-    continues the walk — pass it back as `starting_token`. Do not report an asset count, or conclude
-    an asset does not exist, from a truncated result; use search_assets() to look one up by name."""
+    BOUNDED: `truncated` means rows were
+    not seen; pass `NextToken` as `starting_token` to continue. Do not report an asset count, or
+    conclude an asset does not exist, from a truncated result."""
     endpoint = API_DATABASE_ASSETS.format(databaseId=database_id) if database_id else API_ASSETS
 
     def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -371,26 +566,16 @@ def list_assets(
     return CLIENT.paginate(fetch, max_items=max_items, starting_token=starting_token)
 
 
-@mcp.tool()
+@mcp.tool(title="Get asset", annotations=READ)
 @tool_result
-def get_asset(database_id: str, asset_id: str, include_archived: bool = False) -> Dict[str, Any]:
-    """Get details for a single asset."""
+def get_asset(database_id: str, asset_id: str, include_archived: bool = False) -> results.Asset:
+    """Use to read one asset by database_id + asset_id: assetName, description, isDistributable (false:
+    no downloads), tags, status ("active" or "archived"), currentVersion. include_archived also finds
+    an archived asset. Next: list_asset_files, get_asset_metadata or list_asset_versions."""
     return CLIENT.api.get_asset(database_id, asset_id, show_archived=include_archived)
 
 
-@mcp.tool()
-@tool_result
-def get_upload_status(database_id: str, asset_id: str, upload_id: str) -> Dict[str, Any]:
-    """Status of an upload whose files over 1 GiB are ingested into the asset after it completed.
-
-    status is processing_async while any such file is pending, then completed or
-    completed_with_errors; asyncFiles lists each one as PENDING, SUCCEEDED or FAILED (with a generic
-    error). An upload whose files all landed at completion keeps no status, so it answers not
-    found, as does an upload the caller may not see."""
-    return CLIENT.api.get_upload_status(database_id, asset_id, upload_id)
-
-
-@mcp.tool()
+@mcp.tool(title="List asset files", annotations=READ)
 @tool_result
 def list_asset_files(
     database_id: str,
@@ -398,17 +583,14 @@ def list_asset_files(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
     include_archived: bool = False,
-) -> Dict[str, Any]:
-    """List files belonging to an asset (auto-paginated).
+) -> results.FilePage:
+    """Use to see an asset's files and folders. Rows: fileName, relativePath (the file_key other tools
+    take), isFolder, size, versionId, isArchived.
 
-    The walk is BOUNDED, and a real asset routinely holds thousands of files — more than one walk
-    returns. `truncated` means files were not seen, `note` says which bound stopped it, and
-    `NextToken` continues the walk: pass it back as `starting_token`. Never report a file count, or
-    answer "file X is not in this asset", from a truncated result — use search_files() to test for a
-    specific file instead.
-
-    include_archived also finds an ARCHIVED asset (get_asset reports status "archived"); every
-    file of an archived asset is archived, carries isArchived, and is always listed."""
+    BOUNDED: `truncated` means files were not seen; pass
+    `NextToken` as `starting_token` to continue. Never report a file count, or answer "file X is not
+    in this asset", from a truncated result; use search_files() to test for one file.
+    include_archived also finds an ARCHIVED asset, whose files are all archived."""
     def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
         if include_archived:
             params = {**params, "showArchived": "true"}
@@ -422,7 +604,27 @@ def list_asset_files(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Get file info", annotations=READ)
+@tool_result
+def get_file_info(
+    database_id: str,
+    asset_id: str,
+    file_key: str,
+    include_versions: bool = False,
+    include_archived: bool = False,
+) -> results.FileInfo:
+    """Use to read one file by file_key: size, contentType, lastModified, isArchived, primaryType,
+    previewFile. include_versions adds its versions; include_archived finds an archived asset's file."""
+    params: Dict[str, Any] = {
+        "filePath": file_key,
+        "includeVersions": "true" if include_versions else "false",
+    }
+    if include_archived:
+        params["showArchived"] = "true"
+    return CLIENT.api.get_file_info(database_id, asset_id, params)
+
+
+@mcp.tool(title="Get asset metadata", annotations=READ)
 @tool_result
 def get_asset_metadata(
     database_id: str,
@@ -430,12 +632,11 @@ def get_asset_metadata(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
     include_archived: bool = False,
-) -> Dict[str, Any]:
-    """Get metadata key/value pairs for an asset (auto-paginated).
-
-    The walk is BOUNDED: `truncated` means rows were not seen and `NextToken` continues it via
-    `starting_token`. A truncated result is not the asset's full metadata, so do not conclude a key
-    is absent from one. include_archived also finds an archived asset."""
+) -> results.MetadataPage:
+    """Use to read an asset's metadata (rows: metadataKey, metadataValue, metadataValueType).
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    Do not conclude a key is absent from a truncated result. include_archived also
+    finds an archived asset."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_asset_metadata_v2(
             database_id, asset_id, page_size=params["pageSize"], starting_token=params.get("startingToken"),
@@ -447,17 +648,16 @@ def get_asset_metadata(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Get database metadata", annotations=READ)
 @tool_result
 def get_database_metadata(
     database_id: str,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Get metadata key/value pairs for a database (auto-paginated).
-
-    The walk is BOUNDED: `truncated` means rows were not seen and `NextToken` continues it via
-    `starting_token`. Do not conclude a key is absent from a truncated result."""
+) -> results.MetadataPage:
+    """Use to read a database's own metadata key/value pairs.
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    Do not conclude a key is absent from a truncated result."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_database_metadata_v2(
             database_id, page_size=params["pageSize"], starting_token=params.get("startingToken")
@@ -468,7 +668,7 @@ def get_database_metadata(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="List asset versions", annotations=READ)
 @tool_result
 def list_asset_versions(
     database_id: str,
@@ -476,13 +676,11 @@ def list_asset_versions(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
     include_archived: bool = False,
-) -> Dict[str, Any]:
-    """List versions of an asset (auto-paginated).
-
-    The walk is BOUNDED: `truncated` means versions were not seen, and `NextToken` continues it via
-    `starting_token`. Do not report a version count from a truncated result.
-
-    include_archived lists archived versions too, and also finds an archived asset."""
+) -> results.VersionPage:
+    """Use to see an asset's versions. Rows: Version (the asset_version_id), Comment, DateModified,
+    createdBy, isCurrent, fileCount, versionAlias. include_archived adds archived versions.
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    Do not report a version count from a truncated result."""
     def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
         if include_archived:
             params = {**params, "showArchived": "true"}
@@ -496,19 +694,19 @@ def list_asset_versions(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Get asset version", annotations=READ)
 @tool_result
 def get_asset_version(
     database_id: str, asset_id: str, asset_version_id: str, include_archived: bool = False
-) -> Dict[str, Any]:
-    """Get a specific asset version by its version ID. include_archived also finds an archived
-    asset."""
+) -> results.AssetVersion:
+    """Use to read one asset version: its files (relativeKey, versionId, size), comment, createdBy,
+    dateCreated and versionedMetadata. include_archived also finds an archived asset."""
     return CLIENT.api.get_asset_version(
         database_id, asset_id, asset_version_id, show_archived=include_archived
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Get asset history", annotations=READ)
 @tool_result
 def get_asset_history(
     database_id: str,
@@ -516,12 +714,9 @@ def get_asset_history(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Get the asset lifecycle history (create/edit/archive/unarchive/delete
-    records, newest first, auto-paginated).
-
-    The walk is BOUNDED and starts from the NEWEST record, so a `truncated` result is the recent
-    history rather than all of it — the absence of an event in one does not mean it never happened.
-    `NextToken` continues the walk via `starting_token`."""
+    """Use to see who created, edited, archived or deleted an asset, newest first. A `truncated` result
+    is the recent history only: an event missing from it may still have happened.
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_asset_history(database_id, asset_id, params=params),
         max_items=max_items,
@@ -529,21 +724,83 @@ def get_asset_history(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Get asset links", annotations=READ)
 @tool_result
 def get_asset_links(
     database_id: str, asset_id: str, child_tree_view: bool = False, include_archived: bool = False
 ) -> Dict[str, Any]:
-    """List relationship links for an asset (related/parent/child assets).
-
-    A `child_tree_view` walk is BOUNDED (100 levels, 10,000 nodes), so `treeTruncated` true means the
-    returned tree is partial rather than the whole hierarchy — read the tree of an asset further down
-    it for the remainder. `unresolvedCounts` counts links whose asset could not be read, which is
-    separate from `unauthorizedCounts` and usually clears on a retry. include_archived also finds
-    an archived asset."""
+    """Use to see an asset's related, parent and child assets. A `child_tree_view` walk is bounded:
+    `treeTruncated` true means the tree is partial. `unresolvedCounts` counts links whose asset could
+    not be read (retry). include_archived also finds an archived asset."""
     return CLIENT.api.get_asset_links_for_asset(
         database_id, asset_id, child_tree_view=child_tree_view, show_archived=include_archived
     )
+
+
+# Smaller than the CLI's defaults (100 assets, 2000 files): an export page carries every file's and
+# asset's metadata, and the whole page lands in the agent's context.
+EXPORT_DEFAULT_MAX_ASSETS = 25
+EXPORT_DEFAULT_MAX_FILES = 500
+# The most one call asks for, whatever the agent passes (the route itself allows 1000 / 10000).
+# Larger trees are read page by page with starting_token.
+EXPORT_MAX_ASSETS = 100
+EXPORT_MAX_FILES = 1000
+
+
+@mcp.tool(title="Export asset tree", annotations=READ)
+@tool_result
+def export_asset(
+    database_id: str,
+    asset_id: str,
+    max_assets: int = EXPORT_DEFAULT_MAX_ASSETS,
+    max_files: int = EXPORT_DEFAULT_MAX_FILES,
+    starting_token: Optional[str] = None,
+    fetch_relationships: bool = True,
+    fetch_entire_subtrees: bool = False,
+    include_parent_relationships: bool = False,
+    include_archived_files: bool = False,
+    include_folder_files: bool = False,
+    include_only_primary_type_files: bool = False,
+    file_extensions: Optional[List[str]] = None,
+    include_asset_metadata: bool = True,
+    include_file_metadata: bool = True,
+    include_asset_link_metadata: bool = True,
+) -> results.AssetExport:
+    """Use to read an asset and its children in one call: `assets` (metadata, files), `relationships`,
+    `totalAssetsInTree`. One child level unless fetch_entire_subtrees; fetch_relationships=False: the
+    asset alone. ONE PAGE per call, capped at 100 assets and 1000 files: `truncated` + `NextToken` mean
+    more; pass it as `starting_token` (files_truncated assets continue there)."""
+    params: Dict[str, Any] = {
+        "generatePresignedUrls": False,
+        "includeFolderFiles": include_folder_files,
+        "includeOnlyPrimaryTypeFiles": include_only_primary_type_files,
+        "includeFileMetadata": include_file_metadata,
+        "includeAssetLinkMetadata": include_asset_link_metadata,
+        "includeAssetMetadata": include_asset_metadata,
+        "fetchAssetRelationships": fetch_relationships,
+        "fetchEntireChildrenSubtrees": fetch_entire_subtrees,
+        "includeParentRelationships": include_parent_relationships,
+        "includeArchivedFiles": include_archived_files,
+        "maxAssets": max(1, min(max_assets, EXPORT_MAX_ASSETS)),
+        "maxFiles": max(1, min(max_files, EXPORT_MAX_FILES)),
+    }
+    if file_extensions:
+        # The handler matches extensions with their leading dot, lower-cased, as the CLI sends them.
+        params["fileExtensions"] = [
+            (ext if ext.startswith(".") else f".{ext}").lower() for ext in (e.strip() for e in file_extensions)
+        ]
+    if starting_token:
+        params["startingToken"] = starting_token
+    result = CLIENT.api.export_asset(database_id, asset_id, params)
+    if isinstance(result, dict) and result.get("NextToken"):
+        result["truncated"] = True
+        result["note"] = (
+            f"One page of the export: {result.get('assetsInThisPage', len(result.get('assets') or []))} of "
+            f"{result.get('totalAssetsInTree')} asset(s). Call again with starting_token=NextToken for the rest."
+        )
+        if any(isinstance(a, dict) and a.get("files_truncated") for a in result.get("assets") or []):
+            result["note"] += " Assets marked files_truncated have more files on the next page."
+    return result
 
 
 def _escape_query_string_value(value: str) -> str:
@@ -617,7 +874,7 @@ def _require_search() -> None:
         raise SearchDisabledError(SEARCH_DISABLED_MESSAGE)
 
 
-@mcp.tool()
+@mcp.tool(title="Search assets", annotations=READ)
 @tool_result
 def search_assets(
     query: Optional[str] = None,
@@ -629,42 +886,20 @@ def search_assets(
     from_offset: int = 0,
     sort_field: Optional[str] = None,
     sort_desc: bool = True,
-) -> Dict[str, Any]:
-    """Full-text / metadata / geospatial search across assets (OpenSearch).
+) -> results.SearchResult:
+    """Use to find assets by name, text, metadata or location (OpenSearch).
 
-    - query: free text (matches names, descriptions, metadata)
-    - database_id: restrict to one database. "GLOBAL" is not an asset database — it is the unscoped
-      keyword for the shared pipeline/workflow catalogs — so passing it searches every database
-      rather than returning nothing.
-    - metadata_query: metadata field search, as `key:value`. All of a record's metadata is
-      stored in one field named `MD_` with the keys carried verbatim, so metadata
-      {"product": "Training"} reads back as "MD_": {"product": "Training"} in a hit's
-      `_source`; file attributes use `AB_` the same way, on the file index only. The key may
-      be written bare ('product:Training'), with the entity prefix ('MD_product:Training',
-      or 'AB_colour:red'), or with a type prefix ('MD_str_product:Training') — all three
-      address the same field. Do NOT write 'MD_.product': the dot belongs to the internal
-      query path, not to a submitted key, and such a query matches nothing. Call
-      get_search_fields() for the mapping, which lists `MD_` itself rather than the keys
-      inside it.
-    - geo_search: geospatial filter on `geo_MD_location`. Supply exactly one of
-      `point` ({lat, lon, radiusMeters}), `bbox` ({topLeft, bottomRight} of
-      points), or `geoJson` (GeoJSON geometry/Feature/FeatureCollection), plus
-      an optional `relation` of intersects (default) / within / contains /
-      disjoint.
-    - size / from_offset: one page of hits. The result reports `total` and `returned` (this page).
-      `total` counts the matches the caller may read. When `total_is_lower_bound` is true the
-      true count is at least `total` (shown as `total_display`, e.g. "120+") and it can rise as
-      you page on; report it with the "+" rather than as an exact number. While from_offset +
-      returned is below total, page on by re-issuing the same query with from_offset advanced by
-      size rather than by raising size to swallow everything.
-    - sort_field / sort_desc: order by an indexed field instead of relevance, e.g.
-      sort_field="str_assetname", sort_desc=False for name order, or
-      sort_field="date_asset_version_createdate" for the most recently versioned first. Index
-      field names carry a type prefix; call get_search_fields() for them. Ordering by relevance
-      (the default) cannot answer "the newest N".
+    - query: free text. database_id: one database ("GLOBAL" searches every database).
+    - metadata_query: `key:value`, e.g. 'product:Training'. Do NOT write 'MD_.product'.
+    - geo_search: one of `point` ({lat, lon, radiusMeters}), `bbox` ({topLeft, bottomRight}) or
+      `geoJson`, plus an optional `relation` (intersects, within, contains, disjoint).
+    - size / from_offset: one page of hits; page on by advancing from_offset.
+    - sort_field / sort_desc: order by an index field, e.g. "date_asset_version_createdate" for the
+      newest; get_search_fields() lists the names.
 
-    Returns a compact list of hits (id, score, source fields). On a deployment without OpenSearch
-    (NOOPENSEARCH) it returns an error and sends no request."""
+    Returns `total`, `returned` and `results` (id, score, source). When `total_is_lower_bound` is
+    true the count is at least `total`: report `total_display` (e.g. "120+"). Without OpenSearch
+    (NOOPENSEARCH) it returns an error; use list_assets there."""
     _require_search()
     request = _build_search_request(
         ["asset"], query, database_id, metadata_query, size, include_archived, geo_search,
@@ -676,7 +911,7 @@ def search_assets(
     return CLIENT.trim_search_results(raw, max_hits=request["size"])
 
 
-@mcp.tool()
+@mcp.tool(title="Search files", annotations=READ)
 @tool_result
 def search_files(
     query: Optional[str] = None,
@@ -688,13 +923,9 @@ def search_files(
     from_offset: int = 0,
     sort_field: Optional[str] = None,
     sort_desc: bool = True,
-) -> Dict[str, Any]:
-    """Full-text / metadata / geospatial search across asset files (OpenSearch).
-
-    Takes the same database_id, metadata_query, geo_search, paging (size / from_offset) and ordering
-    (sort_field / sort_desc) semantics as search_assets, and the same NOOPENSEARCH error. File
-    index fields differ from the asset index: e.g. sort_field="date_lastmodified" for the most
-    recently modified files first."""
+) -> results.SearchResult:
+    """Use to find files across assets, or to test whether one file exists. Same parameters and
+    NOOPENSEARCH error as search_assets; file index fields differ (e.g. sort_field="date_lastmodified")."""
     _require_search()
     request = _build_search_request(
         ["file"], query, database_id, metadata_query, size, include_archived, geo_search,
@@ -704,16 +935,16 @@ def search_files(
     return CLIENT.trim_search_results(raw, max_hits=request["size"])
 
 
-@mcp.tool()
+@mcp.tool(title="Get search fields", annotations=READ)
 @tool_result
 def get_search_fields() -> Dict[str, Any]:
-    """List available search fields/types (the OpenSearch index mapping). Returns an error on a
-    deployment without OpenSearch (NOOPENSEARCH)."""
+    """Use to learn index field names for sort_field and metadata searches (the OpenSearch mapping).
+    Returns an error on a deployment without OpenSearch (NOOPENSEARCH)."""
     _require_search()
     return CLIENT.api.get_search_mapping()
 
 
-@mcp.tool()
+@mcp.tool(title="List workflows", annotations=READ)
 @tool_result
 def list_workflows(
     database_id: Optional[str] = None,
@@ -721,14 +952,9 @@ def list_workflows(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """List workflows, optionally scoped to a database (auto-paginated).
-
-    Archived workflows are filtered out server-side unless include_archived is set, which is how an
-    archived workflow's id is found in order to restore it.
-
-    The walk is BOUNDED: `truncated` means rows were not seen and `NextToken` continues it via
-    `starting_token`. A workflow missing from a truncated result may simply be past the bound.
-    """
+    """Use to find a workflow to run or inspect, optionally in one database. include_archived adds
+    archived workflows (how an archived workflow's id is found to restore it).
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_workflows(
             database_id=database_id, include_archived=include_archived, params=params
@@ -738,7 +964,7 @@ def list_workflows(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="List an asset's executions", annotations=READ)
 @tool_result
 def list_workflow_executions(
     database_id: str,
@@ -755,46 +981,16 @@ def list_workflow_executions(
     filter_end_date: Optional[str] = None,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
-) -> Dict[str, Any]:
-    """List workflow executions for an asset (auto-paginated).
+) -> results.ExecutionPage:
+    """Use to see the workflow runs of ONE asset (list_executions covers every asset). A workflow id
+    is unique across every database, so workflow_id alone identifies it; workflow_database_id is a
+    narrowing filter, and a value that is not its database empties the result.
 
-    Optionally narrow to one workflow. A workflow id is unique across every database including
-    "GLOBAL", so the id identifies the workflow on its own; workflow_database_id is an additional
-    narrowing filter rather than a disambiguator, and a value that is not the workflow's own database
-    silently empties the result instead of erroring.
+    `filterStartDate` is the applied window (90 days by default); widen it with filter_start_date
+    (UTC "YYYY-MM-DDTHH:MM:SSZ"). Filters, SKIPPED rows and system runs: as on list_executions.
 
-    The listing is lower-bounded by start date: `filterStartDate` reports the applied window (90 days
-    back by default), so an asset last processed before it lists nothing at all — that is the window,
-    not an absence of history. Widen it with filter_start_date; both dates are UTC timestamps of the
-    form "YYYY-MM-DDTHH:MM:SSZ" and any other spelling is rejected with a 400.
-
-    The remaining filters each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED,
-    SKIPPED), trigger_type, group_id, and triggered_by_user_id. trigger_type is 'manual' or 'fileUpload'
-    (the stored spellings 'Manual' and 'File-Upload' are accepted too).
-
-    A SKIPPED row is not a run: it records the file-upload trigger launches the workflow's concurrency
-    restriction refused while another run held the asset, file or file version. One row covers every
-    launch one blocking run refused; `skippedLaunchCount` is how many, `skipScope` the lock scope and
-    `skipReason` the fixed reason. Do not count SKIPPED rows as runs. exclude_status drops rows of
-    one status or a comma-separated list (e.g. "SKIPPED") on the server, before the page is cut; an
-    unknown status, or excluding the status `status` selects, is a 400.
-
-    Runs of system workflows are HIDDEN unless include_system is true, except that a listing narrowed
-    to one system workflow (workflow_id plus workflow_database_id) shows them unless include_system
-    is false; workflow_id alone is not that scope, and `systemRunsHint` then says so when runs were
-    hidden. `includeSystem` reports which applied, and each row's `isSystem` marks a system run, so
-    a list without them is not the asset's whole history.
-
-    A `warnings` entry means the page WITHHELD rows, for either of two reasons: it reached the cap on
-    executions inspected for this asset, or it spent its budget re-checking runs an earlier page
-    already listed. Each entry names which. The result is then also flagged `truncated`. Do not
-    report a run count or conclude a run does not exist from a result carrying warnings — narrow the
-    filters and list again.
-
-    The walk is also BOUNDED independently of that, and this endpoint's page size is capped at 50 so
-    the bound arrives sooner than elsewhere. `truncated` means runs were not seen, `note` says which
-    bound stopped it, and `NextToken` continues the walk via `starting_token`.
-    """
+    `warnings` means the page WITHHELD rows and the result is `truncated`: do not report a count or
+    conclude a run does not exist. Also BOUNDED: pass `NextToken` as `starting_token`."""
     extra = {
         key: value
         for key, value in (
@@ -830,7 +1026,7 @@ def list_workflow_executions(
     return _note_unscoped_workflow_filter(result, workflow_id, workflow_database_id)
 
 
-@mcp.tool()
+@mcp.tool(title="List tags", annotations=READ)
 @tool_result
 def list_tags(
     database: Optional[str] = None,
@@ -838,14 +1034,10 @@ def list_tags(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """List all tags.
-
-    database: restrict to only that database's tags (global tags are not included; use scope='global'/'all' for those).
-    scope: 'global' for global tags only, 'all' for every tag.
-
-    The walk is BOUNDED: `truncated` means tags were not seen and `NextToken` continues it via
-    `starting_token`. Do not conclude a tag does not exist from a truncated result.
-    """
+    """Use to see the tags assets can carry. database: that database's tags only; scope: 'global' or
+    'all'.
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    Do not conclude a tag does not exist from a truncated result."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_tags(params=params, database_id=database, scope=scope),
         max_items=max_items,
@@ -853,7 +1045,7 @@ def list_tags(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="List tag types", annotations=READ)
 @tool_result
 def list_tag_types(
     database: Optional[str] = None,
@@ -861,14 +1053,9 @@ def list_tag_types(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """List all tag types.
-
-    database: restrict to only that database's tag types (global tag types are not included; use scope='global'/'all' for those).
-    scope: 'global' for global tag types only, 'all' for every tag type.
-
-    The walk is BOUNDED: `truncated` means tag types were not seen and `NextToken` continues it via
-    `starting_token`. Do not conclude a tag type does not exist from a truncated result.
-    """
+    """Use to see tag types (tag groups, some required). database: that database's only; scope:
+    'global' or 'all'.
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_tag_types(params=params, database_id=database, scope=scope),
         max_items=max_items,
@@ -876,7 +1063,7 @@ def list_tag_types(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="List metadata schemas", annotations=READ)
 @tool_result
 def list_metadata_schemas(
     database_id: Optional[str] = None,
@@ -884,12 +1071,10 @@ def list_metadata_schemas(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """List metadata schemas, optionally filtered by database and entity type
-    (databaseMetadata, assetMetadata, fileMetadata, fileAttribute,
-    assetLinkMetadata).
-
-    The walk is BOUNDED: `truncated` means schemas were not seen and `NextToken` continues it via
-    `starting_token`. Do not conclude a schema is undefined from a truncated result."""
+    """Use to see the metadata fields a database or entity type defines (entity types: databaseMetadata,
+    assetMetadata, fileMetadata, fileAttribute, assetLinkMetadata).
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    Do not conclude a schema is undefined from a truncated result."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_metadata_schemas(
             database_id=database_id,
@@ -902,35 +1087,27 @@ def list_metadata_schemas(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Get a download URL", annotations=READ)
 @tool_result
 def generate_download_url(
     database_id: str,
     asset_id: str,
     file_key: Optional[str] = None,
     version_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Generate a time-limited presigned download URL for an asset file.
-    Non-mutating: creates a URL, does not transfer data through this server.
+) -> results.DownloadUrl:
+    """Use only when the user asked to download a file: a time-limited presigned download URL for an
+    asset file (`downloadUrl`, `expiresIn`; file_key = its relativePath). Non-mutating.
 
-    The URL is a bearer credential: it carries its own Amazon S3 signature, needs no further
-    authentication, and anyone holding it can download the object until it expires. The lifetime is
-    at most the deployment's `app.authProvider.presignedUrlTimeoutSeconds` — 24 hours by default —
-    and ends sooner if the credentials that signed it expire first. Returning one here puts it in the
-    agent transcript, and therefore in whatever conversation log, trace, or telemetry the host
-    retains, so for the whole of that window it is readable by everything with access to those.
-    Generate one only when a download was actually asked for, and treat any URL already generated as
-    disclosed.
-
-    A deployment can bound where the URL works with
-    `app.assetBuckets.presignedUrlNetworkRestrictions` (allowedIpRanges / allowedVpceIds), which
-    denies presigned-URL requests originating outside those networks. It is unset by default."""
+    The URL is a bearer credential: anyone holding it can download the object until it expires, at
+    most `presignedUrlTimeoutSeconds` (24 hours by default) or sooner if the credentials that signed it
+    expire. It lands in the agent transcript and the host's logs, so treat it as disclosed.
+    `presignedUrlNetworkRestrictions` (allowedIpRanges / allowedVpceIds) can limit where it works."""
     return CLIENT.api.download_asset_file(
         database_id, asset_id, file_key=file_key, version_id=version_id
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Get many download URLs", annotations=READ)
 @tool_result
 def generate_download_urls_bulk(
     database_id: str,
@@ -938,27 +1115,17 @@ def generate_download_urls_bulk(
     file_keys: List[Union[str, Dict[str, Any]]],
     asset_version_id: Optional[str] = None,
     asset_version_alias: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Generate presigned download URLs for MANY files of one asset in a single request.
-    Non-mutating: creates URLs, does not transfer data through this server.
+) -> results.DownloadUrl:
+    """Use only when the user asked to download several files of ONE asset. `file_keys` holds up to 1500
+    entries: a relative path or `{"key": path, "versionId": id}`; `asset_version_id` or
+    `asset_version_alias` instead pins EVERY key (not with per-key versionIds). Non-mutating.
 
-    `file_keys` holds up to 1500 entries, each either a relative file path string (latest version) or
-    `{"key": path, "versionId": s3VersionId}` to pin that one file. `asset_version_id` or
-    `asset_version_alias` instead pins EVERY key to an asset version snapshot, and cannot be combined
-    with per-key versionIds. A larger list, an empty one, or a mixed pin is refused as a 400 rather
-    than partially served.
+    Each `files[]` entry has `key`, `success`, and `downloadUrl` + `versionId` or `error`: a missing
+    path is SKIPPED with `success: false` while the call succeeds, so check each entry; the top-level
+    `downloadUrl` is only the FIRST success.
 
-    The answer is per file: `files[]` entries carry `key`, `success`, and either `downloadUrl` +
-    `versionId` or `error`. A path that does not exist or is not downloadable is SKIPPED with
-    `success: false` while the call still succeeds, and the top-level `message` string counts the
-    skips — so check every entry's `success`, and never treat the top-level `downloadUrl` (the FIRST
-    successful URL only, kept for single-URL consumers) as the result. If no key can be signed the
-    whole call is an error.
-
-    Every URL is a bearer credential exactly as generate_download_url describes — it needs no further
-    authentication, is usable for at most `presignedUrlTimeoutSeconds` (24 hours by default), and
-    lands in the agent transcript and whatever logs the host keeps — multiplied here by the number of
-    keys. Request only the files a download was actually asked for."""
+    Every URL is a bearer credential as generate_download_url describes, usable for at most
+    `presignedUrlTimeoutSeconds` (24 hours by default) and landing in the agent transcript."""
     return CLIENT.api.download_asset_files_bulk(
         database_id,
         asset_id,
@@ -968,22 +1135,13 @@ def generate_download_urls_bulk(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Find and summarize assets", annotations=READ)
 @tool_result
 def find_and_summarize(query: str, database_id: Optional[str] = None, size: int = 10) -> Dict[str, Any]:
-    """Composite: search assets, then enrich each hit with details and version
-    count in a single call. Best for 'find X and tell me about them' requests.
-
-    COST: one search plus ONE additional paginated request per hit, so a call costs `size` + 1
-    authenticated API requests. `size` is clamped to 25 for that reason — this tool is for
-    summarizing a handful of results, not for enumerating a database. Use search_assets() (which
-    pages with from_offset) when you need more, and list_asset_versions() when you need a specific
-    asset's versions in full.
-
-    Each entry's `version_count` is therefore the count on the FIRST page of versions;
-    `version_count_truncated` marks an asset with more versions than one page holds, and its count
-    must not be reported as a total. Returns an error on a deployment without OpenSearch
-    (NOOPENSEARCH)."""
+    """Use for 'find X and tell me about them': searches assets and adds each hit's version count.
+    COST: one request per hit, so `size` is clamped to 25; use search_assets() to page more.
+    `version_count_truncated` marks a count that must not be reported as a total. Returns an error
+    without OpenSearch (NOOPENSEARCH)."""
     _require_search()
     # Clamped rather than passed through: `size` fans out one paginated version walk per hit, and an
     # unclamped value turns one auto-approved tool call into thousands of API Gateway requests and
@@ -1039,7 +1197,7 @@ def find_and_summarize(query: str, database_id: Optional[str] = None, size: int 
 # =========================================================================
 
 
-@mcp.tool()
+@mcp.tool(title="List pipelines", annotations=READ)
 @tool_result
 def list_pipelines(
     database_id: Optional[str] = None,
@@ -1047,13 +1205,9 @@ def list_pipelines(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """List processing pipelines, optionally scoped to a database (auto-paginated).
-
-    Omit database_id to list every pipeline the user can see, including the shared GLOBAL catalog.
-
-    The walk is BOUNDED: `truncated` means rows were not seen and `NextToken` continues it via
-    `starting_token`. A pipeline missing from a truncated result may simply be past the bound.
-    """
+    """Use to find processing pipelines, in one database or (database_id omitted) everywhere, the
+    GLOBAL catalog included.
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_pipelines(
             database_id=database_id, include_archived=include_archived, params=params
@@ -1063,54 +1217,51 @@ def list_pipelines(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Get pipeline", annotations=READ)
 @tool_result
 def get_pipeline(
     database_id: str, pipeline_id: str, include_archived: bool = False
 ) -> Dict[str, Any]:
-    """Get one pipeline with its execution settings, admin settings, and config templates.
-
-    The inline templates list is capped at the first 10; templateCount is the true total. When it
-    exceeds the inline count, use list_pipeline_templates() to page the full set.
-    """
+    """Use to read one pipeline: executionConfig, systemConfig and config templates (the first 10;
+    templateCount is the total, list_pipeline_templates() lists all)."""
     return CLIENT.unwrap_message(CLIENT.api.get_pipeline(database_id, pipeline_id, include_archived=include_archived))
 
 
-@mcp.tool()
+@mcp.tool(title="List pipeline templates", annotations=READ)
 @tool_result
 def list_pipeline_templates(database_id: str, pipeline_id: str) -> Dict[str, Any]:
-    """List a pipeline's configuration templates.
-
-    The list omits each template's tagSchema and blanks S3-offloaded config bodies — use
-    get_pipeline_template() for the full, rehydrated template.
-    """
+    """Use to list a pipeline's templates (no tagSchema, offloaded bodies blank; get_pipeline_template()
+    reads one in full)."""
     return CLIENT.unwrap_message(CLIENT.api.list_pipeline_templates(database_id, pipeline_id))
 
 
-@mcp.tool()
+@mcp.tool(title="Get pipeline template", annotations=READ)
 @tool_result
 def get_pipeline_template(database_id: str, pipeline_id: str, template_id: str) -> Dict[str, Any]:
-    """Get one pipeline template, including its tag schema and full config body."""
+    """Use to read one pipeline template in full: templateId, templateName, configFormat, configBody,
+    inputInstructions, tagSchema and overrides."""
     return CLIENT.unwrap_message(CLIENT.api.get_pipeline_template(database_id, pipeline_id, template_id))
 
 
-@mcp.tool()
+@mcp.tool(title="Get template tag schema", annotations=READ)
 @tool_result
 def get_pipeline_template_tag_schema(
     database_id: str, pipeline_id: str, template_id: str
 ) -> Dict[str, Any]:
-    """Get a template's tag schema — the fields a caller supplies when running it."""
+    """Use before running a template: returns its tag schema, the fields a caller supplies (each tagKey,
+    type, required, default, label, description, enumValues)."""
     return CLIENT.unwrap_message(CLIENT.api.get_pipeline_template_tag_schema(database_id, pipeline_id, template_id))
 
 
-@mcp.tool()
+@mcp.tool(title="Get workflow", annotations=READ)
 @tool_result
 def get_workflow(database_id: str, workflow_id: str, include_archived: bool = False) -> Dict[str, Any]:
-    """Get one workflow with its pipeline references, input/output rules, and triggers."""
+    """Use to read one workflow: workflowId, workflowName, specifiedPipelines (its steps), systemConfig
+    (input and output rules, concurrencyRestriction), enabled and its triggers."""
     return CLIENT.unwrap_message(CLIENT.api.get_workflow(database_id, workflow_id, include_archived=include_archived))
 
 
-@mcp.tool()
+@mcp.tool(title="List workflow triggers", annotations=READ)
 @tool_result
 def list_workflow_triggers(
     database_id: str,
@@ -1118,15 +1269,10 @@ def list_workflow_triggers(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """List a workflow's triggers (e.g. fileUpload) and whether each is enabled (auto-paginated).
-
-    A workflow may carry several triggers of one type, each with its own filters and default templates.
-    Each item's `triggerType` is its KEY — the bare type for the first trigger of a type, or
-    'type#triggerId' for an additional one — and is what the get/set/delete tools take.
-
-    The walk is BOUNDED: `truncated` means triggers were not seen and `NextToken` continues it via
-    `starting_token`. A trigger missing from a truncated result may simply be past the bound.
-    """
+    """Use to see what launches a workflow automatically and whether each trigger is enabled. Each
+    `triggerType` is the trigger KEY ('fileUpload', or 'type#triggerId' for an extra one) that the
+    get, set and delete tools take.
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_workflow_triggers(database_id, workflow_id, params=params),
         max_items=max_items,
@@ -1134,18 +1280,14 @@ def list_workflow_triggers(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Get workflow trigger", annotations=READ)
 @tool_result
 def get_workflow_trigger(database_id: str, workflow_id: str, trigger_type: str) -> Dict[str, Any]:
-    """Get one workflow trigger by its key, including its input-file filters.
-
-    `trigger_type` is the trigger KEY from list_workflow_triggers: the bare type (e.g. 'fileUpload') for
-    a workflow's first trigger of that type, or 'type#triggerId' for an additional one.
-    """
+    """Use to read one trigger and its input-file filters, by its KEY from list_workflow_triggers."""
     return CLIENT.unwrap_message(CLIENT.api.get_workflow_trigger(database_id, workflow_id, trigger_type))
 
 
-@mcp.tool()
+@mcp.tool(title="List executions", annotations=READ)
 @tool_result
 def list_executions(
     status: Optional[str] = None,
@@ -1160,49 +1302,24 @@ def list_executions(
     filter_end_date: Optional[str] = None,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
-) -> Dict[str, Any]:
-    """List workflow executions across every workflow and database the user can see.
+) -> results.ExecutionPage:
+    """Use to find workflow runs across every workflow and asset, newest first (e.g. "the last failed
+    run"). For ONE asset's runs use list_workflow_executions().
 
-    Distinct from list_workflow_executions(), which is scoped to ONE asset's history. The filters
-    each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED, SKIPPED), workflow_id,
-    workflow_database_id, trigger_type, group_id, and triggered_by_user_id. A SKIPPED row is not a run:
-    it records the file-upload trigger launches a concurrency restriction refused while another run
-    held the lock, with `skippedLaunchCount`, `skipScope` and `skipReason`; do not count it as a run.
-    exclude_status drops rows of one status or a comma-separated list (e.g. "SKIPPED") on the server,
-    before the page is cut; an unknown status, or excluding the status `status` selects, is a 400. trigger_type is 'manual' or
-    'fileUpload' (the stored spellings 'Manual' and 'File-Upload' are accepted too). group_id is how a
-    group's members are enumerated — rerun_execution re-runs one execution at a time, so a group re-run means
-    listing the group here first.
+    Equality filters: status (RUNNING, SUCCEEDED, FAILED, ABORTED, SKIPPED), workflow_id,
+    workflow_database_id, trigger_type ('manual' or 'fileUpload'), group_id, triggered_by_user_id;
+    exclude_status drops statuses (e.g. "SKIPPED"). A SKIPPED row is not a run: do not count it.
+    System runs are hidden unless include_system=true or both workflow ids name one
+    (`includeSystem`, `systemRunsHint`; `isSystem`).
 
-    Runs of system workflows are HIDDEN unless include_system is true, except that a listing narrowed
-    to one system workflow (workflow_id plus workflow_database_id) shows them unless include_system
-    is false; workflow_id alone is not that scope, and `systemRunsHint` then says so when runs were
-    hidden. `includeSystem` reports which applied, and each row's `isSystem` marks a system run, so
-    a count taken without them excludes system runs by design.
+    `filterStartDate` is the applied window (90 days by default); widen it with filter_start_date /
+    filter_end_date (UTC "YYYY-MM-DDTHH:MM:SSZ"). A run is listed only when the user can read its
+    workflow, its inputs and the asset it wrote to.
 
-    An execution is listed only when the user can read its workflow, every asset the run read, and
-    the asset it wrote to. A run whose output landed in an asset the user cannot read is therefore
-    absent even when the user can read its inputs — an omission by permission, not by date.
-
-    The listing is lower-bounded by start date: `filterStartDate` reports the applied window (90 days
-    back by default), so executions older than it are absent by design, not missing. Reach them with
-    filter_start_date, and bound the window above with filter_end_date; both are UTC timestamps of
-    the form "YYYY-MM-DDTHH:MM:SSZ" and any other spelling is rejected with a 400.
-
-    A `warnings` entry means the walk WITHHELD rows, for either of two reasons: a page reached a cap
-    on the distinct assets it resolves for permission checks and skipped the executions it could not
-    evaluate, or it spent its per-request work budget before filling the page. Each entry names which.
-    The result is then also flagged `truncated`. Do not report a count or conclude an execution does
-    not exist from a result carrying warnings — narrow the filters and list again.
-
-    The walk is also BOUNDED independently of that: `note` says which bound stopped it, and
-    `NextToken` continues it — pass the token back as `starting_token`.
-
-    Each listed execution carries `outputTypes`, the subset of ["File","Metadata","Result"] the run
-    produced (File->Metadata->Result order). It is [] for a run that produced none and for a legacy
-    run whose configuration row predates the attribute — read it, do not infer output kinds from the
-    output target. "Result" present means get_execution_results() has text to return.
-    """
+    `warnings` means rows were WITHHELD (a distinct assets cap or a work budget), `truncated`: do
+    not report a count or conclude a run does not exist; narrow the filters.
+    Also BOUNDED: pass `NextToken` as `starting_token`. `outputTypes` containing "Result" means
+    get_execution_results() has text. Next: get_execution_details(workflowExecutionId)."""
     extra = {
         key: value
         for key, value in (
@@ -1234,103 +1351,37 @@ def list_executions(
     return _note_unscoped_workflow_filter(result, workflow_id, workflow_database_id)
 
 
-@mcp.tool()
+# The description names only what an agent needs to reach a conclusion (Mandatory Rule 11).
+# The full field reference of the detail view (sub-execution stages and `stageSource`,
+# `workflowVersionCurrent` and what redeploys a workflow, `availableLogs` kinds, the
+# `metadataSource*` fields) is the API documentation's workflows page
+# (documentation/docusaurus-site/docs/api/workflows.md) and the handler,
+# backend/backend/handlers/workflows/executionService.py `get_execution_details`.
+@mcp.tool(title="Get execution details", annotations=READ)
 @tool_result
-def get_execution_details(execution_id: str, include_sub_executions: bool = False) -> Dict[str, Any]:
-    """Get an execution's full detail: per-pipeline step status, inputs, outputs, and any error.
+def get_execution_details(execution_id: str, include_sub_executions: bool = False) -> results.ExecutionDetails:
+    """Use when asked why a run failed or what it produced: per-step (`pipelines`) status, error,
+    inputs, outputs, config and `availableLogs` (pass a `logId` to get_execution_logs).
 
-    This is the tool to reach for when asked why a run failed or what it produced.
+    It can be PARTIAL: `truncatedCollections` names each cut collection. Check it before reporting a
+    count or an absence; read the rest with page_execution_detail_metadata(),
+    page_execution_detail_files() or get_execution_results().
 
-    A SKIPPED execution never ran: it has no pipelines, outputs or logs. Its `skip` block says why
-    (`reason`, `scope`), how many file-upload launches were refused (`count`), when (`firstSkippedDate`,
-    `lastSkippedDate`) and the first files they named (`files`, `filesTruncated`; `inputFiles` and the
-    details files tool list the rest that were recorded). `blockingExecutionId`, the run that held the
-    lock, is present only when the user may read that run; its absence says nothing about the run.
+    Input metadata: `inputMetadata` (asset/file rows) and `inputDatabaseMetadata` (database
+    rows), each with `metadata` and `attributes`; `expanded` true marks context, not an input file.
+    `metadataSourceDatabases` lists every database read. `renderedConfig` is the PRE-system-tag
+    inline copy (`renderedConfigTruncated` when cut); `renderedConfigLocation` (NOT only on
+    truncation) holds the FULLY substituted body the step read.
 
-    `workflowVersion` is the published workflow state machine version the run started on, and
-    `workflowVersionCurrent` says whether the workflow still runs that version: true when it does,
-    false once its state machine has been redeployed since the run. A save from the workflow builder
-    always redeploys it, as does an API or CLI update that supplies the step list; a change to a
-    setting one of its pipelines contributes to the state machine (execution type, target, callback
-    mode, timeouts, Deadline Cloud job settings) redeploys it too. The flag does not track
-    `workflowSystemConfig` or the pipeline names and descriptions: they are read live and can change
-    without a redeploy, so they may differ from what the run used whatever the flag says; each
-    step's `effectiveSystemConfig` is the snapshot it ran under. Both are null for a run started
-    before versions were recorded, and `workflowVersionCurrent` is also null when the workflow no
-    longer records a current version (for example, the workflow was deleted).
-
-    Metadata the run read arrives in two SEPARATE collections: `inputMetadata` (asset- and
-    file-scope rows) and `inputDatabaseMetadata` (database-scope rows, which belong to no asset).
-    Reading only the first understates what the run saw.
-
-    Each row carries TWO content maps: `metadata` and `attributes` (that file's attributes). A pipeline
-    is granted fileMetadata and fileAttributes independently, so reading only `metadata` understates
-    what a step received — a row may hold attributes with an empty `metadata` map. Asset-level and
-    database-scope rows always report an empty `attributes` map. `expanded` is true on a file row that
-    the assetFileMetadata expansion of a whole-asset or folder selection added: the step was handed
-    that file's record as context, and the file is not one of its input files. Leave expanded rows out
-    when counting or listing what a step took as input.
-
-    The sources are reported alongside them:
-    `metadataSourceAssets` ([{databaseId, assetId}], assets read purely as sources),
-    `metadataSourceDatabases` (EVERY database whose metadata was captured — for a run with input
-    files these are derived from those files' assets), and `metadataSourceDatabaseId` (only the one
-    database the caller NAMED, which only a run with no input files has). Render the databases list,
-    not the named id, when reporting what a run actually read.
-
-    The response can be PARTIAL. Every collection is bounded server-side, and `truncatedCollections`
-    lists the names of any that were cut ("inputFiles", "inputMetadata", "inputDatabaseMetadata",
-    "outputs.files", "outputs.metadata", "outputs.results"). Check it before reporting a count or
-    concluding something is absent — a name in that list means more rows exist than are shown. For a
-    truncated METADATA collection, read the rest with page_execution_detail_metadata(); a truncated
-    FILE collection ("inputFiles", "outputs.files") with page_execution_detail_files(); and the full
-    result text (for "outputs.results", or any run) with get_execution_results().
-
-    A pipeline entry reports its configuration in TWO places, at different STAGES of the same body:
-
-    - `renderedConfig` — the inline copy, post-user-tag but PRE-system-tag, so its system-tag
-      placeholders are still unsubstituted. Held inline only up to a size limit;
-      `renderedConfigTruncated` (emitted unconditionally) reports whether this copy was shortened,
-      and a bounded step section can also name "pipelines" / "inputConfigurations" in
-      `truncatedCollections`.
-    - `renderedConfigLocation` ({"bucket", "key"}) — the Amazon S3 object holding the FULLY
-      substituted body the pipeline actually read. Present whenever that object exists, NOT only on
-      truncation.
-
-    So to report what a step really ran with, read the location's object even when the inline copy is
-    complete — which is the common case. Diagnosing from `renderedConfig` alone reports a config the
-    step never saw.
-
-    Every pipeline entry lists its log sources in `availableLogs`: [{logId, kind, label, sourceType,
-    stageName, logGroupName, logStreamName, logStreamPrefix}], where `kind` is "invocation" (the step's
-    own invocation log), "registered" (a location the pipeline reported for itself), "subStateMachine"
-    (a registered nested state machine's log group) or "deadlineCloudJob" (the session log group of a
-    registered AWS Deadline Cloud job, read by its exact session streams), and `sourceType` is one of
-    stateMachine, lambda, batch, ecs, container, custom, deadlineCloud. `logId` is the value
-    get_execution_logs(log_id=...) reads ONE source by. Names only — no ARNs are returned.
-
-    Pass include_sub_executions=True to add `subExecutions` to each entry: one per registered
-    sub-process (a nested state machine, a Batch job or a Deadline Cloud job) with `label`,
-    `resourceName`, `status` (RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, NOT_STARTED, UNKNOWN),
-    `startDate`/`stopDate` (ISO-8601 UTC), `error`/`cause`, `stageSource` ("definition" when the
-    stage order came from the sub-state-machine definition, "history" when only its history was
-    readable, "none"), and `stages` — each with `stageName`, `stateType`, `status`, a `caught` flag on
-    a failure the sub-process handled and continued past (the common shape for a failed container
-    job), `attempts`, Map `iterations`, and for a Batch task the resolved `batch` {jobId,
-    logStreamName}. A Deadline Cloud job (`resourceType` "deadlineCloudJob") carries its live job
-    status folded onto that vocabulary (a cancelled job is ABORTED), `cause` from its lifecycle
-    message, no stages, and a `deadline` {farmId, queueId, jobId} block. `stagesTruncated`
-    and `historyTruncated` mark a capped read of that sub-process; `subExecutionsTruncated` and
-    `subExecutionWarnings` sit on the entry; and a bounded step section names
-    "pipelines.subExecutions" in `truncatedCollections` when every sub-process kept its summary but
-    lost its stages. The flag is off by default because the derivation reads each sub-process's
-    execution history — set it when asked where inside a step a run is, or where it failed.
-    """
+    A SKIPPED execution never ran (`skip` says why). include_sub_executions=True adds each step's
+    `subExecutions` (nested state machines, Batch and Deadline Cloud jobs: status, error,
+    `stages`; `caught` is a handled failure). Partial reads are marked `stagesTruncated`,
+    `historyTruncated`, `subExecutionsTruncated`, `subExecutionWarnings`, "pipelines.subExecutions"."""
     params = {"includeSubExecutions": "true"} if include_sub_executions else None
     return CLIENT.unwrap_message(CLIENT.api.get_execution_details(execution_id, params=params))
 
 
-@mcp.tool()
+@mcp.tool(title="Page execution metadata", annotations=READ)
 @tool_result
 def page_execution_detail_metadata(
     execution_id: str,
@@ -1339,29 +1390,13 @@ def page_execution_detail_metadata(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Read one metadata collection of an execution's detail view in full (auto-paginated).
-
-    get_execution_details() bounds its metadata collections and names any it cut in
-    `truncatedCollections`. This tool reads a named collection past that bound, so reach for it when
-    `truncatedCollections` contains "inputMetadata", "inputDatabaseMetadata", or "outputs.metadata"
-    — reporting a count from the truncated details response instead understates what the run read.
-
-    `collection` is one of "input" (asset- and file-scope input metadata, the default),
-    "inputDatabase" (database-scope input metadata, which belongs to no asset), or "output"
-    (per-pipeline output metadata); any other value is rejected. The two input collections are
-    SEPARATE halves of what the run read, matching the details view's split — read both to see all of
-    it. Pass pipeline_id to narrow to a single workflow step's rows.
-
-    Rows carry the same fields the details view returns plus the producing `pipelineId`: the input
-    collections give {databaseId, assetId, filePath, scope, metadata, attributes, expanded} (expanded
-    is true on a file record a whole-asset or folder expansion added as context, not an input file),
-    and "output" gives {targetFilePath, metadataKey, metadataValue, metadataType}. metadataType is
-    "metadata" or "attribute": a step that writes one key to a file as both is two rows, so count and
-    report them by type rather than treating the second as a duplicate. `truncated` in the result
-    means the row cap was reached before the walk finished, not that the collection ends there —
-    `NextToken` continues it, passed back as `starting_token` alongside the SAME collection and
-    pipeline_id (the token is pinned to them and a mismatch is answered with a 400).
-    """
+    """Use when get_execution_details' `truncatedCollections` names a metadata collection: reads it in
+    full. `collection`: "input" (the default), "inputDatabase" or "output"; pipeline_id narrows to one
+    step. Rows carry the producing `pipelineId`; input rows `expanded` (context, not an input file);
+    output rows targetFilePath, metadataKey, metadataValue and metadataType ("metadata" or
+    "attribute": one key written as both is two rows). `truncated` means the row cap was reached:
+    pass `NextToken` as `starting_token` with the SAME collection and pipeline_id (a mismatch is a
+    400)."""
     if collection not in EXECUTION_DETAIL_METADATA_COLLECTIONS:
         return {
             "error": f"collection must be one of {list(EXECUTION_DETAIL_METADATA_COLLECTIONS)}",
@@ -1387,7 +1422,7 @@ def page_execution_detail_metadata(
     return result
 
 
-@mcp.tool()
+@mcp.tool(title="Page execution files", annotations=READ)
 @tool_result
 def page_execution_detail_files(
     execution_id: str,
@@ -1396,25 +1431,12 @@ def page_execution_detail_files(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Read one FILE collection of an execution's detail view in full (auto-paginated).
-
-    get_execution_details() bounds its file lists and names any it cut in `truncatedCollections`.
-    This tool reads a named collection past that bound, so reach for it when `truncatedCollections`
-    contains "inputFiles" or "outputs.files" — a count from the truncated details response understates
-    the run's files.
-
-    `collection` is one of "input" (the workflow-level input files, the default) or "output" (the
-    per-pipeline output files); any other value — including "inputDatabase", which is metadata-only —
-    is rejected. Pass pipeline_id to narrow the OUTPUT collection to a single workflow step; it does
-    not apply to input files (they are workflow-level).
-
-    Rows carry the same scrubbed fields the details view returns: input rows give {databaseId,
-    assetId, inputAssetFileKey, versionId}, and output rows give {relativeFilePath, fileType,
-    fileSize, contentType, s3VersionId, pipelineId}. No S3 bucket/key is returned. `truncated` means
-    the row cap was reached before the walk finished, not that the collection ends there — `NextToken`
-    continues it, passed back as `starting_token` alongside the SAME collection and pipeline_id (the
-    token is pinned to them and a mismatch is answered with a 400).
-    """
+    """Use when get_execution_details' `truncatedCollections` names "inputFiles" or "outputs.files":
+    reads that file collection in full. `collection`: "input" (workflow input files, the default) or
+    "output" (per-step output files; pipeline_id narrows it to one step). Output rows carry
+    relativeFilePath, fileType, fileSize and s3VersionId; no S3 bucket/key is returned. `truncated`
+    means the row cap was reached: pass `NextToken` as `starting_token` with the SAME collection and
+    pipeline_id (a mismatch is a 400)."""
     if collection not in EXECUTION_DETAIL_FILE_COLLECTIONS:
         return {
             "error": f"collection must be one of {list(EXECUTION_DETAIL_FILE_COLLECTIONS)}",
@@ -1448,27 +1470,15 @@ def _result_text_sent_bytes(text: str) -> int:
     return len(json.dumps(text or "", ensure_ascii=False).encode("utf-8")) - 2
 
 
-@mcp.tool()
+@mcp.tool(title="Get execution result text", annotations=READ)
 @tool_result
 def get_execution_results(execution_id: str,
-                          starting_token: Optional[str] = None) -> Dict[str, Any]:
-    """Get an execution's concatenated result text (output-only; no collection).
-
-    This is the tool for "what did the run output / return", for a pipeline that produces a textual
-    result (an LLM-style response) rather than asset files. It returns {resultContent,
-    resultContentTruncated, resultRowCount, resultContentBytes, pageCount}. The service pages the
-    result by its 5 MiB response budget; this tool follows those pages while the next one still fits
-    that same 5 MiB budget (counted as sent, JSON-escaped UTF-8) and the VAMS_MAX_PAGES work bound, so
-    `resultContent` never exceeds 5 MiB. When it stops early it returns `NextToken` and a `note`; pass
-    `NextToken` back as `starting_token` to read the rest. Without a `NextToken`, `resultContent` is the
-    whole result.
-
-    `resultContentTruncated` is true only when a result row was stored cut at write time or one row
-    alone exceeded the response budget; that cut text is not retrievable. An execution that produced
-    no result — most runs, and every run that predates result capture — returns the empty shape
-    (resultContent "", counts zero), never an error. An execution's list/details `outputTypes`
-    includes "Result" exactly when there is result content to read here.
-    """
+                          starting_token: Optional[str] = None) -> results.ExecutionResults:
+    """Use for "what did the run output" from a pipeline that produces text rather than files. Returns
+    {resultContent, resultContentTruncated, resultRowCount, resultContentBytes, pageCount}, at most
+    5 MiB per call: a `NextToken` means more text remains (pass it as `starting_token`).
+    `resultContentTruncated` true means text was stored cut and cannot be read. A run with no result
+    returns resultContent "", not an error."""
     parts = []
     truncated = False
     row_count = byte_count = pages = sent_bytes = 0
@@ -1510,7 +1520,12 @@ def get_execution_results(execution_id: str,
     return result
 
 
-@mcp.tool()
+# Log-source details trimmed from the description: a nested state machine's history line
+# carries the logId of the group it writes to; a "deadlineCloudJob" source is read by the exact
+# session streams of the job's 10 most recent sessions, never by prefix ("notFound" until it has
+# a session); "skipped" is past the per-request registered-log cap; sfnHistoryEvents is served only
+# on a tokenless first call. Reference: documentation/docusaurus-site/docs/api/workflows.md.
+@mcp.tool(title="Get execution logs", annotations=READ)
 @tool_result
 def get_execution_logs(
     execution_id: str,
@@ -1524,55 +1539,22 @@ def get_execution_logs(
     log_id: Optional[str] = None,
     stage_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Retrieve an execution's logs.
+    """Use to read a run's logs after get_execution_details. Administrative route: a role without it
+    gets a 403, not empty output.
 
-    mode="full" reads live CloudWatch (reliable; the stored copy is often empty because the
-    end-state lambda captures it before CloudWatch finishes ingesting). mode="truncated" reads the
-    stored text with a server-side live fallback. Pass pipeline_execution_id to scope to one step.
+    mode="full" (default) reads live CloudWatch; "truncated" reads the stored copy (often empty).
+    pipeline_execution_id scopes to one step; log_id (an `availableLogs` logId) reads ONE source and
+    stage_name one stage, both in full mode with pipeline_execution_id only (an unknown log_id: 404).
 
-    Full mode returns at most `limit` events (default 100, server cap 1000) and a `nextToken` when
-    more remain. A pipeline container emits thousands of lines, so the failure is routinely past the
-    first page: raise `limit`, then walk the rest by passing the returned `nextToken` back with the
-    SAME mode, pipeline_execution_id, limit, and filter_pattern. Reporting "the logs show no error"
-    from a page that returned a token is a wrong conclusion, not an incomplete read.
+    Full mode returns at most `limit` events (default 100, cap 1000) and a `nextToken` when more
+    remain; a failure is often past the first page. Pass `nextToken` back with the SAME mode,
+    pipeline_execution_id, limit and filter_pattern; it continues only the `events` list. "The logs
+    show no error" from a page that returned a token is a wrong conclusion. `filter_pattern` is a
+    literal substring; `start_time` / `end_time` are epoch MILLISECONDS.
 
-    The other full-mode narrowing options: `filter_pattern` is matched as a literal substring (not
-    CloudWatch pattern syntax) on top of the execution scope, and `start_time` / `end_time` bound the
-    window in epoch MILLISECONDS.
-
-    `next_token` is a CloudWatch token and continues only the `events` list. With no pipeline scoped
-    the response also carries `sfnHistoryEvents` (the Step Functions timeline, which needs no
-    CloudWatch ingestion), and that section is served only on a tokenless first call — read it there
-    rather than expecting it on a continuation.
-
-    With pipeline_execution_id, the full-mode response also carries `logSources`: every log source
-    known for the step (the same entries get_execution_details lists in `availableLogs`) with a
-    `status` of "read" (plus `eventCount`), "denied", "notFound", "error" (the read failed for
-    another reason — throttling, an invalid CloudWatch token, an unparseable location; `warnings`
-    names the cause), "empty", "skipped" (past the per-request registered-log cap) or "unscoped" — a
-    container log prefix searched with the execution-scope terms because no exact stream was
-    resolved; container output does not print the execution id, so an empty "unscoped" source means
-    unresolved, not silent. Each CloudWatch
-    `subProcessEvents` item names its source by `logId`; a nested state machine's history line
-    carries the `logId` of the log group that machine writes to ("" when it has no logging
-    destination); the list is sorted by timestamp. A "deadlineCloudJob" source is read by the exact
-    session streams of the registered AWS Deadline Cloud job (its 10 most recent sessions), never by
-    prefix: "notFound" until the job has a session, "denied" when listing the sessions or reading
-    the group is refused, never "unscoped".
-
-    Pass log_id to read ONE source: `events` becomes that source's events, `nextToken` its CloudWatch
-    token, and when the source is the log group a registered nested state machine writes to (kind
-    "subStateMachine", or "registered" when the pipeline reported that group itself — the usual
-    case) the response adds that sub-execution's `sfnHistoryEvents`. Pass stage_name to keep only
-    the sources registered for one sub-state-machine stage and the history between that stage's
-    entry and exit. Both apply only in full mode with pipeline_execution_id — the server answers 400
-    otherwise, and 404 for a log_id the step does not have; that 404 comes back here as
-    {"error": "Log source not found for this pipeline execution", ...}, distinct from a missing
-    execution's "Execution '<id>' not found".
-
-    This route is administrative — it exposes full execution logs — so a role without it will get a
-    403 rather than empty output.
-    """
+    The first call without a step also returns `sfnHistoryEvents`. With a step, `logSources` gives
+    each source's `status`; "error" names its cause in `warnings`, and "unscoped" and empty means
+    unresolved, not silent."""
     params: Dict[str, Any] = {"mode": mode}
     if pipeline_execution_id:
         params["pipelineExecutionId"] = pipeline_execution_id
@@ -1603,7 +1585,7 @@ def get_execution_logs(
 # =========================================================================
 
 
-@mcp.tool()
+@mcp.tool(title="List asset comments", annotations=READ)
 @tool_result
 def list_asset_comments(
     asset_id: str,
@@ -1611,24 +1593,11 @@ def list_asset_comments(
     page_size: Optional[int] = None,
     include_archived: bool = False,
 ) -> Dict[str, Any]:
-    """List the comments on an asset, across every version of it. include_archived also finds an
-    archived asset.
-
-    Each row carries assetId, the composite `assetVersionId:commentId` key, commentBody,
-    commentOwnerID / commentOwnerUsername and dateCreated. Rows come back ordered by that composite
-    key descending, which for a uuid4 comment id is arbitrary within a version — sort on dateCreated
-    rather than reading anything into the position.
-
-    This route CANNOT be paged. It applies max_items / page_size and then discards the pagination
-    token, so there is nothing to resume with and comments past the bound are unreachable through the
-    API. `truncated` is set when the result reached the bound in force — the max_items you supplied,
-    else page_size, else the deployment's own default of 10000 — and the count is then a floor rather
-    than a total: raise max_items rather than reporting it, or narrow with
-    list_asset_version_comments().
-
-    Deleted comments are never returned: the route accepts a showDeleted flag and the service ignores
-    it, so this tool does not offer one.
-    """
+    """Use to read the comments on an asset (every version). Rows: `assetVersionId:commentId`,
+    commentBody, commentOwnerUsername, dateCreated (sort on it). include_archived also finds an
+    archived asset. This route CANNOT be paged (the token is discarded): `truncated` means the result
+    reached max_items (else page_size, else 10000) and the count is a floor. Deleted comments are never
+    returned (showDeleted is ignored, so not offered)."""
     return _bounded_message_list(
         CLIENT.api.list_asset_comments(
             asset_id, max_items=max_items, page_size=page_size, show_archived=include_archived
@@ -1639,7 +1608,7 @@ def list_asset_comments(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="List version comments", annotations=READ)
 @tool_result
 def list_asset_version_comments(
     asset_id: str,
@@ -1648,12 +1617,9 @@ def list_asset_version_comments(
     page_size: Optional[int] = None,
     include_archived: bool = False,
 ) -> Dict[str, Any]:
-    """List the comments on ONE version of an asset.
-
-    Use list_asset_versions() to find an asset_version_id. Same row shape and the same unpageable
-    bound as list_asset_comments(): the token is discarded, so a result that reached max_items cannot
-    be continued and its count is a floor. include_archived also finds an archived asset.
-    """
+    """Use to read the comments on ONE asset version. Same rows and unpageable bound as
+    list_asset_comments() (the token is discarded): a `truncated` count is a floor. include_archived
+    also finds an archived asset."""
     return _bounded_message_list(
         CLIENT.api.list_asset_version_comments(
             asset_id, asset_version_id, max_items=max_items, page_size=page_size,
@@ -1665,35 +1631,23 @@ def list_asset_version_comments(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Get comment", annotations=READ)
 @tool_result
 def get_comment(asset_id: str, asset_version_id: str, comment_id: str) -> Dict[str, Any]:
-    """Read one comment, addressed by asset, asset version and comment id.
-
-    The endpoint answers 200 with an empty object for a comment that does not exist rather than 404,
-    so absence surfaces here as a CommentNotFoundError in the `error` field — not as an empty
-    success. Neither id may contain a colon: the two are joined into one `assetVersionId:commentId`
-    path segment, and an extra colon shifts which value the handler validates.
-    """
+    """Use to read one comment. The route answers 200 with an empty object for a missing comment, which
+    comes back as a CommentNotFoundError in `error`. Neither id may contain a colon."""
     return CLIENT.unwrap_message(CLIENT.api.get_comment(asset_id, asset_version_id, comment_id))
 
 
-@mcp.tool()
+@mcp.tool(title="List subscriptions", annotations=READ)
 @tool_result
 def list_subscriptions(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """List the event subscriptions on this deployment (auto-paginated).
-
-    Each row carries eventName, entityName, entityId, subscribers, entityValue and databaseId. A
-    subscription is keyed on (eventName, entityName, entityId) — that triple is what the write and
-    delete tools address, and `subscribers` is a field of the row rather than a separate record.
-
-    The walk is BOUNDED: `truncated` means subscriptions were not seen and `NextToken` continues it
-    via `starting_token`. Do not conclude a user is unsubscribed from a truncated result — use
-    check_subscription() for one asset, which answers without paging.
-    """
+    """Use to see e-mail event subscriptions (eventName, entityName, entityId, subscribers).
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    For one asset and user use check_subscription()."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_subscriptions(
             page_size=params["pageSize"],
@@ -1704,19 +1658,11 @@ def list_subscriptions(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Check subscription", annotations=READ)
 @tool_result
 def check_subscription(asset_id: str, user_id: str) -> Dict[str, Any]:
-    """Check whether a user is subscribed to an asset's version changes.
-
-    Returns `subscribed` (boolean) alongside the endpoint's raw `message`. The endpoint answers HTTP
-    200 in BOTH cases and carries the verdict only in that string, so a successful call is never on
-    its own an answer. The event and entity are fixed by the route ('Asset Version Change' on
-    'Asset'); use list_subscriptions() for any other event or entity type.
-
-    `unrecognizedResponse` is set when the message is neither of the two known values, meaning the
-    verdict could not be read — treat that as unknown rather than as not subscribed.
-    """
+    """Use to tell whether one user is subscribed to an asset's version changes: `subscribed`. The route
+    answers 200 in BOTH cases; `unrecognizedResponse` set means the verdict is unknown."""
     response = CLIENT.api.check_subscription(asset_id, user_id)
     message = response.get("message") if isinstance(response, dict) else response
     result: Dict[str, Any] = {"subscribed": message == SUBSCRIBED_MESSAGE, "message": message}
@@ -1725,47 +1671,30 @@ def check_subscription(asset_id: str, user_id: str) -> Dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(title="Get API key (admin)", annotations=READ)
 @tool_result
 def get_api_key(api_key_id: str) -> Dict[str, Any]:
-    """Read one API key's record, in the administrative (any user's keys) scope.
-
-    Returns the key's metadata only — apiKeyName, the userId it acts as, expiry and enabled state.
-    The key VALUE is shown once at creation and never again, and the stored hash is stripped by the
-    handler, so nothing usable as a credential is returned here. `api_key_id` comes from
-    list_api_keys(). A key that does not exist is reported as a 400 rather than a 404.
-    """
+    """Use to read one API key's record (admin scope; id from list_api_keys()): apiKeyName, the userId it
+    acts as, expiry, enabled. The key VALUE is shown once at creation and never again."""
     return CLIENT.api.get_api_key(api_key_id)
 
 
-@mcp.tool()
+@mcp.tool(title="Get my API key", annotations=READ)
 @tool_result
 def get_user_api_key(api_key_id: str) -> Dict[str, Any]:
-    """Read one of the AUTHENTICATED user's own API key records.
-
-    Same metadata-only response as get_api_key(), scoped to the caller's keys: a key owned by another
-    user is reported as not found, so this scope never reveals that it exists. `api_key_id` comes
-    from list_user_api_keys().
-    """
+    """Use to read one of the signed-in user's own API key records (no key value)."""
     return CLIENT.api.get_user_api_key(api_key_id)
 
 
-@mcp.tool()
+@mcp.tool(title="List API keys (admin)", annotations=READ)
 @tool_result
 def list_api_keys(
     max_items: Optional[int] = None, starting_token: Optional[str] = None
 ) -> Dict[str, Any]:
-    """List API keys in the administrative (every user's keys) scope. Auto-paginated.
-
-    Returns key INVENTORY only — apiKeyId, apiKeyName, the userId each key acts as, expiry and
-    enabled state. The stored hash is stripped by the handler and the key value is never stored, so
-    nothing here is usable as a credential; it is still a map of who holds automation access, which
-    is why this tool is not in the README's `autoApprove` sample.
-
-    The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it, and
-    `NextToken` continues the walk via `starting_token`. Never report a count, or conclude a key does
-    not exist, from a truncated result.
-    """
+    """Use to audit every user's API keys (admin scope). Key INVENTORY only: apiKeyId, apiKeyName,
+    userId, expiry, enabled.
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    Never report a count from a truncated result."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_api_keys(
             page_size=params.get("pageSize"), starting_token=params.get("startingToken")
@@ -1775,19 +1704,15 @@ def list_api_keys(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="List my API keys", annotations=READ)
 @tool_result
 def list_user_api_keys(
     max_items: Optional[int] = None, starting_token: Optional[str] = None
 ) -> Dict[str, Any]:
-    """List the AUTHENTICATED user's own API keys. Auto-paginated.
-
-    Same inventory-only rows as list_api_keys(), restricted to keys that act as the caller. Another
-    user's keys are never included, so an empty result says nothing about whether they exist.
-
-    The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it, and
-    `NextToken` continues the walk via `starting_token`. Never report a count from a truncated result.
-    """
+    """Use to list the signed-in user's own API keys. Other users' keys are never included, so an empty
+    result says nothing about whether they exist.
+    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    Never report a count from a truncated result."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_user_api_keys(
             page_size=params.get("pageSize"), starting_token=params.get("startingToken")
@@ -1884,10 +1809,10 @@ def get_zip_download(database_id: str, asset_id: str, request_id: str) -> Dict[s
 
 if CONFIG.enable_writes:
 
-    @mcp.tool()
+    @mcp.tool(title="Create database", annotations=WRITE)
     @tool_result
     def create_database(database_id: str, description: str, default_bucket_id: str) -> Dict[str, Any]:
-        """Create a new database. Use list_buckets() to find a default_bucket_id."""
+        """Use to create a database: database_id, description, default_bucket_id (from list_buckets())."""
         return CLIENT.api.create_database(
             {
                 "databaseId": database_id,
@@ -1896,7 +1821,7 @@ if CONFIG.enable_writes:
             }
         )
 
-    @mcp.tool()
+    @mcp.tool(title="Create asset", annotations=WRITE)
     @tool_result
     def create_asset(
         database_id: str,
@@ -1905,11 +1830,8 @@ if CONFIG.enable_writes:
         is_distributable: bool = False,
         tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Create a new asset in a database. The asset ID is generated by VAMS.
-
-        description is required and must be at least 4 characters.
-        is_distributable controls whether the asset may be downloaded/exported;
-        defaults to False (non-distributable) as the safe default."""
+        """Use to create an asset (no files); VAMS generates the `assetId`. description: at least 4
+        characters. is_distributable (default False) allows downloads."""
         payload: Dict[str, Any] = {
             "databaseId": database_id,
             "assetName": asset_name,
@@ -1919,39 +1841,35 @@ if CONFIG.enable_writes:
         }
         return CLIENT.api.create_asset(payload)
 
-    @mcp.tool()
+    @mcp.tool(title="Update asset", annotations=WRITE)
     @tool_result
     def update_asset(database_id: str, asset_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
-        """Update fields on an existing asset. At least one of assetName,
-        description, isDistributable, or tags must be supplied with a non-null
-        value. A field sent as null is left unchanged; tags=[] clears the tag
-        list, which a required tag type in the database can refuse."""
+        """Use to change an asset's assetName, description, isDistributable or tags (at least one). A field
+        sent as null is left unchanged; tags=[] clears the tag list."""
         return CLIENT.api.update_asset(database_id, asset_id, updates)
 
-    @mcp.tool()
+    @mcp.tool(title="Set asset metadata", annotations=WRITE)
     @tool_result
     def set_asset_metadata(
         database_id: str,
         asset_id: str,
         metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Create or update metadata key/value pairs on an asset (upsert; keys
-        not listed are left untouched). Values are sent as strings."""
+        """Use to upsert metadata key/value pairs on an asset; keys not listed are untouched."""
         items = [
             {"metadataKey": k, "metadataValue": str(v), "metadataValueType": "string"}
             for k, v in metadata.items()
         ]
         return CLIENT.api.update_asset_metadata_v2(database_id, asset_id, items, update_type="update")
 
-    @mcp.tool()
+    @mcp.tool(title="Create folder", annotations=WRITE)
     @tool_result
     def create_folder(database_id: str, asset_id: str, folder_path: str) -> Dict[str, Any]:
-        """Create a folder within an asset's file tree. folder_path is relative
-        to the asset root and must end with a slash."""
+        """Use to create a folder in an asset; folder_path is relative and ends with a slash."""
         relative_key = folder_path if folder_path.endswith("/") else f"{folder_path}/"
         return CLIENT.api.create_folder(database_id, asset_id, {"relativeKey": relative_key})
 
-    @mcp.tool()
+    @mcp.tool(title="Create asset version", annotations=WRITE)
     @tool_result
     def create_asset_version(
         database_id: str,
@@ -1959,284 +1877,259 @@ if CONFIG.enable_writes:
         comment: str,
         version_alias: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create a new version snapshot of an asset from its latest files.
-        comment is required (1-256 characters)."""
+        """Use to snapshot an asset's current files as a version; comment required (1-256 characters)."""
         payload: Dict[str, Any] = {"useLatestFiles": True, "comment": comment}
         if version_alias:
             payload["versionAlias"] = version_alias
         return CLIENT.api.create_asset_version(database_id, asset_id, payload)
+
+    @mcp.tool(title="Move file", annotations=WRITE)
+    @tool_result
+    def move_file(database_id: str, asset_id: str, source_path: str, destination_path: str) -> Dict[str, Any]:
+        """Use to move or rename a file inside its asset (relativePaths). Returns affectedFiles; the
+        source stays as an archived entry."""
+        return CLIENT.api.move_file(
+            database_id, asset_id, {"sourcePath": source_path, "destinationPath": destination_path}
+        )
+
+    @mcp.tool(title="Copy file", annotations=WRITE)
+    @tool_result
+    def copy_file(
+        database_id: str,
+        asset_id: str,
+        source_path: str,
+        destination_path: str,
+        destination_asset_id: Optional[str] = None,
+        destination_database_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Use to copy a file within its asset or into destination_asset_id (destination_database_id
+        defaults to the source's). Returns affectedFiles."""
+        payload: Dict[str, Any] = {"sourcePath": source_path, "destinationPath": destination_path}
+        if destination_asset_id:
+            payload["destinationAssetId"] = destination_asset_id
+        if destination_database_id:
+            payload["destinationDatabaseId"] = destination_database_id
+        return CLIENT.api.copy_file(database_id, asset_id, payload)
+
+    @mcp.tool(title="Link assets", annotations=WRITE)
+    @tool_result
+    def create_asset_link(
+        from_database_id: str,
+        from_asset_id: str,
+        to_database_id: str,
+        to_asset_id: str,
+        relationship_type: str,
+        alias_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Use to link two assets: relationship_type 'related' or 'parentChild' (from = parent; cycles
+        refused; alias_id adds a second parentChild link). Returns assetLinkId."""
+        payload: Dict[str, Any] = {
+            "fromAssetId": from_asset_id,
+            "fromAssetDatabaseId": from_database_id,
+            "toAssetId": to_asset_id,
+            "toAssetDatabaseId": to_database_id,
+            "relationshipType": relationship_type,
+            "tags": tags or [],
+        }
+        if alias_id:
+            payload["assetLinkAliasId"] = alias_id
+        return CLIENT.api.create_asset_link(payload)
+
+    # ---------------------------------------------------------------------
+    # Tag / tag-type writes
+    # ---------------------------------------------------------------------
+
+    @mcp.tool(title="Create tag", annotations=WRITE)
+    @tool_result
+    def create_tag(
+        tag_name: str, description: str, tag_type_name: str, database_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Use to create a tag of an existing tag type; database_id scopes it (omit: global). Relay
+        `warnings`."""
+        return CLIENT.api.create_tags(
+            _tag_body({"tagName": tag_name, "description": description, "tagTypeName": tag_type_name}, database_id)
+        )
+
+    @mcp.tool(title="Update tag", annotations=WRITE)
+    @tool_result
+    def update_tag(
+        tag_name: str, description: str, tag_type_name: str, database_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Use to change a tag's description or tag type; both are REPLACED, so resend the kept one
+        (list_tags)."""
+        return CLIENT.api.update_tags(
+            _tag_body({"tagName": tag_name, "description": description, "tagTypeName": tag_type_name}, database_id)
+        )
+
+    @mcp.tool(title="Create tag type", annotations=WRITE)
+    @tool_result
+    def create_tag_type(
+        tag_type_name: str, description: str, required: bool = False, database_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Use to create a tag type (tag group); required=True makes assets need one of its tags."""
+        return CLIENT.api.create_tag_types(
+            _tag_body(
+                {"tagTypeName": tag_type_name, "description": description, "required": "True" if required else "False"},
+                database_id,
+            )
+        )
+
+    @mcp.tool(title="Update tag type", annotations=WRITE)
+    @tool_result
+    def update_tag_type(
+        tag_type_name: str, description: str, required: bool, database_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Use to change a tag type's description and required flag; both are REPLACED."""
+        return CLIENT.api.update_tag_types(
+            _tag_body(
+                {"tagTypeName": tag_type_name, "description": description, "required": "True" if required else "False"},
+                database_id,
+            )
+        )
 
 
     # ---------------------------------------------------------------------
     # Pipeline / workflow / execution writes
     # ---------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(title="Create pipeline", annotations=WRITE)
     @tool_result
     def create_pipeline(database_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a pipeline. `body` is the full pipeline definition.
+        """Use to create a pipeline. `body` is the full definition in the API's shape (pipelineId,
+        pipelineName, executionConfig, systemConfig); copy an existing one from get_pipeline() first.
+        systemConfig.metadataInputs is a boolean map of exactly six keys: assetMetadata, fileMetadata,
+        fileAttributes, databaseMetadata (default true), assetFileMetadata and metadataSchema (default
+        false).
 
-        Pass the same shape the API takes: pipelineId, pipelineName, executionConfig
-        (executionType plus the block for that type), and systemConfig (inputFileArity,
-        assetScope, requireTemplate, inputFileFilters, metadataInputs, ...). Copy an existing
-        pipeline via get_pipeline() to see the expected shape before composing one.
-
-        systemConfig.metadataInputs is a boolean map with exactly six keys: the four metadata types
-        assetMetadata, fileMetadata, fileAttributes, databaseMetadata, each defaulting to true, and
-        two opt-in keys defaulting to false — assetFileMetadata (a whole-asset or folder run also
-        carries one record per current file under the selection, up to 500 per selection) and
-        metadataSchema (the envelope carries each involved database's metadata schema fields and its
-        restrictMetadataOutsideSchemas flag). Any other key, and any non-boolean value, is rejected.
-        It gates which metadata a run captures, not whether a caller must supply it.
-
-        A successful save can still carry a `warnings` array — e.g. a requireTemplate pipeline in an
-        auto-triggered workflow with no default template chosen, whose trigger-launched runs will all
-        fail. The pipeline saved; relay the warnings rather than reporting a clean success.
-        """
+        A successful save can still carry a `warnings` array (e.g. a requireTemplate pipeline in an
+        auto-triggered workflow with no default template). The pipeline saved; relay the warnings rather
+        than reporting a clean success."""
         return _unwrap_message_with_warnings(CLIENT.api.create_pipeline(database_id, body))
 
-    @mcp.tool()
+    @mcp.tool(title="Update pipeline", annotations=WRITE)
     @tool_result
     def update_pipeline(database_id: str, pipeline_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        """Update a pipeline. Only the fields present in `body` change.
-
-        Carries the same save `warnings` as create_pipeline. A change to a setting compiled into
-        workflow state machines (executionConfig: execution type, target, callback mode, timeouts,
-        Deadline Cloud job settings) adds a warning with how many referencing workflows are being
-        redeployed in the background; nothing has to be re-saved. A launch of a workflow that the
-        background redeploy has not reached yet redeploys it first, or returns a retryable 409 and
-        starts nothing, so no run uses the previous settings. When the warning says the redeploy
-        could not be scheduled, each workflow is redeployed at its next save or launch. Always
-        relay the warnings.
-
-        System pipelines (isSystem) are read-only except their enabled flag and their templates'
-        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
-        template, is answered with 400 and a message naming the refused field or action.
-        """
+        """Use to change a pipeline; only fields in `body` change. Relay the save `warnings` (as
+        create_pipeline), including that referencing workflows are being redeployed.
+        System pipelines (isSystem) are read-only except enabled and the templates' configBody,
+        tagSchema and webFormJson (400 otherwise)."""
         return _unwrap_message_with_warnings(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
 
-    @mcp.tool()
+    @mcp.tool(title="Create pipeline template", annotations=WRITE)
     @tool_result
     def create_pipeline_template(
         database_id: str, pipeline_id: str, body: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Create a pipeline configuration template.
-
-        `body` takes templateId, templateName, configFormat, configBody, and optionally
-        inputInstructions (operator-facing guidance, max 4096 chars), tagSchema, and overrides.
-
-        `overrides` narrows the pipeline's systemConfig for runs using this template, over the keys
-        inputFileArity, assetScope, metadataInputs, and inputFileFilters. metadataInputs takes the
-        same six-key boolean map as the pipeline: assetMetadata, fileMetadata, fileAttributes,
-        databaseMetadata, and the opt-in assetFileMetadata and metadataSchema. The block is at most
-        65536 bytes serialized.
-
-        A `tagSchema` entry carries only tagKey, type, required, default, label, description and
-        enumValues. Any other key is rejected naming the offending index and key, so do not invent a
-        spelling — a misspelled 'requried' or a capitalised 'Type' fails the call rather than storing
-        a tag that is silently optional or untyped.
-
-        System pipelines (isSystem) are read-only except their enabled flag and their templates'
-        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
-        template, is answered with 400 and a message naming the refused field or action.
-        """
+        """Use to add a configuration template to a pipeline. `body` takes templateId, templateName,
+        configFormat, configBody, and optionally inputInstructions, tagSchema and overrides (at most 65536
+        bytes; may narrow metadataInputs (assetMetadata, fileMetadata, fileAttributes, databaseMetadata,
+        assetFileMetadata, metadataSchema)). A `tagSchema`
+        entry carries only tagKey, type, required, default, label, description and enumValues.
+        System pipelines (isSystem) are read-only except enabled and the templates' configBody,
+        tagSchema and webFormJson (400 otherwise)."""
         return CLIENT.unwrap_message(CLIENT.api.create_pipeline_template(database_id, pipeline_id, body))
 
-    @mcp.tool()
+    @mcp.tool(title="Update pipeline template", annotations=WRITE)
     @tool_result
     def update_pipeline_template(
         database_id: str, pipeline_id: str, template_id: str, body: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Update a pipeline template. Only the fields present in `body` change.
-
-        `overrides` and `tagSchema` carry the same rules as on create_pipeline_template: the
-        overrides block is at most 65536 bytes serialized, and a tag entry's keys are limited to
-        tagKey, type, required, default, label, description and enumValues.
-
-        System pipelines (isSystem) are read-only except their enabled flag and their templates'
-        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
-        template, is answered with 400 and a message naming the refused field or action.
-        """
+        """Use to change a pipeline template; only fields in `body` change; create_pipeline_template's rules
+        apply. System pipelines (isSystem) are read-only except enabled and the templates' configBody,
+        tagSchema and webFormJson (400 otherwise)."""
         return CLIENT.unwrap_message(CLIENT.api.update_pipeline_template(database_id, pipeline_id, template_id, body))
 
-    @mcp.tool()
+    @mcp.tool(title="Replace template tag schema", annotations=WRITE)
     @tool_result
     def set_pipeline_template_tag_schema(
         database_id: str, pipeline_id: str, template_id: str, fields: list
     ) -> Dict[str, Any]:
-        """Replace a template's tag schema. This REPLACES the whole schema, not a merge.
-
-        Each entry in `fields` carries only tagKey, type, required, default, label, description and
-        enumValues. Any other key is rejected naming the offending index and key, rather than being
-        ignored, so a misspelled 'requried' or a capitalised 'Type' fails the call instead of storing
-        a tag that is silently optional or untyped.
-
-        System pipelines (isSystem) are read-only except their enabled flag and their templates'
-        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
-        template, is answered with 400 and a message naming the refused field or action.
-        """
+        """Use to REPLACE a template's whole tag schema. Entries carry only tagKey, type, required, default,
+        label, description and enumValues; any other key is rejected.
+        System pipelines (isSystem) are read-only except enabled and the templates' configBody,
+        tagSchema and webFormJson (400 otherwise)."""
         return CLIENT.unwrap_message(
             CLIENT.api.set_pipeline_template_tag_schema(
                 database_id, pipeline_id, template_id, fields
             )
         )
 
-    @mcp.tool()
+    @mcp.tool(title="Create workflow", annotations=WRITE)
     @tool_result
     def create_workflow(database_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a workflow referencing one or more pipelines.
-
-        `body` takes workflowId, workflowName, specifiedPipelines (ordered pipeline refs), and
-        systemConfig (inputFileArity, assetScope, outputTarget, inputFileFilters, metadataInputs,
-        ...). A workflow may not list the same pipeline twice — per-step config is keyed by pipeline
-        id, so a repeat silently overwrites the earlier step.
-
-        systemConfig.metadataInputs takes the same six-key boolean map as a pipeline's —
-        assetMetadata, fileMetadata, fileAttributes, databaseMetadata, and the opt-in
-        assetFileMetadata and metadataSchema — and the workflow's gate builds the one metadata
-        envelope the steps share; each step receives only what its own pipeline or template also
-        turns on.
-
-        systemConfig.concurrencyRestriction is one of none, perAsset, perInputFile, or
-        perInputFileVersion. The three restrictions lock the selected assets, files, or file
-        versions for the run's duration, so a second execution on a locked scope is rejected with
-        400 until the first finishes; the fileUpload trigger treats that rejection as already handled.
-        """
+        """Use to create a workflow from pipelines. `body` takes workflowId, workflowName,
+        specifiedPipelines (ordered; no pipeline twice) and systemConfig, including
+        metadataInputs (assetMetadata, fileMetadata, fileAttributes, databaseMetadata,
+        assetFileMetadata, metadataSchema).
+        concurrencyRestriction (none, perAsset, perInputFile, perInputFileVersion) locks that scope while
+        a run lasts."""
         return CLIENT.unwrap_message(CLIENT.api.create_workflow(database_id, body))
 
-    @mcp.tool()
+    @mcp.tool(title="Update workflow", annotations=WRITE)
     @tool_result
     def update_workflow(database_id: str, workflow_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        """Update a workflow. Only the fields present in `body` change.
-
-        System workflows (isSystem) are read-only except their enabled flag and their triggers'
-        enabled flag: update_workflow(..., {"enabled": false}) and
-        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
-        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
-        naming the refused field or action.
-        """
+        """Use to change a workflow; only fields in `body` change.
+        System workflows (isSystem) are read-only (400) except the toggles
+        update_workflow(..., {"enabled": false}) and set_workflow_trigger(..., {"enabled": false})."""
         return CLIENT.unwrap_message(CLIENT.api.update_workflow(database_id, workflow_id, body))
 
-    @mcp.tool()
+    @mcp.tool(title="Set workflow trigger", annotations=WRITE)
     @tool_result
     def set_workflow_trigger(
         database_id: str, workflow_id: str, trigger_type: str, body: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Create or replace a workflow trigger (PUT-idempotent).
-
-        `trigger_type` is the trigger KEY: the bare type addresses a workflow's first trigger of that
-        type, and 'type#triggerId' addresses an additional one — a key with a NEW id creates another
-        trigger of that type, so one workflow can respond differently to different uploads. An upload
-        launches the workflow once per matching trigger.
-
-        `body` takes enabled plus the trigger's own settings, e.g. inputFileFilters. A
-        match-everything exclude pattern is rejected: exclude is applied last and would remove every
-        file, leaving the trigger permanently unable to fire.
-
-        Three conditions are rejected with 400: a trigger set on an archived workflow (restore the
-        workflow first), an additional trigger of a type when the workflow's concurrencyRestriction is
-        perAsset (several would contend on the same asset), and an additional trigger naming the same
-        defaultTemplateIds as an existing one — including two that both name none, which is a valid
-        choice and therefore a comparable value.
-
-        On a system workflow (isSystem) only {"enabled": true|false} changes: inputFileFilters or
-        defaultTemplateIds that differ from the stored trigger, and a trigger key the workflow does
-        not have, are answered with 400 and a message naming the refused field or action.
-        """
+        """Use to create or replace a workflow trigger (PUT-idempotent). `trigger_type` is the trigger KEY:
+        the bare type for the first trigger of a type, 'type#triggerId' for another (a NEW id creates
+        one). `body` takes enabled plus settings such as inputFileFilters. Refused with 400: a
+        match-everything exclude, an archived workflow, an extra trigger under perAsset, or an extra one
+        with the same defaultTemplateIds. A system workflow (isSystem) changes only {"enabled"}."""
         return CLIENT.unwrap_message(CLIENT.api.set_workflow_trigger(database_id, workflow_id, trigger_type, body))
 
-    @mcp.tool()
+    @mcp.tool(title="Run workflow", annotations=COMPUTE)
     @tool_result
     def execute_workflow(
         workflow_database_id: str, workflow_id: str, body: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Execute a workflow on a set of input files. Returns the new executionId.
+        """Use to run a workflow on input files. Returns the new executionId. This starts real compute.
+        Confirm with the user before calling it.
 
-        `body` takes inputFiles (each an independent databaseId / assetId / relativeFileKey and
-        optional versionId), optional outputAssetId + outputDatabaseId (REQUIRED when the inputs
-        span more than one asset, since the output cannot then be inferred), an optional
-        outputFileBaseExecutionPathExtension prefix, and per-pipeline parameters keyed by
-        pipelineId. A relativeFileKey of "/" selects the whole asset where the workflow allows it.
+        `body` takes inputFiles (each databaseId, assetId, relativeFileKey ("/" = the whole asset) and
+        optional versionId), outputAssetId + outputDatabaseId (REQUIRED when inputs span more than one
+        asset), and per-pipeline parameters keyed by pipelineId. Optional metadata sources:
+        metadataSourceAssets [{"databaseId", "assetId"}], and metadataSourceDatabaseId for a run with NO
+        input files ("GLOBAL" is REJECTED).
 
-        Two optional fields name entities the run reads stored METADATA from. They are not input
-        files — a metadata source carries no file key and takes no part in arity, input filters, or
-        output-target resolution — and naming them is always optional: a pipeline that genuinely
-        requires metadata validates and fails on its own, so omitting them is never an error here.
-
-        - metadataSourceAssets: [{"databaseId", "assetId"}]. No file key field exists.
-        - metadataSourceDatabaseId: ONE concrete database id, and only meaningful for a run with NO
-          input files. With input files the databases are DERIVED from the input files' assets (plus
-          any metadataSourceAssets' assets), so this field is ignored. "GLOBAL" is REJECTED — it is
-          the unscoped keyword, not a database whose metadata can be read. Database metadata is
-          read-only; a database is never an output target.
-
-        Captured metadata is capped per entity, so the response's `warnings` array can report a
-        truncated capture or a source database that could not be read. The run still succeeded —
-        relay those warnings rather than dropping them, because the inputs are then not what was
-        named.
-
-        A workflow whose systemConfig.concurrencyRestriction is perAsset, perInputFile, or
-        perInputFileVersion refuses a launch on an asset, file, or file version a running execution
-        of it already holds: the result is an error with error_type WorkflowAlreadyRunningError and
-        a message naming that scope. Nothing started; launch again once that execution has ended.
-
-        This starts real compute. Confirm with the user before calling it.
-        """
+        Relay the response's `warnings`: the run started, but its inputs are not exactly what was named.
+        A concurrencyRestriction (perAsset, perInputFile, perInputFileVersion) refuses a launch on a held
+        scope: error_type WorkflowAlreadyRunningError. Nothing started; launch again later."""
         return CLIENT.unwrap_message(CLIENT.api.execute_workflow(workflow_database_id, workflow_id, body))
 
-    @mcp.tool()
+    @mcp.tool(title="Re-run execution", annotations=COMPUTE)
     @tool_result
     def rerun_execution(
         execution_id: str, execution_group_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Re-run ONE execution from its stored inputs, creating a NEW execution.
+        """Use to re-run ONE execution from its stored inputs, as a NEW execution, with the CALLER's
+        permissions: returns the new id. This starts real compute; confirm with the user first.
 
-        Re-launches with the CALLER's permissions, not the original runner's. Returns the new
-        execution's id — the id passed in still refers to the original run.
-
-        execution_group_id ASSIGNS the new execution's group membership; it does not select what to
-        re-run. Exactly one execution is launched either way. Pass the original run's group id to
-        keep the re-run alongside its siblings, a new one to separate it, or omit it. There is no
-        re-run-the-whole-group operation: to re-run several, call this once per execution id (find
-        them with list_executions()).
-
-        Input file versions: a file the original launch pinned is read at that version again; every
-        other file is read at its current version. A version is pinned only when someone chose it (a
-        versionId in an execute request, or a version picked in the web), not for a web launch on the
-        current version or a fileUpload trigger launch. Executions recorded before 2.7.0 re-run every
-        file on its current version. A pinned version that was deleted is refused.
-
-        The re-run goes through the execute path, so the response carries the same `warnings` array
-        (e.g. a metadata capture bounded by the per-entity cap). Relay them: the run started, but its
-        inputs may not match the original.
-        """
+        execution_group_id ASSIGNS the new run's group; it does not select what to re-run. There is no
+        re-run-the-whole-group operation: call this once per execution id. A file the original launch
+        pinned is read at that version again, every other file at its current version (executions from
+        before 2.7.0 use current versions). Relay the response's `warnings`."""
         return CLIENT.unwrap_message(CLIENT.api.rerun_execution(execution_id, execution_group_id=execution_group_id))
 
-    @mcp.tool()
+    @mcp.tool(title="Abort execution", annotations=COMPUTE)
     @tool_result
     def abort_execution(execution_id: str, group_id: Optional[str] = None) -> Dict[str, Any]:
-        """Abort a running execution, terminating its state machine and any AWS Batch job.
+        """Use to stop a running execution: it STOPS running AWS compute (state machine, Batch job) and is
+        NOT reversible. Keep it out of `autoApprove` alongside execute_workflow and rerun_execution;
+        group_id fans out to every active execution of the group, so confirm a group abort first.
 
-        Aborting is NOT reversible: the run stops where it is and partial outputs may already have
-        been written. It is write-tier rather than destructive because it removes no stored data, but
-        it is the one write tool that irreversibly STOPS running AWS compute, and with group_id it
-        fans out across every active execution in that group — so keep it out of `autoApprove`
-        alongside execute_workflow and rerun_execution. Confirm a group abort with the user first.
-
-        Pass group_id to abort every active execution in that group. Any returned warnings
-        identify a member whose sub-process may still be running after the abort.
-
-        A single abort answers `message` plus, when something could not be stopped, two sibling
-        arrays: `warnings` (free text) and `notAbortable` — one {resourceType, label, stageName,
-        locator} per registered sub-process of a type VAMS has no stop API for (an externally owned
-        pipeline's own compute, for example). The execution still reads ABORTED, so do NOT conclude
-        that everything stopped: a non-empty `notAbortable` means that compute is still running until
-        the bridge's own heartbeat or timeout ends it, and the entry names what and where. Both arrays
-        are absent from a clean abort. A group abort returns the group's results with the same two
-        arrays beside them: each warning is prefixed with its member's execution id and each
-        `notAbortable` entry carries its member's `executionId`, so non-empty `warnings` or
-        `notAbortable` from a group abort likewise means not everything stopped.
-        """
+        When something could not be stopped the answer carries `warnings` and `notAbortable` (one
+        {resourceType, label, stageName, locator} per sub-process; in a group abort each carries the
+        member's `executionId`). The execution still reads ABORTED, so either array non-empty means
+        compute is still running: do NOT conclude that everything stopped."""
         return _unwrap_message_with_warnings(
             CLIENT.api.abort_execution(execution_id, group_id=group_id), siblings=("warnings", "notAbortable"))
 
@@ -2244,7 +2137,7 @@ if CONFIG.enable_writes:
     # Comment / subscription / metadata-schema writes
     # ---------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(title="Add comment", annotations=WRITE)
     @tool_result
     def add_comment(
         asset_id: str,
@@ -2252,16 +2145,9 @@ if CONFIG.enable_writes:
         comment_body: str,
         comment_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Add a comment to one version of an asset. Returns the `commentId` written.
-
-        `comment_id` is the caller's to choose and the write is UNCONDITIONAL, so passing the id of
-        an existing comment REPLACES it — its body, owner and creation date — with no error and no
-        indication that anything was overwritten. Leave it unset unless that is the intent: a uuid4
-        is generated, and returned here because the endpoint's acknowledgement does not contain it.
-
-        `comment_body` is free text up to 16384 characters. Use list_asset_versions() to find an
-        asset_version_id; neither id may contain a colon.
-        """
+        """Use to comment on one asset version; returns `commentId`. The write is UNCONDITIONAL: passing an
+        existing `comment_id` REPLACES that comment with no error, so leave it unset (a uuid4 is
+        generated). comment_body: up to 16384 characters."""
         resolved_id = comment_id or str(uuid.uuid4())
         response = CLIENT.api.add_comment(asset_id, asset_version_id, resolved_id, comment_body)
         result: Dict[str, Any] = {"commentId": resolved_id}
@@ -2271,21 +2157,15 @@ if CONFIG.enable_writes:
             result["response"] = response
         return result
 
-    @mcp.tool()
+    @mcp.tool(title="Edit comment", annotations=WRITE)
     @tool_result
     def update_comment(
         asset_id: str, asset_version_id: str, comment_id: str, comment_body: str
     ) -> Dict[str, Any]:
-        """Replace the text of an existing comment. Only the body changes.
-
-        The comment's CREATOR is the only user who may edit it; anyone else gets a 403 regardless of
-        their VAMS role, so this fails for an agent acting as a different user than the one who
-        commented. A comment id that does not exist is reported as not found rather than created —
-        add_comment() is the tool that writes a new one.
-        """
+        """Use to edit a comment's text. Only its CREATOR may (403 otherwise)."""
         return CLIENT.api.update_comment(asset_id, asset_version_id, comment_id, comment_body)
 
-    @mcp.tool()
+    @mcp.tool(title="Subscribe users", annotations=WRITE)
     @tool_result
     def create_subscription(
         entity_id: str,
@@ -2293,19 +2173,12 @@ if CONFIG.enable_writes:
         event_name: str = SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
         entity_name: str = SUBSCRIPTION_ENTITY_ASSET,
     ) -> Dict[str, Any]:
-        """Subscribe users to an entity's events, sending them e-mail on each occurrence.
-
-        Defaults subscribe to asset version changes, where `entity_id` is the assetId. `subscribers`
-        are VAMS user IDs, each resolved to the e-mail address on the user's profile (falling back to
-        the user ID when that is itself an address) — a user with no usable address fails the call.
-
-        A user already subscribed to this entity is an ERROR, not a no-op: the whole call is rejected,
-        including the subscribers that would have been added. Call check_subscription() first, or use
-        update_subscription() to state the full list you want.
-        """
+        """Use to subscribe users (VAMS user IDs) to an entity's e-mail events (default: an asset's version
+        changes). A user already subscribed is an ERROR, not a no-op, and rejects the whole call; check
+        first, or use update_subscription()."""
         return CLIENT.api.create_subscription(event_name, entity_name, entity_id, subscribers)
 
-    @mcp.tool()
+    @mcp.tool(title="Replace subscribers", annotations=WRITE)
     @tool_result
     def update_subscription(
         entity_id: str,
@@ -2313,71 +2186,37 @@ if CONFIG.enable_writes:
         event_name: str = SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
         entity_name: str = SUBSCRIPTION_ENTITY_ASSET,
     ) -> Dict[str, Any]:
-        """REPLACE a subscription's subscriber list with the one given.
-
-        This is not an addition. Every user absent from `subscribers` is unsubscribed from the
-        underlying notification topic, so passing one user removes all the others. To add someone,
-        read the current list with list_subscriptions() and send it back with the addition included —
-        this tool deliberately does not do that read for you, because a stale list silently
-        unsubscribes whoever joined in between.
-
-        The subscription must already exist; there is no upsert. Use create_subscription() first.
-        """
+        """Use to REPLACE a subscription's subscriber list; this is not an addition: every user not in
+        `subscribers` is unsubscribed. To add one, read list_subscriptions() and send the full list."""
         return CLIENT.api.update_subscription(event_name, entity_name, entity_id, subscribers)
 
-    @mcp.tool()
+    @mcp.tool(title="Create metadata schema", annotations=WRITE)
     @tool_result
     def create_metadata_schema(schema_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Define a metadata schema, which constrains and describes metadata fields on an entity.
-
-        `schema_data` takes databaseId (or the literal 'GLOBAL' for every database),
-        metadataSchemaEntityType (databaseMetadata, assetMetadata, fileMetadata, fileAttribute or
-        assetLinkMetadata), schemaName, and fields — which is nested: `{"fields": [ ... ]}`, not a
-        bare list. Optional: fileKeyTypeRestriction (a comma-delimited extension list, accepted only
-        for fileMetadata and fileAttribute), and enabled (defaults true). Write each extension with
-        its leading dot and no other dot or path separator (".stp,.step", or ".all" for every file);
-        an entry in any other form is refused with a 400.
-
-        Call list_metadata_schemas() first and copy the shape of an existing schema. The response
-        carries the generated metadataSchemaId, which is what update_metadata_schema() takes.
-        """
+        """Use to define a metadata schema: `schema_data` takes databaseId (or 'GLOBAL'),
+        metadataSchemaEntityType, schemaName and fields NESTED as `{"fields": [ ... ]}`. Optional
+        fileKeyTypeRestriction, each extension with its leading dot (".stp,.step"), else refused with a
+        400. Returns metadataSchemaId."""
         return CLIENT.api.create_metadata_schema(schema_data)
 
-    @mcp.tool()
+    @mcp.tool(title="Update metadata schema", annotations=WRITE)
     @tool_result
     def update_metadata_schema(
         metadata_schema_id: str, update_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Update a metadata schema. Only the fields present in `update_data` change.
-
-        Changeable: schemaName, fields (the same nested `{"fields": [ ... ]}` shape as on create),
-        fileKeyTypeRestriction, and enabled. The schema's databaseId and entity type are fixed at
-        creation. `fields` REPLACES the whole field list rather than merging into it, so send the
-        complete set — read it with list_metadata_schemas() first. A schemaName, fields or enabled
-        sent as null is left unchanged; a fileKeyTypeRestriction sent as null or "" removes the
-        restriction when sent beside another field.
-
-        A fileKeyTypeRestriction takes the same dotted list as on create, and only a fileMetadata or
-        fileAttribute schema accepts one; either mistake is refused with a 400.
-        """
+        """Use to change a metadata schema. `fields` REPLACES the whole list (send the full set, nested). A
+        field sent as null is left unchanged; a null or "" fileKeyTypeRestriction removes the restriction.
+        It takes the same dotted list as create, and only a fileMetadata or fileAttribute schema has one."""
         return CLIENT.api.update_metadata_schema(metadata_schema_id, update_data)
 
-    @mcp.tool()
+    @mcp.tool(title="Create API key for a user (admin)", annotations=WRITE)
     @tool_result
     def create_api_key(
         api_key_name: str, user_id: str, description: str, expires_at: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Create an API key that acts AS `user_id`, in the administrative scope.
-
-        The response carries the key VALUE (`apiKey`). This is the only time it is ever shown: VAMS
-        stores a hash and cannot return the value again. That value is a bearer credential with every
-        permission `user_id` holds, and returning it here puts it in the agent transcript and the
-        host's conversation log. Keep this tool out of `autoApprove`, hand the value to the user at
-        once rather than repeating it, and prefer create_user_api_key() — a key for the caller's own
-        identity — unless a key acting as another user is really what is wanted.
-
-        `expires_at` is ISO 8601 (for example 2026-12-31T23:59:59Z); omitted, the key never expires.
-        """
+        """Use to create an API key that acts AS `user_id` (admin scope); prefer create_user_api_key(). The
+        key VALUE (`apiKey`) is shown this only time: a bearer credential landing in the transcript. Keep
+        this tool out of `autoApprove` and hand the value to the user at once. `expires_at`: ISO 8601."""
         payload: Dict[str, Any] = {
             "apiKeyName": api_key_name,
             "userId": user_id,
@@ -2387,23 +2226,17 @@ if CONFIG.enable_writes:
             payload["expiresAt"] = expires_at
         return CLIENT.api.create_api_key(payload)
 
-    @mcp.tool()
+    @mcp.tool(title="Create my API key", annotations=WRITE)
     @tool_result
     def create_user_api_key(api_key_name: str, description: str, expires_at: str) -> Dict[str, Any]:
-        """Create an API key for the AUTHENTICATED user (self-service scope).
-
-        The response carries the key VALUE (`apiKey`), shown this one time only — the same bearer
-        credential exposure as create_api_key(), so keep this tool out of `autoApprove` and hand the
-        value to the user at once. The key acts as the caller and can do no more than the caller can.
-
-        `expires_at` is REQUIRED here (ISO 8601) and must fall within 365 days of creation; the
-        handler rejects a later date.
-        """
+        """Use to create an API key for the signed-in user. The key VALUE (`apiKey`) is shown this one time:
+        keep this tool out of `autoApprove` and hand the value to the user at once. `expires_at` is
+        required (ISO 8601, within 365 days)."""
         return CLIENT.api.create_user_api_key(
             {"apiKeyName": api_key_name, "description": description, "expiresAt": expires_at}
         )
 
-    @mcp.tool()
+    @mcp.tool(title="Update API key (admin)", annotations=WRITE)
     @tool_result
     def update_api_key(
         api_key_id: str,
@@ -2411,17 +2244,9 @@ if CONFIG.enable_writes:
         expires_at: Optional[str] = None,
         is_active: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Update an API key's description, expiry or enabled state (administrative scope).
-
-        Only the arguments given change; at least one is required. `is_active=False` is the
-        REVERSIBLE revoke — the key stops authenticating until it is set back to True, and its value
-        is untouched — so prefer it to delete_api_key() when access may need restoring. The API
-        Gateway authorizer caches its decision for ~30 seconds in BOTH directions: a key that
-        authenticated in that window keeps working until it expires, and a key refused in that window
-        stays refused for the same time after being re-enabled; a disabled key that was not in use is
-        refused at once. `expires_at` is ISO 8601; an empty string clears the expiry in this scope. The
-        key value is never returned.
-        """
+        """Use to change an API key's description, expiry or enabled state (admin scope). `is_active=False`
+        is the REVERSIBLE revoke; prefer it to delete_api_key(). Changes can take ~30 seconds (authorizer
+        cache)."""
         payload: Dict[str, Any] = {}
         if description is not None:
             payload["description"] = description
@@ -2431,7 +2256,7 @@ if CONFIG.enable_writes:
             payload["isActive"] = "true" if is_active else "false"
         return CLIENT.api.update_api_key(api_key_id, payload)
 
-    @mcp.tool()
+    @mcp.tool(title="Update my API key", annotations=WRITE)
     @tool_result
     def update_user_api_key(
         api_key_id: str,
@@ -2439,13 +2264,8 @@ if CONFIG.enable_writes:
         expires_at: Optional[str] = None,
         is_active: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Update one of the AUTHENTICATED user's own API keys.
-
-        Same fields, the same reversible revoke (`is_active=False`) and the same ~30-second authorizer
-        cache window as update_api_key(), limited to the caller's keys — another user's key is reported
-        as not found. `expires_at` must stay within 365 days of the key's ORIGINAL creation date and
-        cannot be cleared in this scope.
-        """
+        """Use to change one of your own API keys, as update_api_key(); `is_active=False` is the reversible
+        revoke. `expires_at` must stay within 365 days of creation."""
         payload: Dict[str, Any] = {}
         if description is not None:
             payload["description"] = description
@@ -2524,13 +2344,13 @@ if CONFIG.enable_writes:
 
 if CONFIG.enable_destructive:
 
-    @mcp.tool()
+    @mcp.tool(title="Archive asset", annotations=DESTRUCTIVE)
     @tool_result
     def archive_asset(database_id: str, asset_id: str, reason: str = "") -> Dict[str, Any]:
-        """Archive (soft-delete) an asset. Reversible via unarchive_asset."""
+        """Use to archive (soft-delete) an asset. Reversible via unarchive_asset."""
         return CLIENT.api.archive_asset(database_id, asset_id, reason=reason or None)
 
-    @mcp.tool()
+    @mcp.tool(title="Unarchive asset", annotations=DESTRUCTIVE)
     @tool_result
     def unarchive_asset(
         database_id: str,
@@ -2538,164 +2358,157 @@ if CONFIG.enable_destructive:
         reason: str = "",
         unarchive_files: bool = False,
     ) -> Dict[str, Any]:
-        """Restore a previously archived asset. Files stay archived unless
-        unarchive_files is set, which restores the files archived by the asset
-        archive (files archived individually beforehand always stay archived)."""
+        """Use to restore an archived asset; unarchive_files also restores its files."""
         return CLIENT.api.unarchive_asset(
             database_id, asset_id, reason=reason or None, unarchive_files=unarchive_files
         )
 
-    @mcp.tool()
+    @mcp.tool(title="Delete asset permanently", annotations=DESTRUCTIVE)
     @tool_result
     def delete_asset(database_id: str, asset_id: str, reason: str = "") -> Dict[str, Any]:
-        """PERMANENTLY delete an asset. Irreversible.
-
-        Consider archive_asset() first: it is reversible via unarchive_asset().
-        """
+        """Use only when asked to PERMANENTLY delete an asset. Irreversible; archive_asset() is reversible."""
         # `confirmPermanentDelete` is a REQUIRED-TRUE field of the request contract, not an optional
         # second signal: DeleteAssetRequestModel declares an always=True validator that rejects any
         # other value, so sending true is the only way to perform the operation at all. The controls
         # on this tool are the destructive gate, its name, and this docstring.
         return CLIENT.api.delete_asset_permanent(database_id, asset_id, reason=reason or None, confirm=True)
 
-    @mcp.tool()
+    @mcp.tool(title="Delete database permanently", annotations=DESTRUCTIVE)
     @tool_result
     def delete_database(database_id: str) -> Dict[str, Any]:
-        """PERMANENTLY delete a database. Irreversible, and rejected while the
-        database still holds active assets, workflows, or pipelines."""
+        """Use only when asked to PERMANENTLY delete a database. Irreversible; refused while it holds
+        assets, workflows or pipelines."""
         return CLIENT.api.delete_database(database_id)
+
+    @mcp.tool(title="Archive file", annotations=DESTRUCTIVE)
+    @tool_result
+    def archive_file(database_id: str, asset_id: str, file_key: str, is_prefix: bool = False) -> Dict[str, Any]:
+        """Use to archive (soft-delete) a file (is_prefix: a whole folder). Reversible via
+        unarchive_file."""
+        return CLIENT.api.archive_file(database_id, asset_id, {"filePath": file_key, "isPrefix": is_prefix})
+
+    @mcp.tool(title="Unarchive file", annotations=DESTRUCTIVE)
+    @tool_result
+    def unarchive_file(database_id: str, asset_id: str, file_key: str) -> Dict[str, Any]:
+        """Use to restore an archived file; file_key from list_asset_files(include_archived)."""
+        return CLIENT.api.unarchive_file(database_id, asset_id, {"filePath": file_key})
+
+    @mcp.tool(title="Delete file permanently", annotations=DESTRUCTIVE)
+    @tool_result
+    def delete_file(database_id: str, asset_id: str, file_key: str, is_prefix: bool = False) -> Dict[str, Any]:
+        """Use only when asked to PERMANENTLY delete a file with all versions (is_prefix: a whole folder).
+        Irreversible; archive_file() is reversible."""
+        # `confirmPermanentDelete` is required to be true by the delete route itself (it refuses any
+        # other value), so it is part of the request contract, not an interlock to surface. The
+        # controls on this tool are the destructive gate, its name, and this docstring.
+        return CLIENT.api.delete_file(
+            database_id, asset_id, {"filePath": file_key, "isPrefix": is_prefix, "confirmPermanentDelete": True}
+        )
+
+    @mcp.tool(title="Delete asset link", annotations=DESTRUCTIVE)
+    @tool_result
+    def delete_asset_link(asset_link_id: str) -> Dict[str, Any]:
+        """Use to remove an asset link (assetLinkId from get_asset_links); the assets stay. Not
+        reversible."""
+        return CLIENT.api.delete_asset_link(asset_link_id)
+
+    @mcp.tool(title="Delete tag", annotations=DESTRUCTIVE)
+    @tool_result
+    def delete_tag(tag_name: str, database_id: Optional[str] = None) -> Dict[str, Any]:
+        """Use only when asked to delete a tag (database_id: a database's). Not reversible."""
+        return CLIENT.api.delete_tag(tag_name, database_id=database_id)
+
+    @mcp.tool(title="Delete tag type", annotations=DESTRUCTIVE)
+    @tool_result
+    def delete_tag_type(tag_type_name: str, database_id: Optional[str] = None) -> Dict[str, Any]:
+        """Use only when asked to delete a tag type; refused while tags use it. Not reversible."""
+        return CLIENT.api.delete_tag_type(_tag_type_name(tag_type_name), database_id=database_id)
 
     # ---------------------------------------------------------------------
     # Pipeline / workflow / execution deletes
     # ---------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(title="Archive pipeline", annotations=DESTRUCTIVE)
     @tool_result
     def archive_pipeline(database_id: str, pipeline_id: str) -> Dict[str, Any]:
-        """Archive (soft-delete) a pipeline. Reversible via unarchive_pipeline.
-
-        System pipelines (isSystem) are read-only except their enabled flag and their templates'
-        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
-        template, is answered with 400 and a message naming the refused field or action.
-        """
+        """Use to archive (soft-delete) a pipeline. Reversible via unarchive_pipeline.
+        System pipelines (isSystem) are read-only except enabled and the templates' configBody,
+        tagSchema and webFormJson (400 otherwise)."""
         return CLIENT.unwrap_message(CLIENT.api.delete_pipeline(database_id, pipeline_id))
 
-    @mcp.tool()
+    @mcp.tool(title="Unarchive pipeline", annotations=DESTRUCTIVE)
     @tool_result
     def unarchive_pipeline(
         database_id: str, pipeline_id: str, keep_disabled: bool = False
     ) -> Dict[str, Any]:
-        """Restore an archived pipeline, re-enabling it so it is executable again.
-
-        Archiving also DISABLES, so clearing the archived flag alone leaves a pipeline that
-        is listed but silently unrunnable. Pass keep_disabled to restore it still disabled.
-
-        System pipelines (isSystem) are read-only except their enabled flag and their templates'
-        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
-        template, is answered with 400 and a message naming the refused field or action.
-        """
+        """Use to restore an archived pipeline, re-enabled (archiving also DISABLES; pass keep_disabled).
+        System pipelines (isSystem) are read-only except enabled and the templates' configBody,
+        tagSchema and webFormJson (400 otherwise)."""
         body: Dict[str, Any] = {"archived": False}
         if not keep_disabled:
             body["enabled"] = True
         return _unwrap_message_with_warnings(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
 
-    @mcp.tool()
+    @mcp.tool(title="Archive workflow", annotations=DESTRUCTIVE)
     @tool_result
     def archive_workflow(database_id: str, workflow_id: str) -> Dict[str, Any]:
-        """Archive (soft-delete) a workflow. Reversible via unarchive_workflow.
-
-        System workflows (isSystem) are read-only except their enabled flag and their triggers'
-        enabled flag: update_workflow(..., {"enabled": false}) and
-        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
-        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
-        naming the refused field or action.
-        """
+        """Use to archive (soft-delete) a workflow. Reversible via unarchive_workflow.
+        System workflows (isSystem) are read-only (400) except the toggles
+        update_workflow(..., {"enabled": false}) and set_workflow_trigger(..., {"enabled": false})."""
         return CLIENT.unwrap_message(CLIENT.api.delete_workflow(database_id, workflow_id))
 
-    @mcp.tool()
+    @mcp.tool(title="Unarchive workflow", annotations=DESTRUCTIVE)
     @tool_result
     def unarchive_workflow(
         database_id: str, workflow_id: str, keep_disabled: bool = False
     ) -> Dict[str, Any]:
-        """Restore an archived workflow, re-enabling it so it is executable again.
-
-        Archiving also DISABLES, so clearing the archived flag alone leaves a workflow that
-        is listed but silently unrunnable. Pass keep_disabled to restore it still disabled.
-
-        System workflows (isSystem) are read-only except their enabled flag and their triggers'
-        enabled flag: update_workflow(..., {"enabled": false}) and
-        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
-        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
-        naming the refused field or action.
-        """
+        """Use to restore an archived workflow, re-enabled (archiving also DISABLES; pass keep_disabled).
+        System workflows (isSystem) are read-only (400) except the toggles
+        update_workflow(..., {"enabled": false}) and set_workflow_trigger(..., {"enabled": false})."""
         body: Dict[str, Any] = {"archived": False}
         if not keep_disabled:
             body["enabled"] = True
         return CLIENT.unwrap_message(CLIENT.api.update_workflow(database_id, workflow_id, body))
 
-    @mcp.tool()
+    @mcp.tool(title="Delete pipeline template", annotations=DESTRUCTIVE)
     @tool_result
     def delete_pipeline_template(
         database_id: str, pipeline_id: str, template_id: str
     ) -> Dict[str, Any]:
-        """Delete a pipeline template. Not reversible.
-
-        A pipeline with requireTemplate becomes unrunnable if its only template is removed.
-
-        The response carries a `warnings` array when a file-upload trigger still names the deleted
-        template as a default for this pipeline. The delete happened; triggered executions of the
-        named workflows fail until each trigger picks a different default template, so relay the
-        warnings rather than reporting a clean delete.
-
-        System pipelines (isSystem) are read-only except their enabled flag and their templates'
-        configBody, tagSchema and webFormJson. Any other change, and adding or deleting a
-        template, is answered with 400 and a message naming the refused field or action.
-        """
+        """Use to delete a pipeline template. Not reversible. Relay any `warnings`: a trigger still names it
+        as a default, so those runs fail until the trigger is changed.
+        System pipelines (isSystem) are read-only except enabled and the templates' configBody,
+        tagSchema and webFormJson (400 otherwise)."""
         return CLIENT.unwrap_message(CLIENT.api.delete_pipeline_template(database_id, pipeline_id, template_id))
 
-    @mcp.tool()
+    @mcp.tool(title="Delete workflow trigger", annotations=DESTRUCTIVE)
     @tool_result
     def delete_workflow_trigger(
         database_id: str, workflow_id: str, trigger_type: str
     ) -> Dict[str, Any]:
-        """Delete a workflow trigger, so the workflow stops firing automatically.
-
-        System workflows (isSystem) are read-only except their enabled flag and their triggers'
-        enabled flag: update_workflow(..., {"enabled": false}) and
-        set_workflow_trigger(..., {"enabled": false}) are the supported toggles. Any other change,
-        an archive or unarchive, and adding or deleting a trigger is answered with 400 and a message
-        naming the refused field or action.
-        """
+        """Use to delete a workflow trigger, so the workflow stops firing automatically.
+        System workflows (isSystem) are read-only (400) except the toggles
+        update_workflow(..., {"enabled": false}) and set_workflow_trigger(..., {"enabled": false})."""
         return CLIENT.unwrap_message(CLIENT.api.delete_workflow_trigger(database_id, workflow_id, trigger_type))
 
-    @mcp.tool()
+    @mcp.tool(title="Delete execution record", annotations=DESTRUCTIVE)
     @tool_result
     def permanent_delete_execution(execution_id: str) -> Dict[str, Any]:
-        """Permanently delete an execution's records. IRREVERSIBLE.
-
-        Administrative route, and blocked while the execution is still in progress — abort it first.
-        Removes the run's traceability; the output files it wrote to assets are left in place.
-        """
+        """Use only when asked to PERMANENTLY delete an execution's records. IRREVERSIBLE; refused while it
+        runs. Its output files stay."""
         return CLIENT.unwrap_message(CLIENT.api.permanent_delete_execution(execution_id))
 
     # ---------------------------------------------------------------------
     # Comment / subscription / metadata-schema deletes
     # ---------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(title="Delete comment", annotations=DESTRUCTIVE)
     @tool_result
     def delete_comment(asset_id: str, asset_version_id: str, comment_id: str) -> Dict[str, Any]:
-        """Delete a comment. A soft delete — the record moves to a deleted partition.
-
-        It cannot be read back through this server either way: the listing tools do not return
-        deleted comments and the route's showDeleted flag is ignored by the service, so treat this as
-        unrecoverable from an agent's position.
-
-        Only the comment's CREATOR may delete it; anyone else gets a 403 whatever their VAMS role.
-        """
+        """Use to delete a comment (unrecoverable through these tools). Only its CREATOR may."""
         return CLIENT.api.delete_comment(asset_id, asset_version_id, comment_id)
 
-    @mcp.tool()
+    @mcp.tool(title="Delete subscription", annotations=DESTRUCTIVE)
     @tool_result
     def delete_subscription(
         entity_id: str,
@@ -2703,17 +2516,11 @@ if CONFIG.enable_destructive:
         event_name: str = SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
         entity_name: str = SUBSCRIPTION_ENTITY_ASSET,
     ) -> Dict[str, Any]:
-        """Delete a WHOLE subscription — every subscriber, not the ones listed.
-
-        For an asset this also deletes the asset's notification topic, so every user on the record is
-        unsubscribed and the subscription no longer exists. `subscribers` is required by the endpoint,
-        which validates it as a user-ID list and then IGNORES it: passing one name does not scope the
-        delete to that name. To remove one user and leave the subscription standing, use
-        unsubscribe(); to change the membership, use update_subscription().
-        """
+        """Use to delete a WHOLE subscription, every subscriber and the asset's notification topic;
+        `subscribers` is required but the endpoint IGNORES it. To remove one user use unsubscribe()."""
         return CLIENT.api.delete_subscription(event_name, entity_name, entity_id, subscribers)
 
-    @mcp.tool()
+    @mcp.tool(title="Unsubscribe user", annotations=DESTRUCTIVE)
     @tool_result
     def unsubscribe(
         entity_id: str,
@@ -2721,49 +2528,31 @@ if CONFIG.enable_destructive:
         event_name: str = SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
         entity_name: str = SUBSCRIPTION_ENTITY_ASSET,
     ) -> Dict[str, Any]:
-        """Remove ONE subscriber from a subscription, leaving the record and the others in place.
-
-        A different route from delete_subscription(), which removes the entire record. Takes a single
-        user rather than a list because the endpoint removes only the first entry it is sent while
-        unsubscribing every entry from the notification topic — so a list would leave the two out of
-        step. A subscriber the record no longer lists is a success (the topic is still cleaned up);
-        only a missing subscription record is reported as not found.
-        """
+        """Use to remove ONE subscriber and keep the subscription (delete_subscription() removes it all)."""
         return CLIENT.api.unsubscribe(event_name, entity_name, entity_id, subscriber)
 
-    @mcp.tool()
+    @mcp.tool(title="Delete metadata schema", annotations=DESTRUCTIVE)
     @tool_result
     def delete_metadata_schema(database_id: str, metadata_schema_id: str) -> Dict[str, Any]:
-        """PERMANENTLY delete a metadata schema. Irreversible, and there is no archived state.
-
-        The schema's constraints stop being applied to the entity type it covered; metadata already
-        stored against it is left in place, unvalidated. Read it with list_metadata_schemas() first —
-        the definition cannot be recovered afterwards, only re-authored.
-        """
+        """Use only when asked to PERMANENTLY delete a metadata schema. Irreversible; stored metadata stays."""
         # `confirmDelete` is a REQUIRED-TRUE field of the request contract, not an optional interlock:
         # DeleteMetadataSchemaRequestModel declares an always=True validator that rejects any other
         # value, so the APIClient always sends true and there is nothing to surface as a parameter.
         # The controls on this tool are the destructive gate, its name, and this docstring.
         return CLIENT.api.delete_metadata_schema(database_id, metadata_schema_id)
 
-    @mcp.tool()
+    @mcp.tool(title="Delete API key (admin)", annotations=DESTRUCTIVE)
     @tool_result
     def delete_api_key(api_key_id: str) -> Dict[str, Any]:
-        """PERMANENTLY delete an API key (administrative scope). Irreversible.
-
-        Every client still presenting the key is locked out at once. Consider
-        update_api_key(is_active=False) first: it revokes the same access and can be undone.
-        """
+        """Use only when asked to PERMANENTLY delete an API key (admin scope). Irreversible; consider
+        update_api_key(is_active=False), which can be undone."""
         return CLIENT.api.delete_api_key(api_key_id)
 
-    @mcp.tool()
+    @mcp.tool(title="Delete my API key", annotations=DESTRUCTIVE)
     @tool_result
     def delete_user_api_key(api_key_id: str) -> Dict[str, Any]:
-        """PERMANENTLY delete one of the AUTHENTICATED user's own API keys. Irreversible.
-
-        Another user's key is reported as not found. Consider update_user_api_key(is_active=False)
-        first: it revokes the same access and can be undone.
-        """
+        """Use only when asked to PERMANENTLY delete one of your own API keys. Irreversible; consider
+        update_user_api_key(is_active=False)."""
         return CLIENT.api.delete_user_api_key(api_key_id)
 
     @mcp.tool()
@@ -2795,6 +2584,8 @@ if CONFIG.enable_destructive:
 # =========================================================================
 
 register_addon_tools(mcp, CLIENT, CONFIG, tool_result)
+# Which add-ons registered tools at start (vams_status reports it; a later sign-in does not add them).
+_ADDONS_REGISTERED = {module: addon_deployed(CLIENT, module) for module in ADDON_TOOL_MODULES}
 
 
 # =========================================================================
@@ -2805,9 +2596,16 @@ register_custom_tools(mcp, CLIENT, CONFIG, tool_result)
 
 
 def main() -> None:
-    """Entry point: run the MCP server over stdio."""
+    """Entry point: run the MCP server over stdio.
+
+    Starts even when no profile is signed in: the tools then answer NotAuthenticated (and vams_status
+    says why) instead of the server exiting with no tools, which left an agent nothing to call but a
+    shell. The reason goes to stderr for the person who configured the host.
+    """
     if CLIENT is None:
-        raise SystemExit(f"[vams-mcp] {STARTUP_ERROR}")
+        logging.getLogger("vams_mcp").warning(
+            "[vams-mcp] starting without a VAMS sign-in: %s", STARTUP_ERROR
+        )
     mcp.run()
 
 

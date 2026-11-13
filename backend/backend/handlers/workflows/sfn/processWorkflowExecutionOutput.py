@@ -9,7 +9,7 @@ import uuid
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
@@ -34,6 +34,7 @@ from common.apiRoutes import (
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import success, validation_error, VAMSGeneralErrorResponse
 from common.s3 import validateUnallowedFileExtensionAndContentType, list_all_objects, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import AssetUploadTableModel, MAX_FILES_PER_UPLOAD_REQUEST
@@ -1435,10 +1436,15 @@ def _ingest_response(pending, batch_id=""):
 
 
 def _record_and_finish(event, bucket_name, collected_output_files, collected_output_metadata,
-                       collected_output_results, output_failures):
+                       collected_output_results, output_failures, audit_event=None):
     """Record the end-state pipeline outputs and the run's completion status, then refresh its stored
     log. Shared by the ingest mode (no large outputs pending) and the finalize mode. Non-critical to
-    the asset write-back: a recording error is logged."""
+    the asset write-back: a recording error is logged.
+
+    With the entrypoint's ``audit_event`` the run's ingest and its end are recorded (audit contract:
+    the entrypoint's own event object). A run whose large outputs were handed to copy jobs records
+    them here once, from the finalize mode, so each run has one ingest and one end record."""
+    execution_start_date = ""
     try:
         # The workflow SFN log group is the same for every workflow; read it from
         # env (not the ASL event) so this works even for workflows not redeployed
@@ -1489,12 +1495,22 @@ def _record_and_finish(event, bucket_name, collected_output_files, collected_out
     except Exception as e:
         # Output recording is non-critical to the upload pipeline; log and continue.
         logger.exception(f"Error recording execution outputs (non-critical): {e}")
+    if audit_event is not None:
+        final_status, _ = _terminal_status(output_failures)
+        log_action(audit_event, "workflowOutputIngest",
+                   outcome="success" if not output_failures else "failed",
+                   reason="internal" if output_failures else None, on_behalf_of=_initiator(event),
+                   **_execution_ids(event), file_count=len(collected_output_files),
+                   item_count=len(collected_output_metadata) + len(collected_output_results))
+        _log_execution_end(audit_event, event, final_status, execution_start_date)
 
 
 # Event fields the finalize step needs back (recording, deferred metadata, the run's identity).
 _STATE_EVENT_FIELDS = (
     'workflowExecutionId', 'workflowDatabaseId', 'workflowId', 'endStatePipelineExecutionId',
     'priorPipelineExecutionIds', 'databaseId', 'assetId', 'metadataPathKey',
+    # The user the run ran for: its ingest and end records name them (onBehalfOf).
+    'executingUserName',
 )
 
 
@@ -1608,7 +1624,7 @@ def _descriptor_from_job(row):
 
 def _begin_waiting_for_ingestion(event, bucket_name, source_bucket, collected_output_files,
                                  collected_output_metadata, collected_output_results, output_failures,
-                                 pending_jobs, pending_bytes, deferred_metadata):
+                                 pending_jobs, pending_bytes, deferred_metadata, audit_event=None):
     """Save what the finalize step needs, record the ingestion batch and put the run in the
     INGESTING_OUTPUTS phase. A waiting definition (awaitOutputIngestion) then waits on the batch;
     for one that does not wait the copy engine invokes finalize when the last copy finishes, or this
@@ -1654,7 +1670,8 @@ def _begin_waiting_for_ingestion(event, bucket_name, source_bucket, collected_ou
     if not waits:
         if recorded.get("claimed"):
             # Every copy finished before the batch was recorded: finalize now.
-            _finalize_ingestion({"batchId": execution_id, "workflowExecutionId": execution_id})
+            _finalize_ingestion({"batchId": execution_id, "workflowExecutionId": execution_id},
+                                audit_event=audit_event)
         return _ingest_response(pending=False)
     return _ingest_response(pending=True, batch_id=execution_id)
 
@@ -1674,7 +1691,7 @@ def _await_ingestion(event):
     return {"registered": True}
 
 
-def _finalize_ingestion(event):
+def _finalize_ingestion(event, audit_event=None):
     """Finalize mode: read every copy job's outcome, apply the deferred file-level metadata of the
     files that landed, and record the run like the ingest mode does. A file whose copy failed is
     left out of the output rows and named in the run's error, so the run ends FAILED; the outputs
@@ -1748,16 +1765,49 @@ def _finalize_ingestion(event):
             output_failures.append(METADATA_WRITE_BACK_FAILURE)
 
     _record_and_finish(state_event, state.get("bucketName", ""), output_files, output_metadata,
-                       state.get("collectedOutputResults") or [], output_failures)
+                       state.get("collectedOutputResults") or [], output_failures,
+                       audit_event=audit_event)
     logger.info(f"Finalized output ingestion of execution {state_event.get('workflowExecutionId')}: "
                 f"{len(succeeded)} landed, {len(failed)} failed")
     return {"finalized": True, "failedFiles": len(failed)}
 
 
+def _duration_ms(start_date):
+    """Milliseconds from an ISO 8601 start date until now, or None when it cannot be read."""
+    try:
+        started = datetime.fromisoformat(str(start_date).replace("Z", "+00:00"))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - started).total_seconds() * 1000))
+    except (TypeError, ValueError):
+        return None
+
+
+def _execution_ids(body):
+    return {"database_id": body.get("databaseId") or None, "asset_id": body.get("assetId") or None,
+            "workflowId": body.get("workflowId") or None, "executionId": body.get("workflowExecutionId") or None}
+
+
+def _initiator(body):
+    user = body.get("executingUserName")
+    return user if user and user != "SYSTEM_USER" else None
+
+
+def _log_execution_end(audit_event, body, status, start_date, details=None):
+    """Record the end of a workflow execution: its outcome and duration, for the user it ran for."""
+    log_action(audit_event, "workflowExecutionEnd", outcome="success" if status == "SUCCEEDED" else "failed",
+               reason=None if status == "SUCCEEDED" else "internal", duration_ms=_duration_ms(start_date),
+               on_behalf_of=_initiator(body), **_execution_ids(body),
+               details={"workflowDatabaseId": body.get("workflowDatabaseId"),
+                        "pipelineExecutionId": body.get("endStatePipelineExecutionId"), **(details or {})})
+
+
+@audited_handler
 def lambda_handler(event, context):
     global _invocation_context
     _invocation_context = context
     logger.info(event)
+    audit_event = event
 
     try:
         if 'body' in event:
@@ -1780,7 +1830,7 @@ def lambda_handler(event, context):
         if mode == MODE_AWAIT:
             return _await_ingestion(event)
         if mode == MODE_FINALIZE:
-            return _finalize_ingestion(event)
+            return _finalize_ingestion(event, audit_event=audit_event)
 
         # Resolve the OUTPUT TARGET identity: outputs are written to this asset. The output
         # target is threaded explicitly as outputAssetId/outputDatabaseId (it equals the input
@@ -1793,7 +1843,11 @@ def lambda_handler(event, context):
         # results text + logs recorded against the execution transaction (e.g. an LLM-style pipeline
         # returning a textual response). Handle them before the asset-required validation below.
         if event.get('outputLocationType') == 'none' or (not event['assetId'] and not event['databaseId']):
-            return _process_results_only(event)
+            response = _process_results_only(event)
+            _log_execution_end(audit_event, event, "SUCCEEDED", _execution_start_date(
+                event.get('workflowExecutionId', ''), event.get('workflowDatabaseId', ''),
+                event.get('workflowId', '')), details={"resultsOnly": True})
+            return response
 
         #Input validation
         if not event['databaseId']:
@@ -2320,15 +2374,16 @@ def lambda_handler(event, context):
                 # Large outputs are still being copied (by this attempt, or by an earlier attempt of
                 # this step whose copies may all have finished already). The outcome is recorded once
                 # every copy has finished, so the run is not reported SUCCEEDED before its outputs
-                # landed, and no copied file is left without its output row.
+                # landed, and no copied file is left without its output row. The ingest and the end
+                # are recorded then, by the finalize mode.
                 return _begin_waiting_for_ingestion(
                     event, bucket_name, source_bucket, collected_output_files,
                     collected_output_metadata, collected_output_results, output_failures,
-                    pending_jobs, pending_bytes, deferred_metadata)
+                    pending_jobs, pending_bytes, deferred_metadata, audit_event=audit_event)
 
-            # Record end-state pipeline outputs + completion status.
+            # Record end-state pipeline outputs + completion status, then the ingest and the end.
             _record_and_finish(event, bucket_name, collected_output_files, collected_output_metadata,
-                               collected_output_results, output_failures)
+                               collected_output_results, output_failures, audit_event=audit_event)
 
             return _ingest_response(pending=False)
 

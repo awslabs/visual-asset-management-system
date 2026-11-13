@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useReducer, useState, useCallback } from "react";
+import React, { useEffect, useReducer, useRef, useState, useCallback } from "react";
 import {
     Alert,
     Box,
@@ -111,6 +111,9 @@ export default function ViewAsset() {
     });
     const [versions, setVersions] = useState<any[]>([]);
     const [versionsLoading, setVersionsLoading] = useState(false);
+    // Counts the changes made on the Versions tab, each of which reloads the asset and its versions.
+    const [versionsRevision, setVersionsRevision] = useState(0);
+    const versionsAssetKey = useRef("");
 
     usePageTitle(databaseId, asset?.assetName);
     const assetLoaded = !!assetId && asset?.assetId === assetId;
@@ -228,11 +231,38 @@ export default function ViewAsset() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [databaseId, assetId]);
 
+    // Reload the asset after a change on the Versions tab, so the header's current version follows
+    // it. The details stay on screen while the request runs, and a failed reload leaves them as
+    // they are.
+    useEffect(() => {
+        if (versionsRevision === 0 || !databaseId || !assetId) return;
+        let cancelled = false;
+        const assetKey = `${databaseId}/${assetId}`;
+        fetchAssetWithStatus({ databaseId, assetId, showArchived: true })
+            .then(([, item]) => {
+                // Drop an answer for an asset the user has already left: versionsAssetKey names
+                // the asset now shown (the versions effect below updates it on navigation).
+                if (cancelled || versionsAssetKey.current !== assetKey) return;
+                if (item && typeof item === "object") setAsset(item);
+            })
+            .catch((error) => console.log("Failed to reload asset:", error));
+        return () => {
+            cancelled = true;
+        };
+        // Runs once per change on the Versions tab; the asset effect above handles a new asset.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [versionsRevision]);
+
     // Fetch asset versions for the version dropdown, once the asset is known so an archived
-    // asset's versions are asked for with showArchived
+    // asset's versions are asked for with showArchived. The list is cleared for another asset and
+    // kept while it reloads for the same one.
     useEffect(() => {
         let cancelled = false;
-        setVersions([]);
+        const assetKey = `${databaseId}/${assetId}`;
+        if (versionsAssetKey.current !== assetKey) {
+            versionsAssetKey.current = assetKey;
+            setVersions([]);
+        }
         const loadVersions = async () => {
             if (!databaseId || !assetId || !assetLoaded) return;
             setVersionsLoading(true);
@@ -262,7 +292,9 @@ export default function ViewAsset() {
         return () => {
             cancelled = true;
         };
-    }, [databaseId, assetId, assetLoaded, isArchived]);
+    }, [databaseId, assetId, assetLoaded, isArchived, versionsRevision]);
+
+    const handleVersionsChanged = useCallback(() => setVersionsRevision((n) => n + 1), []);
 
     // Handle version selection change and sync to URL query parameter
     const handleVersionChange = useCallback(
@@ -410,6 +442,7 @@ export default function ViewAsset() {
                                         onSelectedPathChange={handleSelectedPathChange}
                                         requestedTabId={requestedTabId}
                                         onTabChange={handleTabChange}
+                                        onVersionsChanged={handleVersionsChanged}
                                     />
 
                                     {/* Metadata - New MetadataV2 Component */}

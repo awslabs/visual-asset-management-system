@@ -13,8 +13,8 @@ that reads through it, whatever its asset grants are.
 Each template is run through the import's own substitution and conversion (``substitute_variables``,
 ``build_constraint_data``) and then through the real policy generation and Casbin evaluation, with only
 the two table reads stubbed. ``READ_ONLY_POST_ROUTES`` records every POST route a read-only template
-reaches, so a criterion that widens the grant past the download route fails here as well as one that
-misses it.
+reaches (the asset export, a read carried in a POST body, among them), so a criterion that widens the
+grant past the download and export routes fails here as well as one that misses it.
 """
 
 import json
@@ -28,6 +28,7 @@ import backend.backend.handlers.authz as authz_module  # noqa: E402
 from backend.backend.common.apiRoutes import (  # noqa: E402
     ALL_API_ROUTES,
     API_AUTH_LOGIN_PROFILE,
+    API_ASSET_EXPORT,
     API_AUTH_ROUTES,
     API_CHECK_SUBSCRIPTION,
     API_DOWNLOAD_ASSET,
@@ -62,6 +63,7 @@ READ_ONLY_POST_ROUTES = {
     API_DOWNLOAD_ASSET,
     API_ZIP_DOWNLOADS_ASSET,
     API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
+    API_ASSET_EXPORT,
 }
 DOWNLOAD_CONSTRAINT_NAME = "{{ROLE_NAME}}-api-routes-download"
 

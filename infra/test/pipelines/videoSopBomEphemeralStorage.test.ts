@@ -163,6 +163,17 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         rule.NoncurrentVersionExpiration !== undefined ||
         rule.ExpiredObjectDeleteMarker !== undefined;
 
+    /**
+     * True for a rule that expires something and is not one of the bucket's always-on rules. The asset
+     * export staging prefix (test/storage/assetExportStagingExpiry.test.ts) and the Download as Zip
+     * archives' prefix (test/platform/zipDownloadsInfra.test.ts) expire in every deployment, so they are
+     * not this pipeline's rules and do not count against it.
+     */
+    const pipelineExpiry = (rule: any): boolean =>
+        expiresSomething(rule) &&
+        rule.Prefix !== Config.ASSET_EXPORT_STAGING_PREFIX &&
+        rule.Prefix !== PREPARED_DOWNLOADS_PREFIX;
+
     test("[control] the pre-existing incomplete-multipart abort rule is still there", () => {
         // Without this, a change that dropped `lifecycleRules` entirely would make "no rule expires
         // outside the prefix" pass over an empty list.
@@ -207,13 +218,8 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         // Viewer data, other pipelines' working files and the non-versioned auxiliary objects live under
         // other prefixes and are not this pipeline's to expire — current versions, noncurrent versions
         // or delete markers alike.
-        // The Download as Zip archives' own expiry (top-level vams.preparedDownloads/, always deployed) is
-        // the one other expiring prefix, and holds no pipeline working file.
         const unscoped = auxBucketRules(synth).filter(
-            (rule) =>
-                expiresSomething(rule) &&
-                rule.Prefix !== VIDEO_SOP_BOM_AUX_PREFIX &&
-                rule.Prefix !== PREPARED_DOWNLOADS_PREFIX
+            (rule) => pipelineExpiry(rule) && rule.Prefix !== VIDEO_SOP_BOM_AUX_PREFIX
         );
         expect(unscoped).toEqual([]);
     });
@@ -260,11 +266,12 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         });
 
         test("no expiration rule is added", () => {
-            // Only the always-deployed Download as Zip rules (vams.preparedDownloads/) expire anything.
-            const expirations = auxBucketRules(disabledSynth)
-                .filter(expiresSomething)
-                .filter((rule) => rule.Prefix !== PREPARED_DOWNLOADS_PREFIX);
+            const expirations = auxBucketRules(disabledSynth).filter(pipelineExpiry);
             expect(expirations).toEqual([]);
+            // Control: the always-on rules are there, so the filter above is what excludes them.
+            expect(auxBucketRules(disabledSynth).filter(expiresSomething).length).toBeGreaterThan(
+                0
+            );
         });
     });
 });

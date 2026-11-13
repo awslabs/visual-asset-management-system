@@ -16,6 +16,7 @@ from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVAL
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetLinks import (
     GetAssetLinksRequestModel,
@@ -560,7 +561,16 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
 # PUT Operations
 #######################
 
-def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestModel, claims_and_roles: dict) -> UpdateAssetLinkResponseModel:
+
+def _link_ids(link_item):
+    """The record ids of both ends of an asset link: the source as databaseId/assetId, the target
+    as targetDatabaseId/targetAssetId."""
+    return {"database_id": link_item.get("fromAssetDatabaseId"), "asset_id": link_item.get("fromAssetId"),
+            "targetDatabaseId": link_item.get("toAssetDatabaseId"), "targetAssetId": link_item.get("toAssetId")}
+
+
+def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestModel, claims_and_roles: dict,
+                      event=None) -> UpdateAssetLinkResponseModel:
     """Update an asset link (tags and assetLinkAliasId can be updated)"""
     try:
         # Get the asset link first
@@ -663,7 +673,12 @@ def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestM
             )
         
         logger.info(f"Updated asset link {asset_link_id}")
-        
+        if event is not None:
+            log_action(event, "assetLinkUpdate", assetLinkId=asset_link_id, **_link_ids(link_item),
+                       changes=request_model.dict(exclude_unset=True),
+                       previous={field: link_item.get(field)
+                                 for field in request_model.dict(exclude_unset=True) if field in link_item})
+
         return UpdateAssetLinkResponseModel(
             message="Asset link updated successfully"
         )
@@ -676,7 +691,8 @@ def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestM
 # DELETE Operations
 #######################
 
-def delete_asset_link(asset_link_id: str, claims_and_roles: dict) -> DeleteAssetLinkResponseModel:
+
+def delete_asset_link(asset_link_id: str, claims_and_roles: dict, event=None) -> DeleteAssetLinkResponseModel:
     """Delete an asset link by ID"""
     try:
         # Get the asset link first
@@ -712,7 +728,9 @@ def delete_asset_link(asset_link_id: str, claims_and_roles: dict) -> DeleteAsset
         )
         
         logger.info(f"Deleted asset link {asset_link_id} between {link_item['fromAssetId']} and {link_item['toAssetId']}")
-        
+        if event is not None:
+            log_action(event, "assetLinkDelete", assetLinkId=asset_link_id, **_link_ids(link_item))
+
         return DeleteAssetLinkResponseModel(
             message="Asset link deleted successfully"
         )
@@ -755,6 +773,7 @@ def handle_get_request(event):
             
             # Get the single asset link
             response = get_single_asset_link(request_model.assetLinkId, claims_and_roles)
+            log_action(event, "assetLinkGet", assetLinkId=request_model.assetLinkId)
             return success(body=response.dict())
         
         # Case 2: Get asset links for a specific asset
@@ -802,6 +821,9 @@ def handle_get_request(event):
                 claims_and_roles,
                 show_archived=show_archived
             )
+            log_action(event, "assetLinkList", database_id=request_model.databaseId, asset_id=request_model.assetId,
+                       request_parameters={"childTreeView": request_model.childTreeView,
+                                           "showArchived": show_archived})
             return success(body=response.dict())
             
         else:
@@ -877,7 +899,7 @@ def handle_put_request(event):
         request_model = parse(body, model=UpdateAssetLinkRequestModel)
         
         # Update the asset link
-        response = update_asset_link(path_request_model.assetLinkId, request_model, claims_and_roles)
+        response = update_asset_link(path_request_model.assetLinkId, request_model, claims_and_roles, event=event)
         return success(body=response.dict())
         
     # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
@@ -929,7 +951,7 @@ def handle_delete_request(event):
         logger.info(f"Deleting asset link {request_model.assetLinkId}")
 
         # Delete the asset link
-        response = delete_asset_link(request_model.assetLinkId, claims_and_roles)
+        response = delete_asset_link(request_model.assetLinkId, claims_and_roles, event=event)
         return success(body=response.dict())
         
     # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
@@ -955,6 +977,8 @@ def handle_delete_request(event):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset links operations (GET, PUT, and DELETE)"""
     global claims_and_roles

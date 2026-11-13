@@ -12,7 +12,7 @@ from handlers.authz import CasbinEnforcer
 from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate, normalize_userid
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_auth_other
+from customLogging.auditLogging import log_auth_other, audited_handler
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success,
@@ -65,6 +65,7 @@ def get_user(userId):
     return response.get("Item") or {'userId': userId}
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     global claims_and_roles
 

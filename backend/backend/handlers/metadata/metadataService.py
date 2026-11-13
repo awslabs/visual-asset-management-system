@@ -25,6 +25,7 @@ from common.dynamodb import get_asset_record, asset_authorization_object
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.metadataSchemaValidation import (
     get_aggregated_schemas,
@@ -1707,6 +1708,46 @@ def delete_asset_link_metadata(asset_link_id: str, request_model: DeleteAssetLin
 # Request Handlers - Asset Link Metadata
 #######################
 
+def _returned_count(response):
+    """The number of metadata entries a read returned (a count, never the entries)."""
+    for field in ("metadata", "Items", "items"):
+        value = getattr(response, field, None)
+        if value is None and isinstance(response, dict):
+            value = response.get(field)
+        if isinstance(value, (list, dict)):
+            return len(value)
+    return None
+
+
+def _log_metadata_write(event, action: str, response, request_model, **ids) -> None:
+    """
+    Record one metadata write on its target entity: the entries written (key -> value and value
+    type) or the keys deleted, and how many entries succeeded. Nothing when no entry succeeded.
+    """
+    succeeded = list(getattr(response, "successfulItems", None) or [])
+    if not getattr(response, "successCount", 0):
+        return
+    details = {}
+    changes = None
+    items = getattr(request_model, "metadata", None)
+    if items is not None:
+        written = set(succeeded)
+        changes = {
+            item.metadataKey: {"value": item.metadataValue,
+                               "valueType": getattr(item.metadataValueType, "value", item.metadataValueType)}
+            for item in items if not written or item.metadataKey in written
+        }
+        update_type = getattr(request_model, "updateType", None)
+        if update_type is not None:
+            details["updateType"] = getattr(update_type, "value", update_type)
+    else:
+        details["deletedKeys"] = succeeded
+    metadata_type = getattr(request_model, "type", None)
+    if isinstance(metadata_type, str):
+        details["type"] = metadata_type
+    log_action(event, action, item_count=response.successCount, changes=changes, details=details or None, **ids)
+
+
 def handle_asset_link_metadata_get(event):
     """Handle GET requests for asset link metadata"""
     path_parameters = event.get('pathParameters', {})
@@ -1735,6 +1776,9 @@ def handle_asset_link_metadata_get(event):
         
         # Get metadata
         response = get_asset_link_metadata(path_request_model.assetLinkId, query_params, claims_and_roles)
+        log_action(event, "metadataGet", assetLinkId=path_request_model.assetLinkId,
+                   item_count=_returned_count(response),
+                   request_parameters=query_params)
         return success(body=response.dict())
         
     except PermissionError as p:
@@ -1781,6 +1825,8 @@ def handle_asset_link_metadata_post(event):
         
         # Create metadata
         response = create_asset_link_metadata(path_request_model.assetLinkId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataCreate", response, request_model,
+                            assetLinkId=path_request_model.assetLinkId)
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -1830,6 +1876,8 @@ def handle_asset_link_metadata_put(event):
         
         # Update metadata
         response = update_asset_link_metadata(path_request_model.assetLinkId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataUpdate", response, request_model,
+                            assetLinkId=path_request_model.assetLinkId)
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -1879,6 +1927,8 @@ def handle_asset_link_metadata_delete(event):
         
         # Delete metadata
         response = delete_asset_link_metadata(path_request_model.assetLinkId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataDelete", response, request_model,
+                            assetLinkId=path_request_model.assetLinkId)
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -2876,6 +2926,9 @@ def handle_asset_metadata_get(event):
         
         # Get metadata
         response = get_asset_metadata(path_request_model.databaseId, path_request_model.assetId, query_params, claims_and_roles)
+        log_action(event, "metadataGet", database_id=path_request_model.databaseId,
+                   asset_id=path_request_model.assetId, item_count=_returned_count(response),
+                   request_parameters=query_params)
         return success(body=response.dict())
         
     except PermissionError as p:
@@ -2922,6 +2975,8 @@ def handle_asset_metadata_post(event):
         
         # Create metadata
         response = create_asset_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataCreate", response, request_model,
+                            database_id=path_request_model.databaseId, asset_id=path_request_model.assetId)
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -2971,6 +3026,8 @@ def handle_asset_metadata_put(event):
         
         # Update metadata
         response = update_asset_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataUpdate", response, request_model,
+                            database_id=path_request_model.databaseId, asset_id=path_request_model.assetId)
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -3020,6 +3077,8 @@ def handle_asset_metadata_delete(event):
         
         # Delete metadata
         response = delete_asset_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataDelete", response, request_model,
+                            database_id=path_request_model.databaseId, asset_id=path_request_model.assetId)
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -4062,6 +4121,9 @@ def handle_file_metadata_get(event):
         
         query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId, 'showArchived': query_request_model.showArchived}
         response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
+        log_action(event, "metadataGet", database_id=path_request_model.databaseId,
+                   asset_id=path_request_model.assetId, file_path=file_path, item_count=_returned_count(response),
+                   request_parameters={**query_params, 'type': query_request_model.type})
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4103,6 +4165,9 @@ def handle_file_metadata_post(event):
             logger.info(f"Stripped assetId prefix from filePath")
         
         response = create_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataCreate", response, request_model,
+                            database_id=path_request_model.databaseId, asset_id=path_request_model.assetId,
+                            file_path=request_model.filePath)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4144,6 +4209,9 @@ def handle_file_metadata_put(event):
             logger.info(f"Stripped assetId prefix from filePath")
         
         response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataUpdate", response, request_model,
+                            database_id=path_request_model.databaseId, asset_id=path_request_model.assetId,
+                            file_path=request_model.filePath)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4185,6 +4253,9 @@ def handle_file_metadata_delete(event):
             logger.info(f"Stripped assetId prefix from filePath")
         
         response = delete_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataDelete", response, request_model,
+                            database_id=path_request_model.databaseId, asset_id=path_request_model.assetId,
+                            file_path=request_model.filePath)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4967,6 +5038,9 @@ def handle_database_metadata_get(event):
         query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken}
 
         response = get_database_metadata(path_request_model.databaseId, query_params, claims_and_roles)
+        log_action(event, "metadataGet", database_id=path_request_model.databaseId,
+                   item_count=_returned_count(response),
+                   request_parameters=query_params)
         return success(body=response.dict())
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
@@ -4998,6 +5072,7 @@ def handle_database_metadata_post(event):
         
         request_model = parse(body, model=CreateDatabaseMetadataRequestModel)
         response = create_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataCreate", response, request_model, database_id=path_request_model.databaseId)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -5032,6 +5107,7 @@ def handle_database_metadata_put(event):
         
         request_model = parse(body, model=UpdateDatabaseMetadataRequestModel)
         response = update_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataUpdate", response, request_model, database_id=path_request_model.databaseId)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -5066,6 +5142,7 @@ def handle_database_metadata_delete(event):
         
         request_model = parse(body, model=DeleteDatabaseMetadataRequestModel)
         response = delete_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataDelete", response, request_model, database_id=path_request_model.databaseId)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -5083,6 +5160,8 @@ def handle_database_metadata_delete(event):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for centralized metadata service"""
     global claims_and_roles

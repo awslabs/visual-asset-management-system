@@ -23,6 +23,7 @@ import {
     latestUserApiKeyExpiryMs,
     latestUserApiKeyExpiryTime,
 } from "../../common/constants/apiKeys";
+import { datePickerStrings } from "../../common/helpers/datePickerStrings";
 
 interface CreateApiKeyProps {
     open: boolean;
@@ -325,6 +326,7 @@ export default function CreateApiKey({ open, setOpen, setReload, userMode }: Cre
                                     : undefined
                             }
                             placeholder="YYYY/MM/DD"
+                            i18nStrings={datePickerStrings("expiration date")}
                             data-testid="api-key-expiresDate"
                         />
                     </FormField>

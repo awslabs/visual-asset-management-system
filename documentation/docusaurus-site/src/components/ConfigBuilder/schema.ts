@@ -380,6 +380,14 @@ const CORE_FIELDS: FieldMeta[] = [
         help: "Create a dedicated CloudWatch Logs group and CloudTrail trail for this stack. CloudTrail allows five trails per Region; turn this off in a Region that already has five.",
     },
     {
+        path: "app.auditLogging.recordReads",
+        label: "Record reads in the audit log",
+        input: "boolean",
+        section: "security",
+        advanced: true,
+        help: "Write an audit record for every read (gets, lists and searches): the request and the number of items returned, never the content. On by default, and when the setting is absent. Turning it off cuts audit log volume; writes, denials, failures, downloads and exports are recorded either way.",
+    },
+    {
         path: "app.useKmsCmkEncryption.enabled",
         label: "Customer-managed KMS encryption",
         input: "boolean",
@@ -813,6 +821,15 @@ const CORE_FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
     },
     {
+        path: "app.authProvider.useCognito.additionalTokenAudiences",
+        label: "Additional accepted app clients",
+        input: "string-array",
+        section: "auth",
+        advanced: true,
+        help: "App client ids of other clients in the VAMS user pool (for example one registered for a remote MCP server) whose ID and access tokens the API accepts, alongside the web app client. Exact ids, at most 10, no wildcards. Empty accepts the web app client only.",
+        visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
+    },
+    {
         path: "app.authProvider.useExternalOAuthIdp.enabled",
         label: "External OAuth IdP",
         input: "boolean",
@@ -911,6 +928,15 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "text",
         section: "auth",
         advanced: true,
+        visibleWhen: oauthEnabled,
+    },
+    {
+        path: "app.authProvider.useExternalOAuthIdp.additionalTokenAudiences",
+        label: "Additional accepted JWT audiences",
+        input: "string-array",
+        section: "auth",
+        advanced: true,
+        help: "Other aud values (for example of a client registered with your IdP for a remote MCP server) the API accepts alongside the JWT audience above. Exact values, at most 10, no wildcards. Empty accepts that audience only.",
         visibleWhen: oauthEnabled,
     },
     {
@@ -1068,7 +1094,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "text",
         section: "pipelines-standard",
         advanced: true,
-        help: "Default model provider. Required when enabled (e.g. global.anthropic.claude-sonnet-4-5-20250929-v1:0).",
+        help: "Default model provider. Required when enabled (commercial default global.anthropic.claude-sonnet-5-5).",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
     },
     {
@@ -1276,7 +1302,7 @@ const CORE_FIELDS: FieldMeta[] = [
         help:
             "Required when enabled outside the commercial partition, where VAMS supplies no default: " +
             "model availability differs by partition and account entitlement. Commercial defaults to " +
-            "global.anthropic.claude-sonnet-4-5-20250929-v1:0. Accepts a model id or an inference-profile ARN.",
+            "global.anthropic.claude-sonnet-5-5. Accepts a model id or an inference-profile ARN.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
     },
     {

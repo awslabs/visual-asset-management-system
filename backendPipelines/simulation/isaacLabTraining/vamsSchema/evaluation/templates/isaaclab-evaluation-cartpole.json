@@ -61,7 +61,7 @@
             "type": "string",
             "required": false,
             "label": "Checkpoint path",
-            "description": "A path to the policy file within the asset, for example checkpoints/model_300.pt. Leave it blank to evaluate the .pt file found on the asset."
+            "description": "A path to the policy file within the asset, for example checkpoints/<executionId>/model_300.pt for a checkpoint a training run wrote. Leave it blank to evaluate the highest-numbered checkpoint in the run folder written most recently."
         }
     ]
 }

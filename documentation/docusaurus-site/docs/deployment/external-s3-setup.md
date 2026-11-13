@@ -739,11 +739,11 @@ The run area is shared across the deployment: one execution resolves a single de
 
 The auxiliary bucket (a separate bucket managed by VAMS) stores:
 
-| Prefix                                    | Purpose                | Description                                                                                                                                                                     |
-| ----------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `{databaseId}/{assetFileKey}/preview/`    | Viewer data            | Previews and viewer data derived from one asset file, where `assetFileKey` is the file's full asset-bucket key (for example, Potree octree files under `preview/PotreeViewer/`) |
-| `pipelines/{pipelineName}/{executionId}/` | Pipeline working files | Temporary working files for one workflow execution                                                                                                                              |
-| `assetExports/{databaseId}/{assetId}/`    | Export staging         | Staged asset export payloads, delivered through a presigned URL                                                                                                                 |
+| Prefix                                      | Purpose                | Description                                                                                                                                                                     |
+| ------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{databaseId}/{assetFileKey}/preview/`      | Viewer data            | Previews and viewer data derived from one asset file, where `assetFileKey` is the file's full asset-bucket key (for example, Potree octree files under `preview/PotreeViewer/`) |
+| `pipelines/{pipelineName}/{executionId}/`   | Pipeline working files | Temporary working files for one workflow execution                                                                                                                              |
+| `vams.assetExports/{databaseId}/{assetId}/` | Export staging         | Staged asset export payloads, delivered through a presigned URL and expired 8 days after creation                                                                               |
 
 ### How databases, buckets, and assets relate
 

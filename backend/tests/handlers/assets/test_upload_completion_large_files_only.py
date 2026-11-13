@@ -3,17 +3,16 @@
 
 """A completion whose every file is over the async threshold is accepted, not failed (#1140).
 
-Files over 1 GiB are queued for the large-file consumer (or handed to a copy job) and never enter the
-list of files the completion copies itself. Both completion routes used to treat an empty list as
-"No files were successfully uploaded" (overallSuccess False, and the CLI exited 1) although every
-queued file then landed. The workflow output step read the same answer from the external route and
-recorded the run FAILED with "The asset file write-back failed." although its output landed.
+Files over 1 GiB are queued for the large-file consumer and never enter the list of files the
+completion copies itself. Both completion routes treated an empty list as "No files were
+successfully uploaded" (overallSuccess False, so the CLI exited 1 and a workflow write-back of only
+large outputs ended FAILED) although every queued file then landed.
 
 Pinned here, for both routes:
 - a large-only completion answers overallSuccess True with the files flagged asynchronous;
 - the asset type and the subscription email are left to the consumer (the file has not landed);
-- mixed and small-only completions behave as before;
-- the workflow output step reads a large-only answer as a successful write-back.
+- the 1 GiB boundary: exactly 1 GiB is copied synchronously, one byte more is queued;
+- mixed and small-only completions, and a large file that could not be queued, behave as before.
 """
 
 import os
@@ -33,7 +32,15 @@ GIB = 1024 ** 3
 NO_FILES = "No files were successfully uploaded"
 UPLOAD_ID = "up-1"
 TEMP_PREFIX = "temp/up-1/"
-SIZES = {"/big.e57": 3 * GIB, "/huge.las": 2 * GIB, "/small.glb": 1024}
+SIZES = {
+    "/big.e57": 3 * GIB,
+    "/huge.las": 2 * GIB,
+    # The single-file case from the issue report: 1,269,109,728 bytes.
+    "/archive.zip": 1_269_109_728,
+    "/edge.bin": GIB,
+    "/over.bin": GIB + 1,
+    "/small.glb": 1024,
+}
 
 
 def _asset():
@@ -46,10 +53,9 @@ def _env(upload_record):
     """Both completion routes with S3, the queue and the asset writes stubbed. The multipart size
     comes from SIZES by the file's temp key; the external HEAD answers the same sizes."""
     from backend.backend.handlers.assets import uploadFile as uf
-    from common.dynamodb import to_update_expr
 
     def _size_from_parts(bucket, key, upload_id, parts):
-        return SIZES["/" + key.split("asset-1/", 1)[-1].lstrip("/")], True, None
+        return SIZES["/" + key.rsplit("/", 1)[-1]], True, None
 
     def _head(Bucket, Key, **_):
         name = "/" + Key.rsplit("/", 1)[-1]
@@ -65,8 +71,7 @@ def _env(upload_record):
             patch.object(uf, "get_database_details", return_value={"databaseId": "db-1"}), \
             patch.object(uf, "asset_upload_table", MagicMock()), \
             patch.object(uf, "asset_table", MagicMock()), \
-            patch.object(uf, "to_update_expr", to_update_expr), \
-            patch.object(uf, "delete_upload_details", MagicMock()) as delete_record, \
+            patch.object(uf, "delete_upload_details", MagicMock()), \
             patch.object(uf, "log_file_upload", MagicMock()), \
             patch.object(uf, "validateUnallowedFileExtensionAndContentType", return_value=True), \
             patch.object(uf, "validateS3AssetExtensionsAndContentType", return_value=True), \
@@ -77,11 +82,10 @@ def _env(upload_record):
             patch.object(uf, "determine_asset_type", return_value=".glb"), \
             patch.object(uf, "update_asset_attributes") as update_asset, \
             patch.object(uf, "send_subscription_email", MagicMock()) as email, \
+            patch.object(uf, "claims_and_roles", {"tokens": ["alice@corp"]}, create=True), \
             patch.object(uf, "s3", MagicMock()) as s3:
         s3.head_object.side_effect = _head
-        uf.claims_and_roles = {"tokens": ["alice@corp"]}
-        yield uf, {"queue": queue, "copy": copy, "update_asset": update_asset, "email": email,
-                   "delete_record": delete_record}
+        yield uf, {"queue": queue, "copy": copy, "update_asset": update_asset, "email": email}
 
 
 def _user_record(keys):
@@ -127,11 +131,11 @@ def _complete_external(*keys):
 @pytest.mark.unit
 class TestUserUploadOfLargeFilesOnly:
     def test_a_single_large_file_is_accepted(self):
-        response, m = _complete_user("/big.e57")
+        response, m = _complete_user("/archive.zip")
         assert response.message != NO_FILES
         assert response.overallSuccess is True
         assert response.largeFileAsynchronousHandling is True
-        assert [r.success for r in response.fileResults] == [True]
+        assert [(r.success, r.largeFileAsynchronousHandling) for r in response.fileResults] == [(True, True)]
         m["queue"].assert_called_once()
         m["copy"].assert_not_called()
 
@@ -145,6 +149,20 @@ class TestUserUploadOfLargeFilesOnly:
         # The large-file consumer sets the asset type and notifies subscribers once it lands.
         m["update_asset"].assert_not_called()
         m["email"].assert_not_called()
+
+    def test_exactly_one_gib_is_copied_synchronously(self):
+        response, m = _complete_user("/edge.bin")
+        assert response.overallSuccess is True
+        assert response.largeFileAsynchronousHandling is False
+        m["queue"].assert_not_called()
+        m["copy"].assert_called_once()
+
+    def test_one_byte_over_one_gib_is_queued_and_accepted(self):
+        response, m = _complete_user("/over.bin")
+        assert response.overallSuccess is True
+        assert response.largeFileAsynchronousHandling is True
+        m["queue"].assert_called_once()
+        m["copy"].assert_not_called()
 
     def test_a_mixed_upload_is_unchanged(self):
         response, m = _complete_user("/small.glb", "/big.e57")
@@ -164,6 +182,19 @@ class TestExternalCompletionOfLargeFilesOnly:
         m["queue"].assert_called_once()
         m["copy"].assert_not_called()
         m["update_asset"].assert_not_called()
+        m["email"].assert_not_called()
+
+    def test_one_byte_over_one_gib_is_queued_and_accepted(self):
+        response, m = _complete_external("/over.bin")
+        assert response.overallSuccess is True
+        m["queue"].assert_called_once()
+
+    def test_exactly_one_gib_is_copied_synchronously(self):
+        response, m = _complete_external("/edge.bin")
+        assert response.overallSuccess is True
+        assert response.largeFileAsynchronousHandling is False
+        m["queue"].assert_not_called()
+        m["copy"].assert_called_once()
 
     def test_a_small_only_completion_is_unchanged(self):
         response, m = _complete_external("/small.glb")

@@ -429,3 +429,59 @@ class TestMainRowPhase:
                 log_group_arn="", log_stream_name="", execution_status="SUCCEEDED")
         main = [u for u in updates if "executionStopDate" in u.get("UpdateExpression", "")]
         assert main and main[-1]["UpdateExpression"].endswith("REMOVE executionPhase, outputIngestion")
+
+
+@pytest.mark.unit
+class TestAuditRecords:
+    """Audit contract: one workflowOutputIngest and one workflowExecutionEnd per run, written for the
+    entrypoint's own event. A run whose large outputs were handed to copy jobs records both when it is
+    finalized, never at the hand-off."""
+
+    def _actions(self, recorder):
+        return [c.args[1] for c in recorder.call_args_list]
+
+    def test_the_hand_off_records_nothing(self):
+        with patch.object(po, "log_action") as recorder:
+            _ingest({"awaitOutputIngestion": True})
+        assert self._actions(recorder) == []
+
+    def test_a_run_without_large_outputs_records_its_ingest_and_end_at_once(self):
+        listing = {"Contents": [dict(SMALL)]}
+        lookup, bucket, logs = base._asset_patches()
+        with lookup, bucket, logs, patch.object(po, "log_action") as recorder, \
+                patch.object(po, "verify_get_path_objects", return_value=listing), \
+                patch.object(po, "create_external_upload_record", return_value="upl-1"), \
+                patch.object(po, "_stamp_output_objects", return_value=True), \
+                patch.object(po, "process_external_upload",
+                             return_value={"overallSuccess": True, "fileResults": [
+                                 {"relativeKey": "small.glb", "success": True}]}), \
+                patch.object(po, "record_execution_outputs"):
+            event = base._event(filesPathKey=FILES_PREFIX, awaitOutputIngestion=True)
+            po.lambda_handler(event, MagicMock())
+        assert self._actions(recorder) == ["workflowOutputIngest", "workflowExecutionEnd"]
+        assert all(c.args[0] is event for c in recorder.call_args_list)
+
+    def test_finalize_records_the_ingest_and_the_end_for_its_own_event(self):
+        batch = {"jobId": "batch#E1", "context": {"workflowExecutionId": "E1", "stateBucket": base.RUN_BUCKET,
+                                                  "stateKey": "k"}}
+        state = _state()
+        state["event"]["executingUserName"] = "alice"
+        s3 = MagicMock()
+        s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(state).encode())}
+        event = {"body": {"mode": "finalize", "batchId": "E1", "workflowExecutionId": "E1"}}
+        with route_to_engine(po, MagicMock()), patch.object(po, "log_action") as recorder, \
+                patch.object(po.loc, "get_batch", return_value=batch), \
+                patch.object(po.loc, "batch_outcomes",
+                             return_value={"big/cloud.e57": {"status": "FAILED", "error": "x"}}), \
+                patch.object(po, "s3c", s3), \
+                patch.object(po, "process_metadata_file", return_value=APPLIED), \
+                patch.object(po, "record_execution_outputs"), \
+                patch.object(po, "_fetch_execution_logs", return_value=("", "")), \
+                patch.object(po, "_execution_start_date", return_value=""), \
+                patch.object(po, "_refresh_execution_log"):
+            po.lambda_handler(event, MagicMock())
+        assert self._actions(recorder) == ["workflowOutputIngest", "workflowExecutionEnd"]
+        ingest, end = recorder.call_args_list
+        assert ingest.args[0] is event and end.args[0] is event
+        assert ingest.kwargs["outcome"] == "failed" and ingest.kwargs["file_count"] == 1
+        assert end.kwargs["on_behalf_of"] == "alice" and end.kwargs["executionId"] == "E1"

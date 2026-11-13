@@ -42,6 +42,8 @@ interface TabbedContainerProps {
     requestedTabId?: string | null;
     /** Called when the user picks a tab, so the page can keep `?tab=` in step. */
     onTabChange?: (tabId: string) => void;
+    /** Called after a version is created, reverted to, edited, archived or unarchived. */
+    onVersionsChanged?: () => void;
 }
 
 export const TabbedContainer: React.FC<TabbedContainerProps> = ({
@@ -53,6 +55,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     onSelectedPathChange,
     requestedTabId,
     onTabChange,
+    onVersionsChanged,
 }) => {
     // The feature switches are applied before the app renders, so one reading per mount is enough.
     const [zipDownloadsEnabled] = useState(() => isZipDownloadsEnabled());
@@ -162,6 +165,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                             databaseId={databaseId}
                                             assetId={assetId}
                                             isActive={activeTabId === "versions"}
+                                            onVersionsChanged={onVersionsChanged}
                                         />
                                     </Suspense>
                                 ),

@@ -70,8 +70,9 @@ Both default roles are seeded at deployment time. `admin` receives the administr
 authorization tiers. `basicReadOnly` grants GET on the read paths (assets, files, metadata, databases,
 pipelines, workflows, executions, tags, comments, subscriptions, metadata schemas), the non-mutating
 POST paths (`/auth/routes`, `/search`, `/check-subscription`), the file download request
-(`POST /database/{databaseId}/assets/{assetId}/download`, which the file viewers use), and management
-of the caller's own API keys.
+(`POST /database/{databaseId}/assets/{assetId}/download`, which the file viewers use), the asset export
+request (`POST /database/{databaseId}/assets/{assetId}/export`), and management of the caller's own API
+keys.
 
 Two routes are administrative and belong to `admin` alone: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
