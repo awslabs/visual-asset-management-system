@@ -817,7 +817,7 @@ The **Default** column in the pipeline tables is the value the shipped `config.t
 
 ### Choosing an Amazon Bedrock model
 
-The GenAI metadata labeling, GenAI CAD STEP agent and Video SOP/BOM extraction pipelines each call one Amazon Bedrock model, named by the pipeline's `bedrockModelId`. The commercial template sets all three to `global.anthropic.claude-sonnet-5-5`, a global cross-Region inference profile. The AWS GovCloud (US) and AWS European Sovereign Cloud templates leave `bedrockModelId` empty, because model availability there differs from the commercial partition; set it before enabling a pipeline. The pipeline's IAM grant names the configured model, so a different model takes effect at the next deployment.
+The GenAI CAD STEP agent and Video SOP/BOM extraction pipelines each call one Amazon Bedrock model, named by the pipeline's `bedrockModelId`. The commercial template sets both to `global.anthropic.claude-sonnet-5-5`, a global cross-Region inference profile. The SYSTEM GenAI metadata pipeline names its models in its own `bedrockModels` block ([SYSTEM GenAI metadata](#system-genai-metadata-apppipelinesusesystemgenaimetadata)); the guidance below applies to its `analysisModelId` too. The AWS GovCloud (US) and AWS European Sovereign Cloud templates leave `bedrockModelId` empty, because model availability there differs from the commercial partition; set it before enabling a pipeline. The pipeline's IAM grant names the configured model, so a different model takes effect at the next deployment.
 
 Choose a model that is offered in the deployment Region and whose lifecycle status is `ACTIVE`. Amazon Bedrock refuses a model whose status is `LEGACY` to an account that has not called it in the last 30 days, and refuses every account once the model reaches end of life, while the model's inference profile still lists as `ACTIVE`. Check both before deploying:
 
@@ -833,11 +833,9 @@ aws bedrock get-foundation-model --region <region> \
 
 -   **Commercial (`aws`):** a `global.` profile routes requests to any commercial Region. A geographic profile (`us.`, `eu.`, `apac.`) keeps inference inside that geography. A plain foundation-model id runs in the deployment Region only.
 -   **AWS GovCloud (US) (`aws-us-gov`):** use a `us-gov.` inference profile or a foundation-model id offered in the deployment Region. Configuration validation rejects the commercial `global.` and `us.` prefixes.
--   **AWS European Sovereign Cloud (`aws-eusc`):** use an inference profile or a foundation-model id that `list-inference-profiles` or `list-foundation-models` returns in `eusc-de-east-1`. Configuration validation rejects the commercial `global.` and `us.` prefixes. Of the three pipelines, only the GenAI CAD STEP agent on its `fargate` runtime runs in this partition.
+-   **AWS European Sovereign Cloud (`aws-eusc`):** use an inference profile or a foundation-model id that `list-inference-profiles` or `list-foundation-models` returns in `eusc-de-east-1`. Configuration validation rejects the commercial `global.` and `us.` prefixes. Of these pipelines, only the GenAI CAD STEP agent on its `fargate` runtime runs in this partition.
 
-For GenAI 3D Metadata Labeling, choose a `global.` profile or a foundation-model id offered on demand in the deployment Region. Its IAM grant covers the model in the deployment Region and the global profile's model only, so a geographic profile (`us.`, `eu.`, `apac.`, `us-gov.`) can be refused when a request is routed to another Region ([#1390](https://github.com/awslabs/visual-asset-management-system/issues/1390)).
-
-The model also has to accept image input for the GenAI metadata labeling and Video SOP/BOM extraction pipelines, and tool use for the GenAI CAD STEP agent and Video SOP/BOM extraction pipelines.
+The model also has to accept image input for the Video SOP/BOM extraction pipeline and for the SYSTEM GenAI metadata pipeline's analysis model (unless `analysisModelSupportsImages` is `false`), and tool use for the GenAI CAD STEP agent and Video SOP/BOM extraction pipelines.
 
 ### 3D basic conversion (`app.pipelines.useConversion3dBasic`)
 
