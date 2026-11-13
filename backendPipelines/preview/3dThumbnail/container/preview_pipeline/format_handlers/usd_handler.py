@@ -98,6 +98,11 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
     if not parts:
         raise ValueError("No valid mesh geometry found in USD stage")
 
+    # A backdrop (a ground or environment plane) is dropped before the parts are merged, so the
+    # prims kept take their colours as a stage holding them alone would.
+    keep = scene_parts.backdrop_keep([points for points, _, _ in parts])
+    if keep is not None:
+        parts = [part for part, kept in zip(parts, keep) if kept]
     pv_mesh = _merge_parts(parts)
     pv_mesh = _normalize_usd_up_axis(stage, pv_mesh)
     scene_parts.record_parts(pv_mesh, [len(points) for points, _, _ in parts])

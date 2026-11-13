@@ -159,6 +159,13 @@ def _load(file_path: str, max_triangles: int = None, asset_root: str = None) -> 
                 trimeshes.append(geom)
             elif isinstance(geom, trimesh.PointCloud):
                 clouds.append(geom)
+        # A backdrop (a ground or environment plane) is dropped before any texture is baked or any
+        # part merged, so the parts kept load as a file holding them alone would.
+        keep = scene_parts.backdrop_keep([geom.vertices for geom in trimeshes + clouds])
+        if keep is not None:
+            n_meshes = len(trimeshes)
+            trimeshes = [geom for geom, kept in zip(trimeshes, keep[:n_meshes]) if kept]
+            clouds = [geom for geom, kept in zip(clouds, keep[n_meshes:]) if kept]
         if clouds:
             # A scene holding point clouds renders every one of its parts, meshes included.
             return _scene_parts_to_pyvista(trimeshes, clouds)
@@ -583,6 +590,9 @@ def _load_fbx_open3d(file_path: str, max_triangles: int = None) -> pv.PolyData:
     if not parts:
         raise ValueError("No triangle geometry read from the FBX file: it is empty, not an FBX 2011 "
                          "(7.1) or later file, or holds no meshes")
+    keep = scene_parts.backdrop_keep([vertices for vertices, _, _ in parts])
+    if keep is not None:
+        parts = [part for part, kept in zip(parts, keep) if kept]
 
     offsets = np.cumsum([0] + [len(vertices) for vertices, _, _ in parts[:-1]])
     points = np.concatenate([vertices for vertices, _, _ in parts])

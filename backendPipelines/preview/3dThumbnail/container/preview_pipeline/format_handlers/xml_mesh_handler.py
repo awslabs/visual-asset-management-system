@@ -133,6 +133,30 @@ def _z_up_to_y_up(points: np.ndarray) -> np.ndarray:
     return np.column_stack([points[:, 0], points[:, 2], -points[:, 1]])
 
 
+def _without_backdrops(points_out, cells_out, colours_out):
+    """The placed parts with a backdrop (``scene_parts.backdrop_keep``) dropped, their triangles'
+    vertex indices renumbered for the parts kept. ``colours_out`` is empty or holds one entry per
+    part (each triangle's RGB)."""
+    keep = scene_parts.backdrop_keep(points_out)
+    if keep is None:
+        return points_out, cells_out, colours_out
+    points, cells, colours = [], [], []
+    old_offset = new_offset = 0
+    for index, (xyz, triangles) in enumerate(zip(points_out, cells_out)):
+        if keep[index]:
+            points.append(xyz)
+            cells.append(triangles - old_offset + new_offset)
+            if colours_out:
+                colours.append(colours_out[index])
+            new_offset += len(xyz)
+        old_offset += len(xyz)
+    # Colours only the dropped part set: the parts kept carry the fill colour alone, and draw as a file
+    # without colours does.
+    if colours and all(np.all(rgb == np.asarray(DEFAULT_RGB, dtype=np.uint8)) for rgb in colours):
+        colours = []
+    return points, cells, colours
+
+
 def _polydata(points, triangles, colours) -> pv.PolyData:
     if not len(triangles):
         raise ValueError("No triangles found")
@@ -266,8 +290,9 @@ def load_3mf(file_path: str, max_triangles: int = None) -> pv.PolyData:
             emit(obj, _transform(item.get("transform")), 0)
     if not points_out:
         raise ValueError("3MF build holds no mesh")
+    points_out, cells_out, colours_out = _without_backdrops(points_out, cells_out, colours_out)
     points = _z_up_to_y_up(np.vstack(points_out))
-    mesh = _polydata(points, np.vstack(cells_out), np.vstack(colours_out) if coloured else None)
+    mesh = _polydata(points, np.vstack(cells_out), np.vstack(colours_out) if colours_out else None)
     scene_parts.record_parts(mesh, [len(xyz) for xyz in points_out])
     logger.info(f"Loaded 3MF: {mesh.n_points} vertices, {mesh.n_cells} triangles from {len(items)} build item(s)")
     return mesh
@@ -465,6 +490,7 @@ def load_dae(file_path: str, max_triangles: int = None) -> pv.PolyData:
             add_geometry(ElementTree.Element("instance_geometry", url="#" + geometry_id), np.eye(4))
     if not points_out:
         raise ValueError("COLLADA file holds no triangle geometry")
+    points_out, cells_out, colours_out = _without_backdrops(points_out, cells_out, colours_out)
     points = np.vstack(points_out)
     asset = _child(root, "asset")
     up_axis = (_child(asset, "up_axis").text or "").strip().upper() if asset is not None and _child(asset, "up_axis") is not None else "Y_UP"
@@ -472,7 +498,7 @@ def load_dae(file_path: str, max_triangles: int = None) -> pv.PolyData:
         points = _z_up_to_y_up(points)
     elif up_axis == "X_UP":
         points = np.column_stack([-points[:, 1], points[:, 0], points[:, 2]])
-    mesh = _polydata(points, np.vstack(cells_out), np.vstack(colours_out) if coloured else None)
+    mesh = _polydata(points, np.vstack(cells_out), np.vstack(colours_out) if colours_out else None)
     scene_parts.record_parts(mesh, [len(xyz) for xyz in points_out])
     logger.info(f"Loaded COLLADA ({up_axis}): {mesh.n_points} vertices, {mesh.n_cells} triangles")
     return mesh

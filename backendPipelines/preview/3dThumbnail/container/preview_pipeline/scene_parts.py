@@ -12,9 +12,12 @@ of the parts in merge order. The bounds travel with the data: an up-axis rotatio
 (``carry_parts``). A loader that does not record parts, a scene of one part and a scene of more
 parts than ``part_limit`` frame exactly as before.
 
-The camera leaves out of its framing a part that is a backdrop (``backdrop_parts``): a near-flat
-sheet, such as a ground or environment plane, far larger than the rest of the scene and centred on
-it. The part is still drawn.
+A part that is a backdrop (``backdrop_parts``) -- a near-flat sheet, such as a ground or environment
+plane, far larger than the rest of the scene and centred on it -- is left out of the render: the
+loader drops it before it merges the parts (``backdrop_keep``), so it is neither drawn nor framed.
+The preview has a transparent background and its own lights, so a backdrop adds nothing to it, and
+drawn it filled the whole frame. ``framing_bounds`` leaves a backdrop out of the framing of data
+whose loader recorded its parts without dropping it.
 """
 
 import numpy as np
@@ -142,13 +145,10 @@ def backdrop_parts(bounds):
     return flat & centred & (largest >= BACKDROP_SCALE * content_largest)
 
 
-def framing_bounds(pv_data):
-    """The (lo, hi) the camera frames when backdrop parts are left out, or None to frame the whole
-    data (no backdrop, or leaving the backdrops out does not change the bounds). Logs the parts left
-    out."""
-    bounds = part_bounds(pv_data)
-    if bounds is None:
-        return None
+def _changing_backdrops(bounds):
+    """The ``backdrop_parts`` mask of ``bounds`` when leaving the backdrops out changes the scene's
+    bounds, else None: a backdrop that does not change them (an object at the centre of one of many
+    floor tiles) is left as it is."""
     mask = backdrop_parts(bounds)
     if not mask.any():
         return None
@@ -156,11 +156,81 @@ def framing_bounds(pv_data):
     lo, hi = kept[:, :3].min(axis=0), kept[:, 3:].max(axis=0)
     if np.array_equal(lo, bounds[:, :3].min(axis=0)) and np.array_equal(hi, bounds[:, 3:].max(axis=0)):
         return None
-    left_out = bounds[mask]
-    extents = ", ".join(
-        "({:.2f}, {:.2f}, {:.2f})".format(*(b[3:] - b[:3])) for b in left_out[:5])
+    return mask
+
+
+def _describe(left_out) -> str:
+    extents = ", ".join("({:.2f}, {:.2f}, {:.2f})".format(*(b[3:] - b[:3])) for b in left_out[:5])
     more = f" and {len(left_out) - 5} more" if len(left_out) > 5 else ""
-    logger.info(f"Camera framing leaves out {len(left_out)} of {len(bounds)} parts as a backdrop "
+    return f"extents {extents}{more}"
+
+
+def backdrop_keep(part_points, max_parts: int = None):
+    """Which parts of a scene to draw, given each part's points in merge order: a boolean mask over
+    the parts, False for a backdrop, or None to draw every part.
+
+    A loader calls this on its parts before it merges them (and before it bakes textures or fills
+    colours across them), so a backdrop is not drawn and the parts it keeps load as a file holding
+    them alone would. The rule is ``backdrop_parts``, with the guards of the framing: nothing is left
+    out of a scene of one part, of more parts than ``max_parts`` (default: ``part_limit`` of the
+    running container's memory), with no content part, or when leaving the backdrops out keeps the
+    scene's bounds. A part without points is kept. Costs one min and one max over each part's
+    points."""
+    counts = [len(points) for points in part_points]
+    present = [index for index, count in enumerate(counts) if count > 0]
+    if len(present) < 2:
+        return None
+    if max_parts is None:
+        max_parts = part_limit(resources.memory_limit_bytes())
+    if len(present) > max_parts:
+        return None
+    bounds = np.full((len(counts), 6), np.nan, dtype=np.float64)
+    for index in present:
+        points = np.asarray(part_points[index])
+        bounds[index, :3] = points.min(axis=0)[:3]
+        bounds[index, 3:] = points.max(axis=0)[:3]
+    return backdrop_keep_bounds(bounds, counts, max_parts)
+
+
+def backdrop_keep_bounds(bounds, counts, max_parts: int = None):
+    """``backdrop_keep`` from each part's (xmin, ymin, zmin, xmax, ymax, zmax) and point count, for a
+    loader that tracks its parts' bounds as it builds them. A part of no points is kept."""
+    bounds = np.asarray(bounds, dtype=np.float64).reshape(-1, 6)
+    present = [index for index, count in enumerate(counts) if count > 0]
+    if len(present) < 2:
+        return None
+    if max_parts is None:
+        max_parts = part_limit(resources.memory_limit_bytes())
+    if len(present) > max_parts:
+        return None
+    bounds = bounds[present]
+    if not np.all(np.isfinite(bounds)):
+        return None
+    mask = _changing_backdrops(bounds)
+    if mask is None:
+        return None
+    keep = np.ones(len(counts), dtype=bool)
+    keep[np.asarray(present)[mask]] = False
+    logger.info(f"Preview leaves out {int(mask.sum())} of {len(present)} parts as a backdrop, from "
+                f"the render and the framing (near-flat, at least {BACKDROP_SCALE:g}x the rest of the "
+                f"scene and centred on it); {_describe(bounds[mask])}")
+    return keep
+
+
+def framing_bounds(pv_data):
+    """The (lo, hi) the camera frames when backdrop parts are left out, or None to frame the whole
+    data (no backdrop, or leaving the backdrops out does not change the bounds). Logs the parts left
+    out. A loader that records parts has already left its backdrops out of the data
+    (``backdrop_keep``), so this applies to data whose parts were recorded without that step."""
+    bounds = part_bounds(pv_data)
+    if bounds is None:
+        return None
+    mask = _changing_backdrops(bounds)
+    if mask is None:
+        return None
+    kept = bounds[~mask]
+    lo, hi = kept[:, :3].min(axis=0), kept[:, 3:].max(axis=0)
+    logger.info(f"Camera framing leaves out {int(mask.sum())} of {len(bounds)} parts as a backdrop "
                 f"(near-flat, at least {BACKDROP_SCALE:g}x the rest of the scene and centred on it); "
-                f"extents {extents}{more}")
+                f"{_describe(bounds[mask])}")
     return lo, hi

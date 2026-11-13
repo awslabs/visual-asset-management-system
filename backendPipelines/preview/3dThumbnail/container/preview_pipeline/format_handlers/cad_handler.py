@@ -314,13 +314,18 @@ def face_triangles(face):
     return nodes, triangles
 
 
-def tessellate_parts(parts, limit: SceneLimit = None) -> pv.PolyData:
+def tessellate_parts(parts, limit: SceneLimit = None, drop_backdrops: bool = True) -> pv.PolyData:
     """One PolyData of every face of every part, each part placed by its location, with per-cell RGB
     when any colour is set. A part instanced several times is meshed once (the mesh lives on the
-    shared shape) and its triangles are placed per instance, until ``limit`` is reached."""
+    shared shape) and its triangles are placed per instance, until ``limit`` is reached.
+
+    A backdrop part (``scene_parts.backdrop_keep``) is dropped and the parts kept are tessellated again
+    on their own, so their detail and colours are those of a file holding them alone: the deflection
+    follows the model's size, not the backdrop's."""
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.TopoDS import TopoDS
 
+    initial_limit = limit
     limit = limit if limit is not None else SceneLimit("STEP assembly")
     deflection = linear_deflection(_diagonal(parts))
     logger.info(f"Tessellating with linear deflection {deflection:.6g} (diagonal x "
@@ -329,11 +334,13 @@ def tessellate_parts(parts, limit: SceneLimit = None) -> pv.PolyData:
     coloured = any(colour or face_colours for _, _, colour, face_colours in parts)
     points, cells, colours = [], [], []
     part_points = []
+    part_bounds = []
     offset = 0
     for shape, location, colour, face_colours in parts:
         if limit.reached:
             break
         part_points.append(0)
+        part_bounds.append(np.array([np.inf] * 3 + [-np.inf] * 3))
         BRepMesh_IncrementalMesh(shape, deflection, False, ANGULAR_DEFLECTION, True)
         matrix = None if location.IsIdentity() else _transform_matrix(location)
         faces = face_map(shape)
@@ -350,6 +357,8 @@ def tessellate_parts(parts, limit: SceneLimit = None) -> pv.PolyData:
             cells.append(triangles + offset)
             offset += len(nodes)
             part_points[-1] += len(nodes)
+            part_bounds[-1][:3] = np.minimum(part_bounds[-1][:3], nodes.min(axis=0))
+            part_bounds[-1][3:] = np.maximum(part_bounds[-1][3:], nodes.max(axis=0))
             if coloured:
                 rgb = face_colours.get(index) or colour or DEFAULT_RGB
                 colours.append(np.tile(np.asarray(rgb, dtype=np.uint8), (len(triangles), 1)))
@@ -357,6 +366,17 @@ def tessellate_parts(parts, limit: SceneLimit = None) -> pv.PolyData:
 
     if not points:
         raise ValueError("No geometry found in STEP file after tessellation")
+    if drop_backdrops and not limit.reached:
+        keep = scene_parts.backdrop_keep_bounds(part_bounds, part_points)
+        if keep is not None:
+            from OCP.BRepTools import BRepTools
+
+            kept = [part for part, keep_part in zip(parts, keep) if keep_part]
+            for shape, _, _, _ in kept:
+                BRepTools.Clean_s(shape)
+            again = SceneLimit(initial_limit.what, initial_limit.max_triangles, initial_limit.max_nodes) \
+                if initial_limit is not None else None
+            return tessellate_parts(kept, again, drop_backdrops=False)
     vertices = np.vstack(points)
     triangles = np.vstack(cells)
     pv_faces = np.column_stack([np.full(len(triangles), 3, dtype=np.int64), triangles]).ravel()
