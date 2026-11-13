@@ -40,6 +40,7 @@ from vamscli.utils.api_client import (
     APIClient,
     _AUTHORIZER_DENIED_MESSAGE,
     _RESOURCE_POLICY_MESSAGE,
+    _VERSION_CHECK_DENIED_MESSAGE,
     _WAF_BLOCKED_MESSAGE,
     _WAF_OR_STAGE_MESSAGE,
     _api_error_message,
@@ -645,7 +646,8 @@ class TestBlockWording:
             for fragment in SIGN_IN_WORDING:
                 assert fragment not in rendered, fragment
 
-    @pytest.mark.parametrize("text", [_RESOURCE_POLICY_MESSAGE, _AUTHORIZER_DENIED_MESSAGE])
+    @pytest.mark.parametrize("text", [_RESOURCE_POLICY_MESSAGE, _AUTHORIZER_DENIED_MESSAGE,
+                                      _VERSION_CHECK_DENIED_MESSAGE])
     def test_a_denial_reads_as_one(self, text):
         assert text.startswith("Access forbidden.")
 
@@ -685,6 +687,23 @@ class TestSignInAndSetupPaths:
         assert "AWS WAF web ACL" in str(excinfo.value)
         assert "names no deployed stage" in str(excinfo.value)
 
+    @pytest.mark.parametrize("body,headers", [
+        (AUTHORIZER_DENY, None),
+        (AUTHORIZER_DENY_TEMPLATED, None),
+        ({"Message": "something"}, ACCESS_DENIED),
+    ], ids=["explicit-deny", "explicit-deny-templated", "access-denied-type"])
+    def test_the_availability_check_reports_an_authorizer_deny_as_a_refusal(self, monkeypatch, body, headers):
+        """The API answered, so the check does not call it unavailable (#1358)."""
+        client = _client()
+        wire = _Wire(monkeypatch, client, _response(body, headers=headers))
+
+        with pytest.raises(PermissionDeniedError) as excinfo:
+            client.check_api_availability()
+        assert str(excinfo.value) == _VERSION_CHECK_DENIED_MESSAGE
+        assert "source IP address" in str(excinfo.value)
+        assert "not currently available" not in str(excinfo.value)
+        assert len(wire.sends) == 1
+
     def test_the_availability_check_keeps_its_404_message(self, monkeypatch):
         client = _client()
         _Wire(monkeypatch, client, _response({"message": "Not Found"}, status=404))
@@ -704,7 +723,8 @@ class TestSignInAndSetupPaths:
     @pytest.mark.parametrize("body,error,error_type", [
         (MARKER, f"Request Blocked: {_WAF_BLOCKED_MESSAGE}", "RequestBlockedError"),
         (BARE, "API Unavailable: VAMS API answered the version check with a bare 403", "APIUnavailableError"),
-    ], ids=["web-acl-marker", "bare-forbidden"])
+        (AUTHORIZER_DENY_TEMPLATED, f"Permission Denied: {_VERSION_CHECK_DENIED_MESSAGE}", "PermissionDeniedError"),
+    ], ids=["web-acl-marker", "bare-forbidden", "authorizer-deny"])
     def test_auth_login_stops_when_its_availability_check_is_blocked(self, monkeypatch, generic_command_mocks,
                                                                     body, error, error_type):
         """`auth login` runs the legacy availability check first; a block there ends the command.

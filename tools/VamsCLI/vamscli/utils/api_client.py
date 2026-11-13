@@ -65,6 +65,12 @@ _AUTHORIZER_DENIED_MESSAGE = (
     "deployment may restrict API access by source IP address, or this credential is not accepted. "
     "Contact your administrator."
 )
+# The version check carries no token, so an authorizer deny there is not about a credential.
+_VERSION_CHECK_DENIED_MESSAGE = (
+    "Access forbidden. The VAMS API is reachable, but its authorizer refused the version check (HTTP 403). "
+    "That request carries no sign-in, so the deployment most likely restricts API access by source IP "
+    "address and this machine's address is not in the allowed ranges. Contact your administrator."
+)
 # A per-call token handed to APIClient(bearer_token=...) is never refreshed, so its
 # rejection is reported at once, and in words that do not tell the caller to run a CLI login.
 _INJECTED_TOKEN_REJECTED_MESSAGE = (
@@ -986,6 +992,9 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                         "AWS WAF web ACL blocked the request, or the stored API Gateway URL names no deployed "
                         "stage (see 'vamscli profile info')."
                     )
+                if forbidden == FORBIDDEN_AUTHORIZER:
+                    # The API answered, so this is a refusal and not an outage.
+                    raise PermissionDeniedError(_VERSION_CHECK_DENIED_MESSAGE)
 
             response.raise_for_status()
             version_data = response.json()
