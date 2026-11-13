@@ -42,6 +42,8 @@ def _run_main(tmp_path, views, input_path="/tmp/pump.glb", import_error=None):
         "mesh_objects": lambda: [SimpleNamespace(data=SimpleNamespace(polygons=[1, 2, 3]))],
         "world_corners": lambda objects: ["corners"],
         "combine_bounds": lambda corners: ((0.0, 0.0, 0.0), (1.0, 2.0, 3.0)),
+        "world_boxes": lambda objects: ["boxes"],
+        "framing_bounds": lambda boxes: ((0.0, 0.0, 0.0), (1.0, 2.0, 3.0)),
         "collect_scene_facts": lambda objects, center, size, path: {"schemaVersion": 1, "dimensions": list(size)},
         "ensure_materials": lambda objects: calls.append("ensure_materials"),
         "configure_render": lambda resolution, samples: calls.append(("configure_render", resolution, samples)),

@@ -148,6 +148,61 @@ def combine_bounds(corners):
     return center, size
 
 
+# The camera leaves a backdrop out of its framing: a near-flat sheet (smallest extent at most
+# BACKDROP_FLAT_RATIO of its largest, middle extent at least BACKDROP_SHEET_RATIO of it), such as a ground or
+# environment plane, at least BACKDROP_SCALE times the largest extent of the other objects together and
+# centred on them (their centre within BACKDROP_CENTRE_SHARE of the sheet's extent on its two large axes).
+# The same rule as the 3D thumbnail's `scene_parts.backdrop_parts`; the sheet is still rendered.
+BACKDROP_FLAT_RATIO = 0.005
+BACKDROP_SHEET_RATIO = 0.1
+BACKDROP_SCALE = 20.0
+BACKDROP_CENTRE_SHARE = 0.25
+
+
+def backdrop_mask(boxes):
+    """One flag per (mins, maxs) box: True for a backdrop. A box of zero size is neither a sheet nor
+    content; a scene with no content box, or no sheet, has no backdrop."""
+    boxes = [(tuple(lo), tuple(hi)) for lo, hi in boxes]
+    mask = [False] * len(boxes)
+    if len(boxes) < 2:
+        return mask
+    shapes = []
+    for lo, hi in boxes:
+        raw = [hi[axis] - lo[axis] for axis in range(3)]
+        order = sorted(range(3), key=lambda axis: raw[axis])
+        small, middle, largest = (raw[axis] for axis in order)
+        flat = (largest > 0 and small <= BACKDROP_FLAT_RATIO * largest
+                and middle >= BACKDROP_SHEET_RATIO * largest)
+        shapes.append((raw, order, largest, flat))
+    content = [index for index, (_raw, _order, largest, flat) in enumerate(shapes) if not flat and largest > 0]
+    if not content or not any(shape[3] for shape in shapes):
+        return mask
+    content_lo = [min(boxes[index][0][axis] for index in content) for axis in range(3)]
+    content_hi = [max(boxes[index][1][axis] for index in content) for axis in range(3)]
+    content_largest = max(content_hi[axis] - content_lo[axis] for axis in range(3))
+    if content_largest <= 0:
+        return mask
+    content_centre = [(content_lo[axis] + content_hi[axis]) / 2.0 for axis in range(3)]
+    for index, (raw, order, largest, flat) in enumerate(shapes):
+        if not flat or largest < BACKDROP_SCALE * content_largest:
+            continue
+        lo, hi = boxes[index]
+        centre = [(lo[axis] + hi[axis]) / 2.0 for axis in range(3)]
+        mask[index] = all(abs(content_centre[axis] - centre[axis]) <= BACKDROP_CENTRE_SHARE * raw[axis]
+                          for axis in order[1:])
+    return mask
+
+
+def framing_bounds(boxes):
+    """Centre and size of the box the camera frames: the union of every (mins, maxs) box that is not a
+    backdrop (`backdrop_mask`), or of every box when none is."""
+    boxes = list(boxes)
+    mask = backdrop_mask(boxes)
+    kept = [box for box, backdrop in zip(boxes, mask) if not backdrop] or boxes
+    corners = [corner for lo, hi in kept for corner in (tuple(lo), tuple(hi))]
+    return combine_bounds(corners)
+
+
 def camera_placement(center, size, direction, is_perspective,
                      lens_mm=PERSPECTIVE_LENS_MM, sensor_mm=SENSOR_WIDTH_MM, padding=FRAMING_PADDING):
     """Where the camera goes for one view so the whole bounding box is in frame.
@@ -199,6 +254,14 @@ def world_corners(objects):
         for corner in obj.bound_box:
             world = obj.matrix_world @ Vector(corner)
             yield (world.x, world.y, world.z)
+
+
+def world_boxes(objects):
+    """The world-space axis-aligned (mins, maxs) box of each object."""
+    for obj in objects:
+        corners = list(world_corners([obj]))
+        yield (tuple(min(corner[axis] for corner in corners) for axis in range(3)),
+               tuple(max(corner[axis] for corner in corners) for axis in range(3)))
 
 
 def ensure_materials(objects):
@@ -493,6 +556,12 @@ def main():
         if sum(len(obj.data.polygons) for obj in objects) == 0:
             raise SceneImportError("the imported mesh objects carry no faces")
         center, size = combine_bounds(world_corners(objects))
+        # The camera and the lights frame the scene without a ground or environment plane far larger
+        # than the model; the facts keep the whole scene's bounds.
+        frame_center, frame_size = framing_bounds(world_boxes(objects))
+        if (frame_center, frame_size) != (center, size):
+            print(f"renderScene: camera framing leaves out a backdrop; framed size {frame_size}, scene "
+                  f"size {size}", file=sys.stderr)
     except Exception as error:  # any loader failure is an import failure for this branch
         failure = {
             "schemaVersion": 1,
@@ -518,13 +587,13 @@ def main():
         return EXIT_OK
     ensure_materials(objects)
     configure_render(args.resolution, args.samples)
-    setup_lighting(center, 0.5 * math.sqrt(sum(extent * extent for extent in size)))
+    setup_lighting(frame_center, 0.5 * math.sqrt(sum(extent * extent for extent in frame_size)))
     camera = setup_camera()
 
     rendered, failed = [], {}
     for view in views:
         try:
-            render_view(camera, center, size, view, args.output_dir)
+            render_view(camera, frame_center, frame_size, view, args.output_dir)
             rendered.append(view)
         except Exception as error:
             failed[view] = f"{type(error).__name__}: {error}"

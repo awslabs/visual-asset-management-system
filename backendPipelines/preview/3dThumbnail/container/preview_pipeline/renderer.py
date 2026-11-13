@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 import pyvista as pv
+from . import scene_parts
 from .utils.logging import get_logger
 
 logger = get_logger()
@@ -403,11 +404,16 @@ def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_R
     crop outliers from sparse scenes (point clouds with distant noise).
 
     For full-bounds mode (USD/CAD): uses complete bounding box since
-    all geometry in engineered models is intentional.
+    all geometry in engineered models is intentional. A near-flat part far
+    larger than the rest of a scene (a ground or environment plane) is left
+    out of the framing bounds and still drawn (``scene_parts``).
     """
     points = pv_data.points
 
-    if use_full_bounds:
+    backdrop_free = scene_parts.framing_bounds(pv_data) if use_full_bounds else None
+    if backdrop_free is not None:
+        lo, hi = backdrop_free
+    elif use_full_bounds:
         lo = points.min(axis=0)
         hi = points.max(axis=0)
     else:

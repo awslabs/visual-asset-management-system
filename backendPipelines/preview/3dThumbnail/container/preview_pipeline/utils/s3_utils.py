@@ -177,6 +177,17 @@ def iter_object_bytes(bucket_name, object_key, chunk_size: int = STREAM_CHUNK_BY
             body.close()
 
 
+def put_json(bucket_name, object_key, body: bytes):
+    """Write a small JSON document. Returns the key, or None when S3 refused the write."""
+    try:
+        client_for_bucket(bucket_name).put_object(
+            Bucket=bucket_name, Key=object_key, Body=body, ContentType="application/json")
+    except ClientError as e:
+        logger.warning(f"PutObject of {object_key} failed: {e.response.get('Error', {}).get('Code', '')}")
+        return None
+    return object_key
+
+
 def upload(bucket_name, object_key, file_path):
     logger.info(
         f"Uploading Object to S3 Bucket w/ auto chunking for multi-part.\n"

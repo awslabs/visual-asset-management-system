@@ -420,7 +420,7 @@ describe("ExecutionsBoard", () => {
 
         await user.keyboard("{Enter}");
         expect(await screen.findByRole("menu")).toBeInTheDocument();
-        expect(screen.getByRole("menuitem", { name: "View results" })).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "View details" })).toBeInTheDocument();
     });
 
     it("shows a placeholder in the search box", () => {

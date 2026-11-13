@@ -559,3 +559,45 @@ class TestUsd:
         assert report.rejected_count == 4 and report.fetched == []
         assert store.calls == []
         assert report.partial is True
+
+
+_USD_WITH_METADATA = """#usda 1.0
+(
+    customLayerData = {
+        asset sourceFile = @./authoring/source.usd@
+    }
+)
+
+def Xform "Robot" (
+    assetInfo = {
+        asset identifier = @./authoring/robot_source.usda@
+    }
+    references = @./parts/arm.usda@
+)
+{
+    asset material:mdl = @OmniPBR.mdl@
+}
+"""
+
+
+@pytest.mark.unit
+@requires_real("pxr")
+class TestUsdPathsThatLoadNothing:
+    """A USD path in layer or prim metadata, and a renderer's own bare MDL module, remove nothing from
+    the scene when absent: the scene report does not call them missing or the scene partial (the rule
+    the 3D thumbnail's incomplete preview applies)."""
+
+    def test_only_a_missing_composition_arc_makes_the_scene_partial(self, tmp_path):
+        store = FakeStore({"xid/scene/robot.usda": _USD_WITH_METADATA})
+        report, _local_root = _resolve(tmp_path, store, "xid/scene/robot.usda")
+        assert report.missing == ["scene/parts/arm.usda"]
+        assert report.missing_required == ["scene/parts/arm.usda"]
+        assert report.partial is True
+
+    def test_a_scene_missing_only_metadata_paths_is_whole(self, tmp_path):
+        store = FakeStore({"xid/scene/robot.usda": _USD_WITH_METADATA,
+                           "xid/scene/parts/arm.usda": "#usda 1.0\n"})
+        report, _local_root = _resolve(tmp_path, store, "xid/scene/robot.usda")
+        assert report.missing == [] and report.missing_required == []
+        assert report.partial is False
+        assert not any("not in the asset" in line for line in report.warnings())

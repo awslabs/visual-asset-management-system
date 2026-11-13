@@ -19,7 +19,8 @@ from test_blender_render_scene_dispatch import exec_named_nodes
 _FRAMING_NAMES = [
     "RENDER_FILE_PREFIX", "PERSPECTIVE_LENS_MM", "SENSOR_WIDTH_MM", "FRAMING_PADDING",
     "ORTHO_DISTANCE_FACTOR", "VIEW_DIRECTIONS", "VIEW_ORDER", "select_views", "render_file_name",
-    "normalized", "combine_bounds", "camera_placement",
+    "normalized", "combine_bounds", "camera_placement", "BACKDROP_FLAT_RATIO", "BACKDROP_SHEET_RATIO",
+    "BACKDROP_SCALE", "BACKDROP_CENTRE_SHARE", "backdrop_mask", "framing_bounds",
 ]
 
 
@@ -124,3 +125,38 @@ def test_flat_and_tiny_objects_still_get_a_positive_frame(scene):
     assert point["distance"] > 0 and point["clip_end"] > point["distance"]
     with pytest.raises(ValueError):
         scene["normalized"]((0.0, 0.0, 0.0))
+
+
+def _box(center, size):
+    return (tuple(c - s / 2.0 for c, s in zip(center, size)), tuple(c + s / 2.0 for c, s in zip(center, size)))
+
+
+@pytest.mark.unit
+def test_a_large_ground_plane_under_the_model_is_left_out_of_the_framing(scene):
+    """A robot (1 m) on a 100 m ground plane of zero thickness: the camera frames the robot."""
+    robot = _box((0.0, 0.0, 0.5), (1.0, 0.6, 1.0))
+    ground = _box((0.0, 0.0, 0.0), (100.0, 100.0, 0.0))
+    center, size = scene["framing_bounds"]([robot, ground])
+    assert size == pytest.approx((1.0, 0.6, 1.0)) and center == pytest.approx((0.0, 0.0, 0.5))
+    assert scene["backdrop_mask"]([robot, ground]) == [False, True]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("sheet", [
+    _box((40.0, 40.0, 0.0), (100.0, 100.0, 0.0)),   # not centred on the model
+    _box((0.0, 0.0, 0.0), (10.0, 10.0, 0.0)),       # not 20x the model
+    _box((0.0, 0.0, 0.0), (100.0, 100.0, 5.0)),     # not near-flat
+])
+def test_a_sheet_that_is_not_a_backdrop_stays_in_the_framing(scene, sheet):
+    robot = _box((0.0, 0.0, 0.5), (1.0, 0.6, 1.0))
+    assert scene["backdrop_mask"]([robot, sheet]) == [False, False]
+    center, size = scene["framing_bounds"]([robot, sheet])
+    assert (center, size) == scene["combine_bounds"]([corner for box in (robot, sheet) for corner in box])
+
+
+@pytest.mark.unit
+def test_a_scene_of_sheets_only_or_one_object_frames_everything(scene):
+    floor = _box((0.0, 0.0, 0.0), (100.0, 100.0, 0.0))
+    sign = _box((0.0, 0.0, 1.0), (2.0, 1.0, 0.0))
+    assert scene["backdrop_mask"]([floor, sign]) == [False, False]
+    assert scene["backdrop_mask"]([floor]) == [False]

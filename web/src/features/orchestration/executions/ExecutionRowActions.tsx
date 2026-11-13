@@ -39,7 +39,7 @@ const ExecutionRowActions: React.FC<ExecutionRowActionsProps> = ({
 
     const menuItems: ContextMenuItem[] = [
         {
-            label: "View results",
+            label: "View details",
             onSelect: onView,
         },
         {
