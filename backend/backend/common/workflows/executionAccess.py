@@ -114,6 +114,7 @@ def execution_access_decision(
     asset_row: Callable[[str, str], Optional[Dict[str, Any]]],
     prewarm_assets: Optional[Callable[[List[Tuple[str, str]]], Any]] = None,
     entities_within_budget: Optional[Callable[[List[Tuple[str, str]]], bool]] = None,
+    entities_out: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[bool, str]:
     """The Tier-2 rule over the entities an execution actually read or wrote: workflow GET, GET on
     EVERY database whose metadata was captured, `asset_action` on EVERY distinct asset the run read,
@@ -144,7 +145,9 @@ def execution_access_decision(
     resolves an asset row, archived rows included, or None. `prewarm_assets(pairs)` (optional)
     resolves the assets in batched reads before the per-asset checks; `entities_within_budget(pairs)`
     (optional) is a list page's bound on the distinct assets it resolves, and a row past it is
-    DENIED rather than authorized on assets it never resolved.
+    DENIED rather than authorized on assets it never resolved. `entities_out`, when a list, receives
+    the (databaseId, assetId) pairs the rule resolved (the assets the run read and the asset it wrote
+    to), so a single-execution read can name them in its audit record without a read of its own.
 
     Returns (allowed, denied_reason); denied_reason is for logging only."""
     # Workflow-level GET (the run's workflow; not modifying the workflow itself).
@@ -167,6 +170,8 @@ def execution_access_decision(
     output_asset_id = row.get('outputAssetId', '')
     entity_pairs = read_assets + ([(output_database_id, output_asset_id)]
                                   if output_database_id and output_asset_id else [])
+    if entities_out is not None:
+        entities_out.extend(entity_pairs)
     if entities_within_budget is not None and not entities_within_budget(entity_pairs):
         return False, "per-page entity-resolution bound reached"
     if prewarm_assets is not None:

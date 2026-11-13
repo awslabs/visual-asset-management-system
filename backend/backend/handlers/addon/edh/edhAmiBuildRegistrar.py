@@ -9,6 +9,7 @@ no instance uses them."""
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from .common import edhAmiRecipes as recipes
 
 logger = safeLogger(service_name="EdhAmiBuildRegistrar")
@@ -17,6 +18,7 @@ IMAGE_STATE_SOURCE = "aws.imagebuilder"
 IMAGE_STATE_DETAIL_TYPE = "EC2 Image Builder Image State Change"
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext):
     if isinstance(event, dict) and event.get("sweep"):
         summary = recipes.sweep()

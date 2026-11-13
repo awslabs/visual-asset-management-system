@@ -25,6 +25,7 @@ from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVAL
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
@@ -2201,6 +2202,16 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
 # API Route Handlers
 #######################
 
+
+def _version_count(response):
+    """The number of versions a listing returned (a count, never the versions)."""
+    for field in ("versions", "Items", "items"):
+        value = getattr(response, field, None)
+        if isinstance(value, list):
+            return len(value)
+    return None
+
+
 def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /createVersion requests
     
@@ -2277,6 +2288,11 @@ def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "assetVersionCreate", database_id=path_params['databaseId'],
+                   asset_id=path_params['assetId'], assetVersionId=response.assetVersionId,
+                   file_count=len(request_model.files) if request_model.files is not None else None,
+                   changes={field: value for field, value in request_model.dict(exclude_none=True).items()
+                            if field != "files"})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -2380,6 +2396,9 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "assetVersionRevert", database_id=path_params['databaseId'],
+                   asset_id=path_params['assetId'], assetVersionId=response.assetVersionId,
+                   changes=request_model.dict(exclude_none=True))
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -2455,6 +2474,9 @@ def handle_get_versions(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "assetVersionList", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   item_count=_version_count(response),
+                   request_parameters=request_model.dict(exclude_none=True))
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -2537,6 +2559,9 @@ def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "assetVersionGet", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   assetVersionId=request_model.assetVersionId,
+                   request_parameters={"showArchived": request_model.showArchived})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -2655,6 +2680,9 @@ def handle_update_asset_version(event, context) -> APIGatewayProxyResponseV2:
             ExpressionAttributeValues=values_map
         )
 
+        log_action(event, "assetVersionUpdate", database_id=databaseId, asset_id=assetId,
+                   assetVersionId=assetVersionId, changes=update_fields)
+
         now = utc_now().isoformat()
         return success(body=AssetVersionOperationResponseModel(
             success=True,
@@ -2762,6 +2790,9 @@ def handle_archive_asset_version(event, context) -> APIGatewayProxyResponseV2:
             }
         )
 
+        log_action(event, "assetVersionArchive", database_id=databaseId, asset_id=assetId,
+                   assetVersionId=assetVersionId, changes={"isArchived": True})
+
         now = utc_now().isoformat()
         return success(body=AssetVersionOperationResponseModel(
             success=True,
@@ -2861,6 +2892,9 @@ def handle_unarchive_asset_version(event, context) -> APIGatewayProxyResponseV2:
             }
         )
 
+        log_action(event, "assetVersionUnarchive", database_id=databaseId, asset_id=assetId,
+                   assetVersionId=assetVersionId, changes={"isArchived": False})
+
         now = utc_now().isoformat()
         return success(body=AssetVersionOperationResponseModel(
             success=True,
@@ -2888,6 +2922,8 @@ def handle_unarchive_asset_version(event, context) -> APIGatewayProxyResponseV2:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset version operations
     

@@ -31,7 +31,9 @@ import time
 import boto3
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
+from datetime import datetime, timezone
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.resourceNames import get_table_name, ResourceKeys
 from common.workflows import executionRecords as er
 from common.workflows import executionLogCapture as elc
@@ -305,7 +307,7 @@ def reconcile_failed_execution(body, error_info):
 
     if not execution_id:
         logger.warning("No workflowExecutionId in error handler body; nothing to reconcile")
-        return
+        return {}
 
     now = er.iso_now()
     error_message = _extract_error_message(error_info)
@@ -362,6 +364,7 @@ def reconcile_failed_execution(body, error_info):
     #    separate calls, so the end-state lambda can finish the run in between; the write carries the
     #    terminal guard and reports whether it landed, and only a FAILED status that landed is
     #    announced — the writer that finished the run first has already announced its status.
+    main_row = {}
     try:
         main_table = dynamodb.Table(workflow_execution_database_v2)
         existing = main_table.query(
@@ -404,8 +407,57 @@ def reconcile_failed_execution(body, error_info):
     # 6) Refresh the stored log once CloudWatch Logs has ingested the failing run's events.
     _refresh_execution_log(execution_id, workflow_database_id, workflow_id, execution_start_date,
                            execution_log)
+    return {"triggeredByUserId": main_row.get('triggeredByUserId', ''),
+            "executionStartDate": main_row.get('executionStartDate') or execution_start_date}
 
 
+# The input rows read to name the failed run's asset: enough to tell one asset from several.
+EXECUTION_END_INPUT_ROWS = 50
+
+
+def _execution_input_asset(execution_id):
+    """The (databaseId, assetId) of a run whose inputs all belong to one asset, else (None, None).
+
+    The error handler's Step Functions input carries only the execution and workflow ids, so the
+    asset is read from the execution's input rows (one bounded query, on the failure path only)."""
+    try:
+        response = dynamodb.Table(workflow_execution_inputs_table).query(
+            KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
+            ProjectionExpression='databaseId, assetId', Limit=EXECUTION_END_INPUT_ROWS)
+    except Exception as e:
+        logger.exception(f"Reading the failed execution's input asset failed (continuing): {e}")
+        return None, None
+    pairs = {(item.get('databaseId'), item.get('assetId')) for item in response.get('Items', [])}
+    if len(pairs) == 1 and 'LastEvaluatedKey' not in response:
+        return next(iter(pairs))
+    return None, None
+
+
+def _duration_ms(start_date):
+    """Milliseconds from an ISO 8601 start date until now, or None when it cannot be read."""
+    try:
+        started = datetime.fromisoformat(str(start_date).replace("Z", "+00:00"))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - started).total_seconds() * 1000))
+    except (TypeError, ValueError):
+        return None
+
+
+def _log_failed_end(event, body, reconciled):
+    """Record the failed end of a workflow execution: duration, asset and the user it ran for."""
+    execution_id = body.get('workflowExecutionId') or None
+    database_id, asset_id = _execution_input_asset(execution_id) if execution_id else (None, None)
+    user = reconciled.get('triggeredByUserId')
+    log_action(event, "workflowExecutionEnd", outcome="failed", reason="internal",
+               database_id=database_id, asset_id=asset_id,
+               workflowId=body.get('workflowId') or None, executionId=execution_id,
+               duration_ms=_duration_ms(reconciled.get('executionStartDate')),
+               on_behalf_of=user if user and user != "SYSTEM_USER" else None,
+               details={"workflowDatabaseId": body.get('workflowDatabaseId')})
+
+
+@audited_handler
 def lambda_handler(event, context):
     """SFN-invoked on any caught error. Reconciles tables to FAILED, then returns so the
     state machine transitions to the Fail state. Never raises (so it never masks the
@@ -416,7 +468,9 @@ def lambda_handler(event, context):
         if isinstance(body, str):
             body = json.loads(body)
         error_info = event.get('errorInfo', {})
-        reconcile_failed_execution(body or {}, error_info)
+        body = body or {}
+        reconciled = reconcile_failed_execution(body, error_info) or {}
+        _log_failed_end(event, body, reconciled)
     except Exception as e:
         # Best-effort: never let a bookkeeping error mask the original failure.
         logger.exception(f"Error handler encountered an error (continuing to Fail state): {e}")

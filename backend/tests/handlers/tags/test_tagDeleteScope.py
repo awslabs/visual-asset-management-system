@@ -4,7 +4,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from backend.backend.handlers.tags.tagService import delete_tag
+from backend.backend.handlers.tags.tagService import TagAccessDenied, delete_tag
 
 CLAIMS = {"tokens": ["u"]}
 
@@ -31,6 +31,6 @@ class TestDeleteTagScope:
     def test_denied_returns_authorization_error(self, casbin, tag_table):
         tag_table.get_item.return_value = {'Item': {'tagName': 'EquipID', 'databaseId': 'factory-db'}}
         inst = MagicMock(); inst.enforce.return_value = False; casbin.return_value = inst
-        result = delete_tag('EquipID', CLAIMS)
-        assert isinstance(result, dict) and result.get('statusCode') == 403
+        with pytest.raises(TagAccessDenied):
+            delete_tag('EquipID', CLAIMS)
         tag_table.delete_item.assert_not_called()

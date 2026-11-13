@@ -23,6 +23,7 @@ from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record, asset_authorization_object, ARCHIVED_ASSET_DATABASE_SUFFIX
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3MetadataKeys import (
@@ -1280,7 +1281,8 @@ def get_all_assets(query_params, showArchived=False):
         logger.exception(f"Error scanning all assets: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving all assets.")
 
-def update_asset(databaseId, assetId, update_data, claims_and_roles):
+
+def update_asset(databaseId, assetId, update_data, claims_and_roles, event=None):
     """Update an existing asset with new data
     
     Args:
@@ -1309,6 +1311,9 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
     # Update the fields
     logger.info(f"Updating asset {assetId} in database {databaseId}")
     
+    # The values the edit replaces, taken before the fields below are set on the read copy.
+    prior_values = {field: asset.get(field) for field in update_data if field in asset}
+
     # Update only the editable fields. `edited_attributes` accumulates exactly what this
     # request changes, so the write below touches nothing else on the record but the change
     # provenance. `stored_asset` is the row as read, before the edits below are applied to `asset`.
@@ -1411,6 +1416,10 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
             claims_and_roles.get("tokens", ["SYSTEM_USER"])[0],
             build_asset_snapshot(asset)
         )
+        if event is not None:
+            log_action(event, "assetUpdate", database_id=databaseId, asset_id=assetId,
+                       changes=edited_attributes,
+                       previous={field: prior_values[field] for field in edited_attributes if field in prior_values})
 
         # Create response
         timestamp = utc_now().isoformat()
@@ -2062,6 +2071,8 @@ def handle_get_request(event):
             bucketDetails = get_asset_bucket_details(asset)
             enhanced_asset["bucketName"] = bucketDetails['bucketName']
 
+            log_action(event, "assetGet", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], request_parameters={"showArchived": show_archived})
             # Convert to AssetResponseModel for consistent response format
             return success(body=format_asset_response(enhanced_asset))
 
@@ -2108,6 +2119,9 @@ def handle_get_request(event):
 
             # Get the assets
             assets_result = get_assets(path_parameters['databaseId'], query_params, show_archived)
+            log_action(event, "assetList", database_id=path_parameters['databaseId'],
+                       item_count=len(assets_result.get('Items', [])),
+                       request_parameters={**query_params, "showArchived": show_archived})
 
             # Enhance the page with version information and bucket details (batched reads)
             enhanced_items = enrich_asset_listing_page(assets_result.get('Items', []))
@@ -2158,6 +2172,8 @@ def handle_get_request(event):
 
             # Get all assets
             assets_result = get_all_assets(query_params, show_archived)
+            log_action(event, "assetList", item_count=len(assets_result.get('Items', [])),
+                       request_parameters={**query_params, "showArchived": show_archived})
 
             # Enhance the page with version information and bucket details (batched reads)
             enhanced_items = enrich_asset_listing_page(assets_result.get('Items', []))
@@ -2247,6 +2263,8 @@ def handle_put_request(event):
                 request_model,
                 claims_and_roles
             )
+            log_action(event, "assetUnarchive", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], changes=request_model.dict(exclude_none=True))
             return success(body=result.dict())
         
         # Otherwise, handle regular update
@@ -2258,7 +2276,8 @@ def handle_put_request(event):
             path_parameters['databaseId'], 
             path_parameters['assetId'], 
             update_model.dict(exclude_unset=True, exclude_none=True),
-            claims_and_roles
+            claims_and_roles,
+            event=event
         )
 
         # Return success response
@@ -2342,6 +2361,8 @@ def handle_delete_request(event):
                 request_model,
                 claims_and_roles
             )
+            log_action(event, "assetArchive", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], changes=request_model.dict(exclude_none=True))
             return success(body=result.dict())
             
         elif API_DELETE_ASSET.matches(path):
@@ -2353,6 +2374,8 @@ def handle_delete_request(event):
                 request_model,
                 claims_and_roles
             )
+            log_action(event, "assetDelete", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], changes=request_model.dict(exclude_none=True))
             return success(body=result.dict())
             
         else:
@@ -2364,6 +2387,8 @@ def handle_delete_request(event):
                 request_model,
                 claims_and_roles
             )
+            log_action(event, "assetArchive", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], changes=request_model.dict(exclude_none=True))
             return success(body=result.dict())
 
     except AuthorizationDenied:
@@ -2378,6 +2403,8 @@ def handle_delete_request(event):
         logger.exception(f"Error handling DELETE request: {e}")
         return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset service APIs"""
     global claims_and_roles

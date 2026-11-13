@@ -18,6 +18,7 @@ from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, commonHeaders, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse, validation_error_message
 from models.databases import GetDatabaseResponseModel, GetDatabasesRequestModel, GetDatabasesResponseModel, DeleteDatabaseResponseModel, UpdateDatabaseRequestModel, UpdateDatabaseResponseModel, BucketModel, GetBucketsRequestModel, GetBucketsResponseModel
 
@@ -283,7 +284,7 @@ class DatabaseAccessDeniedError(VAMSGeneralErrorResponse):
     """An object-level authorization denial on a database, answered with 403 rather than 400."""
 
 
-def update_database(database_id, update_data, claims_and_roles=None):
+def update_database(database_id, update_data, claims_and_roles=None, event=None):
     """Update an existing database with new data
     
     Args:
@@ -348,7 +349,11 @@ def update_database(database_id, update_data, claims_and_roles=None):
                 logger.warning(f"Database {database_id} no longer exists, database record not updated")
                 raise VAMSGeneralErrorResponse("Database not found")
             raise
-        
+
+        if event is not None:
+            log_action(event, "databaseUpdate", database_id=database_id, changes=updates,
+                       previous={field: database.get(field) for field in updates})
+
         # Create response
         from common.timestamps import utc_now
         timestamp = utc_now().isoformat()
@@ -485,6 +490,8 @@ def get_database_handler(event, path_parameters, query_parameters, claims_and_ro
         # Get database
         database = get_database(database_id, show_deleted, claims_and_roles)
         if database:
+            log_action(event, "databaseGet", database_id=database_id,
+                       request_parameters={"showDeleted": show_deleted})
             return success(body=database.dict())
         else:
             return validation_error(status_code=404, body={'message': 'Database not found'}, event=event)
@@ -506,6 +513,8 @@ def get_databases_handler(event, query_parameters, claims_and_roles):
         
         # Get databases
         databases = get_databases(query_parameters, show_deleted, claims_and_roles)
+        log_action(event, "databaseList", item_count=len(databases.Items),
+                   request_parameters={**query_parameters, "showDeleted": show_deleted})
         return success(body=databases.dict())
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
@@ -541,7 +550,8 @@ def update_database_handler(event, path_parameters, body, claims_and_roles):
             return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Update database
-        result = update_database(database_id, request_model.dict(exclude_unset=True), claims_and_roles)
+        result = update_database(database_id, request_model.dict(exclude_unset=True), claims_and_roles,
+                                 event=event)
         return success(body=result.dict())
 
     except DatabaseAccessDeniedError:
@@ -574,6 +584,8 @@ def delete_database_handler(event, path_parameters, claims_and_roles):
 
         # Delete database
         result = delete_database(database_id, claims_and_roles)
+        if result.statusCode == 200:
+            log_action(event, "databaseDelete", database_id=database_id)
         return APIGatewayProxyResponseV2(
             isBase64Encoded=False,
             statusCode=result.statusCode,
@@ -682,6 +694,8 @@ def get_buckets_handler(event, query_parameters, claims_and_roles):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for database service API"""
     normalize_event(event)

@@ -13,7 +13,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_upload
+from customLogging.auditLogging import log_file_upload, audited_handler
 from common.dynamodb import to_update_expr
 from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, register_bucket_region
 from common.assetProvenance import asset_change_provenance
@@ -1042,6 +1042,8 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
             
         return False
 
+
+@audited_handler
 def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
     """
     Lambda handler for processing SQS events containing large file processing requests.

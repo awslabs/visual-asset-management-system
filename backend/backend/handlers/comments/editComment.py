@@ -16,6 +16,7 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import get_asset_object_from_id
 from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 
 claims_and_roles = {}
 
@@ -83,9 +84,17 @@ def edit_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, eve
 
         response["statusCode"] = 200
         response["message"] = "Succeeded"
+        response["previousCommentBody"] = item.get("commentBody")
     return response
 
 
+def _comment_ids(asset_version_and_comment_id):
+    """The asset version id and comment id of an "<assetVersionId>:<commentId>" path value."""
+    version_id, _, comment_id = str(asset_version_and_comment_id or "").partition(":")
+    return {"assetVersionId": version_id or None, "commentId": comment_id or None}
+
+
+@audited_handler
 def lambda_handler(event: dict, context: dict) -> dict:
     """
     Lambda handler for API calls that try to add a comment
@@ -202,6 +211,12 @@ def lambda_handler(event: dict, context: dict) -> dict:
 
             # call the edit_comment function if everything is valid
             returned = edit_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], userId, event)
+            if returned["statusCode"] == 200:
+                log_action(event, "commentUpdate", database_id=asset_object.get("databaseId"),
+                           asset_id=pathParameters["assetId"],
+                           **_comment_ids(pathParameters["assetVersionId:commentId"]),
+                           changes={"commentBody": event["body"]["commentBody"]},
+                           previous={"commentBody": returned.get("previousCommentBody")})
             response["statusCode"] = returned["statusCode"]
             response["body"] = json.dumps({"message": returned["message"]})
             logger.info(response)

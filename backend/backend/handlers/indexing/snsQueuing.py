@@ -22,6 +22,7 @@ import json
 from typing import Dict, List, Any
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from common.batchItemFailures import all_batch_item_failures, with_batch_item_failures
 
 # Initialize AWS clients
@@ -124,6 +125,8 @@ def publish_to_sns(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         'batch_item_failures': all_batch_item_failures({'Records': unpublished}),
     }
 
+
+@audited_handler
 def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> Dict[str, Any]:
     """
     Lambda handler for SNS queuing from DynamoDB streams.

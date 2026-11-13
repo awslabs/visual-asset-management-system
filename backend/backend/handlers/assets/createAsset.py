@@ -23,6 +23,7 @@ from handlers.assets.assetCount import update_asset_count
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.tagScope import GLOBAL_SCOPE
 from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.snsTopicNames import asset_sns_topic_name
@@ -919,6 +920,8 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset creation API"""
     global claims_and_roles
@@ -973,6 +976,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         # Process request
         response = create_asset(request_model, claims_and_roles)
+        log_action(event, "assetCreate", database_id=request_model.databaseId, asset_id=response.assetId,
+                   changes=request_model.dict(exclude_none=True))
         return success(body=response.dict())
             
     except ValidationError as v:
