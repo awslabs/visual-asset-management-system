@@ -113,7 +113,9 @@ class TestErrorHandlerReleasesLocks:
     def test_the_none_restriction_reads_no_input_rows_and_deletes_nothing(self):
         for restriction in ("none",):
             _finalize, inputs_table, locks_table = _reconcile(restriction)
-            inputs_table.query.assert_not_called()
+            # The one input read is the failed-end audit record's asset lookup, never a lock rebuild.
+            assert [c.kwargs.get("ProjectionExpression") for c in inputs_table.query.call_args_list] == [
+                "databaseId, assetId"]
             locks_table.delete_item.assert_not_called()
 
     def test_a_failing_release_still_answers_handled(self):

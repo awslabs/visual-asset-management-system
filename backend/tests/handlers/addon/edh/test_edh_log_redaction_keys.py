@@ -9,7 +9,8 @@ They are declared once, in the add-on constants lane (``ADDON_LOG_SENSITIVE_KEYS
 The EDH root key travels as the ``X-EDH-TOKEN`` header and as the ``rootKey`` field of the secret; a
 desktop row carries its DCV ``session_token``, ``authentication_token`` (returned a second time under
 ``broker_session_id``) and ``session_local_admin_password``; a ``connection_string`` embeds an
-``authToken``; the directory user the client creates is sent with a throw-away ``password``. Redaction
+``authToken``; the directory user the client creates is sent with a throw-away ``password``, a field
+name the core redaction lists cover. Redaction
 matches the WHOLE lowercased key, so the header is covered in either case and a JSON-string ``body`` is
 parsed before the walk. The uid, the user header and the ids stay readable --
 the control pins that the walk redacts by key, not by proximity. The real modules are imported by their
@@ -31,7 +32,7 @@ from backend.backend.customLogging.logger import (
 
 EDH_CREDENTIAL_KEYS = ("X-EDH-TOKEN", "rootKey", "connection_string", "authToken",
                        "session_token", "authentication_token", "session_local_admin_password",
-                       "broker_session_id", "password")
+                       "broker_session_id")
 ROOT_KEY_VALUE = "edh-root-key-s3cr3t-value"
 DCV_TOKEN_VALUE = "dcv-auth-t0ken-value"
 SESSION_TOKEN_VALUE = "dcv-session-t0ken-value"
@@ -53,8 +54,12 @@ class TestEdhCredentialKeysAreRedacted:
         assert ROOT_KEY_VALUE not in json.dumps(out)
 
     def test_the_secret_payload_field_is_redacted(self):
+        # A field named secret is a core credential name, so its whole value is withheld.
         out = mask_sensitive_data({"secret": {"rootKey": ROOT_KEY_VALUE, "description": "EDH"}})
-        assert out["secret"] == {"rootKey": REDACTED, "description": "EDH"}
+        assert out["secret"] == REDACTED
+        # The root key inside any other object is still redacted by the add-on lane's own key.
+        out = mask_sensitive_data({"value": {"rootKey": ROOT_KEY_VALUE, "description": "EDH"}})
+        assert out["value"] == {"rootKey": REDACTED, "description": "EDH"}
 
     def test_a_connection_string_and_its_auth_token_are_redacted_inside_a_list(self):
         session = {

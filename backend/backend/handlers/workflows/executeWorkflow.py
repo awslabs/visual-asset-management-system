@@ -27,6 +27,7 @@ buckets (each manifest entry carries its own bucket). Output-target write-back t
 asset's own bucket, resolved independently by the end-state process-output lambda.
 """
 
+import contextvars
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -56,7 +57,8 @@ from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_actions
+from customLogging.auditLogging import (AUDIT_INTERNAL_CALL_KEY, audited_handler, internal_call_marker,
+                                        log_actions)
 from common.workflows import executionRecords as er
 from common.workflows import executionValidation as ev
 from common.workflows import templateResolution as tres
@@ -521,6 +523,7 @@ def _metadata_service_payload(path, path_parameters, event):
     else:
         payload["requestContext"]["authorizer"] = (
             event.get("requestContext") or {}).get("authorizer")
+        payload[AUDIT_INTERNAL_CALL_KEY] = internal_call_marker(event)
     return payload
 
 
@@ -669,14 +672,19 @@ def _simplify_metadata_array(metadata_array, entity_label="", truncated=None):
 def _run_bounded(jobs):
     """Run zero-arg callables through a bounded worker pool, returning results in job order. A single
     job runs inline (no pool). Keeps the per-input fan-out inside the request window without an
-    unbounded burst of child invocations."""
+    unbounded burst of child invocations.
+
+    Each pooled job runs in a copy of the caller's context, so it sees the request audit context (the
+    forwarded metadata reads carry the caller's request id); one copy per job, as a context cannot be
+    entered by two threads at once."""
     if not jobs:
         return []
     if len(jobs) == 1:
         return [jobs[0]()]
     workers = min(MAX_PARALLEL_INPUT_WORKERS, len(jobs))
+    contexts = [contextvars.copy_context() for _ in jobs]
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        return list(executor.map(lambda job: job(), jobs))
+        return list(executor.map(lambda ctx, job: ctx.run(job), contexts, jobs))
 
 
 def _derive_metadata_source_databases(selected_inputs, metadata_source_assets,
@@ -3285,6 +3293,7 @@ def handle_post_request(event):
         event, path_params["workflowDatabaseId"], path_params["workflowId"], request_model)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for the asset-less execute-workflow API (POST)."""
     global claims_and_roles

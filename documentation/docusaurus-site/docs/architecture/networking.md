@@ -205,6 +205,7 @@ Private and public subnets are created when any of the following are enabled:
 -   NVIDIA Gr00t pipeline
 -   Image to 3D pipeline
 -   GenAI CAD STEP agent pipeline on its `fargate` runtime (the `agentcore` runtime runs outside the VPC)
+-   An add-on configured to place its functions in private subnets (the add-on's own pages name the setting)
 
 ### Availability Zone Configuration
 

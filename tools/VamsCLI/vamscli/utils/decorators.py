@@ -9,7 +9,7 @@ from .profile import ProfileManager, read_active_profile_name
 from .api_client import APIClient
 from .exceptions import (
     APIUnavailableError, SetupRequiredError, AuthenticationError,
-    GlobalInfrastructureError, RequestBlockedError
+    GlobalInfrastructureError, RequestBlockedError, PermissionDeniedError
 )
 from ..constants import DEFAULT_PROFILE_NAME
 
@@ -262,12 +262,13 @@ def requires_api_access(func):
             
             if api_gateway_url:
                 api_client = APIClient(api_gateway_url, profile_manager)
-                # Check API availability - this will raise APIUnavailableError if issues, or
-                # RequestBlockedError when the deployment's web ACL blocked the check
+                # Check API availability - this will raise APIUnavailableError if issues,
+                # RequestBlockedError when the deployment's web ACL blocked the check, or
+                # PermissionDeniedError when the API's authorizer refused it
                 api_client.check_api_availability()
         
-        except (APIUnavailableError, RequestBlockedError):
-            # Re-raise API unavailable errors and web ACL blocks
+        except (APIUnavailableError, RequestBlockedError, PermissionDeniedError):
+            # Re-raise API unavailable errors, web ACL blocks and authorizer denials
             raise
         except Exception:
             # If we can't check availability, continue with the command

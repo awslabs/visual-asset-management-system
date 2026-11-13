@@ -42,7 +42,7 @@ from common.dynamodb import validate_pagination_info, to_update_expr, batch_get_
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_actions
+from customLogging.auditLogging import audited_handler, log_action, log_actions
 from models.common import (
     APIGatewayProxyResponseV2,
     success,
@@ -1228,6 +1228,7 @@ def handle_internal_action(event):
     return validation_error(body={"message": "Unknown internal action."})
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     if _is_internal_action_event(event):
         try:
@@ -1294,15 +1295,19 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 if item.get("archived") and not include_archived:
                     return validation_error(status_code=404, body={"message": "Workflow not found"}, event=event)
                 triggers = get_workflow_triggers(database_id, workflow_id)
+                log_action(event, "workflowGet", database_id=database_id, workflowId=workflow_id,
+                           request_parameters={"includeArchived": include_archived})
                 return success(body={"message": _item_to_response(
                     item, triggers=triggers,
                     pipeline_system_configs=_ordered_pipeline_system_configs(
                         item, _batch_pipeline_system_configs([item]))).dict()})
             if database_id:
-                return success(body={"message": get_database_workflows(
-                    database_id, query_parameters, include_archived, claims_and_roles).dict()})
-            return success(body={"message": get_all_workflows(
-                query_parameters, include_archived, claims_and_roles).dict()})
+                listing = get_database_workflows(database_id, query_parameters, include_archived, claims_and_roles)
+            else:
+                listing = get_all_workflows(query_parameters, include_archived, claims_and_roles)
+            log_action(event, "workflowList", database_id=database_id, item_count=len(listing.Items),
+                       request_parameters={**query_parameters, "includeArchived": include_archived})
+            return success(body={"message": listing.dict()})
 
         # The importer's marked cross-call is the one caller that may set isSystem and that is exempt
         # from the system-record guards. The request models ignore the key, so it is read from the
