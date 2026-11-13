@@ -984,7 +984,7 @@ def _authorization_keys(ctx: "AuditContext", authorized: Any) -> Dict[str, Any]:
                                   route_spec.entity_type if route_spec else None)
     if route_spec is not None and "entity" in keys:
         id_field = _ENTITY_ID_FIELDS.get(route_spec.entity_type)
-        entity_id = _path_ids(ctx.event).get(id_field) if id_field else None
+        entity_id = _path_ids(ctx.event, route_spec.entity_type).get(id_field) if id_field else None
         if entity_id:
             keys["entity"]["id"] = _cap_value(entity_id)[0]
     return keys
@@ -1508,6 +1508,11 @@ _ENTITY_ID_FIELDS = {
     "apiKey": "apiKeyId", "workstation": "sessionId",
 }
 
+# Path parameters whose name differs from the id field of the entity they name, by entity type:
+# /roles/{roleId} names a role (roleName), /user/cognito/{userId} and /auth/loginProfile/{userId}
+# name a user (targetUserId).
+_PATH_ID_ALIASES = {"role": {"roleId": "roleName"}, "user": {"userId": "targetUserId"}}
+
 # Actions of these kinds record the request only: log_action drops the write sections (changes,
 # previous) a call passes for one, whatever the call site, and logs an error naming the action.
 _REQUEST_ONLY_KINDS = frozenset({KIND_READ, KIND_SEARCH, KIND_DOWNLOAD})
@@ -1908,13 +1913,22 @@ def _response_status(response: Any) -> Optional[int]:
         return None
 
 
-def _path_ids(event: Any) -> Dict[str, Any]:
-    """The path parameters that are record id fields (databaseId, assetId, workflowId, ...)."""
+def _path_ids(event: Any, entity_type: Optional[str] = None) -> Dict[str, Any]:
+    """
+    The path parameters that are record id fields (databaseId, assetId, workflowId, ...). On a route
+    whose entity is a role or a user, the path parameter that names it (``roleId``, ``userId``) is
+    returned under the entity's id field (``roleName``, ``targetUserId``).
+    """
     path_parameters = event.get("pathParameters") if isinstance(event, dict) else None
     if not isinstance(path_parameters, dict):
         return {}
-    return {key: value for key, value in path_parameters.items()
-            if key in AUDIT_ID_FIELDS and isinstance(value, str) and value}
+    ids = {key: value for key, value in path_parameters.items()
+           if key in AUDIT_ID_FIELDS and isinstance(value, str) and value}
+    for parameter, id_field in _PATH_ID_ALIASES.get(entity_type or "", {}).items():
+        value = path_parameters.get(parameter)
+        if id_field not in ids and isinstance(value, str) and value:
+            ids[id_field] = value
+    return ids
 
 
 def _record_route_failure(ctx: Optional[AuditContext], event: Any, status: int) -> None:
@@ -1928,7 +1942,7 @@ def _record_route_failure(ctx: Optional[AuditContext], event: Any, status: int) 
         # Written with the request's flush, which follows at once: the request has ended, so holding
         # the record loses nothing and saves the request a write of its own.
         log_action(ctx.event, action, outcome=OUTCOME_FAILED, reason=audit_failure_reason(status),
-                   flush_with_request=True, **_path_ids(ctx.event))
+                   flush_with_request=True, **_path_ids(ctx.event, ctx.route_spec.entity_type))
     except Exception as e:
         logger.exception(f"Failed to record the request's failed action: {e}")
 

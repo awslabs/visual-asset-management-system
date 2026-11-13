@@ -371,6 +371,52 @@ class TestAuthRecordEcho:
             "method": "PUT", "path": "/database/db1/assets/a1"}}}
 
 
+ENTITY_PATH_ROUTES = [
+    # (path, method, path parameters, action, entity)
+    ("/roles/r1", "DELETE", {"roleId": "r1"}, "roleDelete", {"type": "role", "id": "r1"}),
+    ("/user/cognito/carol", "PUT", {"userId": "carol"}, "cognitoUserUpdate", {"type": "user", "id": "carol"}),
+    ("/user/cognito/carol", "DELETE", {"userId": "carol"}, "cognitoUserDelete", {"type": "user", "id": "carol"}),
+    ("/user/cognito/carol/resetPassword", "POST", {"userId": "carol"}, "cognitoUserPasswordReset",
+     {"type": "user", "id": "carol"}),
+]
+
+
+@pytest.mark.unit
+class TestEntityIdFromRolePathAndUserPath:
+    """/roles/{roleId} and /user/cognito/{userId} name the entity under another parameter name than
+    its id field; the records still carry the entity id."""
+
+    @pytest.mark.parametrize("authorized", [True, False])
+    @pytest.mark.parametrize("path, method, path_parameters, action, entity", ENTITY_PATH_ROUTES,
+                             ids=[f"{r[1]}-{r[0]}" for r in ENTITY_PATH_ROUTES])
+    def test_the_authorization_record_names_the_entity(self, clients, path, method, path_parameters, action,
+                                                       entity, authorized):
+        event = _event(path, method, path_parameters=path_parameters)
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_authorization_api(event, authorized, _api_check(event))
+        _, payload, _ = _only(clients, "auditAuthorization")
+        assert (payload["action"], payload["entity"]) == (action, entity)
+
+    @pytest.mark.parametrize("path, method, path_parameters, action, entity", ENTITY_PATH_ROUTES,
+                             ids=[f"{r[1]}-{r[0]}" for r in ENTITY_PATH_ROUTES])
+    def test_the_failed_request_record_names_the_entity(self, clients, path, method, path_parameters, action,
+                                                        entity):
+        @auditLogging.audited_handler
+        def handler(event, context):
+            return {"statusCode": 404}
+
+        handler(_event(path, method, path_parameters=path_parameters), LAMBDA_CONTEXT)
+        _, payload, _ = _only(clients, "auditAuthChanges")
+        assert (payload["action"], payload["outcome"], payload["entity"]) == (action, "failed", entity)
+        id_field = "roleName" if entity["type"] == "role" else "targetUserId"
+        assert payload[id_field] == entity["id"]
+
+    def test_a_user_id_path_parameter_on_another_route_is_not_renamed(self):
+        event = {"pathParameters": {"userId": "carol", "databaseId": "db1"}}
+        assert auditLogging._path_ids(event, "database") == {"databaseId": "db1"}
+        assert auditLogging._path_ids(event, None) == {"databaseId": "db1"}
+
+
 AUTH_READS = [
     ("apiKeyList", "/auth/api-keys", "GET", {}),
     ("apiKeyGet", "/auth/api-keys/k1", "GET", {"apiKeyId": "k1"}),
