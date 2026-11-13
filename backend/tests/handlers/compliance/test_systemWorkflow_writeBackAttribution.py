@@ -16,6 +16,7 @@ a queue batch into one `workflowExecution` stamp per asset, which starts no eval
 """
 
 import ast
+import importlib
 import json
 import re
 from pathlib import Path
@@ -33,7 +34,6 @@ from backend.tests.handlers.compliance.test_complianceTrigger_indexedChanges imp
     CHANGE_EPOCH, _stamps,
 )
 from backend.tests.handlers.compliance.test_complianceWorkflowCallback import EXECUTION_ID
-from backend.backend.handlers.metadata import metadataService
 from common.assetProvenance import (
     METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
     METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE,
@@ -44,6 +44,17 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 SYSTEM_PIPELINE_DIR = REPO_ROOT / "backendPipelines" / "system"
 GENERATE_METADATA = SYSTEM_PIPELINE_DIR / "genAiMetadata" / "lambda" / "generateMetadata.py"
 METADATA_SERVICE = REPO_ROOT / "backend" / "backend" / "handlers" / "metadata" / "metadataService.py"
+
+
+def _metadata_service():
+    """The metadata service module, imported when a test runs rather than when this file is collected.
+
+    tests/handlers/metadata/conftest.py installs its own `common.*` modules when pytest enters that
+    directory, after this one. Importing the service here at collection would bind it to the root
+    conftest's `common.metadataSchemaValidation`, whose schema cache the metadata tests' fixtures do not
+    clear, and their cached schemas would then leak between those tests."""
+    return importlib.import_module("backend.backend.handlers.metadata.metadataService")
+
 
 # The asset the end-state harness writes back into (EndState's outputDatabaseId / outputAssetId).
 DB, ASSET = "db1", "asset1"
@@ -92,8 +103,8 @@ def _call_table(call):
     """The table the metadata service writes a captured call's rows to."""
     body = json.loads(call["body"])
     if body.get("type") == "attribute":
-        return metadataService.file_attribute_table_name
-    return metadataService.asset_file_metadata_table_name
+        return _metadata_service().file_attribute_table_name
+    return _metadata_service().asset_file_metadata_table_name
 
 
 def _call_composite(call):
@@ -130,7 +141,7 @@ class TestEveryOutputFileIsWrittenBackAsTheExecutions:
         for call in end_state.metadata_calls:
             assert call["lambdaCrossCall"] == {"userName": "SYSTEM_USER",
                                                "workflowExecutionId": EXECUTION_ID}
-            assert metadataService.workflow_execution_writer(call) == EXECUTION_ID
+            assert _metadata_service().workflow_execution_writer(call) == EXECUTION_ID
 
     def test_every_staged_row_travels_on_one_of_those_calls(self, objects, expected_calls):
         end_state = EndState(objects)
@@ -140,6 +151,7 @@ class TestEveryOutputFileIsWrittenBackAsTheExecutions:
         assert sent == staged
 
     def test_the_metadata_service_tags_every_row_those_calls_write(self, objects, expected_calls):
+        metadataService = _metadata_service()
         for call in EndState(objects).metadata_calls:
             table = _call_table(call)
             batch = [{"PutRequest": {"Item": {
