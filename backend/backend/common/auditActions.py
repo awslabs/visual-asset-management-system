@@ -129,6 +129,7 @@ from common.apiRoutes import (
     API_UNSUBSCRIBE,
     API_UPLOADS,
     API_UPLOAD_COMPLETE,
+    API_UPLOAD_STATUS,
     API_UPLOAD_COMPLETE_EXTERNAL,
     API_USER_ROLES,
     API_VERSION,
@@ -257,6 +258,8 @@ CORE_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
     # Uploads
     **route_entries(API_UPLOADS, {POST: _FILE_UPLOAD_START}),
     **route_entries(API_UPLOAD_COMPLETE, {POST: _FILE_UPLOAD}),
+    # The upload's status and the outcome of each file it accepted for asynchronous ingestion.
+    **route_entries(API_UPLOAD_STATUS, {GET: read("uploadStatusGet", "file")}),
     **route_entries(API_UPLOAD_COMPLETE_EXTERNAL, {
         POST: spec("pipelineOutputUpload", "file", group=GROUP_FILE_UPLOAD, legacy_function="log_file_upload"),
     }),
@@ -522,6 +525,8 @@ CORE_AUDIT_SECONDARY_ACTIONS: Tuple[AuditSpec, ...] = (
 # the user an action ran for when the handler knows it.
 CORE_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
     SystemAction("handlers.assets.sqsUploadFileLarge", _FILE_UPLOAD),
+    # The large object copy engine: a large API upload or workflow output that landed in its asset.
+    SystemAction("handlers.assets.largeObjectCopy", _FILE_UPLOAD),
     SystemAction("handlers.indexing.sqsBucketSync", spec("assetSync", "asset")),
     SystemAction("handlers.indexing.sqsBucketSync", spec("fileSync", "file")),
     SystemAction("handlers.indexing.crReindexer", spec("searchReindex", "system")),

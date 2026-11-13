@@ -49,9 +49,14 @@ def _pipeline_task_state(exec_type, resource, wait_for_callback):
     definition, _jobs = asl.generate_workflow_asl(
         [pipeline], "db", "wf", process_workflow_output_function="t-po",
         interim_tracking_function="t-interim", error_handler_function="t-err", aws_partition="aws")
+    # Scaffolding states every definition carries, including the large-output wait after
+    # process-output (ASL schema 2).
+    scaffolding = {"HandleExecutionError", "WorkflowProcessingJobFailed",
+                   asl.INGESTION_CHOICE_STATE_ID, asl.AWAIT_INGESTION_STATE_ID,
+                   asl.INGESTION_TIMEOUT_STATE_ID, asl.FINALIZE_OUTPUTS_STATE_ID,
+                   asl.WORKFLOW_SUCCEEDED_STATE_ID}
     states = [s for k, s in definition["States"].items()
-              if not k.startswith(("interim-", "process-outputs-"))
-              and k not in ("HandleExecutionError", "WorkflowProcessingJobFailed")]
+              if not k.startswith(("interim-", "process-outputs-")) and k not in scaffolding]
     assert len(states) == 1
     return states[0]
 

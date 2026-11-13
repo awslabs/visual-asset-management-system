@@ -103,6 +103,9 @@ const EXECUTION_SERVICE_GRANTS = expand({
     // The lock release, in the role's lock policy.
     locks: ["DeleteItem"],
     "locks/index/WorkflowExecutionLocksByHolderGSI": ["Query"],
+    // The abort route resolves an asset bucket's Region for the copy upload it aborts, when the copy
+    // job row carries none (grantLargeObjectCopyCoordination, inline, #1123 D6).
+    "buckets/index/bucketNameGSI": ["Query"],
 });
 
 /** backend: test_execution_service_route_split.py (PERMANENT_DELETE_CALLS). */
@@ -268,6 +271,7 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
     test("the execution service's table reads are in its managed policy, which its function waits for", () => {
         const role = roleId(synth, stack, "executionService");
         const managed = managedPolicies(synth, role, stack);
+        // Its table reads only (the large object copy grants of the abort route are inline).
         expect(managed.map(([id]) => id)).toEqual([
             expect.stringMatching(
                 new RegExp(`^executionService${EXECUTION_SERVICE_TABLE_READ_POLICY_ID}`)

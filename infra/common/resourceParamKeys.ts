@@ -8,10 +8,11 @@
  * for every fixed-name deployment resource distributed to backend Lambda functions.
  * The dynamoTables, s3Buckets, and cloudwatchLogGroups categories are mirrored by
  * backend/backend/common/resourceNames.py — keep those lists identical. The
- * dynamoTablesLegacy, lambdaFunctions and integration categories are consumed only by
+ * dynamoTablesLegacy, lambdaFunctions and integration categories are consumed by
  * deployment tooling, data-migration tooling and externally owned pipeline bridge stacks
- * (mirrored by infra/deploymentDataMigration/tools/ssm_resource_lookup.py), never by
- * backend Lambda handlers.
+ * (mirrored by infra/deploymentDataMigration/tools/ssm_resource_lookup.py), not through
+ * backend/common/resourceNames.py; lambdaFunctions.largeObjectCopyEngine is also read by the
+ * workflow output step, by its full parameter name.
  */
 export const RESOURCE_PARAM_KEYS = {
     dynamoTables: {
@@ -66,6 +67,7 @@ export const RESOURCE_PARAM_KEYS = {
         workflowStorageV2: "dynamoTables/workflowStorageV2",
         workflowTriggersStorage: "dynamoTables/workflowTriggersStorage",
         workflowExecutionLocksStorage: "dynamoTables/workflowExecutionLocksStorage",
+        largeObjectCopyJobsStorage: "dynamoTables/largeObjectCopyJobsStorage",
         // Compliance tables
         complianceSchemaStorage: "dynamoTables/complianceSchemaStorage",
         complianceAssetStateStorage: "dynamoTables/complianceAssetStateStorage",
@@ -87,6 +89,9 @@ export const RESOURCE_PARAM_KEYS = {
     lambdaFunctions: {
         crOsReindexer: "lambdaFunctions/crOsReindexer",
         importGlobalPipelineWorkflow: "lambdaFunctions/importGlobalPipelineWorkflow",
+        // The large object copy engine, read by the workflow output step (which cannot take the
+        // name as an environment variable: the engine references it).
+        largeObjectCopyEngine: "lambdaFunctions/largeObjectCopyEngine",
     },
     // Integration surface an externally owned pipeline bridge stack resolves at deploy time
     integration: {

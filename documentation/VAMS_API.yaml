@@ -4360,7 +4360,7 @@ paths:
                                 triggerType:
                                     type: string
                                     enum: [manual, fileUpload]
-                                    description: "Trigger type (default manual; set by trigger dispatch otherwise)."
+                                    description: "Trigger type (default manual; set by trigger dispatch otherwise). A system trigger value (System-<Identifier>) is refused with 400: system pipeline runs are launched by VAMS itself, never through this request."
             responses:
                 "200":
                     description: Workflow execution started.
@@ -4577,6 +4577,7 @@ paths:
                 required: false
                 schema:
                     type: string
+                description: "Stored trigger value (Manual, File-Upload, or a system trigger value such as System-MyFeature, compared as given); the request spellings manual and fileUpload are accepted too."
               - in: query
                 name: groupId
                 required: false
@@ -7766,7 +7767,66 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
             security:
                 - DefaultCognitoAuthorizer: []
-    
+
+    /uploads/{uploadId}:
+        get:
+            summary: "Get the status of an upload whose large files are ingested asynchronously."
+            description: "Returns the upload's status and the outcome of each file it accepted for asynchronous ingestion (files over 1 GiB, largeFileAsynchronousHandling in the completion response). Completion keeps the record of such an upload with status processing_async and one PENDING entry per file; each file then becomes SUCCEEDED or FAILED, and the upload completed or completed_with_errors. The record is kept for 7 days. An upload whose files all landed at completion has no record, so it answers 404. Requires GET on the upload's asset. A missing upload, an upload of another database, a missing asset and an asset the caller may not read all answer the same 404."
+            parameters:
+                - name: "uploadId"
+                  in: path
+                  description: "Unique identifier for the upload, as returned by POST /uploads."
+                  required: true
+                  schema:
+                    type: string
+                    pattern: "^[A-Za-z0-9-]+$"
+                    maxLength: 64
+                - name: "assetId"
+                  in: query
+                  description: "The asset the upload targets."
+                  required: true
+                  schema:
+                    $ref: '#/components/schemas/asset_id_regex'
+                - name: "databaseId"
+                  in: query
+                  description: "The database of the asset."
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: The upload's status.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/uploadStatusResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to call this route.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Upload not found: no record (including an upload whose files all landed at completion, and a record past its 7 days), another database, or an asset the caller may not read."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+
     /uploads/{uploadId}/complete:
         post:
             summary: "Complete a multipart upload."
@@ -7941,6 +8001,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 required: false
                 schema:
                     type: string
+                description: "Stored trigger value (Manual, File-Upload, or a system trigger value such as System-MyFeature, compared as given); the request spellings manual and fileUpload are accepted too."
               - in: query
                 name: groupId
                 required: false
@@ -8080,7 +8141,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}/details:
         get:
             summary: "Get full detail and input/output traceability for an execution."
-            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map; a row's expanded flag is true for a file record a metadataInputs.assetFileMetadata expansion added - context the step was handed for a whole-asset or folder selection, not one of its input files - and false on every other row, including rows recorded before the flag existed), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. workflowVersion is the published workflow state machine version the execution started on (an integer), null for an execution started before versions were recorded; workflowVersionCurrent is true while the workflow still runs that version, false once its state machine has been redeployed since the execution, and null when either version is unrecorded (for example, the workflow was deleted). A save from the workflow builder always redeploys the state machine, as does an API or CLI update that supplies the step list (specifiedPipelines); a change to a setting one of its pipelines contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings) redeploys it too. The flag does not track workflowSystemConfig or the pipeline names and descriptions in this response: they are read live and can change without a redeploy, so they may differ from what the execution used whatever the flag says; each pipeline entry's effectiveSystemConfig is the snapshot that step ran under. Every pipeline entry carries availableLogs, the log sources known for that step ({logId, kind, label, sourceType, stageName, logGroupName, logStreamName, logStreamPrefix}): kind is 'invocation' (the step's own invocation log), 'registered' (a location the pipeline reported for itself), 'subStateMachine' (the logging destination of a registered Step Functions sub-execution) or 'deadlineCloudJob' (the session logs of a registered AWS Deadline Cloud job: the queue's /aws/deadline/{farmId}/{queueId} log group under the session- stream prefix, read by the exact streams of the job's sessions); sourceType is one of stateMachine, lambda, batch, ecs, container, custom, deadlineCloud; and logId is the stable identifier GET /workflows/executions/{executionId}/logs accepts as its logId parameter. With includeSubExecutions=true each entry additionally carries subExecutions - one per registered sub-process, with resourceType, label, stageName, abortable (true for the types VAMS stops on abort: Step Functions executions, AWS Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions; false for any other registered type, which is reported by its label, stageName and raw resourceType with status UNKNOWN and is listed under notAbortable when the execution is aborted), resourceName, status (RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, NOT_STARTED or UNKNOWN), startDate, stopDate, error, cause, stageSource ('definition' when the stage order came from the sub-state-machine definition, 'history' when only its execution history was readable, 'none'), stagesTruncated, historyTruncated and stages, the ordered stage frame derived at read time from the sub-state-machine definition and its execution history, each stage reporting stageName, stateType, status, caught (a failure the sub-process handled and continued past), startDate, stopDate, error, cause, attempts and, for a Map state, iterations or distributed, and for an AWS Batch task the resolved batch {jobId, logStreamName}; a registered AWS Deadline Cloud job (resourceType deadlineCloudJob) has no state machine and is reported with its summary only (stageSource 'none'), resolved live from the farm: resourceName is the job name, status is the job's task-run status folded onto the same vocabulary (RUNNING while pending, scheduled, running, suspended or being interrupted; SUCCEEDED; FAILED for a failed or not-compatible job and for a failed create, update or upload; ABORTED for a cancelled job; otherwise UNKNOWN), startDate/stopDate its start and end, cause its lifecycle status message, and deadline {farmId, queueId, jobId} names the job by id alone (its parameters are never returned); a registered Amazon SageMaker training job (resourceType sageMakerTrainingJob) or pipeline execution (resourceType sageMakerPipelineExecution) is likewise reported with its summary only, resolved live from SageMaker in the deployment account: status folds InProgress/Executing and Stopping onto RUNNING, Completed/Succeeded onto SUCCEEDED, Failed onto FAILED and Stopped onto ABORTED, resourceName is the training job name or the pipeline execution display name, cause is the failure reason, and sageMaker names the job ({trainingJobName}) or the execution ({pipelineName, pipelineExecutionId}) by name and id tail only - ARNs, hyperparameters and pipeline parameters are never returned - plus subExecutionsTruncated and subExecutionWarnings. Nothing about stages is stored; the flag is off by default because the derivation reads Step Functions history, and every such read is best-effort (a failure yields status UNKNOWN and a warning, never an error). All dates are ISO-8601 UTC strings. Internal details (Step Functions and resource ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted; availableLogs names log groups and stream prefixes, which embed function and job-definition names, but never ARNs. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results', and, when the step section exceeded its byte share, 'pipelines' and 'inputConfigurations' together with (only under includeSubExecutions=true) 'pipelines.subExecutions', which means every sub-execution kept its summary but its stages were dropped, before any inline configuration body was shortened -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles, outputs.files, and outputs.results have no paged route, which is why the response budget is spent on them first. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required. A SKIPPED execution (fileUpload trigger launches a concurrency restriction refused) has no pipelines or outputs; its inputFiles are the files the refused launches named, and the response adds a skip block (see executionSkip) whose blockingExecutionId is present only when the caller also passes this read check on the blocking execution."
+            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map; a row's expanded flag is true for a file record a metadataInputs.assetFileMetadata expansion added - context the step was handed for a whole-asset or folder selection, not one of its input files - and false on every other row, including rows recorded before the flag existed), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. workflowVersion is the published workflow state machine version the execution started on (an integer), null for an execution started before versions were recorded; workflowVersionCurrent is true while the workflow still runs that version, false once its state machine has been redeployed since the execution, and null when either version is unrecorded (for example, the workflow was deleted). A save from the workflow builder always redeploys the state machine, as does an API or CLI update that supplies the step list (specifiedPipelines); a change to a setting one of its pipelines contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings) redeploys it too. The flag does not track workflowSystemConfig or the pipeline names and descriptions in this response: they are read live and can change without a redeploy, so they may differ from what the execution used whatever the flag says; each pipeline entry's effectiveSystemConfig is the snapshot that step ran under. Every pipeline entry carries availableLogs, the log sources known for that step ({logId, kind, label, sourceType, stageName, logGroupName, logStreamName, logStreamPrefix}): kind is 'invocation' (the step's own invocation log), 'registered' (a location the pipeline reported for itself), 'subStateMachine' (the logging destination of a registered Step Functions sub-execution) or 'deadlineCloudJob' (the session logs of a registered AWS Deadline Cloud job: the queue's /aws/deadline/{farmId}/{queueId} log group under the session- stream prefix, read by the exact streams of the job's sessions); sourceType is one of stateMachine, lambda, batch, ecs, container, custom, deadlineCloud; and logId is the stable identifier GET /workflows/executions/{executionId}/logs accepts as its logId parameter. With includeSubExecutions=true each entry additionally carries subExecutions - one per registered sub-process, with resourceType, label, stageName, abortable (true for the types VAMS stops on abort: Step Functions executions, AWS Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions; false for any other registered type, which is reported by its label, stageName and raw resourceType with status UNKNOWN and is listed under notAbortable when the execution is aborted), resourceName, status (RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, NOT_STARTED or UNKNOWN), startDate, stopDate, error, cause, stageSource ('definition' when the stage order came from the sub-state-machine definition, 'history' when only its execution history was readable, 'none'), stagesTruncated, historyTruncated and stages, the ordered stage frame derived at read time from the sub-state-machine definition and its execution history, each stage reporting stageName, stateType, status, caught (a failure the sub-process handled and continued past), startDate, stopDate, error, cause, attempts and, for a Map state, iterations or distributed, and for an AWS Batch task the resolved batch {jobId, logStreamName}; a registered AWS Deadline Cloud job (resourceType deadlineCloudJob) has no state machine and is reported with its summary only (stageSource 'none'), resolved live from the farm: resourceName is the job name, status is the job's task-run status folded onto the same vocabulary (RUNNING while pending, scheduled, running, suspended or being interrupted; SUCCEEDED; FAILED for a failed or not-compatible job and for a failed create, update or upload; ABORTED for a cancelled job; otherwise UNKNOWN), startDate/stopDate its start and end, cause its lifecycle status message, and deadline {farmId, queueId, jobId} names the job by id alone (its parameters are never returned); a registered Amazon SageMaker training job (resourceType sageMakerTrainingJob) or pipeline execution (resourceType sageMakerPipelineExecution) is likewise reported with its summary only, resolved live from SageMaker in the deployment account: status folds InProgress/Executing and Stopping onto RUNNING, Completed/Succeeded onto SUCCEEDED, Failed onto FAILED and Stopped onto ABORTED, resourceName is the training job name or the pipeline execution display name, cause is the failure reason, and sageMaker names the job ({trainingJobName}) or the execution ({pipelineName, pipelineExecutionId}) by name and id tail only - ARNs, hyperparameters and pipeline parameters are never returned - plus subExecutionsTruncated and subExecutionWarnings. Nothing about stages is stored; the flag is off by default because the derivation reads Step Functions history, and every such read is best-effort (a failure yields status UNKNOWN and a warning, never an error). All dates are ISO-8601 UTC strings. Internal details (Step Functions and resource ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted; availableLogs names log groups and stream prefixes, which embed function and job-definition names, but never ARNs. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results', and, when the step section exceeded its byte share, 'pipelines' and 'inputConfigurations' together with (only under includeSubExecutions=true) 'pipelines.subExecutions', which means every sub-execution kept its summary but its stages were dropped, before any inline configuration body was shortened -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles, outputs.files, and outputs.results have no paged route, which is why the response budget is spent on them first. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required. While output files over 1 GiB are still being copied into the asset, the execution stays RUNNING and the response adds executionPhase 'INGESTING_OUTPUTS' and outputIngestion {filesTotal, filesDone, bytesTotal, bytesDone, files, filesTruncated}; both are absent for every other execution. outputIngestion.files lists each copy, sorted by relativeKey, at most 100 entries: {relativeKey, status (QUEUED, RUNNING, SUCCEEDED, FAILED or CANCELLED), bytesTotal, partsTotal, partsDone, error (a generic reason, set only for a FAILED or CANCELLED copy)}; filesTruncated is true when the execution has more copies than are listed. The per-file entries are display progress read from an eventually consistent index. Such a file's outputs.files row carries ingestionStatus 'SUCCEEDED' once it has landed, and a file whose copy failed is left out of outputs.files and named in executionError. A SKIPPED execution (fileUpload trigger launches a concurrency restriction refused) has no pipelines or outputs; its inputFiles are the files the refused launches named, and the response adds a skip block (see executionSkip) whose blockingExecutionId is present only when the caller also passes this read check on the blocking execution."
             parameters:
               - in: path
                 name: executionId
@@ -8558,6 +8619,11 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 execution's metadata source asset list — cannot
                 be reproduced exactly, so the re-run is answered 400 instead of launching a run that
                 differs from the original. Start a new execution supplying those values.
+
+
+                A system pipeline run (a triggerType that starts with System-, launched by VAMS for a system
+                feature) is never re-run: the request is answered 400 and nothing is launched. Start
+                the operation again from the feature that created it.
             parameters:
               - in: path
                 name: executionId
@@ -15162,6 +15228,7 @@ components:
                     description: "Empty while the execution is still running. For a SKIPPED record, the first refused launch."
                 triggerType:
                     type: string
+                    description: "Stored trigger value: Manual, File-Upload, or a system trigger value (System-<Identifier>, chosen by the feature) on a run VAMS launched for a system feature. A system run cannot be re-run."
                 triggeredByUserId:
                     type: string
                 executionGroupId:
@@ -15337,6 +15404,9 @@ components:
                 s3VersionId:
                     type: string
                     description: "Output rows only, when known."
+                ingestionStatus:
+                    type: string
+                    description: "Output rows only: 'SUCCEEDED' for a file over 1 GiB the large object copy engine copied into the asset. Absent on every other row."
                 pipelineId:
                     type: string
                     description: "Output rows only: the pipeline whose step produced the file."
@@ -17716,6 +17786,7 @@ components:
                         $ref: "#/components/schemas/fileCompletionResult"
                 overallSuccess:
                     type: boolean
+                    description: "True when every file succeeded. A file accepted for asynchronous processing (largeFileAsynchronousHandling) counts as succeeded, including when every file in the upload is over 1 GiB."
                 largeFileAsynchronousHandling:
                     type: boolean
                     description: "Indicates if any file in this upload is being processed asynchronously due to large file size"
@@ -17726,6 +17797,44 @@ components:
                 - assetId
                 - fileResults
                 - overallSuccess
+        uploadStatusResponse:
+            type: object
+            properties:
+                uploadId:
+                    type: string
+                databaseId:
+                    type: string
+                assetId:
+                    $ref: '#/components/schemas/asset_id_regex'
+                status:
+                    type: string
+                    description: "processing_async while a file is PENDING, then completed (every file SUCCEEDED) or completed_with_errors (a file FAILED)."
+                asyncFiles:
+                    type: array
+                    description: "One entry per file accepted for asynchronous ingestion, sorted by relativeKey; empty when the upload tracks none."
+                    items:
+                        type: object
+                        properties:
+                            relativeKey:
+                                type: string
+                            status:
+                                type: string
+                                enum: [PENDING, SUCCEEDED, FAILED]
+                            error:
+                                type: string
+                                description: "Generic reason, set when the file FAILED."
+                            updatedAt:
+                                type: string
+                                format: date-time
+                        required:
+                            - relativeKey
+                            - status
+            required:
+                - uploadId
+                - databaseId
+                - assetId
+                - status
+                - asyncFiles
         
         # Asset File Operations Schemas
         assetFileItem:

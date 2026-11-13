@@ -255,6 +255,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 // ApiBuilder2 depends on: the metadata service and the upload-file lambda.
                 metadataServiceFunction: apiBuilderNestedStack.metadataServiceFunction,
                 uploadFileFunction: apiBuilderNestedStack.uploadFileFunction,
+                sendEmailFunction: apiBuilderNestedStack.sendEmailFunction,
             });
             apiBuilder2NestedStack.addStackDependency(storageResourcesNestedStack);
             apiBuilder2NestedStack.addStackDependency(resourceNamesNestedStack);

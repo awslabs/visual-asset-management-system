@@ -59,7 +59,7 @@ All VAMS DynamoDB tables use on-demand (pay-per-request) billing mode, which aut
 | Billing mode                | On-demand (PAY_PER_REQUEST)               |
 | Maximum item size           | 400 KB (DynamoDB service limit)           |
 | Metadata records per entity | 500                                       |
-| Table count                 | 52 tables (plus 7 retained for migration) |
+| Table count                 | 53 tables (plus 7 retained for migration) |
 
 :::info
 On-demand mode has no provisioned throughput to configure. Amazon DynamoDB automatically allocates capacity based on traffic patterns. For sustained high-throughput workloads, monitor your account-level DynamoDB service quotas.
@@ -232,6 +232,42 @@ does not fit is emptied rather than partially kept, so a reader never sees a sil
 entity. A tag value is generous at 64 KB because a tag may legitimately carry a long generative-AI
 prompt.
 :::
+
+### Large Output Limits
+
+Workflow outputs over 1 GiB, and API uploads over 5 GiB, are copied into their asset by the large
+object copy engine: a Step Functions state machine that copies the file in parts with short AWS Lambda
+tasks. A task that times out or fails is retried and resumes at the next missing part, so there is no
+size limit below the Amazon S3 object limit of 5 TiB. A workflow execution whose outputs include such a
+file stays `RUNNING` until its copies finish, then ends `SUCCEEDED`, or `FAILED` with an error naming
+each file that did not land. A copy that fails discards its partial upload at once.
+
+The engine runs with fixed values; they are not deployment configuration.
+
+| Engine value                         | Value   | Effect                                                                                                         |
+| ------------------------------------ | ------- | -------------------------------------------------------------------------------------------------------------- |
+| API upload size that uses the engine | 5 GiB   | API uploads larger than this use the copy engine. Smaller uploads over 1 GiB keep the large-file queue's copy. |
+| Smallest part of a copy              | 256 MiB | Larger files use larger parts, so a copy has at most 9,000 parts.                                              |
+| Parts per Lambda task                | 16      | Parts one Lambda task copies, 8 of them at the same time.                                                      |
+| Lambda tasks per copy                | 10      | Lambda tasks one copy runs at the same time.                                                                   |
+| Maximum wait for large outputs       | 48 h    | How long a workflow execution waits for its large outputs before it fails.                                     |
+
+The copy engine function is unreserved: it draws on the account's unreserved Lambda concurrency, like
+the VAMS API functions. When the account runs out, a copy task is throttled, and throttling slows a copy
+rather than failing it. The same holds for a run's own calls to the copy engine (recording its copies, registering
+its wait, reading the outcomes): a throttled call waits, and the workflow step is retried if the throttle
+outlasts it, so a run with copies still alive never ends `FAILED` because of a throttle. A throttled task waits with jittered backoff, about 4 hours on average and at
+most about 8 hours, before its copy fails.
+
+| Parameter                                  | Value                          | Exceeding it                                   |
+| ------------------------------------------ | ------------------------------ | ---------------------------------------------- |
+| Size of one output or uploaded file        | 5 TiB (Amazon S3 object limit) | The file is refused and the execution names it |
+| Output files over 1 GiB from one execution | About 7,000                    | The output step fails                          |
+| Copies listed in the execution details     | 100 per execution              | Truncated, flagged (`filesTruncated`)          |
+
+The per-execution limit comes from the DynamoDB item size limit of 400 KB: the row that tracks an
+execution's large outputs keeps one copy id of about 55 bytes for each. Split such a run into several
+executions, or package the outputs into fewer files.
 
 ### Execution Detail and Log Limits
 

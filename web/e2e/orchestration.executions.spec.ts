@@ -828,6 +828,120 @@ test.describe("Executions board — partial detail responses", () => {
             rows.filter({ has: cell("metadata") }).filter({ has: cell("mm") })
         ).toHaveCount(1);
     });
+
+    /**
+     * The details of a run copying its large outputs into the asset. Whether this sandbox holds such
+     * a run is not assumed: the first execution's own details are served with the ingestion fields.
+     */
+    const INGESTION = {
+        executionPhase: "INGESTING_OUTPUTS",
+        outputIngestion: {
+            filesTotal: 3,
+            filesDone: 1,
+            bytesTotal: 3 * 1024 ** 3,
+            bytesDone: 1024 ** 3,
+            files: [
+                {
+                    relativeKey: "/e2e/landed.e57",
+                    status: "SUCCEEDED",
+                    bytesTotal: 1024 ** 3,
+                    partsTotal: 4,
+                    partsDone: 4,
+                    error: "",
+                },
+                {
+                    relativeKey: "/e2e/copying.e57",
+                    status: "RUNNING",
+                    bytesTotal: 2 * 1024 ** 3,
+                    partsTotal: 8,
+                    partsDone: 2,
+                    error: "",
+                },
+            ],
+            filesTruncated: true,
+        },
+    };
+
+    async function serveDetails(
+        page: import("@playwright/test").Page,
+        edit: (execution: any) => void
+    ): Promise<void> {
+        await page.route(DETAILS_ROUTE, async (route) => {
+            const response = await route.fetch();
+            const body = await response.json();
+            const target = body && typeof body.message === "object" ? body.message : body;
+            edit(target);
+            await route.fulfill({ response, json: body });
+        });
+    }
+
+    test("the detail page shows a run's output ingestion progress", async ({ page }) => {
+        const errors = collectPageErrors(page);
+        await serveDetails(page, (execution) => {
+            execution.executionStatus = "RUNNING";
+            Object.assign(execution, INGESTION);
+        });
+        const opened = await openFirstExecutionDetail(page);
+        test.skip(!opened, "No executions in this environment");
+
+        await expect(page.getByText("Ingesting outputs (1 of 3)")).toBeVisible({ timeout: 20_000 });
+        await expect(
+            page.getByRole("progressbar", { name: "Ingesting outputs (1 of 3)" })
+        ).toHaveAttribute("aria-valuenow", "33");
+        await expect(page.getByText(/1 GiB of 3 GiB copied into the asset/)).toBeVisible();
+        const table = page.getByRole("table", { name: "Output files being copied" });
+        await expect(table.getByRole("row").filter({ hasText: "/e2e/copying.e57" })).toContainText(
+            "25%"
+        );
+        await expect(table.getByRole("row").filter({ hasText: "/e2e/landed.e57" })).toContainText(
+            "Landed"
+        );
+        await expect(page.getByText(/Showing the first 2 files/)).toBeVisible();
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+
+    test("the quick view shows the ingestion summary only", async ({ page }) => {
+        await serveDetails(page, (execution) => {
+            execution.executionStatus = "RUNNING";
+            Object.assign(execution, INGESTION);
+        });
+        await gotoOrchestration(page, "executions", /Executions/i);
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        await tableRows(page).first().click();
+
+        await expect(page.getByText("Ingesting outputs (1 of 3)")).toBeVisible({ timeout: 20_000 });
+        await expect(page.getByRole("table", { name: "Output files being copied" })).toHaveCount(0);
+    });
+
+    test("a finished run shows no ingestion progress and marks its landed large output", async ({
+        page,
+    }) => {
+        await serveDetails(page, (execution) => {
+            delete execution.executionPhase;
+            delete execution.outputIngestion;
+            execution.truncatedCollections = [];
+            execution.outputs = {
+                ...(execution.outputs || {}),
+                files: [
+                    { relativeFilePath: "/e2e/landed.e57", ingestionStatus: "SUCCEEDED" },
+                    { relativeFilePath: "/e2e/small.glb" },
+                ],
+            };
+        });
+        const opened = await openFirstExecutionDetail(page);
+        test.skip(!opened, "No executions in this environment");
+
+        await expect(page.getByTestId("output-ingestion-progress")).toHaveCount(0);
+        await page.getByRole("tab", { name: /^Outputs$/ }).click();
+        const table = page.getByRole("table", { name: "Output files" });
+        await expect(table.getByText("Ingested by copy engine")).toHaveCount(1, {
+            timeout: 20_000,
+        });
+        await expect(table.getByRole("row").filter({ hasText: "/e2e/landed.e57" })).toContainText(
+            "Ingested by copy engine"
+        );
+    });
 });
 
 /**

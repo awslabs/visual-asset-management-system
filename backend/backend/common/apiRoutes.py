@@ -211,6 +211,8 @@ ASSET_VERSION_ROUTES: Tuple[ApiRoute, ...] = (
 # ---------------------------------------------------------------------------
 API_UPLOADS = ApiRoute("/uploads", (POST,), "uploads")
 API_UPLOAD_COMPLETE = ApiRoute("/uploads/{uploadId}/complete", (POST,), "uploads")
+# Status of an upload whose files over the asynchronous threshold are still (or were) ingested.
+API_UPLOAD_STATUS = ApiRoute("/uploads/{uploadId}", (GET,), "uploads")
 # Cross-Lambda invocation only (processWorkflowExecutionOutput -> uploadFile);
 # not registered with API Gateway.
 API_UPLOAD_COMPLETE_EXTERNAL = ApiRoute(
@@ -220,6 +222,7 @@ API_UPLOAD_COMPLETE_EXTERNAL = ApiRoute(
 UPLOAD_ROUTES: Tuple[ApiRoute, ...] = (
     API_UPLOADS,
     API_UPLOAD_COMPLETE,
+    API_UPLOAD_STATUS,
     API_UPLOAD_COMPLETE_EXTERNAL,
 )
 

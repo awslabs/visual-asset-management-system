@@ -492,6 +492,32 @@ else:
     sys.modules['customLogging'] = MagicMock()
     sys.modules['customLogging.logger'] = MagicMock()
     sys.modules['customLogging.logger'].safeLogger = mock_safe_logger
+
+# largeObjectCopy is the copy engine's shared logic (settings, part planner, job and batch rows); every
+# client and table it touches is passed in, so the REAL module loads with no AWS access. Loaded after
+# customLogging (it builds a safeLogger at import) and bound on the `common` MagicMock as well, the same
+# way as batchItemFailures: a MagicMock attribute would otherwise answer `from common import
+# largeObjectCopy` with a stand-in whose settings and thresholds are all MagicMocks.
+_loc_spec = _importlib_util.spec_from_file_location(
+    'common.largeObjectCopy',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'largeObjectCopy.py')
+)
+_loc_module = _importlib_util.module_from_spec(_loc_spec)
+sys.modules['common.largeObjectCopy'] = _loc_module
+_loc_spec.loader.exec_module(_loc_module)
+sys.modules['common'].largeObjectCopy = _loc_module
+
+# uploadStatus (an upload's asynchronously ingested files) likewise takes its table as an argument, so
+# the REAL module is loaded and bound the same way.
+_us_spec = _importlib_util.spec_from_file_location(
+    'common.uploadStatus',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'uploadStatus.py')
+)
+_us_module = _importlib_util.module_from_spec(_us_spec)
+sys.modules['common.uploadStatus'] = _us_module
+_us_spec.loader.exec_module(_us_module)
+sys.modules['common'].uploadStatus = _us_module
+
 sys.modules['customConfigCommon'] = MagicMock()
 sys.modules['customConfigCommon.customAuthClaimsCheck'] = MagicMock()
 sys.modules['customConfigCommon.customAuthClaimsCheck'].customAuthClaimsCheckOverride = lambda claims_and_roles, request: claims_and_roles

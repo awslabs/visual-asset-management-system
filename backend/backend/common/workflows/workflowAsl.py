@@ -28,6 +28,7 @@ import boto3
 from botocore.config import Config
 
 from customLogging.logger import safeLogger
+from common.largeObjectCopy import MAX_OUTPUT_INGESTION_WAIT_HOURS
 from common.workflows.workflowAslBuilder import generate_workflow_asl
 from common.workflows.stepfunctions_builder import (
     create_state_machine,
@@ -37,8 +38,9 @@ from common.workflows.stepfunctions_builder import (
 
 logger = safeLogger()
 
-# ASL schema version stamped on the workflow record.
-ASL_SCHEMA_VERSION = 1
+# ASL schema version stamped on the workflow record. A workflow deployed with an older version is
+# redeployed by its next launch (deployment_matches); 2 adds the wait for large outputs.
+ASL_SCHEMA_VERSION = 2
 
 # Published versions kept per workflow state machine. Step Functions caps a state machine at 1000
 # versions; older ones are deleted after each deploy. A launch reads the newest from the workflow
@@ -148,7 +150,7 @@ def workflow_pipeline_fingerprints(pipeline_records):
     }
 
 
-def deployment_matches(workflow_item, pipeline_records):
+def fingerprints_match(workflow_item, pipeline_records):
     """True when the workflow record names a published version AND its stored per-pipeline
     fingerprints equal these pipeline records' current ones — i.e. the version was built from exactly
     these settings. A record written before versions and fingerprints were stored never matches."""
@@ -156,6 +158,23 @@ def deployment_matches(workflow_item, pipeline_records):
         return False
     stored = (workflow_item or {}).get("pipelineFingerprints") or {}
     return dict(stored) == workflow_pipeline_fingerprints(pipeline_records)
+
+
+def asl_schema_current(workflow_item):
+    """True when the workflow's deployed definition was generated with the current ASL schema and
+    with the current maximum output-ingestion wait (the wait is baked into the definition, so a
+    release that changes MAX_OUTPUT_INGESTION_WAIT_HOURS redeploys the workflow at its next launch)."""
+    item = workflow_item or {}
+    if str(item.get("aslSchemaVersion") or "") != str(ASL_SCHEMA_VERSION):
+        return False
+    return str(item.get("outputIngestionWaitHours") or "") == str(_max_wait_hours())
+
+
+def deployment_matches(workflow_item, pipeline_records):
+    """True when the deployed version was built from these pipeline records (fingerprints_match) with
+    the current ASL schema. A workflow deployed with an older schema is redeployed by its next launch
+    or pipeline refresh, which is how existing workflows move to a new definition."""
+    return fingerprints_match(workflow_item, pipeline_records) and asl_schema_current(workflow_item)
 
 
 def _deploy_env():
@@ -170,7 +189,14 @@ def _deploy_env():
         # Deployment partition for the service-integration ARNs embedded in the ASL (defaults to
         # commercial "aws"); GovCloud/China/ISO inject the matching partition.
         "aws_partition": os.environ.get("AWS_PARTITION", "aws") or "aws",
+        # Maximum wait for large outputs (common.largeObjectCopy MAX_OUTPUT_INGESTION_WAIT_HOURS).
+        "max_output_ingestion_wait_hours": _max_wait_hours(),
     }
+
+
+def _max_wait_hours():
+    """The maximum output-ingestion wait, in hours (a fixed value)."""
+    return MAX_OUTPUT_INGESTION_WAIT_HOURS
 
 
 def _sf_client():
@@ -292,6 +318,7 @@ def deploy_state_machine(database_id, workflow_id, ref_records, existing_arn="",
         error_handler_function=env["error_handler_function"],
         aws_partition=env["aws_partition"],
         job_names=job_names,
+        max_output_ingestion_wait_hours=env.get("max_output_ingestion_wait_hours") or _max_wait_hours(),
     )
 
     # Update in place only when the recorded ARN still resolves; otherwise (new workflow or orphaned
