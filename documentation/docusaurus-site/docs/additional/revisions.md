@@ -408,6 +408,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Execution menu names the view it opens** — The first item of an execution row's actions menu reads **View details** instead of **View results**, since it opens the execution's details view, not its results. (issue #1431)
 -   **GLB combine keeps the output it reports** — `vamscli industry spatial glbassetcombine` without `--local-path` keeps the combined GLB and the export JSON in the temporary folder its result names, unless it uploaded them with `--asset-create-name`; `--no-delete-temporary-files` keeps them, also after a failed upload. Its cleanup removes the whole folder it created in the system temp directory; it removed the files it had just reported and left an empty `vams_glb_combine_*` folder behind. (issues #1388, #1389)
 -   **CLI sign-in names an IP restriction** — `vamscli auth login` reports a 403 from the API's authorizer on its version check as `Permission Denied`, says the API is reachable, and names the deployment's source IP restriction as the likely cause; it reported `API Unavailable`. (issue #1358)
+-   **Splat Toolbox job log lists keys and names** — The Splat Toolbox container's job log lists the pipeline definition's top-level keys and the names of its `INPUT_*`, `VAMS_*`, `AWS_*` and `TASK_*` environment variables instead of their values; only the AWS Region and AWS Batch job ID and attempt are printed with values. A definition that does not parse is reported by its length. (PR #1446)
 
 **Documentation:**
 
