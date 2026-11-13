@@ -22,7 +22,7 @@ A tool whose name is already registered is not: the MCP SDK keeps the first regi
 fork's. ``tests/test_addon_tools.py`` holds every module here to that layout.
 """
 
-from typing import Any, Callable
+from typing import Any, Callable, Tuple
 
 from . import edh
 
@@ -48,3 +48,16 @@ def register_addon_tools(
     for module in ADDON_TOOL_MODULES:
         if addon_deployed(client, module):
             module.register(mcp, client, config, tool_result)
+
+
+def addon_outcome_checks() -> Tuple[Tuple[str, str], ...]:
+    """The (tool-name fragment, read tool) rows of every add-on, in ``ADDON_TOOL_MODULES`` order.
+
+    A remote call of a write, destructive or compute tool that runs past its time budget names the
+    read tool that shows whether it took effect (``server.outcome_check_tool``). Each add-on module
+    declares the rows for its own tools in ``OUTCOME_CHECKS``, so the core server names none of them.
+    """
+    rows: Tuple[Tuple[str, str], ...] = ()
+    for module in ADDON_TOOL_MODULES:
+        rows += tuple(getattr(module, "OUTCOME_CHECKS", ()))
+    return rows

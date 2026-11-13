@@ -28,6 +28,18 @@ jest.mock("../common/StatusMessage", () => ({
     useStatusMessage: () => ({ showMessage: jest.fn() }),
 }));
 
+// The header's compliance badge asks the permissions check for the compliance state route. These
+// tests are about the archived header, so the role cannot read compliance state and no state is read
+// (AssetDetailsPane.test.tsx covers the badge, an archived asset's included).
+jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({ loading: false, can: () => false }),
+}));
+const mockFetchComplianceState = jest.fn();
+jest.mock("../../services/ComplianceService", () => ({
+    ...jest.requireActual("../../services/ComplianceService"),
+    fetchComplianceState: (...args: any[]) => mockFetchComplianceState(...args),
+}));
+
 const archivedAsset = {
     assetId: "a1",
     assetName: "Widget",
@@ -49,6 +61,7 @@ const renderPane = (props: any) => {
         <AssetDetailsPane
             asset={archivedAsset}
             databaseId="db1"
+            assetId="a1"
             onOpenUpdateAsset={onOpenUpdateAsset}
             onOpenDeleteModal={onOpenDeleteModal}
             onOpenUnarchiveModal={onOpenUnarchiveModal}
@@ -133,6 +146,8 @@ describe("AssetDetailsPane for an archived asset", () => {
         renderPane({ isArchived: true });
         expect(mockCheckSubscription).not.toHaveBeenCalled();
         expect(mockDownloadAsset).not.toHaveBeenCalled();
+        // The role cannot read compliance state, so the badge reads none.
+        expect(mockFetchComplianceState).not.toHaveBeenCalled();
     });
 
     it("a live asset keeps Delete, Edit and Subscribe and shows no archived notice", async () => {

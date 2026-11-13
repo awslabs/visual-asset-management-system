@@ -120,6 +120,16 @@ function coreAdminNavEntries(): NavEntry[] {
         },
         {
             type: "section",
+            text: "Admin - Compliance",
+            items: [
+                { type: "link", text: "Compliance Schemas", href: "#/compliance/schemas/" },
+                { type: "link", text: "Quarantine", href: "#/compliance/quarantine/" },
+                { type: "link", text: "Cascade Approvals", href: "#/compliance/cascades/" },
+                { type: "link", text: "Audit Log", href: "#/compliance/audit/" },
+            ],
+        },
+        {
+            type: "section",
             text: "Admin - Auth",
             items: [
                 {

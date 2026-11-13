@@ -3,6 +3,7 @@
 
 import os
 import pytest
+from unittest.mock import MagicMock, patch
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_environment():
@@ -11,3 +12,4 @@ def setup_environment():
     os.environ["ASSET_STORAGE_TABLE_NAME"] = "test-asset-table"
     os.environ["COGNITO_AUTH_ENABLED"] = "true"
     # Add any other required environment variables here
+
