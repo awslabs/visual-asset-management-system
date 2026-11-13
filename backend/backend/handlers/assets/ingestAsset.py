@@ -360,15 +360,22 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             response = initialize_ingest(request_model, claims_and_roles, event_auth)
 
         files = request_model.files or []
-        declared = [getattr(file, "file_size", None) for file in files]
+        details = {"stage": "complete" if is_complete_stage else "initialize",
+                   "files": [file.relativeKey for file in files]}
+        if is_complete_stage:
+            # Completion counts the files that landed; no byte count is recorded, since the
+            # declared sizes of the initialize stage are not what was stored.
+            file_count = sum(1 for result in getattr(response, "fileResults", None) or [] if result.success)
+        else:
+            file_count = len(files)
+            declared = [getattr(file, "file_size", None) for file in files]
+            if declared and all(size is not None for size in declared):
+                details["declaredBytes"] = sum(declared)
         log_action(event, "assetIngest", database_id=request_model.databaseId, asset_id=request_model.assetId,
-                   file_count=len(files),
-                   bytes=sum(declared) if declared and all(size is not None for size in declared) else None,
+                   file_count=file_count,
                    changes={field: value for field, value in request_model.dict(exclude_none=True).items()
                             if field not in ("files", "uploadId")},
-                   details={"stage": "complete" if is_complete_stage else "initialize",
-                            "files": [file.relativeKey for file in files]},
-                   uploadId=getattr(request_model, "uploadId", None))
+                   details=details, uploadId=getattr(request_model, "uploadId", None))
         return success(body=response.dict())
             
     except UploadResponsePassThrough as p:

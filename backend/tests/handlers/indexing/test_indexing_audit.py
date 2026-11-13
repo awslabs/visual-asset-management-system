@@ -74,3 +74,55 @@ class TestReindexRecord:
         kwargs = recorder.call_args.kwargs
         assert kwargs["outcome"] == "failed" and kwargs["reason"] == "internal" and kwargs["item_count"] is None
         assert "assets: 2 failed" not in str(kwargs), "the failure text is never recorded"
+
+
+def _wire_existing_asset(monkeypatch, m, object_metadata):
+    """Run process_s3_record on an object of an existing asset; the head the handler already makes
+    returns ``object_metadata``."""
+    recorder = MagicMock()
+    event = {"Records": []}
+    monkeypatch.setattr(m, "log_action", recorder)
+    monkeypatch.setattr(m, "current_audit_context", lambda: SimpleNamespace(event=event))
+    monkeypatch.setattr(m, "asset_bucket_name", "asset-bucket")
+    monkeypatch.setattr(m, "asset_bucket_prefix", "db/")
+    monkeypatch.setattr(m, "RESERVED_S3_PREFIX_FOLDERS", set())
+    monkeypatch.setattr(m, "get_bucket_id", MagicMock(return_value="bucket-1"))
+    monkeypatch.setattr(m, "lookup_asset", MagicMock(return_value={"databaseId": "db-1", "assetId": "x-asset-1"}))
+    monkeypatch.setattr(m, "update_s3_metadata", MagicMock(return_value=True))
+    monkeypatch.setattr(m, "update_asset_type", MagicMock(return_value=True))
+    monkeypatch.setattr(m, "write_file_version_history", MagicMock())
+    monkeypatch.setattr(m, "is_vams_metadata_stamp_echo", MagicMock(return_value=False))
+    s3 = MagicMock()
+    s3.head_object.return_value = {"VersionId": "v1", "Metadata": object_metadata}
+    monkeypatch.setattr(m, "s3_client", s3)
+    record = {"s3": {"bucket": {"name": "asset-bucket"}, "object": {"key": "db/x-asset-1/docs/b.glb", "size": 42}},
+              "eventName": "ObjectCreated:Put"}
+    m.process_s3_record(record)
+    return recorder, event
+
+
+@pytest.mark.unit
+class TestBucketSyncSkipsVamsWrites:
+    def test_a_direct_write_is_recorded_with_the_api_file_path(self, monkeypatch):
+        m = _load_sync()
+        recorder, event = _wire_existing_asset(monkeypatch, m, {"vams-changesource": "direct"})
+        recorder.assert_called_once()
+        assert recorder.call_args.args == (event, "fileSync")
+        assert recorder.call_args.kwargs["file_path"] == "/docs/b.glb"
+        assert recorder.call_args.kwargs["bytes"] == 42
+
+    def test_an_unstamped_write_is_recorded(self, monkeypatch):
+        m = _load_sync()
+        recorder, _ = _wire_existing_asset(monkeypatch, m, {})
+        assert recorder.call_args.args[1] == "fileSync"
+
+    @pytest.mark.parametrize("source", ["upload", "fileCopy", "fileRevert", "workflowExecution"])
+    def test_a_write_made_through_vams_is_not_recorded_again(self, monkeypatch, source):
+        m = _load_sync()
+        recorder, _ = _wire_existing_asset(monkeypatch, m, {"vams-changesource": source})
+        recorder.assert_not_called()
+
+    def test_a_delete_writes_no_sync_record(self):
+        source = open(os.path.join(os.path.dirname(_CR_REINDEXER_PATH), "sqsBucketSync.py")).read()
+        handler = source[source.index("def lambda_handler_deleted("):]
+        assert "_log_sync(" not in handler

@@ -131,6 +131,19 @@ database_cache = SimpleCache()    # Cache for database lookups
 asset_cache = SimpleCache()       # Cache for asset lookups
 
 
+def _sync_file_path(object_key: str, prefix: str, asset_id: str) -> str:
+    """The asset-relative file path in the form the API records name a file ('/dir/file.ext')."""
+    return "/" + extract_relative_file_path(object_key, prefix, asset_id).lstrip("/")
+
+
+def _written_by_vams(object_metadata) -> bool:
+    """Whether an object was written through VAMS (an upload, copy, move, revert, archive or pipeline
+    output), which stamps its change source on the object; those writes are recorded by the action
+    that made them. A direct write to the bucket carries no change source, or the direct one."""
+    source = (object_metadata or {}).get(VAMS_CHANGE_SOURCE_METADATA_KEY)
+    return bool(source) and source != VAMS_CHANGE_SOURCE_DIRECT
+
+
 def _log_sync(action: str, operation: str, **kwargs) -> None:
     """Record a bucket sync action of the invocation being served (the actor is the system)."""
     ctx = current_audit_context()
@@ -1856,9 +1869,11 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         # Record file version change history (best-effort; never fails the sync).
         # Skip folder markers (no version/content). head_object returns 'null' for
         # VersionId on buckets without versioning enabled.
+        object_metadata = None
         if not object_key.endswith('/'):
             try:
                 head = s3_client.head_object(Bucket=bucket_name, Key=object_key)
+                object_metadata = head.get('Metadata', {}) or {}
                 last_modified = head.get('LastModified')
                 write_file_version_history(
                     database_id_to_use,
@@ -1876,9 +1891,10 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
             logger.info(f"Folder marker detected: {object_key}, processing but skipping indexing")
             return True, False, f"Processed folder marker {object_key}"
 
-        _log_sync("fileSync", "created", database_id=database_id_to_use, asset_id=asset_id,
-                  file_path=extract_relative_file_path(object_key, prefix, asset_id),
-                  bytes=(record.get('s3', {}).get('object') or {}).get('size'))
+        if not _written_by_vams(object_metadata):
+            _log_sync("fileSync", "created", database_id=database_id_to_use, asset_id=asset_id,
+                      file_path=_sync_file_path(object_key, prefix, asset_id),
+                      bytes=(record.get('s3', {}).get('object') or {}).get('size'))
         return True, True, f"Successfully processed {object_key}"
     except Exception as e:
         logger.exception(f"Error processing S3 record: {e}")
@@ -2299,10 +2315,6 @@ def lambda_handler_deleted(event, context):
                     # Update asset type based on remaining files
                     logger.info(f"Updating asset type for {asset_id} after file deletion")
                     update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
-                    if asset_data:
-                        _log_sync("fileSync", "deleted", database_id=asset_data.get('databaseId'),
-                                  asset_id=asset_id,
-                                  file_path=extract_relative_file_path(object_key, prefix, asset_id))
 
                     logger.info(f"Successfully processed deletion for {object_key}")
                 except Exception as e:

@@ -70,16 +70,18 @@ class TestIngestRecord:
         assert result["statusCode"] == 200
         kwargs = recorder.call_args.kwargs
         assert recorder.call_args.args == (event, "assetIngest")
-        assert kwargs["file_count"] == 1 and kwargs["bytes"] == 1024
-        assert kwargs["details"] == {"stage": "initialize", "files": ["asset-1/a.glb"]}
+        assert kwargs["file_count"] == 1 and "bytes" not in kwargs, "declared sizes are not stored bytes"
+        assert kwargs["details"] == {"stage": "initialize", "files": ["asset-1/a.glb"], "declaredBytes": 1024}
         assert "files" not in kwargs["changes"]
 
-    def test_a_complete_records_the_upload_id(self):
-        result, recorder, _ = self._run(MagicMock(dict=lambda: {}), complete=True)
+    def test_a_complete_records_the_upload_id_and_the_files_that_landed(self):
+        results = [MagicMock(success=True), MagicMock(success=False)]
+        result, recorder, _ = self._run(MagicMock(dict=lambda: {}, fileResults=results), complete=True)
         assert result["statusCode"] == 200
         kwargs = recorder.call_args.kwargs
         assert kwargs["uploadId"] == "up-1" and kwargs["details"]["stage"] == "complete"
-        assert kwargs["bytes"] is None, "a completion declares no size"
+        assert kwargs["file_count"] == 1 and "bytes" not in kwargs
+        assert "declaredBytes" not in kwargs["details"]
 
 
 @pytest.mark.unit
