@@ -57,6 +57,7 @@ tools/VamsCLI/
       execution.py           # Execution ops: list (global), details (nested group: whole view + metadata|files|results subcommands, each paged), logs, abort, rerun, permanent-delete
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
+      compliance.py          # Compliance: schema sub-group, bind/unbind/bindings, evaluate/sweep/state/evaluations, quarantine + cascade sub-groups, audit
       addon/
         __init__.py          # Add-on lane: ADDON_COMMANDS, registered by main.py after the core commands
         edh.py               # EDH Workstations add-on: workstation, catalog, admin (images, ami-recipe, instances, settings, capacity-reservation), container (job) sub-groups
@@ -100,14 +101,15 @@ tools/VamsCLI/
     addon/                   # Add-on command and client tests (test_edh.py, test_edh_client.py, test_edh_capacity_reservations.py, test_edh_start_status.py, test_edh_workstation_image.py)
 ```
 
-### Command Groups (24 core + add-on groups)
+### Command Groups (25 core + add-on groups)
 
 The core groups are registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
 tag, tag-type, metadata, metadata-schema, comment, subscription, features,
-search, sync, workflow, pipeline, execution, industry, user, role, api-key
+search, sync, workflow, pipeline, execution, industry, user, role, api-key,
+compliance
 ```
 
 The add-on groups are registered from `commands/addon/` (`ADDON_COMMANDS`): `edh` (EDH Workstations). See [Add-on Commands](#add-on-commands).
@@ -126,6 +128,21 @@ Comment and subscription cover the comments and subscriptions APIs:
 
 -   `comment list|get|add|update|delete` -- `list` takes `-v/--asset-version-id` to switch from the asset-wide route to the version-scoped one; `get`, `add`, `update` and `delete` address a comment by asset, asset version and comment ID
 -   `subscription list|create|update|delete|unsubscribe|check` -- `delete` removes the whole subscription (and, for an asset, its notification topic); `unsubscribe` removes one subscriber and is a different route
+
+Compliance covers the schema registry, bindings, evaluation, quarantine, cascades and the audit trail:
+
+-   `compliance schema list|get|create|update|delete` -- `create`/`update` take `--schema-file` (a JSON file path or the body inline); `delete` requires `--confirm` and the API refuses a schema that is still bound
+-   `compliance bind|unbind|bindings` -- `-d` binds a database, `-d -a` binds one asset as an override; `--auto-eval/--no-auto-eval` (omitted: the API keeps an existing binding's setting, a new binding turns it on) is rejected with `-a` because the asset route does not read it. A database bind or unbind answers 202 and is applied in the background: the command prints the change's `apply` (`format_binding_change`), `--wait` follows it with the binding read (`COMPLIANCE_BINDING_APPLY_POLL_DELAYS`, `--wait-timeout`, default `DEFAULT_COMPLIANCE_BINDING_WAIT_TIMEOUT`) and exits 1 unless it was applied (a binding read that answers the database not found after the change was accepted is the change failing, reported with `COMPLIANCE_BINDING_APPLY_DATABASE_DELETED_REASON`, D171); `--wait` is rejected with `-a`; `compliance bindings` prints the last change
+-   `compliance bind` prints `✓ Nothing changed.` when the API answers `changed: false` (the schema already bound with the same automatic-evaluation setting); `compliance state` prints an `Awaiting Re-evaluation:` line for a quarantined record a binding change reached (`awaitingReevaluationSince` / `awaitingReevaluationSchema`), or whose evaluation waits for its pipeline rules (`awaitingReevaluationReason` `evaluationPending`, its own wording). `compliance schema create|update` surfaces the pipeline-rule run-rights refusal as the existing `PermissionDeniedError` (`Access forbidden. Not authorized to run the workflow of pipeline rule '<name>'`): `_make_request` raises on 403 before any command-level mapping, so do not add one. A deleted database's history is read by passing `<databaseId>%23deleted`; the client does not encode `#` in a path.
+-   `compliance evaluate|sweep|state|evaluations` -- `sweep -n` sweeps a schema, `sweep -d` evaluates one database's tracked assets (`POST /compliance/evaluate/{databaseId}`), exactly one of the two; `state -d` is the database overview (paged on `--max-items`/`--starting-token`; `summary`/`totalAssets` cover the full set, `assets` is one page; the options are rejected with `-a`), `state -d -a` one asset's record; `evaluations` pages on `--max-items`/`--starting-token` (the route reads its page size from `maxItems`); `sweep` reports `skipped` (bound assets the caller may not evaluate), `superseded` (assets whose evaluation a newer one had already started; marked in the list, not an error) and `assetsRemaining`
+-   `compliance schema list|get` print `Format:` from the record's top-level `schemaFormat` (`legacy` rows cannot be bound, updated or evaluated); `compliance evaluate` prints `schemaVersion`, `exceptionApplied`, `hasRuleErrors` and marks `status: error` rule results with `!`; `compliance evaluate` prints `pipelineRulesWaiting` and `compliance evaluations` a `Waiting: <rule>` line for each pipeline rule of a pending evaluation whose `pipelineExecutions` entry is `waiting`/`launching` (it waits for a running execution of its workflow; no execution is named); `compliance schema create|update` print each entry of the answer's `warnings` (pipeline rules sharing a workflow) as `Warning:`; `compliance state` prints `lastEvaluationStatus` and the overview's `error` overlay bucket
+-   `compliance quarantine list|release|exception|revoke-exception` -- `list` pages on `--max-items`/`--starting-token` (an authorization-filtered page may be empty while a token remains); `exception` moves the asset to the `exception` state (scoped to the bound schema's name + version); `revoke-exception` (DELETE on the exception route, no reason) returns it to its last verdict's state
+-   `compliance cascade list|get|create|approve|reject` -- `create --no-approval` and `approve` return 202 with `state` `executing` and no result; the CLI prints a hint to poll `cascade get` until `completed` or `aborted` (`abortReason`)
+-   `compliance audit [-d -a] [--event-type] [--start-date] [--end-date] [--max-items|--limit] [--starting-token]` -- pages on `--max-items` (`--limit` is an alias; `click.IntRange(1, 500)`) and `--starting-token`, printing the `NextToken` hint; `--event-type` is rejected with `-d -a` because the per-asset route has no such filter
+
+Every compliance call goes through `APIClient._compliance_request`, which percent-encodes the request path (`quote(endpoint, safe='/%')`): an id with `#` (a deleted database's `<id>#deleted`) is sent as typed, and an id typed encoded (`%23`) is left as it is. A new compliance client method calls `_compliance_request`, not `get`/`post` directly (D134). The MCP compliance tools reach the API only through these methods.
+
+The compliance `schemas` and pending `cascades` listings return their whole list in one response and take no paging parameters, so `schema list` and `cascade list` have none — a `--starting-token` there would be a knob the route ignores (`tools/VamsMCP/CLAUDE.md` Rule 9). `bindings` (`assetOverrides`), `state -d` (`assets`), `quarantine list` (`quarantinedAssets`), `evaluations` and `audit` (`entries`) all page on `maxItems` + `startingToken` with a `NextToken`; the CLI exposes them as `--max-items` (IntRange to the route cap) and `--starting-token`.
 
 Industry has nested sub-command groups:
 
@@ -175,6 +192,7 @@ VamsCLIError (base)
     RoleError (+ 4 subclasses)
     ConstraintError (+ 5 subclasses)
     UserRoleError (+ 4 subclasses)
+    ComplianceError (+ 3 subclasses: ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError)
     EdhError (+ 17 subclasses; add-on, in utils/addon/edh_exceptions.py)
     ProfileAlreadyExistsError
 ```
@@ -291,6 +309,7 @@ output_info("Hint text", json_output)          # Suppressed in JSON mode
 4. CLI mode uses colored output via `click.secho()` with `fg='green'`, `fg='red'`, etc.
 5. The JSON error object is `{"error", "error_type"}` plus the exception's `json_fields`, merged without replacing those two and only when it is a dict, whether it is set on the class or on the instance (any other value is left out) -- `RequestBlockedError` carries `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` on the instance, and an add-on's exceptions set theirs on the class ([Add-on Commands](#add-on-commands)); `tests/test_json_output_error_fields.py` holds `output_error` to that. A global error's document (`_global_error_data` in `utils/global_exceptions.py`) is `{"error": "<Heading>: <message>", "error_type", ...json_fields, "additional_info"?}`, also on stdout; in text mode its `✗ <Heading>: <message>` line goes to stderr and its `additional_info` lines to stdout. Both exit 1
 6. A command that runs another command (`industry spatial glbassetcombine` runs `assets export`, `assets create` and `file upload`; `industry engineering bom bomassemble` runs `glbassetcombine`, `assets create` and `file upload`) calls it through `invoke_nested_command(ctx, json_output, command, **params)`, never by swapping `sys.stdout` by hand. It runs the command with `json_output=True` and its stdout captured, restores stdout on every path, and passes a nested `output_error()` failure on as one error document (JSON mode) or a `✗` line on stderr (CLI mode) with the nested exit code. Its keyword-only `error_fields` adds fields to that document: once `--asset-create-name` has created the asset, both commands add `createdAssetId` to any later error, so a caller does not retry and create a second asset. A nested `file upload` returns its result with `overall_success: false` instead of exiting 1 (`invoked_from_another_command`), so both commands pass each upload's result to `raise_if_upload_failed()` (`commands/industry/spatial/glb.py`), which raises `FileUploadError` naming the files that were not stored (#1349, #1359)
+7. **A command that ends non-zero without raising exits with `sys.exit(n)`, never `ctx.exit(n)`.** `main()` runs the CLI with `standalone_mode=False`, under which Click turns `ctx.exit(n)` into a return value that the entry point drops, so the installed CLI exits 0 while `CliRunner` (standalone) sees `n`. `compliance bind|unbind --wait` exited 0 on a timeout, failure or stop this way (D167, #335). Test such an exit through `main()`, as `TestTheWaitsExitStatusThroughTheEntryPoint` in `tests/test_compliance_commands.py` does.
 
 ### 5. Decorator Usage
 
@@ -829,7 +848,7 @@ Follow this checklist:
 
     - Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed, and update the call site
     - Add an `@mcp.tool(title="...", annotations=<CONST>)` + `@tool_result` function for a new method agents should be able to use, in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`), with that tier's annotation constant and an agent-facing description within the budget (`tools/VamsMCP/CLAUDE.md` Rules 11-14)
-    - Confirm the pagination `items_key` still matches the endpoint's list field. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions` and `metadata`. `VamsClient.paginate()` also unwraps the legacy `message` envelope
+    - Confirm the pagination `items_key` still matches the endpoint's list field. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions`, `metadata`, and the compliance fields `evaluations`, `entries`, `quarantinedAssets`. `VamsClient.paginate()` also unwraps the legacy `message` envelope
     - Verify the new `def` is unique and correctly positioned. The tools are module-level functions, so a duplicate name silently shadows the earlier one and a `def` placed after the `if __name__` entrypoint or outside its gate block never executes — the tool goes missing with no import error. `tests/test_server_tools.py` asserts the source layout for this
     - Add the tool to the `tools/VamsMCP/README.md` tool list (and the `autoApprove` sample if it is a safe read)
     - Place the tool in a tool set in `tools/VamsMCP/vams_mcp/toolsets.py` (`tools/VamsMCP/CLAUDE.md` Rule 17): `tests/test_toolsets.py` fails on a tool in no set and on a set past 100 tools

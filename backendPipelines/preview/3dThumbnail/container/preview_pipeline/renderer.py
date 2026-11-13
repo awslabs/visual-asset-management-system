@@ -32,6 +32,16 @@ _BG_COLOR = (128, 128, 128)
 _FOCUS_PERCENTILE_LO = 2
 _FOCUS_PERCENTILE_HI = 98
 
+# A mesh whose full bounds are at least this many times its percentile bounds may be framed on the
+# percentile bounds (``_percentile_bounds_if_sparse``); vertices sampled for that check.
+SPARSE_FRAMING_SCALE = 25.0
+_SPARSE_SAMPLE = 1_000_000
+# ... and only when, framed on its full bounds, its dense region would project under this many pixels
+# and a small still at SPARSE_CHECK_RESOLUTION would cover under SPARSE_COVERAGE of its pixels.
+SPARSE_CORE_PIXELS = 4.0
+SPARSE_CHECK_RESOLUTION = (160, 120)
+SPARSE_COVERAGE = 0.001
+
 # Camera elevation angle in degrees above the orbit plane.
 # 25 degrees is the industry standard for 3D product thumbnails.
 _CAMERA_ELEVATION_DEG = 25
@@ -146,6 +156,7 @@ def generate_static_frame(
     pv_data: pv.PolyData,
     resolution: tuple = DEFAULT_RESOLUTION,
     use_full_bounds=None,
+    _check_sparse: bool = True,
 ) -> np.ndarray:
     """
     Render a single static frame of the given PyVista data from the front three-quarter view
@@ -162,7 +173,8 @@ def generate_static_frame(
         _add_mesh(plotter, pv_data)
 
     focal_point, radius, elevation = _compute_camera_framing(
-        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution
+        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution,
+        check_sparse=_check_sparse,
     )
 
     max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
@@ -329,7 +341,53 @@ def _capture_rgba(plotter) -> np.ndarray:
     return np.ascontiguousarray(img, dtype=np.uint8)
 
 
-def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_RESOLUTION):
+def _percentile_bounds_if_sparse(points, lo, hi, pv_data=None, resolution=DEFAULT_RESOLUTION):
+    """The percentile bounds of a mesh that would vanish when framed on its full bounds, else None.
+
+    A mesh is framed on its full bounds, but one stray piece far away inside the same mesh (a part the
+    scene's parts do not tell apart) can make those bounds so large that the model is a dot. Framing
+    the percentile bounds instead would crop a model whose vertices crowd into one detailed region (a
+    long low-poly mast with a dense antenna), so it is done only when full-bounds framing provably
+    loses the model, by two tests:
+
+    * the 2nd-98th percentile bounds (where nearly all vertices lie) are at least
+      ``SPARSE_FRAMING_SCALE`` times smaller than the full bounds, and would project under
+      ``SPARSE_CORE_PIXELS`` pixels framed on the full bounds (cheap; read from at most
+      ``_SPARSE_SAMPLE`` evenly spaced vertices);
+    * a small still render on the full bounds (``SPARSE_CHECK_RESOLUTION``) covers less than
+      ``SPARSE_COVERAGE`` of its pixels: the whole mesh, not only its dense region, draws as nothing.
+
+    A mast is long enough to draw even when its antenna is a dot, so it keeps full-bounds framing; a
+    6 cm model with a stray piece 50 m away covers a pixel or two."""
+    full = float(np.max(hi - lo))
+    if full <= 0:
+        return None
+    step = max(1, len(points) // _SPARSE_SAMPLE)
+    sample = np.asarray(points[::step])
+    p_lo = np.percentile(sample, _FOCUS_PERCENTILE_LO, axis=0)
+    p_hi = np.percentile(sample, _FOCUS_PERCENTILE_HI, axis=0)
+    core = float(np.max(p_hi - p_lo))
+    if core <= 0 or full < SPARSE_FRAMING_SCALE * core:
+        return None
+    _, radius, _ = _framing_for_bounds(lo, hi, True, resolution)
+    visible = 2.0 * radius * np.tan(np.radians(15.0))  # frame height at the focal distance
+    core_pixels = core / visible * resolution[1]
+    if core_pixels >= SPARSE_CORE_PIXELS or pv_data is None:
+        return None
+    frame = generate_static_frame(pv_data, resolution=SPARSE_CHECK_RESOLUTION, use_full_bounds=True,
+                                  _check_sparse=False)
+    coverage = float((frame[..., 3] > 0).mean())
+    if coverage >= SPARSE_COVERAGE:
+        return None
+    if step > 1:
+        p_lo = np.percentile(points, _FOCUS_PERCENTILE_LO, axis=0)
+        p_hi = np.percentile(points, _FOCUS_PERCENTILE_HI, axis=0)
+    logger.info(f"Camera framing: on its full bounds the mesh would cover {coverage:.3%} of the frame "
+                f"(its dense region {core_pixels:.1f} px); framing the 2nd-98th percentile bounds")
+    return p_lo, p_hi
+
+
+def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_RESOLUTION, check_sparse=True):
     """
     Compute camera framing parameters for orbit-style camera positioning.
 
@@ -341,9 +399,12 @@ def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_R
     crop outliers from sparse scenes (point clouds with distant noise).
 
     For full-bounds mode (USD/CAD): uses complete bounding box since
-    all geometry in engineered models is intentional. A near-flat part far
-    larger than the rest of a scene (a ground or environment plane) is left
-    out of the framing bounds and still drawn (``scene_parts``).
+    all geometry in engineered models is intentional. A part the scene's
+    parts mark as a backdrop or a stray is left out of the framing bounds
+    (``scene_parts.framing_bounds``; a loader has already dropped its
+    backdrops from the data, a stray is still drawn), and a mesh whose full
+    bounds would leave its content covering almost nothing is framed on its
+    percentile bounds (``_percentile_bounds_if_sparse``).
     """
     points = pv_data.points
 
@@ -353,10 +414,17 @@ def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_R
     elif use_full_bounds:
         lo = points.min(axis=0)
         hi = points.max(axis=0)
+        sparse = _percentile_bounds_if_sparse(points, lo, hi, pv_data, resolution) if check_sparse else None
+        if sparse is not None:
+            lo, hi = sparse
     else:
         lo = np.percentile(points, _FOCUS_PERCENTILE_LO, axis=0)
         hi = np.percentile(points, _FOCUS_PERCENTILE_HI, axis=0)
+    return _framing_for_bounds(lo, hi, use_full_bounds, resolution, log=True)
 
+
+def _framing_for_bounds(lo, hi, use_full_bounds, resolution, log=False):
+    """(focal point, radius, elevation) of the orbit that frames the box (lo, hi)."""
     focal_point = (lo + hi) / 2.0
 
     dx = hi[0] - lo[0]
@@ -388,11 +456,12 @@ def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_R
 
     elevation = radius * np.tan(np.radians(_CAMERA_ELEVATION_DEG))
 
-    logger.info(
-        f"Camera framing: focal={focal_point}, radius={radius:.2f}, "
-        f"elevation={elevation:.2f}, focus_extents=({dx:.2f}, {dy:.2f}, {dz:.2f}), "
-        f"xz_diagonal={xz_diagonal:.2f}, dist_h={dist_for_height:.2f}, "
-        f"dist_w={dist_for_width:.2f}, use_full_bounds={use_full_bounds}"
-    )
+    if log:
+        logger.info(
+            f"Camera framing: focal={focal_point}, radius={radius:.2f}, "
+            f"elevation={elevation:.2f}, focus_extents=({dx:.2f}, {dy:.2f}, {dz:.2f}), "
+            f"xz_diagonal={xz_diagonal:.2f}, dist_h={dist_for_height:.2f}, "
+            f"dist_w={dist_for_width:.2f}, use_full_bounds={use_full_bounds}"
+        )
 
     return focal_point, radius, elevation

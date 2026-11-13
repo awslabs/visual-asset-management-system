@@ -182,6 +182,8 @@ elif 'lambdaCrossCall' in event:
 | External OAuth IDP | `sub`, `preferred_username`, `email`, `upn`, `username`              |
 | VAMS custom        | `vams:tokens`, `vams:roles`, `vams:externalAttributes`               |
 
+The authorizer sets the `vams:` values itself and ignores any claim a token carries under that prefix. `vams:tokens` holds the token's username claim, the first present of `cognito:username`, `username` and `sub`; a verified token with none of them is refused. Only those three claims identify the caller: `preferred_username`, `email` and `upn` still reach handlers in the authorizer context, but VAMS user role assignments, user-level constraints and per-user records are keyed by the username claim, so map VAMS users by that value.
+
 #### Role Resolution
 
 The `vams:roles` context value is resolved by the custom Lambda authorizer, which reads the caller's assigned roles from the user roles table after verifying the presented credential and passes them to handler Lambda functions through the authorizer context. Resolved roles are cached per user for `USER_ROLES_CACHE_TTL` (60 seconds); an empty role list is cached as well, so a user with no roles does not re-query the table on every request, but only for the shorter `USER_ROLES_EMPTY_CACHE_TTL` (5 seconds) — the API key path denies a caller that resolves to no roles, and a full-lifetime empty entry would keep denying a machine identity for a minute after its role was granted. Resolving roles at authorization time applies to every authentication mechanism — Amazon Cognito, an external OAuth identity provider, and API keys — and means a role assignment or revocation takes effect within that cache lifetime rather than persisting for the lifetime of an issued token. Amazon API Gateway caches the authorizer result itself for `AUTH_CACHE_TTL_SECONDS` (30 seconds) on authenticated routes, a Deny included, so that is the floor on how quickly a first grant to a previously roleless identity becomes visible — roughly 30 seconds rather than 5. The Amazon Cognito pre-token-generation trigger therefore populates only `vams:tokens` and `email`, leaving `vams:roles` empty in the token itself.
@@ -255,7 +257,7 @@ flowchart TD
 
 **Tier 1 -- API Route Authorization** controls which API endpoints a user's role can access. Policies use `api` and `web` object types to gate route-level access.
 
-**Tier 2 -- Object Entity Authorization** controls which specific data entities a user can access. Policies use entity-type constraints (`database`, `asset`, `pipeline`, `workflow`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`) with attribute-based rules.
+**Tier 2 -- Object Entity Authorization** controls which specific data entities a user can access. Policies use entity-type constraints (`database`, `asset`, `pipeline`, `workflow`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`, `complianceSchema`, `complianceEvaluation`, `complianceCascade`, `complianceBinding`) with attribute-based rules. API keys have no object type: access to them is governed at Tier 1 through `api` constraints on `/auth/api-keys` and `/auth/user/api-keys`.
 
 ### Constraint Fields
 
@@ -278,6 +280,9 @@ The following fields can be used in ABAC policy rules:
 | `name`                     | Pipeline name or workflow name (the display name, not the identifier)         |
 | `metadataSchemaName`       | Metadata schema name                                                          |
 | `metadataSchemaEntityType` | Metadata entity type                                                          |
+| `complianceSchemaName`     | Compliance schema name                                                        |
+| `complianceState`          | Asset compliance state (for example `quarantined`)                            |
+| `cascadeId`                | Compliance cascade identifier                                                 |
 | `object__type`             | Entity type for Tier 2 enforcement                                            |
 | `route__path`              | API route path for Tier 1 enforcement                                         |
 

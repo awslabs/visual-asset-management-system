@@ -19,6 +19,21 @@ import DatabaseMapThumbnail from "../components/search/SearchResults/DatabaseMap
 import { usePageTitle } from "../hooks/usePageTitle";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 import { routeDisabledReason } from "../features/orchestration/permissions/routeDisabledReason";
+import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
+
+// The API route the database compliance page reads; the column linking to it is shown only
+// when the caller may call it.
+const COMPLIANCE_STATE_DATABASE_API_ROUTE = "/compliance/state/{databaseId}";
+// The routes behind the Create, Edit and Delete Selected actions. A caller who may only list
+// databases (for example the Compliance Admin template) sees the list with Create disabled and
+// without Edit and Delete Selected.
+const DATABASE_API_ROUTE = "/database";
+const DATABASE_BY_ID_API_ROUTE = "/database/{databaseId}";
+// The route the database metadata modal reads; the Metadata column opening it is shown only when
+// the caller may call it.
+const DATABASE_METADATA_API_ROUTE = "/database/{databaseId}/metadata";
+// The database name links to the database's assets page when the caller may open it
+// (useAssetPageAccess); otherwise to the compliance page, or it is not a link.
 
 export default function Databases() {
     usePageTitle(Synonyms.Databases);
@@ -30,13 +45,23 @@ export default function Databases() {
     const createDisabledReason = routeDisabledReason(
         permissionsLoading,
         permissionsFailed,
-        can("POST", "/database"),
+        can("POST", DATABASE_API_ROUTE),
         `Your role does not allow creating ${Synonyms.databases}.`
     );
 
     const config = appCache.getItem("config");
     const useMapView = config?.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES);
     const mapStyleUrl = config?.locationServiceApiUrl;
+    const showCompliance = can("GET", COMPLIANCE_STATE_DATABASE_API_ROUTE);
+    const canEdit = can("PUT", DATABASE_BY_ID_API_ROUTE);
+    const canDelete = can("DELETE", DATABASE_BY_ID_API_ROUTE);
+    const showMetadata = can("GET", DATABASE_METADATA_API_ROUTE);
+    const { canOpenDatabaseAssets } = useAssetPageAccess();
+    const nameLinkTarget = canOpenDatabaseAssets
+        ? "assets"
+        : showCompliance
+        ? "compliance"
+        : "none";
 
     const listDefinition = useMemo(
         () =>
@@ -45,8 +70,11 @@ export default function Databases() {
                 showMapThumbnails: showMapThumbnails && useMapView,
                 MapThumbnailComponent: DatabaseMapThumbnail,
                 mapStyleUrl,
+                showCompliance,
+                showMetadata,
+                nameLinkTarget,
             }),
-        [showMapThumbnails, useMapView, mapStyleUrl]
+        [showMapThumbnails, useMapView, mapStyleUrl, showCompliance, showMetadata, nameLinkTarget]
     );
 
     const mapThumbnailToggle =
@@ -71,8 +99,8 @@ export default function Databases() {
                 createDisabledReason={createDisabledReason}
                 fetchAllElements={fetchAllDatabases}
                 fetchElements={fetchAllDatabases}
-                editEnabled={can("PUT", "/database/{databaseId}")}
-                hideDeleteButton={!can("DELETE", "/database/{databaseId}")}
+                editEnabled={canEdit}
+                hideDeleteButton={!canDelete}
                 customFilterControls={mapThumbnailToggle}
             />
             <Modal

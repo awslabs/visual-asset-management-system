@@ -298,6 +298,21 @@ export function setupSecurityAndLoggingEnvironmentAndPermissions(
     storageResources.dynamo.userRolesStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.rolesStorageTable.grantReadData(lambdaFunction);
 
+    grantAuditLogWritePermissions(lambdaFunction, storageResources);
+}
+
+/**
+ * The audit log write grant alone: `logs:CreateLogStream` and `logs:PutLogEvents` on the streams of
+ * the nine VAMS audit log groups, with the stack-level cdk-nag suppression for the `:*` stream
+ * wildcard. For a function that writes audit records but makes no authorization decision, so it
+ * needs none of the authorization tables `setupSecurityAndLoggingEnvironmentAndPermissions` grants
+ * (the deploy-time compliance schema seed). Use it with `globalLambdaEnvironmentsAndPermissions`,
+ * which sets the resource-name prefix the audit writer resolves the log group names from.
+ */
+export function grantAuditLogWritePermissions(
+    lambdaFunction: lambda.Function,
+    storageResources: storageResources
+): void {
     // Grant CloudWatch Logs permissions for audit logging
     lambdaFunction.addToRolePolicy(
         new iam.PolicyStatement({
