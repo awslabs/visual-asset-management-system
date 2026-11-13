@@ -1027,9 +1027,16 @@ export function buildHandleExecutionErrorFunction(
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadData(fun);
-    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grant(
-        fun,
-        "dynamodb:UpdateItem"
+    // One UpdateItem on the configuration row, by its key: the table ARN alone (Table.grant would add
+    // the table's index ARNs, which an UpdateItem never names), keeping the role under its budget.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:UpdateItem"],
+            resources: [
+                storageResources.dynamo.workflowExecutionConfigurationStorageTable.tableArn,
+            ],
+        })
     );
     // The error handler releases the failed run's concurrency locks.
     attachExecutionLockPolicy(fun, executionLockReleaseStatements(storageResources));

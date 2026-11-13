@@ -97,8 +97,18 @@ const BUDGET_EXCEPTIONS: Record<string, { ceiling: number; reason: string }> = {
             "bucket; above the budget in the GovCloud template only. To be narrowed the way the " +
             "execution service's role was.",
     },
+    handleExecutionErrorServiceRole: {
+        ceiling: 9251,
+        reason:
+            "The workflow error handler stops a failed run's large output copies (#1123: the copy " +
+            "jobs table, the copy sweep start and the asset buckets' multipart abort) and publishes " +
+            "the run's completion event, on top of the execution, pipeline, lock and log grants it " +
+            "already held. Above the budget in the worst-case commercial template only, after its " +
+            "configuration-table grant was narrowed to the table ARN. Owner decision 2026-11-13: a " +
+            "named exception at the measured maximum, shrink-only.",
+    },
 };
-const MAX_EXCEPTIONS = 2;
+const MAX_EXCEPTIONS = 3;
 
 const synthCell = (cell: Cell): SynthResult =>
     cell.mutate
