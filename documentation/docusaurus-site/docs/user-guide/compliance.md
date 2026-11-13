@@ -463,6 +463,10 @@ Any workflow can back a pipeline rule without changes to its pipelines. When the
 For measurements of your own — geometric accuracy, noise levels, coverage ratios — the pipeline writes a `compliance-output.json` file under its results output prefix. [Building a pipeline for compliance checks](#building-a-pipeline-for-compliance-checks) walks through it; the file format is in [Compliance (Concepts) — Pipeline output contract](../concepts/compliance.md#pipeline-output-contract).
 :::
 
+:::note[A pipeline rule on the SYSTEM GenAI metadata workflow]
+A rule can name the `GLOBAL` `system-genai-metadata` workflow like any other. It writes no `compliance-output.json`, so a succeeded run passes or fails on `execution_success` and `processing_duration_seconds` alone, as for any workflow without that file. It analyzes one file per run, so the rule's **Input files** must leave exactly one file, or the rule ends as an error. The upload already runs this workflow on every file version and the workflow allows one run per file version at a time, so a rule evaluated after an upload analyzes the file a second time, after the upload's own run when that run is still going. To check what the analysis wrote, use a `metadata` rule on the file metadata (`files`) or attributes (`fileAttributes`) the upload's run records, which needs no second run.
+:::
+
 ---
 
 ## Building a pipeline for compliance checks
