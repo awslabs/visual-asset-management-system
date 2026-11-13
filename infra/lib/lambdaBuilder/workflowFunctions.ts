@@ -131,7 +131,7 @@ function executionLockReleaseStatements(storageResources: storageResources) {
  * them. Under VAMS stack role customization the statements are recorded on the pre-created role
  * instead. The function waits for the policy, since its code calls the lock table once deployed.
  */
-function attachExecutionLockPolicy(fun: lambda.Function, statements: iam.PolicyStatement[]) {
+export function attachExecutionLockPolicy(fun: lambda.Function, statements: iam.PolicyStatement[]) {
     attachHandlerPolicy(fun, EXECUTION_LOCK_POLICY_ID, statements);
 }
 

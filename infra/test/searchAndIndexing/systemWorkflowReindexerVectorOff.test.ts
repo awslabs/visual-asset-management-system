@@ -32,6 +32,8 @@ const REINDEXER_FAMILY = [
     "VectorIndexingVectorReindexerAsyncDLQB60B9EFF",
     "VectorIndexingVectorReindexerAsyncDLQPolicy8CFED122",
     "VectorIndexingsystemWorkflowLauncher46522329",
+    // The launcher's read of the reindex slot rows, in its own lock policy (added with the slots).
+    "VectorIndexingsystemWorkflowLauncherExecutionLockPolicyE11EB43D",
     "VectorIndexingsystemWorkflowLauncherServiceRole50656F80",
     "VectorIndexingsystemWorkflowLauncherServiceRoleDefaultPolicy4C679549",
     "VectorIndexingvectorReindexer805C9493",

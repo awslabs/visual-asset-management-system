@@ -40,8 +40,9 @@ const CREATED_HANDLER = "handlers.indexing.sqsBucketSync.lambda_handler_created"
 const DELETED_HANDLER = "handlers.indexing.sqsBucketSync.lambda_handler_deleted";
 const REINDEXER_HANDLER = "handlers.osVectorSearch.vectorReindexer.lambda_handler";
 const INDEXER_HANDLER = "handlers.osVectorSearch.vectorIndexer.lambda_handler";
-/** The vector functions that continue their own work. */
-const VECTOR_SELF_CONTINUING_HANDLERS = [REINDEXER_HANDLER, INDEXER_HANDLER];
+const LAUNCHER_HANDLER = "handlers.osVectorSearch.systemWorkflowLauncher.lambda_handler";
+/** The vector functions that continue their own work (the launcher by sending a waiting launch back). */
+const VECTOR_SELF_CONTINUING_HANDLERS = [REINDEXER_HANDLER, INDEXER_HANDLER, LAUNCHER_HANDLER];
 /** The functions that may set `RecursiveLoop`, each only where the partition has the detection. */
 const OPTED_OUT_HANDLERS = [CREATED_HANDLER, ...VECTOR_SELF_CONTINUING_HANDLERS];
 

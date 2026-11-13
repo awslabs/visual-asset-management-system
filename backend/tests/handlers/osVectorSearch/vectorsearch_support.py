@@ -43,6 +43,8 @@ os.environ.setdefault("WORKFLOW_LAUNCH_QUEUE_URL",
 os.environ.setdefault("GENAI_METADATA_WORKFLOW_ID", "system-genai-metadata")
 os.environ.setdefault("GENAI_METADATA_WORKFLOW_DATABASE_ID", "GLOBAL")
 os.environ.setdefault("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME", "executeWorkflowV2-test")
+os.environ.setdefault("REINDEX_SLOT_COUNT", "5")
+os.environ.setdefault("WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME", "test-workflow-executions-v2-table")
 os.environ.setdefault("AWS_LAMBDA_FUNCTION_NAME", "vectorReindexer-test")
 
 _REAL_MODULES = {

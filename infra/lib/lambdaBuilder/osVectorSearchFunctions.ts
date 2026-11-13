@@ -66,17 +66,19 @@ export function applyVectorLambdaSecurity(
 const backendCode = () => lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`));
 
 /**
- * Recursive-loop setting for the two vector functions that continue their own work.
+ * Recursive-loop setting for the three vector functions that continue their own work.
  *
  * The vector reindexer continues a run by invoking itself asynchronously every time fewer than 90 s of its
  * 15-minute window remain; the vector indexer continues an asset- or file-wide rule by sending a
- * `vector.indexer.continue` message to the queue it consumes. AWS Lambda's recursive-loop detection counts
+ * `vector.indexer.continue` message to the queue it consumes, and the system-workflow launcher sends a
+ * launch that waits for a reindex slot back to the queue it consumes. AWS Lambda's recursive-loop detection counts
  * both chains (Lambda to Lambda, and Lambda to SQS to the same Lambda) and stops them after about 16 hops,
  * sending the event to the on-failure destination or the queue's DLQ, so a long reindex run (a large
  * enumeration or clear, the v2.6-to-v2.7 vector backfill) or a rule over a large item collection would
- * stop part-way. ALLOW turns the detection off for these two functions only; each handler bounds its chain
- * itself (`MAX_RUN_INVOCATIONS` in `vectorReindexer.py`, `MAX_CONTINUATION_HOPS` in `vectorIndexer.py`)
- * and sends what resumes the work to its DLQ when the chain reaches the cap.
+ * stop part-way. ALLOW turns the detection off for these three functions only; each handler bounds its
+ * chain itself (`MAX_RUN_INVOCATIONS` in `vectorReindexer.py`, `MAX_CONTINUATION_HOPS` in `vectorIndexer.py`,
+ * `MAX_SLOT_WAITS` in `systemWorkflowLauncher.py`) and sends what resumes the work to its DLQ when the chain
+ * reaches the cap.
  *
  * Set in the partitions that have the detection, where it is on by default: commercial (`aws`) and the AWS
  * European Sovereign Cloud (`aws-eusc`), as for the bucket-sync function in `indexingFunctions.ts`. The AWS
@@ -216,6 +218,9 @@ export function buildSystemWorkflowLauncherFunction(
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         ...vectorLambdaPlacement(config, vpc, subnets),
+        // A launch that finds every reindex slot in use sends its message back to the queue this function
+        // consumes; the handler bounds that chain itself (MAX_SLOT_WAITS in systemWorkflowLauncher.py).
+        recursiveLoop: vectorSelfContinuationRecursiveLoop(config),
         environment: {
             // The workflow database id is the shared literal of infra/common/systemPipelines.ts.
             GENAI_METADATA_WORKFLOW_DATABASE_ID: SYSTEM_WORKFLOW_DATABASE_ID,

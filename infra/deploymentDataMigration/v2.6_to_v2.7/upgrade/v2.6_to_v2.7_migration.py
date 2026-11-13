@@ -20,7 +20,7 @@ The v2.7 release introduces:
      produced by the system pipeline's upload trigger, so a file that existed before the upgrade has
      no vector until it is re-processed. The ``vectorBackfill`` step invokes the deployed
      ``vectorReindexer`` Lambda, which enumerates the latest live version of every file and enqueues
-     one system-workflow execution per file, paced by ``app.vectorSearch.indexingConcurrency``.
+     one system-workflow execution per file, at most ``app.vectorSearch.indexingConcurrency`` running at once.
      ``--clear-vectors`` deletes every stored vector first (``operation: both``); the default
      (``operation: enqueue``) leaves existing vectors in place and re-embeds every file. The step
      reads the deployment's VECTORSEARCH feature switch first: without it vector search is off and
@@ -838,8 +838,8 @@ def describe_vector_backfill_result(result: Dict, function_name: str, clear_vect
     logger.info(f"    vamscli execution abort <executionId> --group-id vec-{run_label}-<chunk> --yes")
     logger.info(f"    CloudWatch Logs: /aws/lambda/{function_name} (enumeration and continuation) "
                 "and the systemWorkflowLauncher function (one log line per launched execution)")
-    logger.info("    The SystemWorkflowLaunchQueue depth drains as executions launch; the launcher "
-                "runs at most app.vectorSearch.indexingConcurrency executions at a time.")
+    logger.info("    The SystemWorkflowLaunchQueue depth drains as executions launch; at most "
+                "app.vectorSearch.indexingConcurrency of them run at once, and the rest wait in the queue.")
     logger.info("=" * 80)
 
 

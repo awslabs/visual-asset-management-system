@@ -23,6 +23,7 @@ import {
     SYSTEM_WORKFLOW_DATABASE_ID,
 } from "../../../../common/systemPipelines";
 import { IAMArn } from "../../../helper/service-helper";
+import { attachExecutionLockPolicy } from "../../../lambdaBuilder/workflowFunctions";
 import {
     buildSystemWorkflowLauncherFunction,
     buildVectorIndexerFunction,
@@ -190,8 +191,32 @@ export class VectorIndexingConstruct extends Construct {
                 EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME: props.executeWorkflowV2FunctionName,
                 GENAI_METADATA_WORKFLOW_ID: SYSTEM_GENAI_METADATA_WORKFLOW_ID,
                 GENAI_METADATA_WORKFLOW_DATABASE_ID: SYSTEM_WORKFLOW_DATABASE_ID,
+                // The number of reindex slots (at most this many reindex runs at once), and the queue a
+                // launch that finds every slot in use is sent back to, delayed.
+                REINDEX_SLOT_COUNT: String(config.app.vectorSearch.indexingConcurrency),
+                WORKFLOW_LAUNCH_QUEUE_URL: this.systemWorkflowLaunchQueue.queueUrl,
             }
         );
+        // A launch reads the reindex slot rows (BatchGetItem) before it calls executeWorkflow, reads a
+        // held slot's holder record (GetItem) to nominate an ended one, and sends a waiting message
+        // back to its own queue. Read-only on the two tables; executeWorkflow alone writes slot rows.
+        // The lock-table statement sits in the function's own ExecutionLockPolicy, as every lock
+        // handler's does.
+        attachExecutionLockPolicy(this.systemWorkflowLauncherFunction, [
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["dynamodb:BatchGetItem"],
+                resources: [storageResources.dynamo.workflowExecutionLocksStorageTable.tableArn],
+            }),
+        ]);
+        this.systemWorkflowLauncherFunction.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["dynamodb:GetItem"],
+                resources: [storageResources.dynamo.workflowExecutionsStorageTableV2.tableArn],
+            })
+        );
+        this.systemWorkflowLaunchQueue.grantSendMessages(this.systemWorkflowLauncherFunction);
 
         this.systemWorkflowLaunchQueue.grantSendMessages(this.vectorReindexerFunction);
         if (this.vectorIndexerQueue && vectorIndexerDlq && this.vectorIndexerFunction) {

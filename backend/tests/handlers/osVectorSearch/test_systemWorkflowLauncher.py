@@ -112,7 +112,9 @@ class TestInvoke:
         assert kwargs["FunctionName"] == launcher.execute_workflow_v2_function
         assert kwargs["InvocationType"] == "RequestResponse"
         event = json.loads(kwargs["Payload"])
-        assert event["lambdaCrossCall"] == {"userName": "SYSTEM_USER"}
+        assert event["lambdaCrossCall"]["userName"] == "SYSTEM_USER"
+        slots = event["lambdaCrossCall"]["reindexSlots"]
+        assert slots["count"] == launcher.reindex_slot_count
         assert event["requestContext"]["http"] == {"method": "POST", "path": "/workflows/GLOBAL/system-genai-metadata/execute"}
         assert event["pathParameters"] == {"workflowDatabaseId": "GLOBAL", "workflowId": "system-genai-metadata"}
         assert event["queryStringParameters"] == {}
@@ -127,8 +129,9 @@ class TestInvoke:
         response = launcher.lambda_handler({"Records": [_sqs("m1", MESSAGE)]}, MagicMock())
         assert _identifiers(response) == [] and response["statusCode"] == 200
 
-    @pytest.mark.parametrize("status", [429, 500, 503])
+    @pytest.mark.parametrize("status", [409, 500, 503])
     def test_non_200_non_400_is_reported_for_redelivery(self, launcher, status):
+        """A 429 is no longer among these: it means every reindex slot is in use, which is a wait."""
         launcher.lambda_client.invoke.return_value = _invoke_response(status)
         response = launcher.lambda_handler({"Records": [_sqs("m1", MESSAGE)]}, MagicMock())
         assert _identifiers(response) == ["m1"]

@@ -68,6 +68,8 @@ const TABLE_FIELDS = [
     "workflowStorageTableV2",
     "pipelineStorageTableV2",
     "workflowTriggersStorageTable",
+    "workflowExecutionLocksStorageTable",
+    "workflowExecutionsStorageTableV2",
     "authEntitiesStorageTable",
     "constraintsStorageTable",
     "userRolesStorageTable",
@@ -336,6 +338,33 @@ describe.each([false, true])("VectorIndexingConstruct (govCloud=%s)", (govCloud)
         expect(invoke[0].Resource).toBe(
             `arn:${partition}:lambda:${region}:${ACCOUNT}:function:${EXECUTE_NAME}`
         );
+    });
+
+    test("the launcher reads the reindex slots and its holders' records, and sends a waiting launch back to its own queue", () => {
+        const [, launcher] = functionByHandler(template, "systemWorkflowLauncher");
+        expect(launcher.Properties.Environment.Variables.REINDEX_SLOT_COUNT).toBe("7");
+        expect(
+            JSON.stringify(launcher.Properties.Environment.Variables.WORKFLOW_LAUNCH_QUEUE_URL)
+        ).toContain(launchQueueId);
+        const statements = statementsForFunction(template, launcher);
+        const withAction = (action: string) =>
+            statements.filter((s) => [s.Action].flat().includes(action));
+        // Read-only on the two tables, each on its own ARN; executeWorkflow alone writes slot rows.
+        const onLocks = statements.filter((s) =>
+            JSON.stringify(s.Resource).includes("workflowExecutionLocksStorageTable")
+        );
+        expect(onLocks).toHaveLength(1);
+        expect([onLocks[0].Action].flat()).toEqual(["dynamodb:BatchGetItem"]);
+        const getItem = statements.filter(
+            (s) =>
+                [s.Action].flat().includes("dynamodb:GetItem") &&
+                JSON.stringify(s.Resource).includes("workflowExecutionsStorageTableV2")
+        );
+        expect(getItem).toHaveLength(1);
+        expect([getItem[0].Action].flat()).toEqual(["dynamodb:GetItem"]);
+        const send = withAction("sqs:SendMessage");
+        expect(send).toHaveLength(1);
+        expect(JSON.stringify(send[0].Resource)).toContain(launchQueueId);
     });
 
     test("the reindexer may send to the launch queue and its own async DLQ, and both consumers may receive from their own queue", () => {
