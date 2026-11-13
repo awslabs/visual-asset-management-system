@@ -745,12 +745,13 @@ class TestProbeDenialMarker:
     def test_marker_text_inside_a_request_does_not_match_the_pattern(self, probe_env):
         marker = "[AUTHORIZATION][authorized: False] [probe: GET /auth/routes/api/allowed]"
         event = _make_event(method="DELETE", path="/database/db1")
-        event["headers"]["x-note"] = marker
+        # A path parameter is part of the short request echo the record carries.
+        event["pathParameters"] = {"databaseId": marker}
         real_audit.log_authorization_api(event, False, {"action": "DELETE"})
 
         messages = [entry["message"] for entry in probe_env["recorder"].accepted_events]
         assert len(messages) == 1
-        assert marker in messages[0], "the header did not reach the record, so the check is vacuous"
+        assert marker in messages[0], "the path parameter did not reach the record, so the check is vacuous"
         assert not re.match(PROBE_RECORD_PATTERN, messages[0])
 
     def test_ordinary_tier_two_denial_is_unmarked(self, probe_env):

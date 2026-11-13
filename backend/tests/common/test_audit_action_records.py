@@ -765,13 +765,17 @@ class TestLegacyRecordsInAContext:
         _, payload, _ = parse(clients.flush.messages()[0])
         assert payload["action"] == "fileDownload"
 
-    def test_auth_records_are_unchanged_inside_a_context(self, clients):
+    def test_auth_records_gain_the_contract_keys_inside_a_context(self, clients):
         event = api_event(path="/roles", method="POST")
         with auditLogging.audit_request(event, LAMBDA_CONTEXT):
             auditLogging.log_auth_changes(event, "roleCreate", {"roleName": "r1"})
-            assert len(clients.module.calls) == 1, "written at once by the module client, as before"
-        _, payload, _ = parse(clients.module.messages()[0])
-        assert payload == {"roleName": "r1"}
+            assert clients.module.calls == [] and clients.flush.calls == [], "a success joins the flush"
+        match, payload, echo = parse(clients.flush.messages(group_name("auditAuthChanges"))[0])
+        assert match.group("prefix") == "[AUTHCHANGES][type: roleCreate]"
+        assert payload["roleName"] == "r1" and payload["legacyType"] == "roleCreate"
+        assert (payload["action"], payload["outcome"], payload["entity"]) == (
+            "roleCreate", "success", {"type": "role", "id": "r1"})
+        assert "body-marker" not in echo and "header-marker" not in echo
 
     def test_outside_a_context_a_legacy_record_is_byte_identical(self, clients):
         event = api_event(path="/database/db1/workflows/w1", method="PUT")
@@ -1057,16 +1061,20 @@ class TestEntrypointOutcome:
         records = [parse(message)[1] for message in clients.flush.messages(group_name("auditActions"))]
         assert [record["reason"] for record in records] == ["notFound"]
 
-    def test_a_pending_action_is_skipped(self, clients, monkeypatch):
-        monkeypatch.setattr(auditLogging, "AUDIT_PENDING_ACTIONS", frozenset({"workflowUpdate"}))
-        _handler_returning(500)(_workflow_event(), LAMBDA_CONTEXT)
-        assert clients.flush.calls == [] and clients.module.calls == []
-
-    @pytest.mark.parametrize("path, method", [("/roles", "POST"), ("/auth/loginProfile/u1", "POST")])
-    def test_an_auth_record_route_adds_no_outcome_record(self, clients, monkeypatch, path, method):
-        monkeypatch.setattr(auditLogging, "AUDIT_PENDING_ACTIONS", frozenset())
+    @pytest.mark.parametrize("path, method, group, prefix, action", [
+        ("/roles", "POST", "auditAuthChanges", "[AUTHCHANGES][type: roleCreate]", "roleCreate"),
+        ("/auth/loginProfile/u1", "POST", "auditAuthOther", "[AUTHOTHER][type: userProfileUpdate]",
+         "loginProfileUpdate"),
+    ])
+    def test_an_auth_record_route_records_its_failed_outcome(self, clients, path, method, group, prefix,
+                                                             action):
         _handler_returning(500)(api_event(path=path, method=method), LAMBDA_CONTEXT)
-        assert clients.flush.calls == [] and clients.module.calls == []
+        records = [parse(message) for message in clients.flush.messages(group_name(group))]
+        assert len(records) == 1
+        match, payload, _ = records[0]
+        assert match.group("prefix") == prefix
+        assert (payload["action"], payload["outcome"], payload["reason"]) == (action, "failed", "internal")
+        assert payload["legacyType"] == prefix.split("type: ")[1].rstrip("]")
 
     def test_an_unregistered_route_adds_no_record(self, clients):
         _handler_returning(500)(api_event(path="/no/such/route"), LAMBDA_CONTEXT)

@@ -37,7 +37,7 @@ class _Recorder:
         self.calls = []
         self.order = order
 
-    def __call__(self, event, authorized, reason=None, token_audience=None):
+    def __call__(self, event, authorized, reason=None, token_audience=None, verified_context=None):
         self.calls.append((authorized, reason))
         if self.order is not None:
             self.order.append("audit")

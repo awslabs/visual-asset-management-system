@@ -680,6 +680,7 @@ class TestLogKeyMerge:
         assert C.CORE_LOG_SENSITIVE_KEYS == (
             "authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
             "SessionToken", "apiKey", "apiKeySecret", "rawKey", "x-vams-origin-verify",
+            "vams:originVerifyDigest",
             "cookie", "set-cookie", "x-api-key", "proxy-authorization", "x-amz-security-token",
             *CREDENTIAL_FIELD_NAMES)
         assert C.CORE_LOG_TEXT_SENSITIVE_KEYS == (
