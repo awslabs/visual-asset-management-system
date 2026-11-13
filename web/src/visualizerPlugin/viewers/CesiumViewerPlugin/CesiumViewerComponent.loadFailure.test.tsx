@@ -19,6 +19,11 @@
 import React from "react";
 import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import CesiumViewerComponent from "./CesiumViewerComponent";
+import {
+    QUARANTINE_REFUSAL_BODY,
+    QUARANTINE_REFUSAL_MESSAGE,
+    QUARANTINE_REFUSAL_STATUS,
+} from "../../core/quarantineRefusal.testdata";
 
 jest.mock("./dependencies", () => ({
     CesiumDependencyManager: { loadCesium: jest.fn(() => Promise.resolve()), cleanup: jest.fn() },
@@ -106,6 +111,9 @@ const loads = (key: string) => () => {
 };
 const fails = (statusCode: number, response?: string) => () =>
     Promise.reject({ statusCode, response });
+/** The API's real refusal of a quarantined asset's tileset (Cesium keeps the body as text). */
+const refused = () => fails(QUARANTINE_REFUSAL_STATUS, JSON.stringify(QUARANTINE_REFUSAL_BODY));
+const TILESET_FORMAT_HINT = "Supported format: .json (3D Tileset definition files)";
 
 const props = { assetId: "asset1", databaseId: "db1" } as any;
 const warning = () => screen.queryByTestId("cesium-load-warning");
@@ -173,6 +181,39 @@ describe("Cesium viewer load failures", () => {
                 'Unable to load the tileset "city.json": Request blocked by the deployment\'s AWS WAF web ACL (request ID r-1).'
             )
         ).toBeInTheDocument();
+    });
+
+    it("names the API's refusal of a tileset with no format hint under it (D170)", async () => {
+        answers = { "city.json": refused() };
+        render(<CesiumViewerComponent {...props} assetKey="city.json" />);
+        expect(
+            await screen.findByText(
+                `Unable to load the tileset "city.json": ${QUARANTINE_REFUSAL_MESSAGE}.`
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText(TILESET_FORMAT_HINT)).not.toBeInTheDocument();
+    });
+
+    it("leaves the format hint out only when every failed tileset was refused (D170)", async () => {
+        answers = { "a.json": refused(), "b.json": refused() };
+        const { unmount } = render(
+            <CesiumViewerComponent {...props} multiFileKeys={["a.json", "b.json"]} />
+        );
+        expect(await screen.findByText("Error Loading 3D Tileset")).toBeInTheDocument();
+        expect(screen.queryByText(TILESET_FORMAT_HINT)).not.toBeInTheDocument();
+        unmount();
+
+        answers = { "a.json": refused(), "b.json": fails(500) };
+        render(<CesiumViewerComponent {...props} multiFileKeys={["a.json", "b.json"]} />);
+        expect(await screen.findByText("Error Loading 3D Tileset")).toBeInTheDocument();
+        expect(screen.getByText(TILESET_FORMAT_HINT)).toBeInTheDocument();
+    });
+
+    it("[control] keeps the format hint under any other failure", async () => {
+        answers = { "city.json": fails(500) };
+        render(<CesiumViewerComponent {...props} assetKey="city.json" />);
+        expect(await screen.findByText("Error Loading 3D Tileset")).toBeInTheDocument();
+        expect(screen.getByText(TILESET_FORMAT_HINT)).toBeInTheDocument();
     });
 
     it("counts failed tiles of a loaded tileset and clears the count on the next load", async () => {
