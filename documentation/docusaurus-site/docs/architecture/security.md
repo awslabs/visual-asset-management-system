@@ -182,7 +182,7 @@ elif 'lambdaCrossCall' in event:
 | External OAuth IDP | `sub`, `preferred_username`, `email`, `upn`, `username`              |
 | VAMS custom        | `vams:tokens`, `vams:roles`, `vams:externalAttributes`               |
 
-The authorizer sets the `vams:` values itself and ignores any claim a token carries under that prefix. `vams:tokens` holds the token's username claim, the first present of `cognito:username`, `username` and `sub`; a verified token with none of them is refused.
+The authorizer sets the `vams:` values itself and ignores any claim a token carries under that prefix. `vams:tokens` holds the token's username claim, the first present of `cognito:username`, `username` and `sub`; a verified token with none of them is refused. Only those three claims identify the caller: `preferred_username`, `email` and `upn` still reach handlers in the authorizer context, but VAMS user role assignments, user-level constraints and per-user records are keyed by the username claim, so map VAMS users by that value.
 
 #### Role Resolution
 
