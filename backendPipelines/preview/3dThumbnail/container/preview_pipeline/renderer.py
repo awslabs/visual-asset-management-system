@@ -375,9 +375,12 @@ def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_R
     crop outliers from sparse scenes (point clouds with distant noise).
 
     For full-bounds mode (USD/CAD): uses complete bounding box since
-    all geometry in engineered models is intentional. A near-flat part far
-    larger than the rest of a scene (a ground or environment plane) is left
-    out of the framing bounds and still drawn (``scene_parts``).
+    all geometry in engineered models is intentional. A part the scene's
+    parts mark as a backdrop or a stray is left out of the framing bounds
+    (``scene_parts.framing_bounds``; a loader has already dropped its
+    backdrops from the data, a stray is still drawn), and a mesh whose full
+    bounds would leave its content covering almost nothing is framed on its
+    percentile bounds (``_percentile_bounds_if_sparse``).
     """
     points = pv_data.points
 
