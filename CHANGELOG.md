@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file. See [standa
 ### Major Change Summary:
 
 -   Behavior changes to review before upgrading:
-    -   A 3D Preview Thumbnail run on a point cloud with no valid point (every point NaN or infinite) fails with "The point cloud has no valid points" instead of succeeding with an empty preview. ([#1460](https://github.com/awslabs/visual-asset-management-system/issues/1460))
+    -   A 3D Preview Thumbnail run on a point cloud with no valid point (every point NaN or infinite) fails with "The point cloud has no valid points" instead of succeeding with an empty preview. A scene that also contains meshes still renders its meshes. ([#1460](https://github.com/awslabs/visual-asset-management-system/issues/1460))
 
 ### ⚠ BREAKING CHANGES
 

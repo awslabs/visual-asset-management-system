@@ -38,7 +38,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Major changes:**
 
 -   Behavior changes to review before upgrading:
-    -   A 3D Preview Thumbnail run on a point cloud with no valid point (every point NaN or infinite) fails with "The point cloud has no valid points" instead of succeeding with an empty preview. (issue #1460)
+    -   A 3D Preview Thumbnail run on a point cloud with no valid point (every point NaN or infinite) fails with "The point cloud has no valid points" instead of succeeding with an empty preview. A scene that also contains meshes still renders its meshes. (issue #1460)
 
 **Breaking changes:**
 
