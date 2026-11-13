@@ -495,6 +495,18 @@ const RETIREMENT_MOVE_WRITES: Record<string, Record<string, string[]>> = {
     },
 };
 
+/**
+ * A table a custom-resource Lambda is handed in its resource properties instead of resolving it
+ * through `ResourceKeys`, so the analysis cannot derive it. The default compliance schema seed
+ * (`complianceDefaultSchemaSeed`) writes the GLOBAL default schema with one conditional PutItem on
+ * the table its `TableName` property names, the schema table, and reads no table.
+ */
+const PROPERTY_TABLE_WRITES: Record<string, Record<string, string[]>> = {
+    "handlers.compliance.complianceDefaultSchemaSeed": {
+        COMPLIANCE_SCHEMA_STORAGE_TABLE: ["dynamodb:PutItem"],
+    },
+};
+
 /** Reads behind the same table of functions: a bind or a change pages the database's asset rows. */
 const NOT_FOLLOWED_READS: Record<string, string[]> = {
     "handlers.compliance.complianceJobs": ["ASSET_STORAGE_TABLE"],
@@ -531,6 +543,12 @@ function needsOf(handlerModule: string): Needs {
     for (const [key, actions] of Object.entries(RETIREMENT_MOVE_WRITES[handlerModule] ?? {})) {
         const entry = need(needs, key);
         entry.write = true;
+        actions.forEach((action) => entry.writeActions.add(action));
+    }
+    for (const [key, actions] of Object.entries(PROPERTY_TABLE_WRITES[handlerModule] ?? {})) {
+        const entry = need(needs, key);
+        entry.write = true;
+        entry.readActions = [];
         actions.forEach((action) => entry.writeActions.add(action));
     }
     return needs;
@@ -794,13 +812,14 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         lambdas = resolver.complianceLambdas();
     });
 
-    test("the synth carries the ten compliance Lambdas and every derived table resolves", () => {
+    test("the synth carries the eleven compliance Lambdas and every derived table resolves", () => {
         // Positive control for every per-Lambda assertion: an empty Lambda list or an unresolvable
         // key would otherwise leave nothing to compare.
         expect(lambdas.map((l) => l.handlerModule)).toEqual([
             "handlers.compliance.complianceAuditService",
             "handlers.compliance.complianceCascadeExecutor",
             "handlers.compliance.complianceCascadeService",
+            "handlers.compliance.complianceDefaultSchemaSeed",
             "handlers.compliance.complianceEvaluateService",
             "handlers.compliance.complianceJobs",
             "handlers.compliance.complianceQuarantineService",
@@ -811,7 +830,11 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         ]);
         for (const lambda of lambdas) {
             expect(lambda.roleLogicalId).toBeDefined();
-            const needs = deriveNeeds(lambda.handlerModule);
+            // The seed's one table comes from its custom-resource properties (PROPERTY_TABLE_WRITES).
+            const needs =
+                lambda.handlerModule in PROPERTY_TABLE_WRITES
+                    ? needsOf(lambda.handlerModule)
+                    : deriveNeeds(lambda.handlerModule);
             expect(needs.size).toBeGreaterThan(0);
             for (const key of needs.keys()) {
                 expect(resolver.tableFor(key)).toMatch(/StorageTable/);
@@ -917,6 +940,20 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
             resolver.grantedTables(cascade)
         );
         expect(surplus.map((s) => s.detail)).toEqual([]);
+    });
+
+    test("the default schema seed is granted exactly PutItem on the schema table", () => {
+        // A conditional put of the GLOBAL default schema on the table its properties name: no read
+        // and no other table, so the seed cannot touch a binding or rewrite anything beside the row.
+        const seed = lambdaFor("complianceDefaultSchemaSeed");
+        const granted = resolver.grantedTables(seed);
+        expect([...granted.keys()]).toEqual([resolver.tableFor("COMPLIANCE_SCHEMA_STORAGE_TABLE")]);
+        const grant = granted.get(resolver.tableFor("COMPLIANCE_SCHEMA_STORAGE_TABLE"))!;
+        expect([...grant.actions].sort()).toEqual(["dynamodb:PutItem"]);
+        expect([...grant.indexActions]).toEqual([]);
+        expect(
+            surplusGrants(resolver, needsOf(seed.handlerModule), granted).map((s) => s.detail)
+        ).toEqual([]);
     });
 
     test("the job Lambda is granted exactly the tables its two jobs reach", () => {
