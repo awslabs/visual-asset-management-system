@@ -427,6 +427,16 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
             ).includes(`"${id}"`);
             return viaPolicy || viaRole;
         });
+    /** A role's managed policies other than CDK's generated overflow of it (#1499 allows only those). */
+    const handWrittenManagedPoliciesOf = (roleId: string) =>
+        managedPoliciesOf(roleId).filter(([id]) => !/OverflowPolicy\d+[0-9A-F]{8}$/.test(id));
+    /** The role's own statements: its inline documents and CDK's overflow policies of it. */
+    const roleDocsOf = (roleId: string) => [
+        ...inlineDocsOf(roleId),
+        ...managedPoliciesOf(roleId)
+            .filter(([id]) => /OverflowPolicy\d+[0-9A-F]{8}$/.test(id))
+            .map(([, r]: [string, any]) => r.Properties.PolicyDocument),
+    ];
     const inlineDocsOf = (roleId: string) =>
         Object.values(resources)
             .filter(
@@ -625,13 +635,14 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         const roleId = roleIdOf(fn);
         // The read is covered by the resource-name grant every VAMS function holds: the role gains
         // no statement for it.
-        const ssmStatements = inlineDocsOf(roleId)
+        const ssmStatements = roleDocsOf(roleId)
             .flatMap((d: any) => d.Statement as any[])
             .filter((st) => JSON.stringify(st.Action).includes("ssm:"));
         expect(ssmStatements).toHaveLength(1);
         expect(JSON.stringify(ssmStatements[0].Resource)).toContain("/resourceNames/*");
         expect(enginePermitsRole(roleId)).toBe(true);
-        expect(managedPoliciesOf(roleId)).toEqual([]);
+        // No hand-written managed policy; CDK's overflow of the role may hold its statements.
+        expect(handWrittenManagedPoliciesOf(roleId)).toEqual([]);
         expect(JSON.stringify(engineFunction)).toContain(fnId);
     });
 
@@ -688,8 +699,9 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         for (const roleId of roles) {
             const managed = managedPoliciesOf(roleId).map(([id]) => id);
             // The system pipeline callback policy comes from #1122, the execution lock policies are
-            // AWS::IAM::Policy resources; nothing named for the copy engine, no overflow.
-            expect(managed.filter((id) => /LargeObjectCopy|OverflowPolicy/.test(id))).toEqual([]);
+            // AWS::IAM::Policy resources; nothing named for the copy engine (CDK's overflow of a role
+            // may hold its statements, #1499).
+            expect(managed.filter((id) => /LargeObjectCopy/.test(id))).toEqual([]);
         }
         const copyManaged = Object.entries(resources).filter(
             ([id, r]: [string, any]) =>
