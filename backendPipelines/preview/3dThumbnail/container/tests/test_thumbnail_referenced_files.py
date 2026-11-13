@@ -419,6 +419,30 @@ class TestParentFolderReferences:
         with pytest.raises(Exception):
             core._load_file(local_input, ".gltf", asset_root=local_root)
 
+    def test_a_symlink_inside_the_asset_that_leads_outside_it_is_refused(self, tmp_path):
+        """A link in the local asset root to a file outside it resolves outside, so it is refused
+        however the name is spelled."""
+        from preview_pipeline import core
+        from preview_pipeline.format_handlers import mesh_handler
+
+        root = tmp_path / "local"
+        (root / "models").mkdir(parents=True)
+        gltf, data = _textured_triangle_gltf("../buffers/tri.bin", "../textures/checker.png")
+        (root / "models" / "tri.gltf").write_text(gltf)
+        outside = tmp_path / "secret.bin"
+        outside.write_bytes(data)
+        (root / "buffers").mkdir()
+        os.symlink(outside, root / "buffers" / "tri.bin")
+        os.symlink(tmp_path, root / "escape")
+        resolver = mesh_handler.asset_resolver(str(root / "models" / "tri.gltf"), str(root))
+        for name in ("../buffers/tri.bin", "../escape/secret.bin"):
+            with pytest.raises((ValueError, FileNotFoundError)):  # never the outside file's bytes
+                resolver.get(name)
+            with pytest.raises(ValueError, match="outside the asset"):
+                resolver.absolute(name)
+        with pytest.raises(Exception):
+            core._load_file(str(root / "models" / "tri.gltf"), ".gltf", asset_root=str(root))
+
     def test_without_an_asset_root_trimesh_resolves_as_before(self, tmp_path):
         """Local test mode passes no asset root: the input's folder is trimesh's default root."""
         from preview_pipeline import core
