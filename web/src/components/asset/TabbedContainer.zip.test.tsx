@@ -14,6 +14,10 @@ jest.mock("./tabs/AssetLinksTab", () => ({ __esModule: true, default: () => <div
 jest.mock("./tabs/AssetExecutionsTab", () => ({ __esModule: true, default: () => <div /> }));
 jest.mock("./tabs/CommentsTab", () => ({ __esModule: true, default: () => <div /> }));
 jest.mock("./tabs/VersionsTab", () => ({ __esModule: true, default: () => <div /> }));
+jest.mock("./tabs/ComplianceTab", () => ({
+    __esModule: true,
+    default: ({ isActive }: any) => <div data-testid="compliance-tab">{`${isActive}`}</div>,
+}));
 // The tab's body records whether it is the active one (it loads and polls only then).
 jest.mock("./tabs/ZipDownloadsTab", () => ({
     __esModule: true,
@@ -88,6 +92,17 @@ describe("TabbedContainer — tab selected by the page's ?tab= query", () => {
             "aria-selected",
             "true"
         );
+    });
+
+    // Development's Compliance tab (#749) is a known tab like the others, so tab=compliance opens it.
+    it("opens on the Compliance tab when the page is opened with tab=compliance", async () => {
+        appCache.setItem("config", { featuresEnabled: [] });
+        render(<TabbedContainer {...props} requestedTabId="compliance" />);
+        expect(screen.getByRole("tab", { name: "Compliance" })).toHaveAttribute(
+            "aria-selected",
+            "true"
+        );
+        expect(await screen.findByTestId("compliance-tab")).toHaveTextContent("true");
     });
 
     it("reports a tab the user picks, so the page can keep ?tab= in step", async () => {

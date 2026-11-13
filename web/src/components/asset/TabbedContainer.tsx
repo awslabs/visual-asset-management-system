@@ -21,11 +21,19 @@ const AssetExecutionsTab = React.lazy(() => import("./tabs/AssetExecutionsTab"))
 const CommentsTab = React.lazy(() => import("./tabs/CommentsTab"));
 const VersionsTab = React.lazy(() => import("./tabs/VersionsTab"));
 const ZipDownloadsTab = React.lazy(() => import("./tabs/ZipDownloadsTab"));
+const ComplianceTab = React.lazy(() => import("./tabs/ComplianceTab"));
 
 export { ZIP_DOWNLOADS_TAB_ID };
 
 const DEFAULT_TAB_ID = "file-manager";
-const BASE_TAB_IDS = [DEFAULT_TAB_ID, "relationships", "workflows", "comments", "versions"];
+const BASE_TAB_IDS = [
+    DEFAULT_TAB_ID,
+    "relationships",
+    "workflows",
+    "comments",
+    "versions",
+    "compliance",
+];
 
 interface TabbedContainerProps {
     assetName: string;
@@ -194,6 +202,21 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                       },
                                   ]
                                 : []),
+                            {
+                                id: "compliance",
+                                label: "Compliance",
+                                content: (
+                                    <Suspense
+                                        fallback={<LoadingSpinner text="Loading Compliance..." />}
+                                    >
+                                        <ComplianceTab
+                                            databaseId={databaseId}
+                                            assetId={assetId}
+                                            isActive={activeTabId === "compliance"}
+                                        />
+                                    </Suspense>
+                                ),
+                            },
                         ]}
                     />
                 </div>

@@ -20,7 +20,7 @@ VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application bu
 -   React Context API + useReducer for shared state
 -   Custom apiClient (fetch-based) for API calls, AWS Amplify v6 for authentication
 -   HashRouter (`#/` URLs) for all routing
--   Plugin-based 3D viewer architecture (19 viewer plugin directories)
+-   Plugin-based 3D viewer architecture (21 viewer plugin directories)
 -   `lazyWithRetry` (React.lazy plus chunk-download retry) + Suspense for route-level code splitting
 
 ---
@@ -118,6 +118,7 @@ web/
       FileOperationsService.ts
       MetadataService.ts    # Metadata CRUD operations
       MetadataSchemaService.ts  # Schema management
+      ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
@@ -139,13 +140,44 @@ web/
 
     components/             # Domain/feature components
       asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions,
+                            #   Compliance tabs
         versions/           # Asset version management
           AssetVersionManager.tsx
           AssetVersionComparison.tsx
           components/       # Edit and archive/unarchive version modals
           hooks/
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
+      compliance/           # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
+                            #   rules: "Add rule" for all six types, the pipeline-rule input-file
+                            #   selector (mode / globs / explicit paths), the metadata-rule scope
+                            #   form (scope select, include/exclude paths, link direction + type),
+                            #   typed checks for fileStructure / versionCoverage / assetAttributes);
+                            #   complianceSchemaRules.ts (pure pipelineRef fields/validation, rule-draft
+                            #   round-trip, example rule per type, metadata-scope switching/validation
+                            #   and check validators carrying the API's messages);
+                            #   ReasonModal.tsx (Cloudscape modal collecting a reason: mandatory to
+                            #   grant a quarantine exception or release from quarantine, `optional`
+                            #   to approve or reject a cascade); complianceStateBadge.tsx
+                            #   (shared compliance-state -> StatusIndicator map + Badge color accessor;
+                            #   `exception` renders as info/blue; schemaSourceLabel says a binding is
+                            #   inherited or set on the asset; EvaluationErrorIndicator flags a
+                            #   record whose lastEvaluationStatus is `error`);
+                            #   EvaluationHistoryModal.tsx (one asset's paged evaluation history with schema
+                            #   version and rule results, opened from the database overview);
+                            #   ExecutionFailureReasons.tsx (a failed pipeline rule's execution failure
+                            #   reason, under the rule result, the asset tab's state and the quarantine
+                            #   reason; the API returns it only to a caller who may read the execution);
+                            #   RevokeExceptionModal.tsx (the revoke confirmation shared by the asset tab
+                            #   and the database overview); bindingConfirmations.ts (what the
+                            #   confirmations of a database binding's Bind, Change and Remove say,
+                            #   shared by the database overview and the database editor);
+                            #   cascadeNodes.tsx (a cascade's node outcomes, paged and sorted in the
+                            #   browser); rowActions.ts (ROW_ACTIONS_STICKY_COLUMNS: the
+                            #   compliance tables pin their inline-link Actions column last and wrap the rest);
+                            #   listingFilters.tsx (URL-backed filters: useUrlFilters(keys, pageRoute) reads
+                            #   and writes only the page's own route's URL; debounce, DatabaseFilter,
+                            #   useLatestRequest)
       createupdate/         # CreateDatabase.tsx, UpdateAsset.tsx + form definitions
       filemanager/          # File tree and file operations; EnhancedFileManager lazy-loads the
                             #   orchestration execution quick view for a file's "View execution" link
@@ -155,7 +187,11 @@ web/
                             #   executionLinks.ts maps workflow-execution provenance to the execution
                             #   detail route and the Tier-1 route the link is gated on
       form/
-      list/
+      list/                 # TableList.tsx (the standard list page: search + refresh left, filters
+                            #   right, collection-hooks filtering/sorting/paging); ListToolbar.tsx (that
+                            #   toolbar for a page with its own Table, 7.6); tableSorting.ts (column
+                            #   comparators byText/byDate/byNumber, useSortedItems for a page the server
+                            #   returned, useBrowserPagedItems for a whole list, PAGE_SORTING_NOTE)
       loading/              # Loading screens and spinners
       metadata/
       metadataSchema/
@@ -182,6 +218,14 @@ web/
       search/               # SearchPage.tsx
       Subscription/
       Tag/
+
+      # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
+      # flag); each deploys unconditionally and the nav/routes filter hides them without access.
+      ComplianceSchemas.tsx
+      ComplianceQuarantine.tsx
+      ComplianceCascades.tsx
+      ComplianceAuditLog.tsx
+      DatabaseCompliance.tsx
 
       # Orchestration route shells — each reads route params and renders the matching
       # features/orchestration component; keep the page logic in the feature module.
@@ -244,7 +288,8 @@ web/
     constants/
       uploadLimits.ts
 
-    hooks/                  # usePageTitle.ts, useThemeSettings.ts
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts,
+                            #   useAssetPageAccess.ts (may the caller open an assets/asset page)
 
     layout/
       Navigation.tsx        # Left sidebar navigation
@@ -866,6 +911,33 @@ An add-on is optional, upstream-maintained code enabled by configuration: it eit
 
 A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavMainSections` for the main menu, spliced in after "Orchestrate & Automate"; `addonNavAdminSections` for the admin area, spliced in after the core "Admin - ..." sections and before "User"), upstream-owned, hold an add-on's pages, and `src/addons/addonFeatures.ts` (`addonFeaturesEnabled`) names the add-ons' feature switches. An add-on route carries its add-on's switches in `featuresEnabledRestriction`, as its navigation entries do: without them `routeTableFor()` (`routes.tsx`) leaves it out, so its URL reaches the not-found panel, the web-route check is not sent it, and the Create Constraint editor does not offer it (`src/addons/addonFeatureRoutes.test.tsx`). `AppRoutes` runs the web-route check again when the switches change (they can land after the first check) and on Retry, and uses only the latest check's answer: an earlier check that answers or fails after it is ignored, and a successful latest check clears the could-not-check panel. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), with the fork's sections after every core and add-on section, so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
+### 7.6 List Toolbar: Search, Refresh and Filters
+
+Every list page lays out the toolbar it passes as the Cloudscape Table's `filter` the same way: **the search field on the left with the refresh button right next to it, and the filter drop-downs aligned to the right of the table.** When the filters do not fit beside the search (on a narrow screen, or a page with many filters such as the compliance Audit Log), they wrap onto a line of their own and stay aligned to the right. The refresh is an icon button whose `ariaLabel` names what it reloads; it sits in the toolbar, not in the header actions, and a list without a search keeps it at the toolbar's left.
+
+`components/list/TableList.tsx` lays out its own filter slot this way. A page with its own `Table` uses `components/list/ListToolbar.tsx`, which has the same layout and keeps a wrapped filter line at the right:
+
+```tsx
+<Table
+    filter={
+        <ListToolbar
+            search={<TextFilterInput value={filters.text} onCommit={...} ariaLabel="Search ..." />}
+            onRefresh={loadData}
+            refreshing={loading}
+            refreshLabel={`Refresh quarantined ${Synonyms.assets}`}
+            filters={<DatabaseFilter value={filters.databaseId} onChange={...} />}
+        />
+    }
+    items={sortedItems}
+    {...sortingProps}
+/>
+```
+
+**Column sorting.** A column that offers sorting must sort. Wire `sortingColumn`, `sortingDescending` and `onSortingChange` with `components/list/tableSorting.ts`, or remove the column's `sortingField`. Keep the `sortingField` (the table matches the sorted column by it) and give the column a `sortingComparator` from the same module, so a date sorts by its value (`byDate`), a status by the label it shows (`byText` over the label) and text with case ignored and its numbers by value (`byText`).
+
+-   **A list the server pages** (token paging) sorts the page shown with `useSortedItems`. While more than one page exists, the table header's description says `PAGE_SORTING_NOTE` ("Column sorting applies to the page shown."). An order across the whole list is a server-side filter (the database compliance overview's **Sort by**), not a column header. Choosing such an order clears the column-header sort (`clearSorting` from `useSortedItems`), so the rows follow the order just chosen.
+-   **A list the API returns whole** is filtered, sorted and paged in the browser with `useBrowserPagedItems` (15 rows to a page, as `TableList` pages), so its filters and sorting cover the whole list. Call `toFirstPage()` when a filter changes.
+
 ---
 
 ## 8. Viewer Plugin System
@@ -881,7 +953,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 -   **StylesheetManager** -- Per-plugin CSS lifecycle management
 -   **extensionMatching.ts** (`src/visualizerPlugin/core/extensionMatching.ts`) -- the one filename rule (`filenameExtension`, `extensionToken`), the `NO_EXTENSION` token `(none)`, `describeExtensionToken` and `supportsAllExtensions` (see 8.4.1)
 -   **textContent.ts** (`src/visualizerPlugin/core/textContent.ts`) -- `classifyTextSample` and `loadTextFile`, the bounded loader both text viewers use (see 8.4.1)
--   **streamFailure.ts** (`src/visualizerPlugin/core/streamFailure.ts`) -- `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent` `downloadFailureMessage(response, subject)` turns a failed `downloadAsset` tuple (`[false, message, status?]`) into the sentence a viewer shows, from the API's status only: 401 `DOWNLOAD_UNAUTHENTICATED_MESSAGE` ("Your session has expired. Sign in again to view this file."), 403 `DOWNLOAD_FORBIDDEN_MESSAGE` ("You do not have permission to view or download this file."), 410 archived, 404 not found, anything else `subject`; `downloadStatusMessage(status, subject)` does the same for a viewer that fetched the streaming route itself. Every core viewer that downloads a file uses them (Online 3D, PDF, Text, Image, Columnar, Audio, Video, HTML, SuperSplat, both Gaussian splat viewers, ThatOpen IFC, Needle USD, Three.js and the Robotics Data Viewer), and the Text Diff Viewer's per-side messages use the same constants (#1211). The licensed VNTANA viewer adopts it in its own change; Cesium and Potree name stream failures through `describeStreamFailure`.
+-   **streamFailure.ts** (`src/visualizerPlugin/core/streamFailure.ts`) -- `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent` `downloadFailureMessage(response, subject)` turns a failed `downloadAsset` tuple (`[false, message, status?, apiMessage?]`, the fourth entry the API's own `message` from the response body) into the sentence a viewer shows, from what the API answered only: 401 `DOWNLOAD_UNAUTHENTICATED_MESSAGE` ("Your session has expired. Sign in again to view this file."), 403 `DOWNLOAD_FORBIDDEN_MESSAGE` ("You do not have permission to view or download this file."), 410 archived, 404 not found, another 4xx with a message the API's own message (`apiRefusalMessage`, for example the `400` "Asset is quarantined and cannot be downloaded" of the quarantine download block, D166), anything else `subject`; `downloadStatusMessage(status, subject, apiMessage?)` does the same for a viewer that fetched the streaming route itself, and `streamResponseFailureMessage(response, subject)` reads the API's message from that response's body (Three.js, Needle USD, ThatOpen IFC). `streamResponseFailure(response, subject)` returns the Error such a viewer throws: an `ApiRefusalError` (`isApiRefusalError`) carrying the API's reason when the API refused the file with one, else an `Error` with the text above; a viewer that collects per-file errors keeps that flag, so a load where no file loaded shows the refusal's reason rather than a generic "No files loaded" sentence (Needle USD, D172). A viewer whose error view adds a format or file hint under its message ("Please ensure the file is a supported 3D format", the Needle USD and ThatOpen IFC format lines, Cesium's "Supported format: .json") leaves it out when the error is such a refusal (D170): Three.js, Needle USD and ThatOpen IFC keep an `errorIsRefusal` flag from `isApiRefusalError`, and Cesium from `isTilesetRefusal` (`CesiumViewerPlugin/tilesetFailure.ts`; in a multi-tileset load only when every failed tileset was refused). The 401/403/404/410 sentences keep the hint as before (#1211). `describeStreamFailure` names such a refusal too. A preview, thumbnail or download button with fixed failure text shows `downloadRefusalReason(response)` (the API's refusal message, else null) in its place (the asset and file preview thumbnails and modals, the asset details pane, the search result thumbnails, the file version download buttons). Nothing in the browser reads a compliance state to decide a refusal: the API decides and the web shows its answer. Every core viewer that downloads a file uses them (Online 3D, PDF, Text, Image, Columnar, Audio, Video, HTML, SuperSplat, both Gaussian splat viewers, ThatOpen IFC, Needle USD, Three.js and the Robotics Data Viewer), and the Text Diff Viewer's per-side messages use the same constants (#1211). The licensed VNTANA viewer uses `downloadFailureMessage` too; Cesium and Potree name stream failures through `describeStreamFailure`, and VEERUM probes a refused point cloud or tileset (`probeStreamFailure`) and names it the same way when the API gave its own reason. Tests of a refusal render the API's real answer from `core/quarantineRefusal.testdata.ts`: its body, `core/quarantineRefusalBody.testdata.json`, is compared with each file route's real response by the backend handler tests (`backend/tests/quarantineRefusalBody.py`, D169), so a test never mocks a message the API does not send.
 
 ### 8.2 Current Viewers (plugins)
 
@@ -1619,6 +1691,9 @@ When in doubt about patterns, reference these well-structured files:
 | Synonyms config      | `src/synonyms.tsx`                                |
 | Navigation           | `src/layout/Navigation.tsx`                       |
 | App shell            | `src/App.tsx`                                     |
+| List page and table  | `src/components/list/TableList.tsx`               |
+| List toolbar         | `src/components/list/ListToolbar.tsx`             |
+| Column sorting       | `src/components/list/tableSorting.ts`             |
 
 ---
 
@@ -1662,9 +1737,10 @@ export const myServiceFunction = async ({ databaseId }) => {
 
 1. Create component in `src/components/myfeature/MyFeatureTable.tsx`
 2. Use `@cloudscape-design/collection-hooks` for filtering/sorting
-3. Create page wrapper in `src/pages/MyFeaturePage.tsx`
-4. Add lazy import + route in `src/routes.tsx`
-5. Add navigation item in `src/layout/Navigation.tsx`
+3. Lay out the toolbar and wire the column sorting per section 7.6
+4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
+5. Add lazy import + route in `src/routes.tsx`
+6. Add navigation item in `src/layout/Navigation.tsx`
 
 ### Adding a new API call
 

@@ -31,6 +31,7 @@ from .commands.user import user
 from .commands.roleUserConstraints import role
 from .commands.apiKey import api_key
 from .commands.zip_download import zip_download
+from .commands.compliance import compliance
 from .commands.addon import ADDON_COMMANDS
 from .commands.custom import CUSTOM_COMMANDS
 from .utils.profile import ProfileManager
@@ -223,6 +224,7 @@ cli.add_command(user)
 cli.add_command(role)
 cli.add_command(api_key)
 cli.add_command(zip_download)
+cli.add_command(compliance)
 
 
 @cli.command()

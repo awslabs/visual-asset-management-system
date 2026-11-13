@@ -134,6 +134,41 @@ class TestDistributableAsset:
                 get_bucket_details=get_bucket)
         get_bucket.assert_not_called()
 
+    def test_the_quarantine_block_runs_after_the_distributable_check_and_before_the_location(self):
+        """The compliance quarantine block (#749) in development's order: a non-distributable asset is
+        refused as before without a quarantine read, and a quarantined asset is refused before its
+        location is checked or its bucket read."""
+        calls = []
+
+        class Quarantined(VAMSGeneralErrorResponse):
+            pass
+
+        def check(database_id, asset_id):
+            calls.append((database_id, asset_id))
+            raise Quarantined("quarantined")
+
+        with pytest.raises(VAMSGeneralErrorResponse) as e:
+            de.require_distributable_asset({'isDistributable': False}, check, 'db1', 'asset1')
+        assert str(e.value) == _msg("Asset not distributable") and calls == []
+
+        get_bucket = MagicMock()
+        with pytest.raises(Quarantined):
+            de.get_distributable_asset_context(
+                'db1', 'asset1', get_asset=MagicMock(return_value={'isDistributable': True}),
+                get_bucket_details=get_bucket, check_quarantine=check)
+        assert calls == [('db1', 'asset1')]
+        get_bucket.assert_not_called()
+
+    def test_an_asset_the_block_allows_is_served(self):
+        check = MagicMock(return_value=None)
+        assert de.get_distributable_asset_context(
+            'db1', 'asset1',
+            get_asset=MagicMock(return_value={'isDistributable': True, 'bucketId': 'b-1',
+                                              'assetLocation': {'Key': 'asset1/'}}),
+            get_bucket_details=MagicMock(return_value={'bucketName': 'bucket-name'}),
+            check_quarantine=check) == ('bucket-name', 'asset1/')
+        check.assert_called_once_with('db1', 'asset1')
+
 
 @pytest.mark.unit
 class TestResolveAssetFileKey:

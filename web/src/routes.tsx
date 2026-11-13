@@ -50,6 +50,11 @@ const ViewFile = lazyWithRetry(() => import("./components/single/ViewFile"));
 const AssetIngestion = lazyWithRetry(() => import("./components/single/AssetIngestion"));
 const AssetDownloadsPage = lazyWithRetry(() => import("./pages/AssetDownload"));
 const ZipDownloadsPage = lazyWithRetry(() => import("./pages/ZipDownloadsPage"));
+const ComplianceSchemas = lazyWithRetry(() => import("./pages/ComplianceSchemas"));
+const ComplianceQuarantine = lazyWithRetry(() => import("./pages/ComplianceQuarantine"));
+const ComplianceCascades = lazyWithRetry(() => import("./pages/ComplianceCascades"));
+const ComplianceAuditLog = lazyWithRetry(() => import("./pages/ComplianceAuditLog"));
+const DatabaseCompliance = lazyWithRetry(() => import("./pages/DatabaseCompliance"));
 
 export interface RouteOption {
     path: string;
@@ -226,6 +231,31 @@ const coreRouteTable: RouteOption[] = [
         path: "/metadataschema",
         Page: MetadataSchema,
         active: "#/metadataschema/",
+    },
+    {
+        path: "/databases/:databaseId/compliance",
+        Page: DatabaseCompliance,
+        active: "#/databases/",
+    },
+    {
+        path: "/compliance/schemas",
+        Page: ComplianceSchemas,
+        active: "#/compliance/schemas/",
+    },
+    {
+        path: "/compliance/quarantine",
+        Page: ComplianceQuarantine,
+        active: "#/compliance/quarantine/",
+    },
+    {
+        path: "/compliance/cascades",
+        Page: ComplianceCascades,
+        active: "#/compliance/cascades/",
+    },
+    {
+        path: "/compliance/audit",
+        Page: ComplianceAuditLog,
+        active: "#/compliance/audit/",
     },
     {
         path: "*",

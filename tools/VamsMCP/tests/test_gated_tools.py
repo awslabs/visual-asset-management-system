@@ -73,6 +73,18 @@ WRITE_TOOLS = (
     "update_user_api_key",
     "create_zip_download",
     "get_zip_download_url",
+    "create_compliance_schema",
+    "update_compliance_schema",
+    "bind_compliance_schema",
+    "unbind_compliance_schema",
+    "evaluate_asset_compliance",
+    "sweep_compliance_schema",
+    "evaluate_database_compliance",
+    "release_quarantine",
+    "grant_quarantine_exception",
+    "create_compliance_cascade",
+    "approve_compliance_cascade",
+    "reject_compliance_cascade",
 )
 
 DESTRUCTIVE_TOOLS = (
@@ -102,6 +114,7 @@ DESTRUCTIVE_TOOLS = (
     "delete_user_api_key",
     "cancel_zip_download",
     "delete_zip_download",
+    "delete_compliance_schema",
 )
 
 GATE_VARS = ("VAMS_ENABLE_WRITES", "VAMS_ENABLE_DESTRUCTIVE")

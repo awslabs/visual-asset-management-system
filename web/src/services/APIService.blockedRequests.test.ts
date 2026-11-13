@@ -26,6 +26,12 @@ import {
 } from "./APIService";
 import { fetchFileVersions } from "./AssetVersionService";
 import { fetchMetadata } from "./MetadataService";
+import {
+    QUARANTINE_REFUSAL_BODY,
+    QUARANTINE_REFUSAL_MESSAGE,
+    QUARANTINE_REFUSAL_STATUS,
+    QUARANTINE_REFUSED_DOWNLOAD,
+} from "../visualizerPlugin/core/quarantineRefusal.testdata";
 
 /**
  * A 403 the deployment's AWS WAF web ACL answered (the WAF_FILTERED body) is not a permission
@@ -92,9 +98,22 @@ describe("downloadAsset", () => {
         expect(await download()).toStrictEqual([false, BLOCKED_MESSAGE, undefined]);
     });
 
-    it("keeps the 403 of a permission denial", async () => {
+    it("keeps the 403 of a permission denial, with the API's message beside it", async () => {
         (apiClient.post as jest.Mock).mockRejectedValue(denied());
-        expect(await download()).toStrictEqual([false, "Not Authorized", 403]);
+        expect(await download()).toStrictEqual([false, "Not Authorized", 403, "Not Authorized"]);
+    });
+
+    it("carries the API's own reason for a refusal, such as a quarantined asset (D166)", async () => {
+        // The body every file route answers (D169); APIService.quarantineRefusal.test.ts runs it
+        // through the real apiClient.
+        (apiClient.post as jest.Mock).mockRejectedValue(
+            new ApiError(
+                QUARANTINE_REFUSAL_MESSAGE,
+                QUARANTINE_REFUSAL_STATUS,
+                QUARANTINE_REFUSAL_BODY
+            )
+        );
+        expect(await download()).toStrictEqual(QUARANTINE_REFUSED_DOWNLOAD);
     });
 });
 

@@ -72,11 +72,12 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 69 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 74 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
-  |     |    and the pipeline / pipeline template / workflow / workflow trigger / execution routes)
+  |     |    the pipeline / pipeline template / workflow / workflow trigger / execution routes,
+  |     |    and the compliance routes + trigger / workflow-callback Lambdas)
   |     |                                                    -> storage, resourceNames, ApiBuilder
   |     +-- SearchBuilder (OpenSearch)                       -> storage, resourceNames
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
@@ -163,7 +164,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 51 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 56 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -218,11 +219,18 @@ interface storageResources {
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; GSI WorkflowExecutionLocksByHolderGSI (PK workflowExecutionId, KEYS_ONLY); one row per concurrency lock (perAsset / perInputFile / perInputFileVersion) a running execution holds
         largeObjectCopyJobsStorageTable: dynamodb.Table; // PK jobId; TTL expiresAt; GSI WorkflowExecutionIdIndex (PK workflowExecutionId); large object copy job rows + workflow ingestion batch rows
         zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; TTL expiresAt; GSIs UserAssetIndex (PK userAssetKey, SK requestId, ALL) and AssetIndex (PK assetKey = databaseId#assetId, SK requestId, ALL); Download as Zip jobs, always deployed
+
+        // Compliance tables
+        complianceSchemaStorageTable: dynamodb.Table; // PK schemaName, SK internalVersion; GSI DatabaseIdIndex
+        complianceAssetStateStorageTable: dynamodb.Table; // PK databaseId, SK assetId; GSIs SchemaNameIndex, ComplianceStateIndex (PK complianceState, SK databaseId — paged quarantine list, overview state filter/counts), DatabaseAssetNameIndex (PK databaseId, SK assetNameSort — overview sort by name)
+        complianceEvaluationStorageTable: dynamodb.Table; // PK evaluationId; GSIs AssetIndex, ExecutionIdIndex (PK executionId — pipeline-rule workflow callback), PipelineRuleWaitIndex (PK waitingWorkflowKey, SK waitingSince; sparse — pipeline rules waiting for a running execution of their workflow)
+        complianceCascadeStorageTable: dynamodb.Table; // PK cascadeId (also per-parent pendingCascadeMarker:<db>:<asset> rows, no state); GSI StateIndex
+        complianceAuditStorageTable: dynamodb.Table; // PK entryId; GSIs AssetIndex, EventTypeIndex, AuditByDateGSI (PK allListPartition — unfiltered newest-first listing), DatabaseIndex (PK databaseId, SK timestamp — one database's entries; the listing by database and the merged listing of a caller who may read only some databases)
     };
 }
 ```
 
-The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists.
+The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables and on the compliance audit table are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists. For the audit table every row is built by `common/compliance/auditRecord.py::build_audit_item`, which sets it; a guard test fails any `put_item` into that table that bypasses the builder.
 
 **`authResources`** (defined in `authBuilder-nestedStack.ts`):
 
@@ -475,6 +483,8 @@ const featureEnabled = true; // BAD - should be configurable
 ```
 
 #### **Rule 2: Feature Switches Must Be Defined**
+
+New features get a switch in `vamsAppFeatures.ts` and are gated by config in the core stack. The one accepted carve-out (root `CLAUDE.md` Rule 6): a feature that is inert until an operator configures it at runtime — none of its behavior applies until a record is written through its own API (an event-driven Lambda of the feature may run per event and no-op without that record, or keep the feature's own change bookkeeping current at no more than one write per change, so that bookkeeping is already correct when the record is written), nothing beyond idle storage, those invocations and that bookkeeping is billed, the core requests the feature observes cost exactly what they cost without it, and access is governed by Casbin like every other route — may deploy without a switch. Compliance is the example: its tables, Lambdas, the trigger's queue and `/compliance/*` routes always deploy; the trigger consumes the indexer topics through its own queue, records each metadata or link change on the asset row (one conditional UpdateItem per change, in every database, bound or not), removes a permanently deleted asset's compliance record, registers a new asset of a bound database, and evaluates nothing without a binding; the workflow callback no-ops without one. The metadata and link requests themselves do no compliance work, so no compliance behavior applies until a schema is bound. A feature that does work on its own (a poller, a scheduled job, an event consumer that acts on every event) does not qualify.
 
 ```typescript
 // ✅ CORRECT - Add to vamsAppFeatures.ts
@@ -731,6 +741,12 @@ coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`, `infra/test/pipelin
 for the CodeBuild repositories and their CMK flip, and `infra/test/security/customResourceKmsGrantOrdering.test.ts`
 for the order of custom resources and their roles' KMS policies.
 
+A Lambda's DynamoDB grants follow the tables its handler (and the shared modules it imports) resolves through `ResourceKeys`; `infra/test/security/complianceLambdaTableGrants.test.ts` derives those needs from the compliance handler source and asserts the synthesized role policy covers each table (read, plus the single-item write actions the module's calls use, so the compliance trigger's change stamp is held to `UpdateItem` on the asset table), so a missing grant fails the suite instead of surfacing as an `AccessDeniedException` 500 in production. The three compliance Lambdas that run evaluations (`complianceEvaluateService`, `complianceTrigger`, `complianceCascadeExecutor`) share `grantEvaluationEngineReads` in `complianceFunctions.ts`: read on the asset, asset-links, asset-file-metadata, file-attribute, asset-links-metadata, asset-file-versions, metadata-schema, workflow, pipeline, pipeline-template and asset-buckets tables, plus every asset bucket. The metadata service and the two asset-link Lambdas (`createAssetLink`, `assetLinksService`) hold `dynamodb:UpdateItem` alone on the asset table (`table.grant(fun, "dynamodb:UpdateItem")`, not `grantWriteData`) for the change stamp a metadata write or link change records on the asset row; `infra/test/security/handlerGrantScopingWave.test.ts` pins that no other write action reaches the asset table from them. The test also pins the deleted-database move's grants (D115): `grantRetirementRecordRead` gives the audit, cascade, binding and schema services `GetItem` on the evaluation table only under `dynamodb:LeadingKeys` `databaseRetirement#*` (`RETIREMENT_RECORD_READERS`), plus `BatchGetItem` on the same keys for the audit, cascade and schema services, whose cross-database listings read a page's records together (`batchRead`, `RETIREMENT_RECORD_BATCH_READERS`, D133); `databaseService` (built in `databaseFunctions.ts`) and the trigger hold the move's writes (`RETIREMENT_MOVE_WRITES`) and `sqs:SendMessage` on the compliance trigger queue with `COMPLIANCE_TRIGGER_QUEUE_URL`; the binding service sends on the same queue (D118's queued evaluations, and the first message of a database binding change applied in the background, D161) and holds `GetItem`, `PutItem` and `UpdateItem` on the evaluation table only under `dynamodb:LeadingKeys` `bindingApply#*` for that change's apply record (`grantBindingApplyRecordWrite`, `BINDING_APPLY_RECORD_WRITERS`); and the schema service reads the workflow and pipeline V2 tables with `GetItem` only (`GET_ITEM_ONLY_READS`, the pipeline-rule save check). Because `databaseService` now references the trigger queue, the queue's URL and ARN cross from the compliance builder into the API stack that builds `databaseService`; keep that in mind for `apiStackCeilings.test.ts`. The compliance trigger opts out of Lambda recursive-loop detection in the partitions that have it (`complianceTriggerRecursiveLoop`: `RecursiveLoop: Allow` in `aws` and `aws-eusc`, omitted in GovCloud; `test/storage/bucketSyncRecursiveLoop.test.ts`), because a deleted database's compliance move and a database binding change applied in the background (D161) continue themselves on its own queue for as many runs as the database's size needs, more than the detection's chain limit of about 16, which would otherwise stop the invocation and dead-letter its whole batch.
+
+The compliance trigger consumes the asset and file indexer topics through its own SQS queue (`ComplianceTriggerQueue` + `ComplianceTriggerDLQ`, built with both topic subscriptions in the storage stack by `buildComplianceTriggerQueue` so they exist before the API stacks update, message-body filter policies on leaf paths evaluated over `test/platform/fixtures/indexerTopicMessages.json`, batch 10, `maxConcurrency` 5, `reportBatchItemFailures`), built in `complianceFunctions.ts` with the GovCloud mapping created directly without Tags; `infra/test/platform/complianceTriggerQueue.test.ts` pins its settings and grants, and `complianceTriggerQueueNoOpenSearch.test.ts` its event source and the stream relays in a deployment without OpenSearch. The metadata service and the asset-link Lambdas hold read access only on the asset table: the trigger records metadata and link changes from the indexer events.
+
+The compliance jobs that continue themselves (a deleted database's compliance move, a database binding change applied in the background) run in `complianceJobs` from `ComplianceJobQueue` + `ComplianceJobDLQ` (`buildComplianceJobQueue`, in the storage stack beside the trigger queue; batch 1, `maxConcurrency` 2, visibility 6 x the 5-minute timeout, 3 receives, no topic subscription). Only that Lambda sets `RecursiveLoop: Allow` (`complianceJobRecursiveLoop`, `aws` and `aws-eusc` only); each job stops itself at a run limit derived from its size instead, and the trigger keeps the detection on. Senders: the binding service, the database service and the job Lambda; the trigger sends nothing and drops a job message found on its own queue; `infra/test/platform/complianceJobQueue.test.ts` pins the queues, the event source and every role's SQS grants.
+
 ### **Dependency Management Standards**
 
 #### **Rule 8: Proper Stack Dependencies**
@@ -932,6 +948,7 @@ A container job role usually reads every asset bucket, so a path written inside 
 -   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
 -   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference. Report what was skipped: one WARNING summary listing each skipped file with its reason (quoted with `repr`), grouped by what the loss costs (geometry layers from a USD layer's composition arcs to USD layer files, never from layer or prim metadata such as an `assetInfo` `identifier` or `customLayerData`, which stay unreported; data files, value clips included; textures and other files; read only `asset`-typed attributes to classify, never geometry samples), and a completion message that says the output is incomplete (`dependencies.IncompletePreview`). When the run has a results folder, also write one small, bounded result document there (`preview-incomplete.json`: the message, the counts by kind, at most 100 entries with a `truncated` flag, asset-relative paths, and for a reference refused as outside the asset only its reason and at most a sanitized base file name, never a bucket, host or folder), so the run's Output Results show it; a complete run writes none, and a failed write is a WARNING, never a failed run.
 -   When a third-party tool opens the referenced files itself (splat-transform reads an `.lcc2` scene's chunk files by the names its description lists), check every name the description lists before the tool starts, and refuse the conversion when one would leave the work directory or a needed file is missing. Do not rely on the fetch having skipped it: the tool would still open the path. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/format_handlers/splat_handler.prepare_lcc2` is the worked example.
+-   Ask only for the files the loader or tool reads, and report only what it uses: an `.lcc` scene's `shcoef.bin` only when splat-transform reads it (`format_handlers/lcc_meta.lcc_data_files`, the same test as its reader) and never its `environment.bin`; an FBX's texture names are fetched but never reported, since the FBX loader samples no textures (`dependencies.KIND_UNSAMPLED_TEXTURE`). Load the fetched files through a resolver confined to the same local root (`format_handlers/mesh_handler.asset_resolver` for glTF and OBJ), not one rooted at the input's folder: otherwise a `../` reference the fetch accepted is refused by the loader, while one outside the asset must still be refused.
 
 ### **Parsing XML From Uploaded Files**
 
@@ -1867,6 +1884,8 @@ def lambda_handler(event, context):
 ```
 
 The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, grants it `states:SendTaskFailure` and invoke on `openPipeline`, and sets `STATE_MACHINE_ARN` on `openPipeline`. A pipeline without an `openPipeline` Lambda starts the state machine from `vamsExecute` itself, as `simulation/isaacLabTraining/lambda/vamsExecuteIsaacLabPipeline.py` does.
+
+**Compliance output.** A pipeline that backs a compliance pipeline rule writes one `compliance-output.json` (`{"complianceOutput": true, "status": "success"|"error", "measurements": {...}, "errors": [], "pipelineMetadata": {}}`) under `outputS3AssetResultsPath`; the `measurements` keys are the `outputField` names of the rule's checks, and a written file replaces the derived `execution_success` / `processing_duration_seconds` measurements. The writer is `backendPipelines/common/compliance_output.py`, vendored like `manifestHelper.py`: copy it into the pipeline's own `lambda/` or `container/` directory and import `compliance_output`, since a deployed pipeline holds only that directory. Copies stay byte-identical to the canonical one (`backendPipelines/tests/test_compliance_output_helper.py`). A container pipeline forwards `outputS3AssetResultsPath` with the other output paths. Full rule in `backendPipelines/CLAUDE.md` "Compliance output"; author walkthrough in the user guide's "Building a pipeline for compliance checks".
 
 ### **Running a Coding Agent as a Pipeline Stage**
 

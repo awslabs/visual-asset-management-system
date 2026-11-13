@@ -89,6 +89,14 @@ export const SECTIONS: Section[] = [
         advanced: true,
         order: 11,
     },
+    {
+        id: "compliance",
+        label: "Compliance",
+        description:
+            "Default compliance schema seeding and whether quarantine blocks downloads. Compliance itself always deploys.",
+        advanced: true,
+        order: 12,
+    },
 ];
 
 // --- Visibility predicates (shared) ---
@@ -2194,6 +2202,23 @@ const CORE_FIELDS: FieldMeta[] = [
         advanced: true,
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useZipDownloads.enabled"),
         help: "Builds the zipArchive container image with AWS CodeBuild during deployment instead of local Docker. Default false.",
+    },
+    // ===== Compliance =====
+    {
+        path: "app.compliance.autoLoadDefaultSchema",
+        label: "Auto-load default compliance schema",
+        input: "boolean",
+        section: "compliance",
+        advanced: true,
+        help: "Seeds the GLOBAL default-compliance-schema (a warn-level metadata rule against the default asset metadata schema) at deploy.",
+    },
+    {
+        path: "app.compliance.quarantineBlocksDownload",
+        label: "Quarantine blocks download",
+        input: "boolean",
+        section: "compliance",
+        advanced: true,
+        help: "When on, a quarantined asset cannot be downloaded unless it holds an active exception. When off, quarantine is informational only.",
     },
 ];
 

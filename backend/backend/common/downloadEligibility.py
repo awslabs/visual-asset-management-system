@@ -93,20 +93,33 @@ def is_file_archived(head: dict) -> bool:
 # Asset-level checks
 #######################
 
-def require_distributable_asset(asset: Optional[dict]) -> dict:
+def require_distributable_asset(asset: Optional[dict],
+                                check_quarantine: Optional[Callable[[str, str], None]] = None,
+                                database_id: Optional[str] = None,
+                                asset_id: Optional[str] = None) -> dict:
     """Check an asset record is downloadable and return its ``assetLocation``.
 
     Args:
         asset: The asset record from the live asset table, or None when it was not found.
             Archived assets are not in the live table, so they arrive here as None.
+        check_quarantine: The caller's compliance quarantine block
+            (``common.compliance.quarantineGuard.check_quarantine_block``), called with the asset's
+            database and asset id once it is known to be distributable, before its location is read.
+            It raises ``QuarantineBlockedResponse`` (a ``VAMSGeneralErrorResponse``) for a quarantined
+            asset and is a no-op while the deployment's block is off. This module reads no table, so
+            the caller passes it; a caller that hands out file bytes always passes it.
+        database_id, asset_id: the ids the quarantine block reads (default: the record's own)
 
     Raises:
-        VAMSGeneralErrorResponse: asset not found, not distributable, or without a location
+        VAMSGeneralErrorResponse: asset not found, not distributable, quarantined, or without a
+            location
     """
     if not asset:
         raise VAMSGeneralErrorResponse(MSG_ASSET_NOT_FOUND)
     if not asset.get('isDistributable', False):
         raise VAMSGeneralErrorResponse(MSG_ASSET_NOT_DISTRIBUTABLE)
+    if check_quarantine is not None:
+        check_quarantine(database_id or asset.get('databaseId'), asset_id or asset.get('assetId'))
     asset_location = asset.get('assetLocation')
     if not asset_location:
         raise VAMSGeneralErrorResponse(MSG_ASSET_LOCATION_NOT_FOUND)
@@ -115,7 +128,9 @@ def require_distributable_asset(asset: Optional[dict]) -> dict:
 
 def get_distributable_asset_context(database_id: str, asset_id: str, *,
                                     get_asset: Callable[[str, str], Optional[dict]],
-                                    get_bucket_details: Callable[[str], dict]) -> Tuple[str, str]:
+                                    get_bucket_details: Callable[[str], dict],
+                                    check_quarantine: Optional[Callable[[str, str], None]] = None
+                                    ) -> Tuple[str, str]:
     """Read the asset, check it is downloadable, and return its bucket and base key.
 
     Args:
@@ -123,6 +138,7 @@ def get_distributable_asset_context(database_id: str, asset_id: str, *,
         asset_id: Asset ID
         get_asset: ``(database_id, asset_id) -> record or None`` over the LIVE asset table
         get_bucket_details: ``bucket_id -> {'bucketName': ..., ...}``
+        check_quarantine: the compliance quarantine block (see ``require_distributable_asset``)
 
     Returns:
         ``(bucket_name, asset_base_key)``
@@ -131,7 +147,7 @@ def get_distributable_asset_context(database_id: str, asset_id: str, *,
         VAMSGeneralErrorResponse: from ``require_distributable_asset`` or the bucket lookup
     """
     asset = get_asset(database_id, asset_id)
-    asset_location = require_distributable_asset(asset)
+    asset_location = require_distributable_asset(asset, check_quarantine, database_id, asset_id)
     bucket_details = get_bucket_details(asset.get('bucketId'))
     return bucket_details['bucketName'], asset_location.get('Key')
 

@@ -3541,6 +3541,36 @@ const CORE_RULES: Rule[] = [
             "app.pipelines.useZipDownloads.computeMemoryGiB is not an AWS Fargate memory size for the vCPU: 4 vCPU " +
             "takes 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in 8 GiB steps.",
     },
+    // ----- Compliance default schema
+    // (config.ts: "The default compliance schema holds one metadata rule against the GLOBAL
+    // `defaultAsset` metadata schema") -----
+    //
+    // The seeded compliance schema's only rule references the GLOBAL `defaultAsset` metadata schema,
+    // which is seeded by `autoLoadDefaultAssetSchema` alone. Without it the rule cannot be checked
+    // (a tooling error, "Metadata schema not found"), so every evaluation under the schema ends in an
+    // error with no verdict. Absence follows `getConfig()`'s backfills: a missing
+    // `autoLoadDefaultSchema` is true, a missing `metadataSchema` BLOCK is every flag true, and a
+    // missing flag inside a present block is false (the seeding construct tests it for truthiness).
+    {
+        id: "compliance-default-schema-requires-default-asset-metadata-schema",
+        severity: "error",
+        fieldPaths: [
+            "app.compliance.autoLoadDefaultSchema",
+            "app.metadataSchema.autoLoadDefaultAssetSchema",
+        ],
+        appliesWhen: (c) => {
+            const autoLoadDefaultSchema = g(c, "app.compliance.autoLoadDefaultSchema");
+            const seedsComplianceSchema = isAbsent(autoLoadDefaultSchema)
+                ? true
+                : !!autoLoadDefaultSchema;
+            const seedsDefaultAssetSchema = isAbsent(g(c, "app.metadataSchema"))
+                ? true
+                : !!g(c, "app.metadataSchema.autoLoadDefaultAssetSchema");
+            return seedsComplianceSchema && !seedsDefaultAssetSchema;
+        },
+        message:
+            "app.compliance.autoLoadDefaultSchema is true but app.metadataSchema.autoLoadDefaultAssetSchema is false. The default compliance schema validates assets against the GLOBAL defaultAsset metadata schema, which only that flag seeds; without it every evaluation under the default schema ends in an error with no verdict (Metadata schema not found). Set autoLoadDefaultAssetSchema to true, or set autoLoadDefaultSchema to false.",
+    },
 ];
 
 export const RULES: Rule[] = [...CORE_RULES, ...ADDON_RULES];
