@@ -29,7 +29,12 @@ ALL_SWITCHES = ["AUTHPROVIDER_COGNITO", addon_constants.FEATURE_EDH_WORKSTATIONS
 # --- Budgets (Mandatory Rule 11) --------------------------------------------------------------------
 
 MAX_DESCRIPTION_CHARS = 1200
-MAX_CORE_TOTAL_CHARS = 30000
+# Every core tool together other than the compliance tools: the whole surface a stdio client with every
+# gate on reads, less the compliance tools, which keep a total of their own (below). The 30,000
+# character budget a client reads at the start of a session holds per tool set
+# (toolsets.MAX_DESCRIPTION_CHARS_PER_SET, tests/test_toolsets.py); this ceiling only keeps the full
+# surface from growing unnoticed.
+MAX_CORE_TOTAL_CHARS = 32000
 # The compliance tools (`vams_mcp/server.py` "Compliance" sections) are core tools with a total of
 # their own, so adding them did not take the room of the other core tools: together within this.
 MAX_COMPLIANCE_TOTAL_CHARS = 18700
