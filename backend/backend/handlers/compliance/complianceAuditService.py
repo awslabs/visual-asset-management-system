@@ -47,6 +47,7 @@ from common.validators import validate
 from common.compliance.routeAudit import (
     audit_outcome, failure_outcome, request_parameters, response_count,
 )
+from common.compliance.scopeChecks import scope_allows
 from customLogging.auditLogging import audit_request, deferred_authorization_audit, log_action
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
@@ -251,6 +252,17 @@ def _database_readability(casbin_enforcer):
     return listing.once_per_key(
         lambda database_id: bool(casbin_enforcer) and casbin_enforcer.enforce(
             _evaluation_object(database_id), "GET"))
+
+
+def _scope_readability(casbin_enforcer):
+    """`database_readable(database_id)` for choosing the partitions a listing across databases
+    reads (`_readable_partitions`, a merged token's databases, the empty-database object): the same
+    evaluation GET as `_database_readability`, as a scope check (`scopeChecks`). The listing names
+    no database, so a database the caller may not read is left out without an authorization record
+    (D198); the rows it reads are still decided with `_database_readability`, which records a
+    refused one."""
+    return listing.once_per_key(
+        lambda database_id: scope_allows(casbin_enforcer, _evaluation_object(database_id), "GET"))
 
 
 def _descendant_readability(readable, access):
@@ -545,7 +557,7 @@ def _presented_id(presenter, partition):
 
 def _readable_partitions(presenter, readable):
     """`(partitions, every)`: the DatabaseIndex partitions the caller may read (the evaluation GET on
-    each one's id, `readable`, asked once per id and shared with the rows' own decision), and whether
+    each one's id, `readable`, a scope check asked once per id: `_scope_readability`), and whether
     that is every partition. `(None, True)` when the partitions are too many to list."""
     partitions = _audit_partitions(presenter)
     if partitions is None:
@@ -577,7 +589,9 @@ def query_audit(event, params):
       the empty-database object (an entry that names no database is in no DatabaseIndex
       partition), reads the global path.
     The partitions are each database row's id, the history of a re-created database and `*`
-    (`_audit_partitions`). A token continues on the index that issued it. While DynamoDB still builds
+    (`_audit_partitions`). Which of them the caller may read is a scope check over every database
+    (`_scope_readability`, D198): a database it may not read is left out without an authorization
+    record. A token continues on the index that issued it. While DynamoDB still builds
     DatabaseIndex after an update, a first page reads the global path instead.
     The time window narrows each index's `timestamp` sort key. Each page is filled across at most
     `listing.DEFAULT_READ_BUDGET` reads (a merged page: one per database, then
@@ -627,7 +641,8 @@ def query_audit(event, params):
     # The evaluation GET names nothing but the database id, so the engine is asked it once per id of
     # the request (live, and `<databaseId>#deleted` for an archived asset), not once per entry: a
     # reader who may read few databases would otherwise have every other database's entries refused
-    # one by one, each refusal writing an authorization audit record.
+    # one by one, each refusal writing an authorization audit record. The partitions a listing
+    # across databases reads are chosen with the scope check (`_scope_readability`) instead.
     readable = _database_readability(casbin_enforcer)
     presenter = databaseRetirement.Presenter(evaluation_table)
     # The entries of an archived asset are listed only for a caller allowed on its stored database
@@ -670,7 +685,7 @@ def query_audit(event, params):
                       # presented (D133).
                       prepare=presenter.prepare(then=archived.expect_items()))
     answer = _route_page(page, token, starting_token, database_id, asset_id, event_type,
-                         presenter, readable if casbin_enforcer else None)
+                         presenter, _scope_readability(casbin_enforcer) if casbin_enforcer else None)
     if answer is None:
         return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
     entries, next_token = answer

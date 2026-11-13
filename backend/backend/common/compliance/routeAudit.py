@@ -10,8 +10,10 @@ API-level check refused, with the route's own action. A data-level denial is als
 Casbin check that made it, to the authorization log.
 
 What is recorded follows the record contract: a write records the fields it set (never a schema
-body or another caller-authored document), a read records what was asked (ids, filters, page size)
-and how many items it returned, never the items.
+body or another caller-authored document) and the id of what it created, from the service's answer
+(`created_value`); a read records what was asked (ids, filters, page size) and how many items it
+returned, never the items. A write that creates many things (Evaluate All, a sweep) records how
+many, never their ids.
 """
 
 import json
@@ -50,18 +52,50 @@ def response_count(response: Any, *keys: str) -> Optional[int]:
     parsed at all."""
     if not isinstance(response, dict) or not audit_records_reads():
         return None
+    body = _body_of(response)
+    if body is None:
+        return None
+    for key in keys:
+        value = body.get(key)
+        if isinstance(value, list):
+            return len(value)
+    return None
+
+
+def _body_of(response: Any) -> Optional[Dict[str, Any]]:
+    """The response body as a dict, or None (no response, or a body that is not a JSON object)."""
+    if not isinstance(response, dict):
+        return None
     body = response.get("body")
     if isinstance(body, str):
         try:
             body = json.loads(body)
         except (TypeError, ValueError):
             return None
-    if not isinstance(body, dict):
+    return body if isinstance(body, dict) else None
+
+
+# The longest id a record takes from a service's answer; a longer value is not an id the services
+# generate or validate, and is left out.
+CREATED_VALUE_MAX_CHARS = 256
+
+
+def created_value(response: Any, key: str) -> Optional[Any]:
+    """The id (or version) of what a successful compliance write created, as the service's own
+    answer gives it under `key`: a cascade's `cascadeId`, an evaluation's `evaluationId`, a schema
+    version's `internalVersion`, a binding change's `applyId`. None for an answer that is not a 2xx
+    or does not carry it as a string or an integer. Taken from the answer the service built, never
+    from a field of the request."""
+    status = response.get("statusCode") if isinstance(response, dict) else None
+    if not (isinstance(status, int) and 200 <= status < 300):
         return None
-    for key in keys:
-        value = body.get(key)
-        if isinstance(value, list):
-            return len(value)
+    value = (_body_of(response) or {}).get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value and len(value) <= CREATED_VALUE_MAX_CHARS:
+        return value
     return None
 
 

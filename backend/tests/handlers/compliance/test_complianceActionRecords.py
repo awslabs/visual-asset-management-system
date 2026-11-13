@@ -236,3 +236,142 @@ def test_with_read_records_off_a_read_response_is_not_parsed_to_count(monkeypatc
     assert routeAudit.response_count(_response(200, "entries"), "entries") is None
     monkeypatch.setenv("AUDIT_RECORD_READS", "true")
     assert routeAudit.response_count(_response(200, "entries"), "entries") == 2
+
+
+# ---------------------------------------------------------------------------------------------
+# D197: a write that creates something names it, from the service's answer
+# ---------------------------------------------------------------------------------------------
+
+SERVER_CASCADE_ID = "5b1e2c3d-0000-4000-8000-00000000d197"
+SERVER_EVALUATION_ID = "e-server-d197"
+SERVER_APPLY_ID = "apply-server-d197"
+
+
+def _answer(status, **body):
+    return {"statusCode": status, "body": json.dumps({"message": "ok", **body})}
+
+
+def _one_record(module_name, function, response, method, path, path_params, body):
+    with _invoked(module_name, function, response=response) as run:
+        _call(run.module, method, path, path_params, body)
+    (action, kwargs), = run.records
+    return action, kwargs
+
+
+@pytest.mark.unit
+class TestAWriteNamesWhatItCreated:
+
+    def test_a_cascade_create_names_the_cascade_its_approve_record_names(self):
+        # A client field of the same name is not what the record takes: the id is the service's.
+        action, kwargs = _one_record(
+            "complianceCascadeService", "create_cascade",
+            _answer(200, cascadeId=SERVER_CASCADE_ID, state="pending_approval"),
+            "POST", "/compliance/cascades", None,
+            {"databaseId": "db1", "assetId": "a1", "cascadeId": "client-chosen"})
+        assert action == "complianceCascadeCreate"
+        assert kwargs["cascadeId"] == SERVER_CASCADE_ID
+        _approve, approved = _one_record(
+            "complianceCascadeService", "approve_cascade", _answer(202, cascadeId=SERVER_CASCADE_ID),
+            "POST", f"/compliance/cascades/{SERVER_CASCADE_ID}/approve",
+            {"cascadeId": SERVER_CASCADE_ID}, {})
+        assert approved["cascadeId"] == kwargs["cascadeId"], "create and approve join by id"
+
+    def test_a_cascade_started_at_once_names_its_cascade(self):
+        _action, kwargs = _one_record(
+            "complianceCascadeService", "create_cascade",
+            _answer(202, cascadeId=SERVER_CASCADE_ID, state="executing"),
+            "POST", "/compliance/cascades", None,
+            {"databaseId": "db1", "assetId": "a1", "requireApproval": False})
+        assert kwargs["cascadeId"] == SERVER_CASCADE_ID
+
+    def test_an_evaluation_names_the_evaluation_it_ran(self):
+        action, kwargs = _one_record(
+            "complianceEvaluateService", "evaluate_asset",
+            _answer(200, evaluationId=SERVER_EVALUATION_ID, verdict="compliant"),
+            "POST", "/compliance/evaluate/db1/a1", {"databaseId": "db1", "assetId": "a1"}, {})
+        assert action == "complianceEvaluate"
+        assert kwargs["evaluationId"] == SERVER_EVALUATION_ID
+        assert (kwargs["database_id"], kwargs["asset_id"]) == ("db1", "a1")
+
+    @pytest.mark.parametrize("method,path,params,body,function", [
+        ("POST", "/compliance/schemas", None,
+         {"schemaName": "cad-quality", "schemaBody": SCHEMA_BODY}, "register_schema"),
+        ("PUT", "/compliance/schemas/cad-quality", {"schemaName": "cad-quality"},
+         {"description": "new"}, "update_schema"),
+    ], ids=["create", "update"])
+    def test_a_schema_write_names_the_version_it_wrote(self, method, path, params, body, function):
+        _action, kwargs = _one_record(
+            "complianceSchemaService", function,
+            _answer(200, schemaName="cad-quality", internalVersion=4), method, path, params, body)
+        assert kwargs["schemaName"] == "cad-quality"
+        assert kwargs["changes"]["internalVersion"] == 4
+
+    @pytest.mark.parametrize("method,body,function", [
+        ("PUT", {"schemaName": "cad-quality"}, "bind_schema_to_database"),
+        ("DELETE", None, "unbind_schema_from_database"),
+    ], ids=["bind", "unbind"])
+    def test_a_database_binding_change_names_the_apply_it_started(self, method, body, function):
+        _action, kwargs = _one_record(
+            "complianceSchemaBindingService", function,
+            _answer(202, applyId=SERVER_APPLY_ID, applyStatus="running"),
+            method, "/compliance/bind/db1", {"databaseId": "db1"}, body)
+        assert kwargs["details"] == {"applyId": SERVER_APPLY_ID}
+
+    def test_an_unchanged_binding_names_no_apply(self):
+        _action, kwargs = _one_record(
+            "complianceSchemaBindingService", "bind_schema_to_database",
+            _answer(200, changed=False), "PUT", "/compliance/bind/db1", {"databaseId": "db1"},
+            {"schemaName": "cad-quality"})
+        assert "details" not in kwargs
+
+    @pytest.mark.parametrize("status", [400, 403, 404, 500])
+    def test_a_write_that_did_not_succeed_names_nothing_it_created(self, status):
+        # Even an answer that carried an id: only a 2xx created something.
+        records = [
+            _one_record("complianceCascadeService", "create_cascade",
+                        _answer(status, cascadeId=SERVER_CASCADE_ID), "POST", "/compliance/cascades",
+                        None, {"databaseId": "db1", "assetId": "a1"}),
+            _one_record("complianceEvaluateService", "evaluate_asset",
+                        _answer(status, evaluationId=SERVER_EVALUATION_ID), "POST",
+                        "/compliance/evaluate/db1/a1", {"databaseId": "db1", "assetId": "a1"}, {}),
+            _one_record("complianceSchemaService", "register_schema",
+                        _answer(status, internalVersion=4), "POST", "/compliance/schemas", None,
+                        {"schemaName": "cad-quality", "schemaBody": SCHEMA_BODY}),
+        ]
+        assert len(records) == 3
+        for _action, kwargs in records:
+            assert kwargs.get("cascadeId") is None and kwargs.get("evaluationId") is None
+            assert "internalVersion" not in (kwargs.get("changes") or {})
+
+    @pytest.mark.parametrize("path,params,function", [
+        ("/compliance/evaluate/db1", {"databaseId": "db1"}, "evaluate_database"),
+        ("/compliance/sweep/s1", {"schemaName": "s1"}, "sweep_schema"),
+    ], ids=["evaluate all", "sweep"])
+    def test_evaluate_all_and_a_sweep_count_their_evaluations_and_name_none(
+            self, path, params, function):
+        triggered = [{"databaseId": "db1", "assetId": f"a{n}", "evaluationId": f"e{n}"}
+                     for n in range(3)]
+        _action, kwargs = _one_record("complianceEvaluateService", function,
+                                      _answer(200, assetsTriggered=triggered), "POST", path,
+                                      params, {})
+        assert kwargs["item_count"] == 3
+        assert "evaluationId" not in kwargs
+        assert not any(f"e{n}" in json.dumps(kwargs, default=str) for n in range(3))
+
+
+@pytest.mark.unit
+class TestCreatedValue:
+
+    def test_it_reads_the_services_answer_of_a_success_only(self):
+        assert routeAudit.created_value(_answer(201, cascadeId="c-1"), "cascadeId") == "c-1"
+        assert routeAudit.created_value(_answer(202, internalVersion=2), "internalVersion") == 2
+        assert routeAudit.created_value(_answer(403, cascadeId="c-1"), "cascadeId") is None
+        assert routeAudit.created_value({"statusCode": 200, "body": "not json"}, "cascadeId") is None
+        assert routeAudit.created_value(None, "cascadeId") is None
+
+    def test_it_takes_an_id_shaped_value_only(self):
+        assert routeAudit.created_value(_answer(200, cascadeId=True), "cascadeId") is None
+        assert routeAudit.created_value(_answer(200, cascadeId=""), "cascadeId") is None
+        assert routeAudit.created_value(_answer(200, cascadeId={"x": 1}), "cascadeId") is None
+        too_long = "c" * (routeAudit.CREATED_VALUE_MAX_CHARS + 1)
+        assert routeAudit.created_value(_answer(200, cascadeId=too_long), "cascadeId") is None

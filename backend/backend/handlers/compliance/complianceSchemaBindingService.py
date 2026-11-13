@@ -74,7 +74,7 @@ from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from common.compliance.routeAudit import (
-    audit_outcome, failure_outcome, request_parameters, response_count,
+    audit_outcome, created_value, failure_outcome, request_parameters, response_count,
 )
 from customLogging.auditLogging import audit_request, log_action
 from customLogging.logger import safeLogger
@@ -237,9 +237,18 @@ def handle_put_request(event):
         log_action(event, "complianceBindingSet", **audit_outcome(response),
                    database_id=path_params.get("databaseId"),
                    changes={"schemaName": request.schemaName,
-                            "complianceAutoEval": request.complianceAutoEval})
+                            "complianceAutoEval": request.complianceAutoEval},
+                   **_apply_started(response))
         return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
+
+
+def _apply_started(response):
+    """`details.applyId` of the background apply a database binding change started (D197), from the
+    service's answer, so the record joins the apply the binding read shows; nothing when the change
+    started none (an unchanged binding, a refusal)."""
+    apply_id = created_value(response, "applyId")
+    return {"details": {"applyId": apply_id}} if apply_id is not None else {}
 
 
 def handle_delete_request(event):
@@ -255,7 +264,7 @@ def handle_delete_request(event):
     if API_COMPLIANCE_BIND_DATABASE.matches(path):
         response = unbind_schema_from_database(event, path_params.get("databaseId"))
         log_action(event, "complianceBindingDelete", **audit_outcome(response),
-                   database_id=path_params.get("databaseId"))
+                   database_id=path_params.get("databaseId"), **_apply_started(response))
         return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 

@@ -302,19 +302,26 @@ class TestAuthorization:
             state_rows=[{"databaseId": DB, "assetId": "a"}, {"databaseId": DB, "assetId": "b"},
                         {"databaseId": OTHER_DB, "assetId": "c"}])
         calls = [c.args for c in mocks["casbin"].enforce.call_args_list]
-        # Each bound database is checked once for the evaluation (POST) and once for whether the
-        # caller may see its archive (GET on its stored id), which decides whether its archived
-        # assets are counted.
+        # The schema read, then each bound database's archive (GET on its stored id), which decides
+        # whether its archived assets are counted: checks on what the sweep acts on, recorded when
+        # refused.
         assert calls == [
             ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA,
               "databaseId": "GLOBAL"}, "GET"),
-            ({"object__type": "complianceEvaluation", "databaseId": DB, "complianceState": ""}, "POST"),
             ({"object__type": "complianceEvaluation", "databaseId": f"{DB}#deleted",
               "complianceState": ""}, "GET"),
-            ({"object__type": "complianceEvaluation", "databaseId": OTHER_DB, "complianceState": ""},
-             "POST"),
             ({"object__type": "complianceEvaluation", "databaseId": f"{OTHER_DB}#deleted",
               "complianceState": ""}, "GET"),
+        ]
+        # Whether the caller may evaluate in each bound database is a scope check (the sweep names
+        # a schema, not the databases): asked once per database, on the engine, without an
+        # authorization record (D198).
+        engine_posts = [c.args for c in mocks["casbin"].service_object.enforce.call_args_list
+                        if c.args[1] == "POST"]
+        assert engine_posts == [
+            ({"object__type": "complianceEvaluation", "databaseId": DB, "complianceState": ""}, "POST"),
+            ({"object__type": "complianceEvaluation", "databaseId": OTHER_DB, "complianceState": ""},
+             "POST"),
         ]
 
     def test_asset_state_check_carries_the_current_state(self):

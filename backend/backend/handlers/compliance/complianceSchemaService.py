@@ -32,8 +32,9 @@ from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from common.workflows import pipelineRecords as pr
 from common.compliance.routeAudit import (
-    audit_outcome, failure_outcome, request_parameters, response_count,
+    audit_outcome, created_value, failure_outcome, request_parameters, response_count,
 )
+from common.compliance.scopeChecks import scope_allows
 from customLogging.auditLogging import audit_request, log_action, log_authorization
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
@@ -443,11 +444,21 @@ def handle_post_request(event):
         body = _parse_body(event)
         request = parse(body, model=CreateSchemaRequestModel)
         response = register_schema(event, request)
+        # The record names the schema and the version the request wrote (from the service's
+        # answer, D197); a name that existed gains a new version.
         log_action(event, "complianceSchemaCreate", **audit_outcome(response),
                    schemaName=request.schemaName, database_id=request.databaseId,
-                   changes={"databaseId": request.databaseId, "description": request.description})
+                   changes={"databaseId": request.databaseId, "description": request.description,
+                            **_version_written(response)})
         return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
+
+
+def _version_written(response):
+    """`{"internalVersion": n}` of the schema version a successful create or update wrote, from the
+    service's answer (`created_value`); empty for any other answer."""
+    version = created_value(response, "internalVersion")
+    return {"internalVersion": version} if isinstance(version, int) else {}
 
 
 def handle_put_request(event):
@@ -460,7 +471,8 @@ def handle_put_request(event):
         # The rule document is caller-authored content: only whether it changed is recorded.
         log_action(event, "complianceSchemaUpdate", **audit_outcome(response),
                    schemaName=path_params.get("schemaName"),
-                   changes={"databaseId": request.databaseId, "description": request.description},
+                   changes={"databaseId": request.databaseId, "description": request.description,
+                            **_version_written(response)},
                    details={"schemaBodyChanged": request.schemaBody is not None})
         return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
@@ -571,13 +583,15 @@ def creatable_scopes(casbin_enforcer):
     """The scopes the caller may create a schema in: GLOBAL and every database whose
     `complianceSchema` POST passes. The database table is small and is scanned for its ids. A
     soft-deleted database (its id carries `#deleted`) is not a scope, as the database listing
-    leaves it out: a schema cannot be created in it."""
+    leaves it out: a schema cannot be created in it. Each database is a scope check
+    (`scopeChecks`): the listing asks to create in none of them, so a scope the caller may not
+    create in is left out without an authorization record (D198)."""
     candidates = [GLOBAL_DATABASE_ID] + sorted(
         item["databaseId"] for item in _scan_all_items(database_table, ProjectionExpression="databaseId")
         if item.get("databaseId") and item["databaseId"] != GLOBAL_DATABASE_ID
         and DELETED_DATABASE_MARKER not in item["databaseId"])
     return [database_id for database_id in candidates
-            if casbin_enforcer.enforce(_schema_object("", database_id), "POST")]
+            if scope_allows(casbin_enforcer, _schema_object("", database_id), "POST")]
 
 
 def list_schemas(event, database_id_filter=None):
