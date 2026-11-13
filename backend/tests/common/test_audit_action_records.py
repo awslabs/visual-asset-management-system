@@ -1094,3 +1094,22 @@ class TestEntrypointOutcome:
         assert payload["actor"]["userId"] == "SYSTEM_USER"
         assert payload["actor"]["authMethod"] == "system"
         assert payload["actor"]["onBehalfOf"] == "alice"
+
+
+@pytest.mark.unit
+class TestLegacyActionOutcome:
+    def test_a_failed_legacy_record_carries_the_outcome_and_is_written_at_once(self, clients):
+        event = _workflow_event()
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_actions(event, "workflowUpdate", {"workflowId": "w1"}, outcome="failed")
+            assert len(clients.flush.calls) == 1, "a failed record is not held for the flush"
+        _, payload, _ = parse(clients.flush.messages(group_name("auditActions"))[0])
+        assert payload["outcome"] == "failed" and payload["workflowId"] == "w1"
+
+    def test_a_legacy_record_defaults_to_success(self, clients):
+        event = _workflow_event()
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_actions(event, "workflowUpdate", {"workflowId": "w1"})
+            assert clients.flush.calls == []
+        _, payload, _ = parse(clients.flush.messages(group_name("auditActions"))[0])
+        assert payload["outcome"] == "success"

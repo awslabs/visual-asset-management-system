@@ -40,8 +40,9 @@ class TestFileRecords:
             success=True, message="deleted", affectedFiles=["/dir/a.glb", "/dir/b.glb"]))
         event = _event({"filePath": "/dir/", "isPrefix": True, "confirmPermanentDelete": True})
         assert files_svc.handle_delete_file(event, None)["statusCode"] == 200
-        assert [call.kwargs["file_path"] for call in recorder.call_args_list] == ["/dir/a.glb", "/dir/b.glb"]
-        assert all(call.args == (event, "fileDelete") for call in recorder.call_args_list)
+        first, second = recorder.call_args_list
+        assert (first.args, first.kwargs["file_path"]) == ((event, "fileDelete"), "/dir/a.glb")
+        assert (second.args, second.kwargs["file_path"]) == ((event, "fileDelete"), "/dir/b.glb")
         assert recorder.call_args.kwargs["changes"] == {"isPrefix": True, "confirmPermanentDelete": True}
 
     def test_a_file_operation_with_no_file_list_records_the_requested_path(self, recorder, monkeypatch):
