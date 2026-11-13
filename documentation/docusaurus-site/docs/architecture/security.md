@@ -685,8 +685,8 @@ VAMS maintains nine dedicated Amazon CloudWatch Log Groups for audit logging, ea
 | File Upload            | File upload operations with user, file, and bucket details |
 | File Download          | File download operations                                   |
 | File Download Streamed | Streamed file download operations                          |
-| Auth Other             | Miscellaneous authentication events                        |
-| Auth Changes           | Role, constraint, and user-role modifications              |
+| Auth Other             | Login profile changes and reads of the auth admin routes   |
+| Auth Changes           | Role, user-role, constraint, API key and user changes      |
 | Actions                | General CRUD operations                                    |
 | Errors                 | Application errors and exceptions                          |
 
@@ -694,7 +694,7 @@ VAMS maintains nine dedicated Amazon CloudWatch Log Groups for audit logging, ea
 Audit logging uses a silent failure pattern. If writing to an audit log fails, the error is logged locally to the Lambda's standard log group, but Lambda execution continues normally. This prevents audit logging failures from disrupting application operations. The entry that could not be written is kept in the Lambda's own log as an `auditFallback` line and counted in the `AuditWriteFailures` metric (namespace `VAMS/Audit`); alarm on that metric (see [Monitoring Audit Logging Health](../developer/audit-logging.md#monitoring-audit-logging-health)).
 :::
 
-Each record carries an echo of the request after credential keys and caller-authored template content are redacted, including the verified token claims and the submitted request body, so audit records can contain personal data a user enters. See [What Is Logged](../developer/audit-logging.md#what-is-logged).
+Authorization, error, auth change and auth other records carry a short echo of the request (request ID and time, method, path, route, path parameters and connection addresses), with no headers, query string or body. Action and auth change records carry what a write changed, after credential keys and caller-authored template content are redacted, and authentication, file transfer and earlier orchestration records carry the redacted request, including the verified token claims and the submitted body, so audit records can contain personal data a user enters. On a deployment behind Amazon CloudFront, records name the viewer's address only for a request that carries the origin verification value. See [What Is Logged](../developer/audit-logging.md#what-is-logged).
 
 ## AWS CloudTrail Integration
 
