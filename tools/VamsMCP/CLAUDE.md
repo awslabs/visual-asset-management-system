@@ -368,7 +368,8 @@ asymmetry other callers rely on):
     quirks, why a helper exists and other maintainer rationale go in code comments or this file,
     never in the docstring. Each description stays within 1,200 characters, except the short named
     list in `tests/test_agent_surface.py` (`DESCRIPTION_EXCEPTIONS`, each with its reason and
-    ceiling), and the core tools together within 30,000. Before adding text, cut text. Many older
+    ceiling), the core tools other than the compliance tools together within 30,000, and the 25
+    compliance tools (`COMPLIANCE_TOOLS`) together within 18,700. Before adding text, cut text. Many older
     contract tests pin phrases in docstrings; keep the phrase, shorten around it. A release that
     changes tools, descriptions or `SERVER_INSTRUCTIONS` runs the scenarios of
     `evals/agent-scenarios.md` against a test deployment in Kiro and Claude Code.
