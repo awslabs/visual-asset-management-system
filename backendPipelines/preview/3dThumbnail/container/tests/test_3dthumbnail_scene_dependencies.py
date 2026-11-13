@@ -601,3 +601,38 @@ class TestUsdPathsThatLoadNothing:
         assert report.missing == [] and report.missing_required == []
         assert report.partial is False
         assert not any("not in the asset" in line for line in report.warnings())
+
+
+@pytest.mark.unit
+class TestReferencesThatLoadNothing:
+    """`loads_nothing` names the files the walk saw only as references that load nothing (a USD metadata
+    asset path, a renderer's own MDL module), so a caller that checks the scene with OpenUSD leaves them
+    out of its missing list. A file also named by an arc that loads it is not among them."""
+
+    @staticmethod
+    def _walk(tmp_path, references):
+        store = FakeStore({"xid/scene/root.refs": "root"})
+        local_root, local_input = _local_input(tmp_path, store, "xid/scene/root.refs")
+        resolver = dependencies.DependencyResolver(
+            store, ROOT, local_root, collectors={".refs": lambda path: list(references)}, late_arrival=False)
+        resolver.discover("scene/root.refs", local_input, ".refs")
+        return resolver
+
+    def test_a_metadata_path_and_a_bare_mdl_module_load_nothing(self, tmp_path):
+        resolver = self._walk(tmp_path, [
+            ("source/scene.usd", False, False, dependencies.KIND_METADATA),
+            ("OmniPBR.mdl", False, False, ""),
+            ("textures/gone.png", False, False, dependencies.KIND_TEXTURE_OR_OTHER),
+        ])
+        assert resolver.loads_nothing() == ["scene/source/scene.usd", "scene/OmniPBR.mdl"]
+        assert resolver.report().missing == ["scene/textures/gone.png"]
+
+    def test_a_path_named_as_metadata_first_and_then_as_a_sublayer_loads(self, tmp_path):
+        resolver = self._walk(tmp_path, [
+            ("layers/gone.usda", False, False, dependencies.KIND_METADATA),
+            ("layers/gone.usda", False, True, dependencies.KIND_GEOMETRY_LAYER),
+        ])
+        assert resolver.loads_nothing() == []
+        report = resolver.report()
+        assert report.missing == ["scene/layers/gone.usda"]
+        assert report.missing_required == ["scene/layers/gone.usda"] and report.partial is True

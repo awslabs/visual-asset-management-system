@@ -308,18 +308,21 @@ def _package_reference_target(rel):
     return "" if target == ".." or target.startswith("../") else target
 
 
-def apply_usd_verification(report, check, local_root, skipped=()):
+def apply_usd_verification(report, check, local_root, skipped=(), loads_nothing=()):
     """Replace the report's missing list with the unresolved paths of Blender's own dependency check of
     the composed stage (renderScene's `usdDependencies`), which also sees what the per-layer walk cannot
     (an asset path assembled by composition). A path outside the local root was refused, not missing, and
-    one the walk skipped for a limit is in the asset; neither is listed. A file the walk fetched is never
-    listed as missing: when the composed stage still does not load it (a `.usdz` package's reference to a
-    file outside the package, which OpenUSD anchors inside the package) it is listed under `notComposed`.
-    A package-relative path is reported as the asset file the walk looked for. Without a check the report
-    is kept."""
+    one the walk skipped for a limit is in the asset; neither is listed. A path the walk named only as one
+    that loads nothing (`loads_nothing`: a layer or prim metadata asset path such as `customLayerData`,
+    or a renderer's own MDL module) removes nothing from the scene when absent and is not listed either,
+    the rule the walk's own report and the 3D thumbnail's incomplete preview apply. A file the walk
+    fetched is never listed as missing: when the composed stage still does not load it (a `.usdz`
+    package's reference to a file outside the package, which OpenUSD anchors inside the package) it is
+    listed under `notComposed`. A package-relative path is reported as the asset file the walk looked for.
+    Without a check the report is kept."""
     if not isinstance(check, dict) or not isinstance(check.get("unresolved"), list):
         return report
-    skipped = set(skipped)
+    skipped = set(skipped) | set(loads_nothing)
     fetched = {entry.get("rel") for entry in report.get("fetched") or [] if isinstance(entry, dict)}
     missing = []
     not_composed = []
@@ -695,7 +698,8 @@ def lambda_handler(event, context):
         }
         if report is not None:
             manifest[DEPENDENCY_REPORT_KEY] = apply_usd_verification(
-                report.to_dict(), (facts or {}).get("usdDependencies"), local_root, resolver.skipped)
+                report.to_dict(), (facts or {}).get("usdDependencies"), local_root, resolver.skipped,
+                resolver.loads_nothing())
             # `warnings` is the manifest's (and the returned state's) list.
             warnings.extend(usd_verification_warnings(manifest[DEPENDENCY_REPORT_KEY]))
         write_analysis_manifest(manifest_bucket, manifest_key, manifest)

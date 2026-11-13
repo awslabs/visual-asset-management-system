@@ -1133,6 +1133,9 @@ class DependencyResolver:
                 node.required = True
                 if node.state == _MISSING:
                     self.missing_required.append(relative)
+            # A file named both as metadata and by an arc that loads it (a sublayer, say) loads.
+            if node is not None and node.kind in _UNREPORTED_KINDS and kind not in _UNREPORTED_KINDS:
+                node.kind = kind
             return
         self.visited.add(relative)
         node = _Node(rel=relative, depth=depth, required=required, local_path=target, referrer=referrer,
@@ -1294,6 +1297,13 @@ class DependencyResolver:
             partial=bool(self.missing_required) or self.rejected_required or skipped_required,
             late_arrival_retry=self.late_arrival_retry,
         )
+
+    def loads_nothing(self) -> List[str]:
+        """The root-relative paths the walk named only as references that load nothing when present (a
+        USD layer or prim metadata asset path, a renderer's own MDL module), in walk order. A caller that
+        checks the scene another way (OpenUSD's unresolved asset paths) leaves these out of its missing
+        list, as ``report`` does."""
+        return [rel for rel in self.order if self.nodes[rel].kind in _UNREPORTED_KINDS]
 
     def thumbnail_report(self) -> FetchReport:
         report = FetchReport()

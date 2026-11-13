@@ -25,6 +25,7 @@ from botocore.exceptions import ClientError
 from blenderTestSupport import FakeContext, FakeS3, load_handler
 from test_blender_handler_contract import (AUX_BUCKET, ASSET_BUCKET, MANIFEST_KEY, PREWRITTEN_MANIFEST, FakeBlender,
                                            _argument, _event)
+from test_blender_render_scene_dispatch import exec_named_nodes
 
 PRIMARY = "xid/test/pump.glb"
 
@@ -560,3 +561,92 @@ def test_a_fetch_fault_is_a_warning_and_the_report_shows_what_was_fetched(monkey
                                                 prepare=_broken)
     assert len(blender.calls) == 1 and result["renderBranch"] == "BLENDER"
     assert manifest["dependencyReport"]["fetched"] == [] and manifest["dependencyReport"]["predictedBytes"] == 1
+
+
+# --- OpenUSD's unresolved paths and the asset paths that load nothing ------------------------------
+#
+# Real USD layers through usd-core: the walk reads them with pxr, and the Blender stand-in reports what
+# renderScene's usd_dependency_check reports in the image, OpenUSD's ComputeAllDependencies over the
+# files the walk fetched. A layer or prim metadata asset path (customLayerData, an assetInfo
+# identifier) loads nothing, so its absence leaves the scene whole; a sublayer or a texture does not.
+
+_USD_GEOMETRY = """#usda 1.0
+def Cube "Box"
+{
+    double size = 1
+}
+"""
+
+
+def _usd_root(custom_source="", info_identifier="", sublayer="./layers/geometry.usda", texture=""):
+    header = []
+    if custom_source:
+        header.append(f"    customLayerData = {{\n        asset sourceFile = @{custom_source}@\n    }}")
+    header.append(f"    subLayers = [@{sublayer}@]")
+    info = (f' (\n    assetInfo = {{\n        asset identifier = @{info_identifier}@\n    }}\n)'
+            if info_identifier else "")
+    body = f'    asset inputs:file = @{texture}@\n' if texture else ""
+    return "#usda 1.0\n(\n" + "\n".join(header) + "\n)\n\n" + f'def Xform "World"{info}\n{{\n{body}}}\n'
+
+
+class _OpenUsdCheckBlender(FakeBlender):
+    """Blender's dependency check of the composed stage, run with the real pxr over the local input."""
+
+    def __call__(self, command, **kwargs):
+        completed = super().__call__(command, **kwargs)
+        scene = exec_named_nodes(["MAX_UNRESOLVED_REPORTED", "usd_dependency_check"], {})
+        path = os.path.join(_argument(command, "--output-dir"), "scene_facts.json")
+        facts = json.load(open(path))
+        facts["usdDependencies"] = scene["usd_dependency_check"](_argument(command, "--input"))
+        with open(path, "w") as handle:
+            json.dump(facts, handle)
+        return completed
+
+
+def _usd_report(monkeypatch, tmp_path, root_text, extra_objects=None):
+    objects = {"xid1234/scene/root.usda": root_text.encode("utf-8"),
+               "xid1234/scene/layers/geometry.usda": _USD_GEOMETRY.encode("utf-8")}
+    objects.update(extra_objects or {})
+    _r, _fake, _b, manifest, _h = _run(monkeypatch, tmp_path, "xid1234/scene/root.usda", objects,
+                                       blender=_OpenUsdCheckBlender())
+    return manifest["dependencyReport"]
+
+
+@pytest.mark.unit
+class TestOpenUsdPathsThatLoadNothing:
+    @pytest.fixture(autouse=True)
+    def _pxr(self):
+        pytest.importorskip("pxr", reason="the USD walk and OpenUSD's check read layers with usd-core")
+
+    def test_a_missing_usd_in_custom_layer_data_is_not_missing(self, monkeypatch, tmp_path):
+        report = _usd_report(monkeypatch, tmp_path, _usd_root(custom_source="./source/scene_source.usd"))
+        assert report["verifiedBy"] == "openusd"
+        assert report["missing"] == [] and report["missingRequired"] == []
+        assert report["partial"] is False
+
+    def test_a_missing_ma_in_custom_layer_data_and_an_asset_info_identifier_is_not_missing(
+            self, monkeypatch, tmp_path):
+        report = _usd_report(monkeypatch, tmp_path, _usd_root(
+            custom_source="./source/scene_source.ma", info_identifier="./published/scene_published.ma"))
+        assert report["verifiedBy"] == "openusd"
+        assert report["missing"] == [] and report["partial"] is False
+
+    def test_a_missing_sublayer_is_still_missing_and_required(self, monkeypatch, tmp_path):
+        report = _usd_report(monkeypatch, tmp_path, _usd_root(
+            custom_source="./source/scene_source.usd", sublayer="./layers/gone.usda"))
+        assert report["missing"] == ["scene/layers/gone.usda"]
+        assert report["missingRequired"] == ["scene/layers/gone.usda"]
+        assert report["partial"] is True
+
+    def test_a_missing_texture_is_still_missing_and_not_required(self, monkeypatch, tmp_path):
+        report = _usd_report(monkeypatch, tmp_path, _usd_root(
+            custom_source="./source/scene_source.usd", texture="./textures/gone.png"))
+        assert report["missing"] == ["scene/textures/gone.png"]
+        assert report["missingRequired"] == [] and report["partial"] is False
+
+    def test_a_file_named_as_metadata_and_as_a_sublayer_is_missing(self, monkeypatch, tmp_path):
+        """The same path in customLayerData and in subLayers loads, so its absence is reported."""
+        report = _usd_report(monkeypatch, tmp_path, _usd_root(
+            custom_source="./layers/gone.usda", sublayer="./layers/gone.usda"))
+        assert report["missing"] == ["scene/layers/gone.usda"]
+        assert report["missingRequired"] == ["scene/layers/gone.usda"] and report["partial"] is True
