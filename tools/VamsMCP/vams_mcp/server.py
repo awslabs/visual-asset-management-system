@@ -424,12 +424,11 @@ def _tag_body(names: Dict[str, Any], database_id: Optional[str]) -> Dict[str, An
 def vams_status() -> results.Status:
     """Check the VAMS connection: call this first, or when a tool returns NotAuthenticated.
 
-    Answers without any API request and also when nobody is signed in. Returns `authenticated`,
-    `profile`, `apiUrl` (the deployment), `userId` (who the tools act as), `featureSwitches` (what the
-    deployment enabled at the last sign-in), `gates` (whether create/update and delete tools and
-    which add-ons are registered), `mcpVersion` and `cliVersion`. When `authenticated` is false,
-    `reason` says why and `user_action` is the step to ask the user to take. `tokenExpired` true with
-    a `note`: the next call renews the sign-in or answers NotAuthenticated."""
+    Makes no API request and works signed out. Returns `authenticated`, `profile`, `apiUrl`, `userId`
+    (who the tools act as), `featureSwitches` (at the last sign-in), `gates` (which tool tiers and
+    add-ons are registered), `mcpVersion` and `cliVersion`. When `authenticated` is false, `reason`
+    says why and `user_action` is the step to ask the user to take. `tokenExpired` true with a
+    `note`: the next call renews the sign-in or answers NotAuthenticated."""
     status = describe_profile(CONFIG)
     client = _current_client()
     refused = _refused_sign_in() if client is not None else None
@@ -508,7 +507,7 @@ def list_databases(
     """Use to find databases (most asset tools need a databaseId). Rows: databaseId, description,
     assetCount, defaultBucketId. include_deleted adds deleted ones.
 
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`.
     Never report a count, or conclude something does not exist, from a truncated
     result."""
     return CLIENT.paginate(
@@ -533,7 +532,7 @@ def list_buckets(
 ) -> Dict[str, Any]:
     """Use before create_database to pick a default_bucket_id. Rows carry the bucket id, name,
     `bucketRegion` and, for another account's bucket, `bucketAccountId`.
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_buckets(params=params),
         max_items=max_items,
@@ -553,8 +552,8 @@ def list_assets(
     by name use search_assets. Rows: databaseId, assetId, assetName, description, tags, status.
     include_archived adds archived assets.
 
-    BOUNDED: `truncated` means rows were
-    not seen; pass `NextToken` as `starting_token` to continue. Do not report an asset count, or
+    BOUNDED: `truncated`: pass
+    `NextToken` as `starting_token`. Do not report an asset count, or
     conclude an asset does not exist, from a truncated result."""
     endpoint = API_DATABASE_ASSETS.format(databaseId=database_id) if database_id else API_ASSETS
 
@@ -587,8 +586,8 @@ def list_asset_files(
     """Use to see an asset's files and folders. Rows: fileName, relativePath (the file_key other tools
     take), isFolder, size, versionId, isArchived.
 
-    BOUNDED: `truncated` means files were not seen; pass
-    `NextToken` as `starting_token` to continue. Never report a file count, or answer "file X is not
+    BOUNDED: `truncated`: pass
+    `NextToken` as `starting_token`. Never report a file count, or answer "file X is not
     in this asset", from a truncated result; use search_files() to test for one file.
     include_archived also finds an ARCHIVED asset, whose files are all archived."""
     def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -634,7 +633,7 @@ def get_asset_metadata(
     include_archived: bool = False,
 ) -> results.MetadataPage:
     """Use to read an asset's metadata (rows: metadataKey, metadataValue, metadataValueType).
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`.
     Do not conclude a key is absent from a truncated result. include_archived also
     finds an archived asset."""
     return CLIENT.paginate(
@@ -656,7 +655,7 @@ def get_database_metadata(
     starting_token: Optional[str] = None,
 ) -> results.MetadataPage:
     """Use to read a database's own metadata key/value pairs.
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`.
     Do not conclude a key is absent from a truncated result."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_database_metadata_v2(
@@ -679,7 +678,7 @@ def list_asset_versions(
 ) -> results.VersionPage:
     """Use to see an asset's versions. Rows: Version (the asset_version_id), Comment, DateModified,
     createdBy, isCurrent, fileCount, versionAlias. include_archived adds archived versions.
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`.
     Do not report a version count from a truncated result."""
     def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
         if include_archived:
@@ -716,7 +715,7 @@ def get_asset_history(
 ) -> Dict[str, Any]:
     """Use to see who created, edited, archived or deleted an asset, newest first. A `truncated` result
     is the recent history only: an event missing from it may still have happened.
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_asset_history(database_id, asset_id, params=params),
         max_items=max_items,
@@ -891,15 +890,15 @@ def search_assets(
 
     - query: free text. database_id: one database ("GLOBAL" searches every database).
     - metadata_query: `key:value`, e.g. 'product:Training'. Do NOT write 'MD_.product'.
-    - geo_search: one of `point` ({lat, lon, radiusMeters}), `bbox` ({topLeft, bottomRight}) or
-      `geoJson`, plus an optional `relation` (intersects, within, contains, disjoint).
-    - size / from_offset: one page of hits; page on by advancing from_offset.
-    - sort_field / sort_desc: order by an index field, e.g. "date_asset_version_createdate" for the
-      newest; get_search_fields() lists the names.
+    - geo_search: `point` ({lat, lon, radiusMeters}), `bbox` ({topLeft, bottomRight}) or `geoJson`,
+      plus an optional `relation` (intersects, within, contains, disjoint).
+    - size / from_offset: one page of hits; advance from_offset to page.
+    - sort_field / sort_desc: an index field (get_search_fields() lists them), e.g.
+      "date_asset_version_createdate" for the newest.
 
-    Returns `total`, `returned` and `results` (id, score, source). When `total_is_lower_bound` is
-    true the count is at least `total`: report `total_display` (e.g. "120+"). Without OpenSearch
-    (NOOPENSEARCH) it returns an error; use list_assets there."""
+    Returns `total`, `returned` and `results`. `total_is_lower_bound` true: the count is at least
+    `total`; report `total_display` (e.g. "120+"). Without OpenSearch (NOOPENSEARCH) it returns an
+    error; use list_assets there."""
     _require_search()
     request = _build_search_request(
         ["asset"], query, database_id, metadata_query, size, include_archived, geo_search,
@@ -954,7 +953,7 @@ def list_workflows(
 ) -> Dict[str, Any]:
     """Use to find a workflow to run or inspect, optionally in one database. include_archived adds
     archived workflows (how an archived workflow's id is found to restore it).
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_workflows(
             database_id=database_id, include_archived=include_archived, params=params
@@ -1036,7 +1035,7 @@ def list_tags(
 ) -> Dict[str, Any]:
     """Use to see the tags assets can carry. database: that database's tags only; scope: 'global' or
     'all'.
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`.
     Do not conclude a tag does not exist from a truncated result."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_tags(params=params, database_id=database, scope=scope),
@@ -1055,7 +1054,7 @@ def list_tag_types(
 ) -> Dict[str, Any]:
     """Use to see tag types (tag groups, some required). database: that database's only; scope:
     'global' or 'all'.
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_tag_types(params=params, database_id=database, scope=scope),
         max_items=max_items,
@@ -1073,7 +1072,7 @@ def list_metadata_schemas(
 ) -> Dict[str, Any]:
     """Use to see the metadata fields a database or entity type defines (entity types: databaseMetadata,
     assetMetadata, fileMetadata, fileAttribute, assetLinkMetadata).
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`.
     Do not conclude a schema is undefined from a truncated result."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_metadata_schemas(
@@ -1098,9 +1097,9 @@ def generate_download_url(
     """Use only when the user asked to download a file: a time-limited presigned download URL for an
     asset file (`downloadUrl`, `expiresIn`; file_key = its relativePath). Non-mutating.
 
-    The URL is a bearer credential: anyone holding it can download the object until it expires, at
-    most `presignedUrlTimeoutSeconds` (24 hours by default) or sooner if the credentials that signed it
-    expire. It lands in the agent transcript and the host's logs, so treat it as disclosed.
+    The URL is a bearer credential: anyone holding it can download the object until it expires (at
+    most `presignedUrlTimeoutSeconds`, 24 hours by default, or sooner if the credentials that signed it
+    expire). It lands in the agent transcript and the host's logs, so treat it as disclosed.
     `presignedUrlNetworkRestrictions` (allowedIpRanges / allowedVpceIds) can limit where it works."""
     return CLIENT.api.download_asset_file(
         database_id, asset_id, file_key=file_key, version_id=version_id
@@ -1117,15 +1116,15 @@ def generate_download_urls_bulk(
     asset_version_alias: Optional[str] = None,
 ) -> results.DownloadUrl:
     """Use only when the user asked to download several files of ONE asset. `file_keys` holds up to 1500
-    entries: a relative path or `{"key": path, "versionId": id}`; `asset_version_id` or
+    entries: a relative path or `{"key": path, "versionId": id}`; `asset_version_id` /
     `asset_version_alias` instead pins EVERY key (not with per-key versionIds). Non-mutating.
 
     Each `files[]` entry has `key`, `success`, and `downloadUrl` + `versionId` or `error`: a missing
-    path is SKIPPED with `success: false` while the call succeeds, so check each entry; the top-level
-    `downloadUrl` is only the FIRST success.
+    path is SKIPPED (`success: false`) while the call succeeds; the top-level `downloadUrl` is only
+    the FIRST success.
 
-    Every URL is a bearer credential as generate_download_url describes, usable for at most
-    `presignedUrlTimeoutSeconds` (24 hours by default) and landing in the agent transcript."""
+    Every URL is a bearer credential as for generate_download_url, usable for at most
+    `presignedUrlTimeoutSeconds` (24 hours by default), and lands in the agent transcript."""
     return CLIENT.api.download_asset_files_bulk(
         database_id,
         asset_id,
@@ -1207,7 +1206,7 @@ def list_pipelines(
 ) -> Dict[str, Any]:
     """Use to find processing pipelines, in one database or (database_id omitted) everywhere, the
     GLOBAL catalog included.
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_pipelines(
             database_id=database_id, include_archived=include_archived, params=params
@@ -1272,7 +1271,7 @@ def list_workflow_triggers(
     """Use to see what launches a workflow automatically and whether each trigger is enabled. Each
     `triggerType` is the trigger KEY ('fileUpload', or 'type#triggerId' for an extra one) that the
     get, set and delete tools take.
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_workflow_triggers(database_id, workflow_id, params=params),
         max_items=max_items,
@@ -1361,22 +1360,21 @@ def list_executions(
 @tool_result
 def get_execution_details(execution_id: str, include_sub_executions: bool = False) -> results.ExecutionDetails:
     """Use when asked why a run failed or what it produced: per-step (`pipelines`) status, error,
-    inputs, outputs, config and `availableLogs` (pass a `logId` to get_execution_logs).
+    inputs, outputs, config and `availableLogs` (a `logId` for get_execution_logs).
 
     It can be PARTIAL: `truncatedCollections` names each cut collection. Check it before reporting a
     count or an absence; read the rest with page_execution_detail_metadata(),
     page_execution_detail_files() or get_execution_results().
 
-    Input metadata: `inputMetadata` (asset/file rows) and `inputDatabaseMetadata` (database
-    rows), each with `metadata` and `attributes`; `expanded` true marks context, not an input file.
-    `metadataSourceDatabases` lists every database read. `renderedConfig` is the PRE-system-tag
-    inline copy (`renderedConfigTruncated` when cut); `renderedConfigLocation` (NOT only on
-    truncation) holds the FULLY substituted body the step read.
+    `inputMetadata` (asset/file rows) and `inputDatabaseMetadata` (database rows) carry `metadata` and
+    `attributes`; `expanded` true marks context, not an input file. `metadataSourceDatabases` lists
+    every database read. `renderedConfig` is the PRE-system-tag copy (`renderedConfigTruncated`);
+    `renderedConfigLocation` (NOT only on truncation) holds the FULLY substituted body.
 
     A SKIPPED execution never ran (`skip` says why). include_sub_executions=True adds each step's
-    `subExecutions` (nested state machines, Batch and Deadline Cloud jobs: status, error,
-    `stages`; `caught` is a handled failure). Partial reads are marked `stagesTruncated`,
-    `historyTruncated`, `subExecutionsTruncated`, `subExecutionWarnings`, "pipelines.subExecutions"."""
+    `subExecutions` (state machines, Batch and Deadline Cloud jobs: status, error, `stages`; `caught`
+    is a handled failure). Partial reads: `stagesTruncated`, `historyTruncated`,
+    `subExecutionsTruncated`, `subExecutionWarnings`, "pipelines.subExecutions"."""
     params = {"includeSubExecutions": "true"} if include_sub_executions else None
     return CLIENT.unwrap_message(CLIENT.api.get_execution_details(execution_id, params=params))
 
@@ -1391,12 +1389,11 @@ def page_execution_detail_metadata(
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Use when get_execution_details' `truncatedCollections` names a metadata collection: reads it in
-    full. `collection`: "input" (the default), "inputDatabase" or "output"; pipeline_id narrows to one
+    full. `collection`: "input" (default), "inputDatabase" or "output"; pipeline_id narrows to one
     step. Rows carry the producing `pipelineId`; input rows `expanded` (context, not an input file);
     output rows targetFilePath, metadataKey, metadataValue and metadataType ("metadata" or
-    "attribute": one key written as both is two rows). `truncated` means the row cap was reached:
-    pass `NextToken` as `starting_token` with the SAME collection and pipeline_id (a mismatch is a
-    400)."""
+    "attribute": one key written as both is two rows). `truncated`: pass `NextToken` as
+    `starting_token` with the SAME collection and pipeline_id (a mismatch is a 400)."""
     if collection not in EXECUTION_DETAIL_METADATA_COLLECTIONS:
         return {
             "error": f"collection must be one of {list(EXECUTION_DETAIL_METADATA_COLLECTIONS)}",
@@ -1432,11 +1429,10 @@ def page_execution_detail_files(
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Use when get_execution_details' `truncatedCollections` names "inputFiles" or "outputs.files":
-    reads that file collection in full. `collection`: "input" (workflow input files, the default) or
+    reads that file collection in full. `collection`: "input" (workflow input files, default) or
     "output" (per-step output files; pipeline_id narrows it to one step). Output rows carry
-    relativeFilePath, fileType, fileSize and s3VersionId; no S3 bucket/key is returned. `truncated`
-    means the row cap was reached: pass `NextToken` as `starting_token` with the SAME collection and
-    pipeline_id (a mismatch is a 400)."""
+    relativeFilePath, fileType, fileSize and s3VersionId; no S3 bucket/key. `truncated`: pass
+    `NextToken` as `starting_token` with the SAME collection and pipeline_id (a mismatch is a 400)."""
     if collection not in EXECUTION_DETAIL_FILE_COLLECTIONS:
         return {
             "error": f"collection must be one of {list(EXECUTION_DETAIL_FILE_COLLECTIONS)}",
@@ -1474,11 +1470,11 @@ def _result_text_sent_bytes(text: str) -> int:
 @tool_result
 def get_execution_results(execution_id: str,
                           starting_token: Optional[str] = None) -> results.ExecutionResults:
-    """Use for "what did the run output" from a pipeline that produces text rather than files. Returns
+    """Use for "what did the run output" from a pipeline that writes text, not files:
     {resultContent, resultContentTruncated, resultRowCount, resultContentBytes, pageCount}, at most
-    5 MiB per call: a `NextToken` means more text remains (pass it as `starting_token`).
-    `resultContentTruncated` true means text was stored cut and cannot be read. A run with no result
-    returns resultContent "", not an error."""
+    5 MiB per call; a `NextToken` means more text remains (pass it as `starting_token`).
+    `resultContentTruncated` true: the text was stored cut. No result: resultContent "", not an
+    error."""
     parts = []
     truncated = False
     row_count = byte_count = pages = sent_bytes = 0
@@ -1542,19 +1538,18 @@ def get_execution_logs(
     """Use to read a run's logs after get_execution_details. Administrative route: a role without it
     gets a 403, not empty output.
 
-    mode="full" (default) reads live CloudWatch; "truncated" reads the stored copy (often empty).
+    mode="full" (default) reads live CloudWatch; "truncated" the stored copy (often empty).
     pipeline_execution_id scopes to one step; log_id (an `availableLogs` logId) reads ONE source and
     stage_name one stage, both in full mode with pipeline_execution_id only (an unknown log_id: 404).
 
     Full mode returns at most `limit` events (default 100, cap 1000) and a `nextToken` when more
-    remain; a failure is often past the first page. Pass `nextToken` back with the SAME mode,
-    pipeline_execution_id, limit and filter_pattern; it continues only the `events` list. "The logs
-    show no error" from a page that returned a token is a wrong conclusion. `filter_pattern` is a
+    remain: pass it back with the SAME mode, pipeline_execution_id, limit and filter_pattern; it
+    continues only the `events` list. "The
+    logs show no error" from a page that returned a token is a wrong conclusion. `filter_pattern` is a
     literal substring; `start_time` / `end_time` are epoch MILLISECONDS.
 
-    The first call without a step also returns `sfnHistoryEvents`. With a step, `logSources` gives
-    each source's `status`; "error" names its cause in `warnings`, and "unscoped" and empty means
-    unresolved, not silent."""
+    Without a step the first call also returns `sfnHistoryEvents`; with one, `logSources` gives each
+    source's `status` ("error": cause in `warnings`; "unscoped" and empty: unresolved, not silent)."""
     params: Dict[str, Any] = {"mode": mode}
     if pipeline_execution_id:
         params["pipelineExecutionId"] = pipeline_execution_id
@@ -1594,10 +1589,9 @@ def list_asset_comments(
     include_archived: bool = False,
 ) -> Dict[str, Any]:
     """Use to read the comments on an asset (every version). Rows: `assetVersionId:commentId`,
-    commentBody, commentOwnerUsername, dateCreated (sort on it). include_archived also finds an
-    archived asset. This route CANNOT be paged (the token is discarded): `truncated` means the result
-    reached max_items (else page_size, else 10000) and the count is a floor. Deleted comments are never
-    returned (showDeleted is ignored, so not offered)."""
+    commentBody, commentOwnerUsername, dateCreated. include_archived also finds an archived asset.
+    This route CANNOT be paged: `truncated` means the result reached max_items (else page_size, else
+    10000) and the count is a floor. Deleted comments are never returned (showDeleted is ignored)."""
     return _bounded_message_list(
         CLIENT.api.list_asset_comments(
             asset_id, max_items=max_items, page_size=page_size, show_archived=include_archived
@@ -1646,7 +1640,7 @@ def list_subscriptions(
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Use to see e-mail event subscriptions (eventName, entityName, entityId, subscribers).
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`.
     For one asset and user use check_subscription()."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_subscriptions(
@@ -1693,7 +1687,7 @@ def list_api_keys(
 ) -> Dict[str, Any]:
     """Use to audit every user's API keys (admin scope). Key INVENTORY only: apiKeyId, apiKeyName,
     userId, expiry, enabled.
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`.
     Never report a count from a truncated result."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_api_keys(
@@ -1711,7 +1705,7 @@ def list_user_api_keys(
 ) -> Dict[str, Any]:
     """Use to list the signed-in user's own API keys. Other users' keys are never included, so an empty
     result says nothing about whether they exist.
-    BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
+    BOUNDED: `truncated`: pass `NextToken` as `starting_token`.
     Never report a count from a truncated result."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_user_api_keys(
@@ -1997,14 +1991,11 @@ if CONFIG.enable_writes:
     @tool_result
     def create_pipeline(database_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Use to create a pipeline. `body` is the full definition in the API's shape (pipelineId,
-        pipelineName, executionConfig, systemConfig); copy an existing one from get_pipeline() first.
+        pipelineName, executionConfig, systemConfig); copy one from get_pipeline() first.
         systemConfig.metadataInputs is a boolean map of exactly six keys: assetMetadata, fileMetadata,
         fileAttributes, databaseMetadata (default true), assetFileMetadata and metadataSchema (default
-        false).
-
-        A successful save can still carry a `warnings` array (e.g. a requireTemplate pipeline in an
-        auto-triggered workflow with no default template). The pipeline saved; relay the warnings rather
-        than reporting a clean success."""
+        false). A save can still carry `warnings` (e.g. a requireTemplate pipeline in an auto-triggered
+        workflow with no default template): it saved; relay them rather than a clean success."""
         return _unwrap_message_with_warnings(CLIENT.api.create_pipeline(database_id, body))
 
     @mcp.tool(title="Update pipeline", annotations=WRITE)
@@ -2021,13 +2012,12 @@ if CONFIG.enable_writes:
     def create_pipeline_template(
         database_id: str, pipeline_id: str, body: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Use to add a configuration template to a pipeline. `body` takes templateId, templateName,
+        """Use to add a configuration template to a pipeline. `body`: templateId, templateName,
         configFormat, configBody, and optionally inputInstructions, tagSchema and overrides (at most 65536
-        bytes; may narrow metadataInputs (assetMetadata, fileMetadata, fileAttributes, databaseMetadata,
-        assetFileMetadata, metadataSchema)). A `tagSchema`
-        entry carries only tagKey, type, required, default, label, description and enumValues.
-        System pipelines (isSystem) are read-only except enabled and the templates' configBody,
-        tagSchema and webFormJson (400 otherwise)."""
+        bytes; may narrow metadataInputs: assetMetadata, fileMetadata, fileAttributes, databaseMetadata,
+        assetFileMetadata, metadataSchema). A `tagSchema` entry carries only tagKey, type, required,
+        default, label, description and enumValues. System pipelines (isSystem) are read-only except
+        enabled and the templates' configBody, tagSchema and webFormJson (400 otherwise)."""
         return CLIENT.unwrap_message(CLIENT.api.create_pipeline_template(database_id, pipeline_id, body))
 
     @mcp.tool(title="Update pipeline template", annotations=WRITE)
@@ -2094,11 +2084,11 @@ if CONFIG.enable_writes:
         """Use to run a workflow on input files. Returns the new executionId. This starts real compute.
         Confirm with the user before calling it.
 
-        `body` takes inputFiles (each databaseId, assetId, relativeFileKey ("/" = the whole asset) and
-        optional versionId), outputAssetId + outputDatabaseId (REQUIRED when inputs span more than one
-        asset), and per-pipeline parameters keyed by pipelineId. Optional metadata sources:
-        metadataSourceAssets [{"databaseId", "assetId"}], and metadataSourceDatabaseId for a run with NO
-        input files ("GLOBAL" is REJECTED).
+        `body`: inputFiles (each databaseId, assetId, relativeFileKey ("/" = the whole asset), optional
+        versionId), outputAssetId + outputDatabaseId (REQUIRED when inputs span more than one asset), and
+        per-pipeline parameters keyed by pipelineId. Metadata sources: metadataSourceAssets
+        [{"databaseId", "assetId"}], or metadataSourceDatabaseId for a run with NO input files ("GLOBAL"
+        is REJECTED).
 
         Relay the response's `warnings`: the run started, but its inputs are not exactly what was named.
         A concurrencyRestriction (perAsset, perInputFile, perInputFileVersion) refuses a launch on a held
@@ -2115,8 +2105,8 @@ if CONFIG.enable_writes:
 
         execution_group_id ASSIGNS the new run's group; it does not select what to re-run. There is no
         re-run-the-whole-group operation: call this once per execution id. A file the original launch
-        pinned is read at that version again, every other file at its current version (executions from
-        before 2.7.0 use current versions). Relay the response's `warnings`."""
+        pinned is read at that version again, every other file at its current version (before 2.7.0:
+        current versions). Relay the response's `warnings`."""
         return CLIENT.unwrap_message(CLIENT.api.rerun_execution(execution_id, execution_group_id=execution_group_id))
 
     @mcp.tool(title="Abort execution", annotations=COMPUTE)
@@ -2126,10 +2116,10 @@ if CONFIG.enable_writes:
         NOT reversible. Keep it out of `autoApprove` alongside execute_workflow and rerun_execution;
         group_id fans out to every active execution of the group, so confirm a group abort first.
 
-        When something could not be stopped the answer carries `warnings` and `notAbortable` (one
-        {resourceType, label, stageName, locator} per sub-process; in a group abort each carries the
-        member's `executionId`). The execution still reads ABORTED, so either array non-empty means
-        compute is still running: do NOT conclude that everything stopped."""
+        What could not be stopped comes back in `warnings` and `notAbortable` (one {resourceType, label,
+        stageName, locator} per sub-process; in a group abort each carries the member's `executionId`).
+        The execution still reads ABORTED, so either array non-empty means compute is still running: do
+        NOT conclude that everything stopped."""
         return _unwrap_message_with_warnings(
             CLIENT.api.abort_execution(execution_id, group_id=group_id), siblings=("warnings", "notAbortable"))
 
