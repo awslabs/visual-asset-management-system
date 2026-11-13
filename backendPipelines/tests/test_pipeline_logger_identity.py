@@ -8,10 +8,11 @@ is only a fallback and nothing shared is importable from a per-pipeline asset. A
 bearer credential: whoever holds it can complete or fail the parent workflow's task. It travels
 through these handlers under several spellings -- the workflow body's `TaskToken`, the nested-invoke
 payload's `sfnExternalTaskToken`, the state machine input's `externalSfnTaskToken`, and the Batch
-container environment's `TASK_TOKEN` -- and every handler logs the event it received. The masker
-therefore redacts by key, walks lists, treats a Batch `{"name": <spelling>, "value": ...}`
-environment pair as a keyed value, and scrubs the token out of plain strings (a rendered dict, or
-the token on its own) so a message that already carries the event as text is covered too.
+container environment's `TASK_TOKEN` (`SFN_TASK_TOKEN` in the Isaac Lab job) -- and every handler logs
+the event it received. The masker therefore redacts by key, walks lists, treats a Batch
+`{"name": <spelling>, "value": ...}` environment pair as a keyed value, and scrubs the token out of
+plain strings (a rendered dict, or the token on its own) so a message that already carries the event
+as text is covered too.
 
 Byte identity across the copies is asserted first, so a fix applied to one pipeline's logger and not
 propagated fails here rather than surfacing as a token in one pipeline's CloudWatch stream. The
@@ -53,6 +54,7 @@ TOKEN_SPELLINGS = (
     "taskToken",
     "TaskToken",
     "TASK_TOKEN",
+    "SFN_TASK_TOKEN",
 )
 
 # Deliberately shorter than any real task token, so these assertions hold through the key-based
