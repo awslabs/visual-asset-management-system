@@ -4,7 +4,8 @@
 """POST /ingest-asset forwards each stage to uploadFile on a route uploadFile dispatches.
 
 ingest-asset invokes the uploadFile Lambda with an API Gateway-shaped event. uploadFile picks the
-operation by matching ``requestContext.http.path`` against the master ApiRoute constants, so the
+operation by matching ``requestContext.http.path`` against the ApiRoute constants in
+``common/apiRoutes.py``, so the
 forwarded path must be the real route with its parameters filled in: ``/uploads`` to initialize and
 ``/uploads/{uploadId}/complete`` to complete. These tests hand the event ingest-asset builds to the
 real uploadFile ``lambda_handler``, with only the work after the dispatch and the checks replaced,
