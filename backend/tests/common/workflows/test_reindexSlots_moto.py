@@ -96,6 +96,27 @@ class TestTheTerminalReleaseFreesTheSlot:
             workflow_execution_id="E-run", workflow_database_id="GLOBAL", workflow_id="system-genai-metadata")
         assert released == 1 and "Item" not in locks.get_item(Key={"lockKey": slot})
 
+    def test_a_second_terminal_writer_releases_nothing_and_never_frees_the_next_holders_slot(self, ddb):
+        """The end-state step and the error handler can both run for one execution (one finishes
+        it, the other loses the terminal guard), and both release. The first frees the slot; the
+        second deletes nothing, also once another launch has claimed the freed slot, since every
+        delete is conditional on the holder."""
+        locks = _lock_table(ddb)
+        _workflow_table(ddb)
+        _inputs_table(ddb)
+
+        def release(execution_id):
+            return el.release_locks_for_execution(
+                ddb, locks_table_name="t-locks", workflow_table_name="t-workflows",
+                inputs_table_name="t-inputs", workflow_execution_id=execution_id,
+                workflow_database_id="GLOBAL", workflow_id="system-genai-metadata")
+
+        slot = el.acquire_reindex_slot(locks, _keys(1), "E-run", TTL, now=NOW)
+        assert release("E-run") == 1
+        assert el.acquire_reindex_slot(locks, _keys(1), "E-next", TTL, now=NOW) == slot
+        assert release("E-run") == 0
+        assert _held(locks) == ["E-next"]
+
 
 @pytest.mark.unit
 class TestALostHolderIsReclaimed:
