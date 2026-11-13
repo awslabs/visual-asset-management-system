@@ -46,7 +46,9 @@ export const SubscriptionListDefinition = new ListDefinition({
                 return (
                     <>
                         <Link
-                            href={`#/databases/${props.item.databaseId}/assets/${props.item.entityId}`}
+                            href={`#/databases/${props.item.databaseId}/assets/${encodeURIComponent(
+                                props.item.entityId
+                            )}`}
                         >
                             {props.children}
                         </Link>
