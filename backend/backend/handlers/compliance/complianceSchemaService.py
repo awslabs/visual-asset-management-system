@@ -34,7 +34,6 @@ from common.workflows import pipelineRecords as pr
 from common.compliance.routeAudit import (
     audit_outcome, created_value, failure_outcome, request_parameters, response_count,
 )
-from common.compliance.scopeChecks import scope_allows
 from customLogging.auditLogging import audit_request, log_action, log_authorization
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
@@ -583,15 +582,13 @@ def creatable_scopes(casbin_enforcer):
     """The scopes the caller may create a schema in: GLOBAL and every database whose
     `complianceSchema` POST passes. The database table is small and is scanned for its ids. A
     soft-deleted database (its id carries `#deleted`) is not a scope, as the database listing
-    leaves it out: a schema cannot be created in it. Each database is a scope check
-    (`scopeChecks`): the listing asks to create in none of them, so a scope the caller may not
-    create in is left out without an authorization record (D198)."""
+    leaves it out: a schema cannot be created in it."""
     candidates = [GLOBAL_DATABASE_ID] + sorted(
         item["databaseId"] for item in _scan_all_items(database_table, ProjectionExpression="databaseId")
         if item.get("databaseId") and item["databaseId"] != GLOBAL_DATABASE_ID
         and DELETED_DATABASE_MARKER not in item["databaseId"])
     return [database_id for database_id in candidates
-            if scope_allows(casbin_enforcer, _schema_object("", database_id), "POST")]
+            if casbin_enforcer.enforce(_schema_object("", database_id), "POST")]
 
 
 def list_schemas(event, database_id_filter=None):

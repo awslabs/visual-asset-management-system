@@ -256,8 +256,10 @@ class TestAuthorization:
     def test_create_enforces_the_cascade_object_and_the_request_database(self):
         _, mocks = _run(rest_event("POST", LIST_PATH, body=CREATE_NOW_BODY))
         calls = [c.args for c in mocks["enforcer"].enforce.call_args_list]
-        # The two checks on the live id and on the parent's stored id, each recorded when refused.
-        assert len(calls) == 4
+        # The two checks on the live id and on the parent's stored id, then the caller's reach: an
+        # evaluation POST per database.
+        assert len(calls) == 5
+        assert calls[4] == (EVALUATION_OBJECT, "POST")
         cascade_object, cascade_action = calls[0]
         assert cascade_object["object__type"] == "complianceCascade"
         assert cascade_object["cascadeId"] == _invoked_cascade_id(mocks["invoke"])
@@ -266,10 +268,6 @@ class TestAuthorization:
         assert calls[1] == (EVALUATION_OBJECT, "POST")
         assert calls[2] == (dict(cascade_object, databaseId=f"{DB}#deleted"), "POST")
         assert calls[3] == stored_id_checks(EVALUATION_OBJECT, "POST")[1]
-        # Then the caller's reach: an evaluation POST per database, a scope check made on the
-        # engine without an authorization record (D198).
-        engine_calls = [c.args for c in mocks["enforcer"].service_object.enforce.call_args_list]
-        assert (EVALUATION_OBJECT, "POST") in engine_calls
 
     @pytest.mark.parametrize("method,path,body,action", [
         ("POST", APPROVE_PATH, {}, "POST"), ("POST", REJECT_PATH, {}, "POST"),

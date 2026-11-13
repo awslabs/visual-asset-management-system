@@ -1,22 +1,19 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A check that decides which databases a compliance request covers writes no denial record (D198).
+"""A compliance request that works across databases records a denial for each database the caller
+may not act on, as the core listings do.
 
-Approving a cascade (or creating one that starts at once) records the approver's reach: every
-database the approver may evaluate. The reach was decided with `CasbinEnforcer.enforce`, which
-writes one authorization record per denial, so a compliance administrator of one database who
-approved a cascade inside it wrote one `complianceEvaluation POST` denial for every other database
-of the deployment (46 on a test deployment), though the request touched none of them. A sweep of a
-schema bound in many databases, the audit trail listed across databases and the schema listing's
-create scopes asked every database the same way.
-
-These are scope checks (`common/compliance/scopeChecks.py`): the same decision on the engine, deny
-by default, with no record for a database the caller lacks. A request that is refused on what it
-names (another database's cascade, an audit listing filtered to another database) still writes its
-denial. The tests run the handlers on moto tables built from the CDK definitions with the
-production enforcer of the shipped Compliance Admin and Compliance Read-Only templates, scoped to
-one database of many.
+Core VAMS records every failed authorization check: `CasbinEnforcer.enforce` writes one
+authorization record per denial, and the database listing writes one for each database it leaves
+out. The compliance requests that name no database and decide, database by database, which ones
+they cover log the same way: approving a cascade, or creating one that starts at once (the reach
+recorded for its executor), sweeping a schema bound in many databases, listing the audit trail
+across databases, and the schema listing's create scopes. A request refused on what it names
+(another database's cascade, an audit listing filtered to another database) writes its denial too.
+The tests run the handlers on moto tables built from the CDK definitions with the production
+enforcer of the shipped Compliance Admin and Compliance Read-Only templates, scoped to one database
+of many.
 """
 
 import json
@@ -41,13 +38,13 @@ from handlers.compliance import complianceEvaluateService as evaluate_svc
 from handlers.compliance import complianceEvaluationStore as store
 from handlers.compliance import complianceSchemaService as schema_svc
 
-USER_ID = "scope-check-user"
-OWN = "scope-own-db"
+USER_ID = "denials-user"
+OWN = "denials-own-db"
 # The other databases of the deployment: the caller may act on none of them.
-OTHERS = [f"scope-other-{n:02d}" for n in range(46)]
-PARENT = "scope-parent"
-CHILD = "scope-child"
-SCHEMA = "scope-global-schema"
+OTHERS = [f"denials-other-{n:02d}" for n in range(46)]
+PARENT = "denials-parent"
+CHILD = "denials-child"
+SCHEMA = "denials-global-schema"
 CASCADE_OWN = "5c0e0000-0000-4000-8000-00000000d198"
 CASCADE_OTHER = "5c0e0000-0000-4000-8000-00000000d199"
 SERVICES = (store, cascade_svc, evaluate_svc, audit_svc, schema_svc)
@@ -105,7 +102,7 @@ def _seed(doubles):
     for n, database_id in enumerate([OWN, OWN] + OTHERS[:3]):
         item = build_audit_item(database_id, PARENT, "compliance_check", "admin", {"n": n},
                                 timestamp=f"2026-10-01T00:00:{n:02d}+00:00")
-        item["entryId"] = f"scope-entry-{n}"
+        item["entryId"] = f"denials-entry-{n}"
         doubles["complianceAuditStorage"].put_item(Item=item)
 
 
@@ -134,10 +131,11 @@ class _World:
 
         def log_authorization(_claims, authorized, data=None):
             if not authorized:
-                self.denials.append((data or {}).get("obj", {}))
+                self.denials.append(((data or {}).get("obj", {}), (data or {}).get("action")))
 
         def flush_denials():
-            self.denials.extend(obj for _claims, obj, _action in asset_access._PENDING_DENIALS)
+            self.denials.extend((obj, action)
+                                for _claims, obj, action in asset_access._PENDING_DENIALS)
             asset_access._PENDING_DENIALS.clear()
 
         for module in HANDLERS:
@@ -176,48 +174,49 @@ class _World:
 
     def denied_databases(self):
         """The database ids the request's denial records name."""
-        return {obj.get("databaseId") for obj in self.denials}
-
-    def denied_elsewhere(self):
-        """The denial records that name a database other than the caller's own (or its archive
-        `<databaseId>#deleted`, which the decision on a record of the caller's database asks)."""
-        return [obj for obj in self.denials
-                if obj.get("databaseId") not in (OWN, f"{OWN}#deleted")]
+        return {obj.get("databaseId") for obj, _action in self.denials}
 
 
-COMPLIANCE_ADMIN = ("compliance-admin.json", "scope-cadmin")
-COMPLIANCE_READONLY = ("compliance-readonly.json", "scope-cro")
+COMPLIANCE_ADMIN = ("compliance-admin.json", "denials-cadmin")
+COMPLIANCE_READONLY = ("compliance-readonly.json", "denials-cro")
+
+
+def _denied_ids(denials, object_type, action):
+    """The database ids of the denial records on `object_type` / `action`, one entry per record."""
+    return [obj.get("databaseId") for obj, denied_action in denials
+            if obj.get("object__type") == object_type and denied_action == action]
 
 
 @pytest.mark.unit
-class TestACascadeStartIsScopedWithoutDenials:
+class TestACascadeStartRecordsADenialPerDatabase:
 
-    def test_approving_a_cascade_in_the_callers_database_writes_no_denial_for_the_others(self):
+    def test_approving_a_cascade_records_a_denial_for_each_database_the_approver_may_not_evaluate(
+            self):
         with _World(*COMPLIANCE_ADMIN) as world:
             response = world.call(cascade_svc, "POST", f"/compliance/cascades/{CASCADE_OWN}/approve",
                                   {"cascadeId": CASCADE_OWN}, body={})
             row = world.doubles["complianceCascadeStorage"].get_item(
                 Key={"cascadeId": CASCADE_OWN})["Item"]
-            elsewhere = world.denied_elsewhere()
             denials = list(world.denials)
         assert response["statusCode"] == 202
-        # The decision is unchanged: the reach is the caller's database only.
         assert json.loads(row["authorizedDatabaseIds"]) == [OWN]
-        assert elsewhere == [], f"{len(elsewhere)} denial records for databases never named"
-        # What is left is the decision on the cascade's parent itself (its stored id).
-        assert len(denials) <= 1
+        denied = _denied_ids(denials, "complianceEvaluation", "POST")
+        assert sorted(database_id for database_id in denied if database_id in OTHERS) == OTHERS
+        assert len(denied) == len(set(denied)), "one denial record per database"
+        assert OWN not in denied
 
-    def test_a_cascade_started_at_once_writes_no_denial_for_the_other_databases(self):
+    def test_a_cascade_started_at_once_records_a_denial_for_each_database_out_of_reach(self):
         with _World(*COMPLIANCE_ADMIN) as world:
             response = world.call(cascade_svc, "POST", "/compliance/cascades", body={
                 "databaseId": OWN, "assetId": PARENT, "requireApproval": False})
             cascade_id = body_of(response)["cascadeId"]
             row = world.doubles["complianceCascadeStorage"].get_item(
                 Key={"cascadeId": cascade_id})["Item"]
-            elsewhere = world.denied_elsewhere()
+            denials = list(world.denials)
         assert response["statusCode"] == 202
         assert json.loads(row["authorizedDatabaseIds"]) == [OWN]
-        assert elsewhere == []
+        denied = _denied_ids(denials, "complianceEvaluation", "POST")
+        assert sorted(database_id for database_id in denied if database_id in OTHERS) == OTHERS
 
     def test_approving_another_databases_cascade_is_refused_and_recorded(self):
         with _World(*COMPLIANCE_ADMIN) as world:
@@ -229,39 +228,39 @@ class TestACascadeStartIsScopedWithoutDenials:
                 Key={"cascadeId": CASCADE_OTHER})["Item"]
         assert response["statusCode"] == 403
         assert row["state"] == "pending_approval"
-        # The refused action is on the database the cascade names, and only that one is recorded.
         assert named == {OTHERS[0]}
 
 
 @pytest.mark.unit
-class TestASweepIsScopedWithoutDenials:
+class TestASweepRecordsADenialPerDatabase:
 
-    def test_a_global_schema_sweep_writes_no_denial_for_the_databases_it_skips(self):
+    def test_a_global_schema_sweep_records_a_denial_for_each_bound_database_it_skips(self):
         with _World(*COMPLIANCE_ADMIN) as world:
             response = world.call(evaluate_svc, "POST", f"/compliance/sweep/{SCHEMA}",
                                   {"schemaName": SCHEMA}, body={})
-            elsewhere = world.denied_elsewhere()
+            denials = list(world.denials)
         body = body_of(response)
         assert response["statusCode"] == 200
-        # The caller's database is swept (its unrecorded asset registered first); the five bound
-        # assets of other databases are skipped, as before.
         assert sorted((a["databaseId"], a["assetId"]) for a in body["assetsTriggered"]) == [
             (OWN, CHILD), (OWN, PARENT)]
         assert body["skippedNotAuthorized"] == 5
-        # Any record left is on the database the sweep acted on (its archive), none on the others.
-        assert elsewhere == [], sorted({obj.get("databaseId") for obj in elsewhere})
+        denied = _denied_ids(denials, "complianceEvaluation", "POST")
+        assert sorted(database_id for database_id in denied if database_id in OTHERS) == OTHERS
+        assert OWN not in denied
 
 
 @pytest.mark.unit
-class TestTheListingsAcrossDatabasesAreScopedWithoutDenials:
+class TestTheListingsAcrossDatabasesRecordADenialPerDatabase:
 
-    def test_the_audit_trail_across_databases_writes_no_denial_for_the_others(self):
+    def test_the_audit_trail_across_databases_records_a_denial_for_each_other_database(self):
         with _World(*COMPLIANCE_READONLY) as world:
             response = world.call(audit_svc, "GET", "/compliance/audit")
-            elsewhere = world.denied_elsewhere()
+            denials = list(world.denials)
         assert response["statusCode"] == 200
         assert [entry["databaseId"] for entry in body_of(response)["entries"]] == [OWN, OWN]
-        assert elsewhere == [], sorted({obj.get("databaseId") for obj in elsewhere})
+        denied = set(_denied_ids(denials, "complianceEvaluation", "GET"))
+        assert set(OTHERS) <= denied
+        assert OWN not in denied
 
     def test_the_audit_trail_of_another_database_is_refused_and_recorded(self):
         with _World(*COMPLIANCE_READONLY) as world:
@@ -272,12 +271,11 @@ class TestTheListingsAcrossDatabasesAreScopedWithoutDenials:
         assert body_of(response)["entries"] == []
         assert named == {OTHERS[1]}
 
-    def test_the_schema_listings_create_scopes_write_no_denial_per_database(self):
+    def test_the_schema_listings_create_scopes_record_a_denial_for_each_other_database(self):
         with _World(*COMPLIANCE_ADMIN) as world:
             response = world.call(schema_svc, "GET", "/compliance/schemas")
-            elsewhere = world.denied_elsewhere()
+            denials = list(world.denials)
         assert response["statusCode"] == 200
         assert body_of(response)["createScopes"] == [OWN]
-        # The listed GLOBAL schema's own edit and delete flags are decisions on a row the listing
-        # returns; no database the caller lacks is recorded.
-        assert not {obj.get("databaseId") for obj in elsewhere} & set(OTHERS)
+        denied = _denied_ids(denials, "complianceSchema", "POST")
+        assert sorted(database_id for database_id in denied if database_id in OTHERS) == OTHERS

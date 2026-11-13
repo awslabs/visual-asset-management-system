@@ -51,7 +51,6 @@ from common.compliance.assetAccess import (
     ACCESS_ARCHIVED_HIDDEN, ACCESS_VISIBLE, AssetAccess, flush_denials, is_asset_database,
 )
 from common.compliance.knownDatabase import database_not_found
-from common.compliance.scopeChecks import scope_allows
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -250,13 +249,12 @@ def _caller_enforcer():
     return CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
 
 
-def _asset_access(enforcer, presenter=None, record_denials=True):
+def _asset_access(enforcer, presenter=None):
     """The request's asset decisions (`AssetAccess`). An archived row of an earlier, deleted
     database with the same id is not the live database's asset (`presenter`, or a new
-    `databaseRetirement.Presenter`). `record_denials` False for the reach's scope checks only."""
+    `databaseRetirement.Presenter`)."""
     return AssetAccess(store.asset_table, enforcer,
-                       presenter or databaseRetirement.Presenter(store.evaluation_table),
-                       record_denials=record_denials)
+                       presenter or databaseRetirement.Presenter(store.evaluation_table))
 
 
 def _start_reach(database_id, asset_id):
@@ -273,22 +271,16 @@ def _start_reach(database_id, asset_id):
       evaluation POST and the asset GET on its row as stored; their rows read together, 100 a
       BatchGetItem).
     The executor evaluates the descendants in both only and records the others as skipped (not
-    authorized); one discovered after the start is not in `authorizedAssetKeys`.
-
-    The per-database checks over every database are scope checks (`scopeChecks`): a database the
-    caller may not evaluate, or whose assets it may not read, is left out of the reach without an
-    authorization record (D198). The decisions on the descendants themselves record their
-    denials, as before."""
+    authorized); one discovered after the start is not in `authorizedAssetKeys`."""
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    scope = _asset_access(casbin_enforcer, record_denials=False)
+    access = _asset_access(casbin_enforcer)
     # A soft-deleted database (`<databaseId>#deleted`) holds no compliance records to evaluate.
     evaluable = [candidate for candidate in store.all_database_ids()
                  if is_asset_database(candidate)
-                 and scope_allows(casbin_enforcer, _evaluation_object(candidate), "POST")]
-    if scope.decided_per_database():
+                 and casbin_enforcer.enforce(_evaluation_object(candidate), "POST")]
+    if access.decided_per_database():
         return [candidate for candidate in evaluable
-                if scope.database_assets_readable(candidate)], None
-    access = _asset_access(casbin_enforcer)
+                if access.database_assets_readable(candidate)], None
     allowed = set(evaluable)
     descendants = [node for node in store.discover_all_descendants(database_id, asset_id)
                    if node["databaseId"] in allowed]

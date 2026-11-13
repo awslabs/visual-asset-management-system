@@ -110,8 +110,6 @@ from boto3.dynamodb.conditions import Key
 
 # A deleted database's history id, `<databaseId>#deleted` (D168).
 from common.compliance.databaseRetirement import is_deleted_scope
-# The engine's answer without an authorization record per check (`_asset_readable`).
-from common.compliance.scopeChecks import scope_allows
 
 # The partition-key suffix of an archived asset row, as the asset service writes it and the engine
 # reads it (`handlers.authz.ARCHIVED_DATABASE_ID_SUFFIX`; a test pins the two together). Kept here
@@ -355,15 +353,12 @@ class AssetAccess:
     `enforcer` is the caller's `CasbinEnforcer`; without one no asset is visible. `retirements` (a
     `databaseRetirement.Presenter`, or anything with its `deleted_at`) tells an archived row of an
     earlier database with the same id from one of the live database (module docstring); without
-    it every archived row is the live database's. With `record_denials` False the asset checks
-    keep no denial for `flush_denials`: for the checks that decide which databases a request covers
-    (`scopeChecks`), never for a decision on an asset the request names or acts on."""
+    it every archived row is the live database's."""
 
-    def __init__(self, asset_table, enforcer=None, retirements=None, record_denials=True):
+    def __init__(self, asset_table, enforcer=None, retirements=None):
         self._asset_table = asset_table
         self._enforcer = enforcer
         self._retirements = retirements
-        self._record_denials = record_denials
         self._archived_rows: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._single_rows: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
         self._live_rows: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
@@ -612,8 +607,7 @@ class AssetAccess:
     def _asset_readable(self, row: Dict[str, Any]) -> bool:
         """The asset GET on a row as stored, as the asset routes make it, cached by the values of
         the fields the caller's rules read. It runs on the engine itself; a denial is kept for
-        `flush_denials`, which writes the records `CasbinEnforcer.enforce` would, in one batch
-        (unless this `AssetAccess` decides scope only: `record_denials`)."""
+        `flush_denials`, which writes the records `CasbinEnforcer.enforce` would, in one batch."""
         enforcer = self._enforcer
         if enforcer is None:
             return False
@@ -621,8 +615,9 @@ class AssetAccess:
         cache = self._decision_key(obj)
         if cache in self._asset_decisions:
             return self._asset_decisions[cache]
-        allowed = scope_allows(enforcer, obj, ASSET_READ_ACTION)
-        if not allowed and self._record_denials:
+        service = getattr(enforcer, "service_object", None)
+        allowed = service is not None and service.enforce(obj, ASSET_READ_ACTION) is True
+        if not allowed:
             claims = getattr(enforcer, "claims_and_roles", None)
             _PENDING_DENIALS.append((claims if isinstance(claims, dict) else {}, obj,
                                      ASSET_READ_ACTION))

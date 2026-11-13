@@ -46,7 +46,6 @@ from common.validators import validate
 from common.compliance.routeAudit import (
     audit_outcome, created_value, failure_outcome, request_parameters, response_count,
 )
-from common.compliance.scopeChecks import scope_allows
 from customLogging.auditLogging import audit_request, log_action
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
@@ -254,29 +253,15 @@ def _parse_body(event):
 # Authorization helpers
 #######################
 
-def _evaluation_object(database_id, compliance_state=""):
-    """The compliance evaluation object of a database (and, for the quarantine actions, a state)."""
-    return {
-        "object__type": COMPLIANCE_EVALUATION_OBJECT_TYPE,
-        "databaseId": database_id,
-        "complianceState": compliance_state or "",
-    }
-
-
 def _enforce_evaluation(database_id, action, compliance_state=""):
     """Tier-2 check on a compliance evaluation object. Fails closed on an empty token list."""
     if len(claims_and_roles["tokens"]) == 0:
         return False
-    return CasbinEnforcer(claims_and_roles).enforce(
-        _evaluation_object(database_id, compliance_state), action)
-
-
-def _evaluation_in_scope(enforcer, database_id, action):
-    """The evaluation check on a database, as a scope check (`scopeChecks`): a sweep names a
-    schema, not the databases it is bound in, so a database the caller may not evaluate (or whose
-    archive it may not read) is left out without an authorization record (D198). Fails closed
-    without an enforcer."""
-    return scope_allows(enforcer, _evaluation_object(database_id), action)
+    return CasbinEnforcer(claims_and_roles).enforce({
+        "object__type": COMPLIANCE_EVALUATION_OBJECT_TYPE,
+        "databaseId": database_id,
+        "complianceState": compliance_state or "",
+    }, action)
 
 
 def _caller_enforcer():
@@ -284,14 +269,12 @@ def _caller_enforcer():
     return CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
 
 
-def _asset_access(record_denials=True):
+def _asset_access():
     """The request's asset decisions (`AssetAccess`), with the caller's enforcer. An archived row
     of an earlier, deleted database with the same id is not the live database's asset
-    (`databaseRetirement.Presenter.deleted_at`). `record_denials` False for the decisions on a
-    database the request does not act on (a sweep's out-of-scope databases)."""
+    (`databaseRetirement.Presenter.deleted_at`)."""
     return AssetAccess(asset_table, _caller_enforcer(),
-                       databaseRetirement.Presenter(store.evaluation_table),
-                       record_denials=record_denials)
+                       databaseRetirement.Presenter(store.evaluation_table))
 
 
 def _execution_reads():
@@ -354,13 +337,12 @@ def _archived_visible(access, database_id, asset_id):
         cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
 
 
-def _hidden_archived(access, database_id, asset_id, decide=None):
+def _hidden_archived(access, database_id, asset_id):
     """Whether an asset is archived and the caller may not see it. Such an asset is counted
     nowhere in the response of a sweep or of Evaluate All (only the operator log counts it), as the
-    asset listing does not show it to that caller (`AssetAccess.withholds`). `decide` is the
-    evaluation GET on the database's stored id; by default `_enforce_evaluation`."""
+    asset listing does not show it to that caller (`AssetAccess.withholds`)."""
     return access.withholds(
-        database_id, asset_id, decide or (lambda stored_id: _enforce_evaluation(stored_id, "GET")),
+        database_id, asset_id, lambda stored_id: _enforce_evaluation(stored_id, "GET"),
         cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
 
 
@@ -491,10 +473,6 @@ def sweep_schema(event, schema_name, starting_token=None):
         return general_error(body={"message": "Schema not found"}, event=event)
 
     # The evaluation object depends only on the database, so one verdict serves every asset in it.
-    # A sweep names a schema, not the databases it is bound in: whether the caller may evaluate in
-    # each is a scope check, and a database it may not evaluate is skipped without an authorization
-    # record (D198).
-    scope_enforcer = _caller_enforcer()
     database_allowed = {}
     # A database binding governs every asset of the database: an asset it does not record yet (one
     # whose creation event was not processed) is registered under it first, in each bound database
@@ -502,7 +480,7 @@ def sweep_schema(event, schema_name, starting_token=None):
     registered = 0
     for database_id in store.databases_bound_to_schema(schema_name):
         if database_id not in database_allowed:
-            database_allowed[database_id] = _evaluation_in_scope(scope_enforcer, database_id, "POST")
+            database_allowed[database_id] = _enforce_evaluation(database_id, "POST")
         if database_allowed[database_id]:
             registered += store.register_unrecorded_assets(database_id, schema_name)
 
@@ -520,13 +498,6 @@ def sweep_schema(event, schema_name, starting_token=None):
     beyond_budget = 0
     budget_spent = False
     archived = _asset_access()
-    # On a database the caller may not evaluate, the archived-asset decision only says whether an
-    # asset is counted at all: a scope check as well, made without a record.
-    out_of_scope = _asset_access(record_denials=False)
-
-    def out_of_scope_read(stored_id):
-        return _evaluation_in_scope(scope_enforcer, stored_id, "GET")
-
     # The live rows of a database's candidates are read together, when a decision first needs one
     # (a caller whose asset rules read asset fields only), and only for a database the caller may
     # evaluate.
@@ -539,13 +510,10 @@ def sweep_schema(event, schema_name, starting_token=None):
         # never this caller's to evaluate, so they are not counted as remaining either.
         database_id = asset["databaseId"]
         if database_id not in database_allowed:
-            database_allowed[database_id] = _evaluation_in_scope(scope_enforcer, database_id, "POST")
+            database_allowed[database_id] = _enforce_evaluation(database_id, "POST")
         # An archived asset the caller may not see is counted nowhere in the response, whatever
         # the reason it is not evaluated (only the operator log counts it).
-        if (_hidden_archived(archived, database_id, asset["assetId"])
-                if database_allowed[database_id]
-                else _hidden_archived(out_of_scope, database_id, asset["assetId"],
-                                      out_of_scope_read)):
+        if _hidden_archived(archived, database_id, asset["assetId"]):
             hidden_archived += 1
             continue
         if not database_allowed[database_id]:

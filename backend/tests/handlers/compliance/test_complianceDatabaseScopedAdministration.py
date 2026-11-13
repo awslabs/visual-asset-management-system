@@ -182,16 +182,12 @@ class TestTheSchemaListing:
             {"databaseId": "old-db#deleted"}, {"databaseId": OTHER_DB}]}
         allow_all = MagicMock(name="CasbinEnforcer")
         allow_all.enforce.return_value = True
-        allow_all = mirror_engine(allow_all)
         with patch.object(schema_svc, "database_table", database_table):
             scopes = schema_svc.creatable_scopes(allow_all)
         assert scopes == ["GLOBAL", DB, OTHER_DB]
-        # Each scope is a scope check on the engine (no authorization record per refusal, D198).
-        checked = [call.args[0]["databaseId"]
-                   for call in allow_all.service_object.enforce.call_args_list]
+        checked = [call.args[0]["databaseId"] for call in allow_all.enforce.call_args_list]
         assert DB in checked and OTHER_DB in checked
         assert not any("#deleted" in database_id for database_id in checked)
-        allow_all.enforce.assert_not_called()
 
 
 def _create(database_id, name="new-1"):
