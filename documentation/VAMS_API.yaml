@@ -11180,7 +11180,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, or the name belongs to a deleted database's schema."
+                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, the name belongs to a deleted database's schema, or a new or changed pipeline rule uses a system pipeline or workflow (a record with `isSystem`, such as the SYSTEM GenAI metadata pipeline): `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `ruleName`. A caller who may not run that rule's workflow gets the 403 instead."
                     content:
                         application/json:
                             schema:
@@ -11267,7 +11267,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: Invalid parameters or schema body, the schema does not exist, the scoping database does not exist, or the schema is a system schema.
+                    description: "Invalid parameters or schema body, the schema does not exist, the scoping database does not exist, the schema is a system schema, or a new or changed pipeline rule uses a system pipeline or workflow: `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `ruleName`. A rule left as stored is not re-checked; when evaluated it is recorded as an error with the same message and not launched."
                     content:
                         application/json:
                             schema:

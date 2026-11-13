@@ -236,7 +236,8 @@ backend/
 │   │       │                                       #   Batch, Deadline Cloud, SageMaker training job / pipeline
 │   │       │                                       #   execution) used by both the abort API and the failure path;
 │   │       │                                       #   terminal-status guard + the shared completion-event emitter
-│   │       ├── systemRecords.py                    #   isSystem: importer cross-call check + read-only guard rules/messages
+│   │       ├── systemRecords.py                    #   isSystem: importer cross-call check + read-only guard rules/messages;
+│   │       │                                       #   is_system_record / names_system_record (no compliance pipeline rule on one)
 │   │       ├── executionLocks.py                   #   concurrency lock rows for perAsset / perInputFile / perInputFileVersion (sorted all-or-none acquire, holder-conditional release, TTL)
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
@@ -872,7 +873,7 @@ An endpoint that answers "may this user do X" (a permission check, as opposed to
 
 The check identifies the user from the token, loads the object itself from the identifiers it is given, and evaluates the same Tier 1 and Tier 2 checks as the endpoint it answers for.
 
-**A stored reference that the system later acts on is authorized when it is saved.** A compliance pipeline rule names a workflow that every evaluation launches as the system user, so `complianceSchemaService.pipeline_rules_refused` decides each new or changed `pipelineRef` on schema create and update the way the execute route decides a run (`may_run_workflow`: Tier 1 `POST` on `/workflows/{databaseId}/{workflowId}/execute` through `enforcer.enforce` on an `api` object, Tier 2 `GET` on the workflow, its pipelines and the rule's own pipeline, each row read with one `GetItem`). It is deny by default: a missing workflow or pipeline answers the same `403` (`Not authorized to run the workflow of pipeline rule '<name>'`, `ruleName`) as a refused one and is logged through `log_authorization`. Unchanged rules are not re-checked and `SYSTEM_USER` is not checked. Follow the same shape for any new field that makes the system act later on an object the saver names.
+**A stored reference that the system later acts on is authorized when it is saved.** A compliance pipeline rule names a workflow that every evaluation launches as the system user, so `complianceSchemaService.pipeline_rules_refused` decides each new or changed `pipelineRef` on schema create and update the way the execute route decides a run (`may_run_workflow`: Tier 1 `POST` on `/workflows/{databaseId}/{workflowId}/execute` through `enforcer.enforce` on an `api` object, Tier 2 `GET` on the workflow, its pipelines and the rule's own pipeline, each row read with one `GetItem`). It is deny by default: a missing workflow or pipeline answers the same `403` (`Not authorized to run the workflow of pipeline rule '<name>'`, `ruleName`) as a refused one and is logged through `log_authorization`. Unchanged rules are not re-checked and `SYSTEM_USER` is not checked. After it, `system_pipeline_rule_refused` refuses (400, `systemRecords.SYSTEM_RECORD_PIPELINE_RULE_MESSAGE`, `ruleName`) a new or changed rule whose workflow, own pipeline or a pipeline its workflow runs is a system record (`systemRecords.names_system_record`), for every caller including `SYSTEM_USER`; `complianceEvaluationStore` never launches such a rule from a schema stored before the check (error result with the same message, and a waiting one is closed). Follow the same shape for any new field that makes the system act later on an object the saver names.
 
 ---
 
