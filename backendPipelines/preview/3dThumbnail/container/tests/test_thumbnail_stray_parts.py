@@ -5,11 +5,13 @@
 
 A mesh is framed on its full bounds, so a 2 cm cube left 50 m from a 6 cm model shrank the model to
 nothing: an empty, fully transparent preview that still reported success. The camera now leaves out
-of its framing a stray part -- outside the parts holding 95% of the points, and widening the frame at
-least ``scene_parts.STRAY_SCALE`` times -- and still draws it. A mesh whose full bounds are at least
-``renderer.SPARSE_FRAMING_SCALE`` times its percentile bounds (a stray piece inside one mesh) is framed
-on the percentile bounds. A near-flat sheet is never a stray; the backdrop rule decides it. Ordinary
-scenes frame exactly as before.
+of its framing a stray part -- outside the parts holding 95% of the points, at most half their size, and
+widening the frame at least ``scene_parts.STRAY_SCALE`` times -- and still draws it. A single mesh is
+framed on its 2nd-98th percentile bounds only when its full-bounds framing provably loses the model: its
+dense region projects under a few pixels and a small full-bounds still covers almost nothing. A
+near-flat sheet is never a stray; the backdrop rule decides it. Ordinary scenes, a large low-poly
+model beside a dense label, a distant second object and a long mast with a dense antenna frame
+exactly as before.
 """
 
 import numpy as np
@@ -55,6 +57,27 @@ class TestStrayRule:
     def test_one_part_or_no_points_has_no_stray(self):
         assert not scene_parts.stray_parts([MODEL], [10]).any()
         assert not scene_parts.stray_parts([MODEL, STRAY], [0, 0]).any()
+
+    def test_a_large_low_poly_model_is_not_a_stray_of_a_small_dense_label(self):
+        """A 10 m model of 8 vertices and a 0.4 m label of thousands far away: the label holds the
+        points, but the model is far larger, so it is kept and the scene frames as before."""
+        model = _box((-5.0, -5.0, -5.0), (5.0, 5.0, 5.0))
+        label = _box((149.8, -0.2, -0.2), (150.2, 0.2, 0.2))
+        assert not scene_parts.stray_parts([model, label], [8, 2562]).any()
+
+    def test_a_far_building_with_few_vertices_is_kept(self):
+        """Two 10 m buildings 150 m apart, the far one under 5% of the vertices: the same size, so both
+        are framed."""
+        near = _box((-5.0, -5.0, -5.0), (5.0, 5.0, 5.0))
+        far = _box((145.0, -5.0, -5.0), (155.0, 5.0, 5.0))
+        assert not scene_parts.stray_parts([near, far], [10242, 8]).any()
+
+    def test_a_far_part_over_half_the_core_is_kept_and_at_half_is_a_stray(self):
+        core = _box((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+        over = _box((50.0, 0.0, 0.0), (50.51, 0.51, 0.51))
+        half = _box((50.0, 0.0, 0.0), (50.5, 0.5, 0.5))
+        assert not scene_parts.stray_parts([core, over], [1000, 8]).any()
+        assert scene_parts.stray_parts([core, half], [1000, 8]).tolist() == [False, True]
 
 
 def _merged(boxes, counts_per_box=None):
@@ -132,7 +155,7 @@ class TestSparseMeshFraming:
         with caplog.at_level("INFO"):
             _, radius, _ = renderer._compute_camera_framing(mesh, use_full_bounds=True)
         assert radius < 1.0
-        assert "framing the percentile bounds" in caplog.text
+        assert "framing the 2nd-98th percentile bounds" in caplog.text
         frame = renderer.generate_static_frame(mesh, resolution=(160, 120))
         assert (frame[..., 3] > 0).mean() > 0.05
 
@@ -149,6 +172,23 @@ class TestSparseMeshFraming:
         focal, _, _ = renderer._compute_camera_framing(mesh, use_full_bounds=True)
         lo, hi = np.asarray(mesh.points).min(axis=0), np.asarray(mesh.points).max(axis=0)
         np.testing.assert_allclose(focal, (lo + hi) / 2)
+
+    def test_a_long_low_poly_mast_with_a_dense_antenna_is_framed_whole(self, caplog):
+        """A 30 m mast of 8 sides with a 1 m antenna of thousands of vertices at its top: the full
+        bounds are 30 times the percentile bounds, but the mast draws on its full bounds, so it is not
+        cropped to the antenna."""
+        import pyvista as pv
+
+        from preview_pipeline import renderer
+
+        mast = pv.Cylinder(center=(0, 15, 0), direction=(0, 1, 0), radius=0.1, height=30, resolution=8).triangulate()
+        antenna = pv.Sphere(radius=0.5, center=(0, 30, 0), theta_resolution=80, phi_resolution=80)
+        mesh = mast.append_polydata(antenna)
+        with caplog.at_level("INFO"):
+            focal, _, _ = renderer._compute_camera_framing(mesh, use_full_bounds=True)
+        lo, hi = np.asarray(mesh.points).min(axis=0), np.asarray(mesh.points).max(axis=0)
+        np.testing.assert_allclose(focal, (lo + hi) / 2)
+        assert "percentile bounds" not in caplog.text
 
 
 @pytest.mark.unit
@@ -168,3 +208,23 @@ class TestGlbStray:
         data = core._normalize_up_axis(core._load_file(str(path), ".glb"), ".glb")
         frames = renderer.generate_rotating_frames(data, n_frames=4, resolution=(160, 120))
         assert all((frame[..., 3] > 0).mean() > 0.05 for frame in frames)
+
+    def test_a_distant_second_object_is_framed_with_the_first(self, tmp_path):
+        """A detailed sphere and a low-poly box of the same size 150 m away: the box holds under 5% of
+        the vertices, but it is a second object, so the frame holds both, as before."""
+        import trimesh
+
+        from preview_pipeline import core, renderer
+
+        scene = trimesh.Scene()
+        scene.add_geometry(trimesh.creation.icosphere(subdivisions=5, radius=5), geom_name="near")
+        scene.add_geometry(trimesh.creation.box(extents=(10, 10, 10)).apply_translation((150, 0, 0)),
+                           geom_name="far")
+        path = tmp_path / "two.glb"
+        scene.export(str(path))
+        data = core._normalize_up_axis(core._load_file(str(path), ".glb"), ".glb")
+        plain = data.copy()
+        plain.field_data.clear()
+        framed = renderer._compute_camera_framing(data, use_full_bounds=True)
+        full = renderer._compute_camera_framing(plain, use_full_bounds=True)
+        assert np.array_equal(framed[0], full[0]) and framed[1:] == full[1:]

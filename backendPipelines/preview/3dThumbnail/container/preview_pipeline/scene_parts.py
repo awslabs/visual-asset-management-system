@@ -54,13 +54,17 @@ NESTED_SHARE = 0.5
 # A stray part is one the framing leaves out because it would shrink the model to nothing: a small
 # piece left far from the rest (an export leftover, a helper object, a light's proxy). The core of the
 # scene is its largest parts by points, taken in descending order until they hold at least
-# 1 - STRAY_SHARE of the points; a part outside the core is a stray when framing the core with it
-# would make the framed extent at least STRAY_SCALE times the core's own. At ten times the model fills
-# a tenth of the frame; an exploded view or a scene of separate objects does not spread 5% of its
-# points that far. A stray is still drawn. A near-flat sheet is never a stray: whether a sheet is left
-# out is decided by the backdrop rule alone, at BACKDROP_SCALE.
+# 1 - STRAY_SHARE of the points. A part outside the core is a stray only when all three hold: framing
+# the core with it would make the framed extent at least STRAY_SCALE times the core's own (far), and
+# its own largest extent is at most STRAY_SIZE_SHARE of the core's (small). Points alone do not decide
+# it, since a large low-poly model can hold fewer vertices than a small detailed label: a part larger
+# than half the core is a second object worth framing, however few its vertices. A part at most half
+# the core's size, framed with it at ten times the core's extent, would draw at most a twentieth of
+# the frame's width: a dot either way, while the model it shrank is what the preview is for. A stray
+# is still drawn. A near-flat sheet is never a stray: the backdrop rule alone decides sheets.
 STRAY_SHARE = 0.05
 STRAY_SCALE = 10.0
+STRAY_SIZE_SHARE = 0.5
 
 # Parts tracked per scene. A backdrop is one part, or a few, at least BACKDROP_SCALE times the rest of
 # the scene, so a scene of more parts (a point instancer's forest, a large assembly) frames as before.
@@ -302,7 +306,8 @@ def stray_parts(bounds, counts):
         return mask
     with_part = np.maximum(core_hi, bounds[:, 3:]) - np.minimum(core_lo, bounds[:, :3])
     far = with_part.max(axis=1) >= STRAY_SCALE * core_largest
-    return ~core & far & ~_near_flat(bounds)
+    small = (bounds[:, 3:] - bounds[:, :3]).max(axis=1) <= STRAY_SIZE_SHARE * core_largest
+    return ~core & far & small & ~_near_flat(bounds)
 
 
 def framing_bounds(pv_data):
@@ -334,6 +339,7 @@ def framing_bounds(pv_data):
                     f"centred on it); {_describe(bounds[backdrops])}")
     if strays.any():
         logger.info(f"Camera framing leaves out {int(strays.sum())} of {len(bounds)} parts as stray "
-                    f"(outside the parts holding {1 - STRAY_SHARE:.0%} of the points, and widening the "
-                    f"frame at least {STRAY_SCALE:g}x); they are still drawn; {_describe(bounds[strays])}")
+                    f"(outside the parts holding {1 - STRAY_SHARE:.0%} of the points, at most "
+                    f"{STRAY_SIZE_SHARE:g}x their size and widening the frame at least "
+                    f"{STRAY_SCALE:g}x); they are still drawn; {_describe(bounds[strays])}")
     return lo, hi
