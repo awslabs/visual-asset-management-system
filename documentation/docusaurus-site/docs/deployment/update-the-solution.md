@@ -829,6 +829,7 @@ From v2.6.7 the API authorizer derives each caller's user identifier only from t
 -   **An identity provider that does not issue a `vams:tokens` claim needs no action.** Its users keep the identifier they had, provided each token carries `sub` (OpenID Connect requires it).
 -   **An identity provider configured to issue `vams:tokens` with a value other than the username claim above must map users by that claim instead.** Before updating, check which value your VAMS user role assignments, user-level constraints and per-user records (API keys, subscriptions) are keyed by. If they are keyed by the `vams:tokens` value, assign the roles again to the username claim's value, or configure the identity provider to issue that value as `sub` or `username`. Until then those users have only the default role, if one is configured.
 -   **A token that carries none of `cognito:username`, `username` and `sub` is refused.** Earlier versions accepted such a token and identified the caller by `upn` or `email`.
+-   **A customized claims check that read another `vams:` claim from the token sees the authorizer's value.** A deployment whose `customAuthClaimsCheckOverride` read a `vams:` claim the identity provider issued, such as `vams:externalAttributes`, now receives the authorizer's value (an empty list). Issue such values under a claim name without the `vams:` prefix and read that name in the customized check.
 -   **Amazon Cognito deployments (including Amazon Cognito federation) and API keys are unchanged.**
 
 ## Breaking changes checklist
