@@ -31,7 +31,7 @@ from common.s3 import region_routing_s3_client, bucket_region_fields, presigned_
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_download_bulk
+from customLogging.auditLogging import audited_handler, log_action, log_file_download_bulk
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from models.assetExport import (
@@ -1845,6 +1845,12 @@ def export_assets(
 # Request Handlers
 #######################
 
+
+def _exported_files(asset) -> List:
+    files = asset.get('files') if isinstance(asset, dict) else getattr(asset, 'files', None)
+    return files if isinstance(files, list) else []
+
+
 def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /export requests"""
     try:
@@ -1910,6 +1916,12 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
             event
         )
         
+        exported = response_data.get('assets') or []
+        log_action(event, "assetExport", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   item_count=len(exported),
+                   file_count=sum(len(_exported_files(asset)) for asset in exported),
+                   request_parameters=request_model.dict(exclude_none=True))
+
         # Deliver inline, or redirect to a presigned URL when the payload is too large
         return build_export_response(
             response_data,
@@ -1935,6 +1947,8 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset export operations"""
     global claims_and_roles, bucket_cache

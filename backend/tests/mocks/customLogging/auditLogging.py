@@ -68,3 +68,16 @@ def audit_request(event, lambda_context=None, *, on_behalf_of=None):
 def audited_handler(handler):
     """Stand-in for the entrypoint decorator: the handler unchanged."""
     return handler
+
+
+AUDIT_INTERNAL_CALL_KEY = "vamsAuditInternalCall"
+
+
+def internal_call_marker(event=None):
+    """Stand-in for the real marker: empty when no request context is open."""
+    return {}
+
+
+def audit_failure_reason(status):
+    """Stand-in for the real mapping of an error status to its generic reason."""
+    return "internal" if status >= 500 else "clientError"

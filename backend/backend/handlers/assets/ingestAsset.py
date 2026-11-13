@@ -9,6 +9,7 @@ from botocore.config import Config
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import AUDIT_INTERNAL_CALL_KEY, audited_handler, internal_call_marker, log_action
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from models.common import (
@@ -144,7 +145,8 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
                     "method": "POST"
                 },
                 "authorizer": event_auth
-            }
+            },
+            AUDIT_INTERNAL_CALL_KEY: internal_call_marker()
         }
         
         # Invoke createAsset lambda
@@ -173,7 +175,8 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
                 "method": "POST"
             },
             "authorizer": event_auth
-        }
+        },
+        AUDIT_INTERNAL_CALL_KEY: internal_call_marker()
     }
     
     # Invoke fileUpload lambda to initialize the upload
@@ -230,7 +233,8 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
                     "method": "POST"
                 },
                 "authorizer": event_auth
-            }
+            },
+            AUDIT_INTERNAL_CALL_KEY: internal_call_marker()
         }
         
         # Invoke createAsset lambda
@@ -262,7 +266,8 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
                 "method": "POST"
             },
             "authorizer": event_auth
-        }
+        },
+        AUDIT_INTERNAL_CALL_KEY: internal_call_marker()
     }
     
     # Invoke fileUpload lambda to complete the upload
@@ -293,6 +298,8 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset ingest API"""
     global claims_and_roles
@@ -355,7 +362,24 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         else:
             # Stage 1 - Initialize upload
             response = initialize_ingest(request_model, claims_and_roles, event_auth)
-        
+
+        files = request_model.files or []
+        details = {"stage": "complete" if is_complete_stage else "initialize",
+                   "files": [file.relativeKey for file in files]}
+        if is_complete_stage:
+            # Completion counts the files that landed; no byte count is recorded, since the
+            # declared sizes of the initialize stage are not what was stored.
+            file_count = sum(1 for result in getattr(response, "fileResults", None) or [] if result.success)
+        else:
+            file_count = len(files)
+            declared = [getattr(file, "file_size", None) for file in files]
+            if declared and all(size is not None for size in declared):
+                details["declaredBytes"] = sum(declared)
+        log_action(event, "assetIngest", database_id=request_model.databaseId, asset_id=request_model.assetId,
+                   file_count=file_count,
+                   changes={field: value for field, value in request_model.dict(exclude_none=True).items()
+                            if field not in ("files", "uploadId")},
+                   details=details, uploadId=getattr(request_model, "uploadId", None))
         return success(body=response.dict())
             
     except UploadResponsePassThrough as p:

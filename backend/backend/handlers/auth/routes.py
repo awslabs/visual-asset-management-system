@@ -33,6 +33,7 @@ from customLogging import auditLogging
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success,
@@ -291,6 +292,7 @@ def get_allowed_api_routes(event):
     return success(body=response_model.dict())
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for auth routes APIs"""
     global claims_and_roles

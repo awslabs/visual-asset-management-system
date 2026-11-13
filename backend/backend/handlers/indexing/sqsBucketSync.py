@@ -11,6 +11,7 @@ import hashlib
 import urllib.parse
 from common.timestamps import utc_now
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from common.resourceNames import get_table_name, ResourceKeys
 from handlers.assets.createAsset import create_asset
 from handlers.assets.assetCount import update_asset_count
@@ -128,6 +129,27 @@ class SimpleCache:
 s3_buckets_cache = SimpleCache()  # Cache for S3 asset buckets table
 database_cache = SimpleCache()    # Cache for database lookups
 asset_cache = SimpleCache()       # Cache for asset lookups
+
+
+def _sync_file_path(object_key: str, prefix: str, asset_id: str) -> str:
+    """The asset-relative file path in the form the API records name a file ('/dir/file.ext')."""
+    return "/" + extract_relative_file_path(object_key, prefix, asset_id).lstrip("/")
+
+
+def _written_by_vams(object_metadata) -> bool:
+    """Whether an object was written through VAMS (an upload, copy, move, revert, archive or pipeline
+    output), which stamps its change source on the object; those writes are recorded by the action
+    that made them. A direct write to the bucket carries no change source, or the direct one."""
+    source = (object_metadata or {}).get(VAMS_CHANGE_SOURCE_METADATA_KEY)
+    return bool(source) and source != VAMS_CHANGE_SOURCE_DIRECT
+
+
+def _log_sync(action: str, operation: str, **kwargs) -> None:
+    """Record a bucket sync action of the invocation being served (the actor is the system)."""
+    ctx = current_audit_context()
+    if ctx is not None:
+        log_action(ctx.event, action, details={"source": "bucketSync", "operation": operation}, **kwargs)
+
 
 def validate_asset_id(asset_id: str) -> bool:
     """
@@ -1783,6 +1805,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                 if not restored_database_id:
                     logger.error(f"Failed to restore archived asset {asset_id}")
                     return False, True, f"Failed to restore archived asset {asset_id}"
+                _log_sync("assetSync", "restore", database_id=restored_database_id, asset_id=asset_id)
                 logger.info(
                     f"Restored archived asset {asset_id} to database {restored_database_id} "
                     f"after direct S3 upload of {object_key}"
@@ -1815,6 +1838,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                 if not created_asset_id:
                     logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
                     return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"
+                _log_sync("assetSync", "create", database_id=database_id_to_use, asset_id=asset_id)
         
         # 3. Check if the object is an "init" import marker - If so delete and skip indexing
         if is_init_marker(object_key):
@@ -1845,9 +1869,11 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         # Record file version change history (best-effort; never fails the sync).
         # Skip folder markers (no version/content). head_object returns 'null' for
         # VersionId on buckets without versioning enabled.
+        object_metadata = None
         if not object_key.endswith('/'):
             try:
                 head = s3_client.head_object(Bucket=bucket_name, Key=object_key)
+                object_metadata = head.get('Metadata', {}) or {}
                 last_modified = head.get('LastModified')
                 write_file_version_history(
                     database_id_to_use,
@@ -1864,7 +1890,11 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         if object_key.endswith('/'):
             logger.info(f"Folder marker detected: {object_key}, processing but skipping indexing")
             return True, False, f"Processed folder marker {object_key}"
-        
+
+        if not _written_by_vams(object_metadata):
+            _log_sync("fileSync", "created", database_id=database_id_to_use, asset_id=asset_id,
+                      file_path=_sync_file_path(object_key, prefix, asset_id),
+                      bytes=(record.get('s3', {}).get('object') or {}).get('size'))
         return True, True, f"Successfully processed {object_key}"
     except Exception as e:
         logger.exception(f"Error processing S3 record: {e}")
@@ -2070,6 +2100,8 @@ def parse_event(event):
     logger.warning("Could not parse event into a standard format, returning original event")
     return event
 
+
+@audited_handler
 def lambda_handler_created(event, context):
     """
     Handler for file creation events from SQS
@@ -2140,6 +2172,8 @@ def lambda_handler_created(event, context):
 
     return with_batch_item_failures({}, event, failures)
 
+
+@audited_handler
 def lambda_handler_deleted(event, context):
     """
     Handler for file deleted events from SQS

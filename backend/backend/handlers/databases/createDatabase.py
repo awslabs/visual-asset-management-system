@@ -13,6 +13,7 @@ from common.apiRoutes import API_DATABASE
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.databases import CreateDatabaseRequestModel, CreateDatabaseResponseModel
 
@@ -93,6 +94,8 @@ def create_database(request_model: CreateDatabaseRequestModel):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for database creation API"""
     claims_and_roles = request_to_claims(event)
@@ -151,6 +154,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
             # Process request
             response = create_database(request_model)
+            log_action(event, "databaseCreate", database_id=request_model.databaseId,
+                       changes=request_model.dict(exclude_none=True))
             return success(body=response.dict())
         else:
             # Not a route handled by this function
