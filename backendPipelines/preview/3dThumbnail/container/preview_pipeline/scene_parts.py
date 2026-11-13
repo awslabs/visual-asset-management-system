@@ -50,8 +50,8 @@ CENTRE_SHARE = 0.25
 # A backdrop sheet lying on a larger backdrop sheet (a model's own platform on a ground plane) is at
 # most this share of the larger one's size; it is kept as part of the model.
 NESTED_SHARE = 0.5
-# Sheets a selected sheet is tested against for lying on one (the largest), and the block of sheets
-# tested in one vectorised pass.
+# Sheets a selected sheet is tested against for lying on one (the largest of each thin axis), and the
+# block of sheets tested in one vectorised pass.
 MAX_NESTED_OUTERS = 64
 _NESTED_BLOCK = 4096
 
@@ -205,13 +205,15 @@ def _lies_on_larger(bounds, order, largest, selected):
     """True per part for a selected sheet lying on a larger selected sheet: the same thin axis, at most
     NESTED_SHARE of its size, and its footprint inside the larger one's on the two large axes. Six
     equal skybox walls do not lie on one another. Each sheet is compared, in one vectorised pass per
-    block, against the MAX_NESTED_OUTERS largest selected sheets only, since a sheet a model stands on
-    lies on one of the few largest; the cost is linear in the number of sheets."""
+    block, against the MAX_NESTED_OUTERS largest selected sheets of each thin axis only, since a sheet a
+    model stands on lies on one of the few largest of its own orientation (larger vertical backdrops do
+    not crowd the ground out); the cost is linear in the number of sheets."""
     lies = np.zeros(len(bounds), dtype=bool)
     inners = np.flatnonzero(selected)
     if len(inners) < 2:
         return lies
-    outers = inners[np.argsort(-largest[inners], kind="stable")[:MAX_NESTED_OUTERS]]
+    by_size = inners[np.argsort(-largest[inners], kind="stable")]
+    outers = np.concatenate([by_size[order[by_size, 0] == axis][:MAX_NESTED_OUTERS] for axis in range(3)])
     thin_out = order[outers, 0]
     axes_out = order[outers, 1:]  # (m, 2)
     lo_out = np.take_along_axis(bounds[outers, :3], axes_out, axis=1)

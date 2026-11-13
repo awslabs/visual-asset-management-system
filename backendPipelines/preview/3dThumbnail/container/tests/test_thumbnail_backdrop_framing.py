@@ -85,6 +85,16 @@ class TestBackdropRule:
         assert mask[1:].all() and not mask[0]  # none is at most half another's size
         assert elapsed < 0.5, f"{elapsed:.2f} s"
 
+    def test_a_platform_on_a_ground_is_kept_beside_seventy_larger_vertical_sheets(self):
+        """Seventy vertical backdrop sheets, each larger than the ground, do not push the ground out of
+        the comparison: the cap applies per thin axis, so the platform is still found on the ground."""
+        robot = _box((-0.5, 0.1, -0.5), (0.5, 1.1, 0.5))
+        platform = _box((-30.0, 0.0, -30.0), (30.0, 0.1, 30.0))
+        ground = _box((-500.0, 0.0, -500.0), (500.0, 0.0, 500.0))
+        walls = [_box((-600.0 - i, -600.0, -0.5), (600.0 + i, 600.0, -0.5)) for i in range(70)]
+        mask = scene_parts.backdrop_parts([robot, platform, ground] + walls)
+        assert mask[:3].tolist() == [False, False, True]
+
     def test_a_platform_on_a_ground_plane_is_kept_and_only_the_ground_is_a_backdrop(self):
         """A 1 m robot on its own 60 m platform on a 1 km ground: only the outermost sheet goes."""
         robot = _box((-0.5, 0.1, -0.5), (0.5, 1.1, 0.5))
