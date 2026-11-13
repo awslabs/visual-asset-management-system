@@ -133,7 +133,13 @@ class ApiClient {
         // Resolve every path relative to the stage-inclusive base (e.g. ".../api/").
         // A leading "/" would make new URL() treat the path as origin-absolute and drop
         // the base's stage segment, so strip it and always resolve relative to fullBase.
-        const relativePath = path.replace(/^\/+/, "");
+        // A '#' or '?' in the path can only come from a value placed in it (an asset id may end
+        // in '#'): new URL() would read it as the start of a fragment or a query and the request
+        // would address another resource. No API path carries either delimiter, because query
+        // parameters go in queryParams, so both are percent-encoded here.
+        const relativePath = path
+            .replace(/^\/+/, "")
+            .replace(/[#?]/g, (c) => encodeURIComponent(c));
         const url = new URL(relativePath, fullBase.endsWith("/") ? fullBase : fullBase + "/");
         if (queryParams) {
             Object.entries(queryParams).forEach(([key, value]) => {

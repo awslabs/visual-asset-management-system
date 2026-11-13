@@ -420,7 +420,11 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                             encodeURIComponent(segment)
                         );
                         const encodedFileKey = encodedSegments.join("/");
-                        let assetUrl = `${config.api}database/${fileDatabaseId}/assets/${fileAssetId}/download/stream/${encodedFileKey}`;
+                        let assetUrl = `${
+                            config.api
+                        }database/${fileDatabaseId}/assets/${encodeURIComponent(
+                            fileAssetId
+                        )}/download/stream/${encodedFileKey}`;
 
                         // assetVersionId takes precedence (used for all files including deps)
                         // versionId is S3 file version, only for the primary file (isMainFile)
