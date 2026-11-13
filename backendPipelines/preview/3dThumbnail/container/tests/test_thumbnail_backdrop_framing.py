@@ -4,10 +4,12 @@
 """Framing a model that sits on a large ground or environment plane.
 
 A scene of a robot about 1 m across on a 50 m ground plane framed the whole plane, so the robot
-rendered as a dot. The camera now leaves a backdrop out of its framing: a near-flat sheet whose
-largest extent is at least ``scene_parts.BACKDROP_SCALE`` times the rest of the scene. The backdrop
-is still drawn. A scene with no such part frames exactly as before, and so does a scene made only of
-flat parts (a sign, a floor plan).
+rendered as a dot. A backdrop -- a near-flat sheet whose largest extent is at least
+``scene_parts.BACKDROP_SCALE`` times the rest of the scene and centred on it -- is now left out of the
+framing, and every loader that merges parts drops it before the merge, so it is not drawn either:
+drawn, it filled the whole frame. The scene then loads and draws exactly as the model alone does. A
+scene with no such part loads and frames exactly as before, and so does a scene made only of flat
+parts (a sign, a floor plan).
 
 The rule tests run anywhere; the loading and render tests need the real pyvista/VTK/trimesh/pxr and
 run inside the pipeline image (or a venv holding its requirements).
@@ -67,20 +69,78 @@ class TestBackdropRule:
         assert scene_parts.backdrop_parts([point, GROUND]).tolist() == [False, False]
         assert scene_parts.backdrop_parts([MODEL, point, GROUND]).tolist() == [False, False, True]
 
+    def test_the_scale_is_fifty_times_the_content(self):
+        assert scene_parts.BACKDROP_SCALE == 50.0
+
+    def test_the_nested_sheet_check_is_fast_for_two_thousand_sheets(self):
+        """2,000 equal backdrop sheets around one small item (the worst case: every sheet selected):
+        the check compares each with the 64 largest only, well under half a second."""
+        import time
+
+        item = _box((-0.01, 0.0, -0.01), (0.01, 0.02, 0.01))
+        sheets = [_box((-25.0 - i * 1e-3, 0.0, -25.0), (25.0 + i * 1e-3, 0.0, 25.0)) for i in range(2000)]
+        start = time.perf_counter()
+        mask = scene_parts.backdrop_parts([item] + sheets)
+        elapsed = time.perf_counter() - start
+        assert mask[1:].all() and not mask[0]  # none is at most half another's size
+        assert elapsed < 0.5, f"{elapsed:.2f} s"
+
+    def test_a_platform_on_a_ground_is_kept_beside_seventy_larger_vertical_sheets(self):
+        """Seventy vertical backdrop sheets, each larger than the ground, do not push the ground out of
+        the comparison: the cap applies per thin axis, so the platform is still found on the ground."""
+        robot = _box((-0.5, 0.1, -0.5), (0.5, 1.1, 0.5))
+        platform = _box((-30.0, 0.0, -30.0), (30.0, 0.1, 30.0))
+        ground = _box((-500.0, 0.0, -500.0), (500.0, 0.0, 500.0))
+        walls = [_box((-600.0 - i, -600.0, -0.5), (600.0 + i, 600.0, -0.5)) for i in range(70)]
+        mask = scene_parts.backdrop_parts([robot, platform, ground] + walls)
+        assert mask[:3].tolist() == [False, False, True]
+
+    def test_a_platform_on_a_ground_plane_is_kept_and_only_the_ground_is_a_backdrop(self):
+        """A 1 m robot on its own 60 m platform on a 1 km ground: only the outermost sheet goes."""
+        robot = _box((-0.5, 0.1, -0.5), (0.5, 1.1, 0.5))
+        platform = _box((-30.0, 0.0, -30.0), (30.0, 0.1, 30.0))
+        ground = _box((-500.0, 0.0, -500.0), (500.0, 0.0, 500.0))
+        assert scene_parts.backdrop_parts([robot, platform, ground]).tolist() == [False, False, True]
+
+    def test_a_thin_sheet_with_one_centred_item_under_a_fiftieth_of_it_is_a_backdrop(self):
+        """The documented limit: a 1.6 m solar panel (3 mm) with only a centred 30 mm junction box is
+        treated as a backdrop; the preview shows the box alone."""
+        panel = _box((-0.8, 0.0, -0.5), (0.8, 0.003, 0.5))
+        junction = _box((-0.015, 0.003, -0.015), (0.015, 0.023, 0.015))
+        assert scene_parts.backdrop_parts([junction, panel]).tolist() == [False, True]
+
+    def test_a_panel_with_one_centred_40_mm_bracket_is_not_a_backdrop(self):
+        """A 1 m x 0.6 m x 2 mm sheet-metal panel is 25 times a 40 mm bracket at its centre: the panel
+        is part of the model, so it is drawn and framed."""
+        panel = _box((-0.5, 0.0, -0.3), (0.5, 0.002, 0.3))
+        bracket = _box((-0.02, 0.002, -0.02), (0.02, 0.042, 0.02))
+        assert not scene_parts.backdrop_parts([bracket, panel]).any()
+
+    def test_a_zero_thickness_board_with_one_centred_4_mm_chip_is_not_a_backdrop(self):
+        """A 100 mm board of no thickness is 25 times a 4 mm chip at its centre."""
+        board = _box((-50.0, 0.0, -40.0), (50.0, 0.0, 40.0))
+        chip = _box((-2.0, 0.0, -2.0), (2.0, 1.0, 2.0))
+        assert not scene_parts.backdrop_parts([chip, board]).any()
+
+    def test_a_sheet_just_under_fifty_times_is_kept_and_at_fifty_is_a_backdrop(self):
+        model = _box((-0.5, 0.0, -0.5), (0.5, 1.0, 0.5))
+        assert not scene_parts.backdrop_parts([model, _box((-24.9, 0, -24.9), (24.9, 0, 24.9))]).any()
+        assert scene_parts.backdrop_parts([model, _box((-25, 0, -25), (25, 0, 25))]).tolist() == [False, True]
+
     def test_one_part_has_no_backdrop(self):
         assert not scene_parts.backdrop_parts([GROUND]).any()
 
     def test_a_board_with_one_small_part_in_its_corner_is_not_a_backdrop(self):
-        """A zero-thickness board 25 times a 4 mm corner part: the part does not stand in its middle."""
+        """A zero-thickness board 62.5 times a 1.6 mm corner part: the part does not stand in its middle."""
         board = _box((0.0, 0.0, 0.0), (100.0, 0.0, 100.0))
-        chip = _box((0.0, 0.0, 0.0), (4.0, 1.4, 4.0))
+        chip = _box((0.0, 0.0, 0.0), (1.6, 0.6, 1.6))
         assert not scene_parts.backdrop_parts([chip, board]).any()
 
     def test_floor_tiles_around_a_small_object_are_not_backdrops(self):
-        """Ten by ten 1 m tiles and a 4 cm object at the floor's centre: each tile is 25 times the
+        """Ten by ten 1 m tiles and a 1.6 cm object at the floor's centre: each tile is 62.5 times the
         object, but no tile is centred on it."""
         tiles = [_box((i - 5.0, 0.0, j - 5.0), (i - 4.0, 0.0, j - 4.0)) for i in range(10) for j in range(10)]
-        thing = _box((-0.02, 0.0, -0.02), (0.02, 0.04, 0.02))
+        thing = _box((-0.008, 0.0, -0.008), (0.008, 0.016, 0.008))
         assert not scene_parts.backdrop_parts([thing] + tiles).any()
 
     def test_a_ground_plane_with_the_model_well_off_its_centre_is_kept(self):
@@ -102,6 +162,54 @@ class TestBackdropRule:
         assert scene_parts.part_limit(small) == int(
             small * scene_parts.PART_MEMORY_FRACTION / scene_parts.BYTES_PER_PART) < scene_parts.MAX_PARTS
         assert scene_parts.part_limit(0) == 2
+
+
+def _corners(box):
+    """The eight corners of a box, as a part's points."""
+    lo, hi = box[:3], box[3:]
+    return np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])])
+
+
+@pytest.mark.unit
+class TestBackdropKeep:
+    """Which parts a loader draws: the backdrops the framing rule selects are dropped, nothing else."""
+
+    def test_the_ground_under_a_model_is_dropped(self, caplog):
+        with caplog.at_level("INFO"):
+            keep = scene_parts.backdrop_keep([_corners(MODEL), _corners(GROUND)], max_parts=100)
+        assert keep.tolist() == [True, False]
+        assert "Preview leaves out 1 of 2 parts as a backdrop" in caplog.text
+
+    def test_a_part_without_points_is_kept(self):
+        keep = scene_parts.backdrop_keep([_corners(MODEL), np.empty((0, 3)), _corners(GROUND)], max_parts=100)
+        assert keep.tolist() == [True, True, False]
+
+    @pytest.mark.parametrize("boxes", [
+        [MODEL],
+        [MODEL, MODEL],
+        [_box((0.0, 0.0, 0.0), (2.0, 1.0, 0.0)), GROUND],  # flat parts only
+        [_box((-4.0, 0.0, -3.0), (4.0, 2.5, 3.0)), _box((-5.0, 0.0, -4.0), (5.0, 0.0, 4.0))],  # a room
+        [_box((0.0, 0.0, 0.0), (1.6, 0.6, 1.6)), _box((0.0, 0.0, 0.0), (100.0, 0.0, 100.0))],  # corner
+        [_box((15.5, 0.0, -0.3), (16.5, 0.7, 0.3)), GROUND],  # off centre
+        [_box((0.0, 0.0, 0.0), (100.0, 1.6, 100.0)), _box((10.0, 1.6, 10.0), (14.0, 3.0, 14.0))],  # PCB
+    ])
+    def test_scenes_without_a_backdrop_keep_every_part(self, boxes):
+        assert scene_parts.backdrop_keep([_corners(box) for box in boxes], max_parts=100) is None
+
+    def test_a_backdrop_that_does_not_change_the_bounds_is_kept(self):
+        tiles = [_box((i - 5.0, 0.0, j - 5.0), (i - 4.0, 0.0, j - 4.0)) for i in range(10) for j in range(10)]
+        thing = _box((-0.508, 0.0, -0.508), (-0.492, 0.016, -0.492))
+        assert scene_parts.backdrop_keep([_corners(b) for b in [thing] + tiles], max_parts=1000) is None
+
+    def test_over_the_part_limit_every_part_is_kept(self):
+        parts = [_corners(MODEL), _corners(GROUND), _corners(MODEL)]
+        assert scene_parts.backdrop_keep(parts, max_parts=2) is None
+        assert scene_parts.backdrop_keep(parts, max_parts=3).tolist() == [True, False, True]
+
+    def test_parts_with_non_finite_points_keep_every_part(self):
+        bad = _corners(MODEL).astype(float)
+        bad[0, 0] = np.nan
+        assert scene_parts.backdrop_keep([bad, _corners(GROUND)], max_parts=100) is None
 
 
 def _merged(*boxes, colours=None):
@@ -151,7 +259,7 @@ class TestFraming:
         from preview_pipeline import renderer
 
         board = _box((0.0, 0.0, 0.0), (100.0, 0.0, 100.0))
-        chip = _box((0.0, 0.0, 0.0), (4.0, 1.4, 4.0))
+        chip = _box((0.0, 0.0, 0.0), (1.6, 0.6, 1.6))
         data = _merged(chip, board)
         plain = data.copy()
         plain.field_data.clear()
@@ -162,7 +270,7 @@ class TestFraming:
     def test_a_backdrop_that_does_not_change_the_bounds_is_not_reported(self, caplog):
         """An object at the centre of one interior tile: leaving that tile out frames the same floor."""
         tiles = [_box((i - 5.0, 0.0, j - 5.0), (i - 4.0, 0.0, j - 4.0)) for i in range(10) for j in range(10)]
-        thing = _box((-0.52, 0.0, -0.52), (-0.48, 0.04, -0.48))
+        thing = _box((-0.508, 0.0, -0.508), (-0.492, 0.016, -0.492))
         data = _merged(thing, *tiles)
         assert scene_parts.backdrop_parts(scene_parts.part_bounds(data)).sum() == 1
         with caplog.at_level("INFO"):
@@ -244,7 +352,9 @@ GROUND_RGB = (40, 40, 230)
 @pytest.mark.unit
 @requires_real("pyvista", "vtk")
 class TestRender:
-    def test_the_model_fills_the_preview_and_the_ground_is_still_drawn(self):
+    def test_framed_without_the_ground_the_model_fills_the_preview(self):
+        """Data whose parts were recorded but whose backdrop was not dropped by a loader: the framing
+        still leaves the ground out."""
         from preview_pipeline import renderer
 
         data = _merged(MODEL, GROUND, colours=[MODEL_RGB, GROUND_RGB])
@@ -254,6 +364,18 @@ class TestRender:
         assert model_share > 0.1
         assert ground_share > 0.1
 
+
+_CUBE_ONLY_USDA = """
+def Xform "World"
+{
+    def Cube "Robot"
+    {
+        double size = 1
+        double3 xformOp:translate = (0, 0, 0.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}
+"""
 
 _PLANE_AND_CUBE_USDA = """
 def Xform "World"
@@ -274,21 +396,39 @@ def Xform "World"
 """
 
 
+def _assert_drawn_as_alone(data, alone, ext):
+    """The scene loaded with its backdrop is the model loaded alone: the same points and cells, drawn
+    into the same pixels, with a transparent background around the model."""
+    from preview_pipeline import core, renderer
+
+    data = core._normalize_up_axis(data, ext)
+    alone = core._normalize_up_axis(alone, ext)
+    np.testing.assert_array_equal(np.asarray(data.points), np.asarray(alone.points))
+    assert data.n_cells == alone.n_cells
+    frame = renderer.generate_static_frame(data, resolution=(160, 120))
+    np.testing.assert_array_equal(frame, renderer.generate_static_frame(alone, resolution=(160, 120)))
+    assert (frame[..., 3] == 0).mean() > 0.3, "the backdrop fills the frame"
+
+
 @pytest.mark.unit
 @requires_real("pyvista", "vtk", "pxr")
 class TestUsdStage:
-    def test_a_z_up_stage_with_a_ground_plane_frames_the_robot(self, tmp_path):
+    def test_a_z_up_stage_with_a_ground_plane_draws_the_robot_alone(self, tmp_path, caplog):
         from preview_pipeline import renderer
         from preview_pipeline.format_handlers import usd_handler
 
         path = tmp_path / "robot.usda"
         path.write_text(f'#usda 1.0\n(\n    upAxis = "Z"\n)\n{_PLANE_AND_CUBE_USDA}\n')
-        data = usd_handler.load(str(path))
-        np.testing.assert_allclose(scene_parts.part_bounds(data),
-                                   [[-25, 0, -25, 25, 0, 25], [-0.5, 0, -0.5, 0.5, 1, 0.5]], atol=1e-6)
+        alone = tmp_path / "robot_alone.usda"
+        alone.write_text(f'#usda 1.0\n(\n    upAxis = "Z"\n)\n{_CUBE_ONLY_USDA}\n')
+        with caplog.at_level("INFO"):
+            data = usd_handler.load(str(path))
+        assert "Preview leaves out 1 of 2 parts as a backdrop" in caplog.text
+        assert "(50.00, 50.00, 0.00)" in caplog.text
         focal, radius, _ = renderer._compute_camera_framing(data, use_full_bounds=True)
         np.testing.assert_allclose(focal, [0.0, 0.5, 0.0], atol=1e-6)
         assert radius < 5.0
+        _assert_drawn_as_alone(data, usd_handler.load(str(alone)), ".usda")
 
     def test_a_single_prim_stage_records_no_parts(self, tmp_path):
         from preview_pipeline.format_handlers import usd_handler
@@ -298,55 +438,113 @@ class TestUsdStage:
         assert scene_parts.part_bounds(usd_handler.load(str(path))) is None
 
 
-@pytest.mark.unit
-@requires_real("pyvista", "vtk", "trimesh")
-class TestGlbScene:
-    def test_a_glb_scene_with_a_ground_plane_frames_the_model(self, tmp_path):
-        import trimesh
-
-        from preview_pipeline import renderer
-        from preview_pipeline.format_handlers import mesh_handler
-
-        scene = trimesh.Scene()
-        scene.add_geometry(trimesh.creation.box(extents=(1.0, 0.7, 0.6)), geom_name="model")
-        plane = trimesh.Trimesh(vertices=[[-25, 0, -25], [25, 0, -25], [25, 0, 25], [-25, 0, 25]],
-                                faces=[[0, 2, 1], [0, 3, 2]])
-        scene.add_geometry(plane, geom_name="ground")
-        path = tmp_path / "scene.glb"
-        scene.export(str(path))
-        data = mesh_handler.load(str(path))
-        assert scene_parts.part_bounds(data) is not None
-        _, radius, _ = renderer._compute_camera_framing(data, use_full_bounds=True)
-        assert radius < 5.0
-
-
-def _model_on_ground_scene(z_up=False):
-    """A trimesh scene of a 1 x 0.7 x 0.6 box standing on a 50 x 50 ground plane."""
+def _model_on_ground_scene(z_up=False, ground=True):
+    """A trimesh scene of a 1 x 0.7 x 0.6 box standing on a 50 x 50 ground plane (or the box alone)."""
     import trimesh
 
     scene = trimesh.Scene()
     box = trimesh.creation.box(extents=(1.0, 0.6, 0.7) if z_up else (1.0, 0.7, 0.6))
     box.apply_translation((0.0, 0.0, 0.35) if z_up else (0.0, 0.35, 0.0))
     scene.add_geometry(box, geom_name="model")
-    corners = ([[-25, -25, 0], [25, -25, 0], [25, 25, 0], [-25, 25, 0]] if z_up
-               else [[-25, 0, -25], [25, 0, -25], [25, 0, 25], [-25, 0, 25]])
-    scene.add_geometry(trimesh.Trimesh(vertices=corners, faces=[[0, 1, 2], [0, 2, 3]]), geom_name="ground")
+    if ground:
+        corners = ([[-25, -25, 0], [25, -25, 0], [25, 25, 0], [-25, 25, 0]] if z_up
+                   else [[-25, 0, -25], [25, 0, -25], [25, 0, 25], [-25, 0, 25]])
+        scene.add_geometry(trimesh.Trimesh(vertices=corners, faces=[[0, 1, 2], [0, 2, 3]]),
+                           geom_name="ground")
     return scene
 
 
-def _assert_frames_the_model(data, ext):
-    """The loaded (and up-axis normalised) scene records its parts, leaves the ground out and frames
-    the model."""
-    from preview_pipeline import core, renderer
+@pytest.mark.unit
+@requires_real("pyvista", "vtk", "trimesh")
+class TestGlbScene:
+    def test_a_glb_scene_with_a_ground_plane_draws_the_model_alone(self, tmp_path):
+        from preview_pipeline import core
 
-    data = core._normalize_up_axis(data, ext)
-    bounds = scene_parts.part_bounds(data)
-    assert bounds is not None
-    mask = scene_parts.backdrop_parts(bounds)
-    assert mask.sum() == 1
-    np.testing.assert_allclose(np.sort(bounds[mask][0][3:] - bounds[mask][0][:3]), [0, 50, 50], atol=1e-4)
-    _, radius, _ = renderer._compute_camera_framing(data, use_full_bounds=True)
-    assert radius < 5.0
+        path, alone = tmp_path / "scene.glb", tmp_path / "alone.glb"
+        _model_on_ground_scene().export(str(path))
+        _model_on_ground_scene(ground=False).export(str(alone))
+        data = core._load_file(str(path), ".glb")
+        assert scene_parts.part_bounds(data) is None  # one part is left
+        _assert_drawn_as_alone(data, core._load_file(str(alone), ".glb"), ".glb")
+
+    @pytest.mark.parametrize("sheet,item", [
+        # A 1 m x 0.6 m x 2 mm panel with one 40 mm bracket at its centre (25 times).
+        (((1.0, 0.002, 0.6), (0, 0.001, 0)), ((0.04, 0.04, 0.04), (0, 0.022, 0))),
+        # A 100 mm board of no thickness with one 4 mm chip at its centre (25 times).
+        (((0.1, 0.0, 0.08), (0, 0, 0)), ((0.004, 0.001, 0.004), (0, 0.0005, 0))),
+    ])
+    def test_a_sheet_that_belongs_to_the_model_is_drawn_and_framed(self, tmp_path, sheet, item):
+        """Under 50 times its centred item, a flat sheet is part of the model: every part is drawn and
+        the camera frames the full bounds, as on a scene with no recorded parts."""
+        import trimesh
+
+        from preview_pipeline import core, renderer
+
+        scene = trimesh.Scene()
+        extents, centre = item
+        scene.add_geometry(trimesh.creation.box(extents=extents).apply_translation(centre), geom_name="item")
+        (sx, _, sz), centre = sheet
+        flat = trimesh.Trimesh(vertices=[[-sx / 2, 0, -sz / 2], [sx / 2, 0, -sz / 2], [sx / 2, 0, sz / 2],
+                                         [-sx / 2, 0, sz / 2]], faces=[[0, 2, 1], [0, 3, 2]]) \
+            if sheet[0][1] == 0 else trimesh.creation.box(extents=sheet[0]).apply_translation(centre)
+        scene.add_geometry(flat, geom_name="sheet")
+        path = tmp_path / "scene.glb"
+        scene.export(str(path))
+        data = core._load_file(str(path), ".glb")
+        assert data.n_points == sum(len(g.vertices) for g in trimesh.load(str(path)).dump())
+        plain = data.copy()
+        plain.field_data.clear()
+        framed = renderer._compute_camera_framing(data, use_full_bounds=True)
+        full = renderer._compute_camera_framing(plain, use_full_bounds=True)
+        assert np.array_equal(framed[0], full[0]) and framed[1:] == full[1:]
+
+    def test_a_glb_robot_on_its_platform_on_a_ground_keeps_and_frames_the_platform(self, tmp_path):
+        import trimesh
+
+        from preview_pipeline import core, renderer
+
+        scene = trimesh.Scene()
+        scene.add_geometry(trimesh.creation.box(extents=(1, 1, 1)).apply_translation((0, 0.6, 0)), geom_name="robot")
+        scene.add_geometry(trimesh.creation.box(extents=(60, 0.1, 60)).apply_translation((0, 0.05, 0)),
+                           geom_name="platform")
+        scene.add_geometry(trimesh.Trimesh(vertices=[[-500, 0, -500], [500, 0, -500], [500, 0, 500], [-500, 0, 500]],
+                                           faces=[[0, 2, 1], [0, 3, 2]]), geom_name="ground")
+        path = tmp_path / "platform.glb"
+        scene.export(str(path))
+        data = core._normalize_up_axis(core._load_file(str(path), ".glb"), ".glb")
+        assert data.n_points == 16  # robot and platform drawn, ground dropped
+        plain = data.copy()
+        plain.field_data.clear()
+        framed = renderer._compute_camera_framing(data, use_full_bounds=True)
+        full = renderer._compute_camera_framing(plain, use_full_bounds=True)
+        assert np.array_equal(framed[0], full[0]) and framed[1:] == full[1:]
+        frame = renderer.generate_static_frame(data, resolution=(160, 120))
+        assert (frame[..., 3] == 0).mean() > 0.3, "the platform fills the frame"
+
+    def test_a_textured_model_on_a_ground_plane_keeps_its_texture(self, tmp_path):
+        """With the ground dropped before the merge, the one part left keeps its UV texture rather
+        than being baked to vertex colours."""
+        import trimesh
+        from PIL import Image
+
+        from preview_pipeline import core
+
+        texture = Image.fromarray(np.kron([[0, 255], [255, 0]], np.ones((16, 16))).astype(np.uint8)).convert("RGB")
+        box = trimesh.creation.box(extents=(1.0, 0.7, 0.6))
+        box.apply_translation((0.0, 0.35, 0.0))
+        uv = np.column_stack([(box.vertices[:, 0] + 0.5), box.vertices[:, 1] / 0.7])
+        box.visual = trimesh.visual.TextureVisuals(uv=uv, image=texture)
+        for ground in (True, False):
+            scene = trimesh.Scene()
+            scene.add_geometry(box, geom_name="model")
+            if ground:
+                scene.add_geometry(trimesh.Trimesh(
+                    vertices=[[-25, 0, -25], [25, 0, -25], [25, 0, 25], [-25, 0, 25]],
+                    faces=[[0, 2, 1], [0, 3, 2]]), geom_name="ground")
+            scene.export(str(tmp_path / f"textured-{ground}.glb"))
+        data = core._load_file(str(tmp_path / "textured-True.glb"), ".glb")
+        assert getattr(data, "_preview_texture", None) is not None
+        _assert_drawn_as_alone(data, core._load_file(str(tmp_path / "textured-False.glb"), ".glb"), ".glb")
 
 
 _BOX_TRIANGLES = [[0, 2, 1], [1, 2, 3], [4, 5, 6], [5, 7, 6], [0, 1, 4], [1, 5, 4],
@@ -357,8 +555,9 @@ def _box_corners(lo, hi):
     return [[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
 
 
-def _write_3mf(path):
-    """A 3MF (Z-up by specification) of a 1 x 0.6 x 0.7 box on a 50 x 50 ground, two build items."""
+def _write_3mf(path, ground=True):
+    """A 3MF (Z-up by specification) of a 1 x 0.6 x 0.7 box on a 50 x 50 ground, two build items (or
+    the box alone)."""
     def obj(object_id, vertices, triangles):
         return (f'<object id="{object_id}" type="model"><mesh><vertices>'
                 + "".join(f'<vertex x="{x}" y="{y}" z="{z}"/>' for x, y, z in vertices)
@@ -366,18 +565,20 @@ def _write_3mf(path):
                 + "".join(f'<triangle v1="{a}" v2="{b}" v3="{c}"/>' for a, b, c in triangles)
                 + "</triangles></mesh></object>")
 
-    ground = [[-25, -25, 0], [25, -25, 0], [25, 25, 0], [-25, 25, 0]]
+    ground_vertices = [[-25, -25, 0], [25, -25, 0], [25, 25, 0], [-25, 25, 0]]
     model = ('<?xml version="1.0" encoding="UTF-8"?><model unit="meter" '
              'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources>'
              + obj(1, _box_corners((-0.5, -0.3, 0), (0.5, 0.3, 0.7)), _BOX_TRIANGLES)
-             + obj(2, ground, [[0, 1, 2], [0, 2, 3]])
-             + '</resources><build><item objectid="1"/><item objectid="2"/></build></model>')
+             + (obj(2, ground_vertices, [[0, 1, 2], [0, 2, 3]]) if ground else "")
+             + '</resources><build><item objectid="1"/>'
+             + ('<item objectid="2"/>' if ground else "") + '</build></model>')
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("3D/3dmodel.model", model)
 
 
-def _write_dae(path):
-    """A Y-up COLLADA scene of a 1 x 0.7 x 0.6 box on a 50 x 50 ground, one node per geometry."""
+def _write_dae(path, ground=True):
+    """A Y-up COLLADA scene of a 1 x 0.7 x 0.6 box on a 50 x 50 ground, one node per geometry (or the
+    box alone)."""
     def geometry(name, vertices, triangles):
         flat = " ".join(str(c) for vertex in vertices for c in vertex)
         indices = " ".join(str(i) for triangle in triangles for i in triangle)
@@ -389,91 +590,104 @@ def _write_dae(path):
                 f'<triangles count="{len(triangles)}"><input semantic="VERTEX" source="#{name}-v" offset="0"/>'
                 f"<p>{indices}</p></triangles></mesh></geometry>")
 
-    ground = [[-25, 0, -25], [25, 0, -25], [25, 0, 25], [-25, 0, 25]]
+    ground_vertices = [[-25, 0, -25], [25, 0, -25], [25, 0, 25], [-25, 0, 25]]
     path.write_text(
         '<?xml version="1.0" encoding="utf-8"?>'
         '<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">'
         "<asset><up_axis>Y_UP</up_axis></asset><library_geometries>"
         + geometry("model", _box_corners((-0.5, 0, -0.3), (0.5, 0.7, 0.3)), _BOX_TRIANGLES)
-        + geometry("ground", ground, [[0, 2, 1], [0, 3, 2]])
+        + (geometry("ground", ground_vertices, [[0, 2, 1], [0, 3, 2]]) if ground else "")
         + '</library_geometries><library_visual_scenes><visual_scene id="s">'
-        '<node><instance_geometry url="#model"/></node><node><instance_geometry url="#ground"/></node>'
-        '</visual_scene></library_visual_scenes><scene><instance_visual_scene url="#s"/></scene></COLLADA>')
+        '<node><instance_geometry url="#model"/></node>'
+        + ('<node><instance_geometry url="#ground"/></node>' if ground else "")
+        + '</visual_scene></library_visual_scenes><scene><instance_visual_scene url="#s"/></scene></COLLADA>')
 
 
 @pytest.mark.unit
 @requires_real("pyvista", "vtk")
 class TestXmlScenes:
-    def test_a_3mf_build_records_its_items(self, tmp_path):
+    @pytest.mark.parametrize("ext,writer", [(".3mf", _write_3mf), (".dae", _write_dae)])
+    def test_a_build_with_a_ground_draws_the_model_alone(self, tmp_path, ext, writer):
         from preview_pipeline import core
 
-        path = tmp_path / "scene.3mf"
-        _write_3mf(path)
-        _assert_frames_the_model(core._load_file(str(path), ".3mf"), ".3mf")
-
-    def test_a_collada_scene_records_its_instances(self, tmp_path):
-        from preview_pipeline import core
-
-        path = tmp_path / "scene.dae"
-        _write_dae(path)
-        _assert_frames_the_model(core._load_file(str(path), ".dae"), ".dae")
+        path, alone = tmp_path / f"scene{ext}", tmp_path / f"alone{ext}"
+        writer(path)
+        writer(alone, ground=False)
+        _assert_drawn_as_alone(core._load_file(str(path), ext), core._load_file(str(alone), ext), ext)
 
 
 @pytest.mark.unit
 @requires_real("pyvista", "vtk", "trimesh")
 class TestSceneLoaders:
-    def test_a_glb_scene_mixing_a_mesh_a_point_cloud_and_a_ground_records_every_part(self, tmp_path):
+    def test_a_glb_scene_mixing_a_mesh_a_point_cloud_and_a_ground_draws_the_mesh_and_the_cloud(self, tmp_path):
         import trimesh
 
         from preview_pipeline import core, renderer
 
-        scene = _model_on_ground_scene()
         cloud = np.random.default_rng(1).uniform((-0.4, 0.7, -0.2), (0.4, 0.9, 0.2), size=(200, 3))
-        scene.add_geometry(trimesh.PointCloud(cloud), geom_name="scan")
-        path = tmp_path / "mixed.glb"
-        scene.export(str(path))
-        data = core._load_file(str(path), ".glb")
+        for ground in (True, False):
+            scene = _model_on_ground_scene(ground=ground)
+            scene.add_geometry(trimesh.PointCloud(cloud), geom_name="scan")
+            scene.export(str(tmp_path / f"mixed-{ground}.glb"))
+        data = core._load_file(str(tmp_path / "mixed-True.glb"), ".glb")
         assert not renderer.is_point_cloud(data) and data.n_verts > 0
-        assert len(scene_parts.part_bounds(data)) == 3
-        _assert_frames_the_model(data, ".glb")
+        assert len(scene_parts.part_bounds(data)) == 2
+        _assert_drawn_as_alone(data, core._load_file(str(tmp_path / "mixed-False.glb"), ".glb"), ".glb")
 
     def test_an_obj_with_one_material_is_one_part(self, tmp_path):
-        """trimesh merges the objects of an OBJ that share a material, so nothing is recorded."""
+        """trimesh merges the objects of an OBJ that share a material, so nothing is recorded or left
+        out: the ground stays."""
         from preview_pipeline import core
 
         path = tmp_path / "scene.obj"
         _model_on_ground_scene().export(str(path))
-        assert scene_parts.part_bounds(core._load_file(str(path), ".obj")) is None
+        data = core._load_file(str(path), ".obj")
+        assert scene_parts.part_bounds(data) is None
+        assert np.ptp(np.asarray(data.points)[:, 0]) == pytest.approx(50.0)
 
 
 @pytest.mark.unit
 @requires_real("pyvista", "vtk", "cadquery")
 class TestStepAssembly:
-    def test_a_step_assembly_records_its_parts(self, tmp_path):
+    def test_a_step_assembly_with_a_ground_draws_the_model_alone(self, tmp_path):
+        """The model is tessellated again on its own, at the detail of a file holding it alone."""
         import cadquery as cq
 
         from preview_pipeline import core
 
-        assembly = cq.Assembly()
-        assembly.add(cq.Workplane().box(1, 0.6, 0.7).translate((0, 0, 0.35)), name="model")
-        assembly.add(cq.Workplane().box(50, 50, 0.01).translate((0, 0, -0.005)), name="ground")
-        path = tmp_path / "assembly.step"
-        assembly.save(str(path))
-        data = core._load_file(str(path), ".step")
-        bounds = scene_parts.part_bounds(data)
-        assert bounds is not None and len(bounds) == 2
-        mask = scene_parts.backdrop_parts(bounds)
-        assert mask.sum() == 1
-        from preview_pipeline import renderer
-
-        _, radius, _ = renderer._compute_camera_framing(data, use_full_bounds=True)
-        assert radius < 5.0
+        for ground in (True, False):
+            assembly = cq.Assembly()
+            assembly.add(cq.Workplane().cylinder(0.7, 0.4).translate((0, 0, 0.35)), name="model")
+            if ground:
+                assembly.add(cq.Workplane().box(50, 50, 0.01).translate((0, 0, -0.005)), name="ground")
+            assembly.save(str(tmp_path / f"assembly-{ground}.step"))
+        data = core._load_file(str(tmp_path / "assembly-True.step"), ".step")
+        _assert_drawn_as_alone(data, core._load_file(str(tmp_path / "assembly-False.step"), ".step"), ".step")
 
 
 @pytest.mark.unit
 @requires_real("pyvista", "vtk", "open3d")
 class TestFbxScene:
-    def test_an_fbx_scene_records_its_meshes(self, tmp_path):
+    def test_an_fbx_scene_with_a_ground_draws_the_model_alone(self, tmp_path):
+        from test_thumbnail_fbx import CUBE_QUADS, CUBE_VERTICES, _budgets, ascii_fbx
+
+        from preview_pipeline import core
+
+        ground = [-25, 0, -25, 25, 0, -25, 25, 0, 25, -25, 0, 25]
+        path, alone = tmp_path / "scene.fbx", tmp_path / "alone.fbx"
+        path.write_text(ascii_fbx(
+            geometries=[(10, CUBE_VERTICES, CUBE_QUADS, None), (11, ground, [[0, 3, 2, 1]], None)],
+            models=[(20, (0, 0.5, 0)), (21, (0, 0, 0))],
+            materials=[(30, (1, 0, 0)), (31, (0, 1, 0))],
+            connections=[(20, 0), (21, 0), (10, 20), (11, 21), (30, 20), (31, 21)]))
+        alone.write_text(ascii_fbx(
+            geometries=[(10, CUBE_VERTICES, CUBE_QUADS, None)], models=[(20, (0, 0.5, 0))],
+            materials=[(30, (1, 0, 0))], connections=[(20, 0), (10, 20), (30, 20)]))
+        _assert_drawn_as_alone(core._load_file(str(path), ".fbx", budgets=_budgets()),
+                               core._load_file(str(alone), ".fbx", budgets=_budgets()), ".fbx")
+
+    def test_a_coloured_ground_does_not_colour_an_uncoloured_model(self, tmp_path):
+        """A model with no colour beside a coloured ground got the fill colour; alone it has none."""
         from test_thumbnail_fbx import CUBE_QUADS, CUBE_VERTICES, _budgets, ascii_fbx
 
         from preview_pipeline import core
@@ -482,7 +696,7 @@ class TestFbxScene:
         path = tmp_path / "scene.fbx"
         path.write_text(ascii_fbx(
             geometries=[(10, CUBE_VERTICES, CUBE_QUADS, None), (11, ground, [[0, 3, 2, 1]], None)],
-            models=[(20, (0, 0.5, 0)), (21, (0, 0, 0))],
-            materials=[(30, (1, 0, 0)), (31, (0, 1, 0))],
-            connections=[(20, 0), (21, 0), (10, 20), (11, 21), (30, 20), (31, 21)]))
-        _assert_frames_the_model(core._load_file(str(path), ".fbx", budgets=_budgets()), ".fbx")
+            models=[(20, (0, 0.5, 0)), (21, (0, 0, 0))], materials=[(31, (0, 1, 0))],
+            connections=[(20, 0), (21, 0), (10, 20), (11, 21), (31, 21)]))
+        data = core._load_file(str(path), ".fbx", budgets=_budgets())
+        assert "RGB" not in data.point_data
