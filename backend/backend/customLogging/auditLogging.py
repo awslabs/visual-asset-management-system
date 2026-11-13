@@ -2309,6 +2309,27 @@ def _action_prefix(group: str, prefix_type: str, outcome: str) -> str:
     return _event_type((label, None), ("type", prefix_type))
 
 
+def _action_spec(action: Optional[str], event: Any, ctx: Optional[AuditContext]) -> Optional[AuditSpec]:
+    """
+    The spec a record of ``action`` is written with. Several routes register one action name with
+    different entity types (the metadata actions of an asset, a file, an asset link and a database),
+    so the spec of the request's matched route wins when it registers that name; otherwise, and for
+    an action another route registers, the spec registered for the name. None takes the route's spec.
+    """
+    route_spec = ctx.route_spec if ctx is not None else None
+    if route_spec is None and ctx is None and action:
+        try:
+            request = _request_facts(event, None) if isinstance(event, dict) else {}
+            route_spec = audit_spec_for_route(request.get("route"), request.get("method"))
+        except Exception:
+            route_spec = None
+    if not action:
+        return route_spec
+    if route_spec is not None and route_spec.action == action:
+        return route_spec
+    return audit_spec_for_action(action)
+
+
 def log_action(
     event: Dict[str, Any],
     action: Optional[str] = None,
@@ -2370,7 +2391,7 @@ def log_action(
     """
     try:
         ctx = _context_for(event)
-        audit_spec = audit_spec_for_action(action) if action else (ctx.route_spec if ctx else None)
+        audit_spec = _action_spec(action, event, ctx)
         if audit_spec is None and not action:
             logger.error("log_action called without an action outside a registered route")
             return
