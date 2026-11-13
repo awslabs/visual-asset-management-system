@@ -1180,7 +1180,7 @@ def _log_auth_record(key, label: str, secondary_type: str, event: Dict[str, Any]
     ``outcome``, ``entity``, ``actor``, ``request``, the top-level ids, ``changes`` / ``previous`` /
     ``requestParameters`` (masked and capped like an action record's) and ``legacyType`` (the
     ``[type: ...]`` value). A legacy key of a contract key's name with a different value moves under
-    ``legacy``. The record is bounded to AUDIT_RECORD_MAX_BYTES with the compact action echo; a
+    ``legacy``. The record is bounded to AUDIT_RECORD_MAX_BYTES with the short request echo; a
     success is buffered for the request's flush, any other outcome is written at once.
     """
     user_context = _extract_user_context(event)
@@ -1210,7 +1210,7 @@ def _log_auth_record(key, label: str, secondary_type: str, event: Dict[str, Any]
         contract["legacyType"] = secondary_type
         return _with_canonical_keys(legacy, contract)
 
-    record = _bounded_action_record(head, build_payload, _compact_echo(event))
+    record = _bounded_action_record(head, build_payload, _short_echo(event))
     _note_recorded(ctx, action)
     _enqueue_records(ctx, log_type, [record], buffer=outcome_written == OUTCOME_SUCCESS)
 
@@ -2214,6 +2214,18 @@ def _compact_echo(event: Any) -> str:
     return f" --- [event: {_serialize_json({'requestContext': echo_context})}]"
 
 
+def _short_echo(event: Any) -> str:
+    """The ` --- [event: ...]` suffix of the short request echo (_short_echo_event), or ""."""
+    short = _short_echo_event(event)
+    return f" --- [event: {_serialize_json(short)}]" if isinstance(short, dict) and short else ""
+
+
+def _record_echo(group: str, event: Any) -> str:
+    """The echo a record contract record of this group carries: the short request echo for auth
+    change and auth other records (as their records outside a context), the compact echo otherwise."""
+    return _short_echo(event) if group in _AUTH_RECORD_GROUPS else _compact_echo(event)
+
+
 # The echo an action record carries when its compact echo would take the record past
 # AUDIT_RECORD_MAX_BYTES.
 AUDIT_ECHO_TRUNCATED = ' --- [event: {"truncated": true}]'
@@ -2384,7 +2396,7 @@ def log_action(
                 payload["legacyType"] = prefix_type
                 return payload
 
-        record = _bounded_action_record(head, build_payload, _compact_echo(event))
+        record = _bounded_action_record(head, build_payload, _record_echo(group, event))
         hold = outcome_written == OUTCOME_SUCCESS or (flush_with_request and outcome_written == OUTCOME_FAILED)
         _enqueue_records(ctx, target_group, [record], buffer=hold)
     except Exception as e:

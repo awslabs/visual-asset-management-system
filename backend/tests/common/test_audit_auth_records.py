@@ -296,6 +296,81 @@ class TestAuthRouteFailures:
         assert [p["outcome"] for p in payloads] == ["success"]
 
 
+def _echo_json(echo):
+    return json.loads(echo[len(" --- [event: "):-1])
+
+
+def _route_event(path, method, path_parameters, resource):
+    event = _event(path, method, path_parameters=path_parameters)
+    event["resource"] = resource
+    event["requestContext"]["resourcePath"] = resource
+    event["requestContext"]["identity"] = {"sourceIp": "203.0.113.5"}
+    return event
+
+
+def _expected_short_echo(event):
+    expected = {"requestContext": {"requestId": "req-1", "requestTimeEpoch": 1763050000000,
+                                   "resourcePath": event["resource"],
+                                   "http": {"method": event["requestContext"]["http"]["method"],
+                                            "path": event["requestContext"]["http"]["path"],
+                                            "sourceIp": "198.51.100.7"},
+                                   "identity": {"sourceIp": "203.0.113.5"}},
+                "resource": event["resource"]}
+    if event["pathParameters"]:
+        expected["pathParameters"] = event["pathParameters"]
+    return expected
+
+
+@pytest.mark.unit
+class TestAuthRecordEcho:
+    """Auth change and auth other records inside a context echo the short request: request id and
+    time, method and path, route, path parameters and connection addresses."""
+
+    @pytest.mark.parametrize("case", AUTH_RECORD_CASES, ids=_CASE_IDS)
+    def test_a_legacy_call_echoes_the_short_request(self, clients, case):
+        function, secondary, path, method, path_parameters, legacy, kwargs, _, _ = case
+        log_type = "auditAuthChanges" if function == "log_auth_changes" else "auditAuthOther"
+        event = _route_event(path, method, path_parameters, "/route/{param}")
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            getattr(auditLogging, function)(event, secondary, dict(legacy), **kwargs)
+        _, _, echo = _only(clients, log_type)
+        assert _echo_json(echo) == _expected_short_echo(event)
+
+    @pytest.mark.parametrize("path, method, path_parameters, resource, group", [
+        ("/roles/r1", "DELETE", {"roleId": "r1"}, "/roles/{roleId}", "auditAuthChanges"),
+        ("/user/cognito/carol", "DELETE", {"userId": "carol"}, "/user/cognito/{userId}", "auditAuthChanges"),
+        ("/auth/constraints/c1", "GET", {"constraintId": "c1"}, "/auth/constraints/{constraintId}",
+         "auditAuthOther"),
+    ])
+    def test_a_failed_request_record_echoes_the_short_request(self, clients, path, method, path_parameters,
+                                                             resource, group):
+        @auditLogging.audited_handler
+        def handler(event, context):
+            return {"statusCode": 404}
+
+        event = _route_event(path, method, path_parameters, resource)
+        handler(event, LAMBDA_CONTEXT)
+        _, payload, echo = _only(clients, group)
+        assert payload["outcome"] == "failed"
+        assert _echo_json(echo) == _expected_short_echo(event)
+
+    def test_a_read_record_echoes_the_short_request(self, clients):
+        event = _route_event("/auth/api-keys/k1", "GET", {"apiKeyId": "k1"}, "/auth/api-keys/{apiKeyId}")
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_action(event, "apiKeyGet", item_count=1, apiKeyId="k1")
+        _, _, echo = _only(clients, "auditAuthOther")
+        assert _echo_json(echo) == _expected_short_echo(event)
+
+    def test_an_action_record_keeps_the_compact_echo(self, clients):
+        event = _route_event("/database/db1/assets/a1", "PUT", {"databaseId": "db1", "assetId": "a1"},
+                             "/database/{databaseId}/assets/{assetId}")
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_action(event, "assetUpdate", database_id="db1", asset_id="a1")
+        _, _, echo = _only(clients, "auditActions")
+        assert _echo_json(echo) == {"requestContext": {"requestId": "req-1", "http": {
+            "method": "PUT", "path": "/database/db1/assets/a1"}}}
+
+
 AUTH_READS = [
     ("apiKeyList", "/auth/api-keys", "GET", {}),
     ("apiKeyGet", "/auth/api-keys/k1", "GET", {"apiKeyId": "k1"}),
