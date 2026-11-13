@@ -23,6 +23,9 @@ from common.s3 import (
     bucket_region_fields,
     presigned_get_object_params,
 )
+from common.compliance.quarantineGuard import (
+    QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
+)
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from handlers.assets.assetVersions import (
     resolve_file_version_from_asset_version,
@@ -216,9 +219,9 @@ def handle_head_request(event, claims_and_roles):
         message = "Asset not distributable"
         logger.error(message)
         return authorization_error(body={'message': message})
-    
+
     asset_object.update({"object__type": "asset"})
-    
+
     # Check authorization
     operation_allowed_on_asset = False
     if len(claims_and_roles["tokens"]) > 0:
@@ -226,10 +229,14 @@ def handle_head_request(event, claims_and_roles):
         if casbin_enforcer.enforceAPI(event, "GET"):
             if casbin_enforcer.enforce(asset_object, "GET"):
                 operation_allowed_on_asset = True
-    
+
     if not operation_allowed_on_asset:
         return authorization_error()
-    
+
+    # The quarantine block is evaluated only for an authorized caller, so a denied caller
+    # cannot learn the asset's compliance state from the response.
+    check_quarantine_block(databaseId, assetId)
+
     # Get asset location
     asset_location = asset_object.get('assetLocation')
     if not asset_location:
@@ -477,6 +484,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     operation_allowed_on_asset = True
 
         if operation_allowed_on_asset:
+            # The quarantine block is evaluated only for an authorized caller, so a denied
+            # caller cannot learn the asset's compliance state from the response.
+            check_quarantine_block(databaseId, assetId)
+
             # Get asset location
             asset_location = asset_object.get('assetLocation')
             if not asset_location:
@@ -700,6 +711,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except QuarantineBlockedResponse as refusal:
+        # An expected refusal: one INFO line, no traceback (D174).
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

@@ -321,7 +321,7 @@ If the destination file already has metadata with the same keys, the copy operat
 
 ## Viewing files
 
-VAMS includes 21 built-in viewer plugins that render files directly in the browser. When you select a file in the file manager, VAMS opens it in the viewer that supports its file extension, or, when several viewers support it, lets you choose one from a dropdown. Viewers cover 3D models, point clouds, Gaussian splats, USD scenes, images, video, audio, documents, and tabular data.
+VAMS includes 22 built-in viewer plugins that render files directly in the browser. When you select a file in the file manager, VAMS opens it in the viewer that supports its file extension, or, when several viewers support it, lets you choose one from a dropdown. Viewers cover 3D models, point clouds, Gaussian splats, USD scenes, images, video, audio, documents, and tabular data.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](viewers.md).
 

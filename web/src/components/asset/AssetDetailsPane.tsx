@@ -17,6 +17,7 @@ import {
     Popover,
     Icon,
     Spinner,
+    Badge,
 } from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
 import {
@@ -25,13 +26,28 @@ import {
     unsubscribeFromAsset,
     downloadAsset,
 } from "../../services/APIService";
+import {
+    fetchComplianceState,
+    onComplianceStateAnnounced,
+    ComplianceState,
+    liveDatabaseId,
+} from "../../services/ComplianceService";
+import {
+    complianceStateBadgeColor,
+    complianceStateIndicator,
+} from "../compliance/complianceStateBadge";
 import PreviewModal from "../filemanager/components/PreviewModal";
+import { downloadRefusalReason } from "../../visualizerPlugin/core/streamFailure";
 import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
 import Synonyms from "../../synonyms";
 import { readCachedTagTypes } from "../../common/utils/tagOptions";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
 import type { GridProps } from "@cloudscape-design/components/grid";
+
+// The API route the badge reads; the badge is fetched only when the caller may call it.
+const COMPLIANCE_STATE_API_ROUTE = "/compliance/state/{databaseId}/{assetId}";
 
 // Header columns (id + description | type + tags | version). Cloudscape's Grid breakpoints follow
 // the grid's container width: one column per row below xxs, two then a full-width third up to xs,
@@ -45,6 +61,8 @@ export const ASSET_HEADER_GRID: GridProps.ElementDefinition[] = [
 interface AssetDetailsPaneProps {
     asset: any;
     databaseId: string;
+    /** The asset id the route names; `asset` can still be the previous asset while it loads. */
+    assetId: string;
     onOpenUpdateAsset: () => void;
     onOpenDeleteModal: () => void;
     /** Why Delete is unavailable to the signed-in role; Delete is enabled when undefined. */
@@ -80,6 +98,7 @@ export function currentVersionLabel(asset: any): string {
 export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     asset,
     databaseId,
+    assetId,
     onOpenUpdateAsset,
     onOpenDeleteModal,
     deleteDisabledReason,
@@ -97,6 +116,54 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     const [isSubscribing, setIsSubscribing] = useState<boolean>(false);
     const [userName, setUserName] = useState<string>("");
 
+    // Compliance badge state
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canReadCompliance = canCallRoute("GET", COMPLIANCE_STATE_API_ROUTE);
+    // The badge is read for the asset the route names (`databaseId`, `assetId`), not for the loaded
+    // `asset`, which still holds the previous asset until the new one is fetched. It is kept with
+    // the ids it was read for and shown only while they are the route's, so after an in-app
+    // navigation the previous asset's state is neither requested nor shown, and a late response
+    // for it is dropped.
+    const [complianceBadge, setComplianceBadge] = useState<{
+        databaseId: string;
+        assetId: string;
+        state: ComplianceState;
+    } | null>(null);
+
+    useEffect(() => {
+        setComplianceBadge(null);
+        if (!canReadCompliance || !assetId || !databaseId) return;
+        let current = true;
+        fetchComplianceState(databaseId, assetId).then(([success, result]) => {
+            if (current && success && typeof result !== "string") {
+                setComplianceBadge({ databaseId, assetId, state: result });
+            }
+        });
+        // The Compliance tab re-reads the state after each of its actions (Evaluate Now, release,
+        // an exception) and shares it; the badge follows it for this asset only.
+        const stopFollowing = onComplianceStateAnnounced((announcedDb, announcedAsset, state) => {
+            if (current && announcedDb === databaseId && announcedAsset === assetId) {
+                setComplianceBadge({ databaseId, assetId, state });
+            }
+        });
+        return () => {
+            current = false;
+            stopFollowing();
+        };
+    }, [canReadCompliance, assetId, databaseId]);
+    // The header pairs the badge with the loaded record's name, so the badge also waits until that
+    // record is the route's asset; otherwise the previous asset's name would carry the new state.
+    const recordIsRouteAsset =
+        asset?.assetId === assetId &&
+        (!asset?.databaseId || liveDatabaseId(asset.databaseId) === databaseId);
+    const shownBadge =
+        recordIsRouteAsset &&
+        complianceBadge &&
+        complianceBadge.databaseId === databaseId &&
+        complianceBadge.assetId === assetId
+            ? complianceBadge.state
+            : null;
+
     // Asset preview thumbnail state
     const previewKey = asset?.previewLocation?.Key || asset?.previewLocation?.key || "";
     // The preview is served by the asset download API, which refuses a non-distributable asset, so
@@ -109,6 +176,8 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
     const [thumbnailLoading, setThumbnailLoading] = useState<boolean>(false);
     const [thumbnailError, setThumbnailError] = useState<boolean>(false);
+    // The API's own reason when it refused the preview (D166), shown in its place.
+    const [thumbnailRefusal, setThumbnailRefusal] = useState<string | null>(null);
     const [showPreviewModal, setShowPreviewModal] = useState<boolean>(false);
 
     // Load preview thumbnail when asset changes
@@ -122,6 +191,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
         let cancelled = false;
         setThumbnailLoading(true);
         setThumbnailError(false);
+        setThumbnailRefusal(null);
         setThumbnailUrl(null);
 
         (async () => {
@@ -138,6 +208,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                     setThumbnailUrl(response[1]);
                 } else {
                     setThumbnailError(true);
+                    setThumbnailRefusal(downloadRefusalReason(response));
                 }
             } catch {
                 if (!cancelled) setThumbnailError(true);
@@ -301,9 +372,18 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             )
                         }
                     >
-                        <span style={{ fontSize: "1.2em" }}>
-                            {asset?.assetName || `${Synonyms.Asset} Details`}
-                        </span>
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <span style={{ fontSize: "1.2em" }}>
+                                {asset?.assetName || `${Synonyms.Asset} Details`}
+                            </span>
+                            {shownBadge && (
+                                <Badge
+                                    color={complianceStateBadgeColor(shownBadge.complianceState)}
+                                >
+                                    {complianceStateIndicator(shownBadge.complianceState).label}
+                                </Badge>
+                            )}
+                        </SpaceBetween>
                     </Header>
                 }
             >
@@ -365,6 +445,14 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             </div>
                         )}
 
+                        {/* A preview the API refused shows the API's reason in its place (D166). */}
+                        {hasPreview && !thumbnailLoading && thumbnailRefusal && (
+                            <div style={{ flexShrink: 0, maxWidth: "240px" }}>
+                                <Box color="text-status-error" fontSize="body-s">
+                                    {thumbnailRefusal}
+                                </Box>
+                            </div>
+                        )}
                         {/* Optional preview thumbnail — only takes the space it needs */}
                         {hasPreview && thumbnailUrl && (
                             <div
