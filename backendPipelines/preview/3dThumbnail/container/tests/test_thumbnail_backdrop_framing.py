@@ -72,6 +72,19 @@ class TestBackdropRule:
     def test_the_scale_is_fifty_times_the_content(self):
         assert scene_parts.BACKDROP_SCALE == 50.0
 
+    def test_the_nested_sheet_check_is_fast_for_two_thousand_sheets(self):
+        """2,000 equal backdrop sheets around one small item (the worst case: every sheet selected):
+        the check compares each with the 64 largest only, well under half a second."""
+        import time
+
+        item = _box((-0.01, 0.0, -0.01), (0.01, 0.02, 0.01))
+        sheets = [_box((-25.0 - i * 1e-3, 0.0, -25.0), (25.0 + i * 1e-3, 0.0, 25.0)) for i in range(2000)]
+        start = time.perf_counter()
+        mask = scene_parts.backdrop_parts([item] + sheets)
+        elapsed = time.perf_counter() - start
+        assert mask[1:].all() and not mask[0]  # none is at most half another's size
+        assert elapsed < 0.5, f"{elapsed:.2f} s"
+
     def test_a_platform_on_a_ground_plane_is_kept_and_only_the_ground_is_a_backdrop(self):
         """A 1 m robot on its own 60 m platform on a 1 km ground: only the outermost sheet goes."""
         robot = _box((-0.5, 0.1, -0.5), (0.5, 1.1, 0.5))

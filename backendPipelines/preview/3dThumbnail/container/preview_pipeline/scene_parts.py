@@ -50,6 +50,10 @@ CENTRE_SHARE = 0.25
 # A backdrop sheet lying on a larger backdrop sheet (a model's own platform on a ground plane) is at
 # most this share of the larger one's size; it is kept as part of the model.
 NESTED_SHARE = 0.5
+# Sheets a selected sheet is tested against for lying on one (the largest), and the block of sheets
+# tested in one vectorised pass.
+MAX_NESTED_OUTERS = 64
+_NESTED_BLOCK = 4096
 
 # A stray part is one the framing leaves out because it would shrink the model to nothing: a small
 # piece left far from the rest (an export leftover, a helper object, a light's proxy). The core of the
@@ -187,23 +191,33 @@ def backdrop_parts(bounds):
     selected = flat & centred & (largest >= BACKDROP_SCALE * content_largest)
     # Only the outermost sheet is a backdrop: a selected sheet lying on a larger selected sheet (the
     # platform a model stands on, on a ground plane) belongs to the model and is kept.
-    for inner in np.flatnonzero(selected):
-        for outer in np.flatnonzero(selected):
-            if outer != inner and _lies_on(bounds, order, largest, inner, outer):
-                mask[inner] = True
-                break
-    return selected & ~mask
+    return selected & ~_lies_on_larger(bounds, order, largest, selected)
 
 
-def _lies_on(bounds, order, largest, inner, outer) -> bool:
-    """True when sheet ``inner`` lies on sheet ``outer``: the same thin axis, at most half its size
-    (NESTED_SHARE), and its footprint inside the outer sheet's on the two large axes. Six equal skybox
-    walls do not lie on one another."""
-    if order[inner, 0] != order[outer, 0] or largest[inner] > NESTED_SHARE * largest[outer]:
-        return False
-    axes = order[outer, 1:]
-    return bool(np.all(bounds[inner, axes] >= bounds[outer, axes])
-                and np.all(bounds[inner, axes + 3] <= bounds[outer, axes + 3]))
+def _lies_on_larger(bounds, order, largest, selected):
+    """True per part for a selected sheet lying on a larger selected sheet: the same thin axis, at most
+    NESTED_SHARE of its size, and its footprint inside the larger one's on the two large axes. Six
+    equal skybox walls do not lie on one another. Each sheet is compared, in one vectorised pass per
+    block, against the MAX_NESTED_OUTERS largest selected sheets only, since a sheet a model stands on
+    lies on one of the few largest; the cost is linear in the number of sheets."""
+    lies = np.zeros(len(bounds), dtype=bool)
+    inners = np.flatnonzero(selected)
+    if len(inners) < 2:
+        return lies
+    outers = inners[np.argsort(-largest[inners], kind="stable")[:MAX_NESTED_OUTERS]]
+    thin_out = order[outers, 0]
+    axes_out = order[outers, 1:]  # (m, 2)
+    lo_out = np.take_along_axis(bounds[outers, :3], axes_out, axis=1)
+    hi_out = np.take_along_axis(bounds[outers, 3:], axes_out, axis=1)
+    for start in range(0, len(inners), _NESTED_BLOCK):
+        block = inners[start:start + _NESTED_BLOCK]
+        lo_in = bounds[block, :3][:, axes_out]  # (b, m, 2): the inner's bounds on each outer's axes
+        hi_in = bounds[block, 3:][:, axes_out]
+        on = ((order[block, 0][:, None] == thin_out[None, :])
+              & (largest[block][:, None] <= NESTED_SHARE * largest[outers][None, :])
+              & np.all(lo_in >= lo_out[None, :, :], axis=2) & np.all(hi_in <= hi_out[None, :, :], axis=2))
+        lies[block] = on.any(axis=1)
+    return lies
 
 
 def _changing_backdrops(bounds):
