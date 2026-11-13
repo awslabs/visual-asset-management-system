@@ -165,6 +165,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Documentation** The OpenAPI document `VAMS_API.yaml` no longer defines `errorMessage` twice in the `complianceEvaluation` schema, so strict YAML and OpenAPI parsers accept it. ([#1498](https://github.com/awslabs/visual-asset-management-system/issues/1498))
 -   **Web** The Needle USD viewer's error panel shows its whole message at any panel width; the 3D canvas no longer stays above the text and pushes it out of view. ([#1234](https://github.com/awslabs/visual-asset-management-system/issues/1234))
 -   **Backend/Tags** Creating, editing or deleting a tag that the caller's role does not allow on that tag answers `403 Not Authorized` instead of `500`. ([#1452](https://github.com/awslabs/visual-asset-management-system/issues/1452))
 -   **Backend** Asset creation and subscriptions share SNS topic names with sanitized asset IDs and a 16-character hash suffix, retained when truncating long names, so dotted, spaced, and already-safe IDs get distinct topics. ([#839](https://github.com/awslabs/visual-asset-management-system/issues/839))
