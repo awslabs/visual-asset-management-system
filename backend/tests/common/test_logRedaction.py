@@ -26,6 +26,17 @@ class TestRedactLogText:
         text = "Pipeline started processing 3 input files at /data/foo.e57"
         assert redact_log_text(text) == text
 
+    def test_the_word_secret_in_free_text_stays_readable(self):
+        text = "Fetched secret: arn:aws:secretsmanager:us-east-1:111122223333:secret:pipeline-key-AbCdEf"
+        assert redact_log_text(text) == text
+
+    def test_credential_field_names_redacted_in_free_text(self):
+        text = '{"clientSecret": "s3cr3t-value", "password": "hunter2", "status": "ok"}'
+        out = redact_log_text(text)
+        assert "s3cr3t-value" not in out
+        assert "hunter2" not in out
+        assert '"status": "ok"' in out
+
     def test_json_authorization_redacted(self):
         text = '{"authorization": "Bearer abc.def.ghi", "status": "ok"}'
         out = redact_log_text(text)

@@ -7,7 +7,7 @@ Scaffold a new VAMS backend API endpoint with all required files following the e
 You are scaffolding a new VAMS API endpoint. Follow root `CLAUDE.md` "Pattern 1: Adding a New API Endpoint" — the authoritative checklist. The required layers are:
 
 1. **Master route** (`backend/backend/common/apiRoutes.py`) - `ApiRoute` constant + category group
-2. **Backend handler** (Python Lambda) - Business logic with two-tier Casbin auth
+2. **Backend handler** (Python Lambda) - Business logic with two-tier Casbin auth, and an audit record of each action (`log_action`, registered in `common/auditActions.py`)
 3. **Pydantic models** - Request/response validation (Pydantic v1)
 4. **CDK Lambda builder** (TypeScript) - Infrastructure definition
 5. **API route binding** - Route registry registration (prefer `apiBuilder2-nestedStack.ts`; an add-on route registers from the add-on's own nested stack, see Fork mode "Which lane")
@@ -27,6 +27,7 @@ When the endpoint is being added in a **fork** of VAMS (the user says so, or the
 | ------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 1. Master route     | `backend/backend/common/apiRoutes.py`                                       | `backend/backend/custom/customApiRoutes.py` — `ApiRoute` constant (import from `common.apiRouteTypes`) + `CUSTOM_ROUTES`                                                                               |
 | 2. Handler          | `backend/backend/handlers/{domain}/`                                        | `backend/backend/handlers/custom/{handler}.py` (`handlers.custom.{handler}.lambda_handler`)                                                                                                            |
+| 2a. Audit action    | `backend/backend/common/auditActions.py`                                    | `backend/backend/custom/customAuditActions.py` — `CUSTOM_AUDIT_ROUTE_ACTIONS` entry per route-method (or `CUSTOM_AUDIT_EXEMPT` with a reason)                                                          |
 | 3. Models           | `backend/backend/models/{domain}.py`                                        | `backend/backend/models/custom/{domain}.py`                                                                                                                                                            |
 | 4–5. Lambda + route | `infra/lib/lambdaBuilder/`, `apiBuilder2-nestedStack.ts`                    | `infra/lib/nestedStacks/custom/customResources.ts` — builder pattern + five security calls + `attachFunctionToApi(scope, fn, { routePath, method, registry: props.registry })`; never `allowAnonymous` |
 | New table / name    | `storageBuilder-nestedStack.ts`, `resourceParamKeys.ts`, `resourceNames.py` | table in `customResources.ts` (KMS per Rule 8), key in `infra/common/customResourceParamKeys.ts` + `backend/backend/custom/customResourceNames.py`, published with `publishCustomResourceName()`       |
@@ -166,6 +167,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 -   Error handling: catch `ValidationError`, `VAMSGeneralErrorResponse`, generic `Exception`
 -   Response helpers: `success()`, `validation_error()`, `general_error()`, `internal_error()`, `authorization_error()`
 -   Never echo request input or internal details in client error messages — log specifics, return generic messages.
+-   **Audit every action.** Register each new route-method in `backend/backend/common/auditActions.py` (add-on: `common/addonAuditActions.py`; fork: `custom/customAuditActions.py`) with `route_entries(API_MY_RESOURCE, {PUT: spec("myResourceUpdate", "<entityType>"), GET: read("myResourceGet", "<entityType>")})`, or with a reason in the lane's exempt map; `tests/common/test_audit_registry.py` fails otherwise. Wrap the entrypoint in `with audit_request(event, context):` (or decorate it with `@audited_handler`) and call `log_action(event, "myResourceUpdate", database_id=..., changes={field: new value})` after the write succeeds; for a read, pass what was asked in `request_parameters`, never what was returned. See `backend/CLAUDE.md` "Audit Logging".
 
 ### Step 4: Create Pydantic Models
 

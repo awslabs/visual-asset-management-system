@@ -469,6 +469,9 @@
                 "additionalTokenAudiences": []
             }
         },
+        "auditLogging": {
+            "recordReads": true
+        },
         "webUi": {
             "optionalBannerHtmlMessage": "",
             "allowUnsafeEvalFeatures": false,

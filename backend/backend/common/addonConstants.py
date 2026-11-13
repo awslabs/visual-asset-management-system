@@ -77,8 +77,8 @@ ADDON_LOG_SENSITIVE_KEYS: List[str] = [
     # EDH Workstations (handlers/addon/edh/): the EDH root key travels as the X-EDH-TOKEN header and
     # as the rootKey field of its secret; a desktop row carries its DCV session_token,
     # authentication_token (returned a second time under broker_session_id) and
-    # session_local_admin_password; a connection_string embeds an authToken; the directory user the
-    # client creates is sent with a throw-away password.
+    # session_local_admin_password; a connection_string embeds an authToken. The throw-away password
+    # of the directory user the client creates is a "password" field, which the core lists redact.
     "X-EDH-TOKEN",
     "rootKey",
     "connection_string",
@@ -87,5 +87,4 @@ ADDON_LOG_SENSITIVE_KEYS: List[str] = [
     "authentication_token",
     "session_local_admin_password",
     "broker_session_id",
-    "password",
 ]

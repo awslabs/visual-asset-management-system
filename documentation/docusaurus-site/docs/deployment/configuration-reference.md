@@ -174,6 +174,16 @@ Independently of the WAF policy, the backend limits every asset file key to 1,02
 Managed rule groups can match legitimate traffic (for example, large multipart uploads, presigned-URL flows, or file names with configuration-style extensions). Set a rule group's `block` to `false` to observe its matches in Amazon CloudWatch first, then switch to `true` once you confirm normal VAMS traffic is not caught, adding scoped rule exclusions for any false positives. When only specific rules are the source of false positives, prefer a `ruleActionOverrides` entry that sets each such rule's `action` to `count` over dropping the whole group to count mode — this is how the shipped policy handles the ten Common Rule Set rules listed above, while the rest of the Common Rule Set keeps blocking. The unit test `infra/test/waf/wafCommonRuleSetOverrides.test.ts` pins the shipped override set, so a change to it is a deliberate edit of both the policy and the test.
 :::
 
+### Audit logging (`app.auditLogging`)
+
+| Field                          | Type    | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------ | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.auditLogging.recordReads` | boolean | `true`  | Writes an audit record for every successful read: gets, lists and searches. A read record holds the request (route, IDs, filters, page size) and the number of items returned, never the content. Set `false` to stop these records and cut audit log volume; writes, denials, failed reads, downloads and exports are recorded either way. When the `auditLogging` block or the key is absent, reads are recorded; a value that is not `true` or `false` fails synthesis with a configuration error. |
+
+:::info[Implemented by]
+`getConfig()` (`infra/config/config.ts`, `resolveAuditLoggingConfig`) defaults and validates the value, and `globalLambdaEnvironmentsAndPermissions()` (`infra/lib/helper/security.ts`) passes it to every VAMS Lambda function as the `AUDIT_RECORD_READS` environment variable, which `backend/backend/customLogging/auditLogging.py` reads. Changing it updates Lambda environment variables only; no other resource changes. See [Audit Logging](../developer/audit-logging.md#reads-switch).
+:::
+
 ### KMS encryption (`app.useKmsCmkEncryption`)
 
 :::note[Implemented by]
