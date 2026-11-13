@@ -186,7 +186,8 @@ web/
         utils/              # automationSelection.ts maps a selection to workflow input files;
                             #   executionLinks.ts maps workflow-execution provenance to the execution
                             #   detail route and the Tier-1 route the link is gated on
-      form/
+      form/                 # DragDropFileUpload (shared upload control, onAdd(roots)), uploadPaths.ts
+                            #   (the one upload path rule), UploadPreview; see section 7.7
       list/                 # TableList.tsx (the standard list page: search + refresh left, filters
                             #   right, collection-hooks filtering/sorting/paging); ListToolbar.tsx (that
                             #   toolbar for a page with its own Table, 7.6); tableSorting.ts (column
@@ -905,6 +906,14 @@ Every list page lays out the toolbar it passes as the Cloudscape Table's `filter
 
 -   **A list the server pages** (token paging) sorts the page shown with `useSortedItems`. While more than one page exists, the table header's description says `PAGE_SORTING_NOTE` ("Column sorting applies to the page shown."). An order across the whole list is a server-side filter (the database compliance overview's **Sort by**), not a column header. Choosing such an order clears the column-header sort (`clearSorting` from `useSortedItems`), so the rows follow the order just chosen.
 -   **A list the API returns whole** is filtered, sorted and paged in the browser with `useBrowserPagedItems` (15 rows to a page, as `TableList` pages), so its filters and sorting cover the whole list. Call `toFirstPage()` when a filter changes.
+
+### 7.7 The Upload Control and the Upload Path Rule
+
+The Create Asset wizard (`pages/AssetUpload/AssetUpload.tsx`, `AssetFileInfo`) and the Add Files page (`pages/AssetUpload/ModifyAssetsUploads.tsx`) share one upload control, `components/form/DragDropFileUpload.tsx`: **Add files** (a plain multi-file input), **Add folder** (a `webkitdirectory` input in every browser; `showDirectoryPicker` is only an enhancement and falls back to the input on any error other than a cancel) and one drop zone for files and folders together. Its contract is `onAdd(roots: UploadRoot[])`: it reports what the user added, never asset paths.
+
+Every asset path comes from `components/form/uploadPaths.ts`. A page stores the roots (Create Asset in the wizard state, `UploadRoots` and `folderNameMode`, so they survive step changes) and derives the files with `planUploadPaths(roots, { flow, destination, folderNameMode })` over the whole selection each time, then maps them onto `FileUploadTableItem`s with `plannedToUploadItems` (`pages/AssetUpload/uploadSelection.ts`) right before the upload workflow. The rule (#1462, #1471): on Create Asset a single folder added on its own drops its name; on Add Files a single folder keeps it; either flow's single folder can be switched with the override; every other selection keeps every folder's name; loose files keep their file name; the destination (`normalizeDestination`, `/` or `/a/b/`) is joined with one slash. Duplicate final paths are errors on every affected row and block the upload; never skip or dedupe them. Pass the database's `restrictFileUploadsToExtensions` in the context: files it refuses, and preview files without a preview image extension, become row errors by the same rule as `validateFiles` (`extensionViolation`), so they count in the preview's errors, its Errors view and the blocking reason; do not add a separate invalid-files alert. Do not build, prefix or re-derive upload paths in a page, and do not add a second picker: extend the root builders in `uploadPaths.ts` so every way of adding items gives identical roots.
+
+`components/form/UploadPreview.tsx` shows the preview (final path, size, status, counters, filters, removal), the single-folder override, the folder-rule info line and the hint for loose files in a referencing format (`referencingFileExtensions` / `referencingFileNames` in `common/constants/fileFormats.ts`). Add Files keeps its destination in `?folder=` and marks files at existing or archived paths from the list-files API (`fetchExistingPaths`, prefix-scoped, capped at 10,000 keys). That mark is advisory: a refusal or failure shows "Could not check all existing files" and marks nothing, and the API still enforces the upload.
 
 ---
 
