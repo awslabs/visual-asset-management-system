@@ -7,7 +7,7 @@
  * The upload preview table (#1462): its pager is labelled for assistive technology.
  */
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import UploadPreview from "./UploadPreview";
 import { UploadRoot, planUploadPaths } from "./uploadPaths";
 
@@ -60,12 +60,30 @@ describe("UploadPreview", () => {
         expect(screen.queryByRole("button", { name: "Show errors only" })).toBeNull();
     });
 
-    it("D2: wraps long paths so the status and remove columns stay in view", () => {
+    it("D2: shows each row's status and size inside its path cell, with an icon-only remove", () => {
         const name = `${"very-long-segment-".repeat(6)}model.gltf`;
-        renderPreview([{ kind: "file", name, handle: new File(["x"], name) }]);
-        const cell = screen.getByText(`/${name}`);
-        expect(cell.style.overflowWrap).toBe("anywhere");
+        const dupName = "a.txt";
+        renderPreview([
+            { kind: "file", name, handle: new File(["x"], name) },
+            { kind: "file", name: dupName, handle: new File(["x"], dupName) },
+            { kind: "file", name: dupName, handle: new File(["x"], dupName) },
+        ]);
+        const cells = screen.getAllByTestId("upload-preview-file-cell");
+        expect(cells).toHaveLength(3);
+        const longCell = cells.find((c) => c.textContent?.includes(`/${name}`)) as HTMLElement;
+        expect(within(longCell).getByText(`/${name}`).style.overflowWrap).toBe("anywhere");
+        expect(within(longCell).getByText("Ready")).toBeTruthy();
+        expect(within(longCell).getByText("1 B")).toBeTruthy();
+        const dupCells = cells.filter((c) => c.textContent?.includes("/a.txt"));
+        dupCells.forEach((c) => expect(within(c).getByText("Duplicate path")).toBeTruthy());
+
+        // No separate Size or Status columns, and the remove column has no text header.
+        const headers = screen.getAllByRole("columnheader").map((h) => h.textContent?.trim());
+        expect(headers).not.toContain("Size");
+        expect(headers).not.toContain("Status");
+        expect(headers).not.toContain("Remove");
+        expect(screen.getByRole("img", { name: "Remove" })).toBeTruthy();
         expect(screen.getByRole("button", { name: `Remove /${name}` })).toBeTruthy();
-        expect(screen.getByText("Ready")).toBeTruthy();
+        expect(screen.getAllByRole("button", { name: "Remove /a.txt" })).toHaveLength(2);
     });
 });

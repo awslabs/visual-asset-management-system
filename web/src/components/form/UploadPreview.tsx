@@ -17,6 +17,7 @@ import {
     Button,
     FormField,
     Header,
+    Icon,
     Pagination,
     RadioGroup,
     SegmentedControl,
@@ -233,10 +234,9 @@ export default function UploadPreview({
                 trackBy="id"
                 selectionType="multi"
                 variant="container"
-                // Long paths wrap instead of pushing Status and Remove out of view at narrow
-                // widths, and the Remove column stays pinned to the right edge.
+                // Long paths wrap; status and size sit under each path in the same cell, so
+                // nothing needs a sideways scroll at narrow widths.
                 wrapLines
-                stickyColumns={{ first: 0, last: 1 }}
                 ariaLabels={{
                     selectionGroupLabel: "File selection",
                     allItemsSelectionLabel: () => "Select all files",
@@ -294,33 +294,30 @@ export default function UploadPreview({
                 pagination={<Pagination {...paginationProps} ariaLabels={paginationLabels} />}
                 columnDefinitions={[
                     {
+                        // Path, status and size in one cell, so a row's status is always next to
+                        // its path, even in a narrow table, without sideways scrolling.
                         id: "finalPath",
-                        header: "Asset path",
+                        header: "Asset path and status",
                         cell: (item) => (
-                            <span style={{ overflowWrap: "anywhere" }}>{item.finalPath}</span>
+                            <div data-testid="upload-preview-file-cell">
+                                <div style={{ overflowWrap: "anywhere" }}>{item.finalPath}</div>
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    {statusCell(item)}
+                                    <Box variant="small" color="text-body-secondary">
+                                        {formatBytes(item.size)}
+                                    </Box>
+                                </SpaceBetween>
+                            </div>
                         ),
-                        minWidth: 160,
                         sortingField: "finalPath",
                         sortingComparator: (a, b) => a.finalPath.localeCompare(b.finalPath),
                         isRowHeader: true,
                     },
                     {
-                        id: "size",
-                        header: "Size",
-                        cell: (item) => formatBytes(item.size),
-                        width: 90,
-                        sortingComparator: (a, b) => a.size - b.size,
-                    },
-                    {
-                        id: "status",
-                        header: "Status",
-                        cell: statusCell,
-                        minWidth: 140,
-                    },
-                    {
+                        // Icon only: the header is labelled for screen readers but takes no
+                        // width, so it never wraps.
                         id: "remove",
-                        header: "Remove",
-                        width: 80,
+                        header: <Icon name="remove" ariaLabel="Remove" />,
                         cell: (item) => (
                             <Button
                                 variant="icon"
