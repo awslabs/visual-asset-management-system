@@ -7,7 +7,7 @@
  * The upload preview table (#1462): its pager is labelled for assistive technology.
  */
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import UploadPreview from "./UploadPreview";
 import { UploadRoot, planUploadPaths } from "./uploadPaths";
 
@@ -43,5 +43,29 @@ describe("UploadPreview", () => {
         expect(screen.getByRole("button", { name: "Next page" })).toBeTruthy();
         expect(screen.getByRole("button", { name: "Previous page" })).toBeTruthy();
         expect(screen.getByRole("button", { name: "Go to page 2" })).toBeTruthy();
+    });
+
+    it("D2: states path errors above the table and filters to them in one click", () => {
+        const dup: UploadRoot[] = [
+            ...looseFiles(60),
+            { kind: "file", name: "file-000.txt", handle: new File(["x"], "file-000.txt") },
+        ];
+        renderPreview(dup);
+        const alert = screen.getByText(/2 files have path errors/);
+        expect(alert).toBeTruthy();
+        // The duplicate rows sort to the top, but the count is stated outside the table either way.
+        fireEvent.click(screen.getByRole("button", { name: "Show errors only" }));
+        expect(screen.getAllByText("Duplicate path")).toHaveLength(2);
+        expect(screen.queryByText("/file-059.txt")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Show errors only" })).toBeNull();
+    });
+
+    it("D2: wraps long paths so the status and remove columns stay in view", () => {
+        const name = `${"very-long-segment-".repeat(6)}model.gltf`;
+        renderPreview([{ kind: "file", name, handle: new File(["x"], name) }]);
+        const cell = screen.getByText(`/${name}`);
+        expect(cell.style.overflowWrap).toBe("anywhere");
+        expect(screen.getByRole("button", { name: `Remove /${name}` })).toBeTruthy();
+        expect(screen.getByText("Ready")).toBeTruthy();
     });
 });

@@ -213,7 +213,19 @@ export default function UploadPreview({
                 </Alert>
             )}
 
-            {reason && <Alert type="error">{reason}</Alert>}
+            {/* Stated above the table so an error is seen even when a row is off screen. */}
+            {reason && (
+                <Alert
+                    type="error"
+                    action={
+                        view !== "errors" ? (
+                            <Button onClick={() => setView("errors")}>Show errors only</Button>
+                        ) : undefined
+                    }
+                >
+                    {reason}
+                </Alert>
+            )}
 
             <Table
                 {...collectionProps}
@@ -221,6 +233,10 @@ export default function UploadPreview({
                 trackBy="id"
                 selectionType="multi"
                 variant="container"
+                // Long paths wrap instead of pushing Status and Remove out of view at narrow
+                // widths, and the Remove column stays pinned to the right edge.
+                wrapLines
+                stickyColumns={{ first: 0, last: 1 }}
                 ariaLabels={{
                     selectionGroupLabel: "File selection",
                     allItemsSelectionLabel: () => "Select all files",
@@ -280,7 +296,10 @@ export default function UploadPreview({
                     {
                         id: "finalPath",
                         header: "Asset path",
-                        cell: (item) => item.finalPath,
+                        cell: (item) => (
+                            <span style={{ overflowWrap: "anywhere" }}>{item.finalPath}</span>
+                        ),
+                        minWidth: 160,
                         sortingField: "finalPath",
                         sortingComparator: (a, b) => a.finalPath.localeCompare(b.finalPath),
                         isRowHeader: true,
@@ -289,16 +308,19 @@ export default function UploadPreview({
                         id: "size",
                         header: "Size",
                         cell: (item) => formatBytes(item.size),
+                        width: 90,
                         sortingComparator: (a, b) => a.size - b.size,
                     },
                     {
                         id: "status",
                         header: "Status",
                         cell: statusCell,
+                        minWidth: 140,
                     },
                     {
                         id: "remove",
                         header: "Remove",
+                        width: 80,
                         cell: (item) => (
                             <Button
                                 variant="icon"
