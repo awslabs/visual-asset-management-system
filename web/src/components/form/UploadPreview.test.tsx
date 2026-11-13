@@ -38,6 +38,30 @@ const renderPreview = (roots: UploadRoot[]) => {
 };
 
 describe("UploadPreview", () => {
+    it("offers the Existing view on Add Files only once the existing-path check has finished", () => {
+        const roots = looseFiles(2);
+        const planned = planUploadPaths(roots, {
+            flow: "addFiles",
+            destination: "/s/",
+            folderNameMode: "auto",
+        });
+        const props = {
+            flow: "addFiles" as const,
+            destination: "/s/",
+            roots,
+            planned,
+            folderNameMode: "auto" as const,
+            onFolderNameModeChange: jest.fn(),
+            onRemove: jest.fn(),
+            onRemoveAll: jest.fn(),
+        };
+        const { rerender } = render(<UploadPreview {...props} existingCheck="checking" />);
+        expect(screen.queryByText(/^Existing \(/)).toBeNull();
+        expect(screen.getByText(/^Errors \(0\)/)).toBeTruthy();
+        rerender(<UploadPreview {...props} existingCheck="done" />);
+        expect(screen.getByText("Existing (0)")).toBeTruthy();
+    });
+
     it("D1: the pager's arrows and pages have accessible names", () => {
         renderPreview(looseFiles(120));
         expect(screen.getByRole("button", { name: "Next page" })).toBeTruthy();

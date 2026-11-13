@@ -107,14 +107,16 @@ export default function UploadPreview({
     const hintKey = referencing.join("|");
 
     const errorCount = planned.filter((p) => p.errors.length > 0).length;
+    const existingChecked =
+        flow === "addFiles" && (existingCheck === "done" || existingCheck === "incomplete");
     const existingCount = planned.filter((p) => p.existing).length;
     const totalSize = planned.reduce((n, p) => n + p.size, 0);
 
     const visible = useMemo(() => {
         if (view === "errors") return planned.filter((p) => p.errors.length > 0);
-        if (view === "existing") return planned.filter((p) => !!p.existing);
+        if (view === "existing" && existingChecked) return planned.filter((p) => !!p.existing);
         return planned;
-    }, [planned, view]);
+    }, [planned, view, existingChecked]);
 
     const { items, actions, collectionProps, filterProps, paginationProps, filteredItemsCount } =
         useCollection(visible, {
@@ -278,13 +280,14 @@ export default function UploadPreview({
                             countText={`${filteredItemsCount} matches`}
                         />
                         <SegmentedControl
-                            selectedId={view}
+                            selectedId={view === "existing" && !existingChecked ? "all" : view}
                             onChange={({ detail }) => setView(detail.selectedId as ViewFilter)}
                             label="Show"
                             options={[
                                 { id: "all", text: "All" },
                                 { id: "errors", text: `Errors (${errorCount})` },
-                                ...(flow === "addFiles"
+                                // Offered once the existing-path check has finished.
+                                ...(existingChecked
                                     ? [{ id: "existing", text: `Existing (${existingCount})` }]
                                     : []),
                             ]}

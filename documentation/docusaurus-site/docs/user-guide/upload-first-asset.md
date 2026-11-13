@@ -138,9 +138,14 @@ The **Select Files to Upload** step lets you attach files to your asset. This st
 
     ![Create Asset file step with a single folder added: the Upload folder contents / Upload folder choice and the preview of each file's final path](/img/upload_create_asset_single_folder_20261113_v2.7.png)
 
-4. Review the preview table below the upload zone. It lists the final asset path, size, and status of every file, sorted by path, with the total file count and size. You can filter by path, show only rows with errors, and remove single files, selected files, or all files.
+4. Review the preview table below the upload zone. It lists the final asset path of every file, sorted by path, with its status and size underneath, and the total file count and size. You can filter by path, remove single files, selected files, or all files, and switch the view:
 
-    - **Duplicate paths are errors.** When two files would land at the same path (for example, two different folders with the same name), both rows are marked **Duplicate path** and **Next** stays blocked until you remove one. Nothing is skipped silently. An alert above the table gives the number of files with path errors, and its **Show errors only** action filters the table to them.
+    - **All** -- every file in the selection.
+    - **Errors (n)** -- the files that block the upload: **Duplicate path** and **Invalid path**.
+
+    Also note:
+
+    - **Duplicate paths are errors.** When two files would land at the same path (for example, two different folders with the same name), both rows are marked **Duplicate path** and **Next** stays blocked until you remove one. Nothing is skipped silently. An alert above the table gives the number of files with path errors, and its **Show errors only** action switches the table to the **Errors** view.
     - **Multi-file formats.** When a loose file can reference other files by relative path (`.usd*`, `.gltf`, `.obj`, `.fbx`, `.dae`, STEP, IFC, IGES and CAD assemblies, or `tileset.json`), an info alert suggests adding the whole folder with **Add folder** instead, so those references keep working. The alert does not block the upload.
 
     ![Create Asset file step with two folders added: each folder keeps its name as a top-level folder](/img/upload_create_asset_two_folders_20261113_v2.7.png)

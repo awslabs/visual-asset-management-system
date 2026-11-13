@@ -224,6 +224,12 @@ To add files to an existing asset:
 
     If VAMS cannot check every existing file (for example, the listing is refused or the folder holds more than 10,000 files), an info alert says so and no rows are marked; the upload still works the same way. Duplicate paths within the selection are errors and block the upload until removed. See [File versions](../concepts/files-and-versions.md#file-versions-amazon-s3).
 
+    The view switch above the table narrows the list:
+
+    - **All** -- every file in the selection.
+    - **Errors (n)** -- the files that block the upload: **Duplicate path** and **Invalid path**. The error alert's **Show errors only** action switches to this view.
+    - **Existing (n)** -- appears once the existing-file check has finished, and lists the files marked **Exists** or **Archived**. These marks are warnings, not errors: they do not block the upload.
+
 5. Select **Finalize and Upload**. Upload progress is displayed for each file.
 
 ![Add Files page with the destination folder /scene/, files at existing paths marked Exists: uploads a new version, and two Duplicate path errors](/img/upload_add_files_destination_20261113_v2.7.png)
