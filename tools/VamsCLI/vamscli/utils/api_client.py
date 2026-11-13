@@ -1,7 +1,6 @@
 """API client for VamsCLI."""
 
 import json
-import re
 import threading
 import requests
 from typing import Dict, Any, List, Optional
@@ -337,22 +336,49 @@ def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) ->
             )
 
     return API_COMMENTS_ASSET_VERSION_COMMENT.replace(
-        '{assetId}', str(asset_id)
+        '{assetId}', _path_segment(asset_id)
     ).replace(
-        '{assetVersionId:commentId}', f"{asset_version_id}:{comment_id}"
+        '{assetVersionId:commentId}', f"{_path_segment(asset_version_id)}:{_path_segment(comment_id)}"
     )
+
+
+# The characters that end a path segment or the path. A value carrying one is sent percent-encoded,
+# so it stays in its own segment; every other character keeps the encoding requests gives it.
+_PATH_SEGMENT_ESCAPES = str.maketrans({'/': '%2F', '?': '%3F', '#': '%23'})
+
+
+def _path_segment(value: Any) -> str:
+    """A value as one path segment: a '/', '?' or '#' in it is percent-encoded."""
+    return str(value).translate(_PATH_SEGMENT_ESCAPES)
+
+
+def route_path(template: str, **values: Any) -> str:
+    """A route constant with each placeholder filled by one path segment, so the request addresses
+    the route the constant names whatever a value contains."""
+    return template.format(**{name: _path_segment(value) for name, value in values.items()})
+
+
+def _has_control_character(text: str) -> bool:
+    return any(ord(char) < 0x20 or ord(char) == 0x7F for char in text)
 
 
 def _request_path(endpoint: str) -> str:
     """The endpoint as it is joined onto the base URL, refused before any request when its path has an
-    empty, '.' or '..' segment, raw or percent-encoded: the join drops an empty segment and resolves a dot
-    segment (requests decodes an encoded dot first), so a path value carrying one would address another
-    route."""
+    empty, '.' or '..' segment, a control character, '?' or '#', raw or percent-encoded where
+    decoding applies: the join drops an empty segment, resolves a dot segment (requests decodes an
+    encoded dot first) and removes some control characters, and a '?' or '#' ends the path, so a
+    path value carrying one would address another route. Query parameters go in `params`."""
     path = endpoint.lstrip('/')
-    for segment in re.split(r'[?#]', path, maxsplit=1)[0].split('/'):
+    if '?' in path or '#' in path:
+        raise InvalidRequestPathError(
+            "A request path may not contain '?' or '#': it would address another route")
+    for segment in path.split('/'):
         decoded = segment
         while unquote(decoded) != decoded:
             decoded = unquote(decoded)
+        if _has_control_character(segment) or _has_control_character(decoded):
+            raise InvalidRequestPathError(
+                "A request path may not contain a control character: it would address another route")
         # A dot segment behind an encoded slash, or before a ';' parameter, is refused too.
         if not segment or any(part.split(';', 1)[0] in ('.', '..') for part in decoded.split('/')):
             raise InvalidRequestPathError(
@@ -440,7 +466,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         `raise_http_errors` leaves a non-2xx as the original `requests.exceptions.HTTPError` instead
         of converting it to an `APIError` here, for callers that map the status code and the handler's
         response body onto their own domain exception. An endpoint whose path has an empty, '.' or '..'
-        segment raises `InvalidRequestPathError` before anything is sent (`_request_path`).
+        segment, a control character, '?' or '#' raises `InvalidRequestPathError` before anything is
+        sent (`_request_path`).
 
         A 403 is read first (`_classify_403`), whatever `raise_http_errors` says. After one send, a web
         ACL block (with auth, a bare "Forbidden" too) raises `RequestBlockedError`, a request outside
@@ -1036,7 +1063,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def call_login_profile(self, user_id: str) -> Dict[str, Any]:
         """Call login profile API to refresh user profile and validate authentication."""
         try:
-            endpoint = f"{API_LOGIN_PROFILE}/{user_id}"
+            endpoint = f"{API_LOGIN_PROFILE}/{_path_segment(user_id)}"
             response = self.get(endpoint, include_auth=True)
             
             # If we get here, the authentication was successful
@@ -1159,7 +1186,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_DATABASE_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DATABASE_ASSET, databaseId=database_id, assetId=asset_id)
             response = self.put(endpoint, data=update_data, include_auth=True)
             return response.json()
             
@@ -1205,7 +1232,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_DATABASE_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DATABASE_ASSET, databaseId=database_id, assetId=asset_id)
             params = {}
             if show_archived:
                 params['showArchived'] = 'true'
@@ -1276,7 +1303,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         from ..constants import API_UPLOADS_COMPLETE
         
-        endpoint = API_UPLOADS_COMPLETE.format(uploadId=upload_id)
+        endpoint = route_path(API_UPLOADS_COMPLETE, uploadId=upload_id)
         data = {
             "databaseId": database_id,
             "assetId": asset_id,
@@ -1332,7 +1359,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def create_folder(self, database_id: str, asset_id: str, folder_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a folder in an asset."""
         try:
-            endpoint = API_CREATE_FOLDER.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_CREATE_FOLDER, databaseId=database_id, assetId=asset_id)
             response = self.post(endpoint, data=folder_data, include_auth=True)
             return response.json()
             
@@ -1358,7 +1385,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def list_asset_files(self, database_id: str, asset_id: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """List files in an asset."""
         try:
-            endpoint = API_LIST_FILES.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_LIST_FILES, databaseId=database_id, assetId=asset_id)
             response = self.get(endpoint, include_auth=True, params=params or {})
             return response.json()
             
@@ -1380,7 +1407,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def get_file_info(self, database_id: str, asset_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get detailed information about a specific file."""
         try:
-            endpoint = API_FILE_INFO.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_FILE_INFO, databaseId=database_id, assetId=asset_id)
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
             
@@ -1406,7 +1433,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def move_file(self, database_id: str, asset_id: str, move_data: Dict[str, Any]) -> Dict[str, Any]:
         """Move a file within an asset."""
         try:
-            endpoint = API_MOVE_FILE.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_MOVE_FILE, databaseId=database_id, assetId=asset_id)
             response = self.post(endpoint, data=move_data, include_auth=True)
             return response.json()
             
@@ -1436,7 +1463,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def copy_file(self, database_id: str, asset_id: str, copy_data: Dict[str, Any]) -> Dict[str, Any]:
         """Copy a file within an asset or to another asset."""
         try:
-            endpoint = API_COPY_FILE.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_COPY_FILE, databaseId=database_id, assetId=asset_id)
             response = self.post(endpoint, data=copy_data, include_auth=True)
             return response.json()
             
@@ -1466,7 +1493,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def archive_file(self, database_id: str, asset_id: str, archive_data: Dict[str, Any]) -> Dict[str, Any]:
         """Archive a file (soft delete)."""
         try:
-            endpoint = API_ARCHIVE_FILE.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ARCHIVE_FILE, databaseId=database_id, assetId=asset_id)
             response = self.delete(endpoint, include_auth=True, json=archive_data)
             return response.json()
             
@@ -1496,7 +1523,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def unarchive_file(self, database_id: str, asset_id: str, unarchive_data: Dict[str, Any]) -> Dict[str, Any]:
         """Unarchive a previously archived file."""
         try:
-            endpoint = API_UNARCHIVE_FILE.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_UNARCHIVE_FILE, databaseId=database_id, assetId=asset_id)
             response = self.post(endpoint, data=unarchive_data, include_auth=True)
             return response.json()
             
@@ -1526,7 +1553,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def delete_asset_preview(self, database_id: str, asset_id: str) -> Dict[str, Any]:
         """Delete the asset preview file."""
         try:
-            endpoint = API_DELETE_ASSET_PREVIEW.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DELETE_ASSET_PREVIEW, databaseId=database_id, assetId=asset_id)
             response = self.delete(endpoint, include_auth=True)
             return response.json()
             
@@ -1552,7 +1579,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def delete_auxiliary_preview_files(self, database_id: str, asset_id: str, delete_data: Dict[str, Any]) -> Dict[str, Any]:
         """Delete auxiliary preview asset files."""
         try:
-            endpoint = API_DELETE_AUXILIARY_PREVIEW.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DELETE_AUXILIARY_PREVIEW, databaseId=database_id, assetId=asset_id)
             response = self.delete(endpoint, include_auth=True, json=delete_data)
             return response.json()
             
@@ -1582,7 +1609,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def delete_file(self, database_id: str, asset_id: str, delete_data: Dict[str, Any]) -> Dict[str, Any]:
         """Permanently delete a file or files under a prefix."""
         try:
-            endpoint = API_DELETE_FILE.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DELETE_FILE, databaseId=database_id, assetId=asset_id)
             response = self.delete(endpoint, include_auth=True, json=delete_data)
             return response.json()
             
@@ -1612,7 +1639,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def revert_file_version(self, database_id: str, asset_id: str, version_id: str, revert_data: Dict[str, Any]) -> Dict[str, Any]:
         """Revert a file to a previous version."""
         try:
-            endpoint = API_REVERT_FILE_VERSION.format(databaseId=database_id, assetId=asset_id, versionId=version_id)
+            endpoint = route_path(API_REVERT_FILE_VERSION, databaseId=database_id, assetId=asset_id, versionId=version_id)
             response = self.post(endpoint, data=revert_data, include_auth=True)
             return response.json()
             
@@ -1642,7 +1669,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def set_primary_file(self, database_id: str, asset_id: str, primary_data: Dict[str, Any]) -> Dict[str, Any]:
         """Set or remove primary type metadata for a file."""
         try:
-            endpoint = API_SET_PRIMARY_FILE.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_SET_PRIMARY_FILE, databaseId=database_id, assetId=asset_id)
             response = self.put(endpoint, data=primary_data, include_auth=True)
             return response.json()
             
@@ -1690,7 +1717,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ARCHIVE_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ARCHIVE_ASSET, databaseId=database_id, assetId=asset_id)
             # Always send a body — the archive endpoint requires a non-empty request
             # body. confirmArchive signals intent; reason is optional.
             data = {'confirmArchive': True}
@@ -1755,7 +1782,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_UNARCHIVE_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_UNARCHIVE_ASSET, databaseId=database_id, assetId=asset_id)
             data = {'confirmUnarchive': True}
             if reason:
                 data['reason'] = reason
@@ -1813,7 +1840,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_DELETE_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DELETE_ASSET, databaseId=database_id, assetId=asset_id)
             data = {
                 'confirmPermanentDelete': confirm
             }
@@ -1921,7 +1948,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             if not database_id:
                 raise InvalidDatabaseDataError("databaseId is required for update")
             
-            endpoint = API_DATABASE_BY_ID.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_BY_ID, databaseId=database_id)
             
             # Remove databaseId from data as it's in the path
             update_data = {k: v for k, v in database_data.items() if k != 'databaseId'}
@@ -1967,7 +1994,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_DATABASE_BY_ID.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_BY_ID, databaseId=database_id)
             params = {}
             if show_deleted:
                 params['showDeleted'] = 'true'
@@ -2039,7 +2066,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_DATABASE_BY_ID.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_BY_ID, databaseId=database_id)
             response = self.delete(endpoint, include_auth=True)
             return response.json()
             
@@ -2231,7 +2258,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_TAG_DELETE.format(tagId=tag_id)
+            endpoint = route_path(API_TAG_DELETE, tagId=tag_id)
             query_params = {}
             if database_id:
                 query_params['databaseId'] = database_id
@@ -2386,7 +2413,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_TAG_TYPE_DELETE.format(tagTypeId=tag_type_id)
+            endpoint = route_path(API_TAG_TYPE_DELETE, tagTypeId=tag_type_id)
             query_params = {}
             if database_id:
                 query_params['databaseId'] = database_id
@@ -2437,7 +2464,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_CREATE_ASSET_VERSION.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_CREATE_ASSET_VERSION, databaseId=database_id, assetId=asset_id)
             response = self.post(endpoint, data=request_data, include_auth=True)
             return response.json()
             
@@ -2487,7 +2514,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_REVERT_ASSET_VERSION.format(
+            endpoint = route_path(API_REVERT_ASSET_VERSION, 
                 databaseId=database_id, 
                 assetId=asset_id, 
                 assetVersionId=asset_version_id
@@ -2539,7 +2566,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_GET_ASSET_VERSIONS.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_GET_ASSET_VERSIONS, databaseId=database_id, assetId=asset_id)
             query_params = params or {}
             response = self.get(endpoint, include_auth=True, params=query_params)
             return response.json()
@@ -2582,7 +2609,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_GET_ASSET_HISTORY.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_GET_ASSET_HISTORY, databaseId=database_id, assetId=asset_id)
             query_params = params or {}
             response = self.get(endpoint, include_auth=True, params=query_params)
             return response.json()
@@ -2628,7 +2655,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_GET_ASSET_VERSION.format(
+            endpoint = route_path(API_GET_ASSET_VERSION, 
                 databaseId=database_id, 
                 assetId=asset_id, 
                 assetVersionId=asset_version_id
@@ -2683,7 +2710,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_VERSION_BY_ID.format(
+            endpoint = route_path(API_ASSET_VERSION_BY_ID, 
                 databaseId=database_id,
                 assetId=asset_id,
                 assetVersionId=asset_version_id
@@ -2737,7 +2764,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_VERSION_ARCHIVE.format(
+            endpoint = route_path(API_ASSET_VERSION_ARCHIVE, 
                 databaseId=database_id,
                 assetId=asset_id,
                 assetVersionId=asset_version_id
@@ -2791,7 +2818,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_VERSION_UNARCHIVE.format(
+            endpoint = route_path(API_ASSET_VERSION_UNARCHIVE, 
                 databaseId=database_id,
                 assetId=asset_id,
                 assetVersionId=asset_version_id
@@ -2890,7 +2917,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_LINKS_SINGLE.format(assetLinkId=asset_link_id)
+            endpoint = route_path(API_ASSET_LINKS_SINGLE, assetLinkId=asset_link_id)
             response = self.get(endpoint, include_auth=True)
             return response.json()
             
@@ -2927,7 +2954,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_LINKS_UPDATE.format(assetLinkId=asset_link_id)
+            endpoint = route_path(API_ASSET_LINKS_UPDATE, assetLinkId=asset_link_id)
             response = self.put(endpoint, data=update_data, include_auth=True)
             return response.json()
             
@@ -2966,7 +2993,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_LINKS_DELETE.format(assetLinkId=asset_link_id)
+            endpoint = route_path(API_ASSET_LINKS_DELETE, assetLinkId=asset_link_id)
             response = self.delete(endpoint, include_auth=True)
             return response.json()
             
@@ -3006,7 +3033,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_LINKS_FOR_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ASSET_LINKS_FOR_ASSET, databaseId=database_id, assetId=asset_id)
             params = {}
             if child_tree_view:
                 params['childTreeView'] = 'true'
@@ -3066,7 +3093,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         try:
             from ..constants import API_ASSET_METADATA
-            endpoint = API_ASSET_METADATA.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ASSET_METADATA, databaseId=database_id, assetId=asset_id)
             params = {'pageSize': page_size}
             if starting_token:
                 params['startingToken'] = starting_token
@@ -3119,7 +3146,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         try:
             from ..constants import API_ASSET_METADATA
-            endpoint = API_ASSET_METADATA.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ASSET_METADATA, databaseId=database_id, assetId=asset_id)
             data = {
                 'metadata': metadata_items,
                 'updateType': update_type
@@ -3171,7 +3198,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         try:
             from ..constants import API_ASSET_METADATA
-            endpoint = API_ASSET_METADATA.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ASSET_METADATA, databaseId=database_id, assetId=asset_id)
             data = {'metadataKeys': metadata_keys}
             
             response = self.delete(endpoint, include_auth=True, json=data)
@@ -3223,7 +3250,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         try:
             from ..constants import API_FILE_METADATA
-            endpoint = API_FILE_METADATA.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_FILE_METADATA, databaseId=database_id, assetId=asset_id)
             params = {
                 'filePath': file_path,
                 'type': metadata_type,
@@ -3285,7 +3312,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         try:
             from ..constants import API_FILE_METADATA
-            endpoint = API_FILE_METADATA.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_FILE_METADATA, databaseId=database_id, assetId=asset_id)
             data = {
                 'filePath': file_path,
                 'type': metadata_type,
@@ -3343,7 +3370,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         try:
             from ..constants import API_FILE_METADATA
-            endpoint = API_FILE_METADATA.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_FILE_METADATA, databaseId=database_id, assetId=asset_id)
             data = {
                 'filePath': file_path,
                 'type': metadata_type,
@@ -3396,7 +3423,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         try:
             from ..constants import API_ASSET_LINK_METADATA
-            endpoint = API_ASSET_LINK_METADATA.format(assetLinkId=asset_link_id)
+            endpoint = route_path(API_ASSET_LINK_METADATA, assetLinkId=asset_link_id)
             params = {'pageSize': page_size}
             if starting_token:
                 params['startingToken'] = starting_token
@@ -3441,7 +3468,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         try:
             from ..constants import API_ASSET_LINK_METADATA
-            endpoint = API_ASSET_LINK_METADATA.format(assetLinkId=asset_link_id)
+            endpoint = route_path(API_ASSET_LINK_METADATA, assetLinkId=asset_link_id)
             data = {
                 'metadata': metadata_items,
                 'updateType': update_type
@@ -3487,7 +3514,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         try:
             from ..constants import API_ASSET_LINK_METADATA
-            endpoint = API_ASSET_LINK_METADATA.format(assetLinkId=asset_link_id)
+            endpoint = route_path(API_ASSET_LINK_METADATA, assetLinkId=asset_link_id)
             data = {'metadataKeys': metadata_keys}
             
             response = self.delete(endpoint, include_auth=True, json=data)
@@ -3526,7 +3553,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         try:
             from ..constants import API_DATABASE_METADATA
-            endpoint = API_DATABASE_METADATA.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_METADATA, databaseId=database_id)
             params = {'pageSize': page_size}
             if starting_token:
                 params['startingToken'] = starting_token
@@ -3567,7 +3594,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         try:
             from ..constants import API_DATABASE_METADATA
-            endpoint = API_DATABASE_METADATA.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_METADATA, databaseId=database_id)
             data = {
                 'metadata': metadata_items,
                 'updateType': update_type
@@ -3611,7 +3638,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         try:
             from ..constants import API_DATABASE_METADATA
-            endpoint = API_DATABASE_METADATA.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_METADATA, databaseId=database_id)
             data = {'metadataKeys': metadata_keys}
             
             response = self.delete(endpoint, include_auth=True, json=data)
@@ -3771,7 +3798,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             AuthenticationError: When authentication fails
         """
         try:
-            endpoint = API_METADATA_SCHEMA_BY_ID.format(
+            endpoint = route_path(API_METADATA_SCHEMA_BY_ID, 
                 databaseId=database_id,
                 metadataSchemaId=metadata_schema_id
             )
@@ -3926,7 +3953,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         from .exceptions import MetadataSchemaDeletionError, MetadataSchemaNotFoundError
 
-        endpoint = API_METADATA_SCHEMA_BY_ID.format(
+        endpoint = route_path(API_METADATA_SCHEMA_BY_ID, 
             databaseId=database_id,
             metadataSchemaId=metadata_schema_id
         )
@@ -3987,7 +4014,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails or asset not distributable
         """
         try:
-            endpoint = API_DOWNLOAD_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DOWNLOAD_ASSET, databaseId=database_id, assetId=asset_id)
             data = {
                 "downloadType": "assetFile"
             }
@@ -4067,7 +4094,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails or asset not distributable
         """
         try:
-            endpoint = API_DOWNLOAD_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DOWNLOAD_ASSET, databaseId=database_id, assetId=asset_id)
             data = {
                 "downloadType": "assetFile",
                 "keys": file_keys
@@ -4118,7 +4145,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails, asset not distributable, or preview not found
         """
         try:
-            endpoint = API_DOWNLOAD_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DOWNLOAD_ASSET, databaseId=database_id, assetId=asset_id)
             data = {
                 "downloadType": "assetPreview"
             }
@@ -4260,7 +4287,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_EXPORT.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ASSET_EXPORT, databaseId=database_id, assetId=asset_id)
             # Backend expects POST with JSON body.
             response = self.post(endpoint, data=export_params, include_auth=True)
             return self._resolve_staged_export_payload(response)
@@ -4361,7 +4388,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                        params: Dict[str, Any] = None) -> Dict[str, Any]:
         """List pipelines. GET /pipelines (all) or GET /database/{databaseId}/pipelines."""
         try:
-            endpoint = (API_DATABASE_PIPELINES.format(databaseId=database_id)
+            endpoint = (route_path(API_DATABASE_PIPELINES, databaseId=database_id)
                         if database_id else API_PIPELINES)
             query_params = dict(params or {})
             if include_archived:
@@ -4384,7 +4411,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                      include_archived: bool = False) -> Dict[str, Any]:
         """Get a pipeline (+ its templates). GET /database/{databaseId}/pipelines/{pipelineId}."""
         try:
-            endpoint = API_DATABASE_PIPELINE.format(databaseId=database_id, pipelineId=pipeline_id)
+            endpoint = route_path(API_DATABASE_PIPELINE, databaseId=database_id, pipelineId=pipeline_id)
             query_params = {'includeArchived': 'true'} if include_archived else {}
             return self._pwe_request('GET', endpoint, params=query_params)
         except requests.exceptions.HTTPError as e:
@@ -4401,7 +4428,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def create_pipeline(self, database_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Create a pipeline. POST /database/{databaseId}/pipelines."""
         try:
-            endpoint = API_DATABASE_PIPELINES.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_PIPELINES, databaseId=database_id)
             return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
@@ -4422,7 +4449,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def update_pipeline(self, database_id: str, pipeline_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Update a pipeline. PUT /database/{databaseId}/pipelines/{pipelineId}."""
         try:
-            endpoint = API_DATABASE_PIPELINE.format(databaseId=database_id, pipelineId=pipeline_id)
+            endpoint = route_path(API_DATABASE_PIPELINE, databaseId=database_id, pipelineId=pipeline_id)
             return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4440,7 +4467,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def delete_pipeline(self, database_id: str, pipeline_id: str) -> Dict[str, Any]:
         """Archive (soft-delete) a pipeline. DELETE /database/{databaseId}/pipelines/{pipelineId}."""
         try:
-            endpoint = API_DATABASE_PIPELINE.format(databaseId=database_id, pipelineId=pipeline_id)
+            endpoint = route_path(API_DATABASE_PIPELINE, databaseId=database_id, pipelineId=pipeline_id)
             return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4461,7 +4488,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         The handler returns one page plus a NextToken, so the pages are drained here and returned as
         a single Items list."""
         try:
-            endpoint = API_PIPELINE_TEMPLATES.format(databaseId=database_id, pipelineId=pipeline_id)
+            endpoint = route_path(API_PIPELINE_TEMPLATES, databaseId=database_id, pipelineId=pipeline_id)
             body = self._pwe_request('GET', endpoint)
             message = body.get('message') if isinstance(body, dict) else None
             if not isinstance(message, dict):
@@ -4491,7 +4518,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def get_pipeline_template(self, database_id: str, pipeline_id: str, template_id: str) -> Dict[str, Any]:
         """Get a template (config body rehydrated). GET .../templates/{templateId}."""
         try:
-            endpoint = API_PIPELINE_TEMPLATE.format(
+            endpoint = route_path(API_PIPELINE_TEMPLATE, 
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
@@ -4509,7 +4536,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                                  body: Dict[str, Any]) -> Dict[str, Any]:
         """Create a template. POST .../pipelines/{pipelineId}/templates."""
         try:
-            endpoint = API_PIPELINE_TEMPLATES.format(databaseId=database_id, pipelineId=pipeline_id)
+            endpoint = route_path(API_PIPELINE_TEMPLATES, databaseId=database_id, pipelineId=pipeline_id)
             return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
@@ -4531,7 +4558,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                                  body: Dict[str, Any]) -> Dict[str, Any]:
         """Update a template. PUT .../templates/{templateId}."""
         try:
-            endpoint = API_PIPELINE_TEMPLATE.format(
+            endpoint = route_path(API_PIPELINE_TEMPLATE, 
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
@@ -4550,7 +4577,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def delete_pipeline_template(self, database_id: str, pipeline_id: str, template_id: str) -> Dict[str, Any]:
         """Delete a template. DELETE .../templates/{templateId}."""
         try:
-            endpoint = API_PIPELINE_TEMPLATE.format(
+            endpoint = route_path(API_PIPELINE_TEMPLATE, 
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
@@ -4570,7 +4597,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                                          template_id: str) -> Dict[str, Any]:
         """Get a template's tag schema. GET .../templates/{templateId}/tagSchema."""
         try:
-            endpoint = API_PIPELINE_TEMPLATE_TAG_SCHEMA.format(
+            endpoint = route_path(API_PIPELINE_TEMPLATE_TAG_SCHEMA, 
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
@@ -4588,7 +4615,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                                          fields: list) -> Dict[str, Any]:
         """Set (replace) a template's tag schema. PUT .../templates/{templateId}/tagSchema."""
         try:
-            endpoint = API_PIPELINE_TEMPLATE_TAG_SCHEMA.format(
+            endpoint = route_path(API_PIPELINE_TEMPLATE_TAG_SCHEMA, 
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('PUT', endpoint, data={'fields': fields})
         except requests.exceptions.HTTPError as e:
@@ -4610,7 +4637,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                        params: Dict[str, Any] = None) -> Dict[str, Any]:
         """List workflows. GET /workflows (all) or GET /database/{databaseId}/workflows."""
         try:
-            endpoint = (API_DATABASE_WORKFLOWS.format(databaseId=database_id)
+            endpoint = (route_path(API_DATABASE_WORKFLOWS, databaseId=database_id)
                         if database_id else API_WORKFLOWS)
             query_params = dict(params or {})
             if include_archived:
@@ -4631,7 +4658,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                      include_archived: bool = False) -> Dict[str, Any]:
         """Get a workflow (+ its triggers). GET /database/{databaseId}/workflows/{workflowId}."""
         try:
-            endpoint = API_DATABASE_WORKFLOW.format(databaseId=database_id, workflowId=workflow_id)
+            endpoint = route_path(API_DATABASE_WORKFLOW, databaseId=database_id, workflowId=workflow_id)
             query_params = {'includeArchived': 'true'} if include_archived else {}
             return self._pwe_request('GET', endpoint, params=query_params)
         except requests.exceptions.HTTPError as e:
@@ -4648,7 +4675,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def create_workflow(self, database_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Create a workflow. POST /database/{databaseId}/workflows."""
         try:
-            endpoint = API_DATABASE_WORKFLOWS.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_WORKFLOWS, databaseId=database_id)
             return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
@@ -4666,7 +4693,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def update_workflow(self, database_id: str, workflow_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Update a workflow. PUT /database/{databaseId}/workflows/{workflowId}."""
         try:
-            endpoint = API_DATABASE_WORKFLOW.format(databaseId=database_id, workflowId=workflow_id)
+            endpoint = route_path(API_DATABASE_WORKFLOW, databaseId=database_id, workflowId=workflow_id)
             return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4684,7 +4711,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def delete_workflow(self, database_id: str, workflow_id: str) -> Dict[str, Any]:
         """Archive (soft-delete) a workflow. DELETE /database/{databaseId}/workflows/{workflowId}."""
         try:
-            endpoint = API_DATABASE_WORKFLOW.format(databaseId=database_id, workflowId=workflow_id)
+            endpoint = route_path(API_DATABASE_WORKFLOW, databaseId=database_id, workflowId=workflow_id)
             return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4707,7 +4734,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         `NextToken` set while more triggers remain. `params` carries maxItems/pageSize/startingToken.
         """
         try:
-            endpoint = API_WORKFLOW_TRIGGERS.format(databaseId=database_id, workflowId=workflow_id)
+            endpoint = route_path(API_WORKFLOW_TRIGGERS, databaseId=database_id, workflowId=workflow_id)
             return self._pwe_request('GET', endpoint, params=dict(params or {}))
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4729,7 +4756,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         trigger.
         """
         try:
-            endpoint = API_WORKFLOW_TRIGGER.format(
+            endpoint = route_path(API_WORKFLOW_TRIGGER, 
                 databaseId=database_id, workflowId=workflow_id,
                 triggerType=quote(trigger_type, safe=''))
             return self._pwe_request('GET', endpoint)
@@ -4748,7 +4775,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                              body: Dict[str, Any]) -> Dict[str, Any]:
         """Set (create/replace) a workflow trigger. PUT .../triggers/{triggerType}."""
         try:
-            endpoint = API_WORKFLOW_TRIGGER.format(
+            endpoint = route_path(API_WORKFLOW_TRIGGER, 
                 databaseId=database_id, workflowId=workflow_id,
                 triggerType=quote(trigger_type, safe=''))
             return self._pwe_request('PUT', endpoint, data=body)
@@ -4768,7 +4795,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def delete_workflow_trigger(self, database_id: str, workflow_id: str, trigger_type: str) -> Dict[str, Any]:
         """Delete a workflow trigger. DELETE .../triggers/{triggerType}."""
         try:
-            endpoint = API_WORKFLOW_TRIGGER.format(
+            endpoint = route_path(API_WORKFLOW_TRIGGER, 
                 databaseId=database_id, workflowId=workflow_id,
                 triggerType=quote(trigger_type, safe=''))
             return self._pwe_request('DELETE', endpoint)
@@ -4789,7 +4816,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                          body: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a workflow (asset-less, multi-file). POST /workflows/{workflowDatabaseId}/{workflowId}/execute."""
         try:
-            endpoint = API_EXECUTE_WORKFLOW.format(
+            endpoint = route_path(API_EXECUTE_WORKFLOW, 
                 workflowDatabaseId=workflow_database_id, workflowId=workflow_id)
             return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
@@ -4824,7 +4851,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         empty list — indistinguishable from an asset with no matching history.
         """
         try:
-            endpoint = API_WORKFLOW_EXECUTIONS.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTIONS, databaseId=database_id, assetId=asset_id)
             query_params = dict(params or {})
             if workflow_id:
                 query_params['workflowId'] = workflow_id
@@ -4879,7 +4906,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         while the inline renderedConfig is pre-system-tag. renderedConfigTruncated reports only
         whether the inline copy was shortened."""
         try:
-            endpoint = API_WORKFLOW_EXECUTION_DETAILS.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION_DETAILS, executionId=execution_id)
             return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4903,7 +4930,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         more rows exist. A token is only valid alongside the same collection and pipelineId it was
         issued with."""
         try:
-            endpoint = API_WORKFLOW_EXECUTION_DETAILS_METADATA.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION_DETAILS_METADATA, executionId=execution_id)
             return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4929,7 +4956,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         only signal that more rows exist. A token is only valid alongside the same collection and
         pipelineId it was issued with."""
         try:
-            endpoint = API_WORKFLOW_EXECUTION_DETAILS_FILES.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION_DETAILS_FILES, executionId=execution_id)
             return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4955,7 +4982,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         page's resultContent yields the whole result. An empty/legacy run returns the empty shape
         (resultContent '', counts zero, no NextToken), never an error."""
         try:
-            endpoint = API_WORKFLOW_EXECUTION_DETAILS_RESULTS.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION_DETAILS_RESULTS, executionId=execution_id)
             return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4985,7 +5012,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         message is raised as ExecutionNotFoundError text.
         """
         try:
-            endpoint = API_WORKFLOW_EXECUTION_LOGS.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION_LOGS, executionId=execution_id)
             return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -5012,7 +5039,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """Abort a running execution, or (with group_id) abort every active execution in the group.
         DELETE /workflows/executions/{executionId}[?groupId=...]."""
         try:
-            endpoint = API_WORKFLOW_EXECUTION.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION, executionId=execution_id)
             params = {'groupId': group_id} if group_id else {}
             return self._pwe_request('DELETE', endpoint, params=params)
         except requests.exceptions.HTTPError as e:
@@ -5031,7 +5058,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def rerun_execution(self, execution_id: str, execution_group_id: Optional[str] = None) -> Dict[str, Any]:
         """Re-run an execution (reconstructed from stored records). POST /workflows/executions/{executionId}/rerun."""
         try:
-            endpoint = API_WORKFLOW_EXECUTION_RERUN.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION_RERUN, executionId=execution_id)
             body = {}
             if execution_group_id:
                 body['executionGroupId'] = execution_group_id
@@ -5052,7 +5079,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def permanent_delete_execution(self, execution_id: str) -> Dict[str, Any]:
         """Permanently delete an execution's DynamoDB records (admin). DELETE .../{executionId}/permanent."""
         try:
-            endpoint = API_WORKFLOW_EXECUTION_PERMANENT.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION_PERMANENT, executionId=execution_id)
             return self._pwe_request('DELETE', endpoint, json={'confirmDelete': True})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -5371,7 +5398,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         from .exceptions import RoleNotFoundError, RoleDeletionError
         
         try:
-            endpoint = API_ROLE_BY_ID.format(roleId=role_name)
+            endpoint = route_path(API_ROLE_BY_ID, roleId=role_name)
             response = self.delete(endpoint, include_auth=True)
             return response.json()
             
@@ -5515,7 +5542,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         )
         
         try:
-            endpoint = API_COGNITO_USER_BY_ID.format(userId=user_id)
+            endpoint = route_path(API_COGNITO_USER_BY_ID, userId=user_id)
             response = self.put(endpoint, data=update_data, include_auth=True, raise_http_errors=True)
             return response.json()
             
@@ -5562,7 +5589,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         from .exceptions import CognitoUserNotFoundError, CognitoUserOperationError
         
         try:
-            endpoint = API_COGNITO_USER_BY_ID.format(userId=user_id)
+            endpoint = route_path(API_COGNITO_USER_BY_ID, userId=user_id)
             response = self.delete(endpoint, include_auth=True, raise_http_errors=True)
             return response.json()
             
@@ -5614,7 +5641,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         )
         
         try:
-            endpoint = API_COGNITO_USER_RESET_PASSWORD.format(userId=user_id)
+            endpoint = route_path(API_COGNITO_USER_RESET_PASSWORD, userId=user_id)
             data = {'confirmReset': confirm_reset}
             response = self.post(endpoint, data=data, include_auth=True, raise_http_errors=True)
             return response.json()
@@ -5808,7 +5835,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         from .exceptions import ConstraintNotFoundError
         
         try:
-            endpoint = API_CONSTRAINT_BY_ID.format(constraintId=constraint_id)
+            endpoint = route_path(API_CONSTRAINT_BY_ID, constraintId=constraint_id)
             response = self.get(endpoint, include_auth=True)
             result = response.json()
             
@@ -5863,7 +5890,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             if not constraint_id:
                 raise InvalidConstraintDataError("Constraint identifier is required")
             
-            endpoint = API_CONSTRAINT_BY_ID.format(constraintId=constraint_id)
+            endpoint = route_path(API_CONSTRAINT_BY_ID, constraintId=constraint_id)
             response = self.post(endpoint, data=constraint_data, include_auth=True)
             return response.json()
             
@@ -5912,7 +5939,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             # Ensure identifier matches the path parameter
             constraint_data['identifier'] = constraint_id
             
-            endpoint = API_CONSTRAINT_BY_ID.format(constraintId=constraint_id)
+            endpoint = route_path(API_CONSTRAINT_BY_ID, constraintId=constraint_id)
             response = self.post(endpoint, data=constraint_data, include_auth=True)
             return response.json()
             
@@ -5958,7 +5985,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         from .exceptions import ConstraintNotFoundError, ConstraintDeletionError
         
         try:
-            endpoint = API_CONSTRAINT_BY_ID.format(constraintId=constraint_id)
+            endpoint = route_path(API_CONSTRAINT_BY_ID, constraintId=constraint_id)
             response = self.delete(endpoint, include_auth=True)
             return response.json()
             
@@ -6277,7 +6304,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         from .exceptions import ApiKeyNotFoundError
 
-        endpoint = API_AUTH_API_KEY.format(apiKeyId=api_key_id)
+        endpoint = route_path(API_AUTH_API_KEY, apiKeyId=api_key_id)
 
         try:
             response = self.get(endpoint, include_auth=True, raise_http_errors=True)
@@ -6368,7 +6395,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         from .exceptions import ApiKeyNotFoundError, ApiKeyUpdateError
 
-        endpoint = API_AUTH_API_KEY.format(apiKeyId=api_key_id)
+        endpoint = route_path(API_AUTH_API_KEY, apiKeyId=api_key_id)
 
         try:
             response = self.put(endpoint, data=data, include_auth=True)
@@ -6411,7 +6438,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         from .exceptions import ApiKeyNotFoundError, ApiKeyDeletionError
 
-        endpoint = API_AUTH_API_KEY.format(apiKeyId=api_key_id)
+        endpoint = route_path(API_AUTH_API_KEY, apiKeyId=api_key_id)
 
         try:
             response = self.delete(endpoint, include_auth=True)
@@ -6498,7 +6525,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         from ..constants import API_AUTH_USER_API_KEY
         from .exceptions import ApiKeyNotFoundError
 
-        endpoint = API_AUTH_USER_API_KEY.format(apiKeyId=api_key_id)
+        endpoint = route_path(API_AUTH_USER_API_KEY, apiKeyId=api_key_id)
 
         try:
             response = self.get(endpoint, include_auth=True, raise_http_errors=True)
@@ -6594,7 +6621,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         from ..constants import API_AUTH_USER_API_KEY
         from .exceptions import ApiKeyNotFoundError, ApiKeyUpdateError
 
-        endpoint = API_AUTH_USER_API_KEY.format(apiKeyId=api_key_id)
+        endpoint = route_path(API_AUTH_USER_API_KEY, apiKeyId=api_key_id)
 
         try:
             response = self.put(endpoint, data=data, include_auth=True)
@@ -6639,7 +6666,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         from ..constants import API_AUTH_USER_API_KEY
         from .exceptions import ApiKeyNotFoundError, ApiKeyDeletionError
 
-        endpoint = API_AUTH_USER_API_KEY.format(apiKeyId=api_key_id)
+        endpoint = route_path(API_AUTH_USER_API_KEY, apiKeyId=api_key_id)
 
         try:
             response = self.delete(endpoint, include_auth=True)
@@ -6712,7 +6739,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_COMMENTS_ASSET.format(assetId=asset_id)
+        endpoint = route_path(API_COMMENTS_ASSET, assetId=asset_id)
         params = self._comment_pagination_params(max_items, page_size, starting_token)
         if show_archived:
             # Also find an archived asset
@@ -6761,7 +6788,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_COMMENTS_ASSET_VERSION.format(
+        endpoint = route_path(API_COMMENTS_ASSET_VERSION, 
             assetId=asset_id, assetVersionId=asset_version_id)
         params = self._comment_pagination_params(max_items, page_size, starting_token)
         if show_archived:

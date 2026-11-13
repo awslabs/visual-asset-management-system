@@ -187,9 +187,9 @@ API Gateway also answers a block with a bare `403` `{"message": "Forbidden"}` wh
 
 ## Request Path Refused
 
-**Symptoms:** A command fails before anything is sent, with an error that includes `A request path may not have an empty, '.' or '..' segment: it would address another route`. With `--json-output`, the `error_type` is `InvalidRequestPathError`, or the command's own error type with that text in its message.
+**Symptoms:** A command fails before anything is sent, with an error that includes `A request path may not have an empty, '.' or '..' segment`, `A request path may not contain a control character` or `A request path may not contain '?' or '#'`. With `--json-output`, the `error_type` is `InvalidRequestPathError`, or the command's own error type with that text in its message.
 
-**Cause:** A value the command puts into the request path, such as a database, asset or other ID, is empty, `.` or `..`, or contains such a segment. The CLI refuses such a path.
+**Cause:** A value the command puts into the request path, such as a database, asset or other ID, is empty, `.` or `..`, contains such a segment, or contains a control character such as a tab or a line break. The CLI refuses such a path. A `/`, `?` or `#` in an ID is sent percent-encoded as part of that ID.
 
 **Resolution:** Pass the ID as the API returns it, for example from the matching `list` command.
 

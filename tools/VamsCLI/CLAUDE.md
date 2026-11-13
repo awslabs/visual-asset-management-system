@@ -235,7 +235,8 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 -   Sets headers: `Content-Type: application/json`, `User-Agent: vamscli/{version}`
 -   Bearer token from `ProfileManager.load_auth_profile()`
 -   Pre-flight token validation for override tokens (checks expiry before request)
--   Refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded) with `InvalidRequestPathError` before anything is sent: the URL join drops or resolves such a segment, so a path value carrying one would address another route (`tests/test_api_request_path.py`)
+-   Refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded), a control character (raw or percent-encoded), or a raw `?` or `#` with `InvalidRequestPathError` before anything is sent: the URL join drops or resolves such a segment and removes some control characters, and a `?` or `#` ends the path, so a path value carrying one would address another route. Query parameters go in `params=` (`tests/test_api_request_path.py`)
+-   Endpoints are built with `route_path(API_X, name=value)`, never `API_X.format(...)`: it percent-encodes a `/`, `?` or `#` in each value so the value stays in its own segment, and leaves every other character to requests. A ratchet test fails on a new `API_*.format(` call outside the EDH client, which encodes each value with `_edh_path_value`
 -   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header
 -   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens (`OverrideTokenError`); a 401 that persists through `MAX_AUTH_RETRIES` refreshes raises `AuthenticationError`, also with `raise_http_errors=True`. From v2.7.0 the authorizer answers a credential it does not accept (expired or invalid token; unknown, disabled or expired API key) with 401 (#1212)
 -   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent (kept for APIs older than v2.7.0, which answered a rejected token with the authorizer's 403)
@@ -791,7 +792,7 @@ Follow this checklist:
 
     def get_my_resource(self, resource_id):
         """Get a specific resource."""
-        endpoint = API_MY_RESOURCE_BY_ID.format(resourceId=resource_id)
+        endpoint = route_path(API_MY_RESOURCE_BY_ID, resourceId=resource_id)
         response = self._make_request('GET', endpoint)
         return self._handle_response(response)
     ```

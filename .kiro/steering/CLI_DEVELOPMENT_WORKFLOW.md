@@ -244,9 +244,9 @@ In a fork, the fork's paths go in `vamscli/custom_constants.py` instead (see [Fo
 # ✅ CORRECT - Import from constants
 from ..constants import API_LOGIN_PROFILE, API_USER_ASSETS
 
-# ✅ CORRECT - Use constants in methods
+# ✅ CORRECT - Use constants in methods; a value joined onto a prefix constant is one segment
 def call_login_profile(self, user_id: str):
-    endpoint = f"{API_LOGIN_PROFILE}/{user_id}"
+    endpoint = f"{API_LOGIN_PROFILE}/{_path_segment(user_id)}"
     return self.get(endpoint)
 ```
 
@@ -1461,7 +1461,7 @@ def create(ctx: click.Context, ...):
 
 `RequestBlockedError` carries `json_fields` `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` (the marker body's request ID, else the first non-blank `x-amz-apigw-id`, `x-amz-cf-id` or `x-amzn-RequestId` header: the IDs the regional web ACL log, the CloudFront web ACL log and the API Gateway access log record), never clears stored credentials (`call_login_profile` re-raises global errors), and is printed under `Request Blocked`, ahead of the `AuthenticationError` branch, with `WAF_ADMIN_HINT` (`WAF_OR_STAGE_ADMIN_HINT`, which also names the stage-path check, when `confirmed` is false) and the request ID. Its texts carry no sign-in wording (`auth login`, `401`, `token has expired`, `Authentication failed`), which the IsaacSim connector would class as a credential failure; `tests/test_api_403_classification.py::TestBlockWording` holds them to that. `check_api_availability` raises `RequestBlockedError` for the marker, `APIUnavailableError` naming both causes for a bare `Forbidden`, and `PermissionDeniedError(_VERSION_CHECK_DENIED_MESSAGE)` for an authorizer deny (the request carries no token, so the message names the source IP restriction). `requires_api_access` re-raises all three, so a blocked or refused version check stops `auth login`, `auth change-password` and `auth forgot-password` before any Cognito call; `setup` refuses a URL whose stage probe the web ACL blocked.
 
-Before anything is sent, `_make_request` refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded) with `InvalidRequestPathError`, an `APIError`: the URL join drops or resolves such a segment, so a path value carrying one would address another route (`tests/test_api_request_path.py`).
+Before anything is sent, `_make_request` refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded), a control character (raw or percent-encoded), or a raw `?` or `#` with `InvalidRequestPathError`, an `APIError`: the URL join drops or resolves such a segment and removes some control characters, and a `?` or `#` ends the path, so a path value carrying one would address another route. Query parameters go in `params=`. Endpoints are built with `route_path(API_X, name=value)`, never `API_X.format(...)`, which percent-encodes a `/`, `?` or `#` in each value (`tests/test_api_request_path.py`).
 
 A global error's `--json-output` document (`_global_error_data`) is `{"error": "<Heading>: <message>", "error_type", ...json_fields, "additional_info"?}` on stdout; in text mode its `✗ <Heading>: <message>` line goes to stderr and its `additional_info` lines to stdout. Both exit 1.
 
@@ -2048,7 +2048,7 @@ def call_new_endpoint(self, param: str) -> Dict[str, Any]:
         APIError: When API call fails
     """
     try:
-        endpoint = f"{API_NEW_ENDPOINT}/{param}"
+        endpoint = f"{API_NEW_ENDPOINT}/{_path_segment(param)}"
         response = self.get(endpoint, include_auth=True)
         return response.json()
 
