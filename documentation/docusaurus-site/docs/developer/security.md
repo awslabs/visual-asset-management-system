@@ -50,7 +50,7 @@ For Amazon Cognito, a pre-token-generation Lambda trigger (`pretokengenv1.py` fo
 
 External OAuth IDP deployments have no equivalent trigger. For every token, the authorizer derives the user identifier from the token's username claim: the first present of `cognito:username`, `username` and `sub`. A verified token with none of them is refused. For an Amazon Cognito token this is the user name the trigger writes, so Amazon Cognito users are identified as before.
 
-The `vams:` prefix is reserved for the authorizer's own context values. The authorizer ignores every claim a token carries under that prefix (matched without regard to case), so an identity provider cannot set a user's identity, roles, MFA state or credential type through a `vams:` claim. Map users to VAMS by the claim above, and assign roles to that value.
+The `vams:` prefix is reserved for the authorizer's own context values. The authorizer ignores every claim a token carries under that prefix (matched without regard to case). Map users to VAMS by the claim above, and assign roles to that value.
 
 ### Stage 2: The custom Lambda authorizer builds the context
 
