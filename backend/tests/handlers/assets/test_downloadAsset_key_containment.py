@@ -26,6 +26,7 @@ covers that fan-out, which must stay fail-closed and must not sample.
 """
 
 import os
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -66,7 +67,6 @@ def _wire(m, base_key):
     # test starts from a prefix that costs no HeadObject calls.
     m.list_all_objects = MagicMock(return_value=[])
     m.check_s3_object_exists = MagicMock(return_value=True)
-    m.is_delete_marker = MagicMock(return_value=False)
     m.resolve_file_version_from_asset_version = MagicMock(return_value=None)
     m.resolve_asset_version_id_from_alias = MagicMock(return_value=None)
     m.s3 = MagicMock()
@@ -306,6 +306,21 @@ def _wire_prefix(m, blocked_index=None, error_index=None):
     return keys
 
 
+def _validate_prefix(m, prefix=SLASHED_BASE):
+    """Run the shared prefix check with the handler's client, worker pool and helpers.
+
+    These are the arguments ``check_file_eligibility`` receives from
+    ``resolve_and_sign_file_key`` for a whole-asset download.
+    """
+    de = sys.modules['common.downloadEligibility']
+    return de.validate_prefix_content_types(
+        m.s3, 'test-bucket', prefix,
+        max_workers=m.MAX_PARALLEL_S3_WORKERS,
+        list_objects=m.list_all_objects,
+        is_allowed=m.validateUnallowedFileExtensionAndContentType,
+    )
+
+
 def _headed_keys(m):
     """Keys passed to head_object.
 
@@ -331,14 +346,14 @@ class TestPrefixContentTypeValidationFanOut:
         for _ in range(10):
             m = _wire(_load(), SLASHED_BASE)
             _wire_prefix(m, blocked_index=VIOLATING_INDEX)
-            assert m.validate_prefix_content_types('test-bucket', SLASHED_BASE) is False
+            assert _validate_prefix(m) is False
 
     def test_all_allowed_objects_pass_with_exactly_one_head_each(self):
         """Negative control: proves the listing is walked, not short-circuited."""
         m = _wire(_load(), SLASHED_BASE)
         keys = _wire_prefix(m)
 
-        assert m.validate_prefix_content_types('test-bucket', SLASHED_BASE) is True
+        assert _validate_prefix(m) is True
         assert len(_headed_keys(m)) == PREFIX_OBJECT_COUNT
         assert set(_headed_keys(m)) == set(keys)
 
@@ -353,11 +368,11 @@ class TestPrefixContentTypeValidationFanOut:
             m = _wire(_load(), SLASHED_BASE)
             _wire_prefix(m, error_index=VIOLATING_INDEX)
             with pytest.raises(ClientError):
-                m.validate_prefix_content_types('test-bucket', SLASHED_BASE)
+                _validate_prefix(m)
 
     def test_empty_prefix_costs_no_head_calls(self):
         m = _wire(_load(), SLASHED_BASE)
-        assert m.validate_prefix_content_types('test-bucket', SLASHED_BASE) is True
+        assert _validate_prefix(m) is True
         assert _headed_keys(m) == []
 
     def test_pool_is_bounded_and_connections_cover_the_workers(self):

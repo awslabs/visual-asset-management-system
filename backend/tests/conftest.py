@@ -446,6 +446,19 @@ _sns_module = _s3mk_importlib_util.module_from_spec(_sns_spec)
 _sns_spec.loader.exec_module(_sns_module)
 sys.modules['common.snsTopicNames'] = _sns_module
 sys.modules['common'].snsTopicNames = _sns_module
+# downloadEligibility is the shared download-eligibility check set (downloadAsset imports it at module
+# level). It builds no client and reads no table at import -- every S3 client, getter and resolver is
+# passed in by the caller -- so load the REAL module by path. It must come after common.s3 above, which
+# it imports. Bound on the MagicMock `common` too, so `from common import downloadEligibility` resolves
+# the real module rather than a mock attribute.
+_de_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.downloadEligibility',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'downloadEligibility.py')
+)
+_de_module = _s3mk_importlib_util.module_from_spec(_de_spec)
+_de_spec.loader.exec_module(_de_module)
+sys.modules['common.downloadEligibility'] = _de_module
+sys.modules['common'].downloadEligibility = _de_module
 # handlers.assets.assetVersions is imported by assetFiles and metadataService at module load.
 # Create a minimal mock package hierarchy: handlers → handlers.assets → handlers.assets.assetVersions
 if 'handlers' not in sys.modules:
