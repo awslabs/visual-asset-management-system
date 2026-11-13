@@ -15,6 +15,8 @@ import { RouteRegistry } from "./nestedStacks/apiLambda/apiRouteRegistry";
 import { ResourceNameRegistry } from "./nestedStacks/resourceNames/resourceNameRegistry";
 import { ResourceNamesBuilderNestedStack } from "./nestedStacks/resourceNames/resourceNamesBuilder-nestedStack";
 import { ApiNestedStack } from "./nestedStacks/apiLambda/api-nestedStack";
+import { RestApiGatewayConstruct } from "./nestedStacks/apiLambda/constructs/rest-api-gateway-construct";
+import { configureApiCloudWatchRoleReuse } from "./nestedStacks/apiLambda/constructs/api-cloudwatch-role-reuse";
 import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
 import { CustomFeatureEnabledConfigNestedStack } from "./nestedStacks/featureEnabled/custom-featureEnabled-config-nestedStack";
@@ -383,6 +385,15 @@ export class CoreVAMSStack extends cdk.Stack {
                 wafArn: props.ssmWafArnRegional,
                 apiOriginVerifySecret: props.apiOriginVerifySecret,
             });
+            // A fresh deploy reuses a retained API Gateway account CloudWatch role of the same
+            // name instead of failing on it; a stack that already exists keeps its own role.
+            if (apiNestedStack.apiImplementation instanceof RestApiGatewayConstruct) {
+                configureApiCloudWatchRoleReuse(
+                    this,
+                    apiNestedStack.apiImplementation.restApi,
+                    awsEnv ? awsEnv["IamRoleNamePrefix"] : undefined
+                );
+            }
             apiNestedStack.addStackDependency(storageResourcesNestedStack);
             apiNestedStack.addStackDependency(authBuilderNestedStack);
             apiNestedStack.addStackDependency(apiBuilderNestedStack);
