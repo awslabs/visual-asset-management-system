@@ -49,10 +49,12 @@ def fbx_up_axis(file_path: str):
     return {0: "X", 1: "Y", 2: "Z"}.get(value)
 
 
-def load(file_path: str, max_triangles: int = None) -> pv.PolyData:
+def load(file_path: str, max_triangles: int = None, asset_root: str = None) -> pv.PolyData:
     """Load a mesh file; an FBX carries the up axis its GlobalSettings declare. ``max_triangles``
-    bounds how far an FBX scene's instances may expand (``_load_fbx_open3d``)."""
-    data = _load(file_path, max_triangles)
+    bounds how far an FBX scene's instances may expand (``_load_fbx_open3d``). ``asset_root`` is the
+    local directory the input's referenced files were fetched into: a glTF or OBJ reads the files it
+    names from anywhere inside it (``asset_resolver``)."""
+    data = _load(file_path, max_triangles, asset_root)
     if os.path.splitext(file_path)[1].lower() == ".fbx":
         axis = fbx_up_axis(file_path)
         if axis:
@@ -61,7 +63,67 @@ def load(file_path: str, max_triangles: int = None) -> pv.PolyData:
     return data
 
 
-def _load(file_path: str, max_triangles: int = None) -> pv.PolyData:
+# Formats whose referenced files (buffers, images, materials, texture maps) the loader reads through a
+# trimesh resolver.
+RESOLVED_EXTENSIONS = {".gltf", ".obj"}
+
+
+def asset_resolver(file_path: str, asset_root: str):
+    """A trimesh resolver for the files ``file_path`` names, confined to ``asset_root``.
+
+    A name resolves against the input file's folder, as trimesh's own ``FilePathResolver`` does, but
+    may lead anywhere inside the asset root rather than only below that folder: the referenced-file
+    fetch accepts a ``../textures/x.png`` that stays inside the asset and fetches it there, so the
+    loader must read it from there too. An OBJ's material library names its texture maps relative to
+    its own folder (as the fetch reads them), so once a ``.mtl`` is read its folder is searched too. A
+    name that resolves outside the asset root is refused, as the fetch refuses it.
+    """
+    from pathlib import Path
+
+    from trimesh.resolvers import FilePathResolver
+
+    class AssetResolver(FilePathResolver):
+        def __init__(self, source, root):
+            super().__init__(source)
+            self.root = Path(root).resolve()
+            self.folders = [Path(self.parent).resolve()]
+
+        def _confined(self, folder, name):
+            path = (folder / name).resolve()
+            return path if path.is_relative_to(self.root) else None
+
+        def absolute(self, name):
+            path = self._confined(self.folders[0], name.strip())
+            if path is None:
+                raise ValueError(f"'{name}' is outside the asset")
+            return path
+
+        def get(self, name):
+            # Backslashes read as separators, as the fetch reads them (files written on Windows).
+            stripped = name.strip().replace("\\", "/")
+            candidates = (stripped, stripped.lstrip("/"), os.path.split(stripped)[-1])
+            refused = True
+            for folder in list(self.folders):
+                for candidate in candidates:
+                    path = self._confined(folder, candidate) if candidate else None
+                    if path is None:
+                        continue
+                    refused = False
+                    if path.is_file():
+                        if path.suffix.lower() == ".mtl" and path.parent not in self.folders:
+                            self.folders.append(path.parent)
+                        return path.read_bytes()
+            if refused:
+                raise ValueError(f"'{name}' is outside the asset")
+            raise FileNotFoundError(name)
+
+        def namespaced(self, namespace):
+            return AssetResolver(os.path.join(self.parent, namespace), self.root)
+
+    return AssetResolver(file_path, asset_root)
+
+
+def _load(file_path: str, max_triangles: int = None, asset_root: str = None) -> pv.PolyData:
     """
     Load a mesh file and return a PyVista PolyData object for rendering.
     Supports: .ply, .stl, .obj, .glb, .gltf, .fbx, .drc
@@ -73,8 +135,11 @@ def _load(file_path: str, max_triangles: int = None) -> pv.PolyData:
         return _load_draco(file_path)
 
     # Use trimesh for all other mesh formats
+    resolver = None
+    if asset_root and ext in RESOLVED_EXTENSIONS:
+        resolver = asset_resolver(file_path, asset_root)
     try:
-        scene_or_mesh = trimesh.load(file_path, force=None)
+        scene_or_mesh = trimesh.load(file_path, force=None, resolver=resolver)
     except (NotImplementedError, Exception) as e:
         # trimesh doesn't support FBX natively; fall back to Open3D
         if ext == ".fbx":
