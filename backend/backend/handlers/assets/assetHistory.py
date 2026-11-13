@@ -14,6 +14,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success,
@@ -88,6 +89,8 @@ def get_asset_history(event, database_id, asset_id, request_model):
         ).decode('utf-8')
 
     response_model = GetAssetHistoryResponseModel(Items=records, NextToken=next_token)
+    log_action(event, "assetHistoryGet", database_id=database_id, asset_id=asset_id, item_count=len(records),
+               request_parameters=request_model.dict(exclude_none=True))
     body = {'message': 'Success'}
     body.update(response_model.dict())
     return success(body=body)
@@ -133,6 +136,7 @@ def handle_get_request(event):
     return get_asset_history(event, database_id, asset_id, request_model)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset history APIs"""
     global claims_and_roles

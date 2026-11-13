@@ -37,7 +37,7 @@ from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_actions
+from customLogging.auditLogging import audited_handler, log_action, log_actions
 from models.common import (
     APIGatewayProxyResponseV2,
     success,
@@ -802,6 +802,7 @@ def _validate_ids(path_parameters):
     return None
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     normalize_event(event)
     logger.info(event)
@@ -865,6 +866,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return validation_error(status_code=404, body={"message": "Template not found"}, event=event)
             if method == "GET":
                 fields = _load_tag_schema_fields(database_id, pipeline_id, template_id) or []
+                log_action(event, "pipelineTemplateTagSchemaGet", database_id=database_id,
+                           pipelineId=pipeline_id, templateId=template_id)
                 return success(body={"message": TagSchemaResponseModel(
                     pipelineDatabaseId=database_id, pipelineId=pipeline_id,
                     templateId=template_id, fields=fields).dict()})
@@ -877,6 +880,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     database_id, pipeline_id, template_id, template_row, fields, username)
                 if errors:
                     return validation_error(body={"message": errors}, event=event)
+                log_action(event, "pipelineTemplateTagSchemaUpdate", database_id=database_id,
+                           pipelineId=pipeline_id, templateId=template_id, item_count=len(fields),
+                           changes={"fields": fields})
                 return success(body={"message": TagSchemaResponseModel(
                     pipelineDatabaseId=database_id, pipelineId=pipeline_id,
                     templateId=template_id, fields=fields).dict()})
@@ -888,9 +894,13 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 if not row:
                     return validation_error(status_code=404, body={"message": "Template not found"}, event=event)
                 fields = _load_tag_schema_fields(database_id, pipeline_id, template_id)
+                log_action(event, "pipelineTemplateGet", database_id=database_id, pipelineId=pipeline_id,
+                           templateId=template_id)
                 return success(body={"message": _template_to_response(row, tag_schema_fields=fields).dict()})
-            return success(body={
-                "message": list_templates(database_id, pipeline_id, query_parameters).dict()})
+            listing = list_templates(database_id, pipeline_id, query_parameters)
+            log_action(event, "pipelineTemplateList", database_id=database_id, pipelineId=pipeline_id,
+                       item_count=len(listing.Items), request_parameters=dict(query_parameters or {}))
+            return success(body={"message": listing.dict()})
 
         if method == "POST":
             if system_locked:

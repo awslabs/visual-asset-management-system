@@ -92,3 +92,15 @@ def test_a_set_up_and_logged_in_profile_builds_a_client():
     client = _build(Config(profile="staging"), manager)
     assert client.profile_name == "staging"
     assert client.api_url == "https://x/api"
+
+
+@pytest.mark.parametrize("manager", [NOT_SET_UP, NO_URL, NOT_LOGGED_IN], ids=["not-set-up", "no-url", "not-logged-in"])
+def test_the_reason_names_no_command_and_the_user_step_does(manager):
+    """The server reports `reason` to the agent and `user_step` as the USER's step (Mandatory Rule 14):
+    the reason must not read as an instruction to run a CLI, and the step must be the hint's command."""
+    with pytest.raises(ConfigError) as raised:
+        _build(Config(profile="staging"), manager)
+    error = raised.value
+    assert "vamscli" not in error.reason, error.reason
+    assert "`vamscli --profile staging " in error.user_step, error.user_step
+    assert error.user_step.split(" and then ")[0] in str(error)

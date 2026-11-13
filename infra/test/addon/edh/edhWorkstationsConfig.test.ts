@@ -60,6 +60,7 @@ const DISABLED_BLOCK = {
     edhApiCaBundleSecretArn: "",
     edhApiTlsServerName: "",
     edhClusterId: "",
+    lambdaSubnets: "isolated",
     edhRootKeyAutoSync: true,
     autoProvisionUsers: true,
     edhAllowedInstanceTypes: [],
@@ -532,6 +533,105 @@ describe("edhRootKeyAutoSync", () => {
                 c.app.addons.useEdhWorkstations.edhRootKeyAutoSync = "yes";
             })
         ).not.toThrow();
+    });
+});
+
+describe("lambdaSubnets", () => {
+    const resolved = (mutate: (edh: any) => void) =>
+        withEdh(mutate)().app.addons.useEdhWorkstations.lambdaSubnets;
+
+    /** The add-on enabled in an imported VPC with two isolated subnets, then `mutate`. */
+    const inImportedVpc = (mutate: (edh: any, c: any) => void) =>
+        withEdh((edh, c) => {
+            c.app.useGlobalVpc.optionalExternalVpcId = "vpc-0123456789abcdef0";
+            c.app.useGlobalVpc.optionalExternalIsolatedSubnetIds =
+                "subnet-0aaaaaaaaaaaaaaa1,subnet-0aaaaaaaaaaaaaaa2";
+            c.app.useGlobalVpc.optionalExternalPrivateSubnetIds = "";
+            mutate(edh, c);
+        });
+
+    test("an unset field is isolated", () => {
+        expect(resolved((edh) => delete edh.lambdaSubnets)).toBe("isolated");
+        expect(resolved((edh) => (edh.lambdaSubnets = undefined))).toBe("isolated");
+    });
+
+    test("only isolated and private are accepted, and only while the add-on is enabled", () => {
+        expect(resolved((edh) => (edh.lambdaSubnets = "isolated"))).toBe("isolated");
+        expect(resolved((edh) => (edh.lambdaSubnets = "private"))).toBe("private");
+        for (const value of ["public", "Private", "", "isolated ", true]) {
+            expect(withEdh((edh) => (edh.lambdaSubnets = value))).toThrow(
+                /lambdaSubnets must be "isolated" or "private"/
+            );
+        }
+        // Not validated while the add-on is disabled, like the add-on's other fields.
+        expect(
+            loadConfig(commercialTemplate, "us-east-1", (c) => {
+                c.app.addons.useEdhWorkstations.lambdaSubnets = "public";
+            })
+        ).not.toThrow();
+    });
+
+    test("private in an imported VPC needs the imported private subnets", () => {
+        expect(inImportedVpc((edh) => (edh.lambdaSubnets = "private"))).toThrow(
+            /lambdaSubnets "private".*optionalExternalPrivateSubnetIds names none/
+        );
+        expect(
+            inImportedVpc((edh, c) => {
+                edh.lambdaSubnets = "private";
+                c.app.useGlobalVpc.optionalExternalPrivateSubnetIds = "UNDEFINED";
+            })
+        ).toThrow(/optionalExternalPrivateSubnetIds names none/);
+        expect(
+            inImportedVpc((edh, c) => {
+                edh.lambdaSubnets = "private";
+                c.app.useGlobalVpc.optionalExternalPrivateSubnetIds =
+                    "subnet-0bbbbbbbbbbbbbbb1,subnet-0bbbbbbbbbbbbbbb2";
+            })
+        ).not.toThrow();
+        // Control: isolated needs no private subnet in the imported VPC.
+        expect(inImportedVpc((edh) => (edh.lambdaSubnets = "isolated"))).not.toThrow();
+    });
+
+    test("the ConfigBuilder mirrors both rules and renders the two values", () => {
+        const builder = (mutate: (c: any) => void) => {
+            const c = makeDefaultConfig("commercial");
+            c.env.region = "us-east-1";
+            enableEdhConfig(c);
+            mutate(c);
+            return evaluateRules(c)
+                .map((r) => r.id)
+                .filter((id) => id.startsWith("edh-lambdasubnets"));
+        };
+        const edh = (c: any) => c.app.addons.useEdhWorkstations;
+        expect(builder(() => undefined)).toEqual([]);
+        expect(builder((c) => (edh(c).lambdaSubnets = "private"))).toEqual([]);
+        expect(builder((c) => delete edh(c).lambdaSubnets)).toEqual([]);
+        expect(builder((c) => (edh(c).lambdaSubnets = "public"))).toEqual([
+            "edh-lambdasubnets-value",
+        ]);
+        const imported = (c: any) => {
+            c.app.useGlobalVpc.optionalExternalVpcId = "vpc-0123456789abcdef0";
+            c.app.useGlobalVpc.optionalExternalIsolatedSubnetIds = "subnet-0aaaaaaaaaaaaaaa1";
+            c.app.useGlobalVpc.optionalExternalPrivateSubnetIds = "";
+        };
+        expect(
+            builder((c) => {
+                imported(c);
+                edh(c).lambdaSubnets = "private";
+            })
+        ).toEqual(["edh-lambdasubnets-private-imported-vpc"]);
+        expect(
+            builder((c) => {
+                imported(c);
+                edh(c).lambdaSubnets = "private";
+                c.app.useGlobalVpc.optionalExternalPrivateSubnetIds = "subnet-0bbbbbbbbbbbbbbb1";
+            })
+        ).toEqual([]);
+        const field = EDH_FIELDS.find(
+            (f) => f.path === "app.addons.useEdhWorkstations.lambdaSubnets"
+        );
+        expect(field?.input).toBe("select");
+        expect(field?.options?.map((o) => o.value)).toEqual(["isolated", "private"]);
     });
 });
 

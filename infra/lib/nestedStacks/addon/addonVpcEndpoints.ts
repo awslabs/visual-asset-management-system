@@ -5,6 +5,18 @@
 
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
+import { edhLambdasInPrivateSubnets } from "../../../config/addon/edhWorkstationsConfig";
+
+/**
+ * Whether an enabled add-on places compute in the private subnets. The VPC builder then gives a VPC
+ * it creates the public and private subnet groups, with one NAT gateway per Availability Zone, as it
+ * does for the pipelines whose compute runs in private subnets.
+ */
+export function addonNeedsPrivateSubnets(config: Config.Config): boolean {
+    // EDH Workstations with lambdaSubnets "private": its Lambdas reach an internet-facing EDH load
+    // balancer through the NAT gateways.
+    return edhLambdasInPrivateSubnets(config);
+}
 
 /** An interface endpoint an enabled add-on needs in the VAMS VPC. */
 export interface AddonInterfaceEndpoint {
@@ -14,10 +26,11 @@ export interface AddonInterfaceEndpoint {
 }
 
 /**
- * Interface endpoints the enabled add-ons call from the isolated subnets. The VPC builder
+ * Interface endpoints the enabled add-ons call from the VPC. The VPC builder
  * (`vpcBuilder-nestedStack.ts`) creates each one with the core endpoints when
  * `app.useGlobalVpc.addVpcEndpoints` is on, with private DNS, in the isolated subnets and behind
- * the shared endpoint security group. The ids are construct ids in the VPC stack, so an endpoint
+ * the shared endpoint security group, which admits the VPC CIDR, so a Lambda in the private subnets
+ * reaches them too. The ids are construct ids in the VPC stack, so an endpoint
  * keeps its logical id for as long as its id here stays the same.
  */
 export function addonInterfaceEndpoints(config: Config.Config): AddonInterfaceEndpoint[] {

@@ -42,7 +42,7 @@ from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_upload
+from customLogging.auditLogging import log_file_upload, audited_handler
 from botocore.exceptions import ClientError
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields, bucket_region_for_name
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
@@ -1034,6 +1034,20 @@ def queue_large_file_for_processing(file_info: dict, sqs_queue_url: str) -> bool
         logger.exception(f"Error in queue_large_file_for_processing for file {file_info.get('relativeKey', 'unknown')}: {e}")
         return False
 
+
+def accepted_asynchronously(file_results) -> bool:
+    """True when any file was queued for the large-file consumer. Such a file is not in
+    successful_files, which holds only the files the completion copies itself, so a completion
+    must not be failed for lacking those."""
+    return any(result.success and result.largeFileAsynchronousHandling for result in file_results)
+
+
+def landed_synchronously(file_results) -> bool:
+    """True when any file was copied into the asset by the completion itself. A queued file updates
+    the asset type and notifies subscribers once it lands (the large-file consumer does both)."""
+    return any(result.success and not result.largeFileAsynchronousHandling for result in file_results)
+
+
 def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: str, expected_parts: list) -> tuple:
     """Calculate total file size by listing parts of an incomplete multipart upload
     
@@ -1630,8 +1644,12 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             ))
             has_failures = True
     
+    # Files queued for asynchronous processing count as accepted: a completion whose every file is
+    # over the async threshold is not reported as failed while its files land.
+    has_async_accepted = accepted_asynchronously(file_results)
+
     # If no files were successfully uploaded, return error
-    if not successful_files:
+    if not successful_files and not has_async_accepted:
         delete_upload_details(uploadId, assetId)
         # Check if any file has largeFileAsynchronousHandling=true
         has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
@@ -1680,7 +1698,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         successful_files.remove(file_detail)
                 
                 # If no files remain successful, return error
-                if not successful_files:
+                if not successful_files and not has_async_accepted:
                     delete_upload_details(uploadId, assetId)
                     # Check if any file has largeFileAsynchronousHandling=true
                     has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
@@ -1747,8 +1765,9 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                     result.error = "Failed to copy file to final location"
                     has_failures = True
     
-    # Update asset record based on upload type
-    if uploadType == "assetFile" and any(f.success for f in file_results):
+    # Update asset record based on upload type. Only files copied here count: a queued file updates
+    # the asset type and notifies subscribers once it lands (the large-file consumer does both).
+    if uploadType == "assetFile" and landed_synchronously(file_results):
         # Determine asset type using the asset's bucket and key location
         assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
@@ -2440,8 +2459,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             ))
             has_failures = True
     
+    # Files queued for asynchronous processing count as accepted: a completion whose every file is
+    # over the async threshold is not reported as failed while its files land.
+    has_async_accepted = accepted_asynchronously(file_results)
+
     # If no files were successfully uploaded, return error
-    if not successful_files:
+    if not successful_files and not has_async_accepted:
         delete_upload_details(uploadId, assetId)
         # Check if any file has largeFileAsynchronousHandling=true
         has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
@@ -2491,7 +2514,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         successful_files.remove(file_detail)
                 
                 # If no files remain successful, return error
-                if not successful_files:
+                if not successful_files and not has_async_accepted:
                     delete_upload_details(uploadId, assetId)
                     # Check if any file has largeFileAsynchronousHandling=true
                     has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
@@ -2546,8 +2569,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     result.error = "Failed to copy file to final location"
                     has_failures = True
 
-    # Update asset record based on upload type
-    if uploadType == "assetFile" and any(f.success for f in file_results):
+    # Update asset record based on upload type. Only files copied here count: a queued file updates
+    # the asset type and notifies subscribers once it lands (the large-file consumer does both).
+    if uploadType == "assetFile" and landed_synchronously(file_results):
         # Determine asset type using the asset's bucket and key location
         assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
@@ -2644,6 +2668,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for file upload APIs"""
     global claims_and_roles

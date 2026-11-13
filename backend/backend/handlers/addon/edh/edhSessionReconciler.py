@@ -69,6 +69,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from common.addonResourceNames import AddonResourceKeys
 from common.resourceNames import get_table_name
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from .common import edhSessionBootstrap as bootstrap
 from .common.edhClient import (
     EDH_SERVICE_ACTOR_UID,
@@ -916,6 +917,7 @@ def _reconcile(scanned: Dict[str, Any], index: DesktopIndex, now: datetime, summ
         _capture_launch_failure({**row, **updates}, settled, now, client_factory, summary, failure_reads)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> Dict[str, int]:
     now = _now()
     client = EdhClient(profile="batch")
@@ -981,4 +983,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, int]:
         summary["failed"] += failed
 
     logger.info("EDH session sweep complete", extra=summary)
+    log_action(event, "edhSessionReconcile", outcome="failed" if summary["failed"] else "success",
+               reason="internal" if summary["failed"] else None, item_count=summary["examined"],
+               details=dict(summary))
     return summary

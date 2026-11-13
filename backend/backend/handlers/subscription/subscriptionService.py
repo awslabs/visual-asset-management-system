@@ -16,6 +16,7 @@ from models.common import VAMSGeneralErrorResponse
 from handlers.authz import CasbinEnforcer
 from common.dynamodb import get_asset_object_from_id, query_all_items
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.dynamodb import validate_pagination_info
 from common.snsTopicNames import asset_sns_topic_name
 from boto3.dynamodb.conditions import Key
@@ -84,7 +85,7 @@ def get_asset_object_for_entity(entity_id):
     return asset_object
 
 
-def get_subscriptions(query_params):
+def get_subscriptions(query_params, event=None):
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     deserializer = TypeDeserializer()
     paginator = dynamodb_client.get_paginator('scan')
@@ -104,7 +105,9 @@ def get_subscriptions(query_params):
     resolved_assets = {}
     for obj in page_iterator.get('Items', []):
         deserialized_document = {k: deserializer.deserialize(v) for k, v in obj.items()}
-        entity_name, entity_id = deserialized_document["entityName_entityId"].split("#")
+        # entityName cannot contain '#' (OBJECT_NAME) while an asset ID may end with one, so the
+        # first '#' is the separator and the rest is the entityId
+        entity_name, entity_id = deserialized_document["entityName_entityId"].split("#", 1)
         output_obj = {
             "eventName": deserialized_document["eventName"],
             "entityName": entity_name,
@@ -144,6 +147,10 @@ def get_subscriptions(query_params):
 
     if 'NextToken' in page_iterator:
         result['NextToken'] = page_iterator['NextToken']
+
+    if event is not None:
+        log_action(event, "subscriptionList", item_count=len(result["Items"]),
+                   request_parameters=dict(query_params or {}))
 
     response['statusCode'] = 200
     response['body'] = json.dumps({"message": result})
@@ -487,6 +494,21 @@ def delete_subscription(body):
     return response
 
 
+def _log_subscription_write(event, action, asset_object, result):
+    """Record a subscription write that succeeded and hand its response back."""
+    if result.get('statusCode') != 200:
+        return result
+    body = event['body']
+    subscribers = body.get('subscribers') or []
+    log_action(event, action, database_id=asset_object.get('databaseId'), asset_id=body.get('entityId'),
+               subscriptionId=f"{body.get('eventName')}#{body.get('entityName')}#{body.get('entityId')}",
+               item_count=len(subscribers),
+               changes={"eventName": body.get('eventName'), "entityName": body.get('entityName'),
+                        "subscribers": subscribers})
+    return result
+
+
+@audited_handler
 def lambda_handler(event, context):
     normalize_event(event)
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
@@ -512,7 +534,7 @@ def lambda_handler(event, context):
 
         #Handle GET request
         if httpMethod == 'GET':
-            return get_subscriptions(queryParameters)
+            return get_subscriptions(queryParameters, event=event)
         
         # Parse request body
         if not event.get('body'):
@@ -547,7 +569,7 @@ def lambda_handler(event, context):
             },
             'entityId': {
                 'value': event['body']['entityId'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
             'subscribers': {
                 'value': event['body']['subscribers'],
@@ -587,11 +609,14 @@ def lambda_handler(event, context):
                     allowed = True
 
             if allowed and httpMethod == 'POST':
-                return create_subscription(event['body'])
+                return _log_subscription_write(event, "subscriptionCreate", asset_object,
+                                               create_subscription(event['body']))
             elif allowed and httpMethod == 'PUT':
-                return update_subscription(event['body'])
+                return _log_subscription_write(event, "subscriptionUpdate", asset_object,
+                                               update_subscription(event['body']))
             elif allowed and httpMethod == 'DELETE':
-                return delete_subscription(event['body'])
+                return _log_subscription_write(event, "subscriptionDelete", asset_object,
+                                               delete_subscription(event['body']))
             else:
                 response['statusCode'] = 403
                 response['body'] = json.dumps({"message": "Not Authorized"})

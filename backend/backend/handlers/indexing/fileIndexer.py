@@ -31,6 +31,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse, MAX_S3_KEY_LENGTH
 from common.indexing.geoLocation import build_geo_location
@@ -1694,6 +1695,17 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                 is_archived = False
                     
             except ClientError as e:
+                if e.response.get('Error', {}).get('Code') in S3_NOT_FOUND_ERROR_CODES:
+                    # Deleted, moved or archived since the event was sent. That change's own
+                    # ObjectRemoved event updates the document, and every redelivery of this
+                    # one would get the same answer, so it is finished rather than failed.
+                    logger.info(f"Object {s3_key} no longer exists; skipping its {event_name} event")
+                    return IndexOperationResponse(
+                        success=True,
+                        message="Object no longer exists, skipping",
+                        indexName=opensearch_file_index,
+                        operation="skip"
+                    )
                 logger.exception(f"Error getting S3 object metadata: {e}")
                 return IndexOperationResponse(
                     success=False,
@@ -2068,6 +2080,7 @@ def with_batch_item_failures(response, event, failures: List[Dict[str, str]]):
     return response
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for file indexing operations"""
     global claims_and_roles
