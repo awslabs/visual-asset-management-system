@@ -32,3 +32,21 @@ def real_to_update_expr():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.to_update_expr
+
+
+@pytest.fixture(autouse=True)
+def no_compliance_retirement(request, monkeypatch):
+    """A database delete starts the move of its compliance data (`databaseRetirement.begin`) and
+    queues the rest (`hand_off_compliance_move`). These tests model no compliance tables, so both
+    are stubbed; a module that drives the move against its own tables sets
+    `USES_RETIREMENT_RECORD = True`."""
+    if getattr(request.module, "USES_RETIREMENT_RECORD", False):
+        yield
+        return
+    import sys
+    from common.compliance import databaseRetirement
+    monkeypatch.setattr(databaseRetirement, "begin", lambda *args, **kwargs: {})
+    module = sys.modules.get("backend.backend.handlers.databases.databaseService")
+    if module is not None:
+        monkeypatch.setattr(module, "hand_off_compliance_move", lambda *args, **kwargs: True)
+    yield

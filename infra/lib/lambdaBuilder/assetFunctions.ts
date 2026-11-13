@@ -294,12 +294,20 @@ export function buildStreamAuxiliaryPreviewAssetFunction(
         environment: {
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            // Compliance asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
         },
     });
     storageResources.s3.assetAuxiliaryBucket.grantRead(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     // The Region-routing S3 client resolves a bucket name's Region through the buckets table.
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+
+    if (config.app.compliance.quarantineBlocksDownload) {
+        storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
+    }
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
@@ -337,6 +345,10 @@ export function buildDownloadAssetFunction(
         environment: {
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            // Compliance asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
         },
     });
 
@@ -344,6 +356,10 @@ export function buildDownloadAssetFunction(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+
+    if (config.app.compliance.quarantineBlocksDownload) {
+        storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
+    }
 
     grantReadPermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -435,6 +451,10 @@ export function buildStreamAssetFunction(
         environment: {
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            // Compliance asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
         },
     });
 
@@ -442,6 +462,10 @@ export function buildStreamAssetFunction(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+
+    if (config.app.compliance.quarantineBlocksDownload) {
+        storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
+    }
 
     grantReadPermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -592,6 +616,10 @@ export function buildAssetExportService(
             ASSET_LINKS_FUNCTION_NAME: assetLinksFunction.functionName,
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            // Compliance asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
         },
     });
 
@@ -604,6 +632,10 @@ export function buildAssetExportService(
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+
+    if (config.app.compliance.quarantineBlocksDownload) {
+        storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
+    }
 
     // Grant invoke permission for asset links lambda
     assetLinksFunction.grantInvoke(fun);
