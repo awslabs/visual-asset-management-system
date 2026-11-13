@@ -359,12 +359,13 @@ def reconcile_failed_execution(body, error_info):
     except Exception as e:
         logger.exception(f"Error writing failing-pipeline log rows (continuing): {e}")
 
-    # 3) Finalize the main row FAILED (unless already terminal) with error + log, then announce the
-    #    terminal status on the orchestration bus. The status read here and the finalize write are
-    #    separate calls, so the end-state lambda can finish the run in between; the write carries the
-    #    terminal guard and reports whether it landed, and only a FAILED status that landed is
-    #    announced — the writer that finished the run first has already announced its status.
+    # 3) Finalize the main row FAILED (unless already terminal) with error + log. The status read
+    #    here and the finalize write are separate calls, so the end-state lambda can finish the run in
+    #    between; the write carries the terminal guard and reports whether it landed, and only a FAILED
+    #    status that landed is announced (step 5) — the writer that finished the run first has
+    #    already announced its status.
     main_row = {}
+    finalized = False
     try:
         main_table = dynamodb.Table(workflow_execution_database_v2)
         existing = main_table.query(
@@ -377,18 +378,30 @@ def reconcile_failed_execution(body, error_info):
                 dynamodb, workflow_execution_database_v2, execution_id,
                 workflow_database_id, workflow_id, FAILED_STATUS, now,
                 execution_log=execution_log, execution_error=error_message)
-            if finalized:
-                emit_workflow_execution_completed(
-                    execution_id, workflow_database_id, workflow_id, FAILED_STATUS,
-                    started_at=main_row.get('executionStartDate', ''), completed_at=now,
-                    execution_group_id=main_row.get('executionGroupId', ''))
-            else:
+            if not finalized:
                 logger.info(f"Execution {execution_id} was finished by another writer; the FAILED "
                             "completion event is not published")
     except Exception as e:
+        finalized = False
         logger.exception(f"Error finalizing main execution row (continuing): {e}")
 
-    # 4) Record the failed run's output types on its configuration row (UPDATE; created at launch),
+    # 4) Release the concurrency locks the run held (a no-op under the `none` restriction).
+    #    Best-effort like every step here; an unreleased row expires through the table's TTL.
+    el.release_locks_for_execution(
+        dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_table,
+        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=execution_id,
+        workflow_database_id=workflow_database_id, workflow_id=workflow_id)
+
+    # 5) Announce the FAILED status this handler recorded, once the locks are free, so a consumer
+    #    that relaunches on the event (the compliance callback's waiting pipeline rules) is not
+    #    refused again by the run it was told had ended.
+    if finalized:
+        emit_workflow_execution_completed(
+            execution_id, workflow_database_id, workflow_id, FAILED_STATUS,
+            started_at=main_row.get('executionStartDate', ''), completed_at=now,
+            execution_group_id=main_row.get('executionGroupId', ''))
+
+    # 6) Record the failed run's output types on its configuration row (UPDATE; created at launch),
     #    derived through the shared helper from whatever output rows exist at failure. Best-effort and
     #    isolated so a config-row write failure never fails the reconciliation; a missing write leaves
     #    the launch-time [] in place, which every reader treats as "no output types".
@@ -398,13 +411,7 @@ def reconcile_failed_execution(body, error_info):
             dynamodb, workflow_execution_configuration_table, execution_id, output_types)
     except Exception as e:
         logger.exception(f"Error recording failed-execution output types (continuing): {e}")
-    # 5) Release the concurrency locks the run held (a no-op under the `none` restriction).
-    #    Best-effort like every step here; an unreleased row expires through the table's TTL.
-    el.release_locks_for_execution(
-        dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_table,
-        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=execution_id,
-        workflow_database_id=workflow_database_id, workflow_id=workflow_id)
-    # 6) Refresh the stored log once CloudWatch Logs has ingested the failing run's events.
+    # 7) Refresh the stored log once CloudWatch Logs has ingested the failing run's events.
     _refresh_execution_log(execution_id, workflow_database_id, workflow_id, execution_start_date,
                            execution_log)
     return {"triggeredByUserId": main_row.get('triggeredByUserId', ''),
