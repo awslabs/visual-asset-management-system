@@ -39,8 +39,10 @@ from test_audit_action_records import (
     parse,
 )
 
+
 def _viewer():
     return importlib.import_module("common.auth.viewerAddress")
+
 
 BODY_SECRET = "body-secret-value-123"
 
@@ -343,7 +345,7 @@ class TestAuthRecordEcho:
          "auditAuthOther"),
     ])
     def test_a_failed_request_record_echoes_the_short_request(self, clients, path, method, path_parameters,
-                                                             resource, group):
+                                                              resource, group):
         @auditLogging.audited_handler
         def handler(event, context):
             return {"statusCode": 404}
