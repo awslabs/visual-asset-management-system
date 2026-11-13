@@ -19,6 +19,12 @@ in the configuration reference).
 The time is stamped here rather than in the template so the synthesized template does not change from
 one `cdk synth` to the next. The resource then runs only when its properties change: when it is first
 created, or when a release changes the default schema the construct passes.
+
+Each invocation writes one `complianceSchemaSeed` action record as the system user
+(`common/auditActions.py`): the schema name and version it wrote (`changes`), or that it found the
+schema already present and wrote nothing (`details.written` false), a Delete that kept the row, or a
+failed request with a generic reason. The handler lives under `handlers/` with the other deploy-time
+writers that record their actions (`indexing/crReindexer`, `workflows/importGlobalPipelineWorkflow`).
 """
 
 import json
@@ -28,6 +34,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from customLogging.auditLogging import audited_handler, log_action
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="ComplianceDefaultSchemaSeed")
@@ -84,6 +91,45 @@ def seed(properties, now=None):
     return True
 
 
+def _schema_ids(properties):
+    """The schema name, version and scope the properties name, for the action record; empty for
+    properties that do not name them (the record of a refused request)."""
+    try:
+        _, item = _seed_item(properties)
+    except ValueError:
+        return {}
+    ids = {"schemaName": item["schemaName"]["S"]}
+    if "S" in (item.get("databaseId") or {}):
+        ids["database_id"] = item["databaseId"]["S"]
+    try:
+        ids["internalVersion"] = int(item["internalVersion"]["N"])
+    except (TypeError, ValueError):
+        pass
+    return ids
+
+
+def _record(event, request_type, properties, written=None, error=None):
+    """The invocation's `complianceSchemaSeed` record: the version written, the schema found already
+    present, a Delete that kept the row, or a failure (`validation` for properties or a request type
+    it refuses, else `internal`)."""
+    ids = _schema_ids(properties)
+    version = ids.pop("internalVersion", None)
+    details = {"requestType": request_type}
+    if error is not None:
+        log_action(event, "complianceSchemaSeed", outcome="failed",
+                   reason="validation" if isinstance(error, ValueError) else "internal",
+                   details=details, **ids)
+        return
+    details["written"] = bool(written)
+    changes = None
+    if written:
+        changes = {"internalVersion": version, "databaseId": ids.get("database_id")}
+    elif request_type != "Delete":
+        details["alreadyPresent"] = True
+    log_action(event, "complianceSchemaSeed", changes=changes, details=details, **ids)
+
+
+@audited_handler
 def lambda_handler(event, context):
     """Custom-resource provider entry point. Raising reports the request as FAILED."""
     request_type = event.get("RequestType")
@@ -93,13 +139,21 @@ def lambda_handler(event, context):
     if request_type == "Delete":
         # The row stays: removing the seed (flag turned off, resource replaced, stack deleted)
         # must not remove a schema databases and assets may be bound to.
+        _record(event, request_type, properties, written=False)
         return {"PhysicalResourceId": event.get("PhysicalResourceId")
                 or _physical_resource_id(properties.get("TableName", ""))}
 
     if request_type not in ("Create", "Update"):
-        raise ValueError(f"Unsupported request type: {request_type}")
+        error = ValueError(f"Unsupported request type: {request_type}")
+        _record(event, request_type, properties, error=error)
+        raise error
 
-    written = seed(properties)
+    try:
+        written = seed(properties)
+    except Exception as e:
+        _record(event, request_type, properties, error=e)
+        raise
+    _record(event, request_type, properties, written=written)
     return {
         "PhysicalResourceId": _physical_resource_id(properties["TableName"]),
         "Data": {"Written": "true" if written else "false"},

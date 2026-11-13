@@ -14,6 +14,8 @@ import { Construct } from "constructs";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
 import * as Config from "../../../../config/config";
 import {
+    globalLambdaEnvironmentsAndPermissions,
+    grantAuditLogWritePermissions,
     kmsKeyLambdaPermissionAddToResourcePolicy,
     suppressCdkNagLambda,
 } from "../../../helper/security";
@@ -76,12 +78,14 @@ const DEFAULT_COMPLIANCE_SCHEMA_ITEM = {
 
 /**
  * Seeds the GLOBAL `default-compliance-schema` through a Lambda-backed custom resource
- * (`backend/backend/customResources/complianceDefaultSchemaSeed.py`).
+ * (`backend/backend/handlers/compliance/complianceDefaultSchemaSeed.py`).
  *
  * Create and Update put the row with `registeredAt` set to the time of the write, conditional on the
  * row not existing, and treat an existing row as success: a redeploy, a replaced seed resource, or a
  * retained table adopted by a new stack never overwrites it. Delete leaves the row in place. The
- * function can issue `dynamodb:PutItem` on the schema table and nothing else.
+ * function can issue `dynamodb:PutItem` on the schema table and no other DynamoDB call. Each
+ * invocation writes a `complianceSchemaSeed` audit record, so the function also resolves the audit
+ * log group names (the resource-name SSM parameters) and writes to the audit log groups.
  */
 export class DynamoDbComplianceSchemaDefaultsConstruct extends Construct {
     constructor(
@@ -97,7 +101,7 @@ export class DynamoDbComplianceSchemaDefaultsConstruct extends Construct {
 
         const seedFunction = new lambda.Function(this, "ComplianceDefaultSchemaSeedFunction", {
             code: lambda.Code.fromAsset(path.join(__dirname, "../../../../../backend/backend")),
-            handler: "customResources.complianceDefaultSchemaSeed.lambda_handler",
+            handler: "handlers.compliance.complianceDefaultSchemaSeed.lambda_handler",
             runtime: Config.LAMBDA_PYTHON_RUNTIME,
             // The layer provides aws-lambda-powertools for safeLogger.
             layers: [props.lambdaCommonBaseLayer],
@@ -119,6 +123,11 @@ export class DynamoDbComplianceSchemaDefaultsConstruct extends Construct {
             seedFunction,
             props.storageResources.encryption.kmsKey
         );
+        // The seed's audit record (`complianceSchemaSeed`): the resource-name prefix and SSM read the
+        // audit writer resolves the log group names with, and the audit log write grant. It makes no
+        // authorization decision, so it gets none of the authorization table reads.
+        globalLambdaEnvironmentsAndPermissions(seedFunction, config);
+        grantAuditLogWritePermissions(seedFunction, props.storageResources);
         suppressCdkNagLambda(seedFunction);
 
         const provider = new cr.Provider(this, "ComplianceDefaultSchemaSeedProvider", {

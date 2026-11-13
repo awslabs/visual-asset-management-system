@@ -15,13 +15,15 @@
  * calls and a swapped key order would silently query the wrong partition.
  *
  * **The default-schema seed is stable and idempotent.** A Lambda-backed custom resource writes
- * `default-compliance-schema` (`backend/backend/customResources/complianceDefaultSchemaSeed.py`, whose
+ * `default-compliance-schema` (`backend/backend/handlers/compliance/complianceDefaultSchemaSeed.py`, whose
  * conditional put and its no-op on an existing row are tested in
  * `backend/tests/handlers/compliance/test_complianceDefaultSchemaSeed.py`). The synth-level contracts:
  * the properties carry the row without a timestamp, so two synths of the same source emit the same
  * `apiBuilder2` template (the handler stamps `registeredAt` when it writes) and a `cdk diff` of an
  * unchanged source shows no change; the handler can issue `dynamodb:PutItem` on the schema table and
- * nothing else, so it cannot touch a binding or rewrite anything beside the row; and the previous
+ * no other DynamoDB call, so it cannot touch a binding or rewrite anything beside the row; it can
+ * write its audit record (the audit log groups and the resource-name parameters) and reads no
+ * authorization table; and the previous
  * `AwsCustomResource` seed is gone, so an upgrade creates the new resource (a conditional put that
  * leaves the existing row alone) and deletes the old one, which had no Delete call.
  */
@@ -55,7 +57,7 @@ function assetStateTable(s: SynthResult) {
     return matches[0];
 }
 
-const SEED_HANDLER = "customResources.complianceDefaultSchemaSeed.lambda_handler";
+const SEED_HANDLER = "handlers.compliance.complianceDefaultSchemaSeed.lambda_handler";
 
 /** The seed custom resource in apiBuilder2, with its properties and the row it writes. */
 function complianceSeed(s: SynthResult) {
@@ -238,7 +240,7 @@ describe("default compliance schema seed", () => {
         expect(fn.properties.Handler).toBe(SEED_HANDLER);
         const handlerFile = path.join(
             __dirname,
-            "../../../backend/backend/customResources/complianceDefaultSchemaSeed.py"
+            "../../../backend/backend/handlers/compliance/complianceDefaultSchemaSeed.py"
         );
         expect(fs.existsSync(handlerFile)).toBe(true);
     });
@@ -258,6 +260,28 @@ describe("default compliance schema seed", () => {
             : [dynamo[0].Resource];
         expect(resources).toHaveLength(1);
         expect(JSON.stringify(resources[0])).toMatch(/ComplianceSchemaStorageTable/);
+    });
+
+    test("the handler can write its audit record and reads no authorization table", () => {
+        // The complianceSchemaSeed record: the audit writer resolves the log group names from the
+        // resource-name SSM parameters (VAMS_RESOURCE_PARAM_PREFIX) and writes to the audit log
+        // groups' streams. The seed makes no authorization decision, so the constraints, roles and
+        // user-roles tables are not granted.
+        const { fn, statements } = seedFunctionStatements(synth());
+        const variables = fn.properties.Environment?.Variables ?? {};
+        expect(variables.VAMS_RESOURCE_PARAM_PREFIX).toBeDefined();
+        expect(variables.AUDIT_RECORD_READS).toBe("true");
+        const logs = statements.filter((st) => actionsOf(st).some((a) => a.startsWith("logs:")));
+        expect(logs).toHaveLength(1);
+        expect(actionsOf(logs[0]).sort()).toEqual(["logs:CreateLogStream", "logs:PutLogEvents"]);
+        expect(logs[0].Resource).toHaveLength(9);
+        expect(JSON.stringify(logs[0].Resource)).toMatch(/AuditLogGroup/);
+        const ssm = statements.filter((st) => actionsOf(st).some((a) => a.startsWith("ssm:")));
+        expect(ssm).toHaveLength(1);
+        expect(JSON.stringify(ssm[0].Resource)).toMatch(/resourceNames/);
+        expect(JSON.stringify(statements)).not.toMatch(
+            /ConstraintsStorageTable|RolesStorageTable|UserRolesStorageTable/
+        );
     });
 
     test("the seed writes to the compliance schema table", () => {

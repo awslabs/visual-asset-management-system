@@ -1,22 +1,28 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The default compliance schema seed (`customResources/complianceDefaultSchemaSeed.py`).
+"""The default compliance schema seed (`handlers/compliance/complianceDefaultSchemaSeed.py`).
 
-Two properties of the deployment-time seed are pinned here:
+Three properties of the deployment-time seed are pinned here:
 
 - `registeredAt` is the time the handler writes the row, not a value carried in the custom-resource
   properties (a property value is fixed when `cdk synth` runs, and changes the template every synth).
 - Every Create and Update against a table that already holds the row is a no-op: the row, its
   creation time and every other version of the schema are left exactly as they are, and no second row
   is written. Delete never removes the row.
+- Every invocation writes one `complianceSchemaSeed` action record as the system user (D200): the
+  schema name and the version it wrote, or that it found the schema already present and wrote
+  nothing, a Delete that kept the row, or a failure with a generic reason.
 
 The table double is built from the CDK definition of the compliance schema table (`_cdkTables`), so
 the conditional put is checked against the deployed key schema.
 """
 
+import ast
 import json
+import os
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import boto3
 import pytest
@@ -24,7 +30,10 @@ from botocore.exceptions import ClientError
 from botocore.stub import ANY, Stubber
 from moto import mock_aws
 
-from backend.backend.customResources import complianceDefaultSchemaSeed as seed_module
+from backend.backend.handlers.compliance import complianceDefaultSchemaSeed as seed_module
+from backend.tests.common.test_auditLogging_authorization_delivery import (  # noqa: F401 -- clients: a fixture
+    clients,
+)
 from backend.tests.handlers.compliance import _cdkTables
 
 TABLE = "test-compliance-schema-table"
@@ -219,3 +228,115 @@ class TestDeleteAndInvalidInput:
     def test_an_unknown_request_type_is_refused(self, table):
         with pytest.raises(ValueError, match="Unsupported"):
             seed_module.lambda_handler(_event("Replace"), None)
+
+
+# ---------------------------------------------------------------------------------------------
+# D200: the seed records its write
+# ---------------------------------------------------------------------------------------------
+
+BACKEND = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend"))
+SEED_MODULE = "handlers.compliance.complianceDefaultSchemaSeed"
+
+
+@pytest.fixture
+def records(monkeypatch):
+    """The (event, action, fields) of each log_action call the seed makes."""
+    calls = []
+    monkeypatch.setattr(seed_module, "log_action",
+                        lambda event, action=None, **fields: calls.append((event, action, fields)))
+    return calls
+
+
+@pytest.mark.unit
+class TestTheSeedIsARegisteredSystemAction:
+    def test_the_registry_names_the_seed_under_handlers(self):
+        from common import auditActions
+        entries = [(system.handler, system.spec.action, system.spec.entity_type, system.spec.kind)
+                   for system in auditActions.AUDIT_SYSTEM_ACTIONS if system.spec.action == "complianceSchemaSeed"]
+        assert entries == [(SEED_MODULE, "complianceSchemaSeed", "complianceSchema", "write")]
+        assert os.path.isfile(os.path.join(BACKEND, *SEED_MODULE.split(".")) + ".py")
+
+    def test_the_old_custom_resource_path_is_gone(self):
+        assert not os.path.exists(os.path.join(BACKEND, "customResources", "complianceDefaultSchemaSeed.py"))
+
+    def test_the_entrypoint_opens_the_audit_context(self):
+        with open(os.path.join(BACKEND, *SEED_MODULE.split(".")) + ".py", encoding="utf-8") as handle:
+            tree = ast.parse(handle.read())
+        entrypoint, = [node for node in tree.body
+                       if isinstance(node, ast.FunctionDef) and node.name == "lambda_handler"]
+        assert [getattr(d, "id", None) for d in entrypoint.decorator_list] == ["audited_handler"]
+
+
+@pytest.mark.unit
+class TestTheSeedRecordsItsWrite:
+    def test_a_create_on_an_empty_table_records_the_version_written(self, table, records):
+        event = _event("Create")
+        seed_module.lambda_handler(event, None)
+        (recorded_event, action, fields), = records
+        assert recorded_event is event, "recorded on the event the audit context was opened for"
+        assert action == "complianceSchemaSeed"
+        assert fields == {"changes": {"internalVersion": 1, "databaseId": "GLOBAL"},
+                          "details": {"requestType": "Create", "written": True},
+                          "schemaName": "default-compliance-schema", "database_id": "GLOBAL"}
+
+    @pytest.mark.parametrize("request_type", ["Create", "Update"])
+    def test_a_schema_already_present_records_that_nothing_was_written(self, table, records,
+                                                                       request_type):
+        seed_module.lambda_handler(_event("Create"), None)
+        records.clear()
+        seed_module.lambda_handler(_event(request_type), None)
+        (_event_, action, fields), = records
+        assert action == "complianceSchemaSeed"
+        assert fields["changes"] is None
+        assert fields["details"] == {"requestType": request_type, "written": False, "alreadyPresent": True}
+        assert fields["schemaName"] == "default-compliance-schema"
+
+    def test_a_delete_records_that_the_row_was_kept(self, table, records):
+        seed_module.lambda_handler(_event("Delete", physical_id="p-1"), None)
+        (_event_, _action, fields), = records
+        assert fields["changes"] is None and fields["details"] == {"requestType": "Delete", "written": False}
+
+    def test_a_failed_write_is_recorded_failed_and_still_fails_the_resource(self, monkeypatch, records):
+        client = boto3.client("dynamodb", region_name="us-east-1")
+        monkeypatch.setattr(seed_module, "dynamodb_client", client)
+        with Stubber(client) as stub:
+            stub.add_client_error("put_item", service_error_code="AccessDeniedException")
+            with pytest.raises(ClientError):
+                seed_module.lambda_handler(_event("Create"), None)
+        (_event_, action, fields), = records
+        assert (action, fields["outcome"], fields["reason"]) == ("complianceSchemaSeed", "failed", "internal")
+        assert fields["schemaName"] == "default-compliance-schema"
+        assert "changes" not in fields
+
+    @pytest.mark.parametrize("event", [
+        _event("Replace"),
+        {"RequestType": "Create", "ResourceProperties": {"TableName": TABLE, "Item": "not json"}},
+    ], ids=["unknown request type", "unparseable item"])
+    def test_a_refused_request_is_recorded_as_a_validation_failure(self, table, records, event):
+        with pytest.raises(ValueError):
+            seed_module.lambda_handler(event, None)
+        (_event_, action, fields), = records
+        assert (action, fields["outcome"], fields["reason"]) == ("complianceSchemaSeed", "failed", "validation")
+
+
+@pytest.mark.unit
+class TestTheSeedRecordIsWrittenAsTheSystemUser:
+    def test_the_record_names_the_system_actor(self, table, clients, monkeypatch):  # noqa: F811
+        from backend.backend.customLogging import auditLogging
+        monkeypatch.setattr(seed_module, "log_action", auditLogging.log_action)
+        event = _event("Create")
+        context = SimpleNamespace(aws_request_id="cfn-seed-1", get_remaining_time_in_millis=lambda: 30000)
+        with auditLogging.audit_request(event, context):
+            seed_module.lambda_handler(event, context)
+        messages = clients.module.messages(clients.actions) + clients.flush.messages(clients.actions)
+        assert len(messages) == 1
+        # The payload follows the bracketed prefix; a record of an event that is not an API request
+        # carries no request echo after it.
+        payload, _end = json.JSONDecoder().raw_decode(messages[0], messages[0].index("{"))
+        assert messages[0].startswith("[ACTIONS][type: complianceSchemaSeed] [user: SYSTEM_USER]")
+        assert payload["entity"] == {"type": "complianceSchema", "id": "default-compliance-schema"}
+        assert (payload["action"], payload["outcome"]) == ("complianceSchemaSeed", "success")
+        assert payload["actor"]["authMethod"] == "system"
+        assert payload["actor"]["userId"] == "SYSTEM_USER"
+        assert payload["schemaName"] == "default-compliance-schema"
+        assert payload["changes"]["internalVersion"] == 1

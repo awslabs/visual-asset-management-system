@@ -548,6 +548,9 @@ CORE_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
     # deleted database's compliance data moved under `<databaseId>#deleted`.
     SystemAction("handlers.compliance.complianceJobs", spec("complianceBindingApply", "complianceBinding")),
     SystemAction("handlers.compliance.complianceJobs", spec("complianceDatabaseRetire", "database")),
+    # The deploy-time seed of the GLOBAL default compliance schema (a CloudFormation custom
+    # resource): the version it wrote, or the schema it found already present.
+    SystemAction("handlers.compliance.complianceDefaultSchemaSeed", spec("complianceSchemaSeed", "complianceSchema")),
 )
 
 # Handlers that serve no API route and record no action, with the reason.
