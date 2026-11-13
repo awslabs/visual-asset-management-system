@@ -111,6 +111,26 @@ export interface ValidationResult {
 }
 
 /**
+ * The extension rule for one file name: a preview file (containing .previewFile.) is exempt from
+ * the database's list but must carry a preview image extension; any other file must carry one of
+ * the listed extensions when the database restricts them. Returns null when the file is allowed.
+ * Shared by validateFiles and the upload preview's per-row errors.
+ */
+export function extensionViolation(
+    fileName: string,
+    allowedExtensions: string[] | null
+): { isPreviewFile: boolean; extension: string } | null {
+    if (isPreviewFile(fileName)) {
+        return isPreviewExtensionAllowed(fileName)
+            ? null
+            : { isPreviewFile: true, extension: getPreviewFileExtension(fileName) };
+    }
+    if (allowedExtensions === null) return null;
+    const extension = getFileExtension(fileName);
+    return allowedExtensions.includes(extension) ? null : { isPreviewFile: false, extension };
+}
+
+/**
  * Validate a list of files against the extension restrictions
  */
 export function validateFiles(
@@ -123,42 +143,28 @@ export function validateFiles(
     // Check each file
     for (const file of files) {
         const fileName = file.name;
+        const violation = extensionViolation(fileName, allowedExtensions);
+        if (!violation) continue;
 
-        // A preview file is exempt from the database restriction list but must still
-        // carry an allowed image extension, so it is checked whether or not the
-        // database restricts extensions
-        if (isPreviewFile(fileName)) {
-            if (!isPreviewExtensionAllowed(fileName)) {
-                invalidFiles.push({
-                    fileName,
-                    isValid: false,
-                    isPreviewFile: true,
-                    extension: getPreviewFileExtension(fileName),
-                    errorMessage: `Preview files must have one of the allowed extensions: ${previewFileFormats.join(
-                        ", "
-                    )}`,
-                });
-            }
-            continue;
-        }
-
-        // No restrictions means any non-preview file is allowed
-        if (allowedExtensions === null) {
-            continue;
-        }
-
-        const fileExt = getFileExtension(fileName);
-
-        // Check if file is allowed
-        if (!allowedExtensions.includes(fileExt)) {
+        if (violation.isPreviewFile) {
+            invalidFiles.push({
+                fileName,
+                isValid: false,
+                isPreviewFile: true,
+                extension: violation.extension,
+                errorMessage: `Preview files must have one of the allowed extensions: ${previewFileFormats.join(
+                    ", "
+                )}`,
+            });
+        } else {
             invalidFiles.push({
                 fileName,
                 isValid: false,
                 isPreviewFile: false,
-                extension: fileExt,
-                errorMessage: `Extension ${fileExt} is not allowed. Allowed extensions: ${allowedExtensions.join(
-                    ", "
-                )}`,
+                extension: violation.extension,
+                errorMessage: `Extension ${
+                    violation.extension
+                } is not allowed. Allowed extensions: ${(allowedExtensions || []).join(", ")}`,
             });
         }
     }
