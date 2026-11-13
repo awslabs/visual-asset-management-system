@@ -13,15 +13,36 @@ logger = safeLogger(service="ConstructPipeline3dThumbnail")
 # definition into dataclasses that reject an unknown key at every level, but reads only the first
 # argument, so a run that reaches such an image during an upgrade still starts.
 INPUT_VERSIONS_KEY = "inputVersions"
+# The execution's results folder travels in the same second argument, for the same reason. That document
+# always carries INPUT_VERSIONS_KEY (empty when the run has no version): an image that reads only the
+# version accepts an empty one and ignores the other key, while it refuses a document without it.
+RESULTS_LOCATION_KEY = "outputResults"
+
+
+def results_location(event) -> dict:
+    """The execution's results folder as ``{"bucketName", "objectDir"}`` from ``outputS3AssetResultsPath``,
+    or None when the event names none (a run outside a workflow, or an event from an older Lambda)."""
+    uri = event.get("outputS3AssetResultsPath") or ""
+    if not uri.startswith("s3://"):
+        return None
+    bucket, _, key = uri[len("s3://"):].partition("/")
+    if not bucket or not key:
+        return None
+    return {"bucketName": bucket, "objectDir": key if key.endswith("/") else key + "/"}
 
 
 def definition_command(definition, event) -> list:
-    """The Batch command for ``definition``: the definition, then the first stage's launch version when
-    the run has one. Without a version it is the one-element command written before the field."""
+    """The Batch command for ``definition``: the definition, then, when the run has a launch version or
+    a results folder, one document naming them. With neither it is the one-element command written
+    before those fields."""
     command = [json.dumps(definition)]
     version_id = event.get("inputVersionId") or ""
-    if version_id:
-        command.append(json.dumps({INPUT_VERSIONS_KEY: {definition["stages"][0]["type"]: version_id}}))
+    results = results_location(event)
+    if version_id or results:
+        extra = {INPUT_VERSIONS_KEY: {definition["stages"][0]["type"]: version_id} if version_id else {}}
+        if results:
+            extra[RESULTS_LOCATION_KEY] = results
+        command.append(json.dumps(extra))
     return command
 
 
@@ -60,7 +81,8 @@ def bucket_regions(event) -> dict:
     auxiliary bucket's."""
     regions = {}
     for path_key, region_key in (("inputS3AssetFilePath", "inputBucketRegion"),
-                                 ("outputS3AssetFilesPath", "outputBucketRegion")):
+                                 ("outputS3AssetFilesPath", "outputBucketRegion"),
+                                 ("outputS3AssetResultsPath", "outputBucketRegion")):
         uri, region = event.get(path_key) or "", event.get(region_key) or ""
         if uri.startswith("s3://") and region:
             regions[uri[len("s3://"):].split("/", 1)[0]] = region

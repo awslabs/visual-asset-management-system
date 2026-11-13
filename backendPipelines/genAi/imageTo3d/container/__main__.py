@@ -88,6 +88,13 @@ def load_pipeline_definition() -> dict:
     return json.loads(source)
 
 
+def describe_definition(definition) -> str:
+    """The pipeline definition as the job log shows it: its top-level keys, not their values."""
+    if isinstance(definition, dict):
+        return f"keys {list(definition)}"
+    return f"a JSON {type(definition).__name__}"
+
+
 def load_allowed_settings() -> dict:
     """The two-level allow-list and its defaults from ``config.json``.
 
@@ -682,7 +689,7 @@ def run() -> None:
     definition = load_pipeline_definition()
     global CURRENT_DEFINITION
     CURRENT_DEFINITION = definition
-    logger.info(f"Pipeline definition: {json.dumps(definition)}")
+    logger.info(f"Pipeline definition: {describe_definition(definition)}")
     # Asset buckets outside the deployment Region, registered before the first S3 call.
     s3.register_bucket_regions(definition.get("bucketRegions"))
 

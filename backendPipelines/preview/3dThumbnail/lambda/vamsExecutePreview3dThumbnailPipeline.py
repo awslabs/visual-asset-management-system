@@ -29,7 +29,8 @@ OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
                                         , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
                                         , executing_userName, executing_requestContext, asset_id, orchestration_event_prefix="",
-                     input_bucket_region="", output_bucket_region="", input_version_id=""):
+                     input_bucket_region="", output_bucket_region="", input_version_id="",
+                     output_s3_asset_results_path=""):
 
     # Create the object message to be sent
     messagePayload = {
@@ -37,6 +38,9 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "outputS3AssetFilesPath": output_s3_asset_files_path,
         "outputS3AssetPreviewPath": output_s3_asset_preview_path,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_path,
+        # The execution's results folder: the container writes a result document there for a preview
+        # rendered without some of its referenced files, which the workflow records on the execution.
+        "outputS3AssetResultsPath": output_s3_asset_results_path,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
@@ -171,7 +175,8 @@ def lambda_handler(event, context):
                                             resolved['assetId'], resolved['orchestrationEventPrefix'],
                                             input_bucket_region=resolved['inputBucketRegion'],
                                             output_bucket_region=resolved['outputBucketRegion'],
-                                            input_version_id=resolved['inputVersionId'])
+                                            input_version_id=resolved['inputVersionId'],
+                                            output_s3_asset_results_path=resolved['outputS3AssetResultsPath'])
 
         return {
             'statusCode': 200,

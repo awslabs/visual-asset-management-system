@@ -2754,3 +2754,443 @@ describe("NVIDIA data collection", () => {
         expect(values(loader?.[1] ?? "")).toEqual(["N", "Y"]);
     });
 });
+
+// The headless script runner. Isaac Sim 6.2's SimulationApp starts Kit with --portable unless the
+// script's arguments hold the exact element "--portable-root" (simulation_app.py, _start_app), and
+// Kit's default portable root lies inside the install, which the image leaves readable but not
+// writable to desktop users; Kit roots its data, cache and logs folders at the portable root.
+const RUNNER = "/usr/local/bin/vams-isaacsim-python";
+const PORTABLE_ROOT = "~/.local/share/ov/isaacsim-portable";
+
+/**
+ * Runs the runner the 030 component installs with `args`, in a scratch home, with Isaac Sim's
+ * python.sh replaced by a stub that records the arguments it receives, the mode of the directory its
+ * last argument names, and whether the default portable root exists, and runs nothing else. Paths
+ * under the home read as `~/...`.
+ */
+function runRunner(
+    args: string[],
+    options: {
+        prelude?: string[];
+        seed?: Record<string, string>;
+        links?: Record<string, string>;
+    } = {}
+) {
+    const runner = installedScript("030-isaacsim.yml", "ISAACSIM_PYTHON")
+        .split("/opt/isaacsim/python.sh")
+        .join("${HOME}/python.sh");
+    const run = runInstalled(runner, {
+        prelude: options.prelude,
+        links: options.links,
+        args,
+        env: { XDG_DATA_HOME: undefined },
+        seed: {
+            ...options.seed,
+            "python.sh": [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "${HOME}" > "${HOME}/python-home"',
+                'printf "%s\\n" "$@" > "${HOME}/python-argv"',
+                'if [ "$#" -gt 0 ] && [ -d "${!#}" ]; then stat -c %a "${!#}" > "${HOME}/last-argument-mode"; fi',
+                'if [ -e "${HOME}/.local/share/ov/isaacsim-portable" ]; then echo yes; else echo no; fi > "${HOME}/default-root-exists"',
+                "",
+            ].join("\n"),
+        },
+    });
+    const home = (run.files["python-home"] ?? "").trim();
+    const recorded = run.files["python-argv"];
+    return {
+        ...run,
+        pythonArgs:
+            recorded === undefined
+                ? undefined
+                : recorded
+                      .replace(/\n$/, "")
+                      .split("\n")
+                      .map((arg) =>
+                          home && arg.startsWith(`${home}/`) ? `~${arg.slice(home.length)}` : arg
+                      ),
+        rootMode: run.files["last-argument-mode"]?.trim(),
+        defaultRootExists: run.files["default-root-exists"]?.trim(),
+    };
+}
+
+describe("the headless script runner", () => {
+    test("runs the script with Isaac Sim's python.sh, its arguments first and the user's portable root last", () => {
+        const run = runRunner(["check.py", "--steps", "3"]);
+        expect(run.status).toBe(0);
+        // Two elements, flag then directory: SimulationApp looks for the flag as an element of its own.
+        expect(run.pythonArgs).toEqual([
+            "check.py",
+            "--steps",
+            "3",
+            "--portable-root",
+            PORTABLE_ROOT,
+        ]);
+    });
+
+    test("creates the portable root private to the user", () => {
+        const run = runRunner(["check.py"]);
+        expect(run.status).toBe(0);
+        expect(run.rootMode).toBe("700");
+    });
+
+    test("keeps an existing portable root and its contents", () => {
+        const run = runRunner(["check.py"], {
+            seed: { ".local/share/ov/isaacsim-portable/cache/kept": "shader cache\n" },
+        });
+        expect(run.status).toBe(0);
+        expect(run.pythonArgs?.slice(-2)).toEqual(["--portable-root", PORTABLE_ROOT]);
+        expect(run.files[".local/share/ov/isaacsim-portable/cache/kept"]).toBe("shader cache\n");
+    });
+
+    test("puts the portable root under XDG_DATA_HOME when the session sets one", () => {
+        const run = runRunner(["check.py"], { prelude: ['XDG_DATA_HOME="${HOME}/xdg-data"'] });
+        expect(run.status).toBe(0);
+        expect(run.pythonArgs).toEqual([
+            "check.py",
+            "--portable-root",
+            "~/xdg-data/ov/isaacsim-portable",
+        ]);
+        expect(run.rootMode).toBe("700");
+    });
+
+    test("ignores a relative XDG_DATA_HOME, as the XDG specification requires, and uses the home's", () => {
+        const run = runRunner(["check.py"], {
+            prelude: ['cd "${HOME}"', "XDG_DATA_HOME=relative-data"],
+        });
+        expect(run.status).toBe(0);
+        expect(run.pythonArgs).toEqual(["check.py", "--portable-root", PORTABLE_ROOT]);
+        expect(run.rootMode).toBe("700");
+    });
+
+    test.each([
+        ["unset", "unset HOME"],
+        ["empty", "HOME="],
+        ["relative", "HOME=relative-home"],
+    ])("refuses with a clear message when HOME is %s, and runs nothing", (_case, line) => {
+        const run = runRunner(["check.py"], { prelude: [line] });
+        expect(run.status).toBe(1);
+        expect(run.stderr).toContain("HOME is not set to an absolute path");
+        expect(run.stderr).not.toContain("unbound variable");
+        expect(run.pythonArgs).toBeUndefined();
+    });
+
+    test("hands a caller's own portable root on before it needs HOME", () => {
+        const runner = installedScript("030-isaacsim.yml", "ISAACSIM_PYTHON");
+        const passThrough = runner.indexOf('exec /opt/isaacsim/python.sh "$@"\n');
+        expect(passThrough).toBeGreaterThan(-1);
+        expect(passThrough).toBeLessThan(runner.indexOf("HOME is not set to an absolute path"));
+    });
+
+    test("keeps a portable root the caller names and makes none of its own", () => {
+        const run = runRunner(["check.py", "--portable-root", "/srv/kit", "--steps", "3"]);
+        expect(run.status).toBe(0);
+        expect(run.pythonArgs).toEqual(["check.py", "--portable-root", "/srv/kit", "--steps", "3"]);
+        expect(run.defaultRootExists).toBe("no");
+    });
+
+    test("refuses --portable-root=<directory>, which SimulationApp does not recognize, and runs nothing", () => {
+        // SimulationApp looks for the flag as an element of its own, so this form would still run Kit
+        // portable inside the install.
+        const run = runRunner(["check.py", "--portable-root=/srv/kit"]);
+        expect(run.status).toBe(2);
+        expect(run.stderr).toContain("pass --portable-root and its directory as two arguments");
+        expect(run.pythonArgs).toBeUndefined();
+        expect(run.defaultRootExists).toBeUndefined();
+    });
+
+    test("passes arguments with spaces, glob characters and empty values through unchanged", () => {
+        const run = runRunner(["my scene.py", "a b", "*", "", "-c"]);
+        expect(run.status).toBe(0);
+        expect(run.pythonArgs).toEqual([
+            "my scene.py",
+            "a b",
+            "*",
+            "",
+            "-c",
+            "--portable-root",
+            PORTABLE_ROOT,
+        ]);
+    });
+
+    test("refuses to run without a script, and runs nothing", () => {
+        const run = runRunner([]);
+        expect(run.status).toBe(2);
+        expect(run.stderr).toContain("usage: vams-isaacsim-python <script.py> [arguments]");
+        expect(run.pythonArgs).toBeUndefined();
+    });
+
+    test("refuses a portable root that is a symbolic link, and runs nothing", () => {
+        const run = runRunner(["check.py"], {
+            links: { ".local/share/ov/isaacsim-portable": os.tmpdir() },
+        });
+        expect(run.status).toBe(1);
+        expect(run.stderr).toContain("is not a directory you own");
+        expect(run.pythonArgs).toBeUndefined();
+    });
+
+    test("refuses a portable root path a file holds, and runs nothing", () => {
+        const run = runRunner(["check.py"], {
+            seed: { ".local/share/ov/isaacsim-portable": "not a directory\n" },
+        });
+        expect(run.status).toBe(1);
+        expect(run.stderr).toContain("is not a directory you own");
+        expect(run.pythonArgs).toBeUndefined();
+    });
+
+    test("is installed for every desktop user by the Isaac Sim component", () => {
+        const install = stepScript("030-isaacsim.yml", "InstallHeadlessScriptRunner");
+        expect(install).toContain(`cat > ${RUNNER} <<'ISAACSIM_PYTHON'`);
+        expect(install).toContain(`chmod 0755 ${RUNNER}`);
+        // The runner is a fixed file: nothing in it is resolved from the recipe.
+        expect(installedScript("030-isaacsim.yml", "ISAACSIM_PYTHON")).not.toMatch(
+            /\$\{(ASSET|PARAM|DEPLOY)_/
+        );
+    });
+
+    /**
+     * Runs the component's validate check against `runner` (the installed text by default), with the
+     * runner and python.sh moved into a scratch directory and python.sh handing its arguments to a
+     * local Python, as Isaac Sim's own does to the interpreter it bundles.
+     */
+    function validateRunner(runner = installedScript("030-isaacsim.yml", "ISAACSIM_PYTHON")) {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vams-runner-"));
+        const where = dir.split(path.sep).join("/");
+        try {
+            fs.writeFileSync(
+                path.join(dir, "python.sh"),
+                `#!/usr/bin/env bash\nexec ${TOML_PYTHON} "$@"\n`,
+                { mode: 0o755 }
+            );
+            fs.writeFileSync(
+                path.join(dir, "vams-isaacsim-python"),
+                runner.split("/opt/isaacsim/python.sh").join(`${where}/python.sh`),
+                { mode: 0o755 }
+            );
+            const check = stepScript("030-isaacsim.yml", "HeadlessScriptRunnerWorks")
+                .split(RUNNER)
+                .join(`${where}/vams-isaacsim-python`);
+            const result = spawnSync("bash", ["-c", check], { encoding: "utf8" });
+            return { status: result.status, output: `${result.stdout}${result.stderr}` };
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    test("the component's validate phase passes the installed runner", () => {
+        expect(TOML_PYTHON).toBeDefined();
+        const run = validateRunner();
+        expect({ status: run.status, output: run.status === 0 ? "" : run.output }).toEqual({
+            status: 0,
+            output: "",
+        });
+    });
+
+    test("the component's validate phase fails a runner that adds no portable root", () => {
+        const runner = installedScript("030-isaacsim.yml", "ISAACSIM_PYTHON").replace(
+            ' --portable-root "${ROOT}"',
+            ""
+        );
+        expect(runner).not.toBe(installedScript("030-isaacsim.yml", "ISAACSIM_PYTHON"));
+        expect(validateRunner(runner).status).not.toBe(0);
+    });
+});
+
+// The AWS CLI step. The stand-in installer below follows aws/install in the AWS CLI v2 bundle: it
+// refuses an install over an existing v2/current link without --update, and with --update exits 0
+// before linking anything when its own version is already installed.
+const BUNDLED_AWS_CLI = "2.31.0";
+const OLDER_AWS_CLI = "2.30.0";
+const STAND_IN_AWS_INSTALLER = [
+    "#!/usr/bin/env bash",
+    `VERSION=${BUNDLED_AWS_CLI}`,
+    "ROOT_DIR=/usr/local/aws-cli",
+    "BIN_DIR=/usr/local/bin",
+    "UPDATE=no",
+    'while [ "$#" -gt 0 ]; do',
+    '    case "$1" in',
+    '        -i | --install-dir) ROOT_DIR="$2"; shift ;;',
+    '        -b | --bin-dir) BIN_DIR="$2"; shift ;;',
+    "        -u | --update) UPDATE=yes ;;",
+    '        *) echo "Got an unexpected argument: $1" >&2; exit 1 ;;',
+    "    esac",
+    "    shift",
+    "done",
+    'CURRENT="${ROOT_DIR}/v2/current"',
+    'if [ -L "${CURRENT}" ] && [ "${UPDATE}" = no ]; then',
+    '    echo "Found preexisting AWS CLI installation: ${CURRENT}. Please rerun install script with --update flag." >&2',
+    "    exit 1",
+    "fi",
+    'if [ -d "${ROOT_DIR}/v2/${VERSION}" ]; then',
+    '    echo "Found same AWS CLI version: ${ROOT_DIR}/v2/${VERSION}. Skipping install."',
+    "    exit 0",
+    "fi",
+    'mkdir -p "${ROOT_DIR}/v2/${VERSION}/bin"',
+    "for exe in aws aws_completer; do",
+    '    printf "#!/usr/bin/env bash\\necho %s/%s\\n" "${exe}" "${VERSION}" > "${ROOT_DIR}/v2/${VERSION}/bin/${exe}"',
+    '    chmod 0755 "${ROOT_DIR}/v2/${VERSION}/bin/${exe}"',
+    "done",
+    'ln -snf "${ROOT_DIR}/v2/${VERSION}" "${CURRENT}"',
+    'mkdir -p "${BIN_DIR}"',
+    'ln -sf "${CURRENT}/bin/aws" "${BIN_DIR}/aws"',
+    'ln -sf "${CURRENT}/bin/aws_completer" "${BIN_DIR}/aws_completer"',
+    "",
+].join("\n");
+
+/**
+ * Runs the 020 component's InstallAwsCli step on a scratch host whose /usr and /tmp lie in a scratch
+ * directory. `existing` installs that AWS CLI v2 version in /usr/local/aws-cli first, linked from
+ * `linkedFrom`; `leftover` leaves an extracted installer in /tmp/aws, as a run stopped after
+ * unpacking does. curl writes a stand-in archive and unzip unpacks the stand-in installer, refusing
+ * to replace an existing file as Info-ZIP's unzip does with no terminal to ask. Returns the step's
+ * status and output, how often it downloaded, where /usr/local/bin/aws points and what it prints.
+ */
+function installAwsCli(host: { existing?: string; linkedFrom?: string; leftover?: boolean } = {}) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vams-awscli-"));
+    const where = dir.split(path.sep).join("/");
+    // Only the paths the step names move: a shebang's /usr/bin/env stays where it is. One pass, so a
+    // scratch directory that is itself under /tmp (as on CI runners) is not rewritten a second time.
+    const localize = (text: string) =>
+        text.replace(/\/usr\/local\/|\/tmp\//g, (prefix) => `${where}${prefix}`);
+    try {
+        fs.mkdirSync(path.join(dir, "tmp"));
+        fs.writeFileSync(path.join(dir, "installer"), localize(STAND_IN_AWS_INSTALLER), {
+            mode: 0o755,
+        });
+        if (host.existing) {
+            const bin = path.join(dir, "usr/local/aws-cli/v2", host.existing, "bin");
+            fs.mkdirSync(bin, { recursive: true });
+            fs.writeFileSync(
+                path.join(bin, "aws"),
+                `#!/usr/bin/env bash\necho aws/${host.existing}\n`,
+                { mode: 0o755 }
+            );
+            fs.symlinkSync(
+                `${where}/usr/local/aws-cli/v2/${host.existing}`,
+                path.join(dir, "usr/local/aws-cli/v2/current")
+            );
+        }
+        if (host.linkedFrom) {
+            fs.mkdirSync(path.dirname(path.join(dir, host.linkedFrom)), { recursive: true });
+            fs.symlinkSync(
+                `${where}/usr/local/aws-cli/v2/current/bin/aws`,
+                path.join(dir, host.linkedFrom)
+            );
+        }
+        if (host.leftover) {
+            fs.mkdirSync(path.join(dir, "tmp/aws"));
+            fs.writeFileSync(path.join(dir, "tmp/aws/install"), "#!/usr/bin/env bash\nexit 1\n", {
+                mode: 0o755,
+            });
+        }
+        const prelude = [
+            `curl() { echo curl >> "${where}/downloads"; : > "\${@: -1}"; }`,
+            // unzip -q <archive> -d <directory>: the directory is the last argument, and one outside
+            // the scratch host is refused, so the step never unpacks on the machine running the tests.
+            "unzip() {",
+            '    local into="${@: -1}"',
+            `    case "\${into}" in "${where}"/*) ;; *) echo "unzip into \${into}: outside the scratch host" >&2; return 1 ;; esac`,
+            '    if [ -e "${into}/aws/install" ]; then',
+            '        echo "replace ${into}/aws/install? (EOF or read error, treating as \\"[N]one\\" ...)" >&2',
+            "        return 1",
+            "    fi",
+            `    mkdir -p "\${into}/aws" && cp -p "${where}/installer" "\${into}/aws/install"`,
+            "}",
+        ];
+        const step = localize(stepScript("020-runtime-deps.yml", "InstallAwsCli"));
+        const result = spawnSync("bash", ["-c", `${prelude.join("\n")}\n${step}`], {
+            encoding: "utf8",
+            // mktemp makes the step's working directory in the scratch host's /tmp.
+            env: { ...process.env, TMPDIR: `${where}/tmp` },
+        });
+        const bin = path.join(dir, "usr/local/bin/aws");
+        const linked = fs.existsSync(bin);
+        return {
+            status: result.status,
+            output: `${result.stdout}${result.stderr}`,
+            downloads: lines(
+                fs.existsSync(path.join(dir, "downloads"))
+                    ? fs.readFileSync(path.join(dir, "downloads"), "utf8")
+                    : ""
+            ).length,
+            link: linked ? fs.readlinkSync(bin).split(where).join("") : undefined,
+            version: linked ? spawnSync(bin, [], { encoding: "utf8" }).stdout.trim() : undefined,
+            // What the step left in the scratch host's /tmp.
+            tmpLeft: fs.readdirSync(path.join(dir, "tmp")).sort(),
+        };
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+describe("the AWS CLI step", () => {
+    test("installs the AWS CLI on a host without one", () => {
+        const run = installAwsCli();
+        expect(run.status).toBe(0);
+        expect(run.downloads).toBe(1);
+        expect(run.link).toBe("/usr/local/aws-cli/v2/current/bin/aws");
+        expect(run.version).toBe(`aws/${BUNDLED_AWS_CLI}`);
+    });
+
+    test("installs over an AWS CLI v2 of another version linked from another directory", () => {
+        const run = installAwsCli({ existing: OLDER_AWS_CLI, linkedFrom: "usr/bin/aws" });
+        expect({ status: run.status, output: run.status === 0 ? "" : run.output }).toEqual({
+            status: 0,
+            output: "",
+        });
+        expect(run.link).toBe("/usr/local/aws-cli/v2/current/bin/aws");
+        expect(run.version).toBe(`aws/${BUNDLED_AWS_CLI}`);
+    });
+
+    test("links an AWS CLI v2 of the same version that the installer skips", () => {
+        const run = installAwsCli({ existing: BUNDLED_AWS_CLI, linkedFrom: "usr/bin/aws" });
+        expect({ status: run.status, output: run.status === 0 ? "" : run.output }).toEqual({
+            status: 0,
+            output: "",
+        });
+        expect(run.output).not.toContain("Found preexisting AWS CLI installation");
+        expect(run.link).toBe("/usr/local/aws-cli/v2/current/bin/aws");
+        expect(run.version).toBe(`aws/${BUNDLED_AWS_CLI}`);
+    });
+
+    test("links an AWS CLI v2 that nothing links yet", () => {
+        const run = installAwsCli({ existing: OLDER_AWS_CLI });
+        expect(run.status).toBe(0);
+        expect(run.link).toBe("/usr/local/aws-cli/v2/current/bin/aws");
+    });
+
+    test("runs again after a run that stopped once it had unpacked the installer", () => {
+        const run = installAwsCli({ leftover: true });
+        expect({ status: run.status, output: run.status === 0 ? "" : run.output }).toEqual({
+            status: 0,
+            output: "",
+        });
+        expect(run.version).toBe(`aws/${BUNDLED_AWS_CLI}`);
+        // The leftover in /tmp is never run, and the step's own working directory is gone.
+        expect(run.tmpLeft).toEqual(["aws"]);
+    });
+
+    test("downloads and unpacks in a new private directory, not under fixed names in /tmp", () => {
+        const step = stepScript("020-runtime-deps.yml", "InstallAwsCli");
+        expect(step).toContain('work="$(mktemp -d)"');
+        expect(step).toContain('"${work}/aws/install"');
+        expect(step).not.toContain("/tmp/aws");
+        expect(step).not.toContain("/tmp/awscliv2.zip");
+        const run = installAwsCli();
+        expect(run.status).toBe(0);
+        expect(run.tmpLeft).toEqual([]);
+    });
+
+    test("leaves a host that already has /usr/local/bin/aws as it is, without a download", () => {
+        const run = installAwsCli({ existing: OLDER_AWS_CLI, linkedFrom: "usr/local/bin/aws" });
+        expect(run.status).toBe(0);
+        expect(run.downloads).toBe(0);
+        expect(run.version).toBe(`aws/${OLDER_AWS_CLI}`);
+    });
+
+    test("its validate phase still runs the CLI from /usr/local/bin", () => {
+        expect(stepScript("020-runtime-deps.yml", "ToolingPresent")).toContain(
+            "/usr/local/bin/aws --version"
+        );
+    });
+});

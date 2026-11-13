@@ -24,6 +24,7 @@ from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.indexing import AssetDocumentModel, AssetIndexRequest, IndexOperationResponse
 from common.indexing.geoLocation import build_geo_location
@@ -1141,6 +1142,7 @@ def with_batch_item_failures(response, event, failures: List[Dict[str, str]]):
     return response
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset indexing operations"""
     global claims_and_roles
