@@ -214,7 +214,12 @@ The front end terminates TLS, exposes only port 443, and forwards to the server'
 2. Create the service with container port 8000, the environment `VAMS_MCP_TRANSPORT=streamable-http`, `VAMS_MCP_HOST=0.0.0.0` and `VAMS_MCP_AUTH_CONFIG`, and the health check path `/.well-known/oauth-protected-resource/mcp`:
 
     ```bash
-    aws ecs create-express-gateway-service         --service-name vams-mcp         --execution-role-arn <task-execution-role-arn>         --infrastructure-role-arn <infrastructure-role-arn>         --primary-container '{"image": "<account>.dkr.ecr.<region>.amazonaws.com/vams-mcp:<tag>", "containerPort": 8000, "environment": [{"name": "VAMS_MCP_TRANSPORT", "value": "streamable-http"}, {"name": "VAMS_MCP_HOST", "value": "0.0.0.0"}, {"name": "VAMS_MCP_AUTH_CONFIG", "value": "/etc/vams-mcp/auth.json"}, {"name": "VAMS_MCP_TOOL_TIMEOUT", "value": "50"}]}'         --health-check-path /.well-known/oauth-protected-resource/mcp
+    aws ecs create-express-gateway-service \
+        --service-name vams-mcp \
+        --execution-role-arn <task-execution-role-arn> \
+        --infrastructure-role-arn <infrastructure-role-arn> \
+        --primary-container '{"image": "<account>.dkr.ecr.<region>.amazonaws.com/vams-mcp:<tag>", "containerPort": 8000, "environment": [{"name": "VAMS_MCP_TRANSPORT", "value": "streamable-http"}, {"name": "VAMS_MCP_HOST", "value": "0.0.0.0"}, {"name": "VAMS_MCP_AUTH_CONFIG", "value": "/etc/vams-mcp/auth.json"}, {"name": "VAMS_MCP_TOOL_TIMEOUT", "value": "50"}]}' \
+        --health-check-path /.well-known/oauth-protected-resource/mcp
     ```
 
 3. The endpoint, `https://<generated-name>.ecs.<region>.on.aws`, is known only after the service exists. Run `vams-mcp setup-remote` with `--resource-url https://<generated-name>.ecs.<region>.on.aws/mcp`, put the file in the image (or write it at container start from environment variables), and update the service.

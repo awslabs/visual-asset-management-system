@@ -60,7 +60,7 @@ from .annotations import COMPUTE, DESTRUCTIVE, READ, WRITE  # noqa: E402
 from .config import Config, ConfigError  # noqa: E402
 from .remote_auth import RemoteAuthSettings  # noqa: E402
 from .addon_tools import register_addon_tools  # noqa: E402
-from .addon_tools import ADDON_TOOL_MODULES, addon_deployed  # noqa: E402
+from .addon_tools import ADDON_TOOL_MODULES, addon_deployed, addon_outcome_checks  # noqa: E402
 from .custom_tools import register_custom_tools  # noqa: E402
 
 _force_logging_to_stderr()
@@ -334,17 +334,10 @@ def _timed_out(exc: BaseException) -> bool:
 
 # The read tool that shows whether a write, destructive or compute call took effect, by the first
 # fragment of its name that matches. A non-read call past its budget may still complete in its
-# worker thread, so its timeout answer names this tool instead of inviting a retry.
-_OUTCOME_CHECKS: Tuple[Tuple[str, str], ...] = (
-    ("edh_container", "list_edh_container_jobs"),
-    ("edh_ami_recipe_build", "list_edh_ami_recipe_builds"),
-    ("edh_ami_recipe", "list_edh_ami_recipes"),
-    ("edh_capacity_reservation", "list_edh_admin_capacity_reservations"),
-    ("edh_admin_instance", "list_edh_admin_instances"),
-    ("edh_admin_settings", "get_edh_admin_settings"),
-    ("edh_vdi_image", "list_edh_admin_images"),
-    ("edh_simulation_image", "list_edh_admin_images"),
-    ("edh_workstation", "list_edh_workstations"),
+# worker thread, so its timeout answer names this tool instead of inviting a retry. The add-ons'
+# own rows (each add-on module's OUTCOME_CHECKS) come first, so a core fragment such as "file"
+# never claims an add-on tool.
+_CORE_OUTCOME_CHECKS: Tuple[Tuple[str, str], ...] = (
     ("execution", "list_executions"),
     ("execute_workflow", "list_executions"),
     ("workflow_trigger", "list_workflow_triggers"),
@@ -368,6 +361,7 @@ _OUTCOME_CHECKS: Tuple[Tuple[str, str], ...] = (
     ("database", "get_database"),
     ("asset", "get_asset"),
 )
+_OUTCOME_CHECKS: Tuple[Tuple[str, str], ...] = addon_outcome_checks() + _CORE_OUTCOME_CHECKS
 
 
 def outcome_check_tool(tool_name: str) -> Optional[str]:

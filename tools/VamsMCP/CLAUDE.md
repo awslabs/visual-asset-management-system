@@ -543,6 +543,7 @@ import ...`): the reads directly in its body, write tools under `if config.enabl
     level after the destructive block and before `register_custom_tools(...)`. The MCP SDK keeps
     the first registration of a name, so a core tool wins over an add-on tool and an add-on tool
     over a custom one.
+-   **No add-on tool name appears in core server code**, lookup tables included (`infra/test/addon/addonCoreSeparation.test.ts`). An add-on module declares what the core needs to know about its tools, such as `OUTCOME_CHECKS` (the read tool that checks a timed-out non-read call), and `addon_tools/__init__.py` merges it in (`addon_outcome_checks()`).
 -   **An add-on's tools exist only on a deployment with the add-on.** Each module declares its
     add-on's switch in `FEATURE` (a `FEATURE_*` of `vamscli.addon_constants`), and
     `register_addon_tools` registers the module only when `addon_deployed(client, module)`: the
