@@ -209,7 +209,7 @@ class TestFbxTextureNames:
         path.write_bytes(b"Kaydara FBX Binary  \x00\x1a\x00" + b"\x00\x05\x00\x00\x00"
                          + record(b"C:\\Users\\artist\\maps\\Wood.PNG") + b"\x00\x00"
                          + record(b"maps/Wood.PNG") + record(b"Amaps/Wood.png") + b"\x00\x01")
-        names = [name for name, _ in dependencies._fbx_references(str(path))]
+        names = [entry[0] for entry in dependencies._fbx_references(str(path))]
         assert "maps/Wood.PNG" in names and "Wood.PNG" in names
         resolved = {dependencies.resolve_reference(name, "") for name in names}
         assert {"maps/Wood.PNG", "Wood.PNG"} <= resolved - {None}

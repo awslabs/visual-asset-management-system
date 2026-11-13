@@ -67,7 +67,10 @@ KIND_METADATA = "metadata"
 # A material module the renderer resolves from its own search path (a bare ``OmniPBR.mdl``), not a
 # file of the asset: still looked up as before, not reported.
 KIND_RENDERER_MDL = "rendererMdl"
-_UNREPORTED_KINDS = (KIND_METADATA, KIND_RENDERER_MDL)
+# A texture of a format whose loader does not sample textures (FBX): still fetched as before, but a
+# missing one removes nothing from the preview, so it is not reported.
+KIND_UNSAMPLED_TEXTURE = "unsampledTexture"
+_UNREPORTED_KINDS = (KIND_METADATA, KIND_RENDERER_MDL, KIND_UNSAMPLED_TEXTURE)
 
 
 @dataclass
@@ -415,6 +418,10 @@ def _fbx_references(path: str) -> List[tuple]:
     FBX keeps a texture's absolute ``FileName`` from the authoring machine and its ``RelativeFilename``;
     both are offered and the resolver discards the absolute one. The scan reads at most the first
     512 MiB.
+
+    The FBX loader draws vertex and material colours and does not sample textures, so no texture can
+    change the preview: each name is offered as ``KIND_UNSAMPLED_TEXTURE`` and a texture that is
+    missing, or refused (the absolute path beside a fetched relative one), is not reported.
     """
     with open(path, "rb") as handle:
         data = handle.read(_FBX_SCAN_LIMIT)
@@ -423,14 +430,14 @@ def _fbx_references(path: str) -> List[tuple]:
         name = match.group(0).decode("utf-8", errors="replace").strip()
         if name not in names:
             names.append(name)
-    references = [(name, False) for name in names]
+    references = [(name, False, KIND_UNSAMPLED_TEXTURE) for name in names]
     # An authoring machine's absolute path keeps the file name as its last segment, and a binary
     # string record's length bytes can read as text and prefix the match; the bare file name is
     # offered too, as a sibling of the FBX -- where an uploader most often puts the textures.
     for name in names:
         base = name.replace("\\", "/").rsplit("/", 1)[-1]
-        if (base, False) not in references:
-            references.append((base, False))
+        if (base, False, KIND_UNSAMPLED_TEXTURE) not in references:
+            references.append((base, False, KIND_UNSAMPLED_TEXTURE))
     return references
 
 
