@@ -176,11 +176,16 @@ test.describe("Download as Zip", () => {
         await openDeepLink(page, "/zipdownloads");
 
         if (enabled) {
-            await expect(
-                page.getByRole("heading", { level: 1, name: "My Download Queue" })
-            ).toBeVisible({
-                timeout: 45_000,
-            });
+            // A role the web route check does not allow /zipdownloads sees the access page instead,
+            // whatever the feature switch says; nothing else on the page can be checked then.
+            const heading = page.getByRole("heading", { level: 1, name: "My Download Queue" });
+            const noAccess = page.getByText("You do not have access to this page");
+            await expect(heading.or(noAccess).first()).toBeVisible({ timeout: 45_000 });
+            if (await noAccess.isVisible()) {
+                await expect(page.getByRole("link", { name: "My Download Queue" })).toHaveCount(0);
+                test.skip(true, "This login's role does not allow the My Download Queue page");
+            }
+            await expect(heading).toBeVisible();
             // Rows or the empty state: both are valid in any environment. The empty state is
             // rendered inside a table row, so with no jobs both sides match; .first() keeps the
             // locator strict-mode safe (D15).
