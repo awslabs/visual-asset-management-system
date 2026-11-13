@@ -22,7 +22,7 @@ import math
 
 import numpy as np
 
-from . import resources
+from . import resources, scene_parts
 from .renderer import is_point_cloud
 from .utils.logging import get_logger
 
@@ -58,7 +58,7 @@ def apply_budgets(pv_data, budgets):
     decimation grid within ``cluster_bin_limit(budgets.memory_bytes)``. A mesh drawn with per-face
     colours is also held to ``resources.cell_colour_triangle_limit``, since the renderer draws it from
     a copy with three corners per triangle. An up axis the loader read from the file travels to the
-    reduced data."""
+    reduced data, and so do the bounds of the scene's parts (``scene_parts``)."""
     if is_point_cloud(pv_data):
         result = limit_points(pv_data, budgets.points)
     else:
@@ -75,7 +75,7 @@ def apply_budgets(pv_data, budgets):
     up_axis = getattr(pv_data, "_preview_up_axis", None)
     if result is not pv_data and isinstance(up_axis, str):
         result._preview_up_axis = up_axis
-    return result
+    return scene_parts.carry_parts(pv_data, result)
 
 
 def limit_points(pv_data, max_points: int, seed: int = 42):
