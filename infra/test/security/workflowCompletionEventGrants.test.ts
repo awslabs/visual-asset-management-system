@@ -10,12 +10,9 @@
  * pipeline rule's outcome and release the run's locks; a role without the grant leaves the rule
  * pending.
  *
- * The end-state handler's role is a named exception to the IAM inline policy budget
- * (iamInlinePolicyBudget.test.ts), so its PutEvents sits in a customer managed policy the role names
- * in ManagedPolicyArns and adds nothing to the inline total.
+ * Every grant is inline: no publisher holds a customer managed policy (#1499).
  */
 
-import { PROCESS_OUTPUT_EVENTS_POLICY_ID } from "../../lib/lambdaBuilder/workflowFunctions";
 import { ALL_TEMPLATES, SynthResult, synthTemplate } from "../support/templateSynth";
 import { inlinePolicies, managedPolicies } from "../support/iamPolicySize";
 
@@ -61,13 +58,9 @@ describe.each(ALL_TEMPLATES)("workflow completion event grants (%s template)", (
         expect(putsToBus(docs)).toBe(true);
     });
 
-    test("the end-state handler's PutEvents is in its own managed policy, not inline", () => {
-        const { roleId, stack } = roleOf(synth, "processWorkflowExecutionOutput");
-        expect(putsToBus(inlinePolicies(synth, roleId, stack))).toBe(false);
-        const events = managedPolicies(synth, roleId, stack).filter(([id]) =>
-            id.includes(PROCESS_OUTPUT_EVENTS_POLICY_ID)
-        );
-        expect(events).toHaveLength(1);
-        expect(putsToBus(events)).toBe(true);
+    test.each(PUBLISHERS)("%s publishes through an inline statement only (#1499)", (construct) => {
+        const { roleId, stack } = roleOf(synth, construct);
+        expect(putsToBus(inlinePolicies(synth, roleId, stack))).toBe(true);
+        expect(managedPolicies(synth, roleId, stack)).toEqual([]);
     });
 });

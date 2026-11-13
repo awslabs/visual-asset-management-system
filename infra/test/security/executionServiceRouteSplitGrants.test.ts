@@ -21,7 +21,6 @@ import {
     EXECUTION_SERVICE_ROUTES_ENV,
     EXECUTION_SERVICE_ROUTE_SET_PERMANENT_DELETE,
     EXECUTION_SERVICE_ROUTE_SET_SERVICE,
-    EXECUTION_SERVICE_TABLE_READ_POLICY_ID,
 } from "../../lib/lambdaBuilder/workflowFunctions";
 import { ALL_TEMPLATES, SynthResult, synthTemplate } from "../support/templateSynth";
 import { inlinePolicies, managedPolicies, nestedTemplateKeyFor } from "../support/iamPolicySize";
@@ -265,20 +264,15 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
         expect(grants).toEqual(EXECUTE_WORKFLOW_GRANTS);
     });
 
-    test("the execution service's table reads are in its managed policy, which its function waits for", () => {
+    test("the execution service's table reads are inline, in no customer managed policy (#1499)", () => {
         const role = roleId(synth, stack, "executionService");
-        const managed = managedPolicies(synth, role, stack);
-        expect(managed.map(([id]) => id)).toEqual([
-            expect.stringMatching(
-                new RegExp(`^executionService${EXECUTION_SERVICE_TABLE_READ_POLICY_ID}`)
-            ),
-        ]);
-        const fn = functionOf(synth, stack, "executionService");
-        expect(fn.raw.DependsOn).toEqual(expect.arrayContaining([managed[0][0]]));
-        // The role names the policy, so the role (and the default policy that names the role) is
-        // updated only once the policy exists.
-        const roleResource = synth.ofType("AWS::IAM::Role").find((r) => r.logicalId === role)!;
-        expect(JSON.stringify(roleResource.properties.ManagedPolicyArns)).toContain(managed[0][0]);
+        expect(managedPolicies(synth, role, stack)).toEqual([]);
+        const actions = inlinePolicies(synth, role, stack)
+            .flatMap(([, doc]) => (doc?.Statement ?? []) as any[])
+            .flatMap((st) => ([] as string[]).concat(st.Action ?? []));
+        expect(actions).toEqual(
+            expect.arrayContaining(["dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query"])
+        );
     });
 
     test("each function is told the routes it serves", () => {

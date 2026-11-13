@@ -74,53 +74,11 @@ export const COMPLIANCE_ENGINE_READ_ACTIONS = [
     "dynamodb:Scan",
 ];
 
-/** Construct ids of the customer managed policies that carry the evaluation engine's table reads. */
-export const COMPLIANCE_ENGINE_ASSET_READ_POLICY_ID = "EngineAssetTableReadPolicy";
-export const COMPLIANCE_ENGINE_DEFINITION_READ_POLICY_ID = "EngineDefinitionTableReadPolicy";
-
-/**
- * A grantee whose grants land in a customer managed policy attached to a role, not in the role's
- * inline default policy. `Table.grant()` builds its statement as it does for the role (the table ARN,
- * and `index/*` only for a table with an index), so the permissions are the role's own, held where
- * IAM does not count them against the role's inline quota.
- */
-class ManagedPolicyGrantee implements iam.IPrincipal {
-    public readonly grantPrincipal: iam.IPrincipal = this;
-    public readonly assumeRoleAction: string;
-    public readonly policyFragment: iam.PrincipalPolicyFragment;
-    public readonly principalAccount: string | undefined;
-
-    constructor(role: iam.IRole, private readonly policy: iam.ManagedPolicy) {
-        this.assumeRoleAction = role.assumeRoleAction;
-        this.policyFragment = role.policyFragment;
-        this.principalAccount = role.principalAccount;
-    }
-
-    public addToPrincipalPolicy(statement: iam.PolicyStatement): iam.AddToPrincipalPolicyResult {
-        this.policy.addStatements(statement);
-        return { statementAdded: true, policyDependable: this.policy };
-    }
-}
-
-/**
- * Grants `COMPLIANCE_ENGINE_READ_ACTIONS` on `tables` through a customer managed policy on the
- * function's role. The role's ManagedPolicyArns names the policy, so CloudFormation creates and
- * attaches it before the role's default policy update drops the same reads on an upgrade (the
- * pattern of `attachManagedHandlerPolicy` in workflowFunctions.ts), and the function waits for it.
- */
-function grantTableReadsInManagedPolicy(
-    fun: lambda.Function,
-    id: string,
-    tables: dynamodb.ITable[]
-): iam.ManagedPolicy {
-    const policy = new iam.ManagedPolicy(fun, id);
-    const grantee = new ManagedPolicyGrantee(fun.role!, policy);
+/** Grants `COMPLIANCE_ENGINE_READ_ACTIONS` on `tables` to the function's role, inline (#1499). */
+function grantTableReads(fun: lambda.Function, tables: dynamodb.ITable[]) {
     for (const table of tables) {
-        table.grant(grantee, ...COMPLIANCE_ENGINE_READ_ACTIONS);
+        table.grant(fun, ...COMPLIANCE_ENGINE_READ_ACTIONS);
     }
-    fun.role!.addManagedPolicy(policy);
-    fun.node.defaultChild!.node.addDependency(policy);
-    return policy;
 }
 
 /**
@@ -133,13 +91,13 @@ function grantTableReadsInManagedPolicy(
  * the read/write split differs between them.
  *
  * The table reads are the largest statement on the evaluate, cascade executor and trigger roles
- * (eleven tables and their indexes, each ARN carrying the stack name), so they sit in two customer
- * managed policies, the asset tables and the definition tables, and the roles' inline policies stay
- * under the IAM inline policy budget in every partition (infra/CLAUDE.md, IAM Inline Policy Budget).
+ * (eleven tables and their indexes, each ARN carrying the stack name). They are inline like every
+ * VAMS grant (#1499), within the IAM inline policy budget in every partition (infra/CLAUDE.md, IAM
+ * Inline Policy Budget).
  */
 function grantEvaluationEngineReads(fun: lambda.Function, storageResources: storageResources) {
     const dynamo = storageResources.dynamo;
-    grantTableReadsInManagedPolicy(fun, COMPLIANCE_ENGINE_ASSET_READ_POLICY_ID, [
+    grantTableReads(fun, [
         dynamo.assetStorageTable,
         dynamo.assetLinksStorageTableV2,
         dynamo.assetFileMetadataStorageTable,
@@ -148,7 +106,7 @@ function grantEvaluationEngineReads(fun: lambda.Function, storageResources: stor
         dynamo.assetLinksMetadataStorageTable,
         dynamo.assetFileVersionsStorageTable,
     ]);
-    grantTableReadsInManagedPolicy(fun, COMPLIANCE_ENGINE_DEFINITION_READ_POLICY_ID, [
+    grantTableReads(fun, [
         dynamo.metadataSchemaStorageTableV2,
         dynamo.workflowStorageTableV2,
         dynamo.pipelineStorageTableV2,
