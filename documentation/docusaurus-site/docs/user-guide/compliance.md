@@ -491,6 +491,7 @@ sequenceDiagram
 2. The pipeline reads its inputs from the workflow manifest, measures them, and writes one file, `compliance-output.json`, to the run's results location (`outputS3AssetResultsPath`).
 3. When the run ends, the workflow records each file in the results location on the execution and announces the completion. The compliance callback receives the announcement, reads `compliance-output.json` from the execution's results, and runs each of the rule's checks against the `measurements` in it.
 4. The rule passes when every check passes. The verdict comes from all the schema's rules together, and the asset's compliance state follows from it.
+5. A run can report its end twice, first as failed and then as succeeded, when two attempts of its last step overlap. The later success replaces the rule's failed result and the evaluation is decided again: the verdict, the compliance state and quarantine follow the new result, and a release or exception granted after the evaluation began still stands. Only a success replaces a failure of the same run; a later failure never replaces a success, and a run of another evaluation is never counted.
 
 ### What decides the rule's result
 

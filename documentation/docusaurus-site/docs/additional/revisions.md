@@ -152,6 +152,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Compliance pipeline rules after a superseded failure** — A workflow run that reports failed and then succeeded replaces the rule's failed result with the success, and the evaluation is decided again (#1504).
 -   **Needle USD viewer error messages are readable** — The error panel shows its whole message at any panel width; the 3D canvas no longer stays above the text and pushes it out of view. (issue #1234)
 -   **Picked and dragged folders land at the same path** — A single folder added on its own on Create Asset becomes the asset's contents, and every other folder keeps its name, including every folder added to an existing asset. (issue #1471)
 -   **Refused tag writes answer 403** — Creating, editing or deleting a tag that the caller's role does not allow on that tag answers `403 Not Authorized` instead of `500`. (issue #1452)

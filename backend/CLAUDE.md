@@ -303,7 +303,13 @@ backend/
 │   │   │                                           #   STATE_WRITE_ATTEMPTS tries, never blind; audit
 │   │   │                                           #   from ALL_OLD). A release / exception grant made after an
 │   │   │                                           #   evaluation began (manualDecision/-At) outranks
-│   │   │                                           #   its outcome (D159). complianceNotifications
+│   │   │                                           #   its outcome (D159). A SUCCEEDED of the same
+│   │   │                                           #   execution supersedes a recorded FAILED pipeline
+│   │   │                                           #   rule (supersede_pipeline_rule_outcome, #1504:
+│   │   │                                           #   reopen on the finalization read, replace only the
+│   │   │                                           #   FAILED of that executionId, finalize again; never
+│   │   │                                           #   SUCCEEDED->FAILED, never a closed evaluation).
+│   │   │                                           #   complianceNotifications
 │   │   ├── pipelines/                              # Pipeline CRUD (pipelineService = full CRUD;
 │   │   │                                           #   pipelineTemplateService = templates + tagSchema)
 │   │   ├── workflows/                              # Step Functions workflow mgmt. API-facing:
