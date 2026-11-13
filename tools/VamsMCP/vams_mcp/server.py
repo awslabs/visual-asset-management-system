@@ -342,6 +342,15 @@ def _timed_out(exc: BaseException) -> bool:
 # own rows (each add-on module's OUTCOME_CHECKS) come first, so a core fragment such as "file"
 # never claims an add-on tool.
 _CORE_OUTCOME_CHECKS: Tuple[Tuple[str, str], ...] = (
+    # The compliance writes, each checked with a read of the compliance set (before the generic
+    # `database`, `asset` and `schema` fragments below, which would name a tool outside it).
+    ("bind_compliance", "get_compliance_bindings"),
+    ("sweep_compliance", "get_database_compliance_overview"),
+    ("evaluate_database_compliance", "get_database_compliance_overview"),
+    ("evaluate_asset_compliance", "list_compliance_evaluations"),
+    ("compliance_schema", "get_compliance_schema"),
+    ("quarantine", "get_asset_compliance_state"),
+    ("compliance_cascade", "list_compliance_cascades"),
     ("execution", "list_executions"),
     ("execute_workflow", "list_executions"),
     ("workflow_trigger", "list_workflow_triggers"),

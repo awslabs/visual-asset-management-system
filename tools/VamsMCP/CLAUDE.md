@@ -107,6 +107,10 @@ tools/VamsMCP/
                              # maxItems-keyed pages (evaluations, audit, quarantine), the
                              # page-returning overview/bindings reads, the write/destructive
                              # bodies, docstring contracts
+    test_compliance_toolset.py
+                             # the `compliance` tool set: its members, its own budget, the gates
+                             # inside it, the outcome checks, and over the remote server the
+                             # user's own token on every compliance call (D201)
     addon/
       test_edh_tools.py      # the EDH tools on a recording fake mcp, one Config per gate setting:
                              # payloads, the pre-flight switch of each tool, the connect tool with
@@ -407,7 +411,8 @@ asymmetry other callers rely on):
     list in `tests/test_agent_surface.py` (`DESCRIPTION_EXCEPTIONS`, each with its reason and
     ceiling), each tool set's descriptions together within 30,000 (`toolsets.MAX_DESCRIPTION_CHARS_PER_SET`,
     Rule 17; the full core surface other than the compliance tools, which only `all` over stdio lists,
-    within 32,000), and the 25 compliance tools (`COMPLIANCE_TOOLS`) together within 18,700. Before
+    within 32,000), and the 25 compliance tools (`COMPLIANCE_TOOLS`, the `compliance` tool set) together
+    within 18,700. Before
     adding text, cut text. Many older
     contract tests pin phrases in docstrings; keep the phrase, shorten around it. A release that
     changes tools, descriptions or `SERVER_INSTRUCTIONS` runs the scenarios of
@@ -502,7 +507,10 @@ asymmetry other callers rely on):
       challenge does not name). The SDK still carries the protocol and its DNS rebinding check,
       which `transport_security_settings` configures for the resource's host and loopback only.
 17. **Every tool is in a tool set, and every set fits a remote client.** `toolsets.py` names the sets
-    (`consumer`, `operator`, `admin`, `edh`, `edh-admin`; plus `custom` for a fork's tools and `all`).
+    (`consumer`, `operator`, `admin`, `compliance`, `edh`, `edh-admin`; plus `custom` for a fork's tools and
+    `all`). The 25 compliance tools (`toolsets.COMPLIANCE_TOOLS`) are in `compliance` only, with the
+    orientation reads, and each compliance write names a compliance read as its outcome check
+    (`server._CORE_OUTCOME_CHECKS`); `tests/test_compliance_toolset.py` holds them there.
     `_ToolSetServer.tool` registers only the selected sets' tools, under the gates as before. A new
     core or add-on tool goes into at least one set (`consumer` takes reads only, never a write), and
     each set stays within `MAX_TOOLS_PER_SET` (100, the most Amazon Quick lists per connection) and

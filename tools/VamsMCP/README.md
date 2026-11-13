@@ -163,15 +163,16 @@ write and destructive gates still apply inside a set. Each named set holds at mo
 30,000 characters of descriptions with every gate and add-on on, so it fits a client that lists at
 most 100 tools per connection.
 
-| Set         | Tools                                                                                                                      |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `consumer`  | Read-only: databases, assets, files, metadata, versions, links, search, download links, workflows and runs, tags, comments |
-| `operator`  | `consumer` plus the writes and deletes of asset content, comments, subscriptions, and running workflows                    |
-| `admin`     | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions, API keys                      |
-| `edh`       | EDH Workstations add-on: workstations, catalog and container jobs                                                          |
-| `edh-admin` | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances, settings                                   |
-| `custom`    | The tools a fork adds in `custom_tools.py`                                                                                 |
-| `all`       | Every tool the gates allow (the stdio default)                                                                             |
+| Set          | Tools                                                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `consumer`   | Read-only: databases, assets, files, metadata, versions, links, search, download links, workflows and runs, tags, comments |
+| `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, and running workflows                    |
+| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions, API keys                      |
+| `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades, the compliance audit trail     |
+| `edh`        | EDH Workstations add-on: workstations, catalog and container jobs                                                          |
+| `edh-admin`  | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances, settings                                   |
+| `custom`     | The tools a fork adds in `custom_tools.py`                                                                                 |
+| `all`        | Every tool the gates allow (the stdio default)                                                                             |
 
 `vams_status` reports the selected sets in `gates.toolsets`. `vams_mcp/toolsets.py` lists each set's
 tools; `tests/test_toolsets.py` holds every set to the limits.
