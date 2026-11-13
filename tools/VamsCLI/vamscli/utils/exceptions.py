@@ -92,6 +92,12 @@ class APIError(BusinessLogicError):
     pass
 
 
+class InvalidRequestPathError(APIError):
+    """Raised before any request when an endpoint path has an empty, '.' or '..' segment, which would
+    address another route."""
+    pass
+
+
 class ProfileNotFoundError(BusinessLogicError):
     """Raised when required profile is not found."""
     pass

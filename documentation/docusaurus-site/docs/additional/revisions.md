@@ -111,6 +111,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Credential headers redacted in audit records** — The `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization` and `X-Amz-Security-Token` header values are redacted from the request echo of audit records and from structured logs, like `Authorization`, whatever their letter case. (issue #1417)
 -   **Audit records with unencodable values kept** — An audit record whose request holds a value JSON cannot encode, such as a decimal number or a set, is written with the value as text instead of being dropped. (issue #1421)
 -   **What audit records contain** — The audit logging and security pages describe the request echo an audit record carries (the headers that are not redacted, the verified token claims and the submitted request body after redaction), so personal data a user enters can appear, instead of stating that no personal data beyond user IDs is logged. (issue #1418)
+-   **VamsCLI request paths** — VamsCLI refuses, before sending anything, a request whose path has an empty, `.` or `..` segment. (PR #554)
 
 **Other changes:**
 
