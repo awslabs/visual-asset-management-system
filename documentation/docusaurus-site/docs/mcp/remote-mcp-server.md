@@ -52,12 +52,12 @@ Remote MCP clients sign users in through an OAuth client of their own, separate 
 
     A deployment that federates the pool to SAML or OIDC already has a domain; use it. Adding a domain does not open hosted sign-in for the web application's own app client: that client gets it only if OAuth flows are enabled on it.
 
-    The domain's form depends on the partition. Copy it from the user pool's domain settings in the Cognito console rather than building it: `<prefix>.auth.<region>.amazoncognito.com` in commercial Regions, `<prefix>.auth-fips.<region>.amazoncognito.com` in AWS GovCloud (US), and the form the console shows in the AWS European Sovereign Cloud. The authorization and token URLs are `https://<domain>/oauth2/authorize` and `https://<domain>/oauth2/token` on that same domain.
+    The domain's form depends on the partition. Copy it from the user pool's domain settings in the Cognito console rather than building it: `<prefix>.auth.<region>.amazoncognito.com` in commercial Regions, `<prefix>.auth-fips.<region>.amazoncognito.com` in AWS GovCloud (US), and the form the console shows in the AWS European Sovereign Cloud. The authorization and token URLs, which the MCP client needs, are `https://<domain>/oauth2/authorize` and `https://<domain>/oauth2/token` on that same domain (in a commercial Region, `https://<prefix>.auth.<region>.amazoncognito.com/oauth2/authorize` and `.../oauth2/token`).
 
 2. **Create an app client** in the same user pool:
 
     - Application type: a web application (with a client secret) when the MCP client asks for one, as Amazon Quick does; otherwise a public client.
-    - Allowed callback URLs: the redirect URL the MCP client shows when you configure it (step 5).
+    - Allowed callback URLs: the MCP client's redirect URL. For Amazon Quick it is `https://<quick-region>.quicksight.aws.amazon.com/sn/oauthcallback`, where `<quick-region>` is the Region of the Amazon Quick account (the Region in the Amazon Quick console's address, for example `us-east-1`), not the Region of the VAMS deployment. For another client, use the redirect URL it shows when you configure it (step 5).
     - OAuth grant type: **Authorization code grant** only.
     - OpenID Connect scopes: `openid`, `email` and `profile`.
     - Identity providers: Cognito user pool, plus the federated IdP when the pool is federated.
@@ -74,7 +74,7 @@ Remote MCP clients sign users in through an OAuth client of their own, separate 
         --explicit-auth-flows ALLOW_REFRESH_TOKEN_AUTH
     ```
 
-    Note the client id. If the client has a secret, enter it in the MCP client only; the server never needs it.
+    Note the client id and the client secret. Enter the secret in the MCP client only; the server never needs it.
 
 3. **Let the VAMS API accept its tokens.** Add the client id to `app.authProvider.useCognito.additionalTokenAudiences` in the deployment configuration and deploy VAMS (see [Additional token audiences](../deployment/configuration-reference.md#additional-token-audiences)):
 
@@ -208,6 +208,20 @@ The front end terminates TLS, exposes only port 443, and forwards to the server'
 -   An AWS WAF web ACL on the load balancer with a rate-based rule, and the managed common rule set.
 -   Keep the `Host` header as the client sent it. The server's DNS rebinding protection accepts the endpoint's own host name and the loopback names only.
 
+**Amazon ECS Express Mode (the simplest example):** Express Mode runs the image as an ECS service on AWS Fargate behind an internet-facing Application Load Balancer that it creates, with an HTTPS listener on 443 only and a generated HTTPS endpoint.
+
+1. Push the image to Amazon ECR, and create two IAM roles: a task execution role with the AWS managed policy `AmazonECSTaskExecutionRolePolicy`, and an infrastructure role with the AWS managed policy `AmazonECSInfrastructureRoleforExpressGatewayServices`.
+2. Create the service with container port 8000, the environment `VAMS_MCP_TRANSPORT=streamable-http`, `VAMS_MCP_HOST=0.0.0.0` and `VAMS_MCP_AUTH_CONFIG`, and the health check path `/.well-known/oauth-protected-resource/mcp`:
+
+    ```bash
+    aws ecs create-express-gateway-service         --service-name vams-mcp         --execution-role-arn <task-execution-role-arn>         --infrastructure-role-arn <infrastructure-role-arn>         --primary-container '{"image": "<account>.dkr.ecr.<region>.amazonaws.com/vams-mcp:<tag>", "containerPort": 8000, "environment": [{"name": "VAMS_MCP_TRANSPORT", "value": "streamable-http"}, {"name": "VAMS_MCP_HOST", "value": "0.0.0.0"}, {"name": "VAMS_MCP_AUTH_CONFIG", "value": "/etc/vams-mcp/auth.json"}, {"name": "VAMS_MCP_TOOL_TIMEOUT", "value": "50"}]}'         --health-check-path /.well-known/oauth-protected-resource/mcp
+    ```
+
+3. The endpoint, `https://<generated-name>.ecs.<region>.on.aws`, is known only after the service exists. Run `vams-mcp setup-remote` with `--resource-url https://<generated-name>.ecs.<region>.on.aws/mcp`, put the file in the image (or write it at container start from environment variables), and update the service.
+4. **Idle timeout.** The load balancer's idle timeout is 60 seconds by default, shorter than the default tool time budget (240 seconds). Set `VAMS_MCP_TOOL_TIMEOUT` below it (for example `50`, as above), or raise the load balancer's idle timeout above the budget.
+5. **AWS WAF.** Attach a web ACL with a rate-based rule to the load balancer. The ECS service does not report which load balancer it uses: find it through the listener rule that matches the service's host name. A load balancer created moments before can briefly answer `WAFUnavailableEntityException`; try again.
+6. **Check the gate anonymously** before you connect a client: the metadata document answers `200`, and `POST /mcp` without a token answers `401` with `WWW-Authenticate: Bearer resource_metadata="..."` (see [Check that it works](#check-that-it-works)).
+
 **A reverse proxy on the same host:** run the server with the default `127.0.0.1` bind and forward `https://mcp.example.com/mcp` and `https://mcp.example.com/.well-known/oauth-protected-resource/mcp` to `http://127.0.0.1:8000`, keeping the paths and the `Host` header.
 
 ### Deployments that allow API access only from a VPC
@@ -220,12 +234,16 @@ When the VAMS API is reachable only from your VPC (a private API endpoint, or an
 
 Amazon Quick is available in some AWS Regions and partitions only; check its Region availability before planning on it, in particular for AWS GovCloud (US) and the AWS European Sovereign Cloud.
 
-Add the server as an MCP integration in Amazon Quick, with user authentication (OAuth):
+Check the gate anonymously first (see [Check that it works](#check-that-it-works)). Then, in the Amazon Quick console:
 
-1. Enter the endpoint, `https://mcp.example.com/mcp`.
-2. Choose user authentication, and enter the client ID, the client secret (if the client has one), the authorization URL, the token URL and the scopes printed by `vams-mcp setup-remote`.
-3. Register the redirect URL Amazon Quick shows as an allowed callback URL on the client from step 1.
-4. Sign in when Amazon Quick asks: each user signs in as themselves.
+1. Open **Connectors**, choose **Create for your team**, and choose **Model Context Protocol**.
+2. **MCP server endpoint:** `https://mcp.example.com/mcp`.
+3. **Connection type:** **Public network**.
+4. **Authentication:** **User authentication (OAuth)**, with the **Client ID** and **Client secret** of the app client from step 1, and the **Authorization URL** and **Token URL** that `vams-mcp setup-remote` printed (`https://<domain>/oauth2/authorize` and `https://<domain>/oauth2/token`). Amazon Quick has no scopes field: it reads the scopes from the server's Protected Resource Metadata (`scopes_supported`), which `setup-remote` fills with the client's scopes (`openid email profile` for Cognito).
+5. Create the connector, and sign in when Amazon Quick asks. Any VAMS user of the user pool can sign in, and each acts with their own VAMS permissions.
+6. Amazon Quick lists the server's tools.
+
+The app client's callback URL must be Amazon Quick's redirect URL for the Region of the Quick account (step 1).
 
 After you upgrade the server or change its tool sets, refresh the integration's tool list (**Sync**). Amazon Quick keeps the list it read when the integration was created.
 
@@ -274,17 +292,19 @@ In the client, ask the agent to call `vams_status`. In remote mode it returns `m
 
 ## Troubleshooting
 
-| Symptom                                                                | Cause and fix                                                                                                                                                                                                                                           |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Every request gets `401` with `error="invalid_token"`                  | The token was issued to a client that is not in the auth configuration (for example the web application's client), has expired, or names no user. Check `--client-id` and `--audience` in `vams-mcp setup-remote`. The server logs the reason category. |
-| Tools return `NotAuthenticated` saying VAMS did not accept the sign-in | The server accepted the token but the VAMS API refused it: the client id is not yet in `additionalTokenAudiences`, or the deployment with it is not deployed yet. Sign in again if the token expired.                                                   |
-| Every request gets `503`                                               | The server cannot read the issuer's keys. Check that the server can reach the issuer's `jwks_uri` (in the auth configuration file) over HTTPS.                                                                                                          |
-| `421` or a host error from the server                                  | The front end does not forward the client's `Host` header, or the endpoint's host name differs from `--resource-url`. Keep the host, or run `vams-mcp setup-remote` again with the right URL.                                                           |
-| The server stops at start with `cannot start`                          | The message names the setting: a missing or invalid auth configuration file, `VAMS_PROFILE` set, or a wide bind with a non-`https` resource URL.                                                                                                        |
-| The client lists fewer tools than expected                             | Check `VAMS_MCP_TOOLSETS` and the write and destructive gates (`vams_status` reports them). A combination of sets above 100 tools can be cut by the client. After a change, refresh the client's tool list (Sync in Amazon Quick).                      |
-| A long list stops with a `NextToken` and a note about the time budget  | The call reached its time budget. Call the tool again with `starting_token`, or narrow the request.                                                                                                                                                     |
-| A tool answers `ToolTimeout` with `outcomeUnknown`                     | A write, delete or compute call ran past its time budget and may still complete. Check with the tool named in `checkWith` before calling it again.                                                                                                      |
-| A tool answers `TooManyConcurrentCalls`                                | The user already has `VAMS_MCP_MAX_CALLS_PER_USER` calls in progress. Nothing ran; call again when they finish.                                                                                                                                         |
+| Symptom                                                                | Cause and fix                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Every request gets `401` with `error="invalid_token"`                  | The token was issued to a client that is not in the auth configuration (for example the web application's client), has expired, or names no user. Check `--client-id` and `--audience` in `vams-mcp setup-remote`. The server logs the reason category.                                                                                                                                                                                          |
+| Tools return `NotAuthenticated` saying VAMS did not accept the sign-in | The server accepted the token but the VAMS API refused it: the client id is not yet in `additionalTokenAudiences`, or the deployment with it is not deployed yet. Sign in again if the token expired.                                                                                                                                                                                                                                            |
+| Sign-in shows Amazon Cognito's `error=redirect_mismatch` page          | The app client's allowed callback URLs do not include the redirect URL the client sent, for example Amazon Quick's URL for another Region. Add the exact `redirect_uri` of the authorize request (read it from the browser's network panel, or the address of the error page) to the app client's callback URLs. For Amazon Quick it is `https://<quick-region>.quicksight.aws.amazon.com/sn/oauthcallback` for the Region of the Quick account. |
+| Long calls fail after about 60 seconds behind a load balancer          | The load balancer's idle timeout (60 seconds by default) is shorter than the tool time budget. Set `VAMS_MCP_TOOL_TIMEOUT` below the idle timeout, or raise the idle timeout above the budget.                                                                                                                                                                                                                                                   |
+| Every request gets `503`                                               | The server cannot read the issuer's keys. Check that the server can reach the issuer's `jwks_uri` (in the auth configuration file) over HTTPS.                                                                                                                                                                                                                                                                                                   |
+| `421` or a host error from the server                                  | The front end does not forward the client's `Host` header, or the endpoint's host name differs from `--resource-url`. Keep the host, or run `vams-mcp setup-remote` again with the right URL.                                                                                                                                                                                                                                                    |
+| The server stops at start with `cannot start`                          | The message names the setting: a missing or invalid auth configuration file, `VAMS_PROFILE` set, or a wide bind with a non-`https` resource URL.                                                                                                                                                                                                                                                                                                 |
+| The client lists fewer tools than expected                             | Check `VAMS_MCP_TOOLSETS` and the write and destructive gates (`vams_status` reports them). A combination of sets above 100 tools can be cut by the client. After a change, refresh the client's tool list (Sync in Amazon Quick).                                                                                                                                                                                                               |
+| A long list stops with a `NextToken` and a note about the time budget  | The call reached its time budget. Call the tool again with `starting_token`, or narrow the request.                                                                                                                                                                                                                                                                                                                                              |
+| A tool answers `ToolTimeout` with `outcomeUnknown`                     | A write, delete or compute call ran past its time budget and may still complete. Check with the tool named in `checkWith` before calling it again.                                                                                                                                                                                                                                                                                               |
+| A tool answers `TooManyConcurrentCalls`                                | The user already has `VAMS_MCP_MAX_CALLS_PER_USER` calls in progress. Nothing ran; call again when they finish.                                                                                                                                                                                                                                                                                                                                  |
 
 ## Upgrade
 
