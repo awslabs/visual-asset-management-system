@@ -459,7 +459,8 @@ class TestAuditRecords:
             event = base._event(filesPathKey=FILES_PREFIX, awaitOutputIngestion=True)
             po.lambda_handler(event, MagicMock())
         assert self._actions(recorder) == ["workflowOutputIngest", "workflowExecutionEnd"]
-        assert all(c.args[0] is event for c in recorder.call_args_list)
+        # Both records carry the entrypoint's own event (a list, so zero calls cannot pass).
+        assert [c.args[0] is event for c in recorder.call_args_list] == [True, True]
 
     def test_finalize_records_the_ingest_and_the_end_for_its_own_event(self):
         batch = {"jobId": "batch#E1", "context": {"workflowExecutionId": "E1", "stateBucket": base.RUN_BUCKET,
