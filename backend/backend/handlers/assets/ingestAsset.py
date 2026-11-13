@@ -10,6 +10,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import AUDIT_INTERNAL_CALL_KEY, audited_handler, internal_call_marker, log_action
+from common.apiRoutes import API_ASSETS, API_UPLOADS, API_UPLOAD_COMPLETE
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from models.common import (
@@ -141,7 +142,7 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
             },
             "requestContext": {
                 "http": {
-                    "path": "/assets",
+                    "path": API_ASSETS.path,
                     "method": "POST"
                 },
                 "authorizer": event_auth
@@ -171,7 +172,7 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
         },
         "requestContext": {
             "http": {
-                "path": "/uploads",
+                "path": API_UPLOADS.path,
                 "method": "POST"
             },
             "authorizer": event_auth
@@ -206,6 +207,13 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
     database_id = request_model.databaseId
     asset_id = request_model.assetId
     upload_id = request_model.uploadId
+
+    # The upload-completion route with this upload's id filled in, which is what uploadFile
+    # dispatches on. An id that does not fill the route as one path segment is refused before
+    # anything is written.
+    complete_upload_path = API_UPLOAD_COMPLETE.path.replace("{uploadId}", upload_id)
+    if not API_UPLOAD_COMPLETE.matches(complete_upload_path):
+        raise ValueError("Invalid uploadId")
     
     # Verify database exists
     verify_database_exists(database_id)
@@ -229,7 +237,7 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
             },
             "requestContext": {
                 "http": {
-                    "path": "/assets",
+                    "path": API_ASSETS.path,
                     "method": "POST"
                 },
                 "authorizer": event_auth
@@ -262,7 +270,7 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
         },
         "requestContext": {
             "http": {
-                "path": "/uploads/complete",
+                "path": complete_upload_path,
                 "method": "POST"
             },
             "authorizer": event_auth

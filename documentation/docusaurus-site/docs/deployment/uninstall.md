@@ -150,7 +150,7 @@ aws cloudformation delete-stack \
 Then manually delete the retained resources using the steps in Step 2 through Step 11.
 
 :::note[Amazon SQS queues are deleted with the stack]
-Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes every source queue — the file and asset indexer queues, both bucket-sync queues per registered bucket, the large file processing queue, the workflow trigger dispatch queue, the Garnet queues, and the two Physna sync queues when Physna sync is enabled — and the dead-letter queue each one redrives to. The dead-letter queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<region>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
+Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes every source queue — the file and asset indexer queues, both bucket-sync queues per registered bucket, the large file processing queue, the workflow trigger dispatch queue, the compliance trigger queue, the compliance job queue, the Garnet queues, and the two Physna sync queues when Physna sync is enabled — and the dead-letter queue each one redrives to. The dead-letter queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<region>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
 
 Check the indexer dead-letter queues before deleting them. They hold the asset and file records the indexer could not add to the search index, and a redeploy does not replay them — run a reindex to rebuild the index for the affected assets and files.
 
@@ -240,7 +240,7 @@ A model cache bucket holds the model weights the GPU pipelines download on first
 
 ## Step 3: Delete DynamoDB tables
 
-VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data. The listing includes the workflow execution locks table (`WorkflowExecutionLocksStorageTable` in the generated name), which holds only short-lived concurrency locks of running executions: nothing in it needs a backup, and a redeploy creates a new, empty one.
+VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data. This includes the five compliance tables (`Compliance{Schema,AssetState,Evaluation,Cascade,Audit}StorageTable`), which follow the same retained, auto-named pattern. The listing also includes the workflow execution locks table (`WorkflowExecutionLocksStorageTable` in the generated name), which holds only short-lived concurrency locks of running executions: nothing in it needs a backup, and a redeploy creates a new, empty one.
 
 ```bash
 # List remaining VAMS tables
@@ -261,6 +261,8 @@ done
 
 VAMS creates Lambda function log groups and explicitly named log groups under `/aws/vendedlogs/` that may persist after stack deletion. The named log groups (audit, workflow, orchestration bus, VPC flow logs, AWS CloudTrail, and per-pipeline state machine and container groups) use deterministic names derived from the stack name and account ID. If any are left behind, they will conflict with the same-named groups on a subsequent redeploy using the same configuration name and account, so delete them before redeploying.
 
+The Lambda function log groups are not stack resources: AWS Lambda creates each one, under `/aws/lambda/<function name>`, when the function first runs, and no removal policy applies to it, so it stays after the stack is deleted. That includes the log groups of the compliance trigger and the compliance job Lambda, whose function names CloudFormation generates from the stack name; the commands below find them with the other Lambda log groups.
+
 The key named log groups are:
 
 -   `/aws/vendedlogs/VAMSAudit*-{hash}` — Audit log groups (authentication, authorization, file upload/download, actions, errors)
@@ -269,7 +271,7 @@ The key named log groups are:
 -   `/aws/vendedlogs/VAMSCloudWatchVPCLogs-{hash}` — VPC flow logs (conditional on `useGlobalVpc`)
 -   `/aws/vendedlogs/VAMSCloudTrailLogs-{hash}` — AWS CloudTrail logs (conditional on `addStackCloudTrailLogs`)
 -   `aws-waf-logs-vams-{hash}` — AWS WAF request logs, one per web ACL (conditional on `useWaf`). Outside the `/aws/vendedlogs/` namespace because AWS WAF requires the `aws-waf-logs-` prefix, and the CloudFront ACL's group is in us-east-1 rather than the deployment Region
--   `/aws/vendedlogs/VAMSstateMachine-*-{hash}` — Per-pipeline state machine logs
+-   `/aws/vendedlogs/VAMSstateMachine-*{hash}` and `/aws/vendedlogs/VAMSStateMachine-*{hash}` — Per-pipeline state machine logs. Both spellings are in use: the CoordTransform, Metadata3dLabelingPipeline, ModelOps, RapidPipeline, CadStepAgent and VideoSopBom pipelines use the upper-case `VAMSStateMachine-`, and the remaining pipelines use `VAMSstateMachine-`. The delete commands below match on the `/aws/vendedlogs/VAMS` prefix, so they already cover both
 -   `/aws/vendedlogs/Pipelines/*` — Per-pipeline container logs. The AWS Fargate job groups are `CoordTransform{hash}`, `Metadata3dLabelingBlenderRenderer{hash}`, `Preview3dThumbnail{hash}`, `PcPotreeViewerPDAL{hash}`, `PcPotreeViewerPotree{hash}`, `VideoSopBom{hash}` and `CadStepAgent{hash}` (conditional on the matching pipeline flag; `CadStepAgent{hash}` on the GenAI CAD STEP agent's `fargate` runtime only); the RapidPipeline and ModelOps groups are named for their container
 
 The `/aws/codebuild/` build log groups of pipelines configured with `useCodeBuild: true` are not named by VAMS; the last command block below finds and deletes them.
@@ -443,11 +445,10 @@ for P in $(aws ssm get-parameters-by-path \
 done
 ```
 
-:::note[An Amazon Location Service API key orphaned by an earlier release]
+:::note[A leftover Amazon Location Service API key]
 When Amazon Location Service is enabled, VAMS creates an API key named
-`vams-location-api-key-<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>` and deletes it with the stack. Earlier releases retained
-it, so a deployment that has ever had a failed-and-rolled-back deploy may still have a key left behind
-from that release. It costs nothing while unused, but its name is deterministic, so it conflicts with a
+`vams-location-api-key-<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>` and deletes it with the stack. A key that a stack did
+not delete when it was removed or rolled back can remain in the account. It costs nothing while unused, but its name is deterministic, so it conflicts with a
 redeploy that uses the same configuration name, stack name, and Region. List and remove any that remain:
 
 ```bash
