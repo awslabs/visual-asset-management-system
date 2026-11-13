@@ -260,3 +260,27 @@ class TestPathValueStaysInItsOwnSegment:
         # Control: the walk above reads the client and finds its route_path calls.
         source = (Path(constants.__file__).parent / "utils" / "api_client.py").read_text(encoding="utf-8")
         assert len(re.findall(r"\broute_path\(API_", source)) > 90
+
+
+class TestAssetIdEndingInHash:
+    """#1476: an asset id may end in '#'. Assets `x-q` and `x-q#` in one database are two assets, and
+    each method reaches its own asset's route; the '#' is never read as the start of a fragment."""
+
+    OPERATIONS = [
+        ("get_asset", (), "GET", ""),
+        ("update_asset", ({"description": "d"},), "PUT", ""),
+        ("list_asset_files", (), "GET", "/listFiles"),
+        ("archive_asset", (), "DELETE", "/archiveAsset"),
+        ("delete_asset_permanent", (None, True), "DELETE", "/deleteAsset"),
+    ]
+
+    @pytest.mark.parametrize("method,extra,verb,suffix", OPERATIONS)
+    def test_each_sibling_reaches_its_own_asset(self, monkeypatch, method, extra, verb, suffix):
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        getattr(client, method)("db-1", "x-q#", *extra)
+        getattr(client, method)("db-1", "x-q", *extra)
+        assert sent == [
+            (verb, f"https://api.example.com/database/db-1/assets/x-q%23{suffix}"),
+            (verb, f"https://api.example.com/database/db-1/assets/x-q{suffix}"),
+        ]
