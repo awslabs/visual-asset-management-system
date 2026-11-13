@@ -28,6 +28,9 @@ from common.dynamodb import query_all_items, batch_get_items
 from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.validators import validate
 from common.s3 import region_routing_s3_client, bucket_region_fields, presigned_get_object_params
+from common.compliance.quarantineGuard import (
+    QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
+)
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -1288,6 +1291,12 @@ def process_asset_batch(
         asset["object__type"] = "asset"
         # Default deny: only authorize if enforcer exists AND grants access
         if casbin_enforcer and casbin_enforcer.enforce(asset, "GET"):
+            # Single choke point for the quarantine block: every asset whose files are about to
+            # be signed passes here once, after its Tier-2 check. A quarantined asset without a
+            # granted exception fails the whole export before any presigned GET URL is minted.
+            # An export that mints no file URLs delivers no file bytes and is not blocked.
+            if request_model.generatePresignedUrls:
+                check_quarantine_block(asset_info['databaseId'], asset_info['assetId'])
             authorized_assets[position] = (asset_info, asset)
         else:
             logger.warning(f"Permission denied for asset {asset_info['assetId']}")
@@ -1936,6 +1945,9 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
         return authorization_error(event=event)
     except VAMSAssetNotFoundResponse:
         return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
+    except QuarantineBlockedResponse as refusal:
+        # An expected refusal: one INFO line, no traceback (D174).
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -1981,6 +1993,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except QuarantineBlockedResponse as refusal:
+        # An expected refusal: one INFO line, no traceback (D174).
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

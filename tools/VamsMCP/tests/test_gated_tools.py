@@ -38,6 +38,9 @@ WRITE_TOOLS = (
     "create_asset",
     "update_asset",
     "set_asset_metadata",
+    "set_file_metadata",
+    "set_primary_file",
+    "revert_file_version",
     "create_folder",
     "create_asset_version",
     "move_file",
@@ -68,6 +71,18 @@ WRITE_TOOLS = (
     "create_user_api_key",
     "update_api_key",
     "update_user_api_key",
+    "create_compliance_schema",
+    "update_compliance_schema",
+    "bind_compliance_schema",
+    "unbind_compliance_schema",
+    "evaluate_asset_compliance",
+    "sweep_compliance_schema",
+    "evaluate_database_compliance",
+    "release_quarantine",
+    "grant_quarantine_exception",
+    "create_compliance_cascade",
+    "approve_compliance_cascade",
+    "reject_compliance_cascade",
 )
 
 DESTRUCTIVE_TOOLS = (
@@ -79,6 +94,7 @@ DESTRUCTIVE_TOOLS = (
     "unarchive_file",
     "delete_file",
     "delete_asset_link",
+    "delete_asset_metadata",
     "delete_tag",
     "delete_tag_type",
     "archive_pipeline",
@@ -94,6 +110,7 @@ DESTRUCTIVE_TOOLS = (
     "delete_metadata_schema",
     "delete_api_key",
     "delete_user_api_key",
+    "delete_compliance_schema",
 )
 
 GATE_VARS = ("VAMS_ENABLE_WRITES", "VAMS_ENABLE_DESTRUCTIVE")

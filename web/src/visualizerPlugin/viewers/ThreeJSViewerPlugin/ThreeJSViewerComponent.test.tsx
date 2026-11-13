@@ -15,6 +15,10 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import ThreeJSViewerComponent from "./ThreeJSViewerComponent";
 import { loadFile } from "./utils/fileLoaders";
+import {
+    QUARANTINE_REFUSAL_MESSAGE,
+    quarantineRefusalResponse,
+} from "../../core/quarantineRefusal.testdata";
 
 jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: jest.fn(() => ({ api: "https://api.example.test/" })) },
@@ -165,6 +169,33 @@ describe("ThreeJSViewerComponent error panel", () => {
         expect(mockedLoadFile.mock.calls.some((call) => call[2] === "part.glb")).toBe(false);
     });
 
+    it("shows the API's refusal alone, with no format hint under it (D170)", async () => {
+        global.fetch = jest.fn(() => Promise.resolve(quarantineRefusalResponse())) as any;
+
+        renderViewer("models/part.glb");
+
+        expect(await screen.findByText(QUARANTINE_REFUSAL_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Failed to load: part\.glb/)).not.toBeInTheDocument();
+    });
+
+    it("shows the API's refusal alone when every file of a multi-file view was refused", async () => {
+        global.fetch = jest.fn(() => Promise.resolve(quarantineRefusalResponse())) as any;
+
+        render(
+            <ThreeJSViewerComponent
+                assetId="asset-1"
+                databaseId="db-1"
+                multiFileKeys={["models/a.glb", "models/b.obj"]}
+                viewerMode="wide"
+                onViewerModeChange={jest.fn()}
+            />
+        );
+
+        expect(await screen.findByText(QUARANTINE_REFUSAL_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+    });
+
     it("[control] keeps the file's own message for any other status", async () => {
         global.fetch = jest.fn(() =>
             Promise.resolve({ ok: false, status: 500, arrayBuffer: () => Promise.resolve(null) })
@@ -173,5 +204,6 @@ describe("ThreeJSViewerComponent error panel", () => {
         renderViewer("models/part.glb");
 
         expect(await screen.findByText(/Failed to load: part\.glb \(500\)/)).toBeInTheDocument();
+        expect(screen.getByText(HINT)).toBeInTheDocument();
     });
 });
