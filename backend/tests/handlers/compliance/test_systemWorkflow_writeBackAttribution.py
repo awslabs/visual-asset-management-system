@@ -98,7 +98,7 @@ def _call_table(call):
 
 def _call_composite(call):
     body = json.loads(call["body"])
-    return f"{DB}:{ASSET}:{body.get('filePath') or '/'}"
+    return ":".join((DB, ASSET, body.get("filePath") or "/"))
 
 
 @pytest.mark.unit
@@ -194,7 +194,7 @@ def test_the_metadata_service_writes_its_tables_only_through_the_tagging_helper(
 
 def _tagged_record(event_name, key, file_path, epoch, removed_by_workflow=False):
     """A stream record of one row the write-back wrote (or, for a REMOVE, deleted after marking)."""
-    composite = f"{DB}:{ASSET}:{file_path}"
+    composite = ":".join((DB, ASSET, file_path))
     keys = {"metadataKey": {"S": key}, "databaseId:assetId:filePath": {"S": composite}}
     image = {**keys, "metadataValue": {"S": "v"}}
     if removed_by_workflow:
