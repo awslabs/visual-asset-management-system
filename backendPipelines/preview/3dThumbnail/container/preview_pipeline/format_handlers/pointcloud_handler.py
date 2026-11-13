@@ -48,6 +48,8 @@ def load(file_path: str) -> pv.PolyData:
     else:
         raise ValueError(f"Unsupported point cloud format: {ext}")
 
+    points, colors = finite_points(points, colors)
+
     # Downsample if needed
     if len(points) > MAX_POINTS_FOR_RENDER:
         logger.info(f"Downsampling from {len(points)} to {MAX_POINTS_FOR_RENDER} points")
@@ -65,6 +67,27 @@ def load(file_path: str) -> pv.PolyData:
 
     logger.info(f"Loaded point cloud: {len(points)} points")
     return pv_cloud
+
+
+def finite_points(points, colors=None):
+    """``points`` and ``colors`` without the points that have a NaN or infinite coordinate.
+
+    An organized cloud (a PCD from a depth camera, say) keeps its grid by storing NaN for the pixels
+    that saw nothing, and a single non-finite point turns the camera's framing into NaN, so the
+    preview came out empty. Raises ValueError when no point is left."""
+    points = np.asarray(points)
+    finite = np.isfinite(points).all(axis=1) if points.ndim == 2 and len(points) else None
+    if finite is None or finite.all():
+        return points, colors
+    kept = int(np.count_nonzero(finite))
+    if kept == 0:
+        raise ValueError(f"The point cloud has no valid points: all {len(points):,} points have "
+                         f"non-finite (NaN or infinite) coordinates")
+    logger.info(f"Dropping {len(points) - kept:,} of {len(points):,} points with non-finite "
+                f"(NaN or infinite) coordinates")
+    if colors is not None and len(colors) == len(points):
+        colors = np.asarray(colors)[finite]
+    return points[finite], colors
 
 
 def _load_las(file_path: str, max_points: int = MAX_POINTS_FOR_RENDER):
