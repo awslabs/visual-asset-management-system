@@ -6,7 +6,7 @@ Organizations working with 3D data face a common set of challenges: spatial asse
 
 Through a web interface, command-line tool, and REST API, VAMS enables any authorized user — not just engineers — to store, search, visualize, transform, and distribute visual assets without requiring specialized desktop software, restrictive licenses, or direct access to storage systems. The solution deploys entirely within your AWS account, ensuring full data sovereignty and control while supporting commercial AWS, AWS GovCloud (US), and AWS European Sovereign Cloud regions.
 
-![VAMS Home Page](/img/home_page_20260323_v2.5.png)
+![VAMS Home Page](/img/home_page_20261109_v2.7.png)
 
 ### Data types
 

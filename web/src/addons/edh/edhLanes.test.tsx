@@ -10,7 +10,8 @@
  * Each route serves its page without parameters and highlights the navigation link that leads to it;
  * the Simulations route opens the Workstations page on that tab. "Virtual Workstations" sits in the
  * main menu after the core "Orchestrate & Automate" section and "Admin - Workstations" in the admin
- * area after the core admin sections and before "User"; both show only while EDH_WORKSTATIONS is
+ * area after the core admin sections (the side navigation's last core section; the user's own pages
+ * are in the profile menu); both show only while EDH_WORKSTATIONS is
  * enabled (the Simulations link
  * also needs EDH_CONTAINERS), are filtered by the web-route check, and appear when the feature
  * switches arrive after mount.
@@ -179,7 +180,7 @@ describe("EDH routes", () => {
 });
 
 describe("EDH navigation sections", () => {
-    it("places Virtual Workstations after Orchestrate & Automate and Admin - Workstations before User", async () => {
+    it("places Virtual Workstations after Orchestrate & Automate and Admin - Workstations after the core admin sections", async () => {
         allowRoutes(
             "/executions",
             "/metadataschema",
@@ -200,9 +201,10 @@ describe("EDH navigation sections", () => {
         // Main menu: right after the core Orchestrate & Automate links, ahead of the admin area.
         expect(at("Virtual Workstations")).toBeGreaterThan(at("Executions"));
         expect(at("Metadata Schema")).toBeGreaterThan(at("Virtual Workstations"));
-        // Admin area: after the core admin sections, ahead of the User section.
+        // Admin area: after the core admin sections. The user's own API key page is in the profile
+        // menu, so no User section follows.
         expect(at("Admin - Workstations")).toBeGreaterThan(at("Users in Roles"));
-        expect(at("API Key Management")).toBeGreaterThan(at("Admin - Workstations"));
+        expect(text).not.toContain("API Key Management");
     });
 
     it("offers My Workstations when the switch is on and the route is allowed", async () => {

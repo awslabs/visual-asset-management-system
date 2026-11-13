@@ -6,15 +6,30 @@ This page provides a comprehensive tour of the VAMS web interface, covering each
 
 ## Navigation Structure
 
-The VAMS interface uses a persistent side navigation panel on the left and a top navigation bar. The side panel groups pages into seven sections: **Home**, **Manage**, **Orchestrate & Automate**, **Admin - Data**, **Admin - Compliance**, **Admin - Auth**, and **User**. Pages within these sections are filtered based on your role permissions -- you will only see navigation items you are authorized to access. For the Compliance pages, see [Compliance](compliance.md). Add-ons a deployment enables can add navigation sections and pages of their own; see [Add-ons Overview](../developer/addons-overview.md).
+The VAMS interface uses a persistent side navigation panel on the left and a top navigation bar. The side panel groups shared pages into six sections: **Home**, **Manage**, **Orchestrate & Automate**, **Admin - Data**, **Admin - Compliance**, and **Admin - Auth**. Your own pages, such as **API Key Management**, are in the profile menu in the top bar (see [Profile menu](#profile-menu)). Pages in both places are filtered based on your role permissions -- you will only see navigation items you are authorized to access. For the Compliance pages, see [Compliance](compliance.md). Add-ons a deployment enables can add navigation sections and pages of their own; see [Add-ons Overview](../developer/addons-overview.md).
 
 :::info
 If the navigation panel shows **No Access**, your account does not have any web route permissions assigned. Contact your administrator to request the necessary role assignments.
+
+If it shows **Your pages are in the profile menu**, your role allows only pages that live in the profile menu. Open the menu with your user name in the top bar to reach them.
 
 If it shows **Navigation could not be loaded**, the check for which pages you can open did not complete. Choose **Retry**. While the check has failed, Home still opens, and other pages show **Page access could not be checked** with a **Retry** button.
 :::
 
 The side navigation panel can be collapsed or expanded using the toggle control. VAMS remembers your panel state across page navigations within a session.
+
+### Profile menu
+
+The menu with your user name in the top bar lists the pages that belong to you, then **Sign out**:
+
+| Item                   | Description                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
+| **API Key Management** | Opens your own API keys (**My Keys**). See [API keys](api-keys.md).                              |
+| **Sign out**           | Ends your session. It is always the last item and is available even when your pages cannot load. |
+
+The menu lists only the pages your role allows. While the check for which pages you can open is loading, or if it did not complete, the menu shows **Sign out** only; the pages appear after you next move to another page. The menu is keyboard-operable: focus it, press **Enter** to open it, use the arrow keys to move, and press **Escape** to close it. On phone-width screens the menu is the user icon in the top bar; only on the narrowest screens (about 280 px) does it move into the **More** menu.
+
+The **Settings** menu next to it holds the theme choice, which is stored in your browser. See [Setting your theme preference](getting-started.mdx#setting-your-theme-preference).
 
 ---
 
@@ -22,7 +37,7 @@ The side navigation panel can be collapsed or expanded using the toggle control.
 
 The **Databases** page displays all databases you have access to in a searchable, sortable table.
 
-![Database listing page showing all databases in a searchable table](/img/database_page_20260323_v2.5.png)
+![Database listing page showing all databases in a searchable table](/img/database_page_20261109_v2.7.png)
 
 ### Key Features
 
@@ -54,7 +69,9 @@ Each database record displays the following information:
 
 The **Assets and Files** page is the primary interface for discovering and browsing assets. It supports multiple view modes and powerful filtering capabilities.
 
-![Asset search page in table view showing column headers and filter bar](/img/asset_search_table_20260323_v2.5.png)
+![Asset search page in table view showing column headers and filter bar](/img/asset_search_table_20261109_v2.7.png)
+
+_Screenshot sample model: IridescenceLamp by Eric Chadwick (Wayfair LLC), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), from the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/IridescenceLamp)._
 
 ### View Modes
 
@@ -89,7 +106,7 @@ Select any asset row in the table view or any card in the card view to navigate 
 
 The asset detail page is the central hub for viewing and managing a single asset. It is divided into three main sections: the **details pane**, the **tabbed container**, and the **metadata section**.
 
-![Asset detail page showing preview, properties, and tabbed container](/img/view_asset_page_20260323_v2.5.png)
+![Asset detail page showing preview, properties, and tabbed container](/img/view_asset_page_20261109_v2.7.png)
 
 ### Breadcrumb Navigation
 
@@ -134,7 +151,7 @@ Below the tabbed container, the metadata section displays all key-value metadata
 
 When you select a file in the file manager and choose to view it, VAMS opens a dedicated file viewer page. If only one viewer plugin supports the file extension, the page opens the file in it; if several do, you choose one from the viewer dropdown.
 
-![File viewer page displaying a USDZ 3D model](/img/view_file_page_usdz_20260323_v2.5.png)
+![File viewer page displaying a USDZ 3D model in the Three.js Viewer](/img/view_file_page_usdz_20261109_v2.7.png)
 
 ### Supported Viewer Types
 
@@ -172,13 +189,13 @@ Each pipeline entry shows its name and id, its execution type, its owning databa
 
 Each entry's **⋮** actions menu holds **Edit**, **Templates**, and **Archive**, limited to the actions your permissions allow. **Create Pipeline** in the page header starts a new one. Deleting a template from the **Templates** list reports a warning, kept on the list, when an auto-triggered workflow's trigger had chosen it as this pipeline's default.
 
-![Pipelines page listing registered pipelines grouped by category](/img/pipelines_page_20260803_v2.6.png)
+![Pipelines page listing two built-in pipelines grouped by category](/img/pipelines_page_20261109_v2.7.png)
 
 ### Workflows Page
 
 The **Workflows** page lets you create and manage workflows that chain multiple pipelines into automated processing sequences. Workflows run automatically when one of their triggers matches an upload, or manually from the workflow's own **Execute** action or an asset's **Automation** menu.
 
-![Workflows page listing workflows with pipeline, execution, and trigger counts](/img/workflows_page_20260803_v2.6.png)
+![Workflows page listing two built-in workflows with pipeline, execution, and trigger counts](/img/workflows_page_20261109_v2.7.png)
 
 Each entry shows the workflow's name and id, its database and category, how many pipelines it runs, how many executions it has, and how many triggers it defines — with the number currently enabled called out when some are off. Filters narrow the list by status, by whether the workflow has an enabled trigger, and by database.
 
@@ -186,7 +203,7 @@ Each entry's **⋮** actions menu holds **Edit**, **Execute**, **View Executions
 
 Creating or editing a workflow opens a step-by-step wizard, whose **Pipelines** step lists the steps in order alongside a graph of the resulting sequence.
 
-![Workflow editor showing pipeline steps and visual graph](/img/workflow_editor_20260803_v2.6.png)
+![Workflow editor showing pipeline steps and visual graph](/img/workflow_editor_20261109_v2.7.png)
 
 ### Executions Page
 
@@ -194,7 +211,7 @@ The **Executions** page lists workflow executions across every workflow and data
 
 A **Skipped** row records file-upload trigger launches that the workflow's concurrency restriction refused while another execution held the asset, file or file version. One row counts every launch that execution refused, shows how many under the badge and gives the reason on hover. Its detail view lists the files and, when you may read it, links the execution that blocked them. Skipped rows have no Abort action. Choose **All except skipped** in the status filter to hide them.
 
-![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
+![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20261109_v2.7.png)
 
 ---
 
@@ -227,6 +244,10 @@ VAMS uses hash-based routing (URLs contain `#/`), which ensures compatibility ac
 | File at asset version | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?assetVersion=<assetVersionId>` |
 | Upload page           | `https://<VAMS_WEBSITE>/#/upload/`                                                                                      |
 | Upload to a database  | `https://<VAMS_WEBSITE>/#/upload/<databaseId>`                                                                          |
+| Your API keys         | `https://<VAMS_WEBSITE>/#/auth/api-keys/?mode=user`                                                                     |
+| All users' API keys   | `https://<VAMS_WEBSITE>/#/auth/api-keys/?mode=admin`                                                                    |
+
+The `?mode=` value on the API keys page is a preference. The page opens the requested mode only if the API allows it for your role; otherwise it opens the mode your role does have (all users' keys for an administrator, your own keys for everyone else). The API still checks every call.
 
 ### File Path Encoding
 

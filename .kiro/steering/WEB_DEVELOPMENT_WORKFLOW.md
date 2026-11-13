@@ -30,7 +30,7 @@ web/
   e2e/                      # Playwright specs against a deployed stack
   customInstalls/           # Viewer plugin custom install scripts
   src/
-    App.tsx                 # Root app shell, HashRouter, TopNavigation
+    App.tsx                 # Root app shell, HashRouter, TopNavigation (Settings menu, profile menu)
     routes.tsx              # Centralized route table (core + add-on + custom), lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
@@ -81,11 +81,11 @@ web/
       addons/               # Add-on API calls (physnaAPIService.ts)
 
     addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts
-                            #   (add-on feature-switch names) — see WEB_FRONTEND.md 7.5
+                            #   (add-on feature-switch names) — see WEB_FRONTEND.md 7.5, 7.6
       edh/                  #   EDH Workstations add-on module (Tailwind + Radix, pages/ route shells)
                             #   — see .kiro/steering/ADDON_EDH_WORKSTATIONS.md
     custom/                 # FORK EXTENSION POINT (shipped empty): customRoutes.tsx, customNavigation.ts,
-                            #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5
+                            #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5, 7.6
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
@@ -161,7 +161,9 @@ web/
     hooks/                  # usePageTitle.ts, useThemeSettings.ts,
                             #   useAssetPageAccess.ts (may the caller open an assets/asset page)
     layout/
-      Navigation.tsx        # Left sidebar navigation
+      navigationRegistry.ts # The one navigation registry: core + add-on + custom, side/profile placement
+      Navigation.tsx        # Left sidebar navigation (side entries)
+      useProfileMenuItems.ts # Top-bar profile menu items (profile entries, then Sign out)
     utils/
       apiEndpoint.ts        # Resolves the API base URL
       chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload
@@ -212,7 +214,7 @@ web/
 -   [ ] **Create thin page wrapper**: In `src/pages/`
 -   [ ] **Add lazy import**: `lazyWithRetry(() => import("./pages/MyPage"))` in `routes.tsx`
 -   [ ] **Add to routeTable**: With `path`, `Page`, and `active` properties
--   [ ] **Add navigation item**: In `src/layout/Navigation.tsx` if needed
+-   [ ] **Add navigation entry**: In `src/layout/navigationRegistry.ts` if needed (`placement: "profile"` for a page of the signed-in user)
 
 ### **Phase 3: Quality Assurance**
 
@@ -661,6 +663,7 @@ Any side-navigation entry (a section, link or group in the core, add-on or custo
 | Upload service       | `src/services/AssetUploadService.ts`              |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |
 | Synonyms config      | `src/synonyms.tsx`                                |
+| Navigation registry  | `src/layout/navigationRegistry.ts`                |
 | Navigation           | `src/layout/Navigation.tsx`                       |
 | App shell            | `src/App.tsx`                                     |
 
@@ -924,7 +927,7 @@ npm run prettier-fix
 3. Lay out the toolbar and wire the column sorting per `WEB_FRONTEND.md` section 7.6 (search and refresh on the left, filters on the right; every sortable column sorts)
 4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
 5. Add lazy import + route in `src/routes.tsx`
-6. Add navigation item in `src/layout/Navigation.tsx`
+6. Add a navigation entry in `src/layout/navigationRegistry.ts` (`placement: "profile"` for a page of the signed-in user)
 
 ### **Adding a new API call**
 

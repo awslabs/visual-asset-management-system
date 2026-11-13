@@ -16,6 +16,7 @@ import { PageFooter } from "./authenticator/Footer";
 import config from "./config";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "./features/orchestration/components/ToastProvider";
+import { SIGN_OUT_ITEM_ID, useProfileMenuItems } from "./layout/useProfileMenuItems";
 import {
     clearLocalStore,
     clearStoredSession,
@@ -65,6 +66,9 @@ function App() {
     }, [navigationOpen]);
 
     const menuText = user?.username;
+    // The user's own pages (navigation registry, `placement: "profile"`) the API allowed, then
+    // Sign out. Page items are links: following one navigates the hash router.
+    const profileMenuItems = useProfileMenuItems();
 
     const signOut = async () => {
         // Amplify revokes the refresh token from the stored tokens, so it runs before any clear.
@@ -120,10 +124,13 @@ function App() {
                                 text: menuText,
                                 description: menuText,
                                 iconName: "user-profile",
+                                // Without a user name the trigger shows only the icon, so it
+                                // still needs a name for assistive technologies.
+                                ariaLabel: menuText ? undefined : "Profile menu",
                                 onItemClick: (e) => {
-                                    if (e?.detail?.id === "signout") void signOut();
+                                    if (e?.detail?.id === SIGN_OUT_ITEM_ID) void signOut();
                                 },
-                                items: [{ id: "signout", text: "Sign out" }],
+                                items: profileMenuItems,
                             },
                         ]}
                         i18nStrings={{

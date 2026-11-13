@@ -24,7 +24,7 @@ The app mounts with `createRoot` from `react-dom/client`, so React 18 APIs such 
 
 ```
 web/src/
-  App.tsx                 # Root shell, HashRouter, TopNavigation
+  App.tsx                 # Root shell, HashRouter, TopNavigation (Settings menu, profile menu)
   routes.tsx              # Centralized route table with lazyWithRetry (core + add-on + custom)
   config.ts               # Static config (APP_TITLE, APP_TITLE_PREFIX, DEV_API_ENDPOINT)
   synonyms.tsx            # Customizable display names (Asset, Database, Comment)
@@ -54,7 +54,9 @@ web/src/
   pages/                  # Thin page wrappers (lazy-loaded)
   components/             # Domain/feature components
   visualizerPlugin/       # 3D/media viewer plugin system (viewers)
-  layout/Navigation.tsx   # Left sidebar navigation
+  layout/navigationRegistry.ts  # The one navigation registry: core + add-on + custom entries, placements
+  layout/Navigation.tsx   # Left sidebar navigation (side entries)
+  layout/useProfileMenuItems.ts # Top-bar profile menu items (profile entries, then Sign out)
   styles/theme.css        # CSS custom properties for dark/light theme
   utils/authTokenUtils.ts # Dual-mode token utilities
 
@@ -538,11 +540,11 @@ The preview file pattern and allowed preview extensions are mirrored in the back
     },
     ```
 
-3. Add a navigation item in `src/layout/Navigation.tsx` if needed.
+3. Add a navigation entry in `src/layout/navigationRegistry.ts` if needed. An entry renders in the side navigation by default; `placement: "profile"` puts a page that belongs to the signed-in user (such as API Key Management) in the top-bar profile menu instead.
 
 The route is automatically permission-filtered via the `webRoutes()` API call. The backend must also allow the route in the Casbin policy.
 
-The route table and the side navigation are composed in the order core, add-on, custom: `routes.tsx` appends `addonRouteTable` (`src/addons/addonRoutes.tsx`) and then `customRouteTable` (`src/custom/customRoutes.tsx`) to its core routes. `Navigation.tsx` splices the two add-on lists from `src/addons/addonNavigation.ts` into its core sections, `addonNavMainSections` in the main menu after **Orchestrate & Automate** and `addonNavAdminSections` in the admin area after the core **Admin - ...** sections and before **User**, and appends `customNavSections` (`src/custom/customNavigation.ts`) after everything. The custom lane ships empty. An add-on page is declared in the add-on files, and a fork's in the custom files ([Extending VAMS in a Fork](customizing-vams.md)), so neither edits the core files. Their routes and links pass through the same `web`-constraint filter as core ones, and a path that repeats an earlier route's path never replaces the core page, because the earlier route matches first. A route or navigation entry can carry `featuresEnabledRestriction`, the feature switches that must all be enabled for it to exist: `routeTableFor()` in `routes.tsx` keeps only the routes whose switches the deployment meets; `AppRoutes` mounts those, sends them to the web-route check, runs the check again when the switches arrive after sign-in or on Retry, and uses only the latest check's answer. `useFeaturesEnabled()` (`src/context/RuntimeConfigContext.ts`) gives a component the deployment's switches and updates when they change.
+The route table and the navigation are composed in the order core, add-on, custom: `routes.tsx` appends `addonRouteTable` (`src/addons/addonRoutes.tsx`) and then `customRouteTable` (`src/custom/customRoutes.tsx`) to its core routes. `layout/navigationRegistry.ts` places the two add-on lists from `src/addons/addonNavigation.ts` among its core entries, `addonNavMainSections` in the main menu after **Orchestrate & Automate** and `addonNavAdminSections` in the admin area after the core **Admin - ...** sections, and `customNavSections` (`src/custom/customNavigation.ts`) after everything. Each placement keeps that order: the side navigation renders the `side` entries (the default) and the top-bar profile menu the `profile` entries, both filtered by the same batched `web`-route check. A link may also set `requiresApiRoute: { method, path }`, which shows it only when the API's allowed-routes listing allows that route; the link is hidden while the listing is unknown, and the API still enforces every call. See [Navigation placement](customizing-vams.md#navigation-placement). The custom lane ships empty. An add-on page is declared in the add-on files, and a fork's in the custom files ([Extending VAMS in a Fork](customizing-vams.md)), so neither edits the core files. Their routes and links pass through the same `web`-constraint filter as core ones, and a path that repeats an earlier route's path never replaces the core page, because the earlier route matches first. A route or navigation entry can carry `featuresEnabledRestriction`, the feature switches that must all be enabled for it to exist: `routeTableFor()` in `routes.tsx` keeps only the routes whose switches the deployment meets; `AppRoutes` mounts those, sends them to the web-route check, runs the check again when the switches arrive after sign-in or on Retry, and uses only the latest check's answer. The navigation registry drops entries the same way, and the side navigation and profile menu check again when the switches arrive. `useFeaturesEnabled()` (`src/context/RuntimeConfigContext.ts`) gives a component the deployment's switches and updates when they change.
 
 ### Component Template
 

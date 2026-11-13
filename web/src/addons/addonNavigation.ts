@@ -4,21 +4,28 @@
  */
 
 /**
- * Side-navigation sections for the pages the optional add-ons add (addons/addonRoutes.tsx).
- * Upstream-owned. An add-on section goes in one of two places, and layout/Navigation.tsx splices
- * each list into the core sections there:
+ * Navigation entries for the pages the optional add-ons add (addons/addonRoutes.tsx).
+ * Upstream-owned. The navigation registry (layout/navigationRegistry.ts) places each list in the
+ * side navigation:
  *
  * - `addonNavMainSections`: the main menu, after the core "Orchestrate & Automate" section and
  *   ahead of the divider, for pages every user works in.
  * - `addonNavAdminSections`: the admin and settings area below the divider, after the core
- *   "Admin - ..." sections and ahead of "User", for administration pages.
+ *   "Admin - ..." sections, for administration pages.
  *
- * The fork's sections (custom/customNavigation.ts) still come after everything. Both lists are
- * filtered by the same `web`-constraint check as the core sections. Each entry has the Cloudscape
- * SideNavigation shape the core sections use; a link's href is its route path with a leading `#`
- * and a trailing `/`. A section, link or group may also carry `featuresEnabledRestriction`, the
- * feature switches (addons/addonFeatures.ts) that must all be enabled for it to show; Navigation
- * drops it otherwise and re-checks when the switches arrive.
+ * The fork's entries (custom/customNavigation.ts) still come after everything. Both lists are
+ * filtered by the same `web`-constraint check as the core entries. Each entry has the Cloudscape
+ * SideNavigation shape the core sections use (the `NavEntry` type); a link's href is its route path
+ * with a leading `#` and a trailing `/`.
+ *
+ * An entry in either list renders in the side navigation unless it sets `placement: "profile"`,
+ * which puts it in the top-bar profile menu, after the core profile entries: a top-level link, or a
+ * section of links shown as a menu group headed by the section's text. A user's own pages go there.
+ * A link may also set `requiresApiRoute: { method, path }` to be shown only when the API's
+ * allowed-routes listing allows that route (advisory; the API still enforces it). A section, link or
+ * group may also carry `featuresEnabledRestriction`, the feature switches (addons/addonFeatures.ts)
+ * that must all be enabled for it to show; the registry drops it otherwise, and the navigation
+ * re-checks when the switches arrive.
  */
 
 import { addonFeaturesEnabled } from "./addonFeatures";
@@ -44,7 +51,7 @@ export const addonNavMainSections: any[] = [
     },
 ];
 
-/** Admin-area sections, placed after the core admin sections and before "User". */
+/** Admin-area sections, placed after the core admin sections. */
 export const addonNavAdminSections: any[] = [
     {
         type: "section",

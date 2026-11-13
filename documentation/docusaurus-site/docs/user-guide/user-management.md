@@ -35,7 +35,7 @@ Creating a user in Amazon Cognito establishes authentication credentials only. T
 1. In the left sidebar, expand the **Admin - Auth** section.
 2. Choose **User Management**.
 
-![Cognito User Management page showing user listing](/img/cognito_user_management_20260323_v2.5.png)
+![Cognito User Management page showing user listing](/img/cognito_user_management_20261109_v2.7.png)
 
 :::note[Navigation visibility]
 The **User Management** link appears only when Amazon Cognito is the configured authentication provider. If you do not see this link, your deployment likely uses an external identity provider.
@@ -176,7 +176,7 @@ To fully revoke a user's access:
 
 1. **Remove role assignments** -- Navigate to **Admin - Auth** > **Users in Roles** and remove the user from all roles.
 2. **Delete or disable the user** -- Delete the user from the User Management page (Cognito deployments) or disable the user in your external IdP.
-3. **Revoke API keys** -- If the user had any API keys, navigate to **API Key Management** and deactivate or delete them. See [API Keys](api-keys.md) for details.
+3. **Revoke API keys** -- If the user had any API keys, navigate to **Admin - Auth** > **API Keys (all users)** and deactivate or delete them. See [API Keys](api-keys.md) for details.
 
 :::note[With a default role, the identity is what ends access]
 When `app.authProvider.authorizerOptions.defaultUserRoleName` is set, a signed-in user whose role assignments are all removed receives that default role, so step 1 alone leaves them with its access; their access ends at step 2, when the identity is deleted or disabled. API keys of a user with no role assignments are already refused, but revoke them anyway (step 3). See [Authorizer options](../deployment/configuration-reference.md#authorizer-options-appauthproviderauthorizeroptions).
