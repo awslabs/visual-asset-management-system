@@ -469,7 +469,7 @@ def _asset_hits(file_hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "str_assettype": row.get("assetType", ""),
                 "list_tags": row.get("tags", []),
                 "bool_archived": src["bool_archived"],
-                # The asset's own location, when the enrichment read one (_add_asset_locations)
+                # The asset's own location, when the enrichment read one (_asset_index_step)
                 **hit.get(ASSET_LOCATION_KEY, {}),
             },
             "_vector": hit["_vector"],
@@ -549,9 +549,11 @@ def _envelope(hits, total, request, databases_searched, candidates, collapsed, c
     }
 
 
-def _opensearch_constraints(request: NlpSearchRequestModel, search_module, databases: List[str]) -> List[Dict[str, Any]]:
-    """The OpenSearch-only constraints as ``bool.filter`` clauses, built by the /search query builder from
-    a keyword request that carries them and no text query; ``tags`` become a should-of-terms clause."""
+def _opensearch_constraints(request: NlpSearchRequestModel, search_module, databases: List[str],
+                            index_type: str = "file") -> List[Dict[str, Any]]:
+    """The OpenSearch-only constraints as ``bool.filter`` clauses for the ``index_type`` index (``file`` or
+    ``asset``), built by the /search query builder from a keyword request that carries them and no text
+    query, as keyword search builds them for that index; ``tags`` become a should-of-terms clause."""
     from models.search import SearchRequestModel
 
     keyword_request = SearchRequestModel(
@@ -561,22 +563,25 @@ def _opensearch_constraints(request: NlpSearchRequestModel, search_module, datab
         metadataSearchMode=request.metadataSearchMode or "both",
         geoSearch=request.geoSearch,
         includeArchived=request.includeArchived,
-        entityTypes=["file"],
+        entityTypes=[index_type],
     )
     builder = search_module.DualIndexQueryBuilder(DatabaseAccessManager())
-    clauses = [builder._build_query_clause(keyword_request, databases, "file")]
+    clauses = [builder._build_query_clause(keyword_request, databases, index_type)]
     if request.tags:
         clauses.append({"bool": {"should": [{"term": {"list_tags.keyword": tag}} for tag in request.tags], "minimum_should_match": 1}})
     return clauses
 
 
 def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, Any]], warnings: List[Dict[str, str]]) -> List[Dict[str, Any]]:
-    """Constrain by the OpenSearch-only fields and merge ``_source`` from the file index. Imports the
-    /search module here, once OPENSEARCH_DISABLED has been ruled out, so an OpenSearch-less deployment
-    never loads opensearch-py. The hits go to OpenSearch in windows of OPENSEARCH_ENRICH_WINDOW ids, each
-    query sized to its own window, so every hit is answered: an ``ids`` filter scores every document the
-    same, and one query over more ids than its size would keep an arbitrary subset. The file index's
-    preview key wins over the one the vector item captured at embedding time, which may be older.
+    """Constrain by the OpenSearch-only fields and enrich, as keyword search does for the entity type: a
+    file answer is constrained by, and merges ``_source`` from, the file index; an asset answer is
+    constrained by the asset index, which holds the asset metadata, tags and location the file documents
+    do not (``_asset_index_step``). Imports the /search module here, once OPENSEARCH_DISABLED has been
+    ruled out, so an OpenSearch-less deployment never loads opensearch-py. The hits go to OpenSearch in
+    windows of OPENSEARCH_ENRICH_WINDOW ids, each query sized to its own window, so every hit is
+    answered: an ``ids`` filter scores every document the same, and one query over more ids than its size
+    would keep an arbitrary subset. The file index's preview key wins over the one the vector item
+    captured at embedding time, which may be older.
 
     A failure with no OpenSearch-only constraint in the request degrades to a warning and the hits stay
     as they were. With a constraint, the failure raises OpenSearchConstraintsFailed: the step decides
@@ -589,6 +594,8 @@ def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, A
         from common.indexing.documentIds import build_file_document_id
 
         manager = opensearch_search.DualIndexSearchManager()
+        if request.entityTypes == ["asset"]:
+            return _asset_index_step(request, opensearch_search, manager, file_hits)
         ids = [build_file_document_id(h["_source"]["str_databaseid"], h["_source"]["str_assetid"], h["_source"]["str_key"]) for h in file_hits]
         constrained = bool(request.opensearch_only_fields())
         shared_clauses: List[Dict[str, Any]] = []
@@ -618,9 +625,6 @@ def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, A
                     merged["str_previewfilekey"] = source["str_previewfilekey"]
                 hit["_source"] = merged
                 kept.append(hit)
-        if request.enrich and request.entityTypes == ["asset"]:
-            # The Map view plots an asset hit from its asset's location (D83)
-            _add_asset_locations(manager, kept, request.size, warnings)
         return kept
     except Exception as e:
         if request.opensearch_only_fields():
@@ -647,51 +651,63 @@ def _location_fields(source: Dict[str, Any]) -> Dict[str, Any]:
     return fields
 
 
-def _add_asset_locations(manager, file_hits: List[Dict[str, Any]], size: int, warnings: List[Dict[str, str]]) -> None:
-    """For an asset answer, read the location of the first ``size`` assets the file hits rank (the assets
-    ``_asset_hits`` returns) from their documents in the OpenSearch asset index, and keep it on each of
-    those assets' file hits under ASSET_LOCATION_KEY for ``_asset_hits`` to copy. A file document carries
-    its own file's location, never its asset's, so only the asset index holds it.
+def _asset_index_step(request: NlpSearchRequestModel, search_module, manager,
+                      file_hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The OpenSearch step of an asset answer, in one read of the asset index per window of
+    OPENSEARCH_ENRICH_WINDOW assets. Keyword search applies an asset search's constraints to the asset
+    index, where the asset metadata, tags and location are, so this does too: with an OpenSearch-only
+    constraint, the documents of every asset the file hits rank are asked with the constraint clauses
+    built for the asset index, and only the file hits of the assets whose document matches are kept.
+    Without one, only the first ``size`` assets (those ``_asset_hits`` returns) are read, for their
+    location.
 
-    Each document is read by the id the asset indexer writes for the record the hit was authorized on
-    (``_authorize``): ``{databaseId}#{assetId}``, with ``#deleted`` on the database id of an archived
-    record. The fields therefore come from a record the caller may already open, and keyword search
-    returns them, with the rest of the asset's metadata, to the same caller. ``manager`` is the one the
-    file enrichment built (``_opensearch_step``, the vector family's one admitted OpenSearch import).
-    Never raises: the location is for display, so a failed lookup degrades to the
-    ``opensearch:enrichment_failed`` warning and the hits stay as they were, also under a constraint."""
-    try:
-        from common.indexing.documentIds import build_asset_document_id
+    The location the Map view plots comes from the same documents (D83): a file document carries its own
+    file's location, never its asset's. Each document is read by the id the asset indexer writes for the
+    record the hit was authorized on (``_authorize``): ``{databaseId}#{assetId}``, with ``#deleted`` on
+    the database id of an archived record, so the fields come from a record the caller may already open,
+    and only assets of authorized hits are asked. ``manager`` is the one ``_opensearch_step`` built (the
+    vector family's one admitted OpenSearch import). A failure raises, and ``_opensearch_step`` answers it:
+    503 under a constraint, the ``opensearch:enrichment_failed`` warning otherwise."""
+    from common.indexing.documentIds import build_asset_document_id
 
-        assets: Dict[Tuple[str, str], str] = {}
-        for hit in file_hits:
-            key = (hit["_source"]["str_databaseid"], hit["_source"]["str_assetid"])
-            if key not in assets and len(assets) < size:
-                archived = str(hit["asset"].get("databaseId") or "").endswith(DELETED_PARTITION_SUFFIX)
-                assets[key] = build_asset_document_id(key[0], key[1], archived)
-        ids = list(assets.values())
-        located: Dict[str, Dict[str, Any]] = {}
-        for start in range(0, len(ids), OPENSEARCH_ENRICH_WINDOW):
-            window_ids = ids[start:start + OPENSEARCH_ENRICH_WINDOW]
-            response = manager.client.search(
-                index=manager.asset_index,
-                body={
-                    "size": len(window_ids),
-                    "_source": [GEO_LOCATION_FIELD, "MD_"],
-                    "query": {"bool": {"filter": [{"ids": {"values": window_ids}}]}},
-                },
-            )
-            for hit in response.get("hits", {}).get("hits", []):
-                fields = _location_fields(hit.get("_source") or {})
-                if fields:
-                    located[hit["_id"]] = fields
-        for hit in file_hits:
-            doc_id = assets.get((hit["_source"]["str_databaseid"], hit["_source"]["str_assetid"]))
-            if doc_id in located:
-                hit[ASSET_LOCATION_KEY] = located[doc_id]
-    except Exception:
-        logger.exception("OpenSearch asset location lookup failed")
-        warnings.append(_warning("opensearch:enrichment_failed", ENRICHMENT_FAILED_MESSAGE))
+    constrained = bool(request.opensearch_only_fields())
+    assets: Dict[Tuple[str, str], str] = {}
+    for hit in file_hits:
+        key = (hit["_source"]["str_databaseid"], hit["_source"]["str_assetid"])
+        if key not in assets and (constrained or len(assets) < request.size):
+            archived = str(hit["asset"].get("databaseId") or "").endswith(DELETED_PARTITION_SUFFIX)
+            assets[key] = build_asset_document_id(key[0], key[1], archived)
+    shared_clauses: List[Dict[str, Any]] = []
+    if constrained:
+        databases = list(dict.fromkeys(key[0] for key in assets))
+        shared_clauses = _opensearch_constraints(request, search_module, databases, "asset")
+    ids = list(assets.values())
+    matched = set()
+    located: Dict[str, Dict[str, Any]] = {}
+    for start in range(0, len(ids), OPENSEARCH_ENRICH_WINDOW):
+        window_ids = ids[start:start + OPENSEARCH_ENRICH_WINDOW]
+        response = manager.client.search(
+            index=manager.asset_index,
+            body={
+                "size": len(window_ids),
+                "_source": [GEO_LOCATION_FIELD, "MD_"] if request.enrich else False,
+                "query": {"bool": {"filter": [{"ids": {"values": window_ids}}] + shared_clauses}},
+            },
+        )
+        for hit in response.get("hits", {}).get("hits", []):
+            matched.add(hit["_id"])
+            fields = _location_fields(hit.get("_source") or {}) if request.enrich else {}
+            if fields:
+                located[hit["_id"]] = fields
+    kept = []
+    for hit in file_hits:
+        doc_id = assets.get((hit["_source"]["str_databaseid"], hit["_source"]["str_assetid"]))
+        if constrained and doc_id not in matched:
+            continue
+        if doc_id in located:
+            hit[ASSET_LOCATION_KEY] = located[doc_id]
+        kept.append(hit)
+    return kept
 
 
 def _parse_request(event) -> NlpSearchRequestModel:

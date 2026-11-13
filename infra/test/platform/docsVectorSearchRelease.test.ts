@@ -1742,10 +1742,18 @@ describe("partition defaults and the OpenSearch step as the pages state them", (
         ).match(/^OPENSEARCH_ENRICH_WINDOW = (\d+)$/m);
         expect(window?.[1]).toBe("100");
         expect(readDoc("concepts/vector-search.md")).toContain(
-            "document ids to the OpenSearch file index 100 at a time, one query per batch"
+            "to that index 100 at a time, one query per batch"
         );
         expect(readDoc("developer/opensearch.md")).toContain(
-            "document ids to the OpenSearch file index 100 per query"
+            "their assets' ids to the asset index, 100 per query"
+        );
+        // The constraints apply to the index of the entity type, as in keyword search (D98).
+        expect(readDoc("concepts/vector-search.md")).toContain(
+            "an asset answer against the asset index"
+        );
+        expect(readDoc("api/search.md")).toContain("the asset index for `asset`");
+        expect(readDoc("user-guide/search-and-discovery.md")).toContain(
+            "with **Assets** selected they match each asset's own metadata"
         );
         for (const page of ["concepts/vector-search.md", "developer/opensearch.md"]) {
             expect(readDoc(page)).not.toContain("one OpenSearch query");

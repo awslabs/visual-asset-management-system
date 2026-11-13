@@ -161,16 +161,16 @@ class TestNothingElseChanges:
         assert body["warnings"] == [{"code": "opensearch:enrichment_failed", "message": "File details could not be loaded."}]
         assert "host-42" not in json.dumps(body)
 
-    def test_a_failed_lookup_under_a_constraint_still_answers_the_constrained_hits(self, svc, opensearch):
-        """The constraint was applied by the file index; the location is display only, so its failure is
-        a warning, never the 503 of a constraint that could not be applied."""
+    def test_a_failed_lookup_under_a_constraint_answers_503(self, svc, opensearch):
+        """An asset answer's constraints are applied by the asset index (D98), so its failure there is a
+        constraint that could not be applied: 503, never the unconstrained hits."""
         rows(svc, ("db1", "a1"))
-        opensearch.files["db1#a1#a.glb"] = {}
+        opensearch.assets["db1#a1"] = ASSET_DOC
         opensearch.fail_index = ASSET_INDEX
         status, body = call(svc, _one_asset_two_files(), {**ASSET_MODE, "tags": ["x"]})
 
-        assert status == 200 and [h["_source"]["str_assetid"] for h in body["hits"]["hits"]] == ["a1"]
-        assert [w["code"] for w in body["warnings"]] == ["opensearch:enrichment_failed"]
+        assert status == 503
+        assert "host-42" not in json.dumps(body)
 
     def test_only_the_assets_of_the_returned_page_are_looked_up(self, svc, opensearch):
         rows(svc, ("db1", "a1"), ("db1", "a2"), ("db1", "a3"))
@@ -181,13 +181,16 @@ class TestNothingElseChanges:
         assert [r["query"]["bool"]["filter"][0]["ids"]["values"] for r in _asset_calls(opensearch)] == [
             ["db1#a1", "db1#a2"]]
 
-    def test_no_second_lookup_after_the_file_enrichment_failed(self, svc, opensearch):
+    def test_an_asset_answer_reads_the_asset_index_only(self, svc, opensearch):
+        """An asset hit is built from the asset record and its asset's document, so the file index, whose
+        documents an asset hit does not show, is not asked: one crossing per window of assets."""
         rows(svc, ("db1", "a1"))
-        opensearch.fail_index = FILE_INDEX
+        opensearch.files["db1#a1#a.glb"] = {"geo_MD_location": FILE_POINT}
+        opensearch.assets["db1#a1"] = ASSET_DOC
         _, body = call(svc, _one_asset_two_files(), ASSET_MODE)
 
-        assert _asset_calls(opensearch) == []
-        assert [w["code"] for w in body["warnings"]] == ["opensearch:enrichment_failed"]
+        assert [index for index, _ in opensearch.calls] == [ASSET_INDEX]
+        assert body["hits"]["hits"][0]["_source"]["geo_MD_location"] == ASSET_POINT
 
     def test_enrich_false_reads_no_location(self, svc, opensearch):
         rows(svc, ("db1", "a1"))

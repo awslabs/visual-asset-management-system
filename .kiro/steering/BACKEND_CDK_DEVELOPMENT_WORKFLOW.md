@@ -451,9 +451,10 @@ cannot see and a suite importing everything never reaches.
     indexer.
 -   **A runtime cross-group read is function-scoped and gated.** Two are admitted:
     `vectorSearchService._opensearch_step` imports `handlers.osSemanticSearch.search` inside
-    the function after `OPENSEARCH_DISABLED` is ruled out (for an asset answer it also reads
-    each returned asset's location from the asset index through the same client,
-    `_add_asset_locations`, so it stays one crossing), and
+    the function after `OPENSEARCH_DISABLED` is ruled out (a file answer is constrained and
+    enriched on the file index; an asset answer on the asset index alone, where
+    `_asset_index_step` applies the constraints built for that index and reads each returned
+    asset's location through the same client, so it stays one crossing), and
     `crReindexer.ReindexUtility.clear_opensearch_indexes` imports `opensearchpy` inside the
     method. Both are named with a site count in
     `tests/common/test_indexer_families_import_boundary.py`, which walks the tree and fails
