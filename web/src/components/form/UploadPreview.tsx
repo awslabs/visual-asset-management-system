@@ -34,6 +34,7 @@ import {
     isSingleFolderSelection,
     looseReferencingFiles,
 } from "./uploadPaths";
+import { paginationLabels } from "../../pages/AssetUpload/FileUploadTable";
 
 export const EXISTS_STATUS_TEXT = "Exists: uploads a new version";
 export const ARCHIVED_STATUS_TEXT = "Archived: uploading restores it with a new version";
@@ -274,7 +275,7 @@ export default function UploadPreview({
                         />
                     </SpaceBetween>
                 }
-                pagination={<Pagination {...paginationProps} />}
+                pagination={<Pagination {...paginationProps} ariaLabels={paginationLabels} />}
                 columnDefinitions={[
                     {
                         id: "finalPath",
