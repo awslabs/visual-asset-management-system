@@ -94,7 +94,8 @@ interface FinishUploadsProps {
 }
 
 export default function ModifyAssetsUploadsPage() {
-    const { state } = useLocation();
+    const location = useLocation();
+    const { state } = location;
     const navigate = useNavigate();
     const { databaseId, assetId } = useParams();
 
@@ -152,6 +153,23 @@ export default function ModifyAssetsUploadsPage() {
         setRoots(nextRoots);
         setFolderNameMode(isSingleFolderSelection(nextRoots) ? nextMode : "auto");
     };
+
+    // Follow a navigation to this page with another ?folder= (or, without one, another file-manager
+    // folder): the page stays mounted, so the initial state alone would keep the old destination
+    // and write it back. A typed value that already means the same folder is left as typed.
+    const folderParam = searchParams.get("folder");
+    useEffect(() => {
+        const wanted = folderParam ?? state?.fileTree?.relativePath;
+        if (wanted === undefined || wanted === null) return;
+        const target = normalizeDestination(wanted);
+        setDestinationInput((prev) => {
+            const current = normalizeDestination(prev);
+            return !target.error && !current.error && current.value === target.value
+                ? prev
+                : wanted;
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [folderParam, location.key]);
 
     // Keep ?folder= in the URL in step with a valid destination.
     useEffect(() => {

@@ -10,7 +10,7 @@
  */
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import ModifyAssetsUploadsPage from "./ModifyAssetsUploads";
 
 jest.mock("../../services/APIService", () => ({
@@ -79,6 +79,39 @@ describe("Add Files page", () => {
     it("reads the destination from ?folder= when there is no navigation state", () => {
         mount({ query: "?folder=%2Fscene%2Fprops%2F" });
         expect(destinationInput().value).toBe("/scene/props/");
+    });
+
+    it("follows a navigation to the same page with another ?folder=", async () => {
+        const Nav = () => {
+            const navigate = useNavigate();
+            return (
+                <button
+                    onClick={() =>
+                        navigate("/databases/db1/assets/a1/uploads?folder=%2Fother%2Fplace%2F")
+                    }
+                >
+                    go elsewhere
+                </button>
+            );
+        };
+        render(
+            <MemoryRouter initialEntries={["/databases/db1/assets/a1/uploads?folder=%2Fscene%2F"]}>
+                <Nav />
+                <Routes>
+                    <Route
+                        path="/databases/:databaseId/assets/:assetId/uploads"
+                        element={<ModifyAssetsUploadsPage />}
+                    />
+                </Routes>
+            </MemoryRouter>
+        );
+        expect(destinationInput().value).toBe("/scene/");
+        addFiles([makeFile("b.txt")]);
+        expect(screen.getByText("/scene/b.txt")).toBeTruthy();
+
+        fireEvent.click(screen.getByText("go elsewhere"));
+        await waitFor(() => expect(destinationInput().value).toBe("/other/place/"));
+        expect(screen.getByText("/other/place/b.txt")).toBeTruthy();
     });
 
     it("refuses an invalid destination and disables the upload", () => {
