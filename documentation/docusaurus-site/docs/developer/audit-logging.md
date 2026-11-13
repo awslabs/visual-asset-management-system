@@ -142,7 +142,7 @@ The keys of the earlier orchestration and authorization records stay alongside t
 Read records are on by default. `app.auditLogging.recordReads` in `config.json` turns them off ([Configuration reference](../deployment/configuration-reference.md#audit-logging-appauditlogging)):
 
 -   **`true`, or the setting absent** -- every successful get, list and search writes an action record. A deployment upgraded with a `config.json` that has no `auditLogging` block records reads.
--   **`false`** -- successful gets, lists and searches write no action record. Writes, denials, failed reads, downloads and exports are recorded as before, and so are the records the earlier functions write (for example the `userProfileGet` record of a login profile read and the add-on's `edhProxy` records).
+-   **`false`** -- successful gets, lists and searches write no action record. Writes, denials, failed reads, downloads and exports are recorded as before, and so are the records the earlier functions write (for example the `userProfileGet` record of a login profile read, and the action records an add-on writes itself).
 
 CDK passes the value to every VAMS Lambda function as the `AUDIT_RECORD_READS` environment variable. Only the value `false` turns reads off, so a function deployed without the variable records them.
 

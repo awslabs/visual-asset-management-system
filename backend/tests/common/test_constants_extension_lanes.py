@@ -683,7 +683,8 @@ class TestLogKeyMerge:
             *CREDENTIAL_FIELD_NAMES)
         assert C.CORE_LOG_TEXT_SENSITIVE_KEYS == (
             "authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
-            "SessionToken", "x-amz-security-token", "TaskToken", *CREDENTIAL_FIELD_NAMES)
+            "SessionToken", "x-amz-security-token", "TaskToken",
+            *(name for name in CREDENTIAL_FIELD_NAMES if name != "secret"))
 
     def test_the_merged_keys_are_tuples(self):
         # The structured logger concatenates its key list with a tuple of content keys.

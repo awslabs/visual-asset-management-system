@@ -529,8 +529,10 @@ CORE_LOG_SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "Access
 CORE_LOG_TEXT_SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "AccessKeyId",
                                 "SecretAccessKey", "SessionToken", "x-amz-security-token", "TaskToken",
                                 # The credential field names above, so a value the structured logger
-                                # redacts is redacted in returned log text alike.
-                                "password", "secret", "clientSecret", "client_secret", "accessToken",
+                                # redacts is redacted in returned log text alike. The bare word
+                                # "secret" is left out here: in free text it labels ordinary values
+                                # ("Fetched secret: <ARN>") rather than a credential field.
+                                "password", "clientSecret", "client_secret", "accessToken",
                                 "access_token", "refreshToken", "refresh_token", "privateKey",
                                 "private_key")
 
