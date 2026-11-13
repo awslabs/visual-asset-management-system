@@ -528,6 +528,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
+-   Behavior changes to review before upgrading: on a deployment with an external OAuth identity provider, VAMS identifies each user by the token's `cognito:username`, `username` or `sub` claim and no longer reads a `vams:tokens` claim; an identity provider that issued `vams:tokens` with a different value must have its users' role assignments keyed by the username claim (see the update guide). ([PR #1490](https://github.com/awslabs/visual-asset-management-system/pull/1490))
+
 ### ⚠ BREAKING CHANGES
 
 ### Features
@@ -552,6 +554,8 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: A deployment that sets `bedrockModelId` keeps its model. One still on `global.anthropic.claude-sonnet-4-5-20250929-v1:0` changes it to an active model and redeploys. ([#1353](https://github.com/awslabs/visual-asset-management-system/issues/1353))
 -   **Pipelines** Fixed GenAI 3D Metadata Labeling failing every run with `ModelResponseError` on Claude Sonnet 5.5, the commercial default model: the final keyword summary arrived after a `thinking` block and only the first content block was read, so no keywords were written. The pipeline now reads the first text block of each response. ([#1428](https://github.com/awslabs/visual-asset-management-system/issues/1428))
 -   **Backend** Fixed the complete stage of `POST /ingest-asset` (the request that carries `uploadId`) always failing with `400` "Invalid API path or method": ingest-asset now forwards the completion to the upload-completion route `/uploads/{uploadId}/complete`, so the upload is completed. An `uploadId` that is not a single path segment is refused with `400` "Invalid uploadId" before anything is written. ([#1453](https://github.com/awslabs/visual-asset-management-system/issues/1453))
+-   **Backend/Auth** The API authorizer derives the caller's identity only from the token's username claim and ignores claims a token carries under the reserved `vams:` prefix. ([PR #1490](https://github.com/awslabs/visual-asset-management-system/pull/1490))
+    -   Note: the username claim is the first present of `cognito:username`, `username` and `sub`; a verified token with none of them is refused. Amazon Cognito users and API keys keep their identity. See the update guide for external OAuth identity providers.
 
 ### Chores
 
