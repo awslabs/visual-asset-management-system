@@ -184,10 +184,13 @@ describe("Add Files page", () => {
         ).toBe(true);
     });
 
-    it("collapses the preview-file guidance by default and opens it for preview files", async () => {
+    it("expands the preview-file guidance by default and reopens it for preview files", async () => {
         mount();
         const toggle = screen.getByRole("button", { name: "About preview files" });
-        expect(toggle.getAttribute("aria-expanded")).toBe("false");
+        expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+        fireEvent.click(toggle);
+        await waitFor(() => expect(toggle.getAttribute("aria-expanded")).toBe("false"));
 
         addFiles([makeFile("model.gltf.previewFile.png")]);
         await waitFor(() => expect(toggle.getAttribute("aria-expanded")).toBe("true"));

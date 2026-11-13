@@ -326,9 +326,9 @@ export default function ModifyAssetsUploadsPage() {
         return fileItems.some((item) => item.name.includes(PREVIEW_FILE_PATTERN));
     }, [fileItems]);
 
-    // The preview-file guidance is collapsed by default and opens when the selection includes
+    // The preview-file guidance is expanded by default and reopens when the selection gains
     // preview files; the user can still close it.
-    const [guidanceExpanded, setGuidanceExpanded] = useState(false);
+    const [guidanceExpanded, setGuidanceExpanded] = useState(true);
     useEffect(() => {
         if (hasPreviewFiles) setGuidanceExpanded(true);
     }, [hasPreviewFiles]);
