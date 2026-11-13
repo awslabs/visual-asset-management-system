@@ -24,7 +24,6 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 import Popover from "@cloudscape-design/components/popover";
 import Icon from "@cloudscape-design/components/icon";
 import { appCache } from "../../services/appCache";
-import type { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
 import {
     SearchExplanation,
@@ -37,6 +36,7 @@ import {
 import { extractLocationData } from "./utils/locationUtils";
 import { hasLocationOnlyMetadata, isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
+import { FIT_BOUNDS_OPTIONS, locationDataBounds } from "./utils/mapBounds";
 import {
     MAP_MARKER_SIZE_PX,
     MAP_PIN_PATH,
@@ -403,72 +403,19 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
         if (map) map.getCanvas().style.cursor = "";
     };
 
-    // Calculate bounds and fit map when location data changes. Considers BOTH
-    // point markers and polygon/line shapes so a results page that contains only
-    // GeoJSON shapes (no points) still gets framed correctly. Previously this
-    // only inspected points, leaving the map stuck on a default San Francisco
-    // viewport whenever every result was polygon-based.
+    // Frame every plotted result whenever the results change and once the map has loaded. The map's
+    // instance, which mapRef exposes, exists only after the map library has loaded, so an effect that ran
+    // before then had nothing to move: a view that opens with its results already in hand (a
+    // natural-language answer, reused rather than fetched again) stayed on the first point. Waiting for
+    // onLoad, and running again on it, frames those results too. Points and GeoJSON shapes both count,
+    // so a page of shapes alone is framed as well (locationDataBounds).
+    const [mapLoaded, setMapLoaded] = useState(false);
     useEffect(() => {
-        if (!mapRef.current || locationData.length === 0) return;
-
-        const allLats: number[] = [];
-        const allLons: number[] = [];
-
-        // Walk arbitrary nested coordinate arrays from a GeoJSON geometry.
-        const collectCoords = (coords: any) => {
-            if (!Array.isArray(coords)) return;
-            if (typeof coords[0] === "number" && typeof coords[1] === "number") {
-                allLons.push(coords[0]);
-                allLats.push(coords[1]);
-                return;
-            }
-            for (const c of coords) collectCoords(c);
-        };
-
-        locationData.forEach((item) => {
-            if (
-                item.type === "point" &&
-                item.latitude !== undefined &&
-                item.longitude !== undefined
-            ) {
-                allLats.push(item.latitude);
-                allLons.push(item.longitude);
-                return;
-            }
-            if (item.type === "geojson" && item.geoJson) {
-                const geom =
-                    item.geoJson?.type === "Feature" ? item.geoJson.geometry : item.geoJson;
-                if (geom?.coordinates) collectCoords(geom.coordinates);
-                if (geom?.geometries) {
-                    // GeometryCollection
-                    for (const sub of geom.geometries) {
-                        if (sub?.coordinates) collectCoords(sub.coordinates);
-                    }
-                }
-            }
-        });
-
-        if (allLats.length === 0) return;
-
-        const minLat = Math.min(...allLats);
-        const maxLat = Math.max(...allLats);
-        const minLon = Math.min(...allLons);
-        const maxLon = Math.max(...allLons);
-
-        const padding = 0.01;
-        const bounds: LngLatBoundsLike = [
-            [minLon - padding, minLat - padding],
-            [maxLon + padding, maxLat + padding],
-        ];
-
-        mapRef.current.fitBounds(bounds, {
-            padding: 40,
-            duration: 1000,
-            // For a single point, fitBounds collapses to a tiny bbox; cap the zoom
-            // so we don't slam to street-level on a single result.
-            maxZoom: 14,
-        });
-    }, [locationData]);
+        if (!mapLoaded || !mapRef.current) return;
+        const bounds = locationDataBounds(locationData);
+        if (!bounds) return;
+        mapRef.current.fitBounds(bounds, FIT_BOUNDS_OPTIONS);
+    }, [locationData, mapLoaded]);
 
     // Handle pagination
     const handlePageChange = (pageIndex: number) => {
@@ -498,7 +445,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
 
     // Calculate initial view state from the first piece of location data we can
     // anchor to -- a point if available, otherwise the first vertex of the first
-    // GeoJSON shape. fitBounds (above) immediately reframes once the data loads,
+    // GeoJSON shape. fitBounds (above) reframes once the map has loaded,
     // but this seeds the initial render so we're already in roughly the right
     // region. Falls back to a neutral world view if nothing has coordinates.
     const initialViewState = (() => {
@@ -602,6 +549,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                 onClick={handleMapClick}
                 onMouseEnter={handleMapMouseEnter}
                 onMouseLeave={handleMapMouseLeave}
+                onLoad={() => setMapLoaded(true)}
             >
                 <NavigationControl position="bottom-right" showZoom showCompass={false} />
 
