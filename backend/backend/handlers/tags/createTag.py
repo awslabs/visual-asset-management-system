@@ -61,6 +61,11 @@ database_table = dynamodb.Table(database_table_name)
 # Business Logic Functions
 #######################
 
+
+class TagAccessDenied(Exception):
+    """The caller may not perform this tag operation (raised so no success path runs)."""
+
+
 def create_tag(tag_data, claims_and_roles):
     """Create a new tag
     
@@ -82,10 +87,10 @@ def create_tag(tag_data, claims_and_roles):
             "databaseId": database_id,
         }
         if len(claims_and_roles["tokens"]) == 0:
-            return authorization_error()
+            raise TagAccessDenied()
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(tag_obj, "POST"):
-            return authorization_error()
+            raise TagAccessDenied()
 
         # Scope-conflict rule, asymmetric by design:
         #   GLOBAL  over a database-specific name -> ALLOWED, with a warning. Promoting a name to the
@@ -172,7 +177,7 @@ def create_tag(tag_data, claims_and_roles):
             warnings=warnings or None
         )
         
-    except VAMSGeneralErrorResponse:
+    except (VAMSGeneralErrorResponse, TagAccessDenied):
         raise
     except Exception as e:
         logger.exception(f"Error creating tag: {e}")
@@ -203,10 +208,10 @@ def update_tag(tag_data, claims_and_roles):
         # Authorization uses the STORED scope (a DB-X admin cannot edit a global/DB-Y tag)
         tag_obj = {"object__type": "tag", "tagName": tag_name, "databaseId": stored_scope}
         if len(claims_and_roles["tokens"]) == 0:
-            return authorization_error()
+            raise TagAccessDenied()
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(tag_obj, "PUT"):
-            return authorization_error()
+            raise TagAccessDenied()
 
         # Scope is immutable: reject any attempt to change databaseId
         if tag_data.get('databaseId') is not None and normalize_scope(tag_data['databaseId']) != stored_scope:
@@ -253,7 +258,7 @@ def update_tag(tag_data, claims_and_roles):
             timestamp=now
         )
         
-    except VAMSGeneralErrorResponse:
+    except (VAMSGeneralErrorResponse, TagAccessDenied):
         raise
     except Exception as e:
         logger.exception(f"Error updating tag: {e}")
@@ -303,6 +308,8 @@ def handle_post_request(event):
         # Return success response
         return success(body=result.dict())
         
+    except TagAccessDenied:
+        return authorization_error()
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
@@ -353,6 +360,8 @@ def handle_put_request(event):
         # Return success response
         return success(body=result.dict())
         
+    except TagAccessDenied:
+        return authorization_error()
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)

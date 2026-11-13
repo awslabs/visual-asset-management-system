@@ -62,6 +62,10 @@ tag_type_table = dynamodb.Table(tag_type_db_table_name)
 #######################
 
 
+class TagAccessDenied(Exception):
+    """The caller may not perform this tag operation (raised so no success path runs)."""
+
+
 def _query_all_in_partition(table, scope):
     """Every item in one partition of a composite tag/tag-type table.
 
@@ -249,10 +253,10 @@ def delete_tag(tag_name, claims_and_roles, database_id=None):
             "databaseId": stored_scope,
         })
         if len(claims_and_roles["tokens"]) == 0:
-            return authorization_error()
+            raise TagAccessDenied()
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(tag, "DELETE"):
-            return authorization_error()
+            raise TagAccessDenied()
 
         # Delete the tag
         logger.info(f"Deleting tag: {tag_name}")
@@ -271,7 +275,7 @@ def delete_tag(tag_name, claims_and_roles, database_id=None):
             timestamp=now
         )
         
-    except VAMSGeneralErrorResponse:
+    except (VAMSGeneralErrorResponse, TagAccessDenied):
         raise
     except Exception as e:
         logger.exception(f"Error deleting tag: {e}")
@@ -367,7 +371,9 @@ def handle_delete_request(event):
 
         # Return success response
         return success(body=result.dict())
-        
+
+    except TagAccessDenied:
+        return authorization_error()
     except VAMSGeneralErrorResponse as e:
         return general_error(body={"message": str(e)}, event=event)
     except Exception as e:

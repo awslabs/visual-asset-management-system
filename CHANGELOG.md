@@ -134,6 +134,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend/Tags** Creating, editing or deleting a tag that the caller's role does not allow on that tag answers `403 Not Authorized` instead of `500`. ([#1452](https://github.com/awslabs/visual-asset-management-system/issues/1452))
 -   **Backend** Asset creation and subscriptions share SNS topic names with sanitized asset IDs and a 16-character hash suffix, retained when truncating long names, so dotted, spaced, and already-safe IDs get distinct topics. ([#839](https://github.com/awslabs/visual-asset-management-system/issues/839))
 -   **Backend** Fixed subscribing to and unsubscribing from an asset whose ID contains a dot or a space, or is longer than 63 characters, failing with `400` "entityId is invalid"; `POST`, `PUT` and `DELETE /subscriptions` and `DELETE /unsubscribe` accept every asset ID the asset API accepts. ([#1197](https://github.com/awslabs/visual-asset-management-system/issues/1197))
 -   **Web** Fixed the Three.js viewer ignoring an OBJ file's `.mtl` material library; it loads the library and its textures from the asset. ([#923](https://github.com/awslabs/visual-asset-management-system/issues/923))

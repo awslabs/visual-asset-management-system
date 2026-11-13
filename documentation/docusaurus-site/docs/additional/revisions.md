@@ -130,6 +130,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Refused tag writes answer 403** — Creating, editing or deleting a tag that the caller's role does not allow on that tag answers `403 Not Authorized` instead of `500`. (issue #1452)
 -   **Asset notification topics** — Asset creation and subscriptions share sanitized SNS topic names with a 16-character hash suffix on every new topic. Truncation preserves the suffix, separating IDs that sanitize alike or share a long prefix; existing stored topic ARNs remain unchanged. (issue #839)
 -   **Subscriptions accept every asset ID** — Subscribing to and unsubscribing from an asset whose ID contains a dot or a space, or is longer than 63 characters, works instead of failing with "entityId is invalid". (issue #1197)
 -   **OBJ material libraries in the Three.js viewer** — An OBJ file's `.mtl` library and its textures load from the asset, so the model renders with its materials. (issue #923)

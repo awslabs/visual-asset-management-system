@@ -78,3 +78,42 @@ class TestTagRecords:
         assert recorder.call_args.args == (event, "tagList")
         assert recorder.call_args.kwargs["item_count"] == 2
         assert "secret-description" not in json.dumps(recorder.call_args.kwargs, default=str)
+
+
+@pytest.fixture
+def refusing_enforcer(monkeypatch):
+    """The real service functions run; only the object-level check (Casbin) refuses."""
+    enforcer = MagicMock()
+    enforcer.return_value.enforce.return_value = False
+    monkeypatch.setattr(createTag, "CasbinEnforcer", enforcer)
+    monkeypatch.setattr(tagService, "CasbinEnforcer", enforcer)
+    stored = {"Item": {"tagName": "approved", "databaseId": "GLOBAL", "tagTypeName": "status",
+                       "description": "Approved"}}
+    for module in (createTag, tagService):
+        table = MagicMock()
+        table.get_item.return_value = stored
+        table.query.return_value = {"Items": []}
+        monkeypatch.setattr(module, "tag_table", table, raising=False)
+    monkeypatch.setattr(createTag, "tag_type_table", MagicMock(**{"get_item.return_value": {
+        "Item": {"tagTypeName": "status", "databaseId": "GLOBAL"}}}), raising=False)
+    return enforcer
+
+
+@pytest.mark.unit
+class TestRefusedTagWrites:
+    """A tag write the object-level check refuses answers 403 and records no success."""
+
+    @pytest.mark.parametrize("handler", ["handle_post_request", "handle_put_request"])
+    def test_a_refused_create_or_update_answers_403_and_records_nothing(self, recorder, refusing_enforcer,
+                                                                        handler):
+        response = getattr(createTag, handler)(_event(TAG))
+        assert response["statusCode"] == 403
+        recorder.assert_not_called()
+        createTag.tag_table.put_item.assert_not_called()
+        createTag.tag_table.update_item.assert_not_called()
+
+    def test_a_refused_delete_answers_403_and_records_nothing(self, recorder, refusing_enforcer):
+        response = tagService.handle_delete_request(_event(path_parameters={"tagId": "approved"}))
+        assert response["statusCode"] == 403
+        recorder.assert_not_called()
+        tagService.tag_table.delete_item.assert_not_called()
