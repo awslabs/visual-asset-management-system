@@ -41,7 +41,7 @@ SHEET_RATIO = 0.1
 # the content stands in the middle of the sheet, as a robot on its ground plane or a model inside a
 # skybox does. A small part in the corner of a large board, or a small object among floor tiles of
 # which none is centred on it, leaves every sheet in the framing.
-BACKDROP_SCALE = 20.0
+BACKDROP_SCALE = 50.0
 CENTRE_SHARE = 0.25
 
 # Parts tracked per scene. A backdrop is one part, or a few, at least BACKDROP_SCALE times the rest of

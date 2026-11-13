@@ -69,20 +69,41 @@ class TestBackdropRule:
         assert scene_parts.backdrop_parts([point, GROUND]).tolist() == [False, False]
         assert scene_parts.backdrop_parts([MODEL, point, GROUND]).tolist() == [False, False, True]
 
+    def test_the_scale_is_fifty_times_the_content(self):
+        assert scene_parts.BACKDROP_SCALE == 50.0
+
+    def test_a_panel_with_one_centred_40_mm_bracket_is_not_a_backdrop(self):
+        """A 1 m x 0.6 m x 2 mm sheet-metal panel is 25 times a 40 mm bracket at its centre: the panel
+        is part of the model, so it is drawn and framed."""
+        panel = _box((-0.5, 0.0, -0.3), (0.5, 0.002, 0.3))
+        bracket = _box((-0.02, 0.002, -0.02), (0.02, 0.042, 0.02))
+        assert not scene_parts.backdrop_parts([bracket, panel]).any()
+
+    def test_a_zero_thickness_board_with_one_centred_4_mm_chip_is_not_a_backdrop(self):
+        """A 100 mm board of no thickness is 25 times a 4 mm chip at its centre."""
+        board = _box((-50.0, 0.0, -40.0), (50.0, 0.0, 40.0))
+        chip = _box((-2.0, 0.0, -2.0), (2.0, 1.0, 2.0))
+        assert not scene_parts.backdrop_parts([chip, board]).any()
+
+    def test_a_sheet_just_under_fifty_times_is_kept_and_at_fifty_is_a_backdrop(self):
+        model = _box((-0.5, 0.0, -0.5), (0.5, 1.0, 0.5))
+        assert not scene_parts.backdrop_parts([model, _box((-24.9, 0, -24.9), (24.9, 0, 24.9))]).any()
+        assert scene_parts.backdrop_parts([model, _box((-25, 0, -25), (25, 0, 25))]).tolist() == [False, True]
+
     def test_one_part_has_no_backdrop(self):
         assert not scene_parts.backdrop_parts([GROUND]).any()
 
     def test_a_board_with_one_small_part_in_its_corner_is_not_a_backdrop(self):
-        """A zero-thickness board 25 times a 4 mm corner part: the part does not stand in its middle."""
+        """A zero-thickness board 62.5 times a 1.6 mm corner part: the part does not stand in its middle."""
         board = _box((0.0, 0.0, 0.0), (100.0, 0.0, 100.0))
-        chip = _box((0.0, 0.0, 0.0), (4.0, 1.4, 4.0))
+        chip = _box((0.0, 0.0, 0.0), (1.6, 0.6, 1.6))
         assert not scene_parts.backdrop_parts([chip, board]).any()
 
     def test_floor_tiles_around_a_small_object_are_not_backdrops(self):
-        """Ten by ten 1 m tiles and a 4 cm object at the floor's centre: each tile is 25 times the
+        """Ten by ten 1 m tiles and a 1.6 cm object at the floor's centre: each tile is 62.5 times the
         object, but no tile is centred on it."""
         tiles = [_box((i - 5.0, 0.0, j - 5.0), (i - 4.0, 0.0, j - 4.0)) for i in range(10) for j in range(10)]
-        thing = _box((-0.02, 0.0, -0.02), (0.02, 0.04, 0.02))
+        thing = _box((-0.008, 0.0, -0.008), (0.008, 0.016, 0.008))
         assert not scene_parts.backdrop_parts([thing] + tiles).any()
 
     def test_a_ground_plane_with_the_model_well_off_its_centre_is_kept(self):
@@ -131,7 +152,7 @@ class TestBackdropKeep:
         [MODEL, MODEL],
         [_box((0.0, 0.0, 0.0), (2.0, 1.0, 0.0)), GROUND],  # flat parts only
         [_box((-4.0, 0.0, -3.0), (4.0, 2.5, 3.0)), _box((-5.0, 0.0, -4.0), (5.0, 0.0, 4.0))],  # a room
-        [_box((0.0, 0.0, 0.0), (4.0, 1.4, 4.0)), _box((0.0, 0.0, 0.0), (100.0, 0.0, 100.0))],  # corner
+        [_box((0.0, 0.0, 0.0), (1.6, 0.6, 1.6)), _box((0.0, 0.0, 0.0), (100.0, 0.0, 100.0))],  # corner
         [_box((15.5, 0.0, -0.3), (16.5, 0.7, 0.3)), GROUND],  # off centre
         [_box((0.0, 0.0, 0.0), (100.0, 1.6, 100.0)), _box((10.0, 1.6, 10.0), (14.0, 3.0, 14.0))],  # PCB
     ])
@@ -140,7 +161,7 @@ class TestBackdropKeep:
 
     def test_a_backdrop_that_does_not_change_the_bounds_is_kept(self):
         tiles = [_box((i - 5.0, 0.0, j - 5.0), (i - 4.0, 0.0, j - 4.0)) for i in range(10) for j in range(10)]
-        thing = _box((-0.52, 0.0, -0.52), (-0.48, 0.04, -0.48))
+        thing = _box((-0.508, 0.0, -0.508), (-0.492, 0.016, -0.492))
         assert scene_parts.backdrop_keep([_corners(b) for b in [thing] + tiles], max_parts=1000) is None
 
     def test_over_the_part_limit_every_part_is_kept(self):
@@ -201,7 +222,7 @@ class TestFraming:
         from preview_pipeline import renderer
 
         board = _box((0.0, 0.0, 0.0), (100.0, 0.0, 100.0))
-        chip = _box((0.0, 0.0, 0.0), (4.0, 1.4, 4.0))
+        chip = _box((0.0, 0.0, 0.0), (1.6, 0.6, 1.6))
         data = _merged(chip, board)
         plain = data.copy()
         plain.field_data.clear()
@@ -212,7 +233,7 @@ class TestFraming:
     def test_a_backdrop_that_does_not_change_the_bounds_is_not_reported(self, caplog):
         """An object at the centre of one interior tile: leaving that tile out frames the same floor."""
         tiles = [_box((i - 5.0, 0.0, j - 5.0), (i - 4.0, 0.0, j - 4.0)) for i in range(10) for j in range(10)]
-        thing = _box((-0.52, 0.0, -0.52), (-0.48, 0.04, -0.48))
+        thing = _box((-0.508, 0.0, -0.508), (-0.492, 0.016, -0.492))
         data = _merged(thing, *tiles)
         assert scene_parts.backdrop_parts(scene_parts.part_bounds(data)).sum() == 1
         with caplog.at_level("INFO"):
@@ -408,6 +429,37 @@ class TestGlbScene:
         data = core._load_file(str(path), ".glb")
         assert scene_parts.part_bounds(data) is None  # one part is left
         _assert_drawn_as_alone(data, core._load_file(str(alone), ".glb"), ".glb")
+
+    @pytest.mark.parametrize("sheet,item", [
+        # A 1 m x 0.6 m x 2 mm panel with one 40 mm bracket at its centre (25 times).
+        (((1.0, 0.002, 0.6), (0, 0.001, 0)), ((0.04, 0.04, 0.04), (0, 0.022, 0))),
+        # A 100 mm board of no thickness with one 4 mm chip at its centre (25 times).
+        (((0.1, 0.0, 0.08), (0, 0, 0)), ((0.004, 0.001, 0.004), (0, 0.0005, 0))),
+    ])
+    def test_a_sheet_that_belongs_to_the_model_is_drawn_and_framed(self, tmp_path, sheet, item):
+        """Under 50 times its centred item, a flat sheet is part of the model: every part is drawn and
+        the camera frames the full bounds, as on a scene with no recorded parts."""
+        import trimesh
+
+        from preview_pipeline import core, renderer
+
+        scene = trimesh.Scene()
+        extents, centre = item
+        scene.add_geometry(trimesh.creation.box(extents=extents).apply_translation(centre), geom_name="item")
+        (sx, _, sz), centre = sheet
+        flat = trimesh.Trimesh(vertices=[[-sx / 2, 0, -sz / 2], [sx / 2, 0, -sz / 2], [sx / 2, 0, sz / 2],
+                                         [-sx / 2, 0, sz / 2]], faces=[[0, 2, 1], [0, 3, 2]]) \
+            if sheet[0][1] == 0 else trimesh.creation.box(extents=sheet[0]).apply_translation(centre)
+        scene.add_geometry(flat, geom_name="sheet")
+        path = tmp_path / "scene.glb"
+        scene.export(str(path))
+        data = core._load_file(str(path), ".glb")
+        assert data.n_points == sum(len(g.vertices) for g in trimesh.load(str(path)).dump())
+        plain = data.copy()
+        plain.field_data.clear()
+        framed = renderer._compute_camera_framing(data, use_full_bounds=True)
+        full = renderer._compute_camera_framing(plain, use_full_bounds=True)
+        assert np.array_equal(framed[0], full[0]) and framed[1:] == full[1:]
 
     def test_a_textured_model_on_a_ground_plane_keeps_its_texture(self, tmp_path):
         """With the ground dropped before the merge, the one part left keeps its UV texture rather
