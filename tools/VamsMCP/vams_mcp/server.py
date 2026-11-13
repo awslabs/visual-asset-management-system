@@ -424,11 +424,10 @@ def _tag_body(names: Dict[str, Any], database_id: Optional[str]) -> Dict[str, An
 def vams_status() -> results.Status:
     """Check the VAMS connection: call this first, or when a tool returns NotAuthenticated.
 
-    Makes no API request and works signed out. Returns `authenticated`, `profile`, `apiUrl`, `userId`
-    (who the tools act as), `featureSwitches` (at the last sign-in), `gates` (which tool tiers and
-    add-ons are registered), `mcpVersion` and `cliVersion`. When `authenticated` is false, `reason`
-    says why and `user_action` is the step to ask the user to take. `tokenExpired` true with a
-    `note`: the next call renews the sign-in or answers NotAuthenticated."""
+    Makes no API request and works signed out. Says who the tools act as (`userId`), which deployment
+    (`apiUrl`), the feature switches, and which tool tiers and add-ons are registered (`gates`). When
+    `authenticated` is false, `reason` says why and `user_action` is the step to ask the user to take.
+    `tokenExpired` true: the next call renews the sign-in or answers NotAuthenticated."""
     status = describe_profile(CONFIG)
     client = _current_client()
     refused = _refused_sign_in() if client is not None else None
@@ -1095,7 +1094,7 @@ def generate_download_url(
     version_id: Optional[str] = None,
 ) -> results.DownloadUrl:
     """Use only when the user asked to download a file: a time-limited presigned download URL for an
-    asset file (`downloadUrl`, `expiresIn`; file_key = its relativePath). Non-mutating.
+    asset file (file_key = its relativePath).
 
     The URL is a bearer credential: anyone holding it can download the object until it expires (at
     most `presignedUrlTimeoutSeconds`, 24 hours by default, or sooner if the credentials that signed it
@@ -1117,7 +1116,7 @@ def generate_download_urls_bulk(
 ) -> results.DownloadUrl:
     """Use only when the user asked to download several files of ONE asset. `file_keys` holds up to 1500
     entries: a relative path or `{"key": path, "versionId": id}`; `asset_version_id` /
-    `asset_version_alias` instead pins EVERY key (not with per-key versionIds). Non-mutating.
+    `asset_version_alias` instead pins EVERY key (not with per-key versionIds).
 
     Each `files[]` entry has `key`, `success`, and `downloadUrl` + `versionId` or `error`: a missing
     path is SKIPPED (`success: false`) while the call succeeds; the top-level `downloadUrl` is only
@@ -2048,10 +2047,9 @@ if CONFIG.enable_writes:
     @mcp.tool(title="Create workflow", annotations=WRITE)
     @tool_result
     def create_workflow(database_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        """Use to create a workflow from pipelines. `body` takes workflowId, workflowName,
-        specifiedPipelines (ordered; no pipeline twice) and systemConfig, including
-        metadataInputs (assetMetadata, fileMetadata, fileAttributes, databaseMetadata,
-        assetFileMetadata, metadataSchema).
+        """Use to create a workflow from pipelines. `body`: workflowId, workflowName, specifiedPipelines
+        (ordered; no pipeline twice) and systemConfig with metadataInputs (assetMetadata, fileMetadata,
+        fileAttributes, databaseMetadata, assetFileMetadata, metadataSchema).
         concurrencyRestriction (none, perAsset, perInputFile, perInputFileVersion) locks that scope while
         a run lasts."""
         return CLIENT.unwrap_message(CLIENT.api.create_workflow(database_id, body))
@@ -2081,7 +2079,7 @@ if CONFIG.enable_writes:
     def execute_workflow(
         workflow_database_id: str, workflow_id: str, body: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Use to run a workflow on input files. Returns the new executionId. This starts real compute.
+        """Use to run a workflow on input files; returns the executionId. This starts real compute.
         Confirm with the user before calling it.
 
         `body`: inputFiles (each databaseId, assetId, relativeFileKey ("/" = the whole asset), optional
