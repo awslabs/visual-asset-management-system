@@ -43,7 +43,7 @@ from common.resourceNames import ResourceKeys, get_table_name
 from common.vectorsearch import fileClassIntent
 from common.vectorsearch.embeddings import EmbeddingModelError, embed_text
 from common.vectorsearch.vectorStore import MAX_TOP_K, DynamoDbVectorStore, VectorHit, VectorIndexNotReady
-from customLogging.auditLogging import deferred_authorization_audit
+from customLogging.auditLogging import audited_handler, deferred_authorization_audit, log_action
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -718,6 +718,14 @@ def _parse_request(event) -> NlpSearchRequestModel:
     return parse(body, model=NlpSearchRequestModel)
 
 
+def _log_search(event, request: NlpSearchRequestModel, hits_returned: int) -> None:
+    """Record the search as keyword search does (osSemanticSearch/search.py ``_log_search``): the request as
+    asked, under its API field names, and the number of hits returned. Never the hits, the query vector or
+    a score."""
+    log_action(event, "search", item_count=hits_returned,
+               request_parameters=request.dict(by_alias=True, exclude_none=True))
+
+
 def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
     started = time.monotonic()
     request = _parse_request(event)
@@ -742,6 +750,7 @@ def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
         if not plan.targets:
             # Nothing was searched, so there is nothing approximate to count: the empty answer is exact.
             warnings.append(_warning("databases:none_accessible", "No searchable database is accessible to the caller"))
+            _log_search(event, request, 0)
             return success(body=_envelope([], 0, request, 0, 0, 0, class_intent, False, warnings, started,
                                           total_relation="eq"))
         vector = embed_text(request.query, model_id=embedding_model_id, dimensions=embedding_dimensions,
@@ -777,16 +786,18 @@ def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
         if not opensearch_disabled and (request.enrich or ignored):
             file_hits = _opensearch_step(request, file_hits, warnings)
     result = _asset_hits(file_hits) if request.entityTypes == ["asset"] else file_hits
-    return success(
-        body=_envelope(
-            result[: request.size], len(result), request, plan.databases_searched, candidates,
-            items_collapsed, class_intent, truncated, warnings, started,
-            total_relation=_total_relation(len(result), truncated),
-            aggregations=_aggregations(result, AGGREGATION_FIELDS[request.entityTypes[0]]),
-        )
+    page = result[: request.size]
+    body = _envelope(
+        page, len(result), request, plan.databases_searched, candidates,
+        items_collapsed, class_intent, truncated, warnings, started,
+        total_relation=_total_relation(len(result), truncated),
+        aggregations=_aggregations(result, AGGREGATION_FIELDS[request.entityTypes[0]]),
     )
+    _log_search(event, request, len(page))
+    return success(body=body)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     claims_and_roles = request_to_claims(event)
     try:

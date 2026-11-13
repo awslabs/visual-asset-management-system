@@ -1661,6 +1661,23 @@ def audited_handler(handler: Callable) -> Callable:
     return wrapper
 
 
+def skip_route_outcome(event: Any) -> None:
+    """
+    Tell :func:`audited_handler` that the error response this request returns is not an outcome of
+    its route's action, so it records no failed action for it. Only for an answer that asks the
+    caller to try again and that the caller always retries: a reindex launch that finds every
+    reindex slot held answers 429 and the launcher sends it again later, so the attempt that starts
+    the run records the action, and one that is refused for good records its failure. Records
+    nothing itself; never raises.
+    """
+    try:
+        ctx = _context_for(event)
+        if ctx is not None and ctx.route_spec is not None:
+            _note_recorded(ctx, ctx.route_spec.action)
+    except Exception as e:
+        logger.exception(f"Failed to mark the request's outcome as not recorded: {e}")
+
+
 # The generic reason a failed record names for an error status; any other 4xx is clientError and
 # every 5xx is internal.
 _FAILURE_REASONS = {400: "validation", 404: "notFound", 405: "validation", 409: "conflict",

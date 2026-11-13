@@ -45,6 +45,7 @@ from common.resourceNames import ResourceKeys, get_table_name
 from common.workflows import executionLocks as el
 from common.workflows import triggerMatching as tm
 from common.workflows.executionRecords import workflow_composite_key
+from customLogging.auditLogging import audited_handler
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success
 
@@ -261,6 +262,7 @@ def launch(message: Dict[str, Any]) -> str:
     raise RuntimeError(f"executeWorkflow returned status {status_code}")
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     try:
         records = event.get("Records") if isinstance(event, dict) else None

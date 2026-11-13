@@ -58,7 +58,7 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import (AUDIT_INTERNAL_CALL_KEY, audited_handler, internal_call_marker,
-                                        log_actions)
+                                        log_actions, skip_route_outcome)
 from common.workflows import executionRecords as er
 from common.workflows import executionValidation as ev
 from common.workflows import templateResolution as tres
@@ -3259,8 +3259,12 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
             metadata_source_databases=metadata_source_databases,
             reindex_slot_keys=_reindex_slot_keys_for(event, request_model, workflow_database_id, workflow_id))
     except el.ReindexSlotsBusy:
-        # Not a refusal: the reindex launcher puts the message back and tries again later.
+        # Not a refusal: the reindex launcher puts the message back and tries again later. So it is no
+        # outcome of the launch either: the attempt that claims a slot records workflowExecute, and one
+        # refused for good (a 400) records its failure, so a backfill that waits writes no failed record
+        # per wait (skip_route_outcome).
         logger.info(f"Reindex launch of workflow {workflow_database_id}:{workflow_id} waits for a slot")
+        skip_route_outcome(event)
         return general_error(status_code=429, body={"message": el.REINDEX_SLOTS_BUSY_MESSAGE}, event=event)
     except el.ExecutionLockConflict as conflict:
         # The key and the holder are for the log; the caller gets a fixed body naming only the scope

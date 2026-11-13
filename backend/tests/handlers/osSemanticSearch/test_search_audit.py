@@ -23,13 +23,16 @@ _SEARCH_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "backen
 
 
 def _load_search():
-    """The real search module, loaded by path with boto3 and its auth imports stubbed."""
+    """The real search module, loaded by path with boto3, its auth imports and the database pre-filter
+    (common.databaseAccess) stubbed."""
     stubs = {"handlers.authz": types.ModuleType("handlers.authz"), "handlers.auth": types.ModuleType("handlers.auth"),
-             "common.dynamodb": types.ModuleType("common.dynamodb")}
+             "common.dynamodb": types.ModuleType("common.dynamodb"),
+             "common.databaseAccess": types.ModuleType("common.databaseAccess")}
     stubs["handlers.authz"].CasbinEnforcer = MagicMock()
     stubs["handlers.auth"].request_to_claims = MagicMock(return_value={"tokens": ["alice"]})
     stubs["common.dynamodb"].validate_pagination_info = MagicMock()
     stubs["common.dynamodb"].batch_get_items = MagicMock(return_value=([], []))
+    stubs["common.databaseAccess"].DatabaseAccessManager = MagicMock()
     saved = {name: sys.modules.get(name) for name in stubs}
     sys.modules.update(stubs)
     ssm = MagicMock()

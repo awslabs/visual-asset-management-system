@@ -38,6 +38,9 @@ invocation cap included, raises ReindexContinuationFailed, so AWS Lambda sends t
 invocation to the function's on-failure dead-letter queue once (its async config retries nothing); the
 error message carries the payload that resumes the run after the last file the failed invocation sent.
 A resume payload from the cap starts the invocation count again, so the resumed run gets a full budget.
+
+Every invocation that runs or refuses a reindex writes one `searchReindex` audit record as the system
+(`_log_reindex`): what it was asked, what it did, and the run id its other invocations share.
 """
 
 import json
@@ -54,6 +57,7 @@ from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from common.vectorsearch.vectorStore import DynamoDbVectorStore
 from common.workflows.executionValidation import aggregate_input_file_filters, apply_input_file_filters
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from customLogging.logger import safeLogger
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -86,6 +90,12 @@ SCAN_PAGE_SIZE = 1000
 # recursive-loop detection off this is the bound on a chain that never finishes; the invocation that
 # reaches it with work left sends its resume payload to the dead-letter queue instead of continuing.
 MAX_RUN_INVOCATIONS = 200
+# How an invocation was started, as its searchReindex record names it: an operator's (or a migration
+# tool's) direct invoke, the run's own continuation (or an operator resuming one), or the CloudFormation
+# custom resource of app.vectorSearch.reindexOnCdkDeploy.
+TRIGGER_DIRECT = 'direct'
+TRIGGER_CONTINUATION = 'continuation'
+TRIGGER_CLOUDFORMATION = 'cloudFormation'
 
 try:
     vector_search_enabled = os.environ.get("VECTOR_SEARCH_ENABLED", "true").strip().lower() == "true"
@@ -311,15 +321,49 @@ def _self_invoke(params: Dict[str, Any], state: Dict[str, Any]) -> None:
     logger.info(f"vector reindex run {state['runId']} continues in phase {state['phase']}")
 
 
-def _run_reindex(params: Dict[str, Any], context: Any, raise_on_failure: bool = False) -> Dict[str, Any]:
+def _log_reindex(trigger: str, params: Optional[Dict[str, Any]] = None, state: Optional[Dict[str, Any]] = None,
+                 before: Tuple[int, int] = (0, 0), reason: Optional[str] = None) -> None:
+    """Record one invocation of a reindex run as the system's searchReindex action, in the invocation's
+    audit context: success, or failed with a generic `reason` (`validation` for a refused payload,
+    `internal` for a run that failed), never the error text or a file name. `item_count` is what this
+    invocation did: the vector items it deleted plus the files it enqueued (a dry run counts what a real
+    run would). The details name the run (`reindexRunId`, `invocation`, and `trigger`: direct,
+    continuation or cloudFormation), what it was asked (`operation`, `dryRun`, `limit`, and `scope` with
+    the record's databaseId when the run is confined to one database) and where the run stands
+    (`phase`, `continued`, and the run's `deleted` and `enqueued` totals), so the records of one run
+    group by its id. Writes nothing outside an invocation."""
+    ctx = current_audit_context()
+    if ctx is None:
+        return
+    details: Dict[str, Any] = {'trigger': trigger}
+    item_count = None
+    database_id = None
+    if params is not None:
+        details.update({'operation': params['operation'], 'dryRun': params['dryRun'],
+                        'scope': 'database' if params['databaseId'] else 'all'})
+        if params['limit'] is not None:
+            details['limit'] = params['limit']
+        database_id = params['databaseId']
+    if state is not None:
+        details.update({'reindexRunId': state['runId'], 'invocation': state['invocations'],
+                        'phase': state['phase'], 'continued': reason is None and state['phase'] != PHASE_DONE,
+                        'deleted': state['deleted'], 'enqueued': state['enqueued']})
+        item_count = (state['deleted'] - before[0]) + (state['enqueued'] - before[1])
+    log_action(ctx.event, "searchReindex", outcome="failed" if reason else "success", reason=reason,
+               item_count=item_count, database_id=database_id, details=details)
+
+
+def _run_reindex(params: Dict[str, Any], context: Any, raise_on_failure: bool = False,
+                 trigger: str = TRIGGER_DIRECT) -> Dict[str, Any]:
     """One invocation's worth of work for a validated payload; the response reports where the run stands.
 
     A failure returns a 500 body to a caller that waits for it (the first invocation, the CloudFormation
     custom resource). With `raise_on_failure` (an asynchronous continuation, whose return value nobody
     reads) it raises ReindexContinuationFailed instead, so the failed continuation reaches the dead-letter
-    queue."""
+    queue. Either way the invocation writes one searchReindex record (`_log_reindex`)."""
     time_left = _time_left(context)
     state = _initial_state(params)
+    before = (state['deleted'], state['enqueued'])
     logger.info(f"vector reindex run {state['runId']}: operation={params['operation']} "
                 f"phase={state['phase']} dryRun={params['dryRun']} invocation={state['invocations']}")
     try:
@@ -346,9 +390,11 @@ def _run_reindex(params: Dict[str, Any], context: Any, raise_on_failure: bool = 
         if params['operation'] in ('clear', 'both') and state['phase'] != PHASE_CLEAR \
                 and params['databaseId'] is None:
             body['tableEmpty'] = not params['dryRun']
+        _log_reindex(trigger, params, state, before)
         return {'statusCode': 200, 'body': json.dumps(body)}
     except Exception as e:
         logger.exception(f"vector reindex run {state['runId']} failed in phase {state['phase']}: {e}")
+        _log_reindex(trigger, params, state, before, reason='internal')
         # A resume after the cap starts a fresh invocation budget; any other resume keeps the count.
         resume_state = dict(state, invocations=0) if isinstance(e, ReindexHopLimitReached) else state
         if raise_on_failure:
@@ -409,10 +455,11 @@ def handle_cfn_event(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     params, error = validate_payload(payload)
     if error:
         logger.error(f"CloudFormation {request_type} request rejected: {error}")
+        _log_reindex(TRIGGER_CLOUDFORMATION, reason='validation')
         raise ValueError(f"vector reindex request rejected: {error}")
     logger.info(f"CloudFormation {request_type} request: operation={params['operation']} "
                 f"dryRun={params['dryRun']}")
-    result = _run_reindex(params, context)
+    result = _run_reindex(params, context, trigger=TRIGGER_CLOUDFORMATION)
     body = json.loads(result['body'])
     if result['statusCode'] != 200:
         # A failed FIRST invocation fails the resource; a failure inside a later continuation is
@@ -433,15 +480,22 @@ def handle_cfn_event(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     }
 
 
+@audited_handler
 def lambda_handler(event, context) -> Dict[str, Any]:
     """Two invocation shapes: a direct payload, or a CloudFormation custom-resource request relayed
-    by the CDK provider framework when `app.vectorSearch.reindexOnCdkDeploy` is set."""
+    by the CDK provider framework when `app.vectorSearch.reindexOnCdkDeploy` is set. Each invocation that
+    runs or refuses a reindex writes one searchReindex record as the system (`_log_reindex`); a Delete
+    request does nothing and writes none."""
     if is_cfn_event(event):
         return handle_cfn_event(event, context)
     params, error = validate_payload(event)
     if error:
         logger.warning(f"Rejected vector reindex payload: {error}")
+        resumed = isinstance(event, dict) and event.get('continuation') is not None
+        _log_reindex(TRIGGER_CONTINUATION if resumed else TRIGGER_DIRECT, reason='validation')
         return {'statusCode': 400, 'body': json.dumps({'error': error})}
     # A payload with a continuation is a self-invoke (or an operator resuming one from the dead-letter
     # queue), always asynchronous: its failure must fail the invocation to reach the dead-letter queue.
-    return _run_reindex(params, context, raise_on_failure=params['continuation'] is not None)
+    resumed = params['continuation'] is not None
+    return _run_reindex(params, context, raise_on_failure=resumed,
+                        trigger=TRIGGER_CONTINUATION if resumed else TRIGGER_DIRECT)

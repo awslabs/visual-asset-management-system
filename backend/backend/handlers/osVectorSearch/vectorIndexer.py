@@ -81,6 +81,7 @@ from common.s3MetadataKeys import (
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, key_has_reserved_segment, select_newest_preview_file
 from common.vectorsearch.embeddings import round_vector
 from common.vectorsearch.vectorStore import DynamoDbVectorStore, VectorItem
+from customLogging.auditLogging import audited_handler
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success
 
@@ -886,6 +887,7 @@ def _dispatch_sqs_record(record: Dict[str, Any], time_left: Callable[[], int]) -
     return [Outcome(True, 'ignore', 'unrecognized SQS body')]
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     try:
         records = event.get('Records') if isinstance(event, dict) else None
