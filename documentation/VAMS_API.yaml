@@ -4454,6 +4454,12 @@ paths:
                 filterStartDate.
 
 
+                Runs of system workflows are not returned unless includeSystem=true, or the list is
+                filtered to one system workflow; the applied value is echoed back as includeSystem.
+                They are removed after the candidate window is read, so a page can come back short or
+                empty with a NextToken, as it can for the other filters.
+
+
                 One request collects at most the 200 most recent executions of the asset, across both
                 directions, and each is then checked against the caller's access; the response carries
                 a NextToken when older executions remain, so page until the token is absent.
@@ -4485,6 +4491,9 @@ paths:
                                             filterEndDate:
                                                 type: string
                                                 description: "The upper bound that was applied, present only when one was supplied."
+                                            includeSystem:
+                                                type: boolean
+                                                description: "Whether this page includes runs of system workflows: the caller's includeSystem, or the default that applied."
                                             warnings:
                                                 type: array
                                                 maxItems: 1
@@ -4498,7 +4507,7 @@ paths:
                                                 type: string
                                                 nullable: true
                 "400":
-                    description: A filter or pagination parameter is invalid — a filterStartDate outside the accepted UTC form, a workflowId or workflowDatabaseId outside the ID pattern, or a startingToken that cannot be decoded.
+                    description: A filter or pagination parameter is invalid — a filterStartDate outside the accepted UTC form, a workflowId or workflowDatabaseId outside the ID pattern, an includeSystem other than true or false, or a startingToken that cannot be decoded.
                     content:
                         application/json:
                             schema:
@@ -4582,6 +4591,13 @@ paths:
                 required: false
                 schema:
                     type: string
+              - in: query
+                name: includeSystem
+                required: false
+                description: "true to include runs of system workflows, false to leave them out. When absent they are left out, except when the list is filtered to one workflow (workflowId and workflowDatabaseId) that is a system workflow the caller can read, in which case its runs are included. Case-insensitive; any other value is rejected with 400."
+                schema:
+                    type: string
+                    enum: ["true", "false"]
     /database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}:
         get:
             summary: "List executions for a specific workflow on an asset."
@@ -4617,6 +4633,9 @@ paths:
                                             filterEndDate:
                                                 type: string
                                                 description: "The upper bound that was applied, present only when one was supplied."
+                                            includeSystem:
+                                                type: boolean
+                                                description: "Whether this page includes runs of system workflows: the caller's includeSystem, or the default that applied."
                                             warnings:
                                                 type: array
                                                 maxItems: 1
@@ -4630,7 +4649,7 @@ paths:
                                                 type: string
                                                 nullable: true
                 "400":
-                    description: A filter or pagination parameter is invalid — a filterStartDate outside the accepted UTC form, a workflowId or workflowDatabaseId outside the ID pattern, or a startingToken that cannot be decoded.
+                    description: A filter or pagination parameter is invalid — a filterStartDate outside the accepted UTC form, a workflowId or workflowDatabaseId outside the ID pattern, an includeSystem other than true or false, or a startingToken that cannot be decoded.
                     content:
                         application/json:
                             schema:
@@ -4673,6 +4692,13 @@ paths:
                 description: "Database of the workflow named in the path. Accepts GLOBAL for the shared workflow catalog."
                 schema:
                     type: string
+              - in: query
+                name: includeSystem
+                required: false
+                description: "true to include runs of system workflows, false to leave them out. When absent they are left out, unless the workflow named in the path (with its workflowDatabaseId) is a system workflow the caller can read. Case-insensitive; any other value is rejected with 400."
+                schema:
+                    type: string
+                    enum: ["true", "false"]
               - name: databaseId
                 in: path
                 description: Database ID.
@@ -7867,7 +7893,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions:
         get:
             summary: "List workflow executions across all assets (global)."
-            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow, GET on EVERY asset the run read (each input file's asset plus each asset named as a metadata source), and GET on the asset it wrote to whenever the run wrote to one; a permanently deleted asset defers to GET on the database it lived in. A results-only run names no output asset and reads nothing, so workflow GET is its whole gate. Lists recent executions by default (started within the last 90 days); filterStartDate/filterEndDate query an explicit range. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination. The applied window is echoed back as filterStartDate (and filterEndDate when supplied). Each row also reports the run's output target (outputLocationType, outputAssetId, outputDatabaseId); these are empty for a results-only execution that writes no files. A page shorter than pageSize is a stated bound rather than an absence of matches: warnings names the bound that stopped it."
+            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow, GET on EVERY asset the run read (each input file's asset plus each asset named as a metadata source), and GET on the asset it wrote to whenever the run wrote to one; a permanently deleted asset defers to GET on the database it lived in. A results-only run names no output asset and reads nothing, so workflow GET is its whole gate. Lists recent executions by default (started within the last 90 days); filterStartDate/filterEndDate query an explicit range. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination. The applied window is echoed back as filterStartDate (and filterEndDate when supplied). Runs of system workflows are not returned unless includeSystem=true, or the list is filtered to one system workflow; the applied value is echoed back as includeSystem. Each row also reports the run's output target (outputLocationType, outputAssetId, outputDatabaseId); these are empty for a results-only execution that writes no files. A page shorter than pageSize is a stated bound rather than an absence of matches: warnings names the bound that stopped it."
             parameters:
               - name: pageSize
                 in: query
@@ -7951,6 +7977,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 required: false
                 schema:
                     type: string
+              - in: query
+                name: includeSystem
+                required: false
+                description: "true to include runs of system workflows, false to leave them out. When absent they are left out, except when the list is filtered to one workflow (workflowId and workflowDatabaseId) that is a system workflow the caller can read, in which case its runs are included. Case-insensitive; any other value is rejected with 400."
+                schema:
+                    type: string
+                    enum: ["true", "false"]
             responses:
                 "200":
                     description: OK
@@ -7973,6 +8006,9 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                             filterEndDate:
                                                 type: string
                                                 description: "The upper bound that was applied, present only when one was supplied."
+                                            includeSystem:
+                                                type: boolean
+                                                description: "Whether this page includes runs of system workflows: the caller's includeSystem, or the default that applied."
                                             warnings:
                                                 type: array
                                                 maxItems: 2
@@ -7989,7 +8025,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                                 type: string
                                                 nullable: true
                 "400":
-                    description: A filter or pagination parameter is invalid — a filterStartDate or filterEndDate outside the accepted UTC form, or a startingToken that cannot be decoded.
+                    description: A filter or pagination parameter is invalid — a filterStartDate or filterEndDate outside the accepted UTC form, an includeSystem other than true or false, or a startingToken that cannot be decoded.
                     content:
                         application/json:
                             schema:
@@ -15166,6 +15202,9 @@ components:
                     type: string
                 executionGroupId:
                     type: string
+                isSystem:
+                    type: boolean
+                    description: "True for a run of a system workflow (the workflow's isSystem, copied at launch). False for every other run, including one recorded before the flag existed. Such rows are listed only when includeSystem applies."
                 outputLocationType:
                     type: string
                     description: "'asset' for a run that wrote files to an asset, 'none' for a results-only run. Empty for a run with no configuration row."

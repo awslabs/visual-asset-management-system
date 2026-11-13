@@ -21,12 +21,13 @@ import click
 
 from ..constants import (
     EXECUTION_DETAIL_METADATA_COLLECTIONS, EXECUTION_DETAIL_FILE_COLLECTIONS,
-    MAX_EXECUTION_AUTO_PAGINATE_PAGES,
+    EXECUTION_LIST_INCLUDE_SYSTEM_PARAM, MAX_EXECUTION_AUTO_PAGINATE_PAGES,
     MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE, MAX_GLOBAL_EXECUTION_PAGE_SIZE,
 )
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
+from ..utils.system_records import system_runs_hidden_hint
 from ..utils.exceptions import (
     ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
 )
@@ -136,6 +137,10 @@ class DetailsGroup(click.Group):
 @click.option('--trigger-type', help='Filter by trigger type (Manual / File-Upload)')
 @click.option('--group-id', help='Filter by executionGroupId')
 @click.option('--triggered-by', help='Filter by the user ID that triggered the execution')
+@click.option('--include-system/--no-include-system', 'include_system', default=None,
+              help='Include runs of system workflows, which are hidden by default. Filtering to one '
+                   'system workflow (-w and --workflow-database-id) shows its runs unless '
+                   '--no-include-system is given.')
 @click.option('--filter-start-date',
               help='Only executions started on/after this UTC date-time, as '
                    'YYYY-MM-DDTHH:MM:SSZ (default: 90 days ago). The list shows recent '
@@ -153,7 +158,8 @@ class DetailsGroup(click.Group):
 @requires_setup_and_auth
 def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_database_id: Optional[str],
                     status: Optional[str], exclude_status: Optional[str], trigger_type: Optional[str],
-                    group_id: Optional[str], triggered_by: Optional[str], filter_start_date: Optional[str],
+                    group_id: Optional[str], triggered_by: Optional[str], include_system: Optional[bool],
+                    filter_start_date: Optional[str],
                     filter_end_date: Optional[str], page_size: Optional[int], max_items: Optional[int],
                     starting_token: Optional[str], auto_paginate: bool, json_output: bool):
     """List workflow executions globally (permission-filtered), with optional filters.
@@ -161,7 +167,8 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
     Only executions whose workflow you can read are listed, and then only when you can read every
     asset the run read and the asset it wrote to. By default only recent executions (started within
     the last 90 days) are listed; use --filter-start-date / --filter-end-date to query an explicit
-    date range.
+    date range. Runs of system workflows are hidden unless --include-system is given (or the list
+    is filtered to one system workflow).
 
     A page shorter than --page-size is a stated bound rather than an absence of matches: the reason
     is reported under Warnings, and a NextToken continues from where the page stopped.
@@ -172,6 +179,7 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
         vamscli execution list --exclude-status SKIPPED
         vamscli execution list --filter-start-date 2026-01-01T00:00:00Z --filter-end-date 2026-02-01T00:00:00Z
         vamscli execution list --group-id grp-123 --auto-paginate
+        vamscli execution list --include-system
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
@@ -204,6 +212,10 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
             params['groupId'] = group_id
         if triggered_by:
             params['triggeredByUserId'] = triggered_by
+        # Sent only when given, so the service's default (hidden, or shown for one system
+        # workflow) applies otherwise.
+        if include_system is not None:
+            params[EXECUTION_LIST_INCLUDE_SYSTEM_PARAM] = 'true' if include_system else 'false'
         if filter_start_date:
             params['filterStartDate'] = filter_start_date
         if filter_end_date:
@@ -223,6 +235,10 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                 end = data.get('filterEndDate')
                 lines.append(f"\nStart date filter applied: {start}"
                              + (f" (through {end})" if end else ""))
+            # System runs are hidden by default; saying so keeps a list without them from reading
+            # as the complete history.
+            if data.get('includeSystem') is False:
+                lines.append(system_runs_hidden_hint(workflow_id, workflow_database_id))
             # Every reason a page can be shorter than --page-size: the cap on distinct assets it
             # resolves for permission checks, and its per-request work budget. Rendered on the empty
             # page too, because that is the case a bare "No executions found." misreports as an
@@ -255,6 +271,8 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
             out.append(f"  Workflow: {ex.get('workflowDatabaseId', 'N/A')}:{ex.get('workflowId', 'N/A')}")
             out.append(f"  Status: {ex.get('executionStatus', 'N/A')}")
             out.append(f"  Started: {ex.get('executionStartDate', 'N/A')}")
+            if ex.get('isSystem') is True:
+                out.append("  System run: yes")
             # A SKIPPED record counts the file-upload trigger launches a concurrency restriction refused.
             if ex.get('executionStatus') == 'SKIPPED':
                 out.append(f"  Skipped launches: {ex.get('skippedLaunchCount', 0)}")
@@ -310,6 +328,9 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                 for key in ('filterStartDate', 'filterEndDate'):
                     if key not in applied_window and page.get(key):
                         applied_window[key] = page[key]
+                # Whether the service included system runs: a boolean, so False is carried too.
+                if 'includeSystem' not in applied_window and 'includeSystem' in page:
+                    applied_window['includeSystem'] = page['includeSystem']
                 if not json_output:
                     output_status(f"Fetched {len(all_items)} executions (page {page_count})...", False)
                 next_token = page.get('NextToken')
