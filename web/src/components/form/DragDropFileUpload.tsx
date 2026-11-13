@@ -128,11 +128,16 @@ export default function DragDropFileUpload({
 
     const openFolderInput = () => folderInputRef.current?.click();
 
+    // Set once showDirectoryPicker has failed in this control: later clicks go straight to the
+    // webkitdirectory input, synchronously inside the click, where the browser always allows it.
+    const pickerBrokenRef = useRef(false);
+
     const handleAddFolder = async () => {
         // showDirectoryPicker is only an enhancement; the webkitdirectory input works everywhere
-        // and the two give identical roots.
+        // and the two give identical roots. Without it (or once it has failed) the input is
+        // opened before any await, so the click keeps its user activation.
         const picker = (window as any).showDirectoryPicker;
-        if (typeof picker !== "function") {
+        if (typeof picker !== "function" || pickerBrokenRef.current) {
             openFolderInput();
             return;
         }
@@ -149,7 +154,12 @@ export default function DragDropFileUpload({
                 return;
             }
             console.warn("Folder picker failed, using the folder input instead:", err);
-            setStatus("");
+            pickerBrokenRef.current = true;
+            // The browser may refuse to open a dialog this long after the click, and that refusal
+            // cannot be detected, so always say what to do; choosing a folder replaces the text.
+            setStatus(
+                "The folder picker could not open. Select Add folder again to choose a folder."
+            );
             openFolderInput();
         } finally {
             setIsLoading(false);

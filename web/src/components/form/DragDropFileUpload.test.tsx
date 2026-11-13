@@ -223,15 +223,38 @@ describe("DragDropFileUpload drop handling", () => {
     });
 
     it("falls back to the folder input when showDirectoryPicker fails for a reason other than cancel", async () => {
-        (window as any).showDirectoryPicker = jest.fn(async () => {
+        const picker = jest.fn(async () => {
             throw new Error("SecurityError");
         });
+        (window as any).showDirectoryPicker = picker;
         const { onAdd } = renderZone();
         const input = screen.getByTestId("upload-folder-input") as HTMLInputElement;
         const clickSpy = jest.spyOn(input, "click");
         fireEvent.click(screen.getByRole("button", { name: "Add folder" }));
-        await waitFor(() => expect(clickSpy).toHaveBeenCalled());
+        await waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));
         expect(onAdd).not.toHaveBeenCalled();
+
+        // The late click may be refused by the browser, so the control never stays silent.
+        expect(screen.getByText(/Select Add folder again/)).toBeTruthy();
+
+        // The next click opens the input synchronously, inside the click, without the picker.
+        fireEvent.click(screen.getByRole("button", { name: "Add folder" }));
+        expect(clickSpy).toHaveBeenCalledTimes(2);
+        expect(picker).toHaveBeenCalledTimes(1);
+
+        // Choosing a folder replaces the message.
+        fireEvent.change(input, { target: { files: packInputFiles() } });
+        expect(onAdd).toHaveBeenCalledTimes(1);
+        expect(screen.queryByText(/Select Add folder again/)).toBeNull();
+    });
+
+    it("opens the folder input synchronously from the click when showDirectoryPicker is absent", () => {
+        renderZone();
+        const input = screen.getByTestId("upload-folder-input") as HTMLInputElement;
+        const clickSpy = jest.spyOn(input, "click");
+        fireEvent.click(screen.getByRole("button", { name: "Add folder" }));
+        // No await between the click and the input: the browser keeps the user activation.
+        expect(clickSpy).toHaveBeenCalledTimes(1);
     });
 
     it("exposes labelled Add files and Add folder buttons and a directory input", () => {
