@@ -352,10 +352,11 @@ def build_manifest_output_target(location_type="asset", asset_id="", database_id
     that asset. The end-state process-output lambda uses this rather than assuming the output
     target equals the input asset.
 
-    fileBaseExecutionPathExtension is inserted between the output asset's location key and each
-    output file's relative path (final key = assetLocationKey + extension + relativePath). It
-    defaults to '/' (no extra path segment); a value like '/exec-2026/' writes all outputs under
-    that sub-folder of the asset."""
+    fileBaseExecutionPathExtension is inserted into each output file's relative path immediately
+    before its final filename (see common.workflows.outputPathExtension), so the pipeline's own
+    folder structure is kept and the extension names the file's parent folder: with '/exec-2026/',
+    a pipeline output 'checkpoints/model_99.pt' lands at 'checkpoints/exec-2026/model_99.pt' on the
+    asset. It defaults to '/' (no extra path segment)."""
     return {
         "locationType": location_type or "asset",
         "assetId": asset_id or "",

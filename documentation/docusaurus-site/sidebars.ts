@@ -77,6 +77,7 @@ const sidebars: SidebarsConfig = {
                 "user-guide/subscriptions",
                 "user-guide/api-keys",
                 "user-guide/automating-vams",
+                "user-guide/audit-and-cost-attribution",
                 "user-guide/user-management",
             ],
         },
@@ -210,6 +211,7 @@ const sidebars: SidebarsConfig = {
                         },
                     ],
                 },
+                "mcp/mcp-server",
                 {
                     type: "category",
                     label: "API Reference",

@@ -13,6 +13,7 @@ from pathlib import Path
 LIBRARY_MODULE_NAMES = [
     "edhAmiRecipeStore",
     "edhAmiRecipes",
+    "edhAudit",
     "edhCapacityReservations",
     "edhCatalogFields",
     "edhClient",

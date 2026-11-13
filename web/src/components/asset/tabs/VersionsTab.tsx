@@ -12,9 +12,16 @@ interface VersionsTabProps {
     databaseId: string;
     assetId: string;
     isActive: boolean;
+    /** Called after a version is created, reverted to, edited, archived or unarchived. */
+    onVersionsChanged?: () => void;
 }
 
-export const VersionsTab: React.FC<VersionsTabProps> = ({ databaseId, assetId, isActive }) => {
+export const VersionsTab: React.FC<VersionsTabProps> = ({
+    databaseId,
+    assetId,
+    isActive,
+    onVersionsChanged,
+}) => {
     // Only render the component when the tab is active to improve performance
     if (!isActive) {
         return null;
@@ -22,7 +29,7 @@ export const VersionsTab: React.FC<VersionsTabProps> = ({ databaseId, assetId, i
 
     return (
         <ErrorBoundary componentName="Asset Versions">
-            <AssetVersionManager />
+            <AssetVersionManager onVersionsChanged={onVersionsChanged} />
         </ErrorBoundary>
     );
 };

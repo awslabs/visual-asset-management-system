@@ -691,8 +691,10 @@ VAMS maintains nine dedicated Amazon CloudWatch Log Groups for audit logging, ea
 | Errors                 | Application errors and exceptions                          |
 
 :::info[Silent Failure Pattern]
-Audit logging uses a silent failure pattern. If writing to an audit log fails, the error is logged locally to the Lambda's standard log group, but Lambda execution continues normally. This prevents audit logging failures from disrupting application operations.
+Audit logging uses a silent failure pattern. If writing to an audit log fails, the error is logged locally to the Lambda's standard log group, but Lambda execution continues normally. This prevents audit logging failures from disrupting application operations. The entry that could not be written is kept in the Lambda's own log as an `auditFallback` line and counted in the `AuditWriteFailures` metric (namespace `VAMS/Audit`); alarm on that metric (see [Monitoring Audit Logging Health](../developer/audit-logging.md#monitoring-audit-logging-health)).
 :::
+
+Each record carries an echo of the request after credential keys and caller-authored template content are redacted, including the verified token claims and the submitted request body, so audit records can contain personal data a user enters. See [What Is Logged](../developer/audit-logging.md#what-is-logged).
 
 ## AWS CloudTrail Integration
 
