@@ -394,6 +394,42 @@ For operations that may exceed the integration timeout, check your AWS Lambda fu
 
 Deployments that regularly run these operations can raise `app.api.apiGatewayRest.apiGatewayTimeoutTime` (up to 300 seconds) so the request completes synchronously instead of returning a 504. Values above 29 seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md).
 
+### Asset ID Refused as Not Unique Although No Asset Exists
+
+**Symptoms:**
+
+-   Creating an asset returns HTTP 400 "Asset identifier is not unique for the given S3 bucket location"
+-   No asset with that ID exists: `vamscli assets get -d <DATABASE_ID> <ASSET_ID> --show-archived` reports that the asset is not found
+
+**Cause:**
+
+Asset creation first writes an empty folder object named after the asset ID into the database's default Amazon S3 bucket, then records the asset. When a later step fails, for example creating the asset's notification topic, the folder object stays behind. Creation refuses an asset ID whose folder holds any object version or delete marker, so that ID cannot be created again. [#1385](https://github.com/awslabs/visual-asset-management-system/issues/1385) tracks removing the leftover object.
+
+**Resolution:**
+
+Remove every version of the empty folder object, then create the asset again.
+
+1. Find the bucket and its base assets prefix: `vamscli database get -d <DATABASE_ID>` shows the database's default bucket ID, and `vamscli database list-buckets` shows that bucket's name and base assets prefix.
+2. Build the folder object's key: the base assets prefix with a trailing slash and no leading slash (a prefix of `/` is the bucket root and adds nothing), then the asset ID, then `/`. In a bucket whose base assets prefix is `/`, the key for asset `my.asset` is `my.asset/`.
+3. List every version and delete marker under that key:
+
+    ```bash
+    aws s3api list-object-versions --bucket <BUCKET_NAME> --prefix "<KEY>" \
+      --query "{Versions: Versions[].[Key, VersionId, Size], DeleteMarkers: DeleteMarkers[].[Key, VersionId]}"
+    ```
+
+    Continue only if every entry has exactly that key and every version has size 0. Anything else under the key is asset data. If another database uses the same bucket and base assets prefix, also confirm with `vamscli assets get -d <OTHER_DATABASE_ID> <ASSET_ID> --show-archived` that it holds no asset with this ID.
+
+4. Delete each listed version and delete marker by its version ID:
+
+    ```bash
+    aws s3api delete-object --bucket <BUCKET_NAME> --key "<KEY>" --version-id <VERSION_ID>
+    ```
+
+    A delete without `--version-id` adds a delete marker, which still blocks the asset ID.
+
+5. Create the asset again.
+
 ### Amazon OpenSearch Indexing Delays After Bulk Operations
 
 After uploading many files or performing bulk metadata changes, search results may not immediately reflect the updates.
