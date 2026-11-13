@@ -27,6 +27,7 @@ buckets (each manifest entry carries its own bucket). Output-target write-back t
 asset's own bucket, resolved independently by the end-state process-output lambda.
 """
 
+import contextvars
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -670,14 +671,19 @@ def _simplify_metadata_array(metadata_array, entity_label="", truncated=None):
 def _run_bounded(jobs):
     """Run zero-arg callables through a bounded worker pool, returning results in job order. A single
     job runs inline (no pool). Keeps the per-input fan-out inside the request window without an
-    unbounded burst of child invocations."""
+    unbounded burst of child invocations.
+
+    Each pooled job runs in a copy of the caller's context, so it sees the request audit context (the
+    forwarded metadata reads carry the caller's request id); one copy per job, as a context cannot be
+    entered by two threads at once."""
     if not jobs:
         return []
     if len(jobs) == 1:
         return [jobs[0]()]
     workers = min(MAX_PARALLEL_INPUT_WORKERS, len(jobs))
+    contexts = [contextvars.copy_context() for _ in jobs]
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        return list(executor.map(lambda job: job(), jobs))
+        return list(executor.map(lambda ctx, job: ctx.run(job), contexts, jobs))
 
 
 def _derive_metadata_source_databases(selected_inputs, metadata_source_assets,

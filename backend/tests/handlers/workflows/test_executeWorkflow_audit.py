@@ -7,8 +7,13 @@ on behalf of the caller rather than as the caller's own reads."""
 import os
 import sys
 import types
+from types import SimpleNamespace
 
 import pytest
+
+# The production audit module, for its real marker and request context variable (the handler under test
+# imports the test tree's no-op stand-in). Imported before the handler stubs below.
+from backend.backend.customLogging import auditLogging as real_audit  # noqa: E402
 
 # executeWorkflowV2 loads these at import.
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "t-assets")
@@ -51,3 +56,31 @@ class TestForwardedMetadataReads:
         payload = execute_svc._metadata_service_payload("/database/db1/metadata", {}, event)
         assert payload["lambdaCrossCall"] == {"userName": "alice"}
         assert execute_svc.AUDIT_INTERNAL_CALL_KEY not in payload
+
+
+@pytest.mark.unit
+class TestPooledMetadataReads:
+    """The metadata reads run in _run_bounded's worker pool; each must still carry the request's marker.
+
+    The handler module imports the test-tree auditLogging stand-in, so the real marker and the real
+    request context variable are wired in from the production module; the pool itself is not patched."""
+
+    def test_every_pooled_read_carries_the_callers_request_id(self, monkeypatch):
+        monkeypatch.setattr(execute_svc, "internal_call_marker", real_audit.internal_call_marker)
+        event = {"requestContext": {"authorizer": {"lambda": {"vams:tokens": '["alice"]'}}}}
+        ctx = SimpleNamespace(event=event, request={"requestId": "req-1"}, actor={"userId": "alice"})
+        jobs = [lambda d=database_id: execute_svc._metadata_service_payload(
+            f"/database/{d}/metadata", {"databaseId": d}, event) for database_id in ("db1", "db2", "db3")]
+        token = real_audit._audit_context.set(ctx)
+        try:
+            payloads = execute_svc._run_bounded(jobs)
+        finally:
+            real_audit._audit_context.reset(token)
+        assert len(payloads) == 3
+        first, second, third = payloads
+        expected = {"requestId": "req-1", "onBehalfOf": "alice"}
+        assert first[execute_svc.AUDIT_INTERNAL_CALL_KEY] == expected
+        assert second[execute_svc.AUDIT_INTERNAL_CALL_KEY] == expected
+        assert third[execute_svc.AUDIT_INTERNAL_CALL_KEY] == expected
+        assert first["pathParameters"] == {"databaseId": "db1"}
+        assert third["pathParameters"] == {"databaseId": "db3"}
