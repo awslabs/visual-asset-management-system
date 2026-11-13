@@ -83,6 +83,24 @@ class TestStrayRule:
         for hub_points in (2000, 1000, 600):  # none, some or most of the ring in the core
             assert not scene_parts.stray_parts([hub] + ring, [hub_points] + [8] * 8).any(), hub_points
 
+    def test_twin_leftovers_at_the_same_distance_are_both_strays(self):
+        """Two identical small pieces 50 m out, on opposite sides: a pair is not a pattern."""
+        left = _box((-50.01, 0.0, -0.01), (-49.99, 0.02, 0.01))
+        right = _box((49.99, 0.0, -0.01), (50.01, 0.02, 0.01))
+        assert scene_parts.stray_parts([MODEL, left, right], [400, 8, 8]).tolist() == [False, True, True]
+
+    @pytest.mark.parametrize("cube", [0.5, 2.0])
+    def test_a_far_cube_beside_a_car_with_wheels_of_its_size_is_a_stray(self, cube):
+        """A 4.5 m car body with four 0.7 m wheels and a cube 100 m away: the wheels are in the core and
+        of the cube's size, but near the car's centre, so they are no peers of the cube."""
+        body = _box((-2.25, 0.3, -0.9), (2.25, 1.5, 0.9))
+        wheels = [_box((x - 0.35, 0.0, z - 0.12), (x + 0.35, 0.7, z + 0.12))
+                  for x in (-1.4, 1.4) for z in (-0.85, 0.85)]
+        h = cube / 2.0
+        far = _box((100.0 - h, 0.0, -h), (100.0 + h, cube, h))
+        mask = scene_parts.stray_parts([body] + wheels + [far], [2000] + [400] * 4 + [8])
+        assert mask.tolist() == [False] * 5 + [True]
+
     def test_two_leftovers_at_different_distances_are_both_strays(self):
         near_left = _box((49.99, 0.0, -0.01), (50.01, 0.02, 0.01))
         far_left = _box((-0.01, 0.0, 119.99), (0.01, 0.02, 120.01))

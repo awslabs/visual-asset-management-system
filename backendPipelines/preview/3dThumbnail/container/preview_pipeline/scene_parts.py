@@ -69,12 +69,16 @@ _NESTED_BLOCK = 4096
 STRAY_SHARE = 0.05
 STRAY_SCALE = 10.0
 STRAY_SIZE_SHARE = 0.5
-# A candidate stray with a peer is not a stray (``_has_peer``): a part within PEER_SIZE_RATIO of its
-# size in the core, or another candidate of that size whose distance from the core's centre is within
-# PEER_DISTANCE_SHARE of its own. The pairwise distance test runs for at most MAX_PEER_CANDIDATES
-# candidates; past that only the core test applies.
+# A candidate stray with a peer is not a stray (``_has_peer``). A peer is within PEER_SIZE_RATIO of its
+# size and its distance from the core's centre is within PEER_DISTANCE_RATIO of the candidate's: twice
+# as near or as far at most, which holds for the parts of a ring (the core's centre moves with the ring
+# parts the core holds) and not for a wheel near the middle of a car beside a cube 100 m away. One peer
+# in the core suffices; among candidates, a group of at least PEER_GROUP_MIN such parts is a pattern
+# (three or more identical parts at one distance), while one leftover or a pair is not. The pairwise
+# tests run for at most MAX_PEER_CANDIDATES candidates and core parts; past that no peer is found.
 PEER_SIZE_RATIO = 1.5
-PEER_DISTANCE_SHARE = 0.1
+PEER_DISTANCE_RATIO = 2.0
+PEER_GROUP_MIN = 3
 MAX_PEER_CANDIDATES = 2048
 
 # Parts tracked per scene. A backdrop is one part, or a few, at least BACKDROP_SCALE times the rest of
@@ -338,27 +342,33 @@ def stray_parts(bounds, counts):
 
 
 def _has_peer(bounds, size, core, candidates, centre):
-    """True per candidate stray that belongs to a pattern rather than being a leftover: a part of
-    comparable size (within PEER_SIZE_RATIO of it) that is in the core, or another candidate at the
-    same distance from the core's centre (within PEER_DISTANCE_SHARE). Identical parts of an exploded
-    ring, some of which landed in the core by point count, are framed together. One leftover piece
-    has no such peer, and a small piece beside a much larger model is not comparable to it."""
+    """True per candidate stray that belongs to a pattern rather than being a leftover. Its peers are
+    parts of comparable size (within PEER_SIZE_RATIO) at a comparable distance from the core's centre
+    (within PEER_DISTANCE_RATIO of the candidate's own): a candidate has a peer when one such part is
+    in the core, or when at least PEER_GROUP_MIN - 1 other candidates are such parts. Identical parts
+    of an exploded ring, some or none of which the point count put in the core, are framed together.
+    A wheel near the middle of a car is no peer of a cube 100 m away (its distance is not comparable),
+    and one leftover, or a pair of twin leftovers at the same distance, has no peer group."""
     peer = np.zeros(len(bounds), dtype=bool)
     index = np.flatnonzero(candidates)
-    core_sizes = np.sort(size[core])
-    lo = np.searchsorted(core_sizes, size[index] / PEER_SIZE_RATIO, side="left")
-    hi = np.searchsorted(core_sizes, size[index] * PEER_SIZE_RATIO, side="right")
-    peer[index] = hi > lo
-    rest = index[~peer[index]]
-    if 2 <= len(rest) <= MAX_PEER_CANDIDATES:
-        distance = np.linalg.norm((bounds[rest, :3] + bounds[rest, 3:]) / 2.0 - centre, axis=1)
-        s = size[rest]
-        comparable = (np.maximum(s[:, None], s[None, :]) <= PEER_SIZE_RATIO * np.minimum(s[:, None], s[None, :]))
-        same = np.abs(distance[:, None] - distance[None, :]) <= PEER_DISTANCE_SHARE * np.maximum(
-            distance[:, None], distance[None, :])
-        pair = comparable & same
-        np.fill_diagonal(pair, False)
-        peer[rest] = pair.any(axis=1)
+    if len(index) > MAX_PEER_CANDIDATES:
+        return peer
+    centres = (bounds[:, :3] + bounds[:, 3:]) / 2.0
+    distance = np.linalg.norm(centres - centre, axis=1)
+
+    def comparable(a, b):
+        return np.maximum(a[:, None], b[None, :]) <= PEER_SIZE_RATIO * np.minimum(a[:, None], b[None, :])
+
+    def near_distance(a, b):
+        return np.maximum(a[:, None], b[None, :]) <= PEER_DISTANCE_RATIO * np.minimum(a[:, None], b[None, :])
+
+    core_index = np.flatnonzero(core)
+    if len(core_index) <= MAX_PEER_CANDIDATES:
+        in_core = comparable(size[index], size[core_index]) & near_distance(distance[index], distance[core_index])
+        peer[index] = in_core.any(axis=1)
+    group = comparable(size[index], size[index]) & near_distance(distance[index], distance[index])
+    np.fill_diagonal(group, False)
+    peer[index] |= group.sum(axis=1) >= PEER_GROUP_MIN - 1
     return peer
 
 
