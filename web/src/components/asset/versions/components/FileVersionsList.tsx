@@ -34,6 +34,7 @@ import {
     useAssetArchived,
 } from "../../../../context/ArchivedAssetContext";
 import { useViewerRegistryReady } from "../../../../visualizerPlugin/core/useViewerRegistryReady";
+import { downloadRefusalReason } from "../../../../visualizerPlugin/core/streamFailure";
 
 export const FileVersionsList: React.FC = () => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
@@ -386,7 +387,11 @@ export const FileVersionsList: React.FC = () => {
                     }, 1000);
                 }
             } else {
-                setDownloadError(`Failed to download file: ${file.relativeKey}`);
+                // A download the API refused shows the API's reason (D166).
+                setDownloadError(
+                    downloadRefusalReason(response) ??
+                        `Failed to download file: ${file.relativeKey}`
+                );
                 setDownloadStatus((prev) => ({ ...prev, [file.relativeKey]: "error" }));
                 console.error("Failed to download file");
                 setDownloadingFile(null);

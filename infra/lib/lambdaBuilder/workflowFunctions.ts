@@ -203,6 +203,12 @@ const EXECUTION_AUTHORIZATION_READS: Partial<Record<ExecutionTableTarget, string
 };
 
 /**
+ * Construct id of the customer managed policy that carries the end-state handler's PutEvents on the
+ * orchestration bus (the workflow.execution.completed event).
+ */
+export const PROCESS_OUTPUT_EVENTS_POLICY_ID = "OrchestrationEventsPolicy";
+
+/**
  * Every DynamoDB call each route set makes, by table and by the one index ARN of each index it
  * queries (never `index/*`), with only the actions it calls. The lock table's calls are in the lock
  * policy (executionLockDeleteStatements). backend/tests/handlers/workflows/
@@ -456,6 +462,41 @@ function newExecutionServiceFunction(
     return fun;
 }
 
+/**
+ * Attaches statements to a handler's role as a customer managed policy, which IAM does not count against
+ * the role's 10,240-character inline policy quota (each managed policy has its own 6,144). The role's
+ * ManagedPolicyArns names the policy, so CloudFormation creates and attaches it before the role and its
+ * default policy update; statements moving out of the default policy are therefore never missing on
+ * upgrade. The function waits for it as well.
+ */
+function attachManagedHandlerPolicy(
+    fun: lambda.Function,
+    id: string,
+    statements: iam.PolicyStatement[]
+) {
+    const policy = new iam.ManagedPolicy(fun, id, { statements });
+    fun.role!.addManagedPolicy(policy);
+    fun.node.defaultChild!.node.addDependency(policy);
+}
+
+/**
+ * Lets a function publish the workflow.execution.completed event on the orchestration bus, for a
+ * terminal status it writes: the service function's abort, list reconcile and Step Functions status
+ * change, and the details function's reconcile (development, #749). The logs and permanent-delete
+ * functions write no terminal status and get neither the grant nor the variables.
+ */
+function addCompletionEventPublish(fun: lambda.Function, storageResources: storageResources) {
+    fun.addEnvironment(
+        "ORCHESTRATION_BUS_ARN",
+        storageResources.eventBridge.orchestrationBus.eventBusArn
+    );
+    fun.addEnvironment(
+        "ORCHESTRATION_EVENT_SOURCE_PREFIX",
+        storageResources.eventBridge.eventSourcePrefix
+    );
+    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
+}
+
 /** Every Step Functions state machine and execution ARN pattern a VAMS run and its registered pipeline
  * sub-executions run under (CDK-generated sub-state-machine names, see the constant above). */
 function executionStateMachineArns(config: Config.Config, kind: "statemachine" | "execution") {
@@ -599,6 +640,7 @@ export function buildExecutionServiceFunction(
     )) {
         fun.addToRolePolicy(statement);
     }
+    addCompletionEventPublish(fun, storageResources);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -712,6 +754,7 @@ export function buildExecutionDetailsFunction(
     )) {
         fun.addToRolePolicy(statement);
     }
+    addCompletionEventPublish(fun, storageResources);
     addExecutionReadGrants(fun, config);
     if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
         // A registered Deadline Cloud job's name and status for the per-step view.
@@ -1021,11 +1064,24 @@ export function buildProcessWorkflowExecutionOutputFunction(
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
+            // The workflow.execution.completed event is published to the orchestration bus.
+            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
     });
 
     fileUploadLambdaFunction.grantInvoke(fun);
     metadataServiceFunction.grantInvoke(fun);
+    // This role is a named exception to the IAM inline policy budget (its execution table grants), so
+    // the completion event's PutEvents sits in a customer managed policy of its own rather than
+    // adding to the inline total (infra/CLAUDE.md, IAM Inline Policy Budget).
+    attachManagedHandlerPolicy(fun, PROCESS_OUTPUT_EVENTS_POLICY_ID, [
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["events:PutEvents"],
+            resources: [storageResources.eventBridge.orchestrationBus.eventBusArn],
+        }),
+    ]);
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
@@ -1152,11 +1208,15 @@ export function buildHandleExecutionErrorFunction(
             // DynamoDB table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). Only the
             // non-SSM shared workflow SFN log group ARN is set here (used to pull failed-run logs).
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
+            // The workflow.execution.completed event is published to the orchestration bus.
+            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
     });
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
+    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
     // A failed run's outputTypes are derived from whatever output rows exist at failure (one
     // existence query per output table) and recorded on the launch-time configuration row.
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadData(fun);
