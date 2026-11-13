@@ -215,7 +215,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Textured FBX thumbnails are not reported incomplete** — FBX textures are still fetched, but since the FBX preview does not sample textures, a missing or absolute-path texture no longer marks the preview incomplete. (issue #1457)
 -   **glTF and OBJ thumbnails read files from parent folders** — A glTF or OBJ that names files in a folder above its own inside the same asset (`../textures/`, `../materials/`) loads them instead of failing or losing its materials; files outside the asset are still refused. (issue #1458)
 -   **Complete LCC scenes are not reported incomplete** — An `.lcc` scene's `shcoef.bin` is fetched only when the scene has spherical harmonics, and `environment.bin`, which the converter does not read, is no longer asked for. (issue #1459)
--   **Point clouds with NaN points render** — Points with NaN or infinite coordinates, such as the empty pixels of an organized PCD, are dropped before framing, so the preview shows the valid points instead of an empty frame; a cloud with no valid point fails with a clear message. (issue #1460)
+-   **Point clouds with NaN points render** — Points with NaN or infinite coordinates, such as the empty pixels of an organized PCD, are dropped before framing, also from the point geometry of glTF/GLB scenes and OBJ and Draco files, so the preview shows the valid points instead of an empty frame; a cloud with no valid point fails with a clear message, and in a scene that also holds meshes it is left out and the meshes render. (issue #1460)
 -   **A stray part no longer empties 3D preview thumbnails** — A tiny part far from the rest of a model is left out of the framing, so the model fills the preview; the part is still drawn, and a far-away part over half the model's size is still framed. (issue #1461)
 -   **FARO scans no longer offered to 3D preview thumbnails** — `.fls` and `.fws` are removed from the pipeline's accepted files, its upload trigger and its documentation; no reader for them is available, so every such run failed. (issue #467)
 -   **Multi-scan E57 and PTX thumbnails show every scan** — Every scan of an E57 or PTX file is read and placed by its pose or transform, E57 colours are scaled from their declared range, and a PTX file's later scans are no longer misread. (issue #467)
@@ -435,6 +435,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Major changes:**
 
+-   Behavior changes to review before upgrading: on a deployment with an external OAuth identity provider, VAMS identifies each user by the token's `cognito:username`, `username` or `sub` claim and no longer reads a `vams:tokens` claim. An identity provider that issued `vams:tokens` with a different value must have its users' role assignments, user-level constraints and per-user records keyed by the username claim instead (see [Update the solution](../deployment/update-the-solution.md#v267-and-later-external-oauth-idp-user-identifier)). (PR #1490)
+
 **Breaking changes:**
 
 **Added:**
@@ -455,6 +457,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Current Amazon Bedrock model for GenAI 3D Metadata Labeling** — The pipeline defaults to Claude Sonnet 5.5 (`global.anthropic.claude-sonnet-5-5`) in the commercial template. Amazon Bedrock refused the previous default, the Legacy Claude Sonnet 4.5, to accounts that had not used it for 30 days. A deployment that sets its own model keeps it; one on Claude Sonnet 4.5 changes it and redeploys. (issue #1353)
 -   **GenAI 3D Metadata Labeling works with Claude Sonnet 5.5** — Runs no longer fail with `ModelResponseError` when the model opens its answer with a thinking block; the pipeline reads the first text block of each response. (issue #1428)
 -   **Ingest-asset upload completion** — The complete stage of `POST /ingest-asset` (the request that carries `uploadId`) finishes the upload instead of always failing with `400` "Invalid API path or method". (issue #1453)
+-   **The authorizer derives the caller's identity from the username claim** — The API authorizer identifies the caller only by the token's username claim (the first present of `cognito:username`, `username` and `sub`) and ignores claims a token carries under the reserved `vams:` prefix; a verified token with none of those claims is refused. Amazon Cognito users and API keys keep their identity. (PR #1490)
 
 **Other changes:**
 
