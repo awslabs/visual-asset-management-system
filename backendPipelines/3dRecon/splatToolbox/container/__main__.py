@@ -449,14 +449,55 @@ def set_config_parameters(params: dict, metadata: dict):
         else:
             print(f"Skipping {key}={value} (not in config.json)")
 
+
+# Environment variable prefixes the launch summary lists, and the variables under them whose values it
+# prints. Every other listed variable is printed by name alone.
+LAUNCH_ENV_PREFIXES = ('INPUT_', 'VAMS_', 'AWS_', 'TASK_')
+LAUNCH_ENV_VALUES_PRINTED = frozenset({
+    'AWS_REGION',
+    'AWS_DEFAULT_REGION',
+    'AWS_BATCH_JOB_ID',
+    'AWS_BATCH_JOB_ATTEMPT',
+})
+
+
+def definition_argument_summary(argument: str) -> str:
+    """How the pipeline definition argument was passed: a file path, or inline JSON and its top-level keys."""
+    argument = argument.strip()
+    if argument.startswith('/') and argument.endswith('.json'):
+        return f"file path {argument}"
+    try:
+        parsed = json.loads(argument)
+    except ValueError:
+        return f"inline text of {len(argument)} characters that is not valid JSON"
+    if isinstance(parsed, dict):
+        return f"inline JSON with keys {list(parsed)}"
+    return f"inline JSON {type(parsed).__name__}"
+
+
+def print_launch_inputs(argv, environ):
+    """Print the shape of the launch inputs rather than their contents.
+
+    The argument count, how the pipeline definition argument was passed (an inline definition by its
+    top-level keys), and the names of the environment variables under LAUNCH_ENV_PREFIXES, with a value
+    only for the variables LAUNCH_ENV_VALUES_PRINTED names.
+    """
+    print(f"Command line arguments: {len(argv)}")
+    if len(argv) >= 2 and argv[1].strip():
+        print(f"Pipeline definition argument: {definition_argument_summary(argv[1])}")
+    print("Environment variables:")
+    for key in sorted(environ):
+        if not key.startswith(LAUNCH_ENV_PREFIXES):
+            continue
+        if key in LAUNCH_ENV_VALUES_PRINTED:
+            print(f"  {key}={environ[key]}")
+        else:
+            print(f"  {key}")
+
+
 def main():
-    # Debug: Print all available inputs
-    print(f"Command line arguments: {sys.argv}")
-    print(f"Environment variables:")
-    for key, value in os.environ.items():
-        if key.startswith(('INPUT_', 'VAMS_', 'AWS_', 'TASK_')):
-            print(f"  {key}={value}")
-    
+    print_launch_inputs(sys.argv, os.environ)
+
     # Try to get pipeline definition from command line or environment
     pipeline_json = None
     if len(sys.argv) >= 2 and sys.argv[1].strip():
@@ -488,7 +529,7 @@ def main():
         print(f"Successfully parsed pipeline definition")
     except json.JSONDecodeError as e:
         print(f"Failed to parse pipeline definition as JSON: {e}")
-        print(f"Raw content (first 200 chars): '{pipeline_json[:200]}'")
+        print(f"Pipeline definition length: {len(pipeline_json)} characters")
         sys.exit(1)
     
     # The pipeline definition carries the metadata + input-configuration S3 locations; read each from S3

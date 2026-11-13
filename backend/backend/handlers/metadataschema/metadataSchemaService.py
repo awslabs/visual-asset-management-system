@@ -19,6 +19,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.metadataSchema import (
     GetMetadataSchemaRequestModel, GetMetadataSchemasRequestModel,
@@ -677,6 +678,8 @@ def handle_get_request(event):
                     return authorization_error()
                 
                 # Convert to response model
+                log_action(event, "metadataSchemaGet", metadataSchemaId=path_parameters['metadataSchemaId'],
+                           database_id=schema.get('databaseId'))
                 try:
                     response_model = MetadataSchemaResponseModel(**schema)
                     return success(body=response_model.dict())
@@ -748,7 +751,10 @@ def handle_get_request(event):
             }
             if 'NextToken' in schemas_result:
                 response['NextToken'] = schemas_result['NextToken']
-            
+
+            log_action(event, "metadataSchemaList", database_id=request_model.databaseId,
+                       item_count=len(formatted_items),
+                       request_parameters=request_model.dict(exclude_none=True))
             return success(body=response)
             
     except VAMSGeneralErrorResponse as e:
@@ -789,14 +795,15 @@ def handle_post_request(event):
         request_model = parse(body, model=CreateMetadataSchemaRequestModel)
         
         # Create the schema
-        result = create_metadata_schema(
-            request_model.dict(exclude_unset=True),
-            claims_and_roles
-        )
+        schema_data = request_model.dict(exclude_unset=True)
+        result = create_metadata_schema(schema_data, claims_and_roles)
 
         # An authorization denial is already a complete response
         if not isinstance(result, MetadataSchemaOperationResponseModel):
             return result
+
+        log_action(event, "metadataSchemaCreate", metadataSchemaId=result.metadataSchemaId,
+                   database_id=schema_data.get('databaseId'), changes=schema_data)
 
         # Return success response
         return success(body=result.dict())
@@ -843,15 +850,15 @@ def handle_put_request(event):
         update_model = parse(body, model=UpdateMetadataSchemaRequestModel)
         
         # Update the schema
-        result = update_metadata_schema(
-            update_model.metadataSchemaId,
-            update_model.dict(exclude_unset=True),
-            claims_and_roles
-        )
+        update_data = update_model.dict(exclude_unset=True)
+        result = update_metadata_schema(update_model.metadataSchemaId, update_data, claims_and_roles)
 
         # An authorization denial is already a complete response
         if not isinstance(result, MetadataSchemaOperationResponseModel):
             return result
+
+        log_action(event, "metadataSchemaUpdate", metadataSchemaId=update_model.metadataSchemaId,
+                   database_id=update_data.get('databaseId'), changes=update_data)
 
         # Return success response
         return success(body=result.dict())
@@ -933,6 +940,9 @@ def handle_delete_request(event):
         if not isinstance(result, MetadataSchemaOperationResponseModel):
             return result
 
+        log_action(event, "metadataSchemaDelete", metadataSchemaId=path_parameters['metadataSchemaId'],
+                   database_id=path_parameters['databaseId'])
+
         # Return success response
         return success(body=result.dict())
         
@@ -946,6 +956,8 @@ def handle_delete_request(event):
         logger.exception(f"Error handling DELETE request: {e}")
         return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for metadata schema service APIs"""
     global claims_and_roles

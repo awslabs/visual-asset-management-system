@@ -14,10 +14,7 @@ import * as sns from "aws-cdk-lib/aws-sns";
 import { LayerVersion, Code, Runtime, Function } from "aws-cdk-lib/aws-lambda";
 import { Template } from "aws-cdk-lib/assertions";
 import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
-import {
-    ASSET_EXPORT_STAGING_PREFIX,
-    buildAssetExportService,
-} from "../../lib/lambdaBuilder/assetFunctions";
+import { buildAssetExportService } from "../../lib/lambdaBuilder/assetFunctions";
 import * as Config from "../../config/config";
 import * as Service from "../../lib/helper/service-helper";
 import * as fs from "fs";
@@ -174,7 +171,7 @@ describe("assetExportService large-export staging grants", () => {
                 f.stack.resolve(f.resources.s3.assetAuxiliaryBucket.bucketArn)
             ),
             kmsKeyRef: JSON.stringify(f.stack.resolve(f.kmsKey.keyArn)),
-            stagedObjects: `/${ASSET_EXPORT_STAGING_PREFIX}*`,
+            stagedObjects: `/${Config.ASSET_EXPORT_STAGING_PREFIX}*`,
         };
     };
 

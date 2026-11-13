@@ -9,7 +9,7 @@ import uuid
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
@@ -32,6 +32,7 @@ from common.apiRoutes import (
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import success, validation_error, VAMSGeneralErrorResponse
 from common.s3 import validateUnallowedFileExtensionAndContentType, list_all_objects, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import AssetUploadTableModel
@@ -1659,8 +1660,40 @@ def _process_results_only(event, context=None):
     return success(body={"message": "Workflow Execution Output Processing Complete (results-only)"})
 
 
+def _duration_ms(start_date):
+    """Milliseconds from an ISO 8601 start date until now, or None when it cannot be read."""
+    try:
+        started = datetime.fromisoformat(str(start_date).replace("Z", "+00:00"))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - started).total_seconds() * 1000))
+    except (TypeError, ValueError):
+        return None
+
+
+def _execution_ids(body):
+    return {"database_id": body.get("databaseId") or None, "asset_id": body.get("assetId") or None,
+            "workflowId": body.get("workflowId") or None, "executionId": body.get("workflowExecutionId") or None}
+
+
+def _initiator(body):
+    user = body.get("executingUserName")
+    return user if user and user != "SYSTEM_USER" else None
+
+
+def _log_execution_end(audit_event, body, status, start_date, details=None):
+    """Record the end of a workflow execution: its outcome and duration, for the user it ran for."""
+    log_action(audit_event, "workflowExecutionEnd", outcome="success" if status == "SUCCEEDED" else "failed",
+               reason=None if status == "SUCCEEDED" else "internal", duration_ms=_duration_ms(start_date),
+               on_behalf_of=_initiator(body), **_execution_ids(body),
+               details={"workflowDatabaseId": body.get("workflowDatabaseId"),
+                        "pipelineExecutionId": body.get("endStatePipelineExecutionId"), **(details or {})})
+
+
+@audited_handler
 def lambda_handler(event, context):
     logger.info(event)
+    audit_event = event
 
     try:
         if 'body' in event:
@@ -1689,7 +1722,11 @@ def lambda_handler(event, context):
         # results text + logs recorded against the execution transaction (e.g. an LLM-style pipeline
         # returning a textual response). Handle them before the asset-required validation below.
         if event.get('outputLocationType') == 'none' or (not event['assetId'] and not event['databaseId']):
-            return _process_results_only(event, context)
+            response = _process_results_only(event, context)
+            _log_execution_end(audit_event, event, "SUCCEEDED", _execution_start_date(
+                event.get('workflowExecutionId', ''), event.get('workflowDatabaseId', ''),
+                event.get('workflowId', '')), details={"resultsOnly": True})
+            return response
 
         #Input validation
         if not event['databaseId']:
@@ -2252,6 +2289,7 @@ def lambda_handler(event, context):
                 staged_keys_by_type)
 
             # Record end-state pipeline outputs + completion status.
+            execution_start_date = ""
             try:
                 # The workflow SFN log group is the same for every workflow; read it from
                 # env (not the ASL event) so this works even for workflows not redeployed
@@ -2304,6 +2342,13 @@ def lambda_handler(event, context):
                 # Output recording is non-critical to the upload pipeline; log and continue.
                 logger.exception(f"Error recording execution outputs (non-critical): {e}")
 
+            final_status, _ = _terminal_status(output_failures)
+            log_action(audit_event, "workflowOutputIngest",
+                       outcome="success" if not output_failures else "failed",
+                       reason="internal" if output_failures else None, on_behalf_of=_initiator(event),
+                       **_execution_ids(event), file_count=len(collected_output_files),
+                       item_count=len(collected_output_metadata) + len(collected_output_results))
+            _log_execution_end(audit_event, event, final_status, execution_start_date)
             return success(body={"message": "Workflow Execution Output Processing Complete"})
 
         else:

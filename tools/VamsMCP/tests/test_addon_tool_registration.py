@@ -20,7 +20,9 @@ EDH_TOOL_NAMES = {
     node.name
     for node in ast.walk(ast.parse(Path(edh.__file__).read_text(encoding="utf-8")))
     if isinstance(node, ast.FunctionDef)
-    and [ast.unparse(d) for d in node.decorator_list] == ["mcp.tool()", "tool_result"]
+    and len(node.decorator_list) == 2
+    and isinstance(node.decorator_list[0], ast.Call) and ast.unparse(node.decorator_list[0].func) == "mcp.tool"
+    and ast.unparse(node.decorator_list[1]) == "tool_result"
 }
 # A core switch every deployment publishes, so "off" is a profile with switches rather than none.
 CORE_ONLY = ["AUTHPROVIDER_COGNITO", "LOCATIONSERVICES"]

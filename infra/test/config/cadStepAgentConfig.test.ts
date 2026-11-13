@@ -246,7 +246,7 @@ describe("useGenAiCadStepAgent getConfig() rules", () => {
             useCodeBuild: true,
             autoRegisterWithVAMS: false,
             autoRegisterAutoTriggerOnFileUpload: false,
-            bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            bedrockModelId: Config.GENAI_DEFAULT_BEDROCK_MODEL_ID,
             openAi: { modelId: "", apiKeySecretArn: "" },
             allowInternetResearch: true,
             bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },

@@ -155,7 +155,9 @@ describe("ExecutionsBoard dialogs return focus", () => {
         await closed();
         await waitFor(() => expect(row).toHaveFocus());
 
-        await openFromMenu(user, /view results/i);
+        // The menu item is named after the view it opens.
+        const quickView = await openFromMenu(user, /^view details$/i);
+        expect(quickView).toHaveAccessibleName("Execution Details");
         await user.keyboard("{Escape}");
         await closed();
         await waitFor(() => expect(actions()).toHaveFocus());
