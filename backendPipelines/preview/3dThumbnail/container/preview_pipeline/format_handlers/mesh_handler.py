@@ -11,6 +11,7 @@ import numpy as np
 import trimesh
 import pyvista as pv
 from ..utils.logging import get_logger
+from .pointcloud_handler import finite_points
 
 logger = get_logger()
 
@@ -48,12 +49,20 @@ def load(file_path: str) -> pv.PolyData:
         # Use scene.dump() to get transformed meshes (applies scene graph
         # transforms so sub-meshes are positioned correctly relative to each other).
         trimeshes = []
+        empty_cloud = None
         for geom in scene_or_mesh.dump():
             if isinstance(geom, trimesh.Trimesh):
                 trimeshes.append(geom)
             elif isinstance(geom, trimesh.PointCloud):
-                return _pointcloud_to_pyvista(geom)
+                try:
+                    return _pointcloud_to_pyvista(geom)
+                except ValueError as e:
+                    # A point geometry with no valid point: render the rest of the scene instead
+                    logger.warning(f"Skipping a scene point cloud: {e}")
+                    empty_cloud = e
         if not trimeshes:
+            if empty_cloud is not None:
+                raise empty_cloud
             raise ValueError("No valid mesh geometry found in scene")
 
         logger.info(f"Loaded scene with {len(trimeshes)} geometries (transforms applied)")
@@ -307,13 +316,17 @@ def _trimesh_to_pyvista(mesh: trimesh.Trimesh) -> pv.PolyData:
 def _pointcloud_to_pyvista(pc: trimesh.PointCloud) -> pv.PolyData:
     """
     Convert a trimesh PointCloud to PyVista PolyData.
+
+    Points with a NaN or infinite coordinate are dropped with their colours, as in the point-cloud
+    handler, so they cannot turn the camera's framing into NaN; a cloud with no valid point fails.
     """
-    points = np.array(pc.vertices)
-    pv_cloud = pv.PolyData(points)
+    colors = None
     if pc.colors is not None and len(pc.colors) > 0:
         colors = np.array(pc.colors)
-        if colors.shape[1] >= 3:
-            pv_cloud.point_data["RGB"] = colors[:, :3]
+    points, colors = finite_points(np.array(pc.vertices), colors)
+    pv_cloud = pv.PolyData(points)
+    if colors is not None and colors.shape[1] >= 3:
+        pv_cloud.point_data["RGB"] = colors[:, :3]
     return pv_cloud
 
 
@@ -340,6 +353,8 @@ def _load_draco(file_path: str) -> pv.PolyData:
         pv_faces = np.column_stack([np.full(n_faces, 3), faces]).ravel()
         pv_mesh = pv.PolyData(vertices, pv_faces)
     else:
+        # No faces: a Draco point cloud, so drop its non-finite points like any other cloud
+        vertices, _ = finite_points(vertices)
         pv_mesh = pv.PolyData(vertices)
 
     logger.info(f"Loaded Draco mesh: {len(vertices)} vertices")
