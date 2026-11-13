@@ -814,6 +814,7 @@ Every audit entry carries an echo of the triggering API event, and the `mask_sen
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken` objects
 -   `apiKey`, `apiKeySecret`, `rawKey` fields (the API key identifier fields `apiKeyId`, `apiKeyName` and `apiKeyHash` stay readable, so a record still names the key a call used)
 -   The credential-carrying request and response headers `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization` and `X-Amz-Security-Token`, and the origin verification header `x-vams-origin-verify` that Amazon CloudFront adds to the API requests it forwards. A header is redacted in both `headers` and `multiValueHeaders`, whatever its letter case.
+-   The authorizer context key `vams:originVerifyDigest`, the digest of the origin verification value the authorizer accepted, so a record that echoes the request never shows it
 -   The credential field names `password`, `secret`, `clientSecret`, `client_secret`, `accessToken`, `access_token`, `refreshToken`, `refresh_token`, `privateKey`, `private_key`. The whole name is matched, in any letter case, so a field that only contains the word, such as `passwordPolicy` or `secretArn`, stays readable.
 -   The keys an add-on or a fork registers (`ADDON_LOG_SENSITIVE_KEYS`, `CUSTOM_LOG_SENSITIVE_KEYS`)
 

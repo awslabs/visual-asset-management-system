@@ -563,6 +563,18 @@ class TestViewerSourceIp:
         with auditLogging.audit_request(event, LAMBDA_CONTEXT) as ctx:
             assert ctx.request["sourceIp"] == "198.51.100.7"
 
+    def test_a_full_echo_record_never_shows_the_digest(self, clients):
+        digest = _viewer().origin_verify_digest(VERIFY_VALUE)
+        event = _forwarded_event(VERIFY_VALUE, digest)
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT) as ctx:
+            auditLogging.log_file_upload(event, "db1", "a1", "dir/model.glb", False)
+            assert ctx.request["sourceIp"] == "192.0.2.44", "the live event still carries the digest"
+        message = (clients.flush.messages(group_name("auditFileUpload"))
+                   + clients.module.messages(group_name("auditFileUpload")))[0]
+        assert digest not in message
+        assert '"vams:originVerifyDigest": "<redacted>"' in message
+        assert event["requestContext"]["authorizer"]["lambda"]["vams:originVerifyDigest"] == digest
+
     def test_the_header_name_matches_the_origin_verify_module(self):
         origin_verify = importlib.import_module("common.auth.originVerify")
         assert _viewer().ORIGIN_VERIFY_HEADER_NAME == origin_verify.ORIGIN_VERIFY_HEADER_NAME
