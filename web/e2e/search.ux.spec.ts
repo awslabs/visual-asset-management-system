@@ -334,7 +334,9 @@ test.describe("Unified search — natural-language behaviour", () => {
         // the scenes-or-passages line.
         const truncated = !!body.nlp?.truncated;
         const empty = (body.hits?.hits ?? []).length === 0;
-        const notice = page.getByText(/^Showing the top \d+ semantic matches; more may exist\.$/);
+        const notice = page.getByText(
+            /^Showing the top \d+ semantic match(?:es)?; more may exist\.$/
+        );
         await expect(notice).toHaveCount(truncated && !empty ? 1 : 0);
         const emptyNotice = page.getByText(
             "No match among the closest results searched; more may exist.",

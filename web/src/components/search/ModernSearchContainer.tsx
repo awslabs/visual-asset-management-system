@@ -58,6 +58,11 @@ import Synonyms from "../../synonyms";
 export const NLP_EMPTY_TRUNCATED_NOTE =
     "No match among the closest results searched; more may exist.";
 
+// The note under a natural-language answer of `count` (1 or more) matches whose candidate window may
+// hold more: singular for one match.
+export const nlpTopMatchesNote = (count: number): string =>
+    `Showing the top ${count} semantic ${count === 1 ? "match" : "matches"}; more may exist.`;
+
 export const REDUCED_FILE_COLUMNS = [
     "relevance",
     "str_assetname",
@@ -946,7 +951,7 @@ const ModernSearchContainer: React.FC<
                                 fontSize="body-s"
                             >
                                 {nlpResult.hits.hits.length > 0
-                                    ? `Showing the top ${nlpResult.hits.hits.length} semantic matches; more may exist.`
+                                    ? nlpTopMatchesNote(nlpResult.hits.hits.length)
                                     : NLP_EMPTY_TRUNCATED_NOTE}
                             </Box>
                         )}

@@ -388,6 +388,31 @@ describe("ModernSearchContainer search modes", () => {
         expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("0+ results");
     });
 
+    it("names a single natural-language match in the singular in the truncated note", async () => {
+        // One match reads "the top 1 semantic match", not "matches".
+        setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+        const envelope = nlpEnvelope(true);
+        (searchNlp as jest.Mock).mockResolvedValue([
+            true,
+            {
+                ...envelope,
+                hits: {
+                    ...envelope.hits,
+                    total: { value: 1, relation: "gte" },
+                    hits: envelope.hits.hits.slice(0, 1),
+                },
+                aggregationTotal: 1,
+            },
+        ]);
+        renderContainer();
+        const input = await screen.findByPlaceholderText("Describe what you are looking for...");
+        await userEvent.type(input, "red truck");
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
+        await screen.findByText("Showing the top 1 semantic match; more may exist.");
+        expect(screen.queryByText(/semantic matches/)).toBeNull();
+    });
+
     it("announces an explicit natural-language search's count in the polite live region, with no completion toast", async () => {
         // A "Search completed" toast would cover the title row's view switch and Clear all filters
         // for 5 s after every search; the badge shows the count, the live region reads it out.
