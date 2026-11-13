@@ -513,6 +513,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Bucket sync keeps files whose names end in `init`** — Bucket sync no longer permanently deletes asset files such as `postinit` or `config.init`. Only an object named exactly `init`, or a folder named `init/`, is an import marker, and deleting a marker removes only that marker's own versions. (issue #1223)
 -   **API keeps working after an IAM role rename** — After an update that renames the IAM roles, such as setting or changing `IamRoleNamePrefix`, the REST API stage moves to a new deployment that names the renamed authorizer role, instead of answering every route with `500`. The first update to this version creates one new API deployment. (issue #1210)
 -   **Current Amazon Bedrock model for GenAI 3D Metadata Labeling** — The pipeline defaults to Claude Sonnet 5.5 (`global.anthropic.claude-sonnet-5-5`) in the commercial template. Amazon Bedrock refused the previous default, the Legacy Claude Sonnet 4.5, to accounts that had not used it for 30 days. A deployment that sets its own model keeps it; one on Claude Sonnet 4.5 changes it and redeploys. (issue #1353)
+-   **Ingest-asset upload completion** — The complete stage of `POST /ingest-asset` (the request that carries `uploadId`) finishes the upload instead of always failing with `400` "Invalid API path or method". (issue #1453)
 
 **Other changes:**
 

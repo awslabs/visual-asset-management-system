@@ -616,6 +616,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: the first update to this version creates one new API deployment and moves the stage to it; the API stays available.
 -   **Pipelines/Config** The commercial template's Amazon Bedrock model for GenAI 3D Metadata Labeling is `global.anthropic.claude-sonnet-5-5`. The previous default, Claude Sonnet 4.5, is a Legacy model that Amazon Bedrock refuses to accounts that have not used it for 30 days, so every run failed. The configuration reference describes how to choose a model in each partition. ([#1353](https://github.com/awslabs/visual-asset-management-system/issues/1353))
     -   Note: A deployment that sets `bedrockModelId` keeps its model. One still on `global.anthropic.claude-sonnet-4-5-20250929-v1:0` changes it to an active model and redeploys. ([#1353](https://github.com/awslabs/visual-asset-management-system/issues/1353))
+-   **Backend** Fixed the complete stage of `POST /ingest-asset` (the request that carries `uploadId`) always failing with `400` "Invalid API path or method": ingest-asset now forwards the completion to the upload-completion route `/uploads/{uploadId}/complete`, so the upload is completed. An `uploadId` that is not a single path segment is refused with `400` "Invalid uploadId" before anything is written. ([#1453](https://github.com/awslabs/visual-asset-management-system/issues/1453))
 
 ### Chores
 
