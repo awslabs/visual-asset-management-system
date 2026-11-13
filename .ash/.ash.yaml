@@ -161,8 +161,8 @@ global_settings:
           reason: credentialsSecretArn key holding a placeholder Secrets Manager ARN in a configuration example
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/pipelines/custom-pipelines.md
-          line_start: 1777
-          line_end: 1777
+          line_start: 1781
+          line_end: 1781
           reason: example workflow execution identifier in a payload example, not a secret
 
         # grype matches the action tag `v4` as version 4.0.0, inside the advisory's affected range
