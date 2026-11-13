@@ -72,10 +72,34 @@ def _call_name(node):
     return None
 
 
+def _forwarding_helpers(tree):
+    """Functions that pass one of their own parameters as the action of a typed audit call, by name,
+    with that parameter's position: ``def _log_x(event, action, ...): log_action(event, action)``."""
+    helpers = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        params = [arg.arg for arg in node.args.args]
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call) or _call_name(call) not in _TYPED_AUDIT_FUNCTIONS:
+                continue
+            argument = call.args[1] if len(call.args) > 1 else None
+            for keyword in call.keywords:
+                if keyword.arg in ("action", "secondary_type"):
+                    argument = keyword.value
+            if isinstance(argument, ast.Name) and argument.id in params:
+                helpers[node.name] = (params.index(argument.id), argument.id)
+    return helpers
+
+
 def _scan_source(source):
-    """(literal types passed to the typed audit functions, file audit functions called)."""
+    """(literal types passed to the typed audit functions, file audit functions called).
+
+    A literal passed to a module helper that forwards it as the action of a typed audit call counts as
+    passed to that call."""
     tree = ast.parse(source)
     constants = _module_string_constants(tree)
+    helpers = _forwarding_helpers(tree)
     literals, file_functions = set(), set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -83,11 +107,15 @@ def _scan_source(source):
         name = _call_name(node)
         if name in _FILE_AUDIT_FUNCTIONS:
             file_functions.add(_FILE_FUNCTION_ALIASES.get(name, name))
-        if name not in _TYPED_AUDIT_FUNCTIONS:
+        if name in _TYPED_AUDIT_FUNCTIONS:
+            position, keywords = 1, ("action", "secondary_type")
+        elif name in helpers:
+            position, keywords = helpers[name][0], (helpers[name][1],)
+        else:
             continue
-        argument = node.args[1] if len(node.args) > 1 else None
+        argument = node.args[position] if len(node.args) > position else None
         for keyword in node.keywords:
-            if keyword.arg in ("action", "secondary_type"):
+            if keyword.arg in keywords:
                 argument = keyword.value
         if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
             literals.add(argument.value)
@@ -242,6 +270,22 @@ class TestRegistryMatchesHandlers:
         assert literals == {"controlLiteral", "controlConstant", "controlKeyword"}
         assert functions == {"log_file_download"}
 
+    def test_the_scan_follows_a_helper_that_forwards_its_action(self):
+        # Control: a literal reaches log_action through a helper's parameter; a helper that passes a
+        # literal of its own does not make its callers' other arguments count.
+        source = (
+            "def _log_write(event, action, response):\n"
+            "    log_action(event, action, item_count=1)\n"
+            "def _fixed(event, label):\n"
+            "    log_action(event, 'controlFixed')\n"
+            "def handler(event):\n"
+            "    _log_write(event, 'controlForwarded', None)\n"
+            "    _log_write(event, action='controlForwardedKeyword', response=None)\n"
+            "    _fixed(event, 'controlNotAnAction')\n"
+        )
+        literals, _ = _scan_source(source)
+        assert literals == {"controlForwarded", "controlForwardedKeyword", "controlFixed"}
+
     def test_the_recorded_check_detects_an_unrecorded_action(self):
         # Control: an action no handler names is not recorded.
         spec = REGISTRY.spec("controlNeverRecorded", "asset")
@@ -251,10 +295,89 @@ class TestRegistryMatchesHandlers:
 @pytest.mark.unit
 class TestSystemActions:
     def test_every_named_handler_module_exists(self):
-        names = [system.handler for system in REGISTRY.AUDIT_SYSTEM_ACTIONS] + list(REGISTRY.AUDIT_SYSTEM_EXEMPT)
+        names = ([system.handler for system in REGISTRY.AUDIT_SYSTEM_ACTIONS] + list(REGISTRY.AUDIT_SYSTEM_EXEMPT)
+                 + list(REGISTRY.AUDIT_ENTRYPOINT_EXEMPT))
         missing = [name for name in names
                    if not os.path.isfile(os.path.join(BACKEND, *name.split(".")) + ".py")]
         assert not missing, f"system actions name handler modules that do not exist: {missing}"
+
+    def test_each_system_action_is_recorded_by_its_own_handler(self):
+        wrong = []
+        for system in REGISTRY.AUDIT_SYSTEM_ACTIONS:
+            path = os.path.join(BACKEND, *system.handler.split(".")) + ".py"
+            if not os.path.isfile(path) or system.spec.action in REGISTRY.AUDIT_PENDING_ACTIONS:
+                continue
+            with open(path, encoding="utf-8") as handle:
+                literals, functions = _scan_source(handle.read())
+            if not _recorded_actions({system.spec.action: system.spec}, literals, functions):
+                wrong.append((system.handler, system.spec.action))
+        assert not wrong, f"system actions their handler module does not record: {wrong}"
+
+
+def _entrypoints(tree):
+    """The module's top-level Lambda entrypoints: lambda_handler and lambda_handler_<name>."""
+    return [node for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and (node.name == "lambda_handler" or node.name.startswith("lambda_handler_"))]
+
+
+def _opens_audit_context(function):
+    for decorator in function.decorator_list:
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        name = target.id if isinstance(target, ast.Name) else getattr(target, "attr", None)
+        if name == "audited_handler":
+            return True
+    for node in ast.walk(function):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                call = item.context_expr
+                if isinstance(call, ast.Call) and _call_name(call) == "audit_request":
+                    return True
+    return False
+
+
+def _module_name(path):
+    return os.path.relpath(path, BACKEND)[:-3].replace(os.sep, ".")
+
+
+@pytest.mark.unit
+class TestEntrypointsOpenTheAuditContext:
+    def test_every_entrypoint_opens_the_audit_context_or_is_exempt(self):
+        missing = []
+        for path in _python_files(HANDLERS):
+            module = _module_name(path)
+            with open(path, encoding="utf-8") as handle:
+                tree = ast.parse(handle.read())
+            for function in _entrypoints(tree):
+                if module in REGISTRY.AUDIT_ENTRYPOINT_EXEMPT:
+                    continue
+                if not _opens_audit_context(function):
+                    missing.append(f"{module}.{function.name}")
+        assert not missing, ("Lambda entrypoints that do not open the request audit context; decorate them "
+                             f"with @audited_handler or list them in AUDIT_ENTRYPOINT_EXEMPT: {sorted(missing)}")
+
+    def test_every_exemption_has_a_reason_and_an_entrypoint(self):
+        for module, reason in REGISTRY.AUDIT_ENTRYPOINT_EXEMPT.items():
+            assert isinstance(reason, str) and reason.strip(), module
+            with open(os.path.join(BACKEND, *module.split(".")) + ".py", encoding="utf-8") as handle:
+                assert _entrypoints(ast.parse(handle.read())), f"{module} defines no entrypoint"
+
+    def test_the_check_detects_each_shape(self):
+        # Control: decorated, with-block and attribute forms are seen; a bare entrypoint is not.
+        source = (
+            "@audited_handler\n"
+            "def lambda_handler(event, context):\n    pass\n"
+            "def lambda_handler_created(event, context):\n"
+            "    with auditLogging.audit_request(event, context):\n        pass\n"
+            "@auditLogging.audited_handler\n"
+            "def lambda_handler_deleted(event, context):\n    pass\n"
+            "def lambda_handler_bare(event, context):\n    pass\n"
+            "def helper(event):\n    pass\n"
+        )
+        functions = _entrypoints(ast.parse(source))
+        assert [function.name for function in functions] == [
+            "lambda_handler", "lambda_handler_created", "lambda_handler_deleted", "lambda_handler_bare"]
+        assert [_opens_audit_context(function) for function in functions] == [True, True, True, False]
 
 
 @pytest.mark.unit

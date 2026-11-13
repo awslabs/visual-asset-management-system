@@ -28,6 +28,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.resourceNames import ResourceKeys, get_bucket_name
 from common.workflows import vamsSchemaImport as vsi
 from common.workflows.systemRecords import IMPORT_SOURCE_MARKER
@@ -461,6 +462,17 @@ def _loggable_event(event):
     return loggable
 
 
+def _log_import(event, result, request_type):
+    """Record one import (a register or an archive) of a pipeline and workflow bundle."""
+    ids = result.get("ids") or {}
+    log_action(event, "pipelineImport", database_id=ids.get("pipelineDatabaseId"),
+               pipelineId=ids.get("pipelineId"), workflowId=ids.get("workflowId"),
+               item_count=len(result.get("applied") or []) if "applied" in result else None,
+               changes={"applied": result["applied"]} if result.get("applied") else None,
+               details={"requestType": request_type, "workflowDatabaseId": ids.get("workflowDatabaseId")})
+
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext):
     """CloudFormation custom resource + direct-invoke handler. A CloudFormation event carries
     RequestType; a direct invoke (external self-registration) omits it and is treated as a register.
@@ -475,6 +487,7 @@ def lambda_handler(event, context: LambdaContext):
     # Direct (non-CloudFormation) invoke: register + return the result inline.
     if "RequestType" not in event:
         result = register_bundle(event.get("ResourceProperties") or event)
+        _log_import(event, result, "Register")
         return {"statusCode": 200, "body": json.dumps(result)}
 
     request_type = event["RequestType"]
@@ -489,6 +502,7 @@ def lambda_handler(event, context: LambdaContext):
         except Exception as e:
             logger.exception(f"Delete failed: {e}")
             result = {"warnings": [str(e)]}
+        _log_import(event, result, request_type)
         return {"Data": _response_data(result)}
 
     if request_type not in ("Create", "Update"):
@@ -504,6 +518,7 @@ def lambda_handler(event, context: LambdaContext):
             event.get("OldResourceProperties") or {}, result.get("ids", {}))
         if superseded:
             result["warnings"] = list(result.get("warnings") or []) + superseded
+    _log_import(event, result, request_type)
 
     physical_id = event.get("PhysicalResourceId") or _physical_id(
         resource_properties, result.get("ids", {}), context.log_stream_name)

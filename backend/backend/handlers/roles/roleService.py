@@ -11,7 +11,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_auth_changes
+from customLogging.auditLogging import log_auth_changes, audited_handler
 from common.dynamodb import validate_pagination_info
 from models.common import (
     validation_error_message,
@@ -312,6 +312,7 @@ def handle_delete_request(event):
         return internal_error(event=event)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for role service APIs"""
     global claims_and_roles

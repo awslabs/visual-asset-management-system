@@ -36,7 +36,7 @@ from common.dynamodb import validate_pagination_info
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_actions
+from customLogging.auditLogging import audited_handler, log_action, log_actions
 from models.common import (
     APIGatewayProxyResponseV2,
     success,
@@ -954,6 +954,7 @@ def _validate_path_ids(path_parameters):
     return None
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     normalize_event(event)
     logger.info(event)
@@ -1005,13 +1006,17 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 # more templates than the cap silently reports the cap as its total, and a caller has
                 # no way to know more exist (or where to page for them).
                 templates = get_pipeline_templates(database_id, pipeline_id)
+                log_action(event, "pipelineGet", database_id=database_id, pipelineId=pipeline_id,
+                           request_parameters={"includeArchived": include_archived})
                 return success(body={"message": _item_to_response(
                     item, templates=templates,
                     template_count=_template_count(database_id, pipeline_id)).dict()})
             if database_id:
                 result = get_database_pipelines(database_id, query_parameters, include_archived, claims_and_roles)
-                return success(body={"message": result.dict()})
-            result = get_all_pipelines(query_parameters, include_archived, claims_and_roles)
+            else:
+                result = get_all_pipelines(query_parameters, include_archived, claims_and_roles)
+            log_action(event, "pipelineList", database_id=database_id, item_count=len(result.Items),
+                       request_parameters={**query_parameters, "includeArchived": include_archived})
             return success(body={"message": result.dict()})
 
         username = (claims_and_roles["tokens"][0]
