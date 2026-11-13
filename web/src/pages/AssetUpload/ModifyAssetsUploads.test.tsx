@@ -182,6 +182,48 @@ describe("Add Files page", () => {
         ).toBe(true);
     });
 
+    it("collapses the preview-file guidance by default and opens it for preview files", async () => {
+        mount();
+        const toggle = screen.getByRole("button", { name: "About preview files" });
+        expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+        addFiles([makeFile("model.gltf.previewFile.png")]);
+        await waitFor(() => expect(toggle.getAttribute("aria-expanded")).toBe("true"));
+        expect(screen.getByText(/will be treated as preview files/)).toBeTruthy();
+    });
+
+    it("keeps the guidance in the second column for a non-root destination", () => {
+        mount({ folder: "/scene/" });
+        expect(screen.queryByTestId("preview-file")).toBeNull();
+        expect(screen.getByRole("button", { name: "About preview files" })).toBeTruthy();
+    });
+
+    it("shows the database's upload restrictions as a compact notice", async () => {
+        const { fetchDatabase } = jest.requireMock("../../services/APIService");
+        fetchDatabase.mockResolvedValueOnce({
+            databaseId: "db1",
+            restrictFileUploadsToExtensions: ".usda,.png",
+        });
+        mount();
+        await waitFor(() => expect(screen.getByText("File upload restrictions")).toBeTruthy());
+        expect(screen.getByText(".usda,.png")).toBeTruthy();
+    });
+
+    it("names the asset, database and destination under the page header, with Cancel beside Finalize and Upload", async () => {
+        mount({ folder: "/scene/" });
+        expect(screen.getByRole("heading", { level: 1, name: "Modify Asset Files" })).toBeTruthy();
+        // The breadcrumb links the asset too; the key-value row adds the second link.
+        await waitFor(() =>
+            expect(screen.getAllByRole("link", { name: "Asset One" })).toHaveLength(2)
+        );
+        expect(screen.getAllByText("db1").length).toBeGreaterThanOrEqual(2);
+        expect(screen.getByText("Destination")).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+        const upload = screen.getByRole("button", { name: "Finalize and Upload" });
+        expect((upload as HTMLButtonElement).disabled).toBe(true);
+        expect(screen.getByText(/Please select at least one asset file to upload/i)).toBeTruthy();
+    });
+
     it("the single-folder override drops the folder name under the destination", () => {
         mount({ folder: "/scene/" });
         addFolder([makeFile("a.png", "textures/a.png")]);

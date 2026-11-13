@@ -212,7 +212,7 @@ Select **(versions)** beside the **Version Date** to open the file's version his
 
 To add files to an existing asset:
 
-1. In the File Manager, select the folder to add files to (or the asset root), then select **Upload Files**. The **Modify Asset Files** page opens with that folder as the **Destination folder**.
+1. In the File Manager, select the folder to add files to (or the asset root), then select **Upload Files**. The **Modify Asset Files** page opens with that folder as the **Destination folder**. The page header names the asset, its database and the destination. Beside the upload zone, the asset's overall preview file picker (asset root only), the database's upload restrictions, if any, and the collapsed **About preview files** guidance are shown; the guidance opens on its own when the selection includes preview files.
 2. Change the destination if needed. It is also kept in the page address as `?folder=/scene/`, so a refresh or a shared link keeps it. Relative segments (`.`, `..`) and backslashes are refused.
 3. Add files with **Add files**, **Add folder**, or by dropping files and folders onto the upload zone. A picked folder and a dropped folder land at the same path:
     - **A folder keeps its name** under the destination: `textures/` added at `/scene/` lands under `/scene/textures/`. For a single folder you can switch to **Upload folder contents** to put its files directly in the destination instead.
@@ -230,7 +230,7 @@ To add files to an existing asset:
     - **Errors (n)** -- the files that block the upload: **Duplicate path** and **Invalid path**. The error alert's **Show errors only** action switches to this view.
     - **Existing (n)** -- appears once the existing-file check has finished, and lists the files marked **Exists** or **Archived**. These marks are warnings, not errors: they do not block the upload.
 
-5. Select **Finalize and Upload**. Upload progress is displayed for each file.
+5. Select **Finalize and Upload**, or **Cancel** to return to the asset. While the button is disabled, the reason is shown beside it. Upload progress is displayed for each file.
 
 ![Add Files page with the destination folder /scene/, files at existing paths marked Exists: uploads a new version, and two Duplicate path errors](/img/upload_add_files_destination_20261113_v2.7.png)
 
