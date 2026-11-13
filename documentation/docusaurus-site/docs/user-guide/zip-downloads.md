@@ -2,7 +2,7 @@
 
 Download as Zip packages files, folders, or a whole asset into a single zip, tar, or tar.gz file. VAMS builds the archive in the background, so large selections do not have to finish while the browser waits, and the archive can reach 5 TiB. When the archive is ready, you download it from your **Download Queue**.
 
-Download as Zip is available when your administrator enables it for the deployment (`app.zipDownloads.enabled`). The controls appear only when the deployment has the feature and your role allows the zip download routes.
+Download as Zip is available when your administrator enables it for the deployment (`app.pipelines.useZipDownloads.enabled`). The controls appear only when the deployment has the feature and your role allows the zip download routes.
 
 ## What you can download
 
@@ -70,12 +70,12 @@ A zip download is available for 7 days after the job was created; the **Expires*
 
 Your administrator sets these limits for the deployment:
 
-| Limit                                         | Configuration key                           | Default |
-| --------------------------------------------- | ------------------------------------------- | ------- |
-| Files in one archive                          | `app.zipDownloads.maxFilesPerRequest`       | 100,000 |
-| Total size of one archive                     | `app.zipDownloads.maxTotalBytesPerRequest`  | 5 TiB   |
-| Your active (queued or running) zip downloads | `app.zipDownloads.maxActiveRequestsPerUser` | 5       |
-| Entries in one selection                      | --                                          | 1,000   |
+| Limit                                         | Configuration key                                        | Default |
+| --------------------------------------------- | -------------------------------------------------------- | ------- |
+| Files in one archive                          | `app.pipelines.useZipDownloads.maxFilesPerRequest`       | 100,000 |
+| Total size of one archive                     | `app.pipelines.useZipDownloads.maxTotalBytesPerRequest`  | 5 TiB   |
+| Your active (queued or running) zip downloads | `app.pipelines.useZipDownloads.maxActiveRequestsPerUser` | 5       |
+| Entries in one selection                      | --                                                       | 1,000   |
 
 Select a folder rather than its files one by one to stay within the selection limit; a folder counts as one entry.
 

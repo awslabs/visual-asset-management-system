@@ -4,7 +4,7 @@
  */
 
 /**
- * Download as Zip (app.zipDownloads) in the synthesized templates.
+ * Download as Zip (app.pipelines.useZipDownloads) in the synthesized templates.
  *
  * Always deployed, whatever `enabled` says: the job table, the auxiliary-bucket expiry rules on
  * `vams.preparedDownloads/` (including the one-day abort of incomplete uploads), the table's SSM
@@ -44,10 +44,10 @@ const CALLBACK_REGISTRY_ENV = "CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER";
 /** Feature on, from a config written before retention became fixed (its retentionDays is ignored). */
 function enabledMutate(legacyRetentionDays: number) {
     return (c: any) => {
-        c.app.zipDownloads.enabled = true;
-        c.app.zipDownloads.retentionDays = legacyRetentionDays;
-        c.app.zipDownloads.computeVcpu = 8;
-        c.app.zipDownloads.computeMemoryGiB = 24;
+        c.app.pipelines.useZipDownloads.enabled = true;
+        c.app.pipelines.useZipDownloads.retentionDays = legacyRetentionDays;
+        c.app.pipelines.useZipDownloads.computeVcpu = 8;
+        c.app.pipelines.useZipDownloads.computeMemoryGiB = 24;
         c.app.useGlobalVpc.enabled = true;
     };
 }

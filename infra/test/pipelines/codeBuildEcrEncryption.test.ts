@@ -10,7 +10,7 @@
  * VAMS-owned repository: coordinate transform, Gaussian splat toolbox, NVIDIA Cosmos (one repository per
  * model family), NVIDIA GR00T, Isaac Lab training, Video SOP/BOM Extraction, the GenAI CAD STEP
  * agent and Image to 3D (one repository per enabled model), plus the Download as Zip zipArchive
- * pipeline (`app.zipDownloads.useCodeBuild`). With the CMK on, each repository is
+ * pipeline (`app.pipelines.useZipDownloads.useCodeBuild`). With the CMK on, each repository is
  * encrypted with the deployment's shared key; with it off, each stays on the Amazon ECR AES-256
  * default, which is no `EncryptionConfiguration` at all. Both directions are asserted for every
  * repository.
@@ -91,8 +91,8 @@ const EXPECTED_CODEBUILD_PIPELINES = [
     "useGenAiVideoSopBom",
     "useGenAiCadStepAgent",
     "useImageTo3d",
-    // Not under app.pipelines: the Download as Zip block (app.zipDownloads) carries its own key.
-    "zipDownloads",
+    // The zipArchive system pipeline of Download as Zip.
+    "useZipDownloads",
 ];
 
 /**
@@ -113,9 +113,6 @@ const enableEveryCodeBuildPipeline = (c: any, cmkOn: boolean): string[] => {
             enabled.push(key);
         }
     }
-    // The zipArchive system pipeline, built only with Download as Zip on.
-    c.app.zipDownloads = { ...(c.app.zipDownloads ?? {}), enabled: true, useCodeBuild: true };
-    enabled.push("zipDownloads");
     // Synth-only values for the fields the NVIDIA constructs require before they build.
     for (const key of ["useNvidiaCosmos", "useNvidiaCosmos3", "useNvidiaGr00t", "useImageTo3d"]) {
         p[key].huggingFaceToken = "synth-only";

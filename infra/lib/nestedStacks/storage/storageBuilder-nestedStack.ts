@@ -1082,7 +1082,7 @@ export function storageResourcesBuilder(
                 : []),
             // Download as Zip archives and their manifests
             // (vams.preparedDownloads/<databaseId>/<assetId>/<userHash>/<requestId>/), expired after
-            // ZIP_DOWNLOAD_RETENTION_DAYS (7). Deployed whatever app.zipDownloads.enabled says, so turning the
+            // ZIP_DOWNLOAD_RETENTION_DAYS (7). Deployed whatever app.pipelines.useZipDownloads.enabled says, so turning the
             // feature off never orphans an archive. Any incomplete upload under the prefix is aborted
             // after a day (the bucket-wide rule above waits 14): the backstop for an upload a cancelled
             // or failed job left open that neither the read-time reconcile nor the delayed sweep

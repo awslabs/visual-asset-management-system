@@ -782,10 +782,10 @@ const VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
         appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
     },
     {
-        id: "vpc-required-zip-downloads",
-        label: "zipDownloads",
-        fieldPaths: ["app.zipDownloads.enabled"],
-        appliesWhen: (c) => !!g(c, "app.zipDownloads.enabled"),
+        id: "vpc-required-pipelines-use-zip-downloads",
+        label: "pipelines.useZipDownloads",
+        fieldPaths: ["app.pipelines.useZipDownloads.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useZipDownloads.enabled"),
     },
     ...ADDON_VPC_REQUIRING_FEATURES,
 ];
@@ -3471,27 +3471,27 @@ const CORE_RULES: Rule[] = [
     })),
 
     // ----- Download as Zip
-    // (config.ts: "app.zipDownloads.<key> must be a whole number of",
-    // "app.zipDownloads.computeVcpu must be 4, 8 or 16", "is not an AWS Fargate memory size") -----
+    // (config.ts: "app.pipelines.useZipDownloads.<key> must be a whole number of",
+    // "app.pipelines.useZipDownloads.computeVcpu must be 4, 8 or 16", "is not an AWS Fargate memory size") -----
     {
         id: "zip-downloads-enabled-boolean",
         severity: "error",
-        fieldPaths: ["app.zipDownloads.enabled"],
+        fieldPaths: ["app.pipelines.useZipDownloads.enabled"],
         appliesWhen: (c) => {
-            const value = g(c, "app.zipDownloads.enabled");
+            const value = g(c, "app.pipelines.useZipDownloads.enabled");
             return value !== undefined && value !== null && typeof value !== "boolean";
         },
-        message: "app.zipDownloads.enabled must be true or false.",
+        message: "app.pipelines.useZipDownloads.enabled must be true or false.",
     },
     {
         id: "zip-downloads-use-codebuild-boolean",
         severity: "error",
-        fieldPaths: ["app.zipDownloads.useCodeBuild"],
+        fieldPaths: ["app.pipelines.useZipDownloads.useCodeBuild"],
         appliesWhen: (c) => {
-            const value = g(c, "app.zipDownloads.useCodeBuild");
+            const value = g(c, "app.pipelines.useZipDownloads.useCodeBuild");
             return value !== undefined && value !== null && typeof value !== "boolean";
         },
-        message: "app.zipDownloads.useCodeBuild must be true or false.",
+        message: "app.pipelines.useZipDownloads.useCodeBuild must be true or false.",
     },
     ...(
         [
@@ -3504,38 +3504,41 @@ const CORE_RULES: Rule[] = [
     ).map(([key, min, max, unit]) => ({
         id: `zip-downloads-${key}-range`,
         severity: "error" as const,
-        fieldPaths: [`app.zipDownloads.${key}`],
+        fieldPaths: [`app.pipelines.useZipDownloads.${key}`],
         appliesWhen: (c: ConfigShape) => {
-            const value = g(c, `app.zipDownloads.${key}`);
+            const value = g(c, `app.pipelines.useZipDownloads.${key}`);
             if (value === undefined || value === null || value === "") return false;
             const n = Number(value);
             return !Number.isInteger(n) || n < min || n > max;
         },
-        message: `app.zipDownloads.${key} must be a whole number of ${unit} between ${min} and ${max}.`,
+        message: `app.pipelines.useZipDownloads.${key} must be a whole number of ${unit} between ${min} and ${max}.`,
     })),
     {
         id: "zip-downloads-compute-vcpu",
         severity: "error",
-        fieldPaths: ["app.zipDownloads.computeVcpu"],
+        fieldPaths: ["app.pipelines.useZipDownloads.computeVcpu"],
         appliesWhen: (c) => {
-            const value = g(c, "app.zipDownloads.computeVcpu");
+            const value = g(c, "app.pipelines.useZipDownloads.computeVcpu");
             if (value === undefined || value === null || value === "") return false;
             return ![4, 8, 16].includes(Number(value));
         },
-        message: "app.zipDownloads.computeVcpu must be 4, 8 or 16.",
+        message: "app.pipelines.useZipDownloads.computeVcpu must be 4, 8 or 16.",
     },
     {
         id: "zip-downloads-compute-fargate-size",
         severity: "error",
-        fieldPaths: ["app.zipDownloads.computeVcpu", "app.zipDownloads.computeMemoryGiB"],
+        fieldPaths: [
+            "app.pipelines.useZipDownloads.computeVcpu",
+            "app.pipelines.useZipDownloads.computeMemoryGiB",
+        ],
         appliesWhen: (c) => {
-            const vcpu = Number(g(c, "app.zipDownloads.computeVcpu") ?? 16);
-            const memoryGiB = Number(g(c, "app.zipDownloads.computeMemoryGiB") ?? 32);
+            const vcpu = Number(g(c, "app.pipelines.useZipDownloads.computeVcpu") ?? 16);
+            const memoryGiB = Number(g(c, "app.pipelines.useZipDownloads.computeMemoryGiB") ?? 32);
             if (![4, 8, 16].includes(vcpu)) return false;
             return !isFargateCpuMemory(vcpu, memoryGiB);
         },
         message:
-            "app.zipDownloads.computeMemoryGiB is not an AWS Fargate memory size for the vCPU: 4 vCPU " +
+            "app.pipelines.useZipDownloads.computeMemoryGiB is not an AWS Fargate memory size for the vCPU: 4 vCPU " +
             "takes 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in 8 GiB steps.",
     },
 ];

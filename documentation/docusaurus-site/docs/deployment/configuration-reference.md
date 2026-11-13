@@ -305,7 +305,7 @@ VAMS provisions every subnet type across a fixed Availability Zone count (a base
 | GenAI CAD STEP agent, Fargate runtime (`useGenAiCadStepAgent`, `runtime: "fargate"`)     | Yes                        | Yes            | 2                                | Batch compute, NAT egress for research                             |
 | GenAI CAD STEP agent, AgentCore runtime (`useGenAiCadStepAgent`, `runtime: "agentcore"`) | Isolated only              | No             | 2                                | Pipeline Lambdas only; the agent runs on AgentCore outside the VPC |
 | Coordinate Transform (`useConversionCoordinateTransform`)                                | Isolated only              | No             | 2                                | Batch compute                                                      |
-| Download as Zip, Zip Archive pipeline (`app.zipDownloads`)                               | Isolated only              | No             | 2                                | Batch compute                                                      |
+| Download as Zip, Zip Archive pipeline (`app.pipelines.useZipDownloads`)                  | Isolated only              | No             | 2                                | Batch compute                                                      |
 | Isaac Lab Training (`useIsaacLabTraining`)                                               | Yes                        | Yes            | 2                                | Batch compute + CodeBuild                                          |
 | NVIDIA Cosmos (`useNvidiaCosmos`)                                                        | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild                                    |
 | NVIDIA Cosmos 3 (`useNvidiaCosmos3`)                                                     | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild                                    |
@@ -1160,6 +1160,51 @@ At least one model must be enabled when the pipeline is enabled. Per-run behavio
 
 Every container image carries the complete mesh repair ladder — `trimesh` (MIT), `manifold3d` (Apache-2.0), `pymeshfix` (GPL-3.0), and `PyMeshLab` (GPL-3.0) — and a run selects which rungs it walks through the `REPAIR_BACKENDS` setting in its configuration template. That setting defaults to the full ladder, so the GPL-3.0 rungs execute unless an operator narrows the selection to the permissively licensed `trimesh,manifold3d` pair or to `trimesh` alone. Because the GPL-3.0 packages are present in the images, the images are subject to GPL-3.0 obligations, including source availability if you redistribute them. A deployment that cannot accept GPL-3.0 components in its container images should leave this pipeline disabled. See [Notices](../additional/notices.md).
 
+### Zip downloads (`app.pipelines.useZipDownloads`)
+
+Download as Zip packages files, folders, or a whole asset into one zip (ZIP64), tar, or tar.gz archive in the background, built by the `utility-zip-archive` system pipeline on AWS Batch with AWS Fargate compute. See [Download as Zip and the Download Queue](../user-guide/zip-downloads.md) and the [Zip Archive pipeline](../pipelines/zip-archive.md).
+
+The `ZipDownloadRequestsStorageTable` table, the `vams.preparedDownloads/` lifecycle rules on the asset auxiliary bucket, and the zip download API routes and functions are deployed whether or not the feature is enabled; with `enabled` set to `false` every zip download route answers `404`. The Zip Archive pipeline, its AWS Batch resources and container image, its pipeline and workflow registration, and the `ZIPDOWNLOADS` feature switch are created only when `enabled` is `true`. **Requires VPC** when enabled.
+
+Every key is optional, and an absent block uses the defaults. Configuration validation checks every key, also while the feature is disabled, and rejects a value that is not a whole number within its range.
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/utility/zipArchive/zipArchiveBuilder-nestedStack.ts` (`ZipArchiveBuilderNestedStack`) — AWS Batch on Fargate. API and delayed sweep (one function): `backend/backend/handlers/assets/zipDownloadService.py`. Defaults and validation: `ZIP_DOWNLOADS_DEFAULTS`, `applyZipDownloadsDefaults()` and `validateZipDownloadsConfig()` in `infra/config/config.ts`.
+:::
+
+| Field                                                    | Type    | Default                 | Range                      | Description                                                                                                                                                                |
+| -------------------------------------------------------- | ------- | ----------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.useZipDownloads.enabled`                  | boolean | `false`                 | --                         | Enables Download as Zip: the Zip Archive pipeline, the feature switch, and the web, CLI, and MCP controls. Requires `app.useGlobalVpc.enabled`.                            |
+| `app.pipelines.useZipDownloads.maxFilesPerRequest`       | number  | `100000`                | 1 to 1,000,000             | Most files one archive holds.                                                                                                                                              |
+| `app.pipelines.useZipDownloads.maxTotalBytesPerRequest`  | number  | `5497558138880` (5 TiB) | 1 byte to 5 TiB            | Largest total size of the files one archive holds. 5 TiB is the Amazon S3 single-object limit; a selection whose archive, with its headers, would exceed 5 TiB is refused. |
+| `app.pipelines.useZipDownloads.maxActiveRequestsPerUser` | number  | `5`                     | 1 to 100                   | Most jobs one user can have queued or running at the same time.                                                                                                            |
+| `app.pipelines.useZipDownloads.computeVcpu`              | number  | `16`                    | `4`, `8`, or `16`          | vCPUs of the Zip Archive job's AWS Fargate task.                                                                                                                           |
+| `app.pipelines.useZipDownloads.computeMemoryGiB`         | number  | `32`                    | Valid for the vCPU (below) | Memory of the Zip Archive job's AWS Fargate task, in GiB.                                                                                                                  |
+| `app.pipelines.useZipDownloads.useCodeBuild`             | boolean | `false`                 | --                         | Builds the Zip Archive container image with AWS CodeBuild during deployment instead of local Docker. Supported in the commercial and AWS GovCloud (US) partitions.         |
+
+`computeMemoryGiB` must be a memory size AWS Fargate supports for the chosen vCPU count: 8 to 30 GiB in 1 GiB steps for 4 vCPU, 16 to 60 GiB in 4 GiB steps for 8 vCPU, and 32 to 120 GiB in 8 GiB steps for 16 vCPU.
+
+Retention is fixed, not configuration: a job expires 7 days after it was created (its `expiresAt`, the table's time to live), and the `vams.preparedDownloads/` lifecycle rule expires an archive 7 days after it was written. Amazon S3 applies the rule asynchronously, so an archive can remain for up to a day or two after its job expired; it can no longer be downloaded. A `retentionDays` key from an earlier 2.7.0 build is ignored and can be removed. Earlier 2.7.0 builds read this block as `app.zipDownloads`; a config that still carries that key is refused at deploy with a message naming `app.pipelines.useZipDownloads`, so move the block, with the same keys, under `app.pipelines`. Archives the Zip Archive pipeline writes into an asset are asset files and do not expire.
+
+```json
+{
+    "app": {
+        "useGlobalVpc": { "enabled": true },
+        "pipelines": {
+            "useZipDownloads": {
+                "enabled": true,
+                "maxFilesPerRequest": 100000,
+                "maxTotalBytesPerRequest": 5497558138880,
+                "maxActiveRequestsPerUser": 5,
+                "computeVcpu": 16,
+                "computeMemoryGiB": 32,
+                "useCodeBuild": false
+            }
+        }
+    }
+}
+```
+
 ### NVIDIA Gr00t Fine-Tuning (`app.pipelines.useNvidiaGr00t`)
 
 NVIDIA Gr00t (GR00T-N1.5-3B) fine-tuning pipeline for embodied AI robot training. Uses LeRobot v2.1 datasets stored as VAMS assets. Operates at the asset level -- downloads the entire asset, looks for training data in a `dataset/` subfolder (configurable), and outputs model checkpoints. **Requires VPC** and internet access for HuggingFace model downloads.
@@ -1251,49 +1296,6 @@ Grant: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildExecutionServiceFun
 | Field                                    | Type     | Default                                                                                                                                                        | Description                                                                              |
 | ---------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `app.pipelines.executionLogReadPrefixes` | string[] | `["/aws/vendedlogs/VAMSStateMachine-*", "/aws/vendedlogs/VAMSstateMachine-*", "/aws/vendedlogs/Pipelines/*", "/aws/batch/job", "/aws/sagemaker/TrainingJobs"]` | Log-group names under `/aws/` the execution logs API may read; trailing `*` is a prefix. |
-
-## Zip downloads (`app.zipDownloads`)
-
-Download as Zip packages files, folders, or a whole asset into one zip (ZIP64), tar, or tar.gz archive in the background, built by the `utility-zip-archive` system pipeline on AWS Batch with AWS Fargate compute. See [Download as Zip and the Download Queue](../user-guide/zip-downloads.md) and the [Zip Archive pipeline](../pipelines/zip-archive.md).
-
-The `ZipDownloadRequestsStorageTable` table, the `vams.preparedDownloads/` lifecycle rules on the asset auxiliary bucket, and the zip download API routes and functions are deployed whether or not the feature is enabled; with `enabled` set to `false` every zip download route answers `404`. The Zip Archive pipeline, its AWS Batch resources and container image, its pipeline and workflow registration, and the `ZIPDOWNLOADS` feature switch are created only when `enabled` is `true`. **Requires VPC** when enabled.
-
-Every key is optional, and an absent block uses the defaults. Configuration validation checks every key, also while the feature is disabled, and rejects a value that is not a whole number within its range.
-
-:::note[Implemented by]
-Nested stack: `infra/lib/nestedStacks/pipelines/utility/zipArchive/zipArchiveBuilder-nestedStack.ts` (`ZipArchiveBuilderNestedStack`) — AWS Batch on Fargate. API and delayed sweep (one function): `backend/backend/handlers/assets/zipDownloadService.py`. Defaults and validation: `ZIP_DOWNLOADS_DEFAULTS`, `applyZipDownloadsDefaults()` and `validateZipDownloadsConfig()` in `infra/config/config.ts`.
-:::
-
-| Field                                       | Type    | Default                 | Range                      | Description                                                                                                                                                                |
-| ------------------------------------------- | ------- | ----------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.zipDownloads.enabled`                  | boolean | `false`                 | --                         | Enables Download as Zip: the Zip Archive pipeline, the feature switch, and the web, CLI, and MCP controls. Requires `app.useGlobalVpc.enabled`.                            |
-| `app.zipDownloads.maxFilesPerRequest`       | number  | `100000`                | 1 to 1,000,000             | Most files one archive holds.                                                                                                                                              |
-| `app.zipDownloads.maxTotalBytesPerRequest`  | number  | `5497558138880` (5 TiB) | 1 byte to 5 TiB            | Largest total size of the files one archive holds. 5 TiB is the Amazon S3 single-object limit; a selection whose archive, with its headers, would exceed 5 TiB is refused. |
-| `app.zipDownloads.maxActiveRequestsPerUser` | number  | `5`                     | 1 to 100                   | Most jobs one user can have queued or running at the same time.                                                                                                            |
-| `app.zipDownloads.computeVcpu`              | number  | `16`                    | `4`, `8`, or `16`          | vCPUs of the Zip Archive job's AWS Fargate task.                                                                                                                           |
-| `app.zipDownloads.computeMemoryGiB`         | number  | `32`                    | Valid for the vCPU (below) | Memory of the Zip Archive job's AWS Fargate task, in GiB.                                                                                                                  |
-| `app.zipDownloads.useCodeBuild`             | boolean | `false`                 | --                         | Builds the Zip Archive container image with AWS CodeBuild during deployment instead of local Docker. Supported in the commercial and AWS GovCloud (US) partitions.         |
-
-`computeMemoryGiB` must be a memory size AWS Fargate supports for the chosen vCPU count: 8 to 30 GiB in 1 GiB steps for 4 vCPU, 16 to 60 GiB in 4 GiB steps for 8 vCPU, and 32 to 120 GiB in 8 GiB steps for 16 vCPU.
-
-Retention is fixed, not configuration: a job expires 7 days after it was created (its `expiresAt`, the table's time to live), and the `vams.preparedDownloads/` lifecycle rule expires an archive 7 days after it was written. Amazon S3 applies the rule asynchronously, so an archive can remain for up to a day or two after its job expired; it can no longer be downloaded. A config that still carries `app.zipDownloads.retentionDays` from an earlier 2.7.0 build loads unchanged; the key is ignored and can be removed. Archives the Zip Archive pipeline writes into an asset are asset files and do not expire.
-
-```json
-{
-    "app": {
-        "useGlobalVpc": { "enabled": true },
-        "zipDownloads": {
-            "enabled": true,
-            "maxFilesPerRequest": 100000,
-            "maxTotalBytesPerRequest": 5497558138880,
-            "maxActiveRequestsPerUser": 5,
-            "computeVcpu": 16,
-            "computeMemoryGiB": 32,
-            "useCodeBuild": false
-        }
-    }
-}
-```
 
 ## Addons (`app.addons`)
 

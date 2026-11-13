@@ -7,7 +7,7 @@ export const featuresEnabled = {
     LOCATIONSERVICES: "LOCATIONSERVICES",
     NOOPENSEARCH: "NOOPENSEARCH",
     ALLOWUNSAFEEVAL: "ALLOWUNSAFEEVAL",
-    // Download as Zip (prepared archive downloads); present only when app.zipDownloads.enabled
+    // Download as Zip (prepared archive downloads); present only when app.pipelines.useZipDownloads.enabled
     ZIPDOWNLOADS: "ZIPDOWNLOADS",
 };
 

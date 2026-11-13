@@ -855,7 +855,7 @@ def archive_head(s3_client, bucket: str, key: str) -> Tuple[bool, Optional[int]]
 # delete of a job) also starts the job's delayed sweep: an execution of the
 # zip download sweep state machine (infra lambdaBuilder/assetFunctions.ts: Wait
 # SWEEP_FIRST_WAIT_SECONDS, sweep, Wait SWEEP_SECOND_WAIT_SECONDS, sweep), whose passes run the
-# zip download service's ``sweep`` action (sweep_recorded_uploads). Deployed only with app.zipDownloads on.
+# zip download service's ``sweep`` action (sweep_recorded_uploads). Deployed only with app.pipelines.useZipDownloads on.
 
 SWEEP_STATE_MACHINE_ARN_ENV = "ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN"
 SWEEP_EXECUTION_PREFIX = "zipsweep-"

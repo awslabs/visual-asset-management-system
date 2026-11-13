@@ -22,7 +22,7 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 -   **Asset preview thumbnails** -- Display generated preview images in asset detail pages and search results
 -   **Cross-database asset linking** -- Create relationships between assets across different databases
 -   **File manager** -- Hierarchical file tree with folder expansion, file selection, copy, move, and rename operations
--   **Download as Zip** -- Package selected files, folders, or a whole asset, current or at an asset version, into one zip (ZIP64), tar, or tar.gz archive of up to 5 TiB built in the background, and download it from **My Download Queue** (`app.zipDownloads.enabled`)
+-   **Download as Zip** -- Package selected files, folders, or a whole asset, current or at an asset version, into one zip (ZIP64), tar, or tar.gz archive of up to 5 TiB built in the background, and download it from **My Download Queue** (`app.pipelines.useZipDownloads.enabled`)
 -   **Drag-and-drop upload** -- Upload files and folders directly through the browser with progress tracking
 -   **Metadata management** -- View and edit asset-level and file-level metadata with configurable schemas
 -   **Tag management** -- Assign tags to assets using custom tag types for classification
@@ -206,7 +206,7 @@ VAMS includes twenty-eight built-in processing pipelines, each deployable throug
 | Isaac Lab RL Evaluation                 | `useIsaacLabTraining`                             | Evaluation of trained reinforcement learning policies using NVIDIA Isaac Lab                                                                                     | Disabled |
 | RapidPipeline 3D Processor              | `useRapidPipeline.useEcs`                         | Licensed 3D model optimization and conversion on Amazon ECS                                                                                                      | Disabled |
 | RapidPipeline (EKS)                     | `useRapidPipeline.useEks`                         | Licensed 3D model optimization and conversion on Amazon EKS                                                                                                      | Disabled |
-| Zip Archive (system pipeline)           | `app.zipDownloads.enabled`                        | Streams selected files into a zip (ZIP64), tar, or tar.gz archive for Download as Zip, or into the asset as a new file                                           | Disabled |
+| Zip Archive (system pipeline)           | `app.pipelines.useZipDownloads.enabled`           | Streams selected files into a zip (ZIP64), tar, or tar.gz archive for Download as Zip, or into the asset as a new file                                           | Disabled |
 | VNTANA ModelOps 3D Optimization         | `useModelOps`                                     | Licensed 3D model optimization and conversion using the VNTANA engine                                                                                            | Disabled |
 
 :::note[Model variant flags]
@@ -267,20 +267,20 @@ Pipelines that use AWS Batch Fargate containers require `useGlobalVpc.enabled` t
 
 VAMS uses a feature flag system to conditionally enable capabilities at deployment time. Feature flags are persisted to Amazon DynamoDB and read by the web interface at runtime.
 
-| Feature Flag                    | Description                                                                                                                                                                    |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments)                                                                                 |
-| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer `.3dm`, Three.js CAD formats)             |
-| `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                                      |
-| `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                           |
-| `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                                   |
-| `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                                                                                                                                        |
-| `AUTHPROVIDER_COGNITO`          | Indicates Amazon Cognito authentication                                                                                                                                        |
-| `AUTHPROVIDER_COGNITO_SAML`     | Indicates Amazon Cognito with SAML federation                                                                                                                                  |
-| `AUTHPROVIDER_COGNITO_OIDC`     | Indicates Amazon Cognito with OIDC federation                                                                                                                                  |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | Indicates external OAuth2 authentication                                                                                                                                       |
-| `ZIPDOWNLOADS`                  | Enables the Download as Zip controls, the asset's **Download Queue** tab, and the **My Download Queue** page. Emitted automatically when `app.zipDownloads.enabled` is `true`. |
-| `DEADLINECLOUD_PIPELINES`       | Enables the AWS Deadline Cloud pipeline execution type in the web interface. Emitted automatically when `app.pipelines.deadlineCloudExecutionTypeEnabled` is `true`.           |
+| Feature Flag                    | Description                                                                                                                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments)                                                                                              |
+| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer `.3dm`, Three.js CAD formats)                          |
+| `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                                                   |
+| `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                                        |
+| `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                                                |
+| `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                                                                                                                                                     |
+| `AUTHPROVIDER_COGNITO`          | Indicates Amazon Cognito authentication                                                                                                                                                     |
+| `AUTHPROVIDER_COGNITO_SAML`     | Indicates Amazon Cognito with SAML federation                                                                                                                                               |
+| `AUTHPROVIDER_COGNITO_OIDC`     | Indicates Amazon Cognito with OIDC federation                                                                                                                                               |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | Indicates external OAuth2 authentication                                                                                                                                                    |
+| `ZIPDOWNLOADS`                  | Enables the Download as Zip controls, the asset's **Download Queue** tab, and the **My Download Queue** page. Emitted automatically when `app.pipelines.useZipDownloads.enabled` is `true`. |
+| `DEADLINECLOUD_PIPELINES`       | Enables the AWS Deadline Cloud pipeline execution type in the web interface. Emitted automatically when `app.pipelines.deadlineCloudExecutionTypeEnabled` is `true`.                        |
 
 An enabled add-on adds feature flags of its own, which are listed on the add-on's pages. See [Add-ons Overview](../developer/addons-overview.md).
 

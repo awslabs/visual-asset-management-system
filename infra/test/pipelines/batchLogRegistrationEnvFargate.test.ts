@@ -314,7 +314,7 @@ describe("utility/zipArchive executeBatchJob registration environment", () => {
 
     beforeAll(() => {
         const h = makePipelineHarness("ZipArchiveEnvStack", (c) => {
-            c.app.zipDownloads.enabled = true;
+            c.app.pipelines.useZipDownloads.enabled = true;
         });
         // The zipArchive job writes its status to the zip job table and reads asset file versions.
         (h.storage as any).dynamo = {

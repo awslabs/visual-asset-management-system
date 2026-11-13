@@ -53,7 +53,7 @@ from ..utils.zip_downloads import (
 # The domain errors every command reports, most specific first: (class, heading, hint).
 _ERROR_PRESENTATION = (
     (ZipDownloadDisabledError, "Zip Downloads Unavailable",
-     "Ask your VAMS administrator whether zip downloads (app.zipDownloads) are enabled. If they "
+     "Ask your VAMS administrator whether zip downloads (app.pipelines.useZipDownloads) are enabled. If they "
      "were enabled after you signed in, run 'vamscli auth login' to refresh the feature switches."),
     (ZipDownloadNotFoundError, "Zip Download Not Found",
      "Use 'vamscli zip-download list' to see your zip downloads. A job expires at its "

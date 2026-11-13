@@ -263,7 +263,9 @@ describe("useCodeBuild outside the supported partitions warns and does not rejec
                 typeof pipelines[name] === "object" &&
                 "useCodeBuild" in pipelines[name]
         );
-        expect(exposed.sort()).toEqual([...CODEBUILD_PIPELINES].sort());
+        // useZipDownloads has its own branch of the check (it warns only while the feature is on),
+        // tested below.
+        expect(exposed.sort()).toEqual([...CODEBUILD_PIPELINES, "useZipDownloads"].sort());
     });
 
     test.each(CODEBUILD_PIPELINES)("warns for %s in the EU Sovereign Cloud", (pipeline) => {
@@ -313,21 +315,21 @@ describe("useCodeBuild outside the supported partitions warns and does not rejec
         expect(warningsFrom(run)).toEqual([]);
     });
 
-    test("warns for app.zipDownloads in the EU Sovereign Cloud when the feature builds with CodeBuild", () => {
+    test("warns for app.pipelines.useZipDownloads in the EU Sovereign Cloud when the feature builds with CodeBuild", () => {
         const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
             c.app.useGlobalVpc = { ...(c.app.useGlobalVpc ?? {}), enabled: true };
-            c.app.zipDownloads.enabled = true;
-            c.app.zipDownloads.useCodeBuild = true;
+            c.app.pipelines.useZipDownloads.enabled = true;
+            c.app.pipelines.useZipDownloads.useCodeBuild = true;
         });
         const warnings = warningsFrom(run);
         expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toContain("app.zipDownloads");
+        expect(warnings[0]).toContain("app.pipelines.useZipDownloads");
     });
 
-    test("does not warn for app.zipDownloads.useCodeBuild while the feature is off", () => {
-        // No zipArchive pipeline, so no build, deploys while app.zipDownloads.enabled is false.
+    test("does not warn for app.pipelines.useZipDownloads.useCodeBuild while the feature is off", () => {
+        // No zipArchive pipeline, so no build, deploys while app.pipelines.useZipDownloads.enabled is false.
         const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
-            c.app.zipDownloads.useCodeBuild = true;
+            c.app.pipelines.useZipDownloads.useCodeBuild = true;
         });
         expect(warningsFrom(run)).toEqual([]);
     });

@@ -82,8 +82,8 @@ export interface ZipArchiveConstructProps extends cdk.StackProps {
  * streams a selection of asset files into one zip (ZIP64), tar or tar.gz archive. A Download as Zip
  * job (mode 1) writes it under `vams.preparedDownloads/` in the auxiliary bucket and records progress on
  * the job row; a workflow run (mode 2) writes it to the run's outputs so it becomes an asset file.
- * Mirrors the coordinate transform construct; built only when app.zipDownloads.enabled. The image is
- * built with local Docker, or with AWS CodeBuild when app.zipDownloads.useCodeBuild.
+ * Mirrors the coordinate transform construct; built only when app.pipelines.useZipDownloads.enabled. The image is
+ * built with local Docker, or with AWS CodeBuild when app.pipelines.useZipDownloads.useCodeBuild.
  */
 export class ZipArchiveConstruct extends Construct {
     public readonly pipelineVamsLambdaFunctionName: string;
@@ -93,7 +93,7 @@ export class ZipArchiveConstruct extends Construct {
 
         const region = cdk.Stack.of(this).region;
         const account = cdk.Stack.of(this).account;
-        const zip = props.config.app.zipDownloads;
+        const zip = props.config.app.pipelines.useZipDownloads;
 
         // Asset buckets: read the selection (any version), and in mode 2 write the archive to the run's
         // outputs prefix as a multipart upload.

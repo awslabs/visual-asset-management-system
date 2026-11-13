@@ -100,7 +100,7 @@ API_GET_ASSET_HISTORY = ApiRoute(
 )
 
 # Download as Zip (prepared downloads, handlers/assets/zipDownloadService.py). Always deployed;
-# the handler answers 404 while app.zipDownloads is disabled. Every job is owned by its requester:
+# the handler answers 404 while app.pipelines.useZipDownloads is disabled. Every job is owned by its requester:
 # only the requester cancels or deletes it; readers of the asset may list it, and those allowed to
 # download from the asset may download its archive.
 API_ZIP_DOWNLOADS_ASSET = ApiRoute(

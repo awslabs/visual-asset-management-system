@@ -397,7 +397,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
         );
 
         // Download as Zip: one function, the zip download service, serves the seven routes and the
-        // delayed sweep's passes. It deploys whatever app.zipDownloads.enabled says, so turning the
+        // delayed sweep's passes. It deploys whatever app.pipelines.useZipDownloads.enabled says, so turning the
         // feature off keeps existing jobs readable and the routes answering 404. Only with it on is
         // it given the sweep state machine and granted its launch and abort cross-calls (below, once
         // executeWorkflowV2 exists). It registers no terminal callback: a job follows its run by the
@@ -417,7 +417,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
                 registry: registry,
             });
         }
-        if (config.app.zipDownloads.enabled) {
+        if (config.app.pipelines.useZipDownloads.enabled) {
             // The delayed sweep of a stopped job's archive upload (#1125 D16).
             buildZipDownloadSweep(this, zipDownloadServiceFunction, storageResources, config);
         }
@@ -631,7 +631,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
             })
         );
 
-        if (config.app.zipDownloads.enabled) {
+        if (config.app.pipelines.useZipDownloads.enabled) {
             grantZipDownloadLaunch(
                 zipDownloadServiceFunction,
                 executeWorkflowV2,

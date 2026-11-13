@@ -712,7 +712,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                     props.config.app.pipelines.useGenAiCadStepAgent.runtime === "fargate") ||
                 props.config.app.pipelines.useImageTo3d?.enabled ||
                 // Download as Zip: the zipArchive system pipeline's Fargate jobs (isolated subnets).
-                props.config.app.zipDownloads?.enabled
+                props.config.app.pipelines.useZipDownloads?.enabled
             ) {
                 // Create VPC endpoint for Batch
                 new ec2.InterfaceVpcEndpoint(this, "BatchEndpoint", {

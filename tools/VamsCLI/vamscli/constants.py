@@ -46,7 +46,7 @@ API_GET_ASSET_HISTORY = "/database/{databaseId}/assets/{assetId}/assetHistory"
 # caller's jobs for that asset); the request route carries GET (one job) and DELETE, which CANCELS a
 # job that is still queued or running and DELETES one that has finished. The /url route issues a
 # short-lived presigned URL for a finished archive. Every route answers 404 with
-# ZIP_DOWNLOADS_DISABLED_API_MESSAGE while the deployment's app.zipDownloads is disabled.
+# ZIP_DOWNLOADS_DISABLED_API_MESSAGE while the deployment's app.pipelines.useZipDownloads is disabled.
 API_ZIP_DOWNLOADS_ASSET = "/database/{databaseId}/assets/{assetId}/download/zip"
 API_ZIP_DOWNLOADS_ASSET_REQUEST = "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}"
 API_ZIP_DOWNLOADS_ASSET_REQUEST_URL = (

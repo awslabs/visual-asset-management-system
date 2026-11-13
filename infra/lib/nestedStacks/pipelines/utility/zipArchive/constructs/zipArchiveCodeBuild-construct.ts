@@ -24,7 +24,7 @@ export interface ZipArchiveCodeBuildConstructProps extends cdk.StackProps {
 }
 
 /**
- * Builds the zipArchive container image with AWS CodeBuild (app.zipDownloads.useCodeBuild) into a
+ * Builds the zipArchive container image with AWS CodeBuild (app.pipelines.useZipDownloads.useCodeBuild) into a
  * VAMS-owned Amazon ECR repository, from backendPipelines/utility/zipArchive/container and its
  * buildspec.yml. Mirrors CoordinateTransformCodeBuildConstruct.
  */

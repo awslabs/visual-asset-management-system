@@ -2134,7 +2134,7 @@ const CORE_FIELDS: FieldMeta[] = [
 
     // ===== Download as Zip (prepared archive downloads) =====
     {
-        path: "app.zipDownloads.enabled",
+        path: "app.pipelines.useZipDownloads.enabled",
         label: "Download as Zip",
         input: "boolean",
         section: "pipelines-standard",
@@ -2142,7 +2142,7 @@ const CORE_FIELDS: FieldMeta[] = [
         help: "Lets users download files, folders or a whole asset as one zip, tar or tar.gz archive, built by the zipArchive system pipeline on AWS Batch Fargate. Requires the global VPC. The job table, the API routes and the archive expiry rule deploy either way. A zip download is kept for 7 days.",
     },
     {
-        path: "app.zipDownloads.maxFilesPerRequest",
+        path: "app.pipelines.useZipDownloads.maxFilesPerRequest",
         label: "Download as Zip — maximum files per archive",
         input: "number",
         section: "pipelines-standard",
@@ -2151,7 +2151,7 @@ const CORE_FIELDS: FieldMeta[] = [
         help: "1 to 1,000,000, default 100,000.",
     },
     {
-        path: "app.zipDownloads.maxTotalBytesPerRequest",
+        path: "app.pipelines.useZipDownloads.maxTotalBytesPerRequest",
         label: "Download as Zip — maximum total size per archive (bytes)",
         input: "number",
         section: "pipelines-standard",
@@ -2160,7 +2160,7 @@ const CORE_FIELDS: FieldMeta[] = [
         help: "Up to 5 TiB (5497558138880, the largest Amazon S3 object), which is the default.",
     },
     {
-        path: "app.zipDownloads.maxActiveRequestsPerUser",
+        path: "app.pipelines.useZipDownloads.maxActiveRequestsPerUser",
         label: "Download as Zip — active jobs per user",
         input: "number",
         section: "pipelines-standard",
@@ -2169,7 +2169,7 @@ const CORE_FIELDS: FieldMeta[] = [
         help: "Queued or running zip download jobs one user may have at once. 1 to 100, default 5.",
     },
     {
-        path: "app.zipDownloads.computeVcpu",
+        path: "app.pipelines.useZipDownloads.computeVcpu",
         label: "Download as Zip — zipArchive job vCPU",
         input: "number",
         section: "pipelines-standard",
@@ -2178,7 +2178,7 @@ const CORE_FIELDS: FieldMeta[] = [
         help: "AWS Fargate vCPU of the zipArchive job: 4, 8 or 16 (default 16).",
     },
     {
-        path: "app.zipDownloads.computeMemoryGiB",
+        path: "app.pipelines.useZipDownloads.computeMemoryGiB",
         label: "Download as Zip — zipArchive job memory (GiB)",
         input: "number",
         section: "pipelines-standard",
@@ -2187,12 +2187,12 @@ const CORE_FIELDS: FieldMeta[] = [
         help: "AWS Fargate memory for the vCPU size: 4 vCPU 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in 8 GiB steps. Default 32.",
     },
     {
-        path: "app.zipDownloads.useCodeBuild",
+        path: "app.pipelines.useZipDownloads.useCodeBuild",
         label: "Download as Zip — build via CodeBuild",
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
-        visibleWhen: (c) => !!getByPath(c, "app.zipDownloads.enabled"),
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useZipDownloads.enabled"),
         help: "Builds the zipArchive container image with AWS CodeBuild during deployment instead of local Docker. Default false.",
     },
 ];

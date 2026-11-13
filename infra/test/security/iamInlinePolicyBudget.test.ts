@@ -53,7 +53,7 @@ interface Cell {
 
 /** Download as Zip on; its zipArchive pipeline requires the global VPC (Lambdas stay outside it). */
 function enableZipDownloads(c: any): void {
-    c.app.zipDownloads.enabled = true;
+    c.app.pipelines.useZipDownloads.enabled = true;
     c.app.useGlobalVpc.enabled = true;
 }
 
@@ -109,7 +109,7 @@ const CELLS: Cell[] = [
             c.app.pipelines.deadlineCloudExecutionTypeEnabled = true;
             c.app.useGlobalVpc.enabled = true;
             c.app.useGlobalVpc.useForAllLambdas = true;
-            c.app.zipDownloads.enabled = true;
+            c.app.pipelines.useZipDownloads.enabled = true;
         },
         zipOnTwinOf: "commercial-worst",
     },

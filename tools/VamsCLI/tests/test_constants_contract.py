@@ -125,7 +125,7 @@ class TestFeatureSwitchMirror:
 
     def test_zip_downloads_switch_is_published_and_mirrored(self):
         """FEATURE_ZIPDOWNLOADS gates the zip-download commands and MCP tools; the deployment
-        publishes it only while app.zipDownloads is enabled."""
+        publishes it only while app.pipelines.useZipDownloads is enabled."""
         declared = _enum_members(VAMS_APP_FEATURES_TS.read_text(encoding="utf-8"))
         assert constants.FEATURE_ZIPDOWNLOADS == "ZIPDOWNLOADS"
         assert "ZIPDOWNLOADS" in declared, "VAMS_APP_FEATURES does not publish ZIPDOWNLOADS"

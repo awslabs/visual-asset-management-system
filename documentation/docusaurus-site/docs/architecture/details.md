@@ -289,7 +289,7 @@ Configuration values resolve through a four-tier fallback chain:
 | `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito with OIDC federation                                                  |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                     |
 | `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type enabled                                   |
-| `ZIPDOWNLOADS`                  | Download as Zip enabled (`app.zipDownloads.enabled`)                                 |
+| `ZIPDOWNLOADS`                  | Download as Zip enabled (`app.pipelines.useZipDownloads.enabled`)                    |
 
 An enabled add-on adds feature flags of its own, which are listed on the add-on's pages. See [Add-ons Overview](../developer/addons-overview.md).
 

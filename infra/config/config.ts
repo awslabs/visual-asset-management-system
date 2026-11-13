@@ -269,7 +269,7 @@ export const RAPID_PIPELINE_ECS_STOP_ROUTE_PAGE_SIZE = 100;
 const MIB = 1024 * 1024;
 
 /**
- * Defaults of app.zipDownloads (Download as Zip). The backend reads the limits from the zip download
+ * Defaults of app.pipelines.useZipDownloads (Download as Zip). The backend reads the limits from the zip download
  * service's environment and falls back to the same values.
  */
 export const ZIP_DOWNLOADS_DEFAULTS = {
@@ -441,7 +441,7 @@ export const COGNITO_APP_CLIENT_ID_PATTERN = /^[\w+]{1,128}$/;
 export const IAM_MANAGED_POLICY_ARN_PATTERN =
     /^arn:(aws[a-z-]*):iam::(?:\d{12}|aws):policy\/(?:[\w+=,.@-]+\/)*[\w+=,.@-]{1,128}$/;
 
-/** Bounds of each numeric app.zipDownloads key (inclusive integers). */
+/** Bounds of each numeric app.pipelines.useZipDownloads key (inclusive integers). */
 export const ZIP_DOWNLOADS_BOUNDS: Record<
     Exclude<keyof typeof ZIP_DOWNLOADS_DEFAULTS, "enabled" | "useCodeBuild">,
     { min: number; max: number; unit: string }
@@ -870,9 +870,25 @@ export function validatePermissionBoundaryArn(value: unknown, partition: string)
     }
 }
 
-/** Fill each unset app.zipDownloads key with its default (an absent block is all defaults). */
+/**
+ * The Download as Zip block moved from app.zipDownloads to app.pipelines.useZipDownloads before its
+ * first release. A config that still carries the old key would otherwise deploy with the feature off
+ * (an absent block is all defaults), so it stops here instead. Exported for the config tests.
+ */
+export function rejectRenamedZipDownloadsKey(config: ConfigPublic): void {
+    if ((config.app as unknown as Record<string, unknown>).zipDownloads !== undefined) {
+        throw new Error(
+            "Configuration Error: app.zipDownloads was renamed to app.pipelines.useZipDownloads. Move " +
+                "the block, with the same keys, under app.pipelines."
+        );
+    }
+}
+
+/** Fill each unset app.pipelines.useZipDownloads key with its default (an absent block is all defaults). */
 export function applyZipDownloadsDefaults(config: ConfigPublic): void {
-    const block = (config.app.zipDownloads ?? {}) as Partial<ConfigPublic["app"]["zipDownloads"]>;
+    const block = (config.app.pipelines.useZipDownloads ?? {}) as Partial<
+        ConfigPublic["app"]["pipelines"]["useZipDownloads"]
+    >;
     const filled = { ...ZIP_DOWNLOADS_DEFAULTS };
     for (const key of Object.keys(ZIP_DOWNLOADS_DEFAULTS) as Array<
         keyof typeof ZIP_DOWNLOADS_DEFAULTS
@@ -881,18 +897,20 @@ export function applyZipDownloadsDefaults(config: ConfigPublic): void {
             (filled as Record<string, unknown>)[key] = block[key];
         }
     }
-    config.app.zipDownloads = filled;
+    config.app.pipelines.useZipDownloads = filled;
 }
 
-/** Reject an app.zipDownloads value outside its type or bounds, and an invalid Fargate size. */
+/** Reject an app.pipelines.useZipDownloads value outside its type or bounds, and an invalid Fargate size. */
 export function validateZipDownloadsConfig(config: ConfigPublic): void {
-    const block = config.app.zipDownloads;
+    const block = config.app.pipelines.useZipDownloads;
     if (typeof block.enabled !== "boolean") {
-        throw new Error("Configuration Error: app.zipDownloads.enabled must be true or false.");
+        throw new Error(
+            "Configuration Error: app.pipelines.useZipDownloads.enabled must be true or false."
+        );
     }
     if (typeof block.useCodeBuild !== "boolean") {
         throw new Error(
-            "Configuration Error: app.zipDownloads.useCodeBuild must be true or false."
+            "Configuration Error: app.pipelines.useZipDownloads.useCodeBuild must be true or false."
         );
     }
     for (const [key, bound] of Object.entries(ZIP_DOWNLOADS_BOUNDS)) {
@@ -904,19 +922,25 @@ export function validateZipDownloadsConfig(config: ConfigPublic): void {
             value > bound.max
         ) {
             throw new Error(
-                `Configuration Error: app.zipDownloads.${key} must be a whole number of ` +
+                `Configuration Error: app.pipelines.useZipDownloads.${key} must be a whole number of ` +
                     `${bound.unit} between ${bound.min} and ${bound.max}.`
             );
         }
     }
     if (!ZIP_DOWNLOADS_COMPUTE_VCPUS.includes(block.computeVcpu)) {
-        throw new Error("Configuration Error: app.zipDownloads.computeVcpu must be 4, 8 or 16.");
+        throw new Error(
+            "Configuration Error: app.pipelines.useZipDownloads.computeVcpu must be 4, 8 or 16."
+        );
     }
     if (!isFargateCpuMemory(block.computeVcpu, block.computeMemoryGiB)) {
         throw new Error(
-            `Configuration Error: app.zipDownloads.computeMemoryGiB (${block.computeMemoryGiB}) is ` +
+            `Configuration Error: app.pipelines.useZipDownloads.computeMemoryGiB (${block.computeMemoryGiB}) is ` +
                 `not an AWS Fargate memory size for ${block.computeVcpu} vCPU. 4 vCPU takes 8-30 GiB, ` +
                 `8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in 8 GiB steps.`
+        );
+    }
+}
+
 /**
  * Defaults and validates `app.auditLogging`: an absent block or `recordReads` key means `true`; any
  * value that is not a JSON boolean is a configuration error rather than being read as truthy.
@@ -1985,6 +2009,7 @@ export function getConfig(app: cdk.App): Config {
     }
 
     // Download as Zip: fill each unset key with its default, then validate.
+    rejectRenamedZipDownloadsKey(config);
     applyZipDownloadsDefaults(config);
     validateZipDownloadsConfig(config);
 
@@ -2168,8 +2193,11 @@ export function getConfig(app: cdk.App): Config {
         const enabledOutsideSupport = codeBuildPipelinePaths
             .filter((name) => pipelines[name]?.useCodeBuild === true)
             .map((name) => `app.pipelines.${name}`);
-        if (config.app.zipDownloads?.enabled && config.app.zipDownloads.useCodeBuild === true) {
-            enabledOutsideSupport.push("app.zipDownloads");
+        if (
+            config.app.pipelines.useZipDownloads?.enabled &&
+            config.app.pipelines.useZipDownloads.useCodeBuild === true
+        ) {
+            enabledOutsideSupport.push("app.pipelines.useZipDownloads");
         }
         if (enabledOutsideSupport.length > 0) {
             console.warn(
@@ -2304,7 +2332,8 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.pipelines.useGenAiCadStepAgent.enabled)
         vpcRequiringFeatures.push("pipelines.useGenAiCadStepAgent");
     // The zipArchive pipeline of Download as Zip runs on AWS Batch Fargate in the isolated pipeline subnets.
-    if (config.app.zipDownloads.enabled) vpcRequiringFeatures.push("zipDownloads");
+    if (config.app.pipelines.useZipDownloads.enabled)
+        vpcRequiringFeatures.push("pipelines.useZipDownloads");
     vpcRequiringFeatures.push(...addonVpcRequiringFeatures(config));
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
@@ -5191,6 +5220,19 @@ export interface ConfigPublic {
                     };
                 };
             };
+            // Download as Zip: user zip download jobs and the zipArchive system pipeline. The job
+            // table, the vams.preparedDownloads/ lifecycle rule and the API routes deploy always;
+            // `enabled` adds the zipArchive pipeline and the feature switch (routes answer 404 while it
+            // is false). Every key is optional (see ZIP_DOWNLOADS_DEFAULTS).
+            useZipDownloads: {
+                enabled: boolean;
+                maxFilesPerRequest: number;
+                maxTotalBytesPerRequest: number;
+                maxActiveRequestsPerUser: number;
+                computeVcpu: number;
+                computeMemoryGiB: number;
+                useCodeBuild: boolean;
+            };
         };
         addons: {
             useGarnetFramework: {
@@ -5282,19 +5324,6 @@ export interface ConfigPublic {
             autoLoadDefaultDatabaseSchema: boolean;
             autoLoadDefaultAssetSchema: boolean;
             autoLoadDefaultAssetFileSchema: boolean;
-        };
-        // Download as Zip: user zip download jobs and the zipArchive system pipeline. The job table, the
-        // vams.preparedDownloads/ lifecycle rule and the API routes deploy always; `enabled` adds the
-        // zipArchive pipeline and the feature switch (routes answer 404 while it is false). Every key is
-        // optional (see ZIP_DOWNLOADS_DEFAULTS).
-        zipDownloads: {
-            enabled: boolean;
-            maxFilesPerRequest: number;
-            maxTotalBytesPerRequest: number;
-            maxActiveRequestsPerUser: number;
-            computeVcpu: number;
-            computeMemoryGiB: number;
-            useCodeBuild: boolean;
         };
     };
 }

@@ -1656,11 +1656,11 @@ function buildCopyStateMachine(
 }
 
 // ---------------------------------------------------------------------------
-// Download as Zip (app.zipDownloads)
+// Download as Zip (app.pipelines.useZipDownloads)
 // ---------------------------------------------------------------------------
 
 /**
- * Download as Zip (app.zipDownloads): one function, the zip download service
+ * Download as Zip (app.pipelines.useZipDownloads): one function, the zip download service
  * (backend handlers/assets/zipDownloadService.py), serves the six `/download/zip` routes and the
  * passes of the delayed sweep. Its handler dispatches on the event envelope: an API Gateway event (it
  * always has `requestContext`) takes the API path with the authorizer and Casbin checks; a sweep pass
@@ -1668,7 +1668,7 @@ function buildCopyStateMachine(
  * zipArchive run by the stored execution id, and the service's read-time reconcile finalizes it
  * from the run's execution row on the next read.
  *
- * The function deploys whatever `app.zipDownloads.enabled` says, so a deployment that turns the
+ * The function deploys whatever `app.pipelines.useZipDownloads.enabled` says, so a deployment that turns the
  * feature off keeps its job table readable and its routes answering (404 "not enabled"). With the
  * feature on, `grantZipDownloadLaunch` adds the two cross-calls the service makes (launch and abort),
  * and `buildZipDownloadSweep` adds the sweep state machine that invokes it.
@@ -1716,9 +1716,9 @@ export const ZIP_DOWNLOAD_ROUTES: ReadonlyArray<{
     },
 ];
 
-/** The zip download service's environment from app.zipDownloads (names read by zipDownloadService.py). */
+/** The zip download service's environment from app.pipelines.useZipDownloads (names read by zipDownloadService.py). */
 export function zipDownloadServiceEnvironment(config: Config.Config): Record<string, string> {
-    const zip = config.app.zipDownloads;
+    const zip = config.app.pipelines.useZipDownloads;
     return {
         ZIPDOWNLOADS_ENABLED: zip.enabled ? "true" : "false",
         ZIP_DOWNLOAD_MAX_FILES_PER_REQUEST: zip.maxFilesPerRequest.toString(),
@@ -1855,7 +1855,7 @@ export function buildZipDownloadServiceFunction(
 }
 
 /**
- * With app.zipDownloads on: the service launches the zipArchive workflow through the execute function
+ * With app.pipelines.useZipDownloads on: the service launches the zipArchive workflow through the execute function
  * and aborts a cancelled job's run through the execution service, both as SYSTEM_USER cross-calls.
  * The same execution service grant serves the run check of an idle job (a details read that records
  * a run ended outside VAMS whose status change event was lost; zipDownloadService._check_run_ended).
@@ -1915,7 +1915,7 @@ export const ZIP_DOWNLOAD_SWEEP_RETRY = {
 };
 
 /**
- * With app.zipDownloads on: the delayed sweep of a stopped zip download job (#1125 D16). An abort's
+ * With app.pipelines.useZipDownloads on: the delayed sweep of a stopped zip download job (#1125 D16). An abort's
  * immediate answer is not final (on demo21 an upload whose abort had answered, and whose ListParts
  * then answered NoSuchUpload, was listed again minutes later with a part accepted before the stop),
  * so every stopper also starts this Standard state machine, once per job (backend

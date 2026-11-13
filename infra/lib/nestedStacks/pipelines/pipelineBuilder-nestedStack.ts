@@ -319,7 +319,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
             props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
             props.config.app.pipelines.useModelOps.enabled ||
             props.config.app.pipelines.useIsaacLabTraining.enabled ||
-            props.config.app.zipDownloads.enabled
+            props.config.app.pipelines.useZipDownloads.enabled
         ) {
             //Create nested stack for each turned on pipeline
             if (props.config.app.pipelines.usePreviewPcPotreeViewer.enabled) {
@@ -368,7 +368,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
 
             // Download as Zip: the zipArchive system pipeline. It registers itself (isSystem, fixed ids
             // GLOBAL/utility-zip-archive), so its execute function is not listed for manual registration.
-            if (props.config.app.zipDownloads.enabled) {
+            if (props.config.app.pipelines.useZipDownloads.enabled) {
                 new ZipArchiveBuilderNestedStack(this, "ZipArchiveBuilderNestedStack", {
                     ...props,
                     config: props.config,

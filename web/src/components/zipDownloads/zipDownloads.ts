@@ -92,7 +92,7 @@ export const assetDownloadQueueLink = (
 export const DOWNLOAD_QUEUE_PAGE_TITLE = "My Download Queue";
 export const DOWNLOAD_QUEUE_TAB_LABEL = "Download Queue";
 
-/** The API's 404 body while app.zipDownloads is disabled. */
+/** The API's 404 body while app.pipelines.useZipDownloads is disabled. */
 export const ZIP_DISABLED_MESSAGE = "Zip downloads are not enabled for this deployment";
 
 /** Polling cadence while a non-terminal job is on screen. */

@@ -26,7 +26,7 @@ export interface ZipArchiveBuilderNestedStackProps extends cdk.StackProps {
     importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
-/** The zipArchive system pipeline of Download as Zip (app.zipDownloads.enabled). */
+/** The zipArchive system pipeline of Download as Zip (app.pipelines.useZipDownloads.enabled). */
 export class ZipArchiveBuilderNestedStack extends NestedStack {
     public pipelineVamsLambdaFunctionName: string;
 

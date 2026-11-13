@@ -2,7 +2,7 @@
 
 The Zip Archive pipeline (`utility-zip-archive`) streams selected files, folders, or a whole asset into one zip, tar, or tar.gz archive. It serves the [Download as Zip](../user-guide/zip-downloads.md) feature, and it can also be run as an ordinary workflow that writes the archive back into the asset as a new file. The pipeline runs as an AWS Batch Fargate container that reads the selected file versions from Amazon S3 and writes the archive to Amazon S3 as a multipart upload, without staging data on disk, so an archive can reach the 5 TiB Amazon S3 object limit.
 
-The pipeline and its workflow are **system** records: VAMS registers them in the `GLOBAL` database with the fixed IDs `utility-zip-archive` when `app.zipDownloads.enabled` is `true`, and they are read-only through the API except for their `enabled` toggles and template content. Runs of the workflow are hidden from the execution lists unless system runs are included.
+The pipeline and its workflow are **system** records: VAMS registers them in the `GLOBAL` database with the fixed IDs `utility-zip-archive` when `app.pipelines.useZipDownloads.enabled` is `true`, and they are read-only through the API except for their `enabled` toggles and template content. Runs of the workflow are hidden from the execution lists unless system runs are included.
 
 ## Archive Formats
 
@@ -72,26 +72,28 @@ The container reads members with ranged GET requests of their pinned versions, r
 
 ### Container Image Build
 
-The container image is built during CDK deployment, from `backendPipelines/utility/zipArchive/container/` (Python 3.11 slim base image, the Python standard library, and the AWS SDK for Python). It runs as a non-root user. By default the image is a local Docker build on the deployment machine (a CDK image asset pushed to Amazon ECR), so the machine running `cdk deploy` needs Docker. With `app.zipDownloads.useCodeBuild` set to `true`, CDK uploads the container source to Amazon S3 instead, and an AWS CodeBuild project builds the image with `container/buildspec.yml` into an Amazon ECR repository VAMS owns (`<name>-<baseStackName>-ziparchive`, with `-kms` when `app.useKmsCmkEncryption.enabled`). The build runs outside the VPC to pull the public base image, and the deployment does not wait for it: the stack output `ZipArchiveCodeBuildProject` names the project, so check that its latest build SUCCEEDED before the first zip download. The CodeBuild option is supported in the commercial and AWS GovCloud (US) partitions; configuration validation warns when it is set elsewhere.
+The container image is built during CDK deployment, from `backendPipelines/utility/zipArchive/container/` (Python 3.11 slim base image, the Python standard library, and the AWS SDK for Python). It runs as a non-root user. By default the image is a local Docker build on the deployment machine (a CDK image asset pushed to Amazon ECR), so the machine running `cdk deploy` needs Docker. With `app.pipelines.useZipDownloads.useCodeBuild` set to `true`, CDK uploads the container source to Amazon S3 instead, and an AWS CodeBuild project builds the image with `container/buildspec.yml` into an Amazon ECR repository VAMS owns (`<name>-<baseStackName>-ziparchive`, with `-kms` when `app.useKmsCmkEncryption.enabled`). The build runs outside the VPC to pull the public base image, and the deployment does not wait for it: the stack output `ZipArchiveCodeBuildProject` names the project, so check that its latest build SUCCEEDED before the first zip download. The CodeBuild option is supported in the commercial and AWS GovCloud (US) partitions; configuration validation warns when it is set elsewhere.
 
 ## Configuration
 
-The pipeline has no configuration block of its own. It is deployed, and its pipeline and workflow are registered, when Download as Zip is enabled:
+The pipeline is configured by the Download as Zip block, `app.pipelines.useZipDownloads`. It is deployed, and its pipeline and workflow are registered, when Download as Zip is enabled:
 
 ```json
 {
     "app": {
-        "zipDownloads": {
-            "enabled": true,
-            "computeVcpu": 16,
-            "computeMemoryGiB": 32,
-            "useCodeBuild": false
+        "pipelines": {
+            "useZipDownloads": {
+                "enabled": true,
+                "computeVcpu": 16,
+                "computeMemoryGiB": 32,
+                "useCodeBuild": false
+            }
         }
     }
 }
 ```
 
-`computeVcpu` and `computeMemoryGiB` size the AWS Fargate job, and `useCodeBuild` builds the image with AWS CodeBuild instead of local Docker (see [Container Image Build](#container-image-build)). The other `app.zipDownloads` keys set the limits of Download as Zip jobs, which are kept for 7 days; see [Zip downloads (`app.zipDownloads`)](../deployment/configuration-reference.md#zip-downloads-appzipdownloads).
+`computeVcpu` and `computeMemoryGiB` size the AWS Fargate job, and `useCodeBuild` builds the image with AWS CodeBuild instead of local Docker (see [Container Image Build](#container-image-build)). The other `app.pipelines.useZipDownloads` keys set the limits of Download as Zip jobs, which are kept for 7 days; see [Zip downloads (`app.pipelines.useZipDownloads`)](../deployment/configuration-reference.md#zip-downloads-apppipelinesusezipdownloads).
 
 ## Running the Zip Archive Workflow
 
@@ -137,7 +139,7 @@ Any other key fails the run. The same checks as for a zip download apply: the ru
 
 ### VPC with Isolated Subnets
 
-The container runs on AWS Batch with AWS Fargate compute in the VPC's isolated subnets, so `app.useGlobalVpc.enabled` must be `true` when `app.zipDownloads.enabled` is `true`. Configuration validation refuses `app.zipDownloads.enabled` without the VPC. When the feature is on and `app.useGlobalVpc.addVpcEndpoints` is `true`, the VPC builder creates the shared AWS Batch, Amazon ECR, and Amazon ECR Docker interface endpoints; the container also uses the VPC's base interface endpoints (AWS Step Functions, Amazon CloudWatch Logs, AWS STS, and AWS KMS when a customer managed key is configured) and the Amazon S3 and Amazon DynamoDB gateway endpoints. A VPC you bring without `addVpcEndpoints` must reach the same services.
+The container runs on AWS Batch with AWS Fargate compute in the VPC's isolated subnets, so `app.useGlobalVpc.enabled` must be `true` when `app.pipelines.useZipDownloads.enabled` is `true`. Configuration validation refuses `app.pipelines.useZipDownloads.enabled` without the VPC. When the feature is on and `app.useGlobalVpc.addVpcEndpoints` is `true`, the VPC builder creates the shared AWS Batch, Amazon ECR, and Amazon ECR Docker interface endpoints; the container also uses the VPC's base interface endpoints (AWS Step Functions, Amazon CloudWatch Logs, AWS STS, and AWS KMS when a customer managed key is configured) and the Amazon S3 and Amazon DynamoDB gateway endpoints. A VPC you bring without `addVpcEndpoints` must reach the same services.
 
 ## Infrastructure Components
 
@@ -186,4 +188,4 @@ The container uses only the Python standard library and the AWS SDK for Python (
 -   [Download as Zip and the Download Queue user guide](../user-guide/zip-downloads.md)
 -   [Zip Downloads API](../api/zip-downloads.md)
 -   [Pipeline System Overview](overview.md)
--   [Configuration Reference](../deployment/configuration-reference.md#zip-downloads-appzipdownloads)
+-   [Configuration Reference](../deployment/configuration-reference.md#zip-downloads-apppipelinesusezipdownloads)

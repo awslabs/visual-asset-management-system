@@ -14,7 +14,7 @@ Routes (common/apiRoutes.py ZIP_DOWNLOAD_ROUTES):
                                                                                  (?intent=cancel: never deletes)
   POST   /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url    presigned URL
 
-Every call: Tier-1 route check, then the feature check (404 while app.zipDownloads is off), then
+Every call: Tier-1 route check, then the feature check (404 while app.pipelines.useZipDownloads is off), then
 validation, then Tier-2 asset GET (the download path's action). Jobs are keyed by the AUTHENTICATED
 user id. A caller gets, cancels and deletes only their own; another user's job, or a job named under
 another asset's path, answers the same 404 as a missing one.

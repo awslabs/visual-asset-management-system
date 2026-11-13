@@ -7,7 +7,7 @@ title: Zip Download Commands
 
 Package files, folders, or a whole asset into one zip, tar, or tar.gz archive built in the background, then download it. Each zip download is a job owned by the signed-in user; the commands list and change only your own jobs. See [Zip Downloads](../../user-guide/zip-downloads.md) for the rules that apply to every job.
 
-The `zip-download` commands require a deployment with Download as Zip enabled (`app.zipDownloads.enabled`). On a deployment without it, every command fails with `Zip downloads are not available for this deployment`. The CLI reads this from the profile's feature switches first (`vamscli features list`), and from the API's answer otherwise.
+The `zip-download` commands require a deployment with Download as Zip enabled (`app.pipelines.useZipDownloads.enabled`). On a deployment without it, every command fails with `Zip downloads are not available for this deployment`. The CLI reads this from the profile's feature switches first (`vamscli features list`), and from the API's answer otherwise.
 
 ---
 
