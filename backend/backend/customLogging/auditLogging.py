@@ -9,19 +9,47 @@ All functions implement silent failure - if logging fails, the error is logged
 locally but the lambda execution continues without disruption. An entry that
 cannot be delivered to its audit log group is written to the function's own log
 as one auditFallback line and counted in the VAMS/Audit AuditWriteFailures metric.
+
+log_action writes action records in the record contract (auditVersion 1): the
+action, its outcome, the actor, the request and the entity, with what a write
+changed. audit_request opens a request's audit context, which resolves the actor
+once and writes the request's successful action records together when it ends.
+The action registry is common/auditActions.py.
 """
 
 import contextlib
 import contextvars
+import functools
+import hashlib
 import json
+import os
 import re
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor, wait as wait_for_futures
 import boto3
 from botocore.config import Config
 from common.timestamps import utc_now
-from typing import Dict, Any, Iterator, Optional, List, Tuple
-from handlers.auth import request_to_claims
+from typing import Dict, Any, Callable, Iterator, Optional, List, Tuple
+from handlers.auth import request_to_claims, AUTH_METHOD_API_KEY
 from customLogging.logger import mask_sensitive_data, safeLogger
 from common.resourceNames import ResourceKeys, get_log_group_name
+from common.auditActions import (
+    AuditSpec,
+    GROUP_ACTIONS,
+    GROUP_AUTHORIZATION,
+    GROUP_ERRORS,
+    GROUP_FILE_DOWNLOAD,
+    GROUP_FILE_DOWNLOAD_STREAMED,
+    GROUP_FILE_UPLOAD,
+    AUDIT_ACTION_NAME_PATTERN,
+    KIND_DOWNLOAD,
+    KIND_READ,
+    KIND_SEARCH,
+    audit_spec_for_action,
+    audit_spec_for_route,
+    resolve_route_template,
+)
 
 # Initialize logger for audit logging module
 logger = safeLogger()
@@ -34,6 +62,19 @@ try:
 except Exception as e:
     logger.exception(f"Failed to initialize CloudWatch Logs client: {e}")
     cloudwatch_logs = None
+
+# The client the request audit context (audit_request) writes with. It runs on the request path,
+# so it is bounded rather than Rule 6's five adaptive attempts: one-second connect and two-second
+# read timeouts and three attempts, under the flush's own AUDIT_FLUSH_DEADLINE_SECONDS. A record the
+# flush cannot confirm in time is reported as undelivered (auditFallback) instead of holding the
+# response.
+flush_client_config = Config(connect_timeout=1, read_timeout=2, retries={'max_attempts': 3, 'mode': 'standard'})
+
+try:
+    audit_flush_client = boto3.client('logs', config=flush_client_config)
+except Exception as e:
+    logger.exception(f"Failed to initialize the audit flush CloudWatch Logs client: {e}")
+    audit_flush_client = None
 
 # PutLogEvents budgets: at most 10,000 events and 1,048,576 bytes per call, and 262,144 bytes
 # per event, each byte total counting 26 bytes of overhead on top of a message's UTF-8 bytes.
@@ -224,12 +265,27 @@ def _report_unresolved_log_group(key, messages: List[str], event: Optional[Dict[
 
 
 def _write_audit_entry(key, event_type: str, user_context: Dict[str, Any], custom_data: Any,
-                       event: Optional[Dict[str, Any]]) -> None:
+                       event: Optional[Dict[str, Any]], canonical: Optional[Dict[str, Any]] = None,
+                       buffer: bool = False) -> None:
     """
     Format one audit entry and write it to the audit log group `key` names, or report it as
     undelivered when that name does not resolve.
+
+    Inside the request's audit context, a call that passes ``canonical`` (action, outcome and entity
+    type) gains the record contract keys in its payload and is handed to the context's delivery: a
+    ``buffer`` entry is held until the request ends, any other is written at once. A call without
+    ``canonical``, or outside a context, is written as before.
     """
-    message = _format_log_message(event_type, user_context, custom_data, _audit_log_type(key))
+    ctx = _context_for(event) if canonical is not None else None
+    if ctx is not None:
+        custom_data = _with_canonical_keys(custom_data, _legacy_canonical_keys(
+            ctx, canonical.get("action"), canonical.get("outcome", OUTCOME_SUCCESS),
+            canonical.get("entityType")))
+    log_type = _audit_log_type(key)
+    message = _format_log_message(event_type, user_context, custom_data, log_type)
+    if ctx is not None:
+        _enqueue_records(ctx, log_type, _records_with_echo([message], event), buffer=buffer)
+        return
     log_group_name = _audit_log_group(key)
     if not log_group_name:
         _report_unresolved_log_group(key, [message], event)
@@ -247,6 +303,10 @@ def _extract_user_context(event: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Dictionary containing user, roles, and mfaEnabled information
     """
+    # Inside the request's audit context the claims were resolved once, when it opened.
+    ctx = _context_for(event)
+    if ctx is not None:
+        return dict(ctx.user_context)
     try:
         claims = request_to_claims(event)
         return {
@@ -477,6 +537,92 @@ def _write_to_cloudwatch(log_group_name: str, message: str, event: Dict[str, Any
     _write_batch_to_cloudwatch(log_group_name, [message], event)
 
 
+def _records_with_echo(messages: List[str], event: Optional[Dict[str, Any]]) -> List[str]:
+    """
+    Append the event echo to each formatted message, the way _write_batch_to_cloudwatch writes them.
+
+    The echo is identical on every entry. Once replicating it would pass
+    AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES, the first entry carries it and the rest carry a reference.
+    """
+    event_suffix = _event_suffix(event)
+    following_suffix = event_suffix
+    if (event_suffix and len(messages) > 1
+            and _message_byte_length(event_suffix) * len(messages)
+            > AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES):
+        following_suffix = AUDIT_EVENT_ECHO_REFERENCE
+    return [message + (event_suffix if index == 0 else following_suffix)
+            for index, message in enumerate(messages)]
+
+
+def _put_audit_records(log_group_name: str, records: List[str], client: Any) -> None:
+    """
+    Write complete records (event echo included) to one audit log group with silent failure.
+
+    Creates the day's log stream once per group per container, cuts the records into batches inside
+    the PutLogEvents budgets, and reports every record a failure loses as undelivered. Never raises.
+
+    Args:
+        log_group_name: The CloudWatch log group name
+        records: The records, in the order they should be written
+        client: The CloudWatch Logs client to write with; None reports the records undelivered
+    """
+    log_type = _audit_log_types_by_name.get(log_group_name, "unknown")
+    try:
+        if not client:
+            logger.error("CloudWatch Logs client not initialized, cannot write audit log")
+            report_undelivered_audit_records(log_type, "clientUnavailable", records)
+            return
+
+        # Create log stream name based on current date
+        log_stream_name = utc_now().strftime("%Y/%m/%d")
+
+        # Ensure log stream exists (create if it doesn't), once per group per day per container
+        if _created_log_streams.get(log_group_name) != log_stream_name:
+            try:
+                client.create_log_stream(
+                    logGroupName=log_group_name,
+                    logStreamName=log_stream_name
+                )
+            except client.exceptions.ResourceAlreadyExistsException:
+                # Log stream already exists, which is fine
+                pass
+            except Exception as e:
+                logger.exception(f"Failed to create log stream {log_stream_name} in {log_group_name}: {e}")
+                report_undelivered_audit_records(log_type, "createLogStreamFailed", records)
+                return
+            _created_log_streams[log_group_name] = log_stream_name
+
+        timestamp = int(utc_now().timestamp() * 1000)
+        batches = _chunk_log_events([_prepare_log_event(timestamp, record) for record in records])
+        # From here each batch reports its own entries if its write fails.
+        records = []
+
+        # Write to CloudWatch, one call per batch inside the PutLogEvents budgets. Each batch
+        # is attempted on its own so a rejected batch does not take the ones after it with it.
+        for batch in batches:
+            try:
+                client.put_log_events(
+                    logGroupName=log_group_name,
+                    logStreamName=log_stream_name,
+                    logEvents=batch
+                )
+            except Exception as e:
+                # The stream may have gone away under the entry recorded above, so the entry goes
+                # to the function log instead and the write after this one creates the stream again.
+                _created_log_streams.pop(log_group_name, None)
+                logger.exception(
+                    f"Failed to write {len(batch)} audit entries to CloudWatch log group "
+                    f"{log_group_name}: {e}"
+                )
+                report_undelivered_audit_records(
+                    log_type, "putLogEventsFailed", [log_event["message"] for log_event in batch])
+
+    except Exception as e:
+        # Silent failure - log locally but don't raise
+        logger.exception(f"Failed to write audit log to CloudWatch log group {log_group_name}: {e}")
+        report_undelivered_audit_records(log_type, "unexpectedError", records)
+
+
 def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[str, Any]) -> None:
     """
     Write multiple audit log entries to CloudWatch with silent failure.
@@ -502,72 +648,13 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
     # What is reported as undelivered if the write stops before any batch is sent.
     records = list(messages)
     try:
-        event_suffix = _event_suffix(event)
-
-        # What the entries after the first carry: the echo itself while replicating it stays inside
-        # AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES, a reference to the first entry's copy beyond that.
-        following_suffix = event_suffix
-        if (event_suffix and len(messages) > 1
-                and _message_byte_length(event_suffix) * len(messages)
-                > AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES):
-            following_suffix = AUDIT_EVENT_ECHO_REFERENCE
-
-        records = [message + (event_suffix if index == 0 else following_suffix)
-                   for index, message in enumerate(messages)]
-
-        if not cloudwatch_logs:
-            logger.error("CloudWatch Logs client not initialized, cannot write audit log")
-            report_undelivered_audit_records(log_type, "clientUnavailable", records)
-            return
-
-        # Create log stream name based on current date
-        log_stream_name = utc_now().strftime("%Y/%m/%d")
-
-        # Ensure log stream exists (create if it doesn't), once per group per day per container
-        if _created_log_streams.get(log_group_name) != log_stream_name:
-            try:
-                cloudwatch_logs.create_log_stream(
-                    logGroupName=log_group_name,
-                    logStreamName=log_stream_name
-                )
-            except cloudwatch_logs.exceptions.ResourceAlreadyExistsException:
-                # Log stream already exists, which is fine
-                pass
-            except Exception as e:
-                logger.exception(f"Failed to create log stream {log_stream_name} in {log_group_name}: {e}")
-                report_undelivered_audit_records(log_type, "createLogStreamFailed", records)
-                return
-            _created_log_streams[log_group_name] = log_stream_name
-
-        timestamp = int(utc_now().timestamp() * 1000)
-        batches = _chunk_log_events([_prepare_log_event(timestamp, record) for record in records])
-        # From here each batch reports its own entries if its write fails.
-        records = []
-
-        # Write to CloudWatch, one call per batch inside the PutLogEvents budgets. Each batch
-        # is attempted on its own so a rejected batch does not take the ones after it with it.
-        for batch in batches:
-            try:
-                cloudwatch_logs.put_log_events(
-                    logGroupName=log_group_name,
-                    logStreamName=log_stream_name,
-                    logEvents=batch
-                )
-            except Exception as e:
-                # The stream may have gone away under the entry recorded above, so the entry goes
-                # to the function log instead and the write after this one creates the stream again.
-                _created_log_streams.pop(log_group_name, None)
-                logger.exception(
-                    f"Failed to write {len(batch)} audit entries to CloudWatch log group "
-                    f"{log_group_name}: {e}"
-                )
-                report_undelivered_audit_records(
-                    log_type, "putLogEventsFailed", [log_event["message"] for log_event in batch])
-
+        records = _records_with_echo(messages, event)
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to write audit log to CloudWatch log group {log_group_name}: {e}")
         report_undelivered_audit_records(log_type, "unexpectedError", records)
+        return
+    _put_audit_records(log_group_name, records, cloudwatch_logs)
 
 
 def log_authentication(event: Dict[str, Any], authenticated: bool, custom_data: Optional[Any] = None) -> None:
@@ -842,7 +929,11 @@ def log_file_upload(
         if custom_data:
             upload_data["customData"] = custom_data
         
-        _write_audit_entry(ResourceKeys.AUDIT_LOG_FILEUPLOAD, event_type, user_context, upload_data, event)
+        canonical = _legacy_canonical(event, legacy_function="log_file_upload", default_action="fileUpload",
+                                      default_entity_type="file",
+                                      outcome=OUTCOME_DENIED if upload_denied else OUTCOME_SUCCESS)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_FILEUPLOAD, event_type, user_context, upload_data, event,
+                           canonical=canonical, buffer=not upload_denied)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
@@ -881,7 +972,10 @@ def log_file_download(
         if custom_data:
             download_data["customData"] = custom_data
         
-        _write_audit_entry(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD, event_type, user_context, download_data, event)
+        canonical = _legacy_canonical(event, legacy_function="log_file_download", default_action="fileDownload",
+                                      default_entity_type="file")
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD, event_type, user_context, download_data, event,
+                           canonical=canonical, buffer=True)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
@@ -911,6 +1005,9 @@ def log_file_download_bulk(
         user_context = _extract_user_context(event)
         event_type = "[FILEDOWNLOAD]"
         log_type = _audit_log_type(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD)
+        ctx = _context_for(event)
+        canonical = _legacy_canonical(event, legacy_function="log_file_download", default_action="fileDownload",
+                                      default_entity_type="file")
 
         for entry in file_entries:
             download_data = {
@@ -923,7 +1020,15 @@ def log_file_download_bulk(
                 custom_data["versionId"] = entry.get("versionId")
             if custom_data:
                 download_data["customData"] = custom_data
+            if ctx is not None:
+                download_data = _with_canonical_keys(download_data, _legacy_canonical_keys(
+                    ctx, canonical["action"], canonical["outcome"], canonical["entityType"]))
             messages.append(_format_log_message(event_type, user_context, download_data, log_type))
+
+        if ctx is not None:
+            # One record per file, all delivered in the request's flush.
+            _enqueue_records(ctx, log_type, _records_with_echo(messages, event), buffer=True)
+            return
 
         log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD)
         if not log_group_name:
@@ -970,7 +1075,10 @@ def log_file_download_streamed(
         if custom_data:
             download_data["customData"] = custom_data
         
-        _write_audit_entry(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD_STREAMED, event_type, user_context, download_data, event)
+        canonical = _legacy_canonical(event, legacy_function="log_file_download_streamed",
+                                      default_action="fileStream", default_entity_type="file")
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD_STREAMED, event_type, user_context, download_data,
+                           event, canonical=canonical, buffer=True)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
@@ -1030,7 +1138,9 @@ def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optiona
     try:
         user_context = _extract_user_context(event)
         event_type = _event_type(("ACTIONS", None), ("type", secondary_type))
-        _write_audit_entry(ResourceKeys.AUDIT_LOG_ACTIONS, event_type, user_context, custom_data, event)
+        canonical = _legacy_canonical(event, secondary_type=secondary_type)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_ACTIONS, event_type, user_context, custom_data, event,
+                           canonical=canonical, buffer=True)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
@@ -1050,7 +1160,9 @@ def log_errors(event: Dict[str, Any], secondary_type: str, custom_data: Optional
     try:
         user_context = _extract_user_context(event)
         event_type = _event_type(("ERRORS", None), ("type", secondary_type))
-        _write_audit_entry(ResourceKeys.AUDIT_LOG_ERRORS, event_type, user_context, custom_data, event)
+        canonical = _legacy_canonical(event, outcome=OUTCOME_FAILED)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_ERRORS, event_type, user_context, custom_data, event,
+                           canonical=canonical, buffer=False)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
@@ -1121,3 +1233,919 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log authorization gateway audit event: {e}")
         report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHORIZATION, "unexpectedError", [None])
+
+
+# ---------------------------------------------------------------------------------------------------
+# Action records (record contract version 1), the request audit context and its collector
+# ---------------------------------------------------------------------------------------------------
+
+# The record contract version. Within a version keys are only added; renaming or removing a key
+# needs a new version.
+AUDIT_RECORD_VERSION = 1
+
+# Size caps on what a record carries. A value is one entry of changes, previous, requestParameters
+# or details, or one id field, measured as its JSON text; a value over the cap is replaced by
+# {"truncated": true, "sha256", "bytes", "preview"}. The record cap bounds the whole payload; past it
+# the largest values lose their preview, then whole sections are replaced by their hash.
+AUDIT_VALUE_MAX_BYTES = 2048
+AUDIT_RECORD_MAX_BYTES = 32768
+AUDIT_VALUE_PREVIEW_CHARS = 512
+
+# The request audit context writes its buffered records once, when the handler returns, with every
+# group written in parallel and the whole flush bounded by this deadline. A timer flushes early when
+# the function nears its timeout, so a timing-out invocation still delivers.
+AUDIT_FLUSH_DEADLINE_SECONDS = 1.5
+AUDIT_PRE_TIMEOUT_MARGIN_MS = 750
+# The time a flush leaves before the function's timeout to write the auditFallback lines and the
+# AuditWriteFailures metric of the records it could not confirm. A flush waits at most
+# min(AUDIT_FLUSH_DEADLINE_SECONDS, remaining time - this reserve), so a pre-timeout flush that meets
+# a slow write still reports what it lost before the runtime ends the invocation.
+AUDIT_FALLBACK_RESERVE_MS = 250
+
+OUTCOME_SUCCESS = "success"
+OUTCOME_FAILED = "failed"
+OUTCOME_DENIED = "denied"
+AUDIT_OUTCOMES = frozenset({OUTCOME_SUCCESS, OUTCOME_FAILED, OUTCOME_DENIED})
+
+AUTH_METHOD_COGNITO = "cognito"
+AUTH_METHOD_EXTERNAL_IDP = "externalIdp"
+AUTH_METHOD_JWT_UNKNOWN_ISSUER = "jwt"
+AUTH_METHOD_API_KEY_RECORD = "apiKey"
+AUTH_METHOD_SYSTEM = "system"
+
+SYSTEM_USER = "SYSTEM_USER"
+
+# Inside an audit context a legacy record's payload gains the contract keys; a legacy key of the
+# same name with a different value is moved under this key.
+AUDIT_LEGACY_KEY = "legacy"
+
+# The id fields a record carries at the top level, by their record key.
+AUDIT_ID_FIELDS = (
+    "databaseId", "assetId", "filePath", "versionId", "assetVersionId", "pipelineId", "templateId",
+    "workflowId", "executionId", "executionGroupId", "assetLinkId", "commentId", "tagId", "tagTypeId",
+    "metadataSchemaId", "subscriptionId", "roleName", "constraintId", "targetUserId", "apiKeyId",
+    "uploadId", "triggerType", "sessionId", "targetDatabaseId", "targetAssetId", "targetFilePath",
+)
+
+# The id field that names an entity of each type, used when log_action is given no entity_id.
+_ENTITY_ID_FIELDS = {
+    "database": "databaseId", "asset": "assetId", "file": "filePath", "folder": "filePath",
+    "assetVersion": "assetVersionId", "fileVersion": "versionId", "comment": "commentId",
+    "metadataSchema": "metadataSchemaId", "assetLink": "assetLinkId", "tag": "tagId",
+    "tagType": "tagTypeId", "subscription": "subscriptionId", "pipeline": "pipelineId",
+    "pipelineTemplate": "templateId", "workflow": "workflowId", "workflowTrigger": "triggerType",
+    "execution": "executionId", "executionGroup": "executionGroupId", "role": "roleName",
+    "userRole": "targetUserId", "constraint": "constraintId", "user": "targetUserId",
+    "workstation": "sessionId",
+}
+
+# Actions of these kinds record the request only: log_action drops the write sections (changes,
+# previous) a call passes for one, whatever the call site, and logs an error naming the action.
+_REQUEST_ONLY_KINDS = frozenset({KIND_READ, KIND_SEARCH, KIND_DOWNLOAD})
+_WRITE_ONLY_SECTIONS = ("changes", "previous")
+
+# Whether a read or search record carries itemCount, the number of items or hits it returned (a
+# count, never the items). Held in this one switch while the maintainers confirm it; set it False
+# to drop the field from read and search records.
+AUDIT_READ_ITEM_COUNT = True
+
+# Whether read and search actions write records: the deployment's app.auditLogging.recordReads,
+# set on every Lambda by CDK as this environment variable. Only "false" turns them off, so a function
+# deployed without the variable keeps recording reads. Downloads and exports are recorded either way.
+AUDIT_RECORD_READS_ENV = "AUDIT_RECORD_READS"
+_READ_SWITCH_KINDS = frozenset({KIND_READ, KIND_SEARCH})
+
+
+def audit_records_reads() -> bool:
+    """Whether this deployment records read and search actions (read on each call)."""
+    return os.environ.get(AUDIT_RECORD_READS_ENV, "").strip().lower() != "false"
+
+
+# The record sections whose values are what a write wrote or a read asked for.
+_VALUE_SECTIONS = ("changes", "previous", "requestParameters", "details")
+
+# The prefix label of each audit log group.
+_GROUP_LABELS = {
+    GROUP_ACTIONS: "ACTIONS",
+    "auditAuthChanges": "AUTHCHANGES",
+    "auditAuthOther": "AUTHOTHER",
+    GROUP_AUTHORIZATION: "AUTHORIZATION",
+    GROUP_ERRORS: "ERRORS",
+    GROUP_FILE_UPLOAD: "FILEUPLOAD",
+    GROUP_FILE_DOWNLOAD: "FILEDOWNLOAD",
+    GROUP_FILE_DOWNLOAD_STREAMED: "FILEDOWNLOAD-STREAMED",
+}
+
+# The file groups' records carry no [type: ...] segment, as their legacy records do not, so the
+# documented prefix patterns keep matching; the action is in the payload.
+_GROUPS_WITHOUT_TYPE_SEGMENT = frozenset({GROUP_FILE_UPLOAD, GROUP_FILE_DOWNLOAD, GROUP_FILE_DOWNLOAD_STREAMED})
+
+# The audit log group key of each audit log type.
+_AUDIT_LOG_KEYS_BY_TYPE = {_audit_log_type(_key): _key for _key in _AUDIT_LOG_GROUP_KEYS}
+
+
+class AuditContext:
+    """What one request's audit records share: the actor and request facts, resolved once, and the
+    records buffered until the request ends. Created by :func:`audit_request`."""
+
+    def __init__(self, event: Dict[str, Any], lambda_context: Any, user_context: Dict[str, Any],
+                 actor: Dict[str, Any], request: Dict[str, Any], route_spec: Optional[AuditSpec]):
+        self.event = event
+        self.lambda_context = lambda_context
+        self.user_context = user_context
+        self.actor = actor
+        self.request = request
+        self.route_spec = route_spec
+        self.pending: Dict[str, List[str]] = {}
+        self.lock = threading.Lock()
+        self.timer: Optional[threading.Timer] = None
+        # Set when the buffer must not hold records any longer (the request ended, or the function
+        # is too close to its timeout to wait); a record recorded after that is written at once.
+        self.write_through = False
+
+
+_audit_context: contextvars.ContextVar = contextvars.ContextVar("_audit_context", default=None)
+
+# The flush pool, created on first use: one worker per audit log group, so a request that touched
+# several groups writes them concurrently. Its threads persist across invocations of the container.
+_flush_executor: Optional[ThreadPoolExecutor] = None
+_flush_executor_lock = threading.Lock()
+
+
+def _get_flush_executor() -> ThreadPoolExecutor:
+    global _flush_executor
+    if _flush_executor is None:
+        with _flush_executor_lock:
+            if _flush_executor is None:
+                _flush_executor = ThreadPoolExecutor(max_workers=len(_AUDIT_LOG_GROUP_KEYS),
+                                                     thread_name_prefix="audit-flush")
+    return _flush_executor
+
+
+def current_audit_context() -> Optional[AuditContext]:
+    """The audit context of the request being served on this thread, or None."""
+    return _audit_context.get()
+
+
+def _context_for(event: Any) -> Optional[AuditContext]:
+    """The current audit context when it was opened for this event, else None."""
+    ctx = _audit_context.get()
+    if ctx is not None and ctx.event is event:
+        return ctx
+    return None
+
+
+def _event_time() -> str:
+    """The current UTC time as ISO 8601 with milliseconds and Z."""
+    now = utc_now()
+    return now.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (now.microsecond // 1000)
+
+
+def _authorizer_claims(event: Dict[str, Any]) -> Dict[str, Any]:
+    """The claims the authorizer passed in the request context (any authorizer shape), or {}."""
+    request_context = event.get("requestContext") if isinstance(event, dict) else None
+    authorizer = request_context.get("authorizer") if isinstance(request_context, dict) else None
+    if not isinstance(authorizer, dict):
+        return {}
+    jwt = authorizer.get("jwt")
+    if isinstance(jwt, dict) and isinstance(jwt.get("claims"), dict):
+        return jwt["claims"]
+    if isinstance(authorizer.get("lambda"), dict):
+        return authorizer["lambda"]
+    return authorizer
+
+
+def _user_context_from_claims(claims: Dict[str, Any]) -> Dict[str, Any]:
+    tokens = claims.get("tokens") or []
+    return {
+        "user": tokens[0] if tokens else "UNKNOWN",
+        "roles": claims.get("roles", []),
+        "mfaEnabled": claims.get("mfaEnabled", False),
+    }
+
+
+def _resolve_actor(event: Dict[str, Any], claims: Dict[str, Any],
+                   on_behalf_of: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Resolve who a request runs as: the prefix user context and the record's actor object.
+
+    The actor's userId is the effective identity, the same value the prefix [user: ...] carries.
+    authMethod is apiKey for an API-key caller (with apiKeyId), cognito or externalIdp for a token
+    (from the issuer the authorizer verified; jwt when the context names no issuer), and system for a
+    Lambda cross-call or an event that did not come through the API. A cross-call carries
+    crossCall true and, when it ran for a user, onBehalfOf.
+    """
+    user_context = _user_context_from_claims(claims)
+    is_event = isinstance(event, dict)
+    cross_call = event.get("lambdaCrossCall") if is_event else None
+    request_context = event.get("requestContext") if is_event else None
+    has_authorizer = isinstance(request_context, dict) and "authorizer" in request_context
+
+    actor: Dict[str, Any] = {}
+    if isinstance(cross_call, dict):
+        actor["authMethod"] = AUTH_METHOD_SYSTEM
+        actor["crossCall"] = True
+        caller = cross_call.get("onBehalfOf") or cross_call.get("userName")
+        if caller and caller != SYSTEM_USER:
+            actor["onBehalfOf"] = str(caller)
+    elif not has_authorizer:
+        actor["authMethod"] = AUTH_METHOD_SYSTEM
+        if user_context["user"] == "UNKNOWN":
+            user_context["user"] = SYSTEM_USER
+    elif claims.get("authMethod") == AUTH_METHOD_API_KEY:
+        actor["authMethod"] = AUTH_METHOD_API_KEY_RECORD
+        if claims.get("apiKeyId"):
+            actor["apiKeyId"] = str(claims["apiKeyId"])
+    else:
+        issuer = str(_authorizer_claims(event).get("iss") or "")
+        if not issuer:
+            actor["authMethod"] = AUTH_METHOD_JWT_UNKNOWN_ISSUER
+        elif "cognito-idp." in issuer:
+            actor["authMethod"] = AUTH_METHOD_COGNITO
+        else:
+            actor["authMethod"] = AUTH_METHOD_EXTERNAL_IDP
+
+    if on_behalf_of:
+        actor["onBehalfOf"] = str(on_behalf_of)
+    actor = {"userId": user_context["user"], **actor}
+    return user_context, actor
+
+
+def _request_facts(event: Dict[str, Any], lambda_context: Any) -> Dict[str, Any]:
+    """
+    The record's request object: requestId, method, route (the template, never the concrete path),
+    sourceIp (the address API Gateway reports for the connection, which on a CloudFront deployment is the
+    CloudFront edge, not the client) and lambdaRequestId. A key that
+    does not apply is left out.
+    """
+    request: Dict[str, Any] = {}
+    if isinstance(event, dict):
+        request_context = event.get("requestContext") if isinstance(event.get("requestContext"), dict) else {}
+        http = request_context.get("http") if isinstance(request_context.get("http"), dict) else {}
+        identity = request_context.get("identity") if isinstance(request_context.get("identity"), dict) else {}
+        method = http.get("method") or event.get("httpMethod")
+        path = http.get("path") or event.get("path") or event.get("rawPath")
+        template_hint = event.get("resource")
+        route_key = request_context.get("routeKey")
+        if not template_hint and isinstance(route_key, str) and " " in route_key:
+            template_hint = route_key.split(" ", 1)[1]
+        request["requestId"] = request_context.get("requestId")
+        request["method"] = method.upper() if isinstance(method, str) else None
+        if path:
+            request["route"] = resolve_route_template(path, template_hint) or "unmatched"
+        request["sourceIp"] = http.get("sourceIp") or identity.get("sourceIp")
+    aws_request_id = getattr(lambda_context, "aws_request_id", None)
+    if isinstance(aws_request_id, str):
+        request["lambdaRequestId"] = aws_request_id
+    return {key: value for key, value in request.items() if value is not None}
+
+
+def _claims_for(event: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        claims = request_to_claims(event)
+        return claims if isinstance(claims, dict) else {}
+    except Exception:
+        return {}
+
+
+def _new_audit_context(event: Dict[str, Any], lambda_context: Any,
+                       on_behalf_of: Optional[str]) -> AuditContext:
+    # request_to_claims also normalizes a REST event into the shape the request facts read.
+    claims = _claims_for(event)
+    user_context, actor = _resolve_actor(event, claims, on_behalf_of)
+    request = _request_facts(event, lambda_context)
+    route_spec = audit_spec_for_route(request.get("route"), request.get("method"))
+    return AuditContext(event, lambda_context, user_context, actor, request, route_spec)
+
+
+def _start_pre_timeout_timer(ctx: AuditContext) -> None:
+    """Flush the buffer shortly before the function times out, so a timing-out invocation delivers."""
+    remaining = getattr(ctx.lambda_context, "get_remaining_time_in_millis", None)
+    if not callable(remaining):
+        return
+    try:
+        delay_ms = int(remaining()) - AUDIT_PRE_TIMEOUT_MARGIN_MS
+    except Exception:
+        return
+    if delay_ms <= 0:
+        # Too close to the timeout to hold anything back.
+        ctx.write_through = True
+        return
+    timer = threading.Timer(delay_ms / 1000.0, _pre_timeout_flush, args=(ctx,))
+    timer.daemon = True
+    ctx.timer = timer
+    timer.start()
+
+
+def _pre_timeout_flush(ctx: AuditContext) -> None:
+    with ctx.lock:
+        ctx.write_through = True
+    flush_audit_context(ctx)
+
+
+@contextlib.contextmanager
+def audit_request(event: Dict[str, Any], lambda_context: Any = None, *,
+                  on_behalf_of: Optional[str] = None) -> Iterator[Optional[AuditContext]]:
+    """
+    Open the audit context of one request. Every Lambda entrypoint enters it around its work::
+
+        def lambda_handler(event, context):
+            with audit_request(event, context):
+                ...
+
+    Inside it the actor (user, roles, MFA, auth method, API key id, cross-call and on-behalf-of) and
+    the request facts (request id, method, route template, source IP, Lambda request id) are
+    resolved once, and every audit function reuses them instead of resolving claims per record.
+    Successful action records are buffered and written when the block ends, one parallel write per
+    audit log group, bounded by AUDIT_FLUSH_DEADLINE_SECONDS; denials, failures and errors are
+    written at once. A record the flush cannot confirm in time is reported as undelivered.
+
+    A nested block joins the outer one. Outside a context every audit function writes as it is
+    called, as before. Records written from another thread (a worker pool) are written at once,
+    since a context belongs to the thread that opened it. Never raises from its own work.
+
+    Args:
+        event: The Lambda event the handler received
+        lambda_context: The Lambda context (for the request id and the pre-timeout flush)
+        on_behalf_of: The user a system invocation runs for, when the handler knows it
+    """
+    if _audit_context.get() is not None:
+        yield _audit_context.get()
+        return
+    ctx: Optional[AuditContext] = None
+    try:
+        ctx = _new_audit_context(event, lambda_context, on_behalf_of)
+    except Exception as e:
+        logger.exception(f"Failed to open the request audit context: {e}")
+    if ctx is None:
+        yield None
+        return
+    token = _audit_context.set(ctx)
+    try:
+        _start_pre_timeout_timer(ctx)
+    except Exception as e:
+        logger.exception(f"Failed to start the audit pre-timeout flush: {e}")
+    try:
+        yield ctx
+    finally:
+        _audit_context.reset(token)
+        try:
+            if ctx.timer is not None:
+                ctx.timer.cancel()
+            with ctx.lock:
+                ctx.write_through = True
+            flush_audit_context(ctx)
+        except Exception as e:
+            logger.exception(f"Failed to flush the request audit records: {e}")
+
+
+def audited_handler(handler: Callable) -> Callable:
+    """Decorate a Lambda entrypoint ``handler(event, context)`` to run inside :func:`audit_request`."""
+
+    @functools.wraps(handler)
+    def wrapper(event, context=None, *args, **kwargs):
+        with audit_request(event, context):
+            return handler(event, context, *args, **kwargs)
+
+    return wrapper
+
+
+def _flush_deadline_seconds(ctx: Optional[AuditContext]) -> float:
+    """
+    How long a flush of this context may wait: AUDIT_FLUSH_DEADLINE_SECONDS, cut to the function's
+    remaining time less AUDIT_FALLBACK_RESERVE_MS, and never below zero. At zero the writes are still
+    started but every record is reported as undelivered at once, while there is time to print it.
+    """
+    remaining = getattr(getattr(ctx, "lambda_context", None), "get_remaining_time_in_millis", None)
+    if not callable(remaining):
+        return AUDIT_FLUSH_DEADLINE_SECONDS
+    try:
+        left_seconds = (int(remaining()) - AUDIT_FALLBACK_RESERVE_MS) / 1000.0
+    except Exception:
+        return AUDIT_FLUSH_DEADLINE_SECONDS
+    return max(0.0, min(AUDIT_FLUSH_DEADLINE_SECONDS, left_seconds))
+
+
+def _deliver_records(records_by_type: Dict[str, List[str]], client: Any,
+                     deadline_seconds: float = AUDIT_FLUSH_DEADLINE_SECONDS) -> None:
+    """
+    Write records to their audit log groups: one write per group, the groups in parallel, the whole
+    bounded by ``deadline_seconds`` (see _flush_deadline_seconds). A group whose write is not
+    confirmed by the deadline is reported as undelivered (its write may still land, so delivery is
+    at least once; recordId identifies a duplicate). Never raises.
+    """
+    work = []
+    for log_type, records in records_by_type.items():
+        if not records:
+            continue
+        key = _AUDIT_LOG_KEYS_BY_TYPE.get(log_type)
+        name = _audit_log_group(key) if key is not None else None
+        if not name:
+            if key is not None:
+                logger.error(f"{key.env_var_names[0]} resource name not resolved")
+            report_undelivered_audit_records(log_type, "logGroupUnresolved", records)
+            continue
+        work.append((log_type, name, records))
+    if not work:
+        return
+    try:
+        executor = _get_flush_executor()
+        futures = {executor.submit(_put_audit_records, name, records, client): (log_type, records)
+                   for log_type, name, records in work}
+    except Exception as e:
+        logger.exception(f"Failed to start the audit flush: {e}")
+        for log_type, _, records in work:
+            report_undelivered_audit_records(log_type, "unexpectedError", records)
+        return
+    done, not_done = wait_for_futures(futures, timeout=deadline_seconds)
+    for future in not_done:
+        log_type, records = futures[future]
+        logger.error(f"Audit flush deadline passed with {len(records)} {log_type} records unconfirmed")
+        report_undelivered_audit_records(log_type, "flushDeadlineExceeded", records)
+    for future in done:
+        error = future.exception()
+        if error is not None:
+            log_type, records = futures[future]
+            report_undelivered_audit_records(log_type, "unexpectedError", records)
+
+
+def flush_audit_context(ctx: AuditContext) -> None:
+    """Write and clear the records the context has buffered. Never raises."""
+    try:
+        with ctx.lock:
+            pending, ctx.pending = ctx.pending, {}
+        if pending:
+            _deliver_records(pending, audit_flush_client, _flush_deadline_seconds(ctx))
+    except Exception as e:
+        logger.exception(f"Failed to flush the request audit records: {e}")
+
+
+def _enqueue_records(ctx: Optional[AuditContext], log_type: str, records: List[str], buffer: bool) -> None:
+    """
+    Hand complete records to delivery: buffer them in the context, or write them now (with the
+    bounded flush client inside a context, the module client outside one).
+    """
+    if ctx is not None and buffer:
+        with ctx.lock:
+            if not ctx.write_through:
+                ctx.pending.setdefault(log_type, []).extend(records)
+                return
+    client = audit_flush_client if ctx is not None else cloudwatch_logs
+    if ctx is not None:
+        _deliver_records({log_type: records}, client, _flush_deadline_seconds(ctx))
+        return
+    key = _AUDIT_LOG_KEYS_BY_TYPE.get(log_type)
+    name = _audit_log_group(key) if key is not None else None
+    if not name:
+        if key is not None:
+            logger.error(f"{key.env_var_names[0]} resource name not resolved")
+        report_undelivered_audit_records(log_type, "logGroupUnresolved", records)
+        return
+    _put_audit_records(name, records, client)
+
+
+# --- Value caps -------------------------------------------------------------------------------------
+
+def audit_value_sha256(value: Any) -> str:
+    """
+    The SHA-256 a cut value carries, as hex: of the UTF-8 bytes of a string value, and of the
+    canonical JSON text (sorted keys, no spaces, ASCII) of any other value.
+    """
+    if isinstance(value, str):
+        data = value.encode("utf-8")
+    else:
+        data = json.dumps(value, ensure_ascii=True, sort_keys=True, default=str,
+                          separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def _value_bytes(value: Any) -> int:
+    """The size of a value: its UTF-8 bytes for a string, its JSON text otherwise."""
+    if isinstance(value, str):
+        return len(value.encode("utf-8"))
+    return len(_serialize_json(value))
+
+
+def _cut_value(value: Any, with_preview: bool = True) -> Dict[str, Any]:
+    stub: Dict[str, Any] = {"truncated": True, "sha256": audit_value_sha256(value), "bytes": _value_bytes(value)}
+    if with_preview:
+        text = value if isinstance(value, str) else _serialize_json(value)
+        stub["preview"] = text[:AUDIT_VALUE_PREVIEW_CHARS]
+        # A preview of non-ASCII or escape-heavy text can still serialize past the cap; shorten it.
+        while len(_serialize_json(stub)) > AUDIT_VALUE_MAX_BYTES and stub["preview"]:
+            stub["preview"] = stub["preview"][:len(stub["preview"]) // 2]
+    return stub
+
+
+def _cap_value(value: Any) -> Tuple[Any, bool]:
+    """The value, or its cut form when its JSON text passes AUDIT_VALUE_MAX_BYTES."""
+    if len(_serialize_json(value)) <= AUDIT_VALUE_MAX_BYTES:
+        return value, False
+    return _cut_value(value), True
+
+
+def _cap_record(payload: Dict[str, Any], originals: Dict[str, Dict[str, Any]],
+                limit: int = AUDIT_RECORD_MAX_BYTES) -> bool:
+    """
+    Bound a payload to ``limit`` bytes of JSON text, in place. First the largest values of the value
+    sections lose their preview (keeping the hash), then whole sections are replaced by their hash,
+    then the sections and the extra ids are dropped. Returns True when anything was cut.
+    """
+    if len(_serialize_json(payload)) <= limit:
+        return False
+    # The running size is adjusted by each replacement's difference rather than re-serializing the
+    # whole payload per field, so a record with thousands of fields stays cheap to bound.
+    size = len(_serialize_json(payload))
+    candidates = []
+    for section in _VALUE_SECTIONS:
+        values = payload.get(section)
+        if isinstance(values, dict) and section in originals:
+            for key, value in values.items():
+                candidates.append((len(_serialize_json(value)), section, key))
+    for value_size, section, key in sorted(candidates, reverse=True):
+        stub = _cut_value(originals[section][key], with_preview=False)
+        stub_size = len(_serialize_json(stub))
+        if stub_size >= value_size:
+            # Every remaining value is already smaller than its cut form would be.
+            break
+        payload[section][key] = stub
+        size += stub_size - value_size
+        if size <= limit and len(_serialize_json(payload)) <= limit:
+            return True
+    sections = sorted((len(_serialize_json(payload[section])), section)
+                      for section in _VALUE_SECTIONS if section in originals)
+    for _, section in reversed(sections):
+        payload[section] = {"truncated": True, "sha256": audit_value_sha256(originals[section]),
+                            "fieldCount": len(originals[section])}
+        if len(_serialize_json(payload)) <= limit:
+            return True
+    for key in list(payload):
+        if key in _VALUE_SECTIONS or key in AUDIT_ID_FIELDS:
+            payload.pop(key, None)
+    return True
+
+
+# --- Record building --------------------------------------------------------------------------------
+
+def _non_negative_int(value: Any) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def build_audit_payload(
+    action: str,
+    *,
+    actor: Dict[str, Any],
+    request: Dict[str, Any],
+    outcome: str = OUTCOME_SUCCESS,
+    reason: Optional[str] = None,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    ids: Optional[Dict[str, Any]] = None,
+    bytes_count: Optional[int] = None,
+    file_count: Optional[int] = None,
+    item_count: Optional[int] = None,
+    duration_ms: Optional[int] = None,
+    changes: Optional[Dict[str, Any]] = None,
+    previous: Optional[Dict[str, Any]] = None,
+    request_parameters: Optional[Dict[str, Any]] = None,
+    details: Optional[Dict[str, Any]] = None,
+    max_bytes: int = AUDIT_RECORD_MAX_BYTES,
+) -> Dict[str, Any]:
+    """
+    Build a version 1 record payload, its JSON text bounded to ``max_bytes``. Keys that do not
+    apply are left out, never written as null.
+
+    ``changes`` holds each field a write set with its new value, ``previous`` the prior values the
+    handler already held, ``requestParameters`` what a read, search or download asked for (filters,
+    page size, ids); never what was returned. All four value sections and ``details`` pass through
+    the log redaction (``mask_sensitive_data``) and the size caps.
+    """
+    outcome = outcome if outcome in AUDIT_OUTCOMES else OUTCOME_FAILED
+    payload: Dict[str, Any] = {
+        "auditVersion": AUDIT_RECORD_VERSION,
+        "recordId": str(uuid.uuid4()),
+        "action": action,
+        "outcome": outcome,
+    }
+    if outcome != OUTCOME_SUCCESS and reason:
+        reason_text = str(reason)
+        payload["reason"] = reason_text if AUDIT_ACTION_NAME_PATTERN.match(reason_text) else "other"
+    payload["eventTime"] = _event_time()
+    payload["actor"] = dict(actor)
+    payload["request"] = dict(request)
+
+    truncated = False
+    id_values: Dict[str, Any] = {}
+    for key, value in (ids or {}).items():
+        if value is None or key not in AUDIT_ID_FIELDS:
+            continue
+        capped, cut = _cap_value(value if isinstance(value, str) else str(value))
+        truncated = truncated or cut
+        id_values[key] = capped
+
+    if entity_type:
+        entity: Dict[str, Any] = {"type": entity_type}
+        if entity_id is None:
+            entity_id = (ids or {}).get(_ENTITY_ID_FIELDS.get(entity_type, ""))
+        if entity_id is not None:
+            entity["id"], cut = _cap_value(entity_id if isinstance(entity_id, str) else str(entity_id))
+            truncated = truncated or cut
+        payload["entity"] = entity
+    payload.update(id_values)
+
+    for key, value in (("bytes", bytes_count), ("fileCount", file_count), ("itemCount", item_count),
+                       ("durationMs", duration_ms)):
+        number = _non_negative_int(value)
+        if number is not None:
+            payload[key] = number
+
+    originals: Dict[str, Dict[str, Any]] = {}
+    for section, values in (("changes", changes), ("previous", previous),
+                            ("requestParameters", request_parameters), ("details", details)):
+        if not isinstance(values, dict) or not values:
+            continue
+        masked = mask_sensitive_data(values)
+        if not isinstance(masked, dict):
+            payload[section] = {"redacted": True}
+            continue
+        masked = {str(key): value for key, value in masked.items() if value is not None}
+        if not masked:
+            continue
+        originals[section] = masked
+        capped_section = {}
+        for key, value in masked.items():
+            capped_section[key], cut = _cap_value(value)
+            truncated = truncated or cut
+        payload[section] = capped_section
+
+    if _cap_record(payload, originals, max_bytes):
+        truncated = True
+    if truncated:
+        payload["truncated"] = True
+    return payload
+
+
+def _compact_echo(event: Any) -> str:
+    """
+    The event echo of an action record: the request id, method, concrete path and route key only --
+    no headers, query string or body (what a write changed is in the payload's own sections).
+    """
+    if not isinstance(event, dict):
+        return ""
+    request_context = event.get("requestContext") if isinstance(event.get("requestContext"), dict) else {}
+    http = request_context.get("http") if isinstance(request_context.get("http"), dict) else {}
+    echo_http = {key: http.get(key) for key in ("method", "path") if http.get(key) is not None}
+    echo_context: Dict[str, Any] = {}
+    if request_context.get("requestId") is not None:
+        echo_context["requestId"] = request_context.get("requestId")
+    if echo_http:
+        echo_context["http"] = echo_http
+    if request_context.get("routeKey") is not None:
+        echo_context["routeKey"] = request_context.get("routeKey")
+    if not echo_context:
+        return ""
+    return f" --- [event: {_serialize_json({'requestContext': echo_context})}]"
+
+
+# The echo an action record carries when its compact echo would take the record past
+# AUDIT_RECORD_MAX_BYTES.
+AUDIT_ECHO_TRUNCATED = ' --- [event: {"truncated": true}]'
+
+
+def _bounded_action_record(head: str, build_payload: Callable[[int], Dict[str, Any]], echo: str) -> str:
+    """
+    Assemble an action record (prefix segments, payload, echo) bounded to AUDIT_RECORD_MAX_BYTES as
+    a whole. The payload is built to fit beside the prefix; if the echo then takes the record over,
+    the echo is replaced by AUDIT_ECHO_TRUNCATED, and if it is still over, the payload's values are
+    cut further. A prefix too long to leave room (a caller with hundreds of long role names) cuts
+    the record itself, ending in AUDIT_EVENT_TRUNCATION_MARKER as a partial record.
+    """
+    head_bytes = _message_byte_length(head) + 1
+
+    def assemble(payload: Dict[str, Any], suffix: str) -> str:
+        return head + " " + _serialize_json(payload) + suffix
+
+    payload = build_payload(AUDIT_RECORD_MAX_BYTES - head_bytes)
+    record = assemble(payload, echo)
+    if _message_byte_length(record) <= AUDIT_RECORD_MAX_BYTES:
+        return record
+    if echo:
+        payload["truncated"] = True
+        echo = AUDIT_ECHO_TRUNCATED
+        record = assemble(payload, echo)
+        if _message_byte_length(record) <= AUDIT_RECORD_MAX_BYTES:
+            return record
+    payload = build_payload(AUDIT_RECORD_MAX_BYTES - head_bytes - _message_byte_length(echo))
+    payload["truncated"] = True
+    record = assemble(payload, echo)
+    if _message_byte_length(record) <= AUDIT_RECORD_MAX_BYTES:
+        return record
+    marker = AUDIT_EVENT_TRUNCATION_MARKER
+    keep = AUDIT_RECORD_MAX_BYTES - _message_byte_length(marker)
+    return record.encode("utf-8")[:keep].decode("utf-8", errors="ignore") + marker
+
+
+def _action_prefix(group: str, prefix_type: str, outcome: str) -> str:
+    if outcome == OUTCOME_DENIED:
+        return _event_type(("AUTHORIZATION", None), ("authorized", False))
+    label = _GROUP_LABELS.get(group, "ACTIONS")
+    if group in _GROUPS_WITHOUT_TYPE_SEGMENT:
+        return _event_type((label, None))
+    return _event_type((label, None), ("type", prefix_type))
+
+
+def log_action(
+    event: Dict[str, Any],
+    action: Optional[str] = None,
+    *,
+    outcome: str = OUTCOME_SUCCESS,
+    reason: Optional[str] = None,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    database_id: Optional[str] = None,
+    asset_id: Optional[str] = None,
+    file_path: Optional[str] = None,
+    bytes: Optional[int] = None,  # noqa: A002 -- the record key it fills is named bytes
+    file_count: Optional[int] = None,
+    item_count: Optional[int] = None,
+    duration_ms: Optional[int] = None,
+    changes: Optional[Dict[str, Any]] = None,
+    previous: Optional[Dict[str, Any]] = None,
+    request_parameters: Optional[Dict[str, Any]] = None,
+    details: Optional[Dict[str, Any]] = None,
+    **ids: Any,
+) -> None:
+    """
+    Record one action in the record contract version 1, with silent failure.
+
+    Call it after the write succeeded (``outcome="success"``), when an authorized attempt failed
+    (``outcome="failed"`` with a generic ``reason`` such as ``notFound``, ``validation``,
+    ``conflict`` or ``internal``), or when a data-level check denied it (``outcome="denied"``).
+    ``action`` is a registered action name (``common/auditActions.py``); None takes the action
+    registered for the request's route. The action's group, ``[type: ...]`` value and entity type
+    come from the registry; a denial is written to the authorization group.
+
+    A write records what it wrote or changed: ``changes`` maps each field set to its new value and
+    ``previous`` the prior values the handler already loaded (never read a record only to fill
+    it). A read, search or download records what was asked (``request_parameters``), never what was
+    returned. Redaction applies to every value section, a value over 2 KB is cut to its hash and a
+    preview, and a record is bounded to 32 KB. Never pass file content.
+
+    Inside :func:`audit_request` a successful record is buffered and written when the request ends;
+    otherwise, and for denials and failures, it is written at once.
+
+    Args:
+        event: The Lambda event of the request
+        action: The registered action name, or None for the route's action
+        outcome: success, failed or denied
+        reason: Generic reason category on failed or denied, never error text
+        entity_type: Overrides the action's registered entity type
+        entity_id: The entity's id; defaults to the id field that names the entity type
+        database_id, asset_id, file_path: The ids of the asset data the action touched
+        bytes, file_count, item_count, duration_ms: Sizes and counts the handler already knows
+        changes, previous, request_parameters, details: The record's value sections
+        **ids: Further id fields by their record key (``AUDIT_ID_FIELDS``, e.g. ``versionId``);
+            any other keyword is recorded in details
+    """
+    try:
+        ctx = _context_for(event)
+        audit_spec = audit_spec_for_action(action) if action else (ctx.route_spec if ctx else None)
+        if audit_spec is None and not action:
+            logger.error("log_action called without an action outside a registered route")
+            return
+        action_name = action or audit_spec.action
+        if audit_spec is None:
+            logger.error(f"Audit action {action_name!r} is not registered in common/auditActions.py")
+        group = audit_spec.group if audit_spec else GROUP_ACTIONS
+        prefix_type = (audit_spec.legacy_type or audit_spec.action) if audit_spec else action_name
+        kind = audit_spec.kind if audit_spec else None
+        if kind in _READ_SWITCH_KINDS and outcome == OUTCOME_SUCCESS and not audit_records_reads():
+            # The deployment turned read records off; a denied or failed read is still recorded.
+            return
+        if kind in _REQUEST_ONLY_KINDS:
+            # A read, search or download records what was asked, never what was written or returned.
+            passed = [name for name, value in (("changes", changes), ("previous", previous)) if value]
+            if passed:
+                logger.error(f"Audit action {action_name!r} is a {kind} action, dropped {', '.join(passed)}")
+            changes = previous = None
+            if kind != KIND_DOWNLOAD and not AUDIT_READ_ITEM_COUNT:
+                item_count = None
+
+        if ctx is not None:
+            user_context, actor, request = dict(ctx.user_context), ctx.actor, ctx.request
+        else:
+            user_context, actor = _resolve_actor(event, _claims_for(event))
+            request = _request_facts(event, None)
+
+        all_ids = {key: value for key, value in ids.items() if key in AUDIT_ID_FIELDS}
+        extra = {key: value for key, value in ids.items() if key not in AUDIT_ID_FIELDS}
+        if extra:
+            details = {**(details or {}), **extra}
+        for key, value in (("databaseId", database_id), ("assetId", asset_id), ("filePath", file_path)):
+            if value is not None:
+                all_ids[key] = value
+
+        outcome_written = outcome if outcome in AUDIT_OUTCOMES else OUTCOME_FAILED
+        target_group = GROUP_AUTHORIZATION if outcome_written == OUTCOME_DENIED else group
+        head = _format_log_message(_action_prefix(group, prefix_type, outcome_written), user_context,
+                                   None, target_group)
+
+        def build_payload(max_bytes: int) -> Dict[str, Any]:
+            return build_audit_payload(
+                action_name, actor=actor, request=request, outcome=outcome_written, reason=reason,
+                entity_type=entity_type or (audit_spec.entity_type if audit_spec else None),
+                entity_id=entity_id, ids=all_ids, bytes_count=bytes, file_count=file_count,
+                item_count=item_count, duration_ms=duration_ms, changes=changes, previous=previous,
+                request_parameters=request_parameters, details=details, max_bytes=max_bytes)
+
+        record = _bounded_action_record(head, build_payload, _compact_echo(event))
+        _enqueue_records(ctx, target_group, [record], buffer=outcome_written == OUTCOME_SUCCESS)
+    except Exception as e:
+        # Silent failure - log locally but don't raise
+        logger.exception(f"Failed to log action audit event: {e}")
+        report_undelivered_audit_records(GROUP_ACTIONS, "unexpectedError", [None])
+
+
+def _legacy_canonical_keys(ctx: AuditContext, action: Optional[str], outcome: str,
+                           entity_type: Optional[str]) -> Dict[str, Any]:
+    """The contract keys a legacy record gains inside an audit context."""
+    keys: Dict[str, Any] = {
+        "auditVersion": AUDIT_RECORD_VERSION,
+        "recordId": str(uuid.uuid4()),
+    }
+    if action:
+        keys["action"] = action
+    keys["outcome"] = outcome
+    keys["eventTime"] = _event_time()
+    keys["actor"] = dict(ctx.actor)
+    keys["request"] = dict(ctx.request)
+    if entity_type:
+        keys["entity"] = {"type": entity_type}
+    return keys
+
+
+def _with_canonical_keys(custom_data: Any, canonical: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    A legacy payload with the contract keys added. The contract keys win: a legacy key of the same
+    name with a different value (an AMI recipe build's ``outcome`` of ``in-progress``, a payload's
+    own ``action``) is moved under ``legacy`` (``{"legacy": {"outcome": "in-progress"}}``), so every
+    contract key keeps its contract type and values and the legacy value is still recorded. A legacy
+    payload that already has a ``legacy`` key keeps it inside that object as ``legacy.legacy``.
+    """
+    if isinstance(custom_data, dict):
+        merged = dict(custom_data)
+        moved: Dict[str, Any] = {}
+        for key, value in canonical.items():
+            if key in merged and merged[key] != value:
+                moved[key] = merged[key]
+            merged[key] = value
+        if moved:
+            if AUDIT_LEGACY_KEY in merged:
+                moved[AUDIT_LEGACY_KEY] = merged[AUDIT_LEGACY_KEY]
+            merged[AUDIT_LEGACY_KEY] = moved
+        return merged
+    merged = dict(canonical)
+    if custom_data is not None:
+        merged["customData"] = custom_data
+    return merged
+
+
+def _legacy_route_action(ctx: AuditContext, secondary_type: Optional[str] = None,
+                         legacy_function: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+    """
+    The canonical action and entity type a legacy record inside a context is for: the route's action
+    when the record is the one the route registers (its legacy type, its name, or its legacy
+    function), else the secondary type's own registered action.
+    """
+    route_spec = ctx.route_spec
+    if route_spec is not None:
+        if secondary_type is None and legacy_function is None:
+            # An error record is for the action the route registers.
+            return route_spec.action, route_spec.entity_type
+        if secondary_type is not None and secondary_type in (route_spec.legacy_type, route_spec.action):
+            return route_spec.action, route_spec.entity_type
+        if legacy_function is not None and route_spec.legacy_function == legacy_function:
+            return route_spec.action, route_spec.entity_type
+    if secondary_type is not None:
+        registered = audit_spec_for_action(secondary_type)
+        return secondary_type, registered.entity_type if registered else None
+    return None, None
+
+
+def _legacy_canonical(event: Any, *, secondary_type: Optional[str] = None,
+                      legacy_function: Optional[str] = None, default_action: Optional[str] = None,
+                      default_entity_type: Optional[str] = None,
+                      outcome: str = OUTCOME_SUCCESS) -> Optional[Dict[str, Any]]:
+    """The canonical action, outcome and entity type of a legacy record, or None outside a context."""
+    ctx = _context_for(event)
+    if ctx is None:
+        return None
+    action, entity_type = _legacy_route_action(ctx, secondary_type, legacy_function)
+    return {"action": action or default_action, "outcome": outcome,
+            "entityType": entity_type or default_entity_type}

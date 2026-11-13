@@ -51,3 +51,21 @@ log_auth_other = _noop
 log_auth_changes = _noop
 log_actions = _noop
 log_errors = _noop
+log_action = _noop
+current_audit_context = _noop
+flush_audit_context = _noop
+
+OUTCOME_SUCCESS = "success"
+OUTCOME_FAILED = "failed"
+OUTCOME_DENIED = "denied"
+
+
+@contextlib.contextmanager
+def audit_request(event, lambda_context=None, *, on_behalf_of=None):
+    """No-op stand-in for the request audit context: nothing is buffered when nothing is written."""
+    yield None
+
+
+def audited_handler(handler):
+    """Stand-in for the entrypoint decorator: the handler unchanged."""
+    return handler

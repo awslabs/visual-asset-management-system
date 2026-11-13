@@ -537,14 +537,27 @@ CORE_LOG_SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "Access
                            # cookies (session cookies included), an API Gateway API key, proxy
                            # credentials, and an AWS SigV4 session token.
                            "cookie", "set-cookie", "x-api-key", "proxy-authorization",
-                           "x-amz-security-token")
+                           "x-amz-security-token",
+                           # Credential field names a request, a record or a third-party response
+                           # can carry; each is matched as a whole name in any letter case, so
+                           # ordinary fields that merely contain the word (passwordPolicy,
+                           # secretArn, accessTokenExpiry) stay readable.
+                           "password", "secret", "clientSecret", "client_secret", "accessToken",
+                           "access_token", "refreshToken", "refresh_token", "privateKey", "private_key")
 
 # Keys the free-text redactor (common/logRedaction.py) finds in log text returned to a caller: the
 # AWS and token credential keys above, plus the two that reach a caller only through returned log
 # text: the security-token header, and a Step Functions task token (an opaque capability to complete
 # or fail the pending pipeline task that no IAM policy can resource-scope).
 CORE_LOG_TEXT_SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "AccessKeyId",
-                                "SecretAccessKey", "SessionToken", "x-amz-security-token", "TaskToken")
+                                "SecretAccessKey", "SessionToken", "x-amz-security-token", "TaskToken",
+                                # The credential field names above, so a value the structured logger
+                                # redacts is redacted in returned log text alike. The bare word
+                                # "secret" is left out here: in free text it labels ordinary values
+                                # ("Fetched secret: <ARN>") rather than a credential field.
+                                "password", "clientSecret", "client_secret", "accessToken",
+                                "access_token", "refreshToken", "refresh_token", "privateKey",
+                                "private_key")
 
 # The names the redactors import: core + add-on + custom, append-only (see "Extension lanes").
 LOG_SENSITIVE_KEYS = merge_log_keys(
