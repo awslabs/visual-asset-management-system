@@ -44,7 +44,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from common.addonResourceNames import AddonResourceKeys
 from common.resourceNames import get_table_name
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_actions
+from customLogging.auditLogging import audited_handler, log_action, log_actions
 from .common import edhCapacityReservations as reservations
 from .common import edhSessionBootstrap as bootstrap
 from .common.edhClient import (
@@ -182,7 +182,7 @@ def _call_edh(audit_event, client, wrapper, operation, edh_uid, *args):
     try:
         result = getattr(client, wrapper)(*args)
     except Exception as err:
-        log_actions(audit_event, "edhProxy", {**audit, "edhStatus": type(err).__name__})
+        log_actions(audit_event, "edhProxy", {**audit, "edhStatus": type(err).__name__}, outcome="failed")
         raise
     log_actions(audit_event, "edhProxy", {**audit, "edhStatus": "ok"})
     return result
@@ -743,6 +743,7 @@ def _handle_start(event, context):
     return start(row, stamp, context)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext):
     if (event or {}).get('action') == WORKER_ACTION_START:
         return _handle_start(event, context)
@@ -763,5 +764,8 @@ def lambda_handler(event, context: LambdaContext):
         # counted this attempt first.
         return {"bootstrapId": bootstrap_id, "outcome": "settled", "state": row.get('state')}
     launched = launch(row)
+    log_action(event, "edhWorkstationLaunch", entity_id=launched.get('sessionId') or bootstrap_id,
+               sessionId=launched.get('sessionId'), changes={"state": launched.get('state')},
+               on_behalf_of=row.get('userId'))
     return {"bootstrapId": bootstrap_id, "outcome": "launched",
             "state": launched.get('state'), "sessionId": launched.get('sessionId')}

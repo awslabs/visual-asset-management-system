@@ -200,7 +200,7 @@ describe("CAD STEP agent on the AgentCore runtime", () => {
             "OPENAI_API_KEY_SECRET_ARN",
             "OPENAI_MODEL_ID",
         ]);
-        expect(env.BEDROCK_MODEL_ID).toBe("global.anthropic.claude-sonnet-4-5-20250929-v1:0");
+        expect(env.BEDROCK_MODEL_ID).toBe("global.anthropic.claude-sonnet-5-5");
         expect(env.OPENAI_API_KEY_SECRET_ARN).toBe("");
         // The deployment-created guardrail's id and numbered version, not literals.
         expect(JSON.stringify(env.BEDROCK_GUARDRAIL_ID)).toMatch(
@@ -460,10 +460,8 @@ describe("CAD STEP agent grants (either runtime)", () => {
         expect(bedrock.length).toBeGreaterThan(0);
         for (const s of bedrock) {
             const flat = SynthResult.flatten(s.statement.Resource);
-            expect(flat).toMatch(/foundation-model\/anthropic\.claude-sonnet-4-5-20250929-v1:0/);
-            expect(flat).toMatch(
-                /inference-profile\/global\.anthropic\.claude-sonnet-4-5-20250929-v1:0/
-            );
+            expect(flat).toMatch(/foundation-model\/anthropic\.claude-sonnet-5-5/);
+            expect(flat).toMatch(/inference-profile\/global\.anthropic\.claude-sonnet-5-5/);
             expect(flat).not.toMatch(/foundation-model\/\*/);
         }
     });
@@ -474,7 +472,7 @@ describe("CAD STEP agent grants (either runtime)", () => {
         )!;
         expect(construct).toBeDefined();
         expect((construct.properties as any).Environment.Variables.BEDROCK_MODEL_ID).toBe(
-            "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+            "global.anthropic.claude-sonnet-5-5"
         );
     });
 
@@ -486,9 +484,7 @@ describe("CAD STEP agent grants (either runtime)", () => {
             const flat = SynthResult.flatten(s.statement.Resource);
             // The `global.` profile routes requests out of the deployment Region, and Amazon Bedrock
             // authorizes the foundation-model ARN of the Region it routed to.
-            expect(flat).toMatch(
-                /:bedrock:\*::foundation-model\/anthropic\.claude-sonnet-4-5-20250929-v1:0/
-            );
+            expect(flat).toMatch(/:bedrock:\*::foundation-model\/anthropic\.claude-sonnet-5-5/);
             // `arn:...:bedrock:::foundation-model/<id>` (empty Region segment) matches no real ARN.
             expect(flat).not.toMatch(/:bedrock:::foundation-model\//);
         }

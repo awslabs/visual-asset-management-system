@@ -11,6 +11,10 @@ without that optional feature answers the CLI's "not enabled" message before any
 does any tool after the profile signs in to a deployment without the add-on while the server runs.
 ``get_edh_workstation_connect`` sits with the writes: it changes nothing, but it issues a desktop
 credential. No tool reaches the desktop sign-in of a workstation.
+
+The tool descriptions are written for the agent and held to a budget (Mandatory Rules 11 and 12 of
+``tools/VamsMCP/CLAUDE.md``); the full field reference of the add-on's records is its guide,
+``documentation/docusaurus-site/docs/developer/edh-workstations/``.
 """
 
 import uuid
@@ -24,6 +28,9 @@ from vamscli.addon_constants import (
     FEATURE_EDH_CONTAINERS,
     FEATURE_EDH_WORKSTATIONS,
 )
+
+# One annotation per gate tier (vams_mcp/annotations.py); the compute tools take the *_COMPUTE ones.
+from ..annotations import COMPUTE, DESTRUCTIVE, DESTRUCTIVE_COMPUTE, READ, WRITE
 
 # The switch whose presence in the profile's snapshot registers these tools.
 FEATURE = FEATURE_EDH_WORKSTATIONS
@@ -40,135 +47,81 @@ def register(
 
     # --- Read tools (always registered) -----------------------------------
 
-    @mcp.tool()
+    @mcp.tool(title="List my EDH workstations", annotations=READ)
     @tool_result
     def list_edh_workstations() -> Dict[str, Any]:
-        """List the AUTHENTICATED user's EDH GPU workstations as `Items`. Each row carries `bootstrapId`
-        (the launch's id, always present), `sessionId` (null until the launch worker, or else the
-        reconciler's next sweep, reads it back from EDH), `userId`, `edhUid` (the EDH identity the
-        desktop runs as), `name`, `state`
-        (CREATING|ACTIVE|STOPPED|DELETED|ORPHANED), `activity` (what the workstation is doing whatever
-        `state` says, derived on every read: `starting` from a start request until EDH reports the
-        desktop connectable, so also on a STOPPED row whose start is in progress, a CREATING row with
-        a `sessionId` and an ACTIVE row that is not connectable yet; `stopping` while EDH still stops
-        the desktop; null otherwise), `edhState`, `lastError` (why a launch ended
-        ORPHANED: USER_NOT_PROVISIONED, QUOTA_EXCEEDED, IMAGE_UNAVAILABLE, CAPACITY_UNAVAILABLE,
-        EDH_REFUSED, LAUNCH_ERROR or CREATE_TIMED_OUT; LEASE_EXPIRED on a desktop the lease sweep stopped;
-        on a STOPPED row, why its last start left it stopped: CAPACITY_UNAVAILABLE (AWS had no
-        capacity for the instance type in the desktop's Availability Zone), RESERVATION_FULL (its
-        capacity reservation was full), RESERVATION_ENDED (its capacity reservation has ended and VAMS
-        could not move the stopped desktop to on-demand capacity) or START_FAILED (any other refusal,
-        or a start that never took effect), kept until the next start is accepted; on a CREATING row
-        with `activity` null,
-        START_STALLED (EDH accepted a start and has not finished it after 30 minutes; the desktop is
-        not stopped for it, so stop it with stop_edh_workstation, then start it again), kept until EDH
-        moves the row out of CREATING; null otherwise), `startFailure` (for
-        those four, a map of `errorCode` (the AWS error code EDH's refusal named, e.g.
-        `InsufficientInstanceCapacity`; never on START_STALLED), `availabilityZone` (the
-        Availability Zone the desktop and
-        its disk are in) and `observedAt` (when VAMS recorded it), the first two absent when not
-        read; null otherwise),
-        `edhFailure` (the launch failure VAMS captured from EDH's own record of a
-        desktop that never ran, as `{event, errorCode, operation, checkpoint, observedAt}`: `event`
-        (`placement_failed` or `session-failed`), `errorCode` and `operation` the AWS error code and
-        the AWS operation EDH's status named, e.g. `InsufficientInstanceCapacity` from
-        `CreateCapacityReservation`, `checkpoint` the desktop setup step a `session-failed` stopped at,
-        each absent when not captured, and `observedAt` when VAMS captured it; null when none was
-        captured. A capacity code makes `lastError` CAPACITY_UNAVAILABLE and a vCPU or instance limit
-        QUOTA_EXCEEDED; EDH's own wording is never returned),
-        `launchAttempts`, `imageId`, `osFamily`, `instanceType`, `rootSizeGb`, `createdAt`, `updatedAt`,
-        `connectionAvailable`, `connectionUnavailableReason` (`DISPLAY_SESSION_ENDED` on an ACTIVE row EDH
-        reports running whose remote display session has ended, so it is not connectable and not
-        starting either: stop it with stop_edh_workstation, then start it again, to reconnect; null
-        otherwise), and `leaseExpiresAt`, `leaseStoppedAt` and `leaseHoursAtLaunch` (null
-        when no lease applies). `capacityReservationId` is the capacity reservation the launch was
-        sent into (null for an on-demand one), `capacityReservationLabel` its registry label (null
-        once unregistered), `capacityReservationFallback` true when the workstation asked for a
-        reservation and runs on-demand, and `capacityReservationFallbackReason` why: `full` (the
-        reservation was full at launch and falls back) or `ended` (VAMS moved the stopped desktop to
-        on-demand because its reservation ended; the start then went ahead on-demand); a fallback
-        without the field was a full reservation's. Each row also names the image it was launched
-        from: `imageName` (the
-        EDH image name), `recipeId` (the AMI recipe whose build produced the image, null for a
-        baseline image), `recipeDisplayName`, `recipeVersion` (the build version it runs),
-        `latestRecipeVersion` (the recipe's newest AVAILABLE build version, derived on each read) and
-        `imageLatest` (true on that newest build, false only when a newer AVAILABLE build exists, null
-        for a baseline image, an unknown recipe or version, or a recipe with no AVAILABLE build), each
-        null when not known; a workstation keeps the image it was launched from, so launch a new
-        workstation to use a newer build. Every session tool takes `session_id` as the row's
-        `sessionId` or its `bootstrapId`, which addresses the row at any time, before and after EDH
-        assigns the `sessionId`; follow a launch here or with get_edh_workstation by its
-        `bootstrapId`. Another user's
-        workstations are never included, so an empty list says nothing about whether they exist.
-        Reading it makes EDH issue no connection token; `connectionAvailable` is true while EDH reports
-        the desktop running. Not paginated: the list is complete."""
+        """Use to see the signed-in user's EDH GPU workstations and follow a launch or start. Returns `Items`
+        (complete, not paginated; another user's workstations are never included). Each row carries
+        `bootstrapId` (always present; every session tool takes it, or `sessionId`, as `session_id`),
+        `sessionId` (null until EDH assigns it), `name`, `state` (CREATING|ACTIVE|STOPPED|DELETED|ORPHANED),
+        `activity` (`starting` from a start until the desktop is connectable, `stopping`, or null),
+        `instanceType`, `osFamily`, `connectionAvailable`, `connectionUnavailableReason`
+        (`DISPLAY_SESSION_ENDED`: stop, then start, to reconnect), the lease fields and the capacity
+        reservation fields (`capacityReservationFallbackReason` `full` or `ended`).
+
+        `lastError` says why a launch ended ORPHANED (e.g. CAPACITY_UNAVAILABLE, QUOTA_EXCEEDED) or why a
+        STOPPED row's last start failed (CAPACITY_UNAVAILABLE, RESERVATION_FULL, RESERVATION_ENDED,
+        START_FAILED), with `startFailure` (`errorCode`, `availabilityZone`, `observedAt`). START_STALLED
+        on a CREATING row with `activity` null: EDH has not finished a start after 30 minutes; stop it with
+        stop_edh_workstation, then start it again. `edhFailure` is the failure captured from EDH:
+        `event` (`placement_failed` or `session-failed`), `errorCode`, `operation`, `checkpoint`,
+        `observedAt`.
+
+        Each row names its image in the image fields `imageName`, `recipeId`, `recipeDisplayName`,
+        `recipeVersion`, `latestRecipeVersion` and `imageLatest` (`recipeId` null for a baseline image;
+        `imageLatest`
+        false only when a newer AVAILABLE build exists). To use the newest AVAILABLE build, launch a new
+        workstation. Reading it makes EDH issue no connection token."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.list_edh_workstations()
 
-    @mcp.tool()
+    @mcp.tool(title="Get EDH workstation", annotations=READ)
     @tool_result
     def get_edh_workstation(session_id: str) -> Dict[str, Any]:
-        """Get one of the authenticated user's EDH workstations by `session_id` — the row's `sessionId`,
-        or its `bootstrapId`, which addresses the row at any time: while a launch has no `sessionId`
-        (state CREATING or ORPHANED) and after EDH assigns one, when the record answers with the
-        `sessionId`, so a launch can be followed here by its `bootstrapId`. A
-        workstation owned by another user is reported as not found, not as forbidden. The record carries
-        the fields of a list_edh_workstations row, `activity` (`starting`, `stopping` or null),
-        `lastError`, `startFailure` (why the last start left a STOPPED row stopped, or when a start
-        stalled on a CREATING row with `lastError` START_STALLED; null when neither) and
-        `edhFailure` (the AWS error code and
-        operation, or the setup checkpoint, VAMS captured from EDH for a failed launch; null when none
-        was captured) among them. It carries the image fields `imageName`, `recipeId`,
-        `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest` as a
-        list_edh_workstations row does. Reading it makes
-        EDH issue no connection token; `connectionAvailable` is true while EDH reports the desktop
-        running, and `connectionUnavailableReason` is `DISPLAY_SESSION_ENDED` (null otherwise) when the
-        desktop is running but its remote display session has ended."""
+        """Use to read one of the user's EDH workstations by `session_id` (its `sessionId`, or its
+        `bootstrapId`, which works at any time; follow a launch by it). Another user's workstation is not
+        found. Carries the fields of a list_edh_workstations row: `activity`, `lastError` (START_STALLED
+        among its codes), `startFailure`, `edhFailure` (the AWS error code and operation, or the setup
+        checkpoint, VAMS captured from EDH for a failed launch; null when none was captured),
+        `connectionAvailable`,
+        `connectionUnavailableReason` (`DISPLAY_SESSION_ENDED` when the display session ended), and
+        the image fields `imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion`,
+        `latestRecipeVersion` and `imageLatest` as a list_edh_workstations row does. Reading it makes
+        EDH issue no connection
+        token."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.get_edh_workstation(session_id)
 
-    @mcp.tool()
+    @mcp.tool(title="List EDH launch images", annotations=READ)
     @tool_result
     def list_edh_catalog_images() -> Dict[str, Any]:
-        """List the EDH desktop images the authenticated user may launch, as `Items`, filtered per image
-        by the user's permissions. Each item carries `imageId`, `name`, `baseOs`, `osFamily`,
-        `architecture` (the image's CPU architecture as EDH reports it, such as `x86_64` or `arm64`, or
-        null when EDH reports none), `rootSize`, `description` and `category`: `amiRecipe` for an image
-        an AMI recipe build registered, which also carries `recipeId`, `recipeDisplayName` and
-        `recipeVersion` (the build version), and `baseline` for every other image. A recipe image whose
-        recipe lists them also carries `launchInstanceTypes`: the instance types the image's recipe
-        offers its desktops, in the recipe's order; the field is absent for every other image. Such an
-        image also carries `defaultInstanceType`, the first of those types a launch of the image
-        accepts, which the web launch wizard preselects; it is absent when none is accepted. Recipe
-        images are listed first, then the baseline images, each group sorted by name. Use an item's
-        `imageId` as `image_id` and its `osFamily` as `os_family` for create_edh_workstation, and
-        choose its `instance_type` by the image's `architecture` and `launchInstanceTypes` (see
-        list_edh_catalog_instance_types). Not paginated."""
+        """Use before create_edh_workstation to pick an image the user may launch. `Items` (not paginated)
+        carry `imageId` (pass as `image_id`), `name`, `osFamily` (pass as `os_family`), `architecture` (the
+        image's CPU architecture, e.g. `x86_64` or `arm64`, or null when EDH reports none), `rootSize`,
+        `description` and `category`: `amiRecipe` (with `recipeId`, `recipeDisplayName`, `recipeVersion`)
+        or `baseline`; recipe images are listed first. A recipe image may carry `launchInstanceTypes` (the
+        instance types the image's recipe offers its desktops, in the recipe's order; absent for every
+        other image) and `defaultInstanceType` (the first of those types a launch of the image accepts;
+        absent when none is accepted). Choose the `instance_type` by `architecture` and
+        `launchInstanceTypes` (see list_edh_catalog_instance_types)."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.list_edh_catalog_images()
 
-    @mcp.tool()
+    @mcp.tool(title="List EDH instance types", annotations=READ)
     @tool_result
     def list_edh_catalog_instance_types() -> Dict[str, Any]:
-        """List the EC2 instance types this deployment allows for EDH workstations, as `Items` of
-        `{instanceType, architectures}` sorted by name with numbers in numeric order (`g5.2xlarge`
-        before `g5.12xlarge`): the EDH desktop profile's types, narrowed to the deployment's allow-list
-        when one is configured. `architectures` names the profile's architecture groups that list the
-        type, in EDH's order, and is `[]` when the profile does not group its types. Each item also
-        carries Amazon EC2's facts for the type: `vcpus` (the default vCPU count), `memoryGiB` (the
-        instance memory in GiB) and `gpus`, a list of `{count, manufacturer, name, memoryGiB, share}` (the
-        memory of each GPU in GiB; `share`, only for a type given part of a GPU, is that part between
-        0 and 1, and `memoryGiB` its memory), `[]` for a type without GPUs; the three fields are absent when EC2
-        could not be read or does not offer the type in the Region. A type runs an
-        image when the image's `architecture` is null, the type's `architectures` is empty, or it
-        contains the image's architecture, and an image that carries `launchInstanceTypes` is offered
-        only the types it lists; pass only such a type to `create_edh_workstation`, as
-        `instance_type`. Answers 502 `EDH virtual desktop profile is unavailable` when EDH lists no
-        desktop profile with the deployment's configured id. Not paginated."""
+        """Use before create_edh_workstation to pick an `instance_type`. `Items` (not paginated, `g5.2xlarge`
+        before `g5.12xlarge`) of `{instanceType, architectures}` plus EC2's `vcpus`, `memoryGiB` and `gpus`
+        (`{count, manufacturer, name, memoryGiB, share}`, `share` only for a type given part of a GPU;
+        `[]` for a type without GPUs), the three absent when EC2 could not be read or does not offer the
+        type in the Region. A type runs an image when the image's `architecture` is null, the type's
+        `architectures` is empty, or it contains the image's architecture, and an image that carries
+        `launchInstanceTypes` is offered only the types it lists; pass only such a type to
+        `create_edh_workstation`. A 502 means EDH lists no desktop profile with the configured id."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.list_edh_catalog_instance_types()
 
-    @mcp.tool()
+    @mcp.tool(title="Get EDH lease policy", annotations=READ)
     @tool_result
     def get_edh_catalog_lease() -> Dict[str, Any]:
         """The workstation lease policy as configured by the administrator, as
@@ -178,34 +131,25 @@ def register(
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.get_edh_catalog_lease()
 
-    @mcp.tool()
+    @mcp.tool(title="List EDH capacity reservations", annotations=READ)
     @tool_result
     def list_edh_catalog_capacity_reservations(
         instance_type: Optional[str] = None,
         os_family: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """List the EC2 capacity reservations the authenticated user may launch an EDH workstation
-        into, as `Items`: registered by an administrator, enabled, granted to the user's role, and
-        active in EC2. Each item carries `capacityReservationId` (the value create_edh_workstation
-        takes as `capacity_reservation_id`), `label`, `fallbackToOnDemand` (whether a launch into the
-        reservation runs on-demand when it has no free slot), `enabled`, `instanceType`,
-        `availabilityZone`, `instancePlatform` (`Linux/UNIX`, `Windows`, ...), `state`,
-        `totalInstanceCount`, `availableInstanceCount`, `instanceMatchCriteria`, `endDate` (ISO-8601
-        or null), `reservationType` (`default` or `capacity-block`), `edhSubnetAvailable` (true, or
-        null when VAMS could not read EDH's private subnets; a reservation in an Availability Zone
-        with no EDH private subnet is not listed, since EDH cannot launch into it) and `launchAllowed`
-        (false for a reservation the role may see but not launch into: create_edh_workstation is then
-        refused with 403, `error_type` `EdhReservationNotPermittedError`, `code`
-        `RESERVATION_NOT_PERMITTED`, so do not pass it). `instance_type` keeps the
-        reservations of that type, and `os_family` (`linux` or `windows`) those whose platform suits
-        an image of that family; a launch takes a reservation only when both match. An empty list
-        means every launch is on-demand, which is also the answer when EC2 could not be read. Not
-        paginated."""
+        """Use before create_edh_workstation to choose a capacity reservation (registered, enabled, granted
+        to the user's role, active in EC2). `Items` (not paginated) carry `capacityReservationId` (pass as
+        `capacity_reservation_id`), `label`, `fallbackToOnDemand`, `instanceType`, `availabilityZone`,
+        `instancePlatform`, `availableInstanceCount`, `endDate`, `reservationType`, `edhSubnetAvailable`
+        and `launchAllowed`: false means the role may see it but not launch into it (create answers 403,
+        `error_type` `EdhReservationNotPermittedError`, `code` `RESERVATION_NOT_PERMITTED`), so do not
+        pass it. `instance_type` and `os_family` (`linux` or `windows`) filter to reservations a launch can
+        take. An empty list means every launch is on-demand."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.list_edh_catalog_capacity_reservations(
             instance_type=instance_type, os_family=os_family)
 
-    @mcp.tool()
+    @mcp.tool(title="List EDH capacity reservations (admin)", annotations=READ)
     @tool_result
     def list_edh_admin_capacity_reservations() -> Dict[str, Any]:
         """ADMIN: list every registered EC2 capacity reservation with EC2's live view of it, as
@@ -218,7 +162,7 @@ def register(
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.list_edh_admin_capacity_reservations()
 
-    @mcp.tool()
+    @mcp.tool(title="List EDH images (admin)", annotations=READ)
     @tool_result
     def list_edh_admin_images() -> Dict[str, Any]:
         """ADMIN: list every EDH software-stack image registered on the cluster (desktop and
@@ -230,7 +174,7 @@ def register(
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.list_edh_admin_images()
 
-    @mcp.tool()
+    @mcp.tool(title="List all EDH sessions (admin)", annotations=READ)
     @tool_result
     def list_edh_admin_instances() -> Dict[str, Any]:
         """ADMIN: list EVERY user's EDH workstation sessions on the cluster, as `Items`. Each item joins
@@ -249,7 +193,7 @@ def register(
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.list_edh_admin_instances()
 
-    @mcp.tool()
+    @mcp.tool(title="List stale EDH sessions (admin)", annotations=READ)
     @tool_result
     def list_edh_stale_instances(idle_minutes: Optional[int] = None) -> Dict[str, Any]:
         """ADMIN: list the workstation sessions in state STOPPED or ORPHANED whose state last changed
@@ -263,14 +207,14 @@ def register(
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.list_edh_stale_instances(idle_minutes=idle_minutes)
 
-    @mcp.tool()
+    @mcp.tool(title="Get EDH capacity (admin)", annotations=READ)
     @tool_result
     def get_edh_capacity() -> Dict[str, Any]:
         """ADMIN: the EDH cluster's current workstation capacity summary, as EDH reports it."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.get_edh_capacity()
 
-    @mcp.tool()
+    @mcp.tool(title="Check EDH health (admin)", annotations=READ)
     @tool_result
     def get_edh_health() -> Dict[str, Any]:
         """ADMIN: whether the VAMS proxy can reach the EDH API with its configured credentials. Call
@@ -281,7 +225,7 @@ def register(
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.get_edh_health()
 
-    @mcp.tool()
+    @mcp.tool(title="Get EDH settings (admin)", annotations=READ)
     @tool_result
     def get_edh_admin_settings() -> Dict[str, Any]:
         """ADMIN: the workstation lease policy as configured by the administrator, as
@@ -291,7 +235,7 @@ def register(
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.get_edh_admin_settings()
 
-    @mcp.tool()
+    @mcp.tool(title="List EDH container compute", annotations=READ)
     @tool_result
     def list_edh_container_catalog() -> Dict[str, Any]:
         """List the container compute registered on the EDH cluster as `Items` — each a curated Batch
@@ -306,7 +250,7 @@ def register(
         client.require_feature(FEATURE_EDH_CONTAINERS, EDH_CONTAINERS_DISABLED_MESSAGE)
         return client.api.list_edh_container_catalog()
 
-    @mcp.tool()
+    @mcp.tool(title="List my EDH container jobs", annotations=READ)
     @tool_result
     def list_edh_container_jobs(
         backend: Optional[str] = None,
@@ -323,7 +267,7 @@ def register(
         client.require_feature(FEATURE_EDH_CONTAINERS, EDH_CONTAINERS_DISABLED_MESSAGE)
         return client.api.list_edh_container_jobs(backend=backend, cluster=cluster, namespace=namespace)
 
-    @mcp.tool()
+    @mcp.tool(title="List EDH AMI recipes", annotations=READ)
     @tool_result
     def list_edh_ami_recipes() -> Dict[str, Any]:
         """List all EDH AMI recipes as `Items`, each with its stored definition, `source` (`config` for
@@ -334,7 +278,7 @@ def register(
         client.require_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
         return client.api.list_edh_ami_recipes()
 
-    @mcp.tool()
+    @mcp.tool(title="Get EDH AMI recipe", annotations=READ)
     @tool_result
     def get_edh_ami_recipe(recipe_id: str) -> Dict[str, Any]:
         """Get one EDH AMI recipe by its `recipeId`: the stored definition (inline components, parent
@@ -346,7 +290,7 @@ def register(
         client.require_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
         return client.api.get_edh_ami_recipe(recipe_id)
 
-    @mcp.tool()
+    @mcp.tool(title="List EDH AMI recipe builds", annotations=READ)
     @tool_result
     def list_edh_ami_recipe_builds(recipe_id: str) -> Dict[str, Any]:
         """List every build of one EDH AMI recipe as `Items`, newest version first. Each build carries
@@ -369,30 +313,24 @@ def register(
 
     if config.enable_writes:
 
-        @mcp.tool()
+        @mcp.tool(title="Get EDH connection URL", annotations=WRITE)
         @tool_result
         def get_edh_workstation_connect(session_id: str) -> Dict[str, Any]:
-            """Get the DCV connection details for one of the authenticated user's ACTIVE EDH workstations:
-            `{sessionId, connectionUrl, osFamily}`. A workstation that is not connectable (CREATING,
-            STOPPED, or without an EDH session) is refused with a 409 that is returned as the error. A
-            running workstation whose remote display session has ended is refused with a 409 returned as
-            `error_type` `EdhDisplaySessionEndedError`, `code` `DISPLAY_SESSION_ENDED`, and the sentence
-            to relay: stop it, then start it again, to reconnect (stop_edh_workstation, then
-            start_edh_workstation); the workstation's record then carries `connectionUnavailableReason`.
-            Each call makes EDH issue at most one connection token per request EDH answers, for this
-            desktop; VAMS repeats a read once after a transport failure or a gateway error, which can make
-            a second.
+            """Use when the user asks to connect to an ACTIVE EDH workstation: returns `{sessionId,
+            connectionUrl, osFamily}`. A workstation that is not connectable is refused (409); one whose
+            display session has ended with `error_type` `EdhDisplaySessionEndedError`, `code`
+            `DISPLAY_SESSION_ENDED`: stop it, then start it again (stop_edh_workstation, then
+            start_edh_workstation). Each call makes EDH issue at most one connection token per request EDH
+            answers, for this desktop.
 
-            `connectionUrl` is a CREDENTIAL: it carries a DCV session auth token, so anyone holding it can
-            open the desktop until the token expires. Because it is returned as tool output it lands in
-            the host's conversation log and telemetry. Issuing that credential is why this tool requires
-            VAMS_ENABLE_WRITES although it changes nothing. It is never in `autoApprove`; relay the URL
-            to the user once rather than repeating it, and prefer pointing the user at the VAMS web UI's
-            Connect button when they can use it."""
+            `connectionUrl` is a CREDENTIAL (a DCV session auth token): anyone holding it can open the desktop
+            until it expires, and it lands in the host's conversation log. That is why this tool requires
+            VAMS_ENABLE_WRITES although it changes nothing, and it is never in `autoApprove`. Relay the URL
+            once; prefer the VAMS web UI's Connect button."""
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.get_edh_workstation_connection(session_id)
 
-        @mcp.tool()
+        @mcp.tool(title="Launch EDH workstation", annotations=COMPUTE)
         @tool_result
         def create_edh_workstation(
             image_id: str,
@@ -404,48 +342,29 @@ def register(
             lease_hours: Optional[int] = None,
             capacity_reservation_id: Optional[str] = None,
         ) -> Dict[str, Any]:
-            """Launch a new EDH GPU workstation for the authenticated user. Returns the accepted session
-            record (HTTP 202): `state` CREATING, `sessionId` null, `lastError` null, plus
-            `sessionBootstrap` (provisioned|skipped|unavailable|disabled, the outcome of placing a
-            session key for the desktop). The record names the image the launch uses in the image
-            fields `imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion`,
-            `latestRecipeVersion` and `imageLatest`, as a list_edh_workstations row does. The launch
-            itself runs asynchronously — poll get_edh_workstation with the returned `bootstrapId`,
-            or list_edh_workstations selecting the row by it, until it reports ACTIVE and a
-            `sessionId`; the `bootstrapId` addresses the row at any time, not only while it has no
-            `sessionId`. A launch EDH refuses ends ORPHANED with the reason in `lastError`, never as
-            an error from this call.
+            """Use to launch a new EDH GPU workstation for the signed-in user. This starts real GPU compute and
+            incurs cost until it is stopped or deleted: confirm with the user before calling it, and keep it
+            out of `autoApprove`.
 
-            `image_id` and `os_family` (`linux` or `windows`, the row's `osFamily`) come from the chosen
-            row of list_edh_catalog_images, `instance_type` from list_edh_catalog_instance_types (a type
-            that runs the image's `architecture`), and `root_size_gb` is 10-2048; all five are required.
-            `bootstrap_id` is the launch's idempotency key: a repeat by the same user returns the stored
-            record (HTTP 200) and launches nothing, and a key another user's launch holds is refused
-            (409). A uuid4 is generated when omitted, and re-sending the one from a call that timed out
-            is how to retry without launching twice.
-            `lease_hours` (1 up to the policy's `leaseHours`, see get_edh_catalog_lease) is honoured
-            only when the admin lease policy is enabled and not forced, and is refused (400) while
-            leases are disabled. Refused (400) `instanceType does not match the image's architecture`
-            when the image's profile lists the type only under architectures of another family than the
-            image's (`x86_64` and `i386` are one family), refused (400) `instanceType is not offered for
-            this image` when the image's recipe lists `launchInstanceTypes` that leave the type out, and
-            refused (403) for a session authenticated with a VAMS API key.
-            `capacity_reservation_id` launches into a reservation from
-            list_edh_catalog_capacity_reservations whose `instanceType` and platform match the launch;
-            omitted, the launch is on-demand. It is refused (400) when it is not registered, not
-            active, of another instance type or platform, or in an Availability Zone with no EDH
-            private subnet; (403, `error_type` `EdhReservationNotPermittedError`, `code`
-            `RESERVATION_NOT_PERMITTED`) when the user's role may see it but not launch into it (its
-            catalog item's `launchAllowed` is false); (403, `PermissionDeniedError`) when the role
-            does not grant it at all; and (503) when EC2 could not be read. A full reservation whose
-            `fallbackToOnDemand` is
-            true launches on-demand (the record then carries `capacityReservationFallback` true);
-            one whose `fallbackToOnDemand` is false is refused (409, `error_type`
-            `EdhReservationFullError`, `code` `RESERVATION_FULL`): launch without it, or later.
+            `image_id` and `os_family` come from list_edh_catalog_images, `instance_type` from
+            list_edh_catalog_instance_types, `root_size_gb` is 10-2048. Refused (400) `instanceType does not
+            match the image's architecture` when the image's profile lists the type only under architectures
+            of another family than the image's (`x86_64` and `i386` are one family), and (400) `instanceType
+            is not offered for this image` when the image's recipe lists `launchInstanceTypes` that leave the
+            type out, and (403) for a session signed in with a VAMS API key. `bootstrap_id` is the
+            idempotency key: re-send the one from a call that timed out to retry without launching twice
+            (409 when another user's launch holds it). `lease_hours` (see get_edh_catalog_lease) applies only when leases
+            are enabled and not forced. `capacity_reservation_id` launches into a reservation from
+            list_edh_catalog_capacity_reservations: a full one without `fallbackToOnDemand` is refused (409,
+            `error_type` `EdhReservationFullError`, `code` `RESERVATION_FULL`), one whose `launchAllowed` is
+            false (403, `EdhReservationNotPermittedError`, `RESERVATION_NOT_PERMITTED`); 503 when EC2 could
+            not be read.
 
-            This starts real GPU compute and incurs cost until the workstation is stopped or deleted.
-            Confirm with the user before calling it, and keep it out of `autoApprove`.
-            """
+            Returns the accepted record (HTTP 202): `state` CREATING, `sessionId` null, `sessionBootstrap`, and
+            the image fields `imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion`,
+            `latestRecipeVersion` and `imageLatest` as a list_edh_workstations row does. Poll
+            get_edh_workstation with the
+            `bootstrapId` until ACTIVE. A refused launch ends ORPHANED with the reason in `lastError`."""
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             payload: Dict[str, Any] = {
                 "bootstrapId": bootstrap_id or str(uuid.uuid4()),
@@ -461,43 +380,27 @@ def register(
                 payload["capacityReservationId"] = capacity_reservation_id
             return client.api.create_edh_workstation(payload)
 
-        @mcp.tool()
+        @mcp.tool(title="Start EDH workstation", annotations=COMPUTE)
         @tool_result
         def start_edh_workstation(session_id: str) -> Dict[str, Any]:
-            """Start one of the authenticated user's STOPPED EDH workstations. The start is accepted
-            (HTTP 202) and runs in the background: the tool returns the record at once, still
-            STOPPED with `activity` `starting`, plus `sessionBootstrap`
-            (provisioned|skipped|unavailable|disabled, the outcome of placing a fresh session key).
-            The record carries the image fields `imageName`, `recipeId`, `recipeDisplayName`,
-            `recipeVersion`, `latestRecipeVersion` and `imageLatest` as a list_edh_workstations row
-            does: a start keeps the image the workstation was launched from.
-            Follow it with list_edh_workstations (or get_edh_workstation): the row reads `activity`
-            `starting` until it is ACTIVE with `activity` null. A start EDH refuses leaves the row
-            STOPPED with `activity` null, `lastError` CAPACITY_UNAVAILABLE (AWS had no capacity for
-            the instance type in the desktop's Availability Zone; the desktop keeps its disk there,
-            so start it again later), RESERVATION_FULL (its capacity reservation is full),
-            RESERVATION_ENDED (its capacity reservation has ended and VAMS could not move it to
-            on-demand capacity; ask an administrator) or START_FAILED, and `startFailure`
-            `{errorCode, availabilityZone, observedAt}`; the desktop is never deleted for a refused
-            start. A desktop whose reservation has ended starts on-demand: the row then carries
-            `capacityReservationFallback` true and `capacityReservationFallbackReason` `ended`. A start
-            EDH accepts and has not finished
-            after 30 minutes leaves the row CREATING with `activity` null and `lastError`
-            START_STALLED (EDH never reported the desktop ready; the desktop is not stopped for it):
-            stop it with stop_edh_workstation, then start it again. An error whose `error_type` is
-            `EdhOutcomeUnknownError` means the start was not confirmed and may still be under way:
-            call list_edh_workstations before retrying. While EDH still lists the desktop stopped, a
-            start is refused (409, `error_type` `EdhStartInProgressError`) when another start of it is
-            being processed, within 3 minutes of one EDH did not confirm, while the reconciler revokes
-            the stopped desktop's key, or while a lease renewal re-issues its key (up to 5 minutes):
-            list the workstations until it shows the start, and if the list still shows it stopped
-            after 5 minutes, start it again. This resumes
-            real GPU compute and cost. Confirm with the user before calling it, and keep it out of
-            `autoApprove`."""
+            """Use to start one of the user's STOPPED EDH workstations. This resumes real GPU compute and cost:
+            confirm with the user before calling it, and keep it out of `autoApprove`.
+
+            Accepted with HTTP 202: returns the record at once, still STOPPED with `activity` `starting`, plus
+            `sessionBootstrap` and the image fields `imageName`, `recipeId`, `recipeDisplayName`,
+            `recipeVersion`, `latestRecipeVersion` and `imageLatest` as a list_edh_workstations row does (a
+            start keeps the
+            launch image). Follow it with list_edh_workstations until ACTIVE. A refused start leaves the row
+            STOPPED with `lastError` CAPACITY_UNAVAILABLE (start again later), RESERVATION_FULL,
+            RESERVATION_ENDED or START_FAILED and `startFailure`; the desktop is never deleted for a refused
+            start. START_STALLED on a CREATING row: stop it with stop_edh_workstation, then start it again.
+            `EdhOutcomeUnknownError`: the start may still be under way; list before retrying.
+            `EdhStartInProgressError` (409): another start is being processed; list again, and start again
+            if it still shows stopped after 5 minutes."""
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.start_edh_workstation(session_id)
 
-        @mcp.tool()
+        @mcp.tool(title="Renew EDH workstation lease", annotations=COMPUTE)
         @tool_result
         def renew_edh_workstation(session_id: str) -> Dict[str, Any]:
             """Renew one of the authenticated user's leased workstations: reset `leaseExpiresAt` to the
@@ -516,7 +419,7 @@ def register(
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.renew_edh_workstation(session_id)
 
-        @mcp.tool()
+        @mcp.tool(title="Stop EDH workstation", annotations=COMPUTE)
         @tool_result
         def stop_edh_workstation(session_id: str) -> Dict[str, Any]:
             """Stop one of the authenticated user's ACTIVE EDH workstations, or a CREATING one whose
@@ -532,7 +435,7 @@ def register(
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.stop_edh_workstation(session_id)
 
-        @mcp.tool()
+        @mcp.tool(title="Register EDH desktop image", annotations=WRITE)
         @tool_result
         def register_edh_vdi_image(
             ami_id: str,
@@ -564,32 +467,25 @@ def register(
                 payload["description"] = description
             return client.api.register_edh_vdi_image(payload)
 
-        @mcp.tool()
+        @mcp.tool(title="Create EDH AMI recipe", annotations=WRITE)
         @tool_result
         def create_edh_ami_recipe(recipe: Dict[str, Any]) -> Dict[str, Any]:
-            """ADMIN: create an EDH AMI recipe (`source` admin) from `recipe`, a dict in the shape of the
-            CLI's recipe file: `recipeId`, `displayName`, `kind` (vdi|simulation), `osFamily`, `baseOs`
-            (vdi only), `architecture`, `parentImage`, `buildInstanceType` (one instance type, or a list
-            Image Builder chooses among by availability), `rootSizeGb`, `stackName`, `profileId`,
-            `components`, and optional `launchInstanceTypes` (1-64 distinct instance types a
-            desktop of the recipe's image may launch on; absent, null or empty offers every type the
-            deployment allows; outside the content hash, so changing it starts no build), `parameters`,
-            `keepVersions`, `recipeRevision`, `description` and `enabled`. Components are inline only —
-            each `{arn}` or `{name, data}`; the CLI's `{file}`
-            form is not read here. A recipe declaring `assets`, a `recipeId` already in use, a
-            `stackName` another recipe uses, or a component document naming an undeclared placeholder
-            or longer than 16000 characters once its placeholders are resolved is refused (409). A
-            `buildInstanceType` or an `ami-` or `ssm:` `parentImage` that EC2 reports as running another
-            architecture family than `architecture` (`x86_64` and `i386` are one family) is refused (400)
-            with `buildInstanceType does not match the recipe's architecture` or `parentImage does not
-            match the recipe's architecture`; a lookup that fails refuses nothing, and the build start
-            checks again. To copy an existing recipe with its bundled files, call
-            duplicate_edh_ami_recipe. No build starts; call start_edh_ami_recipe_build. Returns the
-            created recipe (HTTP 201). Requires the EDH admin routes."""
+            """ADMIN: use to create an EDH AMI recipe (`source` admin) from `recipe`, shaped as the CLI's recipe
+            file: `recipeId`, `displayName`, `kind`, `osFamily`, `baseOs`, `architecture`, `parentImage`,
+            `buildInstanceType`, `rootSizeGb`, `stackName`, `profileId`, inline `components` (`{arn}` or
+            `{name, data}`), and optional `launchInstanceTypes` (1-64 distinct instance types a desktop of the
+            recipe's image may launch on; absent, null or empty offers every type the deployment allows;
+            outside the content hash, so changing it starts no build), `parameters`, `keepVersions`,
+            `description`, `enabled`. A recipe declaring `assets` or reusing a `recipeId` or `stackName` is
+            refused (409). A `buildInstanceType` or `parentImage` running another architecture family than
+            `architecture` is refused (400) with `buildInstanceType does not match the recipe's architecture` or
+            `parentImage does not match the recipe's architecture`. No build starts
+            (start_edh_ami_recipe_build); to copy a recipe
+            use duplicate_edh_ami_recipe. Returns the recipe (HTTP 201). Requires the EDH admin routes."""
             client.require_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
             return client.api.create_edh_ami_recipe(recipe)
 
-        @mcp.tool()
+        @mcp.tool(title="Update EDH AMI recipe", annotations=WRITE)
         @tool_result
         def update_edh_ami_recipe(recipe_id: str, recipe: Dict[str, Any]) -> Dict[str, Any]:
             """ADMIN: replace an `admin` EDH AMI recipe with `recipe`, the full definition, validated as
@@ -604,7 +500,7 @@ def register(
             client.require_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
             return client.api.update_edh_ami_recipe(recipe_id, recipe)
 
-        @mcp.tool()
+        @mcp.tool(title="Duplicate EDH AMI recipe", annotations=WRITE)
         @tool_result
         def duplicate_edh_ami_recipe(
             source_recipe_id: str,
@@ -613,53 +509,37 @@ def register(
             stack_name: Optional[str] = None,
             keep_versions: Optional[int] = None,
         ) -> Dict[str, Any]:
-            """ADMIN: duplicate an EDH AMI recipe, `config` (shipped) or `admin`, into a new `admin`
-            recipe `recipe_id` that update_edh_ami_recipe can then change. Reads `source_recipe_id` and
-            creates the copy with its definition, its `launchInstanceTypes` included, and `duplicateOf`;
-            the service copies the source's
-            bundled files (`assets` and `assetPrefix`), which the copy cannot change, and records
-            `duplicatedFrom`. `display_name` defaults to the source's `displayName` plus ` (copy)`,
-            `stack_name` to its `stackName` plus ` Copy`, and `keep_versions`, the number of AMIs
-            pruning keeps for the copy (1-20; another value is refused (400)), to its `keepVersions`.
-            A `recipe_id` already in use, or a stack name another recipe uses, is refused (409); a
-            source that does not exist is reported as not found (404). A copy whose
-            `buildInstanceType` or `parentImage` EC2 reports as running another architecture family
-            than its `architecture` is refused (400) with `buildInstanceType does not match the
-            recipe's architecture` or `parentImage does not match the recipe's architecture`. The
-            caller must be allowed to read the source and create the copy. No build starts; call
-            start_edh_ami_recipe_build. Returns the created recipe (HTTP 201). Requires the EDH admin
-            routes."""
+            """ADMIN: use to copy an EDH AMI recipe (`config` or `admin`) into a new `admin` recipe `recipe_id`
+            that update_edh_ami_recipe can change. The copy keeps the definition, its `launchInstanceTypes`
+            included, and the source's bundled files (`assets`, `assetPrefix`), and records `duplicateOf` /
+            `duplicatedFrom`. `display_name` defaults to the source's plus ` (copy)`, `stack_name` to its plus
+            ` Copy`, `keep_versions` (1-20) to its `keepVersions`. A `recipe_id` or stack name in use is refused
+            (409); a missing source is not found (404). A copy running another architecture family than its
+            `architecture` is refused (400) with `buildInstanceType does not match the recipe's architecture` or
+            `parentImage does not match the recipe's architecture`. No build starts; call
+            start_edh_ami_recipe_build. Returns the
+            recipe (HTTP 201). Requires the EDH admin routes."""
             client.require_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
             return client.api.duplicate_edh_ami_recipe(
                 source_recipe_id, recipe_id, display_name=display_name, stack_name=stack_name,
                 keep_versions=keep_versions)
 
-        @mcp.tool()
+        @mcp.tool(title="Start EDH AMI build", annotations=COMPUTE)
         @tool_result
         def start_edh_ami_recipe_build(recipe_id: str) -> Dict[str, Any]:
-            """ADMIN: start a new Image Builder build for an EDH AMI recipe. Launches an EC2 build
-            instance that is billed until the image completes. Answers 202 with the build record and an
-            `outcome`: `started` (status BUILDING), or `queued` (status QUEUED) when the recipe already
-            has a BUILDING or REGISTERING build of other content. When the recipe's current content is
-            already QUEUED, BUILDING or REGISTERING it answers 200 with that build and the outcome
-            `in-progress`, and starts nothing, so a repeated call does not build the content twice.
-            Registration in EDH, retirement of the recipe's other AVAILABLE builds' stacks and pruning
-            of AMIs beyond `keepVersions` follow automatically; follow them with
-            list_edh_ami_recipe_builds. Refused (409) for a disabled recipe; a build that starts at once
-            is also refused, with nothing started, for a parent image that cannot be resolved, a parent
-            AMI EC2 does not find (`the parent image could not be found`), a parent or
-            `buildInstanceType` EC2 reports as running another architecture family than the recipe's
-            `architecture` (`the parent image's architecture does not match the recipe's architecture`,
-            `buildInstanceType does not match the recipe's architecture`), or a component placeholder
-            the recipe does not declare. A queued build is checked when it is
-            promoted, by the sweep or by this call when nothing is ahead of it (which then answers
-            `started` with that build, or 409 with the reason); one that fails the check stays QUEUED
-            while the sweep retries the promotion. Confirm with the user before calling it, and keep it
-            out of `autoApprove`. Requires the EDH admin routes."""
+            """ADMIN: use to start an Image Builder build of an EDH AMI recipe. Launches an EC2 build instance
+            billed until the image completes: confirm with the user before calling it, and keep it out of
+            `autoApprove`. Answers 202 with `outcome` `started` (BUILDING) or `queued` (QUEUED, behind another
+            build); 200 `in-progress` when this content is already QUEUED, BUILDING or REGISTERING. Follow it
+            with list_edh_ami_recipe_builds. Refused (409) for a disabled recipe, a parent image that cannot be
+            resolved or found (`the parent image could not be found`), a parent or `buildInstanceType` running
+            another architecture family than the recipe's `architecture` (`the parent image's architecture does
+            not match the recipe's architecture`, `buildInstanceType does not match the recipe's
+            architecture`), or an undeclared component placeholder. Requires the EDH admin routes."""
             client.require_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
             return client.api.start_edh_ami_recipe_build(recipe_id)
 
-        @mcp.tool()
+        @mcp.tool(title="Register EDH AMI build", annotations=WRITE)
         @tool_result
         def register_edh_ami_recipe_build(recipe_id: str, version: int) -> Dict[str, Any]:
             """ADMIN: retry the EDH registration of a build whose `status` is REGISTER_FAILED. A build
@@ -674,7 +554,7 @@ def register(
             client.require_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
             return client.api.register_edh_ami_recipe_build(recipe_id, version)
 
-        @mcp.tool()
+        @mcp.tool(title="Register EDH simulation image", annotations=WRITE)
         @tool_result
         def register_edh_simulation_image(
             ami_id: str,
@@ -708,7 +588,7 @@ def register(
                 payload["description"] = description
             return client.api.register_edh_simulation_image(payload)
 
-        @mcp.tool()
+        @mcp.tool(title="Stop an EDH session (admin)", annotations=COMPUTE)
         @tool_result
         def stop_edh_admin_instance(session_id: str) -> Dict[str, Any]:
             """ADMIN: stop ANY user's ACTIVE EDH workstation session by `session_id`, reclaiming its
@@ -720,7 +600,7 @@ def register(
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.stop_edh_admin_instance(session_id)
 
-        @mcp.tool()
+        @mcp.tool(title="Update EDH settings (admin)", annotations=WRITE)
         @tool_result
         def update_edh_admin_settings(
             enabled: Optional[bool] = None,
@@ -748,7 +628,7 @@ def register(
                 raise ValueError("Pass at least one of enabled, lease_hours, forced, grace_hours")
             return client.api.update_edh_admin_settings(data)
 
-        @mcp.tool()
+        @mcp.tool(title="Register EDH capacity reservation", annotations=WRITE)
         @tool_result
         def register_edh_capacity_reservation(
             capacity_reservation_id: str,
@@ -773,7 +653,7 @@ def register(
                 payload["enabled"] = enabled
             return client.api.register_edh_capacity_reservation(payload)
 
-        @mcp.tool()
+        @mcp.tool(title="Update EDH capacity reservation", annotations=WRITE)
         @tool_result
         def update_edh_capacity_reservation(
             capacity_reservation_id: str,
@@ -798,7 +678,7 @@ def register(
                 raise ValueError("Pass at least one of label, fallback_to_on_demand, enabled")
             return client.api.update_edh_capacity_reservation(capacity_reservation_id, data)
 
-        @mcp.tool()
+        @mcp.tool(title="Submit EDH container job", annotations=COMPUTE)
         @tool_result
         def submit_edh_container_job(
             job_definition: str,
@@ -847,7 +727,7 @@ def register(
 
     if config.enable_destructive:
 
-        @mcp.tool()
+        @mcp.tool(title="Delete EDH workstation", annotations=DESTRUCTIVE)
         @tool_result
         def delete_edh_workstation(session_id: str) -> Dict[str, Any]:
             """PERMANENTLY delete one of the authenticated user's EDH workstations: the desktop and its
@@ -863,7 +743,7 @@ def register(
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.delete_edh_workstation(session_id)
 
-        @mcp.tool()
+        @mcp.tool(title="Delete EDH desktop image", annotations=DESTRUCTIVE)
         @tool_result
         def delete_edh_vdi_image(image_id: str) -> Dict[str, Any]:
             """ADMIN: PERMANENTLY unregister an EDH desktop (VDI) software stack by `image_id`, so users
@@ -873,7 +753,7 @@ def register(
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.delete_edh_vdi_image(image_id)
 
-        @mcp.tool()
+        @mcp.tool(title="Delete EDH simulation image", annotations=DESTRUCTIVE)
         @tool_result
         def delete_edh_simulation_image(image_id: str) -> Dict[str, Any]:
             """ADMIN: PERMANENTLY unregister an EDH simulation (target node) software stack by
@@ -883,7 +763,7 @@ def register(
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.delete_edh_simulation_image(image_id)
 
-        @mcp.tool()
+        @mcp.tool(title="Delete EDH AMI recipe", annotations=DESTRUCTIVE)
         @tool_result
         def delete_edh_ami_recipe(recipe_id: str) -> Dict[str, Any]:
             """ADMIN: PERMANENTLY delete an `admin` EDH AMI recipe, removing the Image Builder resources
@@ -901,7 +781,7 @@ def register(
             client.require_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
             return client.api.delete_edh_ami_recipe(recipe_id)
 
-        @mcp.tool()
+        @mcp.tool(title="Retire EDH AMI build", annotations=DESTRUCTIVE)
         @tool_result
         def retire_edh_ami_recipe_build(recipe_id: str, version: int) -> Dict[str, Any]:
             """ADMIN: retire an AVAILABLE or REGISTER_FAILED AMI recipe build: deactivates its EDH stack,
@@ -916,7 +796,7 @@ def register(
             client.require_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
             return client.api.retire_edh_ami_recipe_build(recipe_id, version)
 
-        @mcp.tool()
+        @mcp.tool(title="Terminate an EDH session (admin)", annotations=DESTRUCTIVE_COMPUTE)
         @tool_result
         def deactivate_edh_admin_instance(session_id: str) -> Dict[str, Any]:
             """ADMIN: force-deactivate ANY user's EDH workstation session — the desktop is terminated.
@@ -931,7 +811,7 @@ def register(
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.deactivate_edh_admin_instance(session_id)
 
-        @mcp.tool()
+        @mcp.tool(title="Unregister EDH capacity reservation", annotations=DESTRUCTIVE)
         @tool_result
         def unregister_edh_capacity_reservation(capacity_reservation_id: str) -> Dict[str, Any]:
             """ADMIN: unregister a capacity reservation, so VAMS no longer offers it for launches. The
@@ -942,7 +822,7 @@ def register(
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.unregister_edh_capacity_reservation(capacity_reservation_id)
 
-        @mcp.tool()
+        @mcp.tool(title="Kill EDH container job", annotations=DESTRUCTIVE_COMPUTE)
         @tool_result
         def kill_edh_container_job(
             job_id: str,

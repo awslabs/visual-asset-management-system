@@ -22,6 +22,7 @@ import {
     latestUserApiKeyExpiryMs,
     latestUserApiKeyExpiryTime,
 } from "../../common/constants/apiKeys";
+import { datePickerStrings } from "../../common/helpers/datePickerStrings";
 
 interface UpdateApiKeyProps {
     open: boolean;
@@ -235,6 +236,7 @@ export default function UpdateApiKey({
                                         : undefined
                                 }
                                 placeholder="YYYY/MM/DD"
+                                i18nStrings={datePickerStrings("expiration date")}
                                 data-testid="update-api-key-expiresDate"
                             />
                             {!userMode && formState.expiresDate && (

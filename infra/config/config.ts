@@ -148,6 +148,13 @@ export const VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB = 16384;
 export const VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB = 100;
 export const VIDEO_SOP_BOM_MAX_KEY_FRAMES_CEILING = 200;
 
+// The Amazon Bedrock model the commercial partition uses when the GenAI 3D Metadata Labeling or the
+// GenAI CAD STEP agent pipeline names none. It is a commercial cross-Region inference profile, so the
+// restricted-partition templates ship the model id empty instead. Bedrock refuses a model whose
+// lifecycle status is LEGACY to an account that has not called it for 30 days, so this names an
+// ACTIVE model; the config templates and the ConfigBuilder presets carry the same id.
+export const GENAI_DEFAULT_BEDROCK_MODEL_ID = "global.anthropic.claude-sonnet-5-5";
+
 // The RapidPipeline EKS timeout chain. Three clocks bound a run, each enforced by a different service,
 // and they must nest so that the parent workflow is still waiting when the run reports its outcome:
 //
@@ -181,6 +188,28 @@ export const RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS = 10;
 // pipelineEnd deletes the copy; the bucket's lifecycle rule for the prefix expires what a crashed
 // run leaves.
 export const MODELOPS_STAGED_INPUT_PREFIX = "pipelines/modelops.staged-inputs/";
+
+// The longest lifetime AWS Signature Version 4 allows a presigned URL: 7 days, in seconds. Amazon S3
+// answers AuthorizationQueryParametersError for a URL signed for longer, so a larger
+// app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
+// getConfig() warns about it at synthesis. The export staging expiry below is derived from it.
+export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
+// The auxiliary-bucket prefix where the asset export service stages an over-size export payload
+// before returning a presigned URL for it (EXPORT_STAGING_PREFIX in
+// backend/backend/handlers/assets/assetExportService.py). The export function's S3 grant and the
+// bucket's lifecycle rules for staged payloads are both scoped to it, so the values move together.
+// The bucket's preview and viewer data is keyed under {databaseId}/, so the prefix carries a dot, a
+// character no database ID can contain: the expiry on it never reaches a database's data.
+export const ASSET_EXPORT_STAGING_PREFIX = "vams.assetExports/";
+// Days after which the auxiliary bucket expires a staged export payload. The payload is read through
+// its presigned URL, possibly more than once, until that URL expires, so nothing deletes it on read.
+// Derived from the longest lifetime any presigned URL can have rather than the configured
+// presignedUrlTimeoutSeconds, so no setting of that value can make a payload expire while a URL
+// signed for it still works: whole days rounded up, plus one day of margin. Amazon S3 adds the days to
+// the object's creation time and rounds up to the next midnight UTC, so a payload lives at least that
+// long.
+export const ASSET_EXPORT_STAGING_EXPIRATION_DAYS =
+    Math.ceil(PRESIGNED_URL_MAX_TIMEOUT_SECONDS / 86400) + 1;
 // The poll outlives the pod deadline by this much, so it observes the terminated pod and reports the
 // pod's own failure rather than a poll timeout.
 export const RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS = 60;
@@ -280,12 +309,6 @@ export const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
 
-// The longest lifetime AWS Signature Version 4 allows a presigned URL: 7 days, in seconds. Amazon S3
-// answers AuthorizationQueryParametersError for a URL signed for longer, so a larger
-// app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
-// getConfig() warns about it at synthesis. Compared against, never assigned.
-export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
-
 // The taskTimeout the Video SOP/BOM Extraction pipeline's vamsSchema declares
 // (backendPipelines/genAi/videoSopBom/vamsSchema/pipeline.json). The parent workflow waits this long
 // for the pipeline's task-token callback.
@@ -383,6 +406,17 @@ const EXECUTION_LOG_READ_PREFIX_PATTERN =
     /^\/aws\/[A-Za-z0-9\-._#]+\/[A-Za-z0-9\-._#][A-Za-z0-9\-._/#]*\*?$/;
 // CloudWatch Logs caps a log-group name at 512 characters.
 const EXECUTION_LOG_READ_PREFIX_MAX_LENGTH = 512;
+
+/**
+ * Most additional token audiences one provider may list. The list is meant for a handful
+ * of named clients (a remote MCP server, an integration), and every entry widens the set of tokens
+ * the API accepts, so it is bounded.
+ */
+export const MAX_ADDITIONAL_TOKEN_AUDIENCES = 10;
+/** Longest additional token audience accepted (an external IdP audience may be a URI). */
+export const ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH = 512;
+/** An Amazon Cognito app client id: 1-128 characters of [\w+] (the CreateUserPoolClient ClientId pattern). */
+export const COGNITO_APP_CLIENT_ID_PATTERN = /^[\w+]{1,128}$/;
 
 // An IAM managed policy ARN, with the partition captured: an account id (customer managed) or `aws`
 // (AWS managed), an optional path, and the policy name.
@@ -797,6 +831,36 @@ export function validatePermissionBoundaryArn(value: unknown, partition: string)
             `Configuration Error: ${where} is in the '${match[1]}' partition, but this deployment ` +
                 `targets the '${partition}' partition. Use the ARN of a managed policy in the ` +
                 `deployment's partition (arn:${partition}:iam::...). Got: ${value}`
+        );
+    }
+}
+
+/**
+ * Defaults and validates `app.auditLogging`: an absent block or `recordReads` key means `true`; any
+ * value that is not a JSON boolean is a configuration error rather than being read as truthy.
+ * Exported for the config tests.
+ */
+export function resolveAuditLoggingConfig(config: ConfigPublic): void {
+    const app = config.app as ConfigPublic["app"] & { auditLogging?: unknown };
+    if (app.auditLogging === undefined || app.auditLogging === null) {
+        app.auditLogging = { recordReads: true };
+        return;
+    }
+    if (typeof app.auditLogging !== "object" || Array.isArray(app.auditLogging)) {
+        throw new Error(
+            "Configuration Error: app.auditLogging must be an object, for example " +
+                '{"recordReads": true}.'
+        );
+    }
+    const block = app.auditLogging as { recordReads?: unknown };
+    if (block.recordReads === undefined || block.recordReads === null) {
+        block.recordReads = true;
+        return;
+    }
+    if (typeof block.recordReads !== "boolean") {
+        throw new Error(
+            "Configuration Error: app.auditLogging.recordReads must be true or false (a JSON " +
+                `boolean), not ${JSON.stringify(block.recordReads)}.`
         );
     }
 }
@@ -1518,7 +1582,7 @@ export function getConfig(app: cdk.App): Config {
             useCodeBuild: true,
             autoRegisterWithVAMS: false,
             autoRegisterAutoTriggerOnFileUpload: false,
-            bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            bedrockModelId: GENAI_DEFAULT_BEDROCK_MODEL_ID,
             openAi: { modelId: "", apiKeySecretArn: "" },
             allowInternetResearch: true,
             bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
@@ -1534,8 +1598,7 @@ export function getConfig(app: cdk.App): Config {
         const cad = config.app.pipelines.useGenAiCadStepAgent;
         if (cad.runtime == undefined) cad.runtime = "agentcore";
         if (cad.useCodeBuild == undefined) cad.useCodeBuild = true;
-        if (cad.bedrockModelId == undefined)
-            cad.bedrockModelId = "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
+        if (cad.bedrockModelId == undefined) cad.bedrockModelId = GENAI_DEFAULT_BEDROCK_MODEL_ID;
         if (cad.openAi == undefined) cad.openAi = { modelId: "", apiKeySecretArn: "" };
         if (cad.openAi.modelId == undefined) cad.openAi.modelId = "";
         if (cad.openAi.apiKeySecretArn == undefined) cad.openAi.apiKeySecretArn = "";
@@ -1672,6 +1735,11 @@ export function getConfig(app: cdk.App): Config {
         config.app.webUi.allowUnsafeEvalFeatures = false;
     }
 
+    // Audit records of reads (gets, lists and searches): recorded unless the deployment turns them
+    // off. An absent block or key records reads, so a config.json from before the switch keeps the
+    // behaviour. Downloads and exports keep their file-download records either way.
+    resolveAuditLoggingConfig(config);
+
     // Whether http://localhost:3001 is registered as a Cognito callback and logout URL. It exists so a
     // developer running the web front locally can complete a federated sign-in against a deployed
     // user pool. Defaults off: the URLs are registered on the same user pool that serves real users,
@@ -1707,6 +1775,15 @@ export function getConfig(app: cdk.App): Config {
     // Initialize IdP display name for external OAuth (backward compatibility)
     if (config.app.authProvider.useExternalOAuthIdp.idpDisplayName == undefined) {
         config.app.authProvider.useExternalOAuthIdp.idpDisplayName = "SSO";
+    }
+
+    // Additional token audiences. Absent means none: the API accepts tokens issued to the web app
+    // client (Cognito) or to lambdaAuthorizorJWTAudience (external IdP) only.
+    if (config.app.authProvider.useCognito.additionalTokenAudiences == undefined) {
+        config.app.authProvider.useCognito.additionalTokenAudiences = [];
+    }
+    if (config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences == undefined) {
+        config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences = [];
     }
 
     if (config.app.api == undefined) {
@@ -3371,6 +3448,39 @@ export function getConfig(app: cdk.App): Config {
         throw new Error("Configuration Error: Must specify only one authentication method!");
     }
 
+    //Additional token audiences belong to the provider they are listed under. A list under a
+    //disabled provider is ignored (normalized to empty, so nothing reaches the authorizer), matching
+    //how useSaml / useOidc are treated when Cognito is off.
+    if (
+        !config.app.authProvider.useCognito.enabled &&
+        config.app.authProvider.useCognito.additionalTokenAudiences.length > 0
+    ) {
+        console.warn(
+            "Configuration Warning: app.authProvider.useCognito.additionalTokenAudiences is ignored because useCognito.enabled is false."
+        );
+        config.app.authProvider.useCognito.additionalTokenAudiences = [];
+    }
+    if (
+        !config.app.authProvider.useExternalOAuthIdp.enabled &&
+        config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences.length > 0
+    ) {
+        console.warn(
+            "Configuration Warning: app.authProvider.useExternalOAuthIdp.additionalTokenAudiences is ignored because useExternalOAuthIdp.enabled is false."
+        );
+        config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences = [];
+    }
+    validateAdditionalTokenAudiences(
+        config.app.authProvider.useCognito.additionalTokenAudiences,
+        "app.authProvider.useCognito.additionalTokenAudiences",
+        "cognito"
+    );
+    validateAdditionalTokenAudiences(
+        config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences,
+        "app.authProvider.useExternalOAuthIdp.additionalTokenAudiences",
+        "external",
+        config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience
+    );
+
     if (
         config.app.authProvider.useCognito.enabled &&
         config.app.authProvider.useCognito.useUserPasswordAuthFlow
@@ -4267,6 +4377,68 @@ export function validateExternalPipelineBridges(
 }
 
 /**
+ * Validates app.authProvider.<provider>.additionalTokenAudiences: an array of at most
+ * MAX_ADDITIONAL_TOKEN_AUDIENCES distinct, exact audience values. Each entry is compared by exact
+ * string equality in the authorizer, so a wildcard, a blank entry, or surrounding whitespace (which
+ * would never match) is rejected. A Cognito entry must be an app client id; an external entry must
+ * not repeat lambdaAuthorizorJWTAudience, which is always accepted. Throws a Configuration Error on
+ * any violation. Exported for unit testing.
+ */
+export function validateAdditionalTokenAudiences(
+    audiences: unknown,
+    label: string,
+    provider: "cognito" | "external",
+    primaryAudience?: string | null
+): void {
+    if (!Array.isArray(audiences)) {
+        throw new Error(
+            `Configuration Error: ${label} must be an array of audience values (leave it empty or out for none).`
+        );
+    }
+    if (audiences.length > MAX_ADDITIONAL_TOKEN_AUDIENCES) {
+        throw new Error(
+            `Configuration Error: ${label} lists ${audiences.length} audiences; at most ${MAX_ADDITIONAL_TOKEN_AUDIENCES} are accepted.`
+        );
+    }
+    const seen = new Set<string>();
+    audiences.forEach((audience: unknown, index: number) => {
+        const entry = `${label}[${index}]`;
+        if (typeof audience !== "string" || audience.trim() === "") {
+            throw new Error(`Configuration Error: ${entry} must be a non-empty string.`);
+        }
+        if (audience !== audience.trim()) {
+            throw new Error(
+                `Configuration Error: ${entry} has leading or trailing whitespace; audiences are matched exactly.`
+            );
+        }
+        if (audience.includes("*")) {
+            throw new Error(
+                `Configuration Error: ${entry} must be an exact audience value; wildcards are not accepted.`
+            );
+        }
+        if (audience.length > ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH) {
+            throw new Error(
+                `Configuration Error: ${entry} exceeds ${ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH} characters.`
+            );
+        }
+        if (provider === "cognito" && !COGNITO_APP_CLIENT_ID_PATTERN.test(audience)) {
+            throw new Error(
+                `Configuration Error: ${entry} must be an Amazon Cognito app client id (letters, digits, '_' and '+', up to 128 characters) of an app client in the VAMS user pool.`
+            );
+        }
+        if (provider === "external" && primaryAudience && audience === primaryAudience) {
+            throw new Error(
+                `Configuration Error: ${entry} repeats lambdaAuthorizorJWTAudience, which is always accepted; remove it from the list.`
+            );
+        }
+        if (seen.has(audience)) {
+            throw new Error(`Configuration Error: ${entry} is listed more than once.`);
+        }
+        seen.add(audience);
+    });
+}
+
+/**
  * Validates app.pipelines.executionLogReadPrefixes: a non-empty array of distinct log-group name
  * patterns under `/aws/`, each used verbatim as an IAM resource name on the executionService
  * log-read grant. Throws a Configuration Error on any violation. Exported for unit testing.
@@ -4966,6 +5138,10 @@ export interface ConfigPublic {
                 // When true, the user pool declares the `custom:groups` attribute that user pools created
                 // by earlier versions carry; Amazon Cognito keeps a custom attribute for the life of the pool.
                 retainLegacyGroupsAttribute: boolean;
+                // Extra app client ids of the VAMS user pool whose ID and access tokens the API accepts,
+                // alongside the web app client, e.g. a client registered for a remote MCP server.
+                // Empty (the default) accepts the web app client only.
+                additionalTokenAudiences?: string[];
             };
             useExternalOAuthIdp: {
                 enabled: boolean;
@@ -4980,12 +5156,19 @@ export interface ConfigPublic {
                 idpAuthProviderDiscoveryEndpoint: string;
                 lambdaAuthorizorJWTIssuerUrl: string;
                 lambdaAuthorizorJWTAudience: string;
+                // Extra `aud` values the API accepts from the external IdP, alongside
+                // lambdaAuthorizorJWTAudience. Empty (the default) accepts that audience only.
+                additionalTokenAudiences?: string[];
             };
         };
         webUi: {
             optionalBannerHtmlMessage: string;
             allowUnsafeEvalFeatures: boolean;
             allowLocalhostAuthCallbacks: boolean;
+        };
+        auditLogging: {
+            // Whether read actions (gets, lists, searches) write audit records. Absent = true.
+            recordReads: boolean;
         };
         api: {
             apiType: string;
