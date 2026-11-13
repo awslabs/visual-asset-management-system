@@ -247,6 +247,10 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     temp_dir = None
+    # The folder mkdtemp creates for this run; stays None with --local-path, which the user owns.
+    base_temp_dir = None
+    # True once the result names the files in temp_dir. From then on they are the run's output.
+    result_built = False
     failed_operations = []
     
     try:
@@ -367,9 +371,10 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
                 }
                 
                 # Delete temp files if requested
-                if delete_temporary_files and temp_dir and not local_path:
+                if delete_temporary_files and base_temp_dir:
                     output_status("Cleaning up temporary files...", json_output)
-                    shutil.rmtree(temp_dir)
+                    shutil.rmtree(base_temp_dir)
+                    base_temp_dir = None
                     temp_dir = None
                 
             except Exception as e:
@@ -402,6 +407,7 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
             "temporary_directory": temp_dir if temp_dir else "deleted",
             **combine_stats
         }
+        result_built = True
         
         if failed_operations:
             result['failed_operations'] = failed_operations
@@ -435,10 +441,14 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
         raise click.ClickException(str(e))
     
     finally:
-        # Cleanup temp directory unless user-provided or kept with --no-delete-temporary-files
-        keep_files = local_path or (asset_create_name and not delete_temporary_files)
-        if temp_dir and not keep_files and os.path.exists(temp_dir):
+        # A run that failed before it had a result removes the whole mkdtemp folder, not only the
+        # timestamped folder inside it, unless --asset-create-name with --no-delete-temporary-files
+        # keeps the files. A run that built a result keeps the folder, because the result names
+        # the combined GLB and the export JSON in it; the upload path above has already removed it
+        # when --delete-temporary-files applies.
+        keep_files = asset_create_name and not delete_temporary_files
+        if base_temp_dir and not result_built and not keep_files and os.path.exists(base_temp_dir):
             try:
-                shutil.rmtree(temp_dir)
+                shutil.rmtree(base_temp_dir)
             except Exception:
                 pass  # Best effort cleanup
