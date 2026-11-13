@@ -76,6 +76,7 @@ tools/VamsCLI/
         edh_api_client.py    # EdhAPIClientMixin (EDH Workstations add-on methods)
         edh_exceptions.py    # EdhError family
       custom_api_client.py   # FORK EXTENSION POINT: CustomAPIClientMixin (shipped empty)
+      request_paths.py       # route_path(): one path segment per value; imports nothing from the package
       profile.py             # ProfileManager (multi-profile, config dirs)
       exceptions.py          # Two-tier exception hierarchy (~140 classes)
       global_exceptions.py   # @handle_global_exceptions() decorator
@@ -236,7 +237,7 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 -   Bearer token from `ProfileManager.load_auth_profile()`
 -   Pre-flight token validation for override tokens (checks expiry before request)
 -   Refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded), a control character (raw or percent-encoded), or a raw `?` or `#` with `InvalidRequestPathError` before anything is sent: the URL join drops or resolves such a segment and removes some control characters, and a `?` or `#` ends the path, so a path value carrying one would address another route. Query parameters go in `params=` (`tests/test_api_request_path.py`)
--   Endpoints are built with `route_path(API_X, name=value)`, never `API_X.format(...)`: it percent-encodes a `/`, `?` or `#` in each value so the value stays in its own segment, and leaves every other character to requests. A ratchet test fails on a new `API_*.format(` call outside the EDH client, which encodes each value with `_edh_path_value`
+-   Endpoints are built with `route_path(API_X, name=value)`, never `API_X.format(...)`: it percent-encodes a `/`, `?`, `#` or `%` in each value so the value stays in its own segment and the API, which decodes each path value once, reads it as given; every other character is left to requests. It lives in `utils/request_paths.py`, which imports nothing from the package, so the add-on and fork mixins import it at module level (`api_client` re-exports it). A ratchet test fails on a new `API_*.format(` call outside the EDH client, which encodes each value with `_edh_path_value`; VamsMCP's `tests/test_path_value_encoding.py` holds `vams_mcp` to the same rule
 -   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header
 -   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens (`OverrideTokenError`); a 401 that persists through `MAX_AUTH_RETRIES` refreshes raises `AuthenticationError`, also with `raise_http_errors=True`. From v2.7.0 the authorizer answers a credential it does not accept (expired or invalid token; unknown, disabled or expired API key) with 401 (#1212)
 -   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent (kept for APIs older than v2.7.0, which answered a rejected token with the authorizer's 403)
@@ -865,7 +866,7 @@ A fork adds commands without editing `main.py`, `constants.py` or `utils/api_cli
 | Command groups           | `vamscli/commands/custom/<group>.py`, listed in `commands/custom/__init__.py` (`CUSTOM_COMMANDS`) | `main.py` registers every entry on the root `cli` group                                                                       |
 
 -   Command files follow the same patterns as core ones (`roleUserConstraints.py`: decorators, `--json-output`, typed errors).
--   `custom_constants.py` imports nothing from `vamscli`, and `custom_api_client.py` must not import from `vamscli.commands` (which imports `APIClient`): either would create an import cycle.
+-   `custom_constants.py` imports nothing from `vamscli`, and `custom_api_client.py` must not import from `vamscli.commands` (which imports `APIClient`): either would create an import cycle. Build a path with `route_path` from `utils/request_paths.py`; importing it from `api_client` is a cycle too, because `api_client` imports the mixin at its top.
 -   `tests/test_constants_contract.py` checks every custom `API_*` path against the backend route lists (including `backend/backend/custom/customApiRoutes.py`) and every `FEATURE_*` in `custom_constants.py` against `infra/common/customAppFeatures.ts`.
 -   A custom command never replaces a core one: `main.py` registers `CUSTOM_COMMANDS` after every core command and raises at import on a name that is already registered (`tests/test_custom_commands.py`).
 -   A `CustomAPIClientMixin` method with the name of an `APIClient` method is never called, because `APIClient` comes first in the MRO; `tests/test_custom_api_client.py` fails on such a name.

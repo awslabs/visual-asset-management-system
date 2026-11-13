@@ -5,7 +5,7 @@ an empty one and removes tab, LF and CR, requests decodes a percent-encoded dot 
 '?' or '#' ends the path. So a path value of any method carrying such a segment or character would
 address another route (an API key's among them). Such a path raises `InvalidRequestPathError` before
 any request, whichever method built it. `route_path` puts each value into its own segment, so a '/',
-'?' or '#' in a value is sent percent-encoded to the route the method names.
+'?', '#' or '%' in a value is sent percent-encoded to the route the method names.
 """
 
 import ast
@@ -201,8 +201,9 @@ class TestRequestPathHasNoControlCharacter:
 
 
 class TestPathValueStaysInItsOwnSegment:
-    """A '/', '?' or '#' in a value would end its segment or the path; `route_path` sends it
-    percent-encoded, and the guard refuses a raw '?' or '#' however the endpoint was built."""
+    """A '/', '?' or '#' in a value would end its segment or the path, and the API decodes a '%'
+    escape once; `route_path` sends each of them percent-encoded, and the guard refuses a raw '?' or
+    '#' however the endpoint was built."""
 
     @pytest.mark.parametrize("endpoint", ["/database/db1#/assets/a-1", "/database/db1?/assets/a-1"])
     def test_a_raw_query_or_fragment_mark_is_refused_unsent(self, monkeypatch, endpoint):
@@ -235,10 +236,52 @@ class TestPathValueStaysInItsOwnSegment:
         client.call_login_profile("jane.doe@example.com")
         assert sent == [("GET", "https://api.example.com/auth/loginProfile/jane.doe@example.com")]
 
-    @pytest.mark.parametrize("value", ["jane.doe@example.com", "a b", "on_upload%23t-1", "x-1:c-1", "100%"])
+    @pytest.mark.parametrize("value", ["jane.doe@example.com", "a b", "x-1:c-1", "a+b", "a;b"])
     def test_every_other_character_is_left_as_it_was(self, value):
-        """Control: only '/', '?' and '#' change; requests encodes the rest as before."""
+        """Control: only '/', '?', '#' and '%' change; requests encodes the rest as before."""
         assert route_path("/database/{databaseId}", databaseId=value) == f"/database/{value}"
+
+    @pytest.mark.parametrize(
+        "asset_id,suffix",
+        [
+            # The API decodes each path value once: sent raw, `x-q%23` would read asset `x-q#`.
+            ("x-q%23", "x-q%2523"),
+            # A lone '%', which requests also sends as '%25'.
+            ("x-q%", "x-q%25"),
+        ],
+    )
+    def test_a_percent_sign_is_sent_as_part_of_the_value(self, monkeypatch, asset_id, suffix):
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        client.get_asset("db-1", asset_id)
+        assert sent == [("GET", f"https://api.example.com/database/db-1/assets/{suffix}")]
+
+    @pytest.mark.parametrize(
+        "method,args,verb",
+        [
+            ("get_workflow_trigger", (), "GET"),
+            ("set_workflow_trigger", ({},), "PUT"),
+            ("delete_workflow_trigger", (), "DELETE"),
+        ],
+    )
+    def test_a_trigger_key_is_encoded_once(self, monkeypatch, method, args, verb):
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        getattr(client, method)("db-1", "wf-1", "fileUpload#t-1", *args)
+        assert sent == [
+            (verb, "https://api.example.com/database/db-1/workflows/wf-1/triggers/fileUpload%23t-1")]
+
+    def test_route_path_imports_nothing_from_the_package(self):
+        """`api_client` imports the add-on and fork mixins at its top, so a mixin can import
+        `route_path` at module level only from a module that imports nothing from the package."""
+        source = Path(constants.__file__).parent / "utils" / "request_paths.py"
+        imports = [node for node in ast.walk(ast.parse(source.read_text(encoding="utf-8")))
+                   if isinstance(node, (ast.Import, ast.ImportFrom))]
+        assert imports, "control: the walk sees the module's imports"
+        assert [node for node in imports if isinstance(node, ast.ImportFrom) and (
+            node.level or (node.module or "").startswith("vamscli"))] == []
+        assert [alias.name for node in imports if isinstance(node, ast.Import)
+                for alias in node.names if alias.name.startswith("vamscli")] == []
 
     def test_core_endpoints_are_built_with_route_path(self):
         """Ratchet: a core method that formats a route constant itself would put a value into the path

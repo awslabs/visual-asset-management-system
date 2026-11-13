@@ -4,7 +4,7 @@ import json
 import threading
 import requests
 from typing import Dict, Any, List, Optional
-from urllib.parse import quote, unquote, urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 # Single-flight token refresh: concurrent uploads share one APIClient (one requests.Session)
 # and run API calls on parallel executor threads. Without serialization, a 403/401 on several
@@ -311,6 +311,7 @@ from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
 from .addon_api_client import AddonAPIClientMixin
 from .custom_api_client import CustomAPIClientMixin
+from .request_paths import _path_segment, route_path  # noqa: F401 - route_path is re-exported
 
 
 def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) -> str:
@@ -340,22 +341,6 @@ def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) ->
     ).replace(
         '{assetVersionId:commentId}', f"{_path_segment(asset_version_id)}:{_path_segment(comment_id)}"
     )
-
-
-# The characters that end a path segment or the path. A value carrying one is sent percent-encoded,
-# so it stays in its own segment; every other character keeps the encoding requests gives it.
-_PATH_SEGMENT_ESCAPES = str.maketrans({'/': '%2F', '?': '%3F', '#': '%23'})
-
-
-def _path_segment(value: Any) -> str:
-    """A value as one path segment: a '/', '?' or '#' in it is percent-encoded."""
-    return str(value).translate(_PATH_SEGMENT_ESCAPES)
-
-
-def route_path(template: str, **values: Any) -> str:
-    """A route constant with each placeholder filled by one path segment, so the request addresses
-    the route the constant names whatever a value contains."""
-    return template.format(**{name: _path_segment(value) for name, value in values.items()})
 
 
 def _has_control_character(text: str) -> bool:
@@ -4758,7 +4743,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         try:
             endpoint = route_path(API_WORKFLOW_TRIGGER, 
                 databaseId=database_id, workflowId=workflow_id,
-                triggerType=quote(trigger_type, safe=''))
+                triggerType=trigger_type)
             return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4777,7 +4762,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         try:
             endpoint = route_path(API_WORKFLOW_TRIGGER, 
                 databaseId=database_id, workflowId=workflow_id,
-                triggerType=quote(trigger_type, safe=''))
+                triggerType=trigger_type)
             return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4797,7 +4782,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         try:
             endpoint = route_path(API_WORKFLOW_TRIGGER, 
                 databaseId=database_id, workflowId=workflow_id,
-                triggerType=quote(trigger_type, safe=''))
+                triggerType=trigger_type)
             return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:

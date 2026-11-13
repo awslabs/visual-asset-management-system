@@ -779,6 +779,7 @@ FEATURE_CUSTOM_WIDGETS = "CUSTOM_WIDGETS"
 from typing import Any, Dict, Optional
 
 from ..custom_constants import API_CUSTOM_WIDGETS
+from .request_paths import route_path
 
 
 class CustomAPIClientMixin:
@@ -789,16 +790,18 @@ class CustomAPIClientMixin:
     ) -> Dict[str, Any]:
         """One page of widgets; `params` carries maxItems, pageSize and startingToken."""
         response = self.get(
-            API_CUSTOM_WIDGETS.format(databaseId=database_id), include_auth=True, params=params or {}
+            route_path(API_CUSTOM_WIDGETS, databaseId=database_id), include_auth=True, params=params or {}
         )
         return response.json()
 
     def create_custom_widget(self, database_id: str, name: str) -> Dict[str, Any]:
         response = self.post(
-            API_CUSTOM_WIDGETS.format(databaseId=database_id), data={"widgetName": name}
+            route_path(API_CUSTOM_WIDGETS, databaseId=database_id), data={"widgetName": name}
         )
         return response.json()
 ```
+
+`route_path` puts each value into its own path segment, percent-encoding a `/`, `?`, `#` or `%` in it. Import it from `request_paths` rather than `api_client`: `api_client` imports this module at its top, so importing from it here is an import cycle.
 
 ```python
 # tools/VamsCLI/vamscli/commands/custom/widgets.py
