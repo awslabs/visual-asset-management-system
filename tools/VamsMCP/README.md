@@ -12,7 +12,8 @@ This server **does not store any keys, tokens, or URLs**. It reuses the
 [`vamscli`](../VamsCLI) profile you already configured on your machine — the
 same one you use for the CLI. Each user runs the server against **their own**
 VAMS account using **their own** vamscli login, which makes it safe to
-distribute publicly.
+distribute publicly. (A [remote](#remote-mode) server reads an auth configuration file of URLs and
+client ids that its operator writes; it holds no secret either.)
 
 ```
 MCP host ──stdio──> vams-mcp (FastMCP) ──> vamscli APIClient + ProfileManager ──HTTPS──> your VAMS API
@@ -23,12 +24,24 @@ MCP host ──stdio──> vams-mcp (FastMCP) ──> vamscli APIClient + Profi
 The server reuses the CLI's `APIClient`, so it inherits retries, 429 backoff,
 typed errors, and automatic token refresh.
 
+The server can also be **hosted remotely** for MCP clients that connect over HTTP (for example
+Amazon Quick). In that mode it reads no profile: each request carries its user's OAuth access token,
+which the server verifies itself and sends on to the VAMS API for that request only, so every call
+still runs as that user under that user's VAMS permissions. See [Remote mode](#remote-mode).
+
+```
+MCP client ──HTTPS──> your front end (TLS, port 443) ──> vams-mcp (streamable HTTP, 127.0.0.1:8000)
+                                                            │ verifies the user's token, then
+                                                            └── APIClient(bearer_token=<that token>) ──HTTPS──> VAMS API
+```
+
 ## Requirements
 
 -   Python 3.12+
 -   [`vamscli`](../VamsCLI) installed and configured (see below)
 -   `mcp` 1.10.0+ or 2.x and `pydantic` 2.11+, installed with the server. `mcp` 1.10.0 to 1.21.1
     need `pydantic` below 2.12.
+-   `PyJWT[crypto]` 2.15.1, installed with the server (remote mode verifies tokens with it).
 
 The full installation, client registration, configuration, upgrade and troubleshooting guide is the
 documentation site's **MCP Server** page
@@ -85,19 +98,84 @@ have you sign in; `user_action` names the command you run (`vamscli auth login -
 add-on tools appear after a restart. `vams_status` always answers: profile, API URL, signed-in user,
 feature switches, which tool tiers are on, and the MCP and CLI versions.
 
+## Remote mode
+
+VAMS does not deploy a remote MCP server; an operator hosts one. The full recipe (container image,
+HTTPS front end, private networks, client registration for Amazon Cognito and external IdPs,
+connecting Amazon Quick, and a threat model) is the documentation site's **Remote MCP Server** page
+(`documentation/docusaurus-site/docs/mcp/remote-mcp-server.md`). The short form:
+
+1. Register an OAuth client for remote MCP clients (user sign-in: authorization code with PKCE; never
+   a client credentials client), and list its client id in
+   `app.authProvider.useCognito.additionalTokenAudiences` (or `useExternalOAuthIdp`), then deploy VAMS.
+2. Write the server's auth configuration from the deployment's own settings, and note the values it
+   prints for the MCP client:
+
+    ```bash
+    vams-mcp setup-remote --vams-url https://<your-vams-url> \
+        --resource-url https://mcp.example.com/mcp --client-id <app-client-id> \
+        --cognito-domain <your-domain>.auth.<region>.amazoncognito.com --output /etc/vams-mcp/auth.json
+    ```
+
+3. Start the server behind an HTTPS front end that forwards to it:
+
+    ```bash
+    VAMS_MCP_TRANSPORT=streamable-http VAMS_MCP_AUTH_CONFIG=/etc/vams-mcp/auth.json vams-mcp
+    ```
+
+The server listens on `127.0.0.1:8000` by default and serves MCP at `/mcp`. Every request needs
+`Authorization: Bearer <access token>`, which the server verifies (signature against the issuer's
+keys, issuer, audience, expiry, token use, and a named user) before any tool runs; without one it
+answers `401` with `WWW-Authenticate: Bearer resource_metadata="..."`, pointing at the OAuth
+Protected Resource Metadata (RFC 9728) at `/.well-known/oauth-protected-resource/mcp`, the only route
+answered without a token. If the issuer's keys cannot be read, every request is refused with `503`.
+The default tool set is the read-only `consumer` set, and each call has a time budget
+(`VAMS_MCP_TOOL_TIMEOUT`, 240 seconds): a list stops early with a `NextToken` rather than run past it. A write,
+delete or compute call still running at the budget may yet complete, so its answer says the outcome is
+unknown (`outcomeUnknown`) and names the read tool to check with (`checkWith`) instead of inviting a
+retry. One user may have at most `VAMS_MCP_MAX_CALLS_PER_USER` (8) calls in progress.
+
 ## Configure (optional)
 
 All configuration is via environment variables — none are required. Set them in the `env` block
 of your MCP host's server entry (see the `mcpServers` sample below); no `.env` file is read.
 `.env.example` lists every supported variable for reference.
 
-| Variable                  | Description                                                                          |
-| ------------------------- | ------------------------------------------------------------------------------------ |
-| `VAMS_PROFILE`            | vamscli profile to use (default: active profile)                                     |
-| `VAMS_ENABLE_WRITES`      | `true` to expose create/update tools and tools that issue a credential (default off) |
-| `VAMS_ENABLE_DESTRUCTIVE` | `true` to expose archive/delete tools (needs writes on; default off)                 |
-| `VAMS_MAX_PAGES`          | Max pages auto-followed for list endpoints (default 20)                              |
-| `VAMS_PAGE_SIZE`          | Page size per paginated call (default 100, clamped to 1000)                          |
+| Variable                      | Description                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------------- |
+| `VAMS_PROFILE`                | vamscli profile to use (default: active profile). Refused in remote mode                      |
+| `VAMS_ENABLE_WRITES`          | `true` to expose create/update tools and tools that issue a credential (default off)          |
+| `VAMS_ENABLE_DESTRUCTIVE`     | `true` to expose archive/delete tools (needs writes on; default off)                          |
+| `VAMS_MAX_PAGES`              | Max pages auto-followed for list endpoints (default 20)                                       |
+| `VAMS_PAGE_SIZE`              | Page size per paginated call (default 100, clamped to 1000)                                   |
+| `VAMS_MCP_TOOLSETS`           | Comma-separated [tool sets](#tool-sets) (default `all` over stdio, `consumer` in remote mode) |
+| `VAMS_MCP_TRANSPORT`          | `stdio` (default) or `streamable-http` ([remote mode](#remote-mode))                          |
+| `VAMS_MCP_AUTH_CONFIG`        | Remote mode: the auth configuration file `vams-mcp setup-remote` writes (required)            |
+| `VAMS_MCP_HOST`               | Remote mode: listen address (default `127.0.0.1`; wider only behind an HTTPS front end)       |
+| `VAMS_MCP_PORT`               | Remote mode: listen port (default `8000`)                                                     |
+| `VAMS_MCP_TOOL_TIMEOUT`       | Remote mode: seconds one tool call may take (default `240`, 10 to 1800)                       |
+| `VAMS_MCP_MAX_CALLS_PER_USER` | Remote mode: tool calls one user may have in progress (default `8`, 1 to 64)                  |
+
+### Tool sets
+
+`VAMS_MCP_TOOLSETS` selects which tools the server registers. Sets combine (`consumer,edh`), and the
+write and destructive gates still apply inside a set. Each named set holds at most 100 tools and
+30,000 characters of descriptions with every gate and add-on on, so it fits a client that lists at
+most 100 tools per connection.
+
+| Set          | Tools                                                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `consumer`   | Read-only: databases, assets, files, metadata, versions, links, search, download links, workflows and runs, tags, comments |
+| `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, and running workflows                    |
+| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions, API keys                      |
+| `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades, the compliance audit trail     |
+| `edh`        | EDH Workstations add-on: workstations, catalog and container jobs                                                          |
+| `edh-admin`  | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances, settings                                   |
+| `custom`     | The tools a fork adds in `custom_tools.py`                                                                                 |
+| `all`        | Every tool the gates allow (the stdio default)                                                                             |
+
+`vams_status` reports the selected sets in `gates.toolsets`. `vams_mcp/toolsets.py` lists each set's
+tools; `tests/test_toolsets.py` holds every set to the limits.
 
 ## Register with Kiro / Claude Desktop
 
@@ -124,12 +202,14 @@ secrets** — just the command:
                 "get_asset",
                 "list_asset_files",
                 "get_file_info",
+                "get_file_metadata",
                 "get_asset_metadata",
                 "get_database_metadata",
                 "list_asset_versions",
                 "get_asset_version",
                 "get_asset_history",
                 "get_asset_links",
+                "get_asset_link_metadata",
                 "export_asset",
                 "search_assets",
                 "search_files",
@@ -157,7 +237,18 @@ secrets** — just the command:
                 "list_asset_comments",
                 "list_asset_version_comments",
                 "get_comment",
-                "check_subscription"
+                "check_subscription",
+                "list_compliance_schemas",
+                "get_compliance_schema",
+                "get_compliance_bindings",
+                "get_asset_compliance_state",
+                "get_database_compliance_overview",
+                "list_compliance_evaluations",
+                "list_quarantined_assets",
+                "list_compliance_cascades",
+                "get_compliance_cascade",
+                "query_compliance_audit",
+                "get_asset_compliance_audit"
             ]
         }
     }
@@ -187,9 +278,9 @@ call it, or why none does, or that it is not exposed yet.
 
 `vams_status`, `list_features`, `list_allowed_api_routes`, `list_api_routes`,
 `list_constraint_permission_objects`, `list_databases`, `get_database`, `list_buckets`,
-`list_assets`, `get_asset`, `list_asset_files`, `get_file_info`, `get_asset_metadata`,
-`get_database_metadata`, `list_asset_versions`, `get_asset_version`, `get_asset_history`,
-`get_asset_links`, `export_asset`,
+`list_assets`, `get_asset`, `list_asset_files`, `get_file_info`, `get_file_metadata`,
+`get_asset_metadata`, `get_database_metadata`, `list_asset_versions`, `get_asset_version`,
+`get_asset_history`, `get_asset_links`, `get_asset_link_metadata`, `export_asset`,
 `search_assets`, `search_files`, `get_search_fields`, `list_workflows`,
 `list_workflow_executions`, `list_tags`, `list_tag_types`, `list_metadata_schemas`,
 `generate_download_url`, `generate_download_urls_bulk`, `find_and_summarize`.
@@ -204,6 +295,11 @@ list and a `note` saying none are known.
 last-modified time, archive state, `primaryType`, preview file and how its current version
 was made (`changeSource`). `include_versions` adds the file's versions, and
 `include_archived` reads a file of an archived asset.
+
+`get_file_metadata` reads one file's metadata rows, or with `metadata_type="attribute"` its
+attributes, and `get_asset_link_metadata` an asset link's metadata (`assetLinkId` from
+`get_asset_links`). Both page like `get_asset_metadata`: `max_items`, `starting_token`, and
+`include_archived` for an archived asset.
 
 `export_asset` returns an asset and its child assets in one call: each asset's metadata
 and files, the parent/child `relationships` and `totalAssetsInTree`. It takes the export
@@ -233,6 +329,54 @@ Pipelines, workflows, and executions: `list_pipelines`, `get_pipeline`,
 Comments, subscriptions, and API keys: `list_asset_comments`,
 `list_asset_version_comments`, `get_comment`, `list_subscriptions`,
 `check_subscription`, `get_api_key`, `get_user_api_key`, `list_api_keys`, `list_user_api_keys`.
+
+Compliance: `list_compliance_schemas`, `get_compliance_schema`,
+`get_compliance_bindings`, `get_asset_compliance_state`,
+`get_database_compliance_overview`, `list_compliance_evaluations`,
+`list_quarantined_assets`, `list_compliance_cascades`, `get_compliance_cascade`,
+`query_compliance_audit`, `get_asset_compliance_audit`.
+
+A compliance schema is a rule set (`vams-rules-v1`: pipeline, metadata,
+relationship, fileStructure, versionCoverage and assetAttributes rules, each
+enforced at quarantine / warn / inform) bound to a database, or to one asset as an override; `get_compliance_bindings` shows both
+for a database. Each schema record carries `schemaFormat` — `vams-rules-v1`, or
+`legacy` for a row whose body is not such a document; a legacy schema cannot be
+bound, updated or evaluated and is listed only so it can be found and deleted.
+`get_asset_compliance_state` answers `unknown` for an asset with
+no binding rather than an error, and reports `exception` for an asset released
+under an active quarantine exception (scoped to `exceptionSchemaName` /
+`exceptionSchemaVersion`); its `lastEvaluationStatus` is `error` when the last
+evaluation produced no verdict, in which case `complianceState` is the state the
+asset held before it. `get_database_compliance_overview` counts only assets
+that have a compliance record, with an `exception` bucket in its `summary` and an
+`error` count that overlays the state buckets (assets whose last evaluation
+errored) rather than adding to them.
+`list_compliance_schemas` returns its whole list in one response under `Items`
+and takes no paging parameters.
+`list_compliance_cascades` (pending approval unless `state` names another; each
+row carries `databaseId` / `assetId` / `assetName` of the trigger asset, and an
+automatically opened cascade is not duplicated while one for the same parent is
+pending), `list_compliance_evaluations`, `list_quarantined_assets`,
+`query_compliance_audit` and `get_asset_compliance_audit` are real pages (`max_items`, `starting_token`,
+`NextToken`), auto-paginated and marked `truncated` when a bound stopped the walk;
+the evaluation rows carry the `executionId` of the workflow execution behind a
+pipeline rule, `exceptionApplied` when the evaluation ran under an exception, and
+`hasRuleErrors` / `errorRules` when a rule's tooling failed — such a rule result
+has `status` `error`, is not a verdict, and its enforcement did not apply (an
+`evaluation_error` audit entry names the rules) —
+and a quarantine page is filtered to the caller's databases after it is read, so
+the walk follows an empty page's token (the global audit trail and the cascade
+listing return only rows whose database the caller may read, too).
+`get_database_compliance_overview` and `get_compliance_bindings` take
+`max_items` / `starting_token` too but return the route's own page: `summary` /
+`totalAssets` and `assetOverrideCount` describe the full set while `assets` /
+`assetOverrides` are one page, with `NextToken` when more exist. The listings
+filter on the server: the overview by `state`, `schema_name`, `schema_source`,
+`evaluation_error` and `text` (sorted by `sort`), the quarantine list and the
+cascade list by `database_id` and `text` (cascades also `state`), and the global
+audit trail by `database_id`, `asset_id` and `text`; a filtered page can be short
+while a `NextToken` remains. `event_type` exists on the global audit trail only —
+the per-asset route ignores it, so the tool does not offer it.
 
 The two comment listings take `max_items` and `page_size` but **no**
 `starting_token`: the routes apply those bounds and then discard the pagination
@@ -415,6 +559,15 @@ paginated request per hit, so its `size` is clamped to 25; use
 `create_database`, `create_asset`, `update_asset`, `set_asset_metadata`,
 `create_folder`, `create_asset_version`.
 
+File metadata and roles: `set_file_metadata`, `set_primary_file`, `revert_file_version`.
+
+`set_file_metadata` upserts key/value pairs on one file's metadata, or with
+`metadata_type="attribute"` its attributes (string values); keys not listed are untouched.
+`set_primary_file` marks a file's role (`primary_type` `primary`, `lod1` to `lod5`, `other` with
+`primary_type_other` naming it, or `""` to remove the mark). `revert_file_version` restores an
+earlier version of one file (`version_id` from `get_file_info` with `include_versions`): it writes
+that content as a new current version and removes none.
+
 Files and links: `move_file`, `copy_file`, `create_asset_link`.
 
 `move_file` moves or renames a file inside its asset (the source path then stays
@@ -463,6 +616,14 @@ stopped", not as a failed abort. A group abort returns the group's results with
 both arrays beside them, gathered from its members: each warning is prefixed with
 its member's execution id and each `notAbortable` entry carries its member's
 `executionId`.
+The compliance tools that evaluate assets start compute the same way — a pipeline
+rule runs one workflow execution per evaluated asset — so `evaluate_asset_compliance`,
+`sweep_compliance_schema` (every asset bound to the schema), `evaluate_database_compliance`
+(every tracked asset of one database), `create_compliance_cascade`
+(starts at once with `require_approval=False`) and `approve_compliance_cascade`
+(starts the run) stay out of `autoApprove` as well, and so do `bind_compliance_schema` and
+`unbind_compliance_schema`: under automatic evaluation a binding change queues an evaluation
+of every asset it reaches.
 
 `create_pipeline` and `update_pipeline` can return a `warnings` array on a
 successful save (for example a `requireTemplate` pipeline with no default template
@@ -531,12 +692,83 @@ that window keeps working until it expires, a key refused within it stays refuse
 for the same time after re-enabling, and a disabled key not in use is refused on
 its next call.
 
+Compliance: `create_compliance_schema`, `update_compliance_schema`,
+`bind_compliance_schema`, `unbind_compliance_schema`, `evaluate_asset_compliance`,
+`sweep_compliance_schema`, `evaluate_database_compliance`, `release_quarantine`,
+`grant_quarantine_exception`,
+`revoke_quarantine_exception`, `create_compliance_cascade`,
+`approve_compliance_cascade`, `reject_compliance_cascade`.
+
+`create_compliance_schema` takes the rule document as `schema_body`, which must be
+a `vams-rules-v1` document (`{"schemaFormat": "vams-rules-v1", "rules": {...}}`;
+any other body is refused). A pipeline rule's `pipelineRef` names the workflow's
+`databaseId` + `workflowId` and the pipeline's `pipelineDatabaseId` + `pipelineId`,
+with an optional `templateId`, and its `inputFiles` selects the asset files the
+execution receives: `mode` `matching` (the default; the asset's files that pass the
+workflow's and pipeline's input-file filters, narrowed by the rule's `filter` globs),
+`wholeAsset` (the asset root, only where the workflow allows it) or `explicit` (the
+listed `keys`, which must all exist). A workflow that takes exactly one input file
+needs the selection to resolve to exactly one file, otherwise the rule records an
+`error` result — a non-verdict `status` `error` whose enforcement does not apply;
+files a workflow execution wrote are never selected, so a filter names source
+formats only. A pipeline that writes no `compliance-output.json` is checked on the derived
+`execution_success` / `processing_duration_seconds` measurements only. A metadata rule's
+`scope` selects what it validates: `asset` (the default; the asset's own metadata),
+`files` or `fileAttributes` (each current, non-archived file's metadata or attributes,
+narrowed by the schema's file type restriction and the rule's `includePaths` /
+`excludePaths` regular expressions) or `links` (each asset link's metadata, narrowed by
+`linkDirection` and `relationshipType`); every file or link in scope must pass, and the
+`metadataSchemaRef` must name a schema of the scope's entity type — a missing or
+mismatched schema records an `error` result, never a pass. Registering an
+existing name writes the next version, and `update_compliance_schema` replaces the
+body wholesale rather than merging. `bind_compliance_schema` binds a database (or,
+with `asset_id`, one asset as an override); only a GLOBAL schema or one scoped to
+that database can be bound, a `legacy` schema is refused, and `auto_eval` is sent on
+the database binding only because the asset route does not read it.
+`unbind_compliance_schema` on a database
+deletes the compliance record of every asset that inherited the binding
+(`removedComplianceRecords`) — evaluation history and the audit trail stay.
+`evaluate_asset_compliance` with `schema_name` evaluates against that schema without
+changing the asset's binding; its response carries `schemaVersion`,
+`exceptionApplied` and `hasRuleErrors`, and when every rule errored the asset's
+state is left unchanged with `lastEvaluationStatus` `error`. `sweep_compliance_schema` returns `assetsTriggered` plus
+`skipped` (bound assets not evaluated: `skippedNotAuthorized` those the caller may not
+evaluate or read, counted but never listed, and `skippedArchived` the archived assets the caller may see;
+an archived asset the caller may not see is counted nowhere) and
+`assetsRemaining` (still to evaluate); while assets remain the response carries
+`NextToken`, and calling again with it as `starting_token` continues the sweep until no
+token is returned. `evaluate_database_compliance` evaluates
+the tracked assets of one database, each against its own bound schema, with the same
+bounds and continuation, and adds `registered` and `withoutSchema`. Both remove,
+rather than evaluate, the compliance record of an asset that no longer exists
+(`removedOrphans`). `release_quarantine` returns an asset to
+compliant until its next evaluation; `grant_quarantine_exception` records a
+deliberate waiver with its required `reason` and moves the asset to state
+`exception`, scoped to its bound schema at its current version — a re-evaluation
+against that version records the violations (`exceptionApplied`) but keeps the asset
+released, while an evaluation against another schema or a newer version supersedes
+the exception. `revoke_quarantine_exception` (no reason; the route carries no body)
+clears it and returns the asset to its last verdict's state — quarantined again when
+that verdict was quarantined, `pending_evaluation` when it has no recorded
+evaluation — and is refused when no exception is active. A cascade waits in
+`pending_approval` unless created with `require_approval=False`; the cascade an
+evaluation opens automatically is not duplicated while one for the same parent is
+pending, but `create_compliance_cascade` always opens a new one.
+`approve_compliance_cascade` (and a create without approval) returns at once with
+`state` `executing` and no `result` — the run continues in the background, so poll
+`get_compliance_cascade` until `state` is `completed` or `aborted` (`abortReason`)
+— and `reject_compliance_cascade` aborts it, recording `rejectionReason` (no
+`abortReason`).
+
 ### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
 
 `archive_asset`, `unarchive_asset`, `delete_asset`, `delete_database`.
 
-Files, links and tags: `archive_file`, `unarchive_file`, `delete_file`,
-`delete_asset_link`, `delete_tag`, `delete_tag_type`.
+Files, links, metadata and tags: `archive_file`, `unarchive_file`, `delete_file`,
+`delete_asset_link`, `delete_asset_metadata`, `delete_tag`, `delete_tag_type`.
+
+`delete_asset_metadata` removes the named metadata keys from an asset (`set_asset_metadata` only
+adds and changes keys). Not reversible.
 
 `archive_file` is the soft delete: the file is hidden and can be restored with
 `unarchive_file`. `delete_file` PERMANENTLY removes the file and every one of its
@@ -581,9 +813,22 @@ out every client still presenting the key at once; `update_api_key` /
 `update_user_api_key` with `is_active=False` revokes the same access reversibly
 and is the better first move.
 
+Compliance: `delete_compliance_schema`. Permanent — every version of the schema is
+removed and there is no archived state. The API refuses to delete a schema that a
+database or asset is still bound to, so `unbind_compliance_schema` first; the
+deletion is written to the audit trail as `schema_deleted`.
+
 ## Security notes
 
--   Authorization is exactly your vamscli user's VAMS permissions (RBAC/ABAC).
+-   Authorization is exactly your vamscli user's VAMS permissions (RBAC/ABAC). In remote mode it is
+    exactly the permissions of the user whose token the request carries: the server never decides a
+    permission, and the VAMS API's authorizer and Casbin policy check every call.
+-   Remote mode: the server verifies every token itself, accepts only tokens issued to the clients in
+    its auth configuration (not the web application's client), never reads a profile, never logs or
+    returns a token, and writes no CLI request log (one process serves many users). It logs one line
+    per request and per tool call: user, client, tool, outcome and duration. Bind beyond `127.0.0.1`
+    only inside a container or private network behind an HTTPS front end, and keep the write and
+    destructive tool sets off unless they are needed.
 -   Writes and destructive tools are **off by default**. Keep destructive tools
     out of `autoApprove`.
 -   `generate_download_url` and `generate_download_urls_bulk` return presigned Amazon S3 URLs

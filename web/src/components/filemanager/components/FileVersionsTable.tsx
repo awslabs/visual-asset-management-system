@@ -18,6 +18,7 @@ import {
 } from "@cloudscape-design/components";
 import Popover from "@cloudscape-design/components/popover";
 import { downloadAsset, revertFileVersion } from "../../../services/APIService";
+import { downloadRefusalReason } from "../../../visualizerPlugin/core/streamFailure";
 import { fetchFileVersions } from "../../../services/AssetVersionService";
 import { getChangeSourceLabel } from "../utils/changeSourceLabels";
 import {
@@ -211,20 +212,25 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     // Handle download version
     const handleDownloadVersion = async (versionId: string) => {
         try {
-            const [success, downloadUrl] = (await downloadAsset({
+            const response = await downloadAsset({
                 databaseId,
                 assetId,
                 key: filePath,
                 versionId: versionId,
                 downloadType: "assetFile",
-            })) as [boolean, any];
+            });
+            const [success, downloadUrl] = (Array.isArray(response) ? response : [false]) as [
+                boolean,
+                any
+            ];
 
             if (success && downloadUrl) {
                 const link = document.createElement("a");
                 link.href = downloadUrl;
                 link.click();
             } else {
-                setError("Failed to download file version");
+                // A download the API refused shows the API's reason (D166).
+                setError(downloadRefusalReason(response) ?? "Failed to download file version");
             }
         } catch (err: any) {
             setError(err.message || "An error occurred while downloading the file");

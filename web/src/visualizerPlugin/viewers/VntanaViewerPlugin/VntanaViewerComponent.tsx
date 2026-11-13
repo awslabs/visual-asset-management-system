@@ -207,7 +207,7 @@ const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
                         }, 500);
                     }
                 } else {
-                    // The message is decided only by the status the API returned (#1211).
+                    // A refused download names why, from the API's answer (#1211, D166).
                     throw new Error(downloadFailureMessage(response, "Failed to download asset"));
                 }
             } catch (error) {

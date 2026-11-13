@@ -22,7 +22,11 @@ import {
     listZipEntryNames,
     normalizePackagedPath,
 } from "./usdDependencyPaths";
-import { downloadStatusMessage } from "../../core/streamFailure";
+import {
+    ApiRefusalError,
+    isApiRefusalError,
+    streamResponseFailure,
+} from "../../core/streamFailure";
 
 const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
@@ -38,6 +42,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
     const [error, setError] = useState<string | null>(null);
+    // Whether `error` is the API's refusal of the file with its own reason (D170): shown alone.
+    const [errorIsRefusal, setErrorIsRefusal] = useState(false);
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
     const [additionalDepsWarning, setAdditionalDepsWarning] = useState<{
         loaded: number;
@@ -810,11 +816,11 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (!response.ok) {
                     if (isMainFile) {
-                        throw new Error(
-                            downloadStatusMessage(
-                                response.status,
-                                `Failed to load: ${fileKey} (${response.status})`
-                            )
+                        // A refusal with the API's own reason is an ApiRefusalError carrying it
+                        // (D166); any other status keeps this file's own message.
+                        throw await streamResponseFailure(
+                            response,
+                            `Failed to load: ${fileKey} (${response.status})`
                         );
                     } else {
                         console.warn(
@@ -1185,7 +1191,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 const authHeader = await getDualAuthorizationHeader();
                 const loadedFiles = new Set<string>();
                 const failedDownloads = new Set<string>();
-                const errors: Array<{ file: string; error: string }> = [];
+                // `refusal`: the API refused the file with its own reason (an ApiRefusalError).
+                const errors: Array<{ file: string; error: string; refusal?: boolean }> = [];
 
                 // Store file info for driver creation
                 const fileInfos: Array<{
@@ -1326,11 +1333,16 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         errors.push({
                             file: fileKey,
                             error: fileError?.message || "Unknown error",
+                            refusal: isApiRefusalError(fileError),
                         });
                     }
                 }
 
                 if (fileInfos.length === 0) {
+                    // When the API refused a file with its own reason (a quarantined asset with
+                    // the download block on), that reason is what the viewer shows (D172).
+                    const refused = errors.find((err) => err.refusal);
+                    if (refused) throw new ApiRefusalError(refused.error);
                     throw new Error("No files loaded successfully");
                 }
 
@@ -1825,6 +1837,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             } catch (error) {
                 console.error("Error loading USD assets:", error);
                 setError(error instanceof Error ? error.message : "Failed to load USD files");
+                setErrorIsRefusal(isApiRefusalError(error));
                 setIsLoading(false);
             }
         };
@@ -2433,9 +2446,21 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     };
 
     if (error) {
+        // Keyed apart from the viewer root below so React does not reuse the scene container for
+        // this panel: the renderer's canvas is appended to that container outside React, and a
+        // reused node would keep it above the message (D176). The message is centred in the panel
+        // and scrolls within it, so a narrow panel never clips it.
         return (
             <div
-                style={{ position: "relative", height: "100%", backgroundColor: "#f5f5f5" }}
+                key="usd-viewer-error"
+                style={{
+                    position: "relative",
+                    height: "100%",
+                    backgroundColor: "#f5f5f5",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
                 id="usd-viewer-root"
             >
                 <div
@@ -2443,28 +2468,38 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         color: "#d13212",
                         fontSize: "1.4em",
                         lineHeight: "1.5",
-                        width: "100%",
-                        position: "absolute",
-                        top: "50%",
-                        left: "50%",
-                        transform: "translate(-50%, -50%)",
+                        maxWidth: "800px",
+                        maxHeight: "100%",
+                        overflowY: "auto",
+                        boxSizing: "border-box",
                         textAlign: "center",
+                        whiteSpace: "pre-line",
                         padding: "20px",
                     }}
                 >
                     {error}
-                    <br />
-                    <br />
-                    <span style={{ fontSize: ".9em", color: "#d13212" }}>
-                        Please ensure the file is a valid USD format (.usd, .usda, .usdz)
-                    </span>
+                    {/* The API's refusal names its own reason; a format hint would point at the
+                        file instead (D170). */}
+                    {!errorIsRefusal && (
+                        <>
+                            <br />
+                            <br />
+                            <span style={{ fontSize: ".9em", color: "#d13212" }}>
+                                Please ensure the file is a valid USD format (.usd, .usda, .usdz)
+                            </span>
+                        </>
+                    )}
                 </div>
             </div>
         );
     }
 
     return (
-        <div style={{ position: "relative", height: "100%", width: "100%" }} id="usd-viewer-root">
+        <div
+            key="usd-viewer"
+            style={{ position: "relative", height: "100%", width: "100%" }}
+            id="usd-viewer-root"
+        >
             <div
                 ref={containerRef}
                 style={{ width: "100%", height: "100%" }}

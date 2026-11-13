@@ -49,10 +49,12 @@ def fbx_up_axis(file_path: str):
     return {0: "X", 1: "Y", 2: "Z"}.get(value)
 
 
-def load(file_path: str, max_triangles: int = None) -> pv.PolyData:
+def load(file_path: str, max_triangles: int = None, asset_root: str = None) -> pv.PolyData:
     """Load a mesh file; an FBX carries the up axis its GlobalSettings declare. ``max_triangles``
-    bounds how far an FBX scene's instances may expand (``_load_fbx_open3d``)."""
-    data = _load(file_path, max_triangles)
+    bounds how far an FBX scene's instances may expand (``_load_fbx_open3d``). ``asset_root`` is the
+    local directory the input's referenced files were fetched into: a glTF or OBJ reads the files it
+    names from anywhere inside it (``asset_resolver``)."""
+    data = _load(file_path, max_triangles, asset_root)
     if os.path.splitext(file_path)[1].lower() == ".fbx":
         axis = fbx_up_axis(file_path)
         if axis:
@@ -61,7 +63,67 @@ def load(file_path: str, max_triangles: int = None) -> pv.PolyData:
     return data
 
 
-def _load(file_path: str, max_triangles: int = None) -> pv.PolyData:
+# Formats whose referenced files (buffers, images, materials, texture maps) the loader reads through a
+# trimesh resolver.
+RESOLVED_EXTENSIONS = {".gltf", ".obj"}
+
+
+def asset_resolver(file_path: str, asset_root: str):
+    """A trimesh resolver for the files ``file_path`` names, confined to ``asset_root``.
+
+    A name resolves against the input file's folder, as trimesh's own ``FilePathResolver`` does, but
+    may lead anywhere inside the asset root rather than only below that folder: the referenced-file
+    fetch accepts a ``../textures/x.png`` that stays inside the asset and fetches it there, so the
+    loader must read it from there too. An OBJ's material library names its texture maps relative to
+    its own folder (as the fetch reads them), so once a ``.mtl`` is read its folder is searched too. A
+    name that resolves outside the asset root is refused, as the fetch refuses it.
+    """
+    from pathlib import Path
+
+    from trimesh.resolvers import FilePathResolver
+
+    class AssetResolver(FilePathResolver):
+        def __init__(self, source, root):
+            super().__init__(source)
+            self.root = Path(root).resolve()
+            self.folders = [Path(self.parent).resolve()]
+
+        def _confined(self, folder, name):
+            path = (folder / name).resolve()
+            return path if path.is_relative_to(self.root) else None
+
+        def absolute(self, name):
+            path = self._confined(self.folders[0], name.strip())
+            if path is None:
+                raise ValueError(f"'{name}' is outside the asset")
+            return path
+
+        def get(self, name):
+            # Backslashes read as separators, as the fetch reads them (files written on Windows).
+            stripped = name.strip().replace("\\", "/")
+            candidates = (stripped, stripped.lstrip("/"), os.path.split(stripped)[-1])
+            refused = True
+            for folder in list(self.folders):
+                for candidate in candidates:
+                    path = self._confined(folder, candidate) if candidate else None
+                    if path is None:
+                        continue
+                    refused = False
+                    if path.is_file():
+                        if path.suffix.lower() == ".mtl" and path.parent not in self.folders:
+                            self.folders.append(path.parent)
+                        return path.read_bytes()
+            if refused:
+                raise ValueError(f"'{name}' is outside the asset")
+            raise FileNotFoundError(name)
+
+        def namespaced(self, namespace):
+            return AssetResolver(os.path.join(self.parent, namespace), self.root)
+
+    return AssetResolver(file_path, asset_root)
+
+
+def _load(file_path: str, max_triangles: int = None, asset_root: str = None) -> pv.PolyData:
     """
     Load a mesh file and return a PyVista PolyData object for rendering.
     Supports: .ply, .stl, .obj, .glb, .gltf, .fbx, .drc
@@ -73,8 +135,11 @@ def _load(file_path: str, max_triangles: int = None) -> pv.PolyData:
         return _load_draco(file_path)
 
     # Use trimesh for all other mesh formats
+    resolver = None
+    if asset_root and ext in RESOLVED_EXTENSIONS:
+        resolver = asset_resolver(file_path, asset_root)
     try:
-        scene_or_mesh = trimesh.load(file_path, force=None)
+        scene_or_mesh = trimesh.load(file_path, force=None, resolver=resolver)
     except (NotImplementedError, Exception) as e:
         # trimesh doesn't support FBX natively; fall back to Open3D
         if ext == ".fbx":
@@ -94,6 +159,13 @@ def _load(file_path: str, max_triangles: int = None) -> pv.PolyData:
                 trimeshes.append(geom)
             elif isinstance(geom, trimesh.PointCloud):
                 clouds.append(geom)
+        # A backdrop (a ground or environment plane) is dropped before any texture is baked or any
+        # part merged, so the parts kept load as a file holding them alone would.
+        keep = scene_parts.backdrop_keep([geom.vertices for geom in trimeshes + clouds])
+        if keep is not None:
+            n_meshes = len(trimeshes)
+            trimeshes = [geom for geom, kept in zip(trimeshes, keep[:n_meshes]) if kept]
+            clouds = [geom for geom, kept in zip(clouds, keep[n_meshes:]) if kept]
         if clouds:
             # A scene holding point clouds renders every one of its parts, meshes included.
             return _scene_parts_to_pyvista(trimeshes, clouds)
@@ -120,7 +192,8 @@ def _load(file_path: str, max_triangles: int = None) -> pv.PolyData:
                     pass
             baked.append(b)
         merged = trimesh.util.concatenate(baked)
-        return scene_parts.record_parts(_trimesh_to_pyvista(merged), [len(m.vertices) for m in baked])
+        return scene_parts.record_parts(_trimesh_to_pyvista(merged), [len(m.vertices) for m in baked],
+                                        backdrops_dropped=True)
 
     elif isinstance(scene_or_mesh, trimesh.Trimesh):
         return _trimesh_to_pyvista_textured(scene_or_mesh)
@@ -419,7 +492,7 @@ def _scene_parts_to_pyvista(trimeshes: list, clouds: list) -> pv.PolyData:
     for cloud in clouds:
         parts.append(_with_rgb(_pointcloud_to_pyvista(cloud), _MIXED_SCENE_POINT_RGB))
     merged = parts[0] if len(parts) == 1 else parts[0].append_polydata(*parts[1:])
-    scene_parts.record_parts(merged, [part.n_points for part in parts])
+    scene_parts.record_parts(merged, [part.n_points for part in parts], backdrops_dropped=True)
     logger.info(f"Loaded scene with {len(trimeshes)} meshes and {len(clouds)} point clouds: "
                 f"{merged.n_points} points, {merged.n_cells} cells")
     return merged
@@ -518,6 +591,9 @@ def _load_fbx_open3d(file_path: str, max_triangles: int = None) -> pv.PolyData:
     if not parts:
         raise ValueError("No triangle geometry read from the FBX file: it is empty, not an FBX 2011 "
                          "(7.1) or later file, or holds no meshes")
+    keep = scene_parts.backdrop_keep([vertices for vertices, _, _ in parts])
+    if keep is not None:
+        parts = [part for part, kept in zip(parts, keep) if kept]
 
     offsets = np.cumsum([0] + [len(vertices) for vertices, _, _ in parts[:-1]])
     points = np.concatenate([vertices for vertices, _, _ in parts])
@@ -527,7 +603,7 @@ def _load_fbx_open3d(file_path: str, max_triangles: int = None) -> pv.PolyData:
         default = np.asarray(_MIXED_SCENE_MESH_RGB, dtype=np.uint8)
         pv_mesh.point_data["RGB"] = np.concatenate(
             [rgb if rgb is not None else np.tile(default, (len(vertices), 1)) for vertices, _, rgb in parts])
-    scene_parts.record_parts(pv_mesh, [len(vertices) for vertices, _, _ in parts])
+    scene_parts.record_parts(pv_mesh, [len(vertices) for vertices, _, _ in parts], backdrops_dropped=True)
 
     logger.info(f"Loaded FBX scene via Open3D: {len(parts)} meshes, {len(points)} vertices, "
                 f"{len(triangles)} faces")

@@ -46,6 +46,10 @@ AUDIT_ENTITY_TYPES = frozenset({
     "workflow", "workflowTrigger", "execution", "executionGroup", "role", "userRole", "constraint",
     "apiKey", "user", "search", "export", "workstation", "image", "instance", "capacityReservation",
     "amiRecipe", "amiBuild", "containerJob", "settings", "catalog", "viewer", "system",
+    # Compliance: a schema, a database or asset binding, an evaluation, an asset's compliance record
+    # (its state, quarantine and exception), a cascade, and the compliance audit trail.
+    "complianceSchema", "complianceBinding", "complianceEvaluation", "complianceState",
+    "complianceCascade", "complianceAudit",
 })
 
 # A canonical action name: lower camelCase <entity><Verb>, letters and digits only. It is written
