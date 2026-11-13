@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from "react";
 import { Box, Button, SpaceBetween, Spinner } from "@cloudscape-design/components";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadRefusalReason } from "../../../visualizerPlugin/core/streamFailure";
 import "./AssetPreviewThumbnail.css"; // Reusing the same CSS as AssetPreviewThumbnail
 
 interface FilePreviewThumbnailProps {
@@ -34,12 +35,15 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
     const [url, setUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
     const [error, setError] = useState<boolean>(false);
+    // The API's own reason when it refused the file (D166), shown in place of the fixed text.
+    const [refusal, setRefusal] = useState<string | null>(null);
 
     useEffect(() => {
         // Reset states when props change
         setUrl(null);
         setLoading(true);
         setError(false);
+        setRefusal(null);
 
         // Don't attempt to load if no file key is provided
         if (!fileKey) {
@@ -66,6 +70,7 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
                     if (response[0] === false) {
                         console.error("Error downloading file preview:", response[1]);
                         setError(true);
+                        setRefusal(downloadRefusalReason(response));
                     } else {
                         setUrl(response[1]);
                     }
@@ -110,7 +115,7 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
 
                 {!loading && error && (
                     <div className="asset-preview-error">
-                        <div>Preview not available</div>
+                        <div>{refusal ?? "Preview not available"}</div>
                     </div>
                 )}
 

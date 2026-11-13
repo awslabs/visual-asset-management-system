@@ -9,7 +9,12 @@ import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { CesiumDependencyManager } from "./dependencies";
 import CesiumSceneGraph from "./components/CesiumSceneGraph";
-import { describeTilesetFailure, partialTilesetsNotice, tileFailureNotice } from "./tilesetFailure";
+import {
+    describeTilesetFailure,
+    isTilesetRefusal,
+    partialTilesetsNotice,
+    tileFailureNotice,
+} from "./tilesetFailure";
 
 // Offset of the viewer's own panels from the top of the scene while no notice is showing
 const OVERLAY_TOP_PX = 20;
@@ -40,6 +45,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     const [viewerGeneration, setViewerGeneration] = useState(0);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    // Whether `error` is the API's refusal of every tileset with its own reason (D170): no
+    // format hint under it.
+    const [errorIsRefusal, setErrorIsRefusal] = useState(false);
     const [initError, setInitError] = useState<string | null>(null);
     // Tilesets that failed beside others that loaded, and failed tiles of a loaded tileset: the
     // model renders with holes, so both are reported without replacing the scene.
@@ -1281,6 +1289,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Error loading tileset ${key}:`, error);
                 setError(describeTilesetFailure(key, error));
+                setErrorIsRefusal(isTilesetRefusal(error));
             }
         },
         [
@@ -1302,6 +1311,8 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
             const tilesets: any[] = [];
             const failures: string[] = [];
+            // How many of the failures were the API's refusal with its own reason (D170).
+            let refusals = 0;
 
             for (let i = 0; i < keys.length; i++) {
                 const key = keys[i];
@@ -1349,6 +1360,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                     console.error(`Error loading tileset ${key}:`, fileError);
                     failures.push(describeTilesetFailure(key, fileError));
+                    if (isTilesetRefusal(fileError)) refusals++;
                 }
             }
 
@@ -1356,6 +1368,8 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 const notice = partialTilesetsNotice(failures, keys.length);
                 if (tilesets.length === 0) {
                     setError(notice);
+                    // The format hint stays while any tileset failed for another reason.
+                    setErrorIsRefusal(refusals === failures.length);
                 } else if (!tileFailures.current.dismissed) {
                     setTilesetWarning(notice);
                 }
@@ -1433,6 +1447,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             try {
                 setLoading(true);
                 setError(null);
+                setErrorIsRefusal(false);
                 resetLoadWarnings();
 
                 // Clear existing tilesets
@@ -1449,6 +1464,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             } catch (error) {
                 console.error("Error loading tilesets:", error);
                 setError(error instanceof Error ? error.message : "Failed to load 3D tilesets");
+                setErrorIsRefusal(false);
             } finally {
                 setLoading(false);
             }
@@ -1484,15 +1500,19 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                         Error Loading 3D Tileset
                     </h3>
                     <p style={{ color: "var(--vams-text-secondary)" }}>{error}</p>
-                    <p
-                        style={{
-                            color: "var(--vams-text-secondary)",
-                            fontSize: "0.9em",
-                            marginTop: "10px",
-                        }}
-                    >
-                        Supported format: .json (3D Tileset definition files)
-                    </p>
+                    {/* The API's refusal names its own reason; a format hint would point at the
+                        file instead (D170). */}
+                    {!errorIsRefusal && (
+                        <p
+                            style={{
+                                color: "var(--vams-text-secondary)",
+                                fontSize: "0.9em",
+                                marginTop: "10px",
+                            }}
+                        >
+                            Supported format: .json (3D Tileset definition files)
+                        </p>
+                    )}
                 </div>
             </div>
         );
