@@ -176,6 +176,16 @@ To avoid the deferred flow entirely, set `app.useGlobalVpc.addVpcEndpoints = tru
 -   **NextGen requires standby replicas** (`enableStandbyReplicas = true`) and is unavailable in GovCloud / EU Sovereign Cloud (use `nextGen = false` there).
 -   **Reconfiguration is a re-deployment:** changing generation, `allowPublic`, or the collection group reshapes the collection. Disable Serverless and deploy, then re-enable with the new settings and deploy, then reindex.
 
+### Switching between Serverless and provisioned
+
+An existing deployment moves from OpenSearch Serverless to a provisioned domain, or from a provisioned domain to Serverless, in two deployments, never in one:
+
+1. **Deploy with OpenSearch off.** Set both `app.openSearch.useServerless.enabled` and `app.openSearch.useProvisioned.enabled` to `false` and deploy. The deployment removes the collection or domain, the OpenSearch asset and file indexers, and the OpenSearch reindexer. The DynamoDB tables, the Amazon S3 buckets, the Amazon Cognito users, the vector index and the Amazon Location Service resources stay. Until the second deployment, keyword search is off (`NOOPENSEARCH`), and natural-language search keeps working without its OpenSearch-only filters, which it reports as ignored (`opensearch:fields_ignored`).
+2. **Deploy with the other option on.** Set `useServerless.enabled` or `useProvisioned.enabled` to `true` and deploy. A provisioned domain needs the global VPC (`app.useGlobalVpc.enabled` set to `true`); `app.useGlobalVpc.useForAllLambdas` can stay `false`, in which case only the search and indexing functions join the VPC. Creating a provisioned domain adds about 15 minutes to the deployment.
+3. **Fill the new indexes.** The new collection or domain starts empty, so keyword search finds nothing until it is filled. Run the [Reindex utility](utilities/reindex.md) in `lambda` mode with the function named by the `OpenSearchReindexerFunctionNameOutput` stack output and `--operation both`, after a `--dry-run` to see the counts, or set `app.openSearch.reindexOnCdkDeploy` to `true` for one later deployment. The reindex starts no Amazon Bedrock analysis, and the vector index is not changed.
+
+The index parameters `/<name>-<baseStackName>/aos/endPoint`, `/aos/assetIndexName` and `/aos/fileIndexName` stay in AWS Systems Manager Parameter Store while OpenSearch is off, the endpoint still naming the removed collection or domain, and the second deployment overwrites them ([#1485](https://github.com/awslabs/visual-asset-management-system/issues/1485)).
+
 ## Provisioned
 
 A provisioned Amazon OpenSearch Service domain offers dedicated capacity and custom instance sizing. Enable it with `app.openSearch.useProvisioned.enabled = true`. A provisioned domain always runs inside the VPC, so it requires `app.useGlobalVpc.enabled = true`.

@@ -391,7 +391,7 @@ Nested stack: `infra/lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStac
 | `app.openSearch.reindexOnCdkDeploy`                      | boolean | `false`            | Triggers automatic reindexing of all assets and files during deployment via a CloudFormation custom resource. **Important:** Enable only for a second deployment after initial deployment or version upgrade, then set back to `false`. Can be overridden with CDK context `reindexOnCdkDeploy=true`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 :::note[Mutual exclusion]
-You cannot enable both OpenSearch Serverless and OpenSearch Provisioned simultaneously. Enable at most one option, or disable both to deploy without search functionality.
+You cannot enable both OpenSearch Serverless and OpenSearch Provisioned simultaneously. Enable at most one option, or disable both to deploy without search functionality. To move an existing deployment from one option to the other, see [Switching between Serverless and provisioned](../developer/opensearch.md#switching-between-serverless-and-provisioned).
 :::
 
 :::tip[Scale-to-zero and cold starts]
