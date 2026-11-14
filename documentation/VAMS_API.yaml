@@ -5356,7 +5356,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     - $ref: '#/components/schemas/ingestAssetInitializeResponse'
                                     - $ref: '#/components/schemas/ingestAssetCompleteResponse'
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, a database that does not exist, or a request the upload step refuses. When the asset does not exist, the request is refused before the asset is created, so a refusal creates nothing: the initialize stage refuses a file with a blocked extension, an extension the database does not allow, or a .previewFile. file with a disallowed extension, and the complete stage refuses an uploadId that is unknown, already completed, initialized for another asset or database, or expired."
                     content:
                         application/json:
                             schema:

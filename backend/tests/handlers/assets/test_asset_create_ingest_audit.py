@@ -125,7 +125,7 @@ class TestIngestForwardedCalls:
         request = ia.IngestAssetInitializeRequestModel(
             databaseId="db-one", assetId="asset-1", assetName="Asset 1", description="an asset",
             files=[{"relativeKey": "asset-1/a.glb", "file_size": 1024}])
-        with patch.object(ia, "verify_database_exists", return_value=True), \
+        with patch.object(ia, "verify_database_exists", return_value={}), \
                 patch.object(ia, "verify_asset_exists", return_value=False), \
                 patch.object(ia, "invoke_lambda", side_effect=invoke), \
                 patch.object(ia, "internal_call_marker", return_value=marker):

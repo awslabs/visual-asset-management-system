@@ -5,7 +5,6 @@ import os
 import boto3
 import json
 import uuid
-import time
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
@@ -19,6 +18,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.assetProvenance import asset_change_provenance
+from common.assetUploads import UPLOAD_RECORD_NOT_FOUND, completion_refusal, validate_file_extension_against_database
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -220,39 +220,6 @@ def get_database_details(databaseId):
         logger.exception(f"Error getting database details: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving database configuration")
 
-def validate_file_extension_against_database(file_path: str, allowed_extensions: str) -> tuple:
-    """Validate file extension against database restrictions
-    
-    Args:
-        file_path: The file path to validate
-        allowed_extensions: Comma-delimited list of allowed extensions (e.g., ".pdf,.jpg,.png")
-        
-    Returns:
-        Tuple of (is_valid, error_message)
-        - is_valid: True if extension is allowed, False otherwise
-        - error_message: Error message if validation fails, None otherwise
-    """
-    # Handle empty or None allowed_extensions (no restrictions)
-    if not allowed_extensions or allowed_extensions.strip() == "":
-        return True, None
-    
-    # Parse comma-delimited extensions and normalize to lowercase
-    allowed_list = [ext.strip().lower() for ext in allowed_extensions.split(',') if ext.strip()]
-    
-    # Check for ".all" bypass
-    if ".all" in allowed_list:
-        return True, None
-    
-    # Extract file extension (case-insensitive)
-    file_extension = os.path.splitext(file_path)[1].lower()
-    
-    # Validate extension
-    if file_extension not in allowed_list:
-        error_message = f"Database does not allow this file extension. Allowed extensions: {', '.join(allowed_list)}"
-        return False, error_message
-    
-    return True, None
-
 def get_default_bucket_details(bucketId):
     """Get default S3 bucket details from database default bucket DynamoDB"""
     try:
@@ -372,7 +339,7 @@ def get_upload_details(uploadId, assetId):
         )
 
         if 'Item' not in response:
-            raise VAMSGeneralErrorResponse("Upload record not found")
+            raise VAMSGeneralErrorResponse(UPLOAD_RECORD_NOT_FOUND)
         return response['Item']
     except Exception as e:
         if isinstance(e, VAMSGeneralErrorResponse):
@@ -1884,34 +1851,19 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found")
     
-    # Verify upload details match request
-    if upload_details['assetId'] != assetId or upload_details['databaseId'] != databaseId:
-        raise VAMSGeneralErrorResponse("Upload details do not match request")
-        
-    # Verify upload type matches
-    if upload_details['uploadType'] != uploadType:
-        raise VAMSGeneralErrorResponse(f"Upload type mismatch.")
-
-    # Refuse a record past its expiresAt. The table's TTL on expiresAt removes an expired record
-    # only some time after it expires, so until then this check is what keeps it from completing;
-    # in particular a record saved before the initialized file list was stored (no 'files'
-    # attribute) is completable without the membership check only until it expires. expiresAt is
-    # epoch seconds, set by every writer (initialize: 7 days; workflow output: 1 day); a missing or
-    # unreadable value counts as expired.
-    try:
-        expires_at = int(upload_details.get('expiresAt', 0))
-    except (TypeError, ValueError):
-        expires_at = 0
-    if expires_at < int(time.time()):
-        deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
-                               request_model.files, "Upload has expired")
-
-    # Refuse an external (workflow-output) record on this route, the mirror of the check
-    # complete_external_upload makes: external records carry no initialized file list by design
-    # and must only be completed by the internal route that reads the staged tempKeys.
-    if upload_details.get('isExternalUpload', False):
-        deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
-                               request_model.files, "Upload type mismatch.")
+    # Refuse a record that does not belong to this request, was initialized for another upload
+    # type, is past its expiresAt, or is an external (workflow-output) record (see
+    # common/assetUploads.py, shared with the ingest-asset complete stage). The expiry check is
+    # also what bounds a record saved before the initialized file list was stored (no 'files'
+    # attribute): it is completable without the membership check only until it expires. External
+    # records carry no initialized file list by design and must only be completed by the internal
+    # route that reads the staged tempKeys, the mirror of the check complete_external_upload makes.
+    refusal = completion_refusal(upload_details, databaseId, assetId, uploadType)
+    if refusal:
+        if refusal.audited:
+            deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
+                                   request_model.files, refusal.reason)
+        raise VAMSGeneralErrorResponse(refusal.reason)
     
     # Update upload status in DynamoDB
     try:

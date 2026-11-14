@@ -3,14 +3,18 @@
 
 import os
 import boto3
-from common.s3 import region_routing_s3_client
+from common.s3 import region_routing_s3_client, validateUnallowedFileExtensionAndContentType
 import json
 from botocore.config import Config
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import AUDIT_INTERNAL_CALL_KEY, audited_handler, internal_call_marker, log_action
+from customLogging.auditLogging import (
+    AUDIT_INTERNAL_CALL_KEY, audited_handler, internal_call_marker, log_action, log_file_upload
+)
 from common.apiRoutes import API_ASSETS, API_UPLOADS, API_UPLOAD_COMPLETE
+from common.assetUploads import UPLOAD_RECORD_NOT_FOUND, completion_refusal, validate_file_extension_against_database
+from common.s3PathPatterns import ALLOWED_PREVIEW_FILE_EXTENSIONS, PREVIEW_FILE_PATTERN
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from models.common import (
@@ -41,6 +45,7 @@ try:
     from common.resourceNames import ResourceKeys, get_table_name
     db_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
     asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_upload_table_name = get_table_name(ResourceKeys.ASSET_UPLOADS_STORAGE_TABLE)
     # Lambda functions for cross-calls
     create_asset_lambda = os.environ["CREATE_ASSET_LAMBDA_FUNCTION_NAME"]
     file_upload_lambda = os.environ["FILE_UPLOAD_LAMBDA_FUNCTION_NAME"]
@@ -56,6 +61,9 @@ except Exception as e:
 # Retry-After, and body); every other non-200 from uploadFile is reported as a 400
 PASS_THROUGH_UPLOAD_STATUSES = (403, 404, 429)
 
+# The upload type every ingest-asset upload is initialized and completed with
+INGEST_UPLOAD_TYPE = "assetFile"
+
 class UploadResponsePassThrough(Exception):
     """An uploadFile response that lambda_handler returns to the caller unchanged."""
 
@@ -64,13 +72,13 @@ class UploadResponsePassThrough(Exception):
         self.response = response
 
 def verify_database_exists(database_id):
-    """Check if a database exists"""
+    """Check if a database exists; returns its stored record"""
     table = dynamodb.Table(db_table_name)
     try:
         response = table.get_item(Key={'databaseId': database_id})
         if 'Item' not in response:
             raise VAMSGeneralErrorResponse("Database does not exist")
-        return True
+        return response['Item']
     except Exception as e:
         if isinstance(e, VAMSGeneralErrorResponse):
             raise e
@@ -89,6 +97,71 @@ def verify_asset_exists(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error verifying asset: {e}")
         raise VAMSGeneralErrorResponse(f"Error verifying asset.")
+
+
+def verify_upload_can_complete(event, request_model: IngestAssetCompleteRequestModel):
+    """Refuse a completion whose upload record cannot be completed, before anything is written.
+
+    Asks the questions the upload completion asks of the record (common/assetUploads.py): it exists
+    for this asset, belongs to this database, was initialized for an asset-file upload, has not
+    expired and is not a workflow-output record. A refusal answers with the message the upload
+    completion would give, and a refusal the completion audits per file is audited the same way.
+    """
+    database_id = request_model.databaseId
+    asset_id = request_model.assetId
+    upload_id = request_model.uploadId
+    table = dynamodb.Table(asset_upload_table_name)
+    try:
+        response = table.get_item(Key={'uploadId': upload_id, 'assetId': asset_id})
+    except Exception as e:
+        logger.exception(f"Error reading upload record: {e}")
+        raise VAMSGeneralErrorResponse("Error verifying upload.")
+
+    upload_record = response.get('Item')
+    if upload_record is None:
+        reason, audited = UPLOAD_RECORD_NOT_FOUND, False
+    else:
+        refusal = completion_refusal(upload_record, database_id, asset_id, INGEST_UPLOAD_TYPE)
+        if refusal is None:
+            return
+        reason, audited = refusal.reason, refusal.audited
+
+    logger.info(f"Upload {upload_id} for asset {asset_id} in database {database_id} cannot be completed: {reason}")
+    if audited:
+        for file in request_model.files:
+            log_file_upload(event, database_id, asset_id, file.relativeKey, True, reason,
+                            {"uploadId": upload_id, "uploadType": INGEST_UPLOAD_TYPE})
+    raise VAMSGeneralErrorResponse(f"Error completing upload: {reason}")
+
+
+def verify_files_can_initialize(database, files):
+    """Refuse, before an asset is created, a file the upload initialization would refuse for its name.
+
+    Runs the rules of `uploadFile.initialize_upload` that read only the file names and the database
+    (the database's allowed extensions, the blocked extension list, the allowed extensions of a
+    `.previewFile.` file), in the same order and with the same messages, so an initialize that the
+    upload step would refuse creates no asset. The rules that need the asset's bucket (key length,
+    response size) and the per-user rate limit stay with the upload step.
+    """
+    allowed_extensions = (database or {}).get('restrictFileUploadsToExtensions', '')
+    if allowed_extensions and allowed_extensions.strip() != "":
+        for file in files:
+            if PREVIEW_FILE_PATTERN not in file.relativeKey:
+                is_valid, error_message = validate_file_extension_against_database(
+                    file.relativeKey, allowed_extensions)
+                if not is_valid:
+                    raise VAMSGeneralErrorResponse(f"Error initializing upload: {error_message}")
+
+    for file in files:
+        if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
+            raise VAMSGeneralErrorResponse("Error initializing upload: Files contain an unsupported file extension")
+        if PREVIEW_FILE_PATTERN in file.relativeKey:
+            extension = '.' + file.relativeKey.split(PREVIEW_FILE_PATTERN)[1].lower()
+            if extension not in ALLOWED_PREVIEW_FILE_EXTENSIONS:
+                raise VAMSGeneralErrorResponse(
+                    "Error initializing upload: Preview files must have one of the allowed extensions: "
+                    ".png, .jpg, .jpeg, .svg, .gif")
+
 
 def invoke_lambda(function_name, payload, invocation_type="RequestResponse"):
     """Invoke a lambda function with the given payload"""
@@ -121,13 +194,16 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
     asset_id = request_model.assetId
     
     # Verify database exists
-    verify_database_exists(database_id)
+    database = verify_database_exists(database_id)
 
     # Check if asset exists
     asset_exists = verify_asset_exists(database_id, asset_id)
     
-    # If asset doesn't exist, create it first
+    # If asset doesn't exist, create it first, but only for files the upload step would accept by
+    # name: a refused initialize must not leave a new, empty asset behind.
     if not asset_exists:
+        verify_files_can_initialize(database, request_model.files)
+
         logger.info(f"Asset {asset_id} does not exist. Creating it first.")
         
         # Prepare payload for createAsset lambda
@@ -167,7 +243,7 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
         "body": {
             "assetId": asset_id,
             "databaseId": database_id,
-            "uploadType": "assetFile",
+            "uploadType": INGEST_UPLOAD_TYPE,
             "files": [file.dict() for file in request_model.files]
         },
         "requestContext": {
@@ -202,7 +278,7 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
         files=response_body.get("files", [])
     )
 
-def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_roles, event_auth):
+def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_roles, event_auth, event):
     """Complete an asset ingest operation"""
     database_id = request_model.databaseId
     asset_id = request_model.assetId
@@ -221,8 +297,12 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
     # Check if asset exists
     asset_exists = verify_asset_exists(database_id, asset_id)
     
-    # If asset doesn't exist, create it first
+    # If asset doesn't exist, create it first, but only for an upload record the completion can
+    # complete: a refused completion must not leave a new, empty asset behind. When the asset
+    # exists nothing is written here, and the upload completion checks the record itself.
     if not asset_exists:
+        verify_upload_can_complete(event, request_model)
+
         logger.info(f"Asset {asset_id} does not exist. Creating it first.")
         
         # Prepare payload for createAsset lambda
@@ -262,7 +342,7 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
         "body": {
             "assetId": asset_id,
             "databaseId": database_id,
-            "uploadType": "assetFile",
+            "uploadType": INGEST_UPLOAD_TYPE,
             "files": [file.dict() for file in request_model.files]
         },
         "pathParameters": {
@@ -366,7 +446,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Process request based on stage
         if is_complete_stage:
             # Stage 2 - Complete upload
-            response = complete_ingest(request_model, claims_and_roles, event_auth)
+            response = complete_ingest(request_model, claims_and_roles, event_auth, event)
         else:
             # Stage 1 - Initialize upload
             response = initialize_ingest(request_model, claims_and_roles, event_auth)
