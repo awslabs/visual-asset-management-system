@@ -216,6 +216,16 @@ _apv_module = _s3mk_importlib_util.module_from_spec(_apv_spec)
 _apv_spec.loader.exec_module(_apv_module)
 sys.modules['common.assetProvenance'] = _apv_module
 sys.modules['common'].assetProvenance = _apv_module
+# assetUploads holds the record-level upload completion checks (stdlib only). The upload completion
+# and the ingest-asset handler import it at module level.
+_aup_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.assetUploads',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'assetUploads.py')
+)
+_aup_module = _s3mk_importlib_util.module_from_spec(_aup_spec)
+_aup_spec.loader.exec_module(_aup_module)
+sys.modules['common.assetUploads'] = _aup_module
+sys.modules['common'].assetUploads = _aup_module
 # metadataSchemaValidation owns `extract_file_extension`, which the compliance evaluation engine
 # imports at module level to apply a metadata schema's fileKeyTypeRestriction exactly as the metadata
 # write path does. Registered for the same reason as indexerEvents. tests/handlers/metadata/conftest.py

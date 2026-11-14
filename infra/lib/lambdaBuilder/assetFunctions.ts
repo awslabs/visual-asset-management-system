@@ -561,6 +561,8 @@ export function buildIngestAssetFunction(
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
+    // Read-only: the complete stage checks the upload record before it creates a missing asset
+    storageResources.dynamo.assetUploadsStorageTable.grantReadData(fun);
     uploadFileLambdaFunction.grantInvoke(fun);
     createAssetLambdaFunction.grantInvoke(fun);
 
