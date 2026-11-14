@@ -143,11 +143,16 @@ locators — the app's markup is not always guessable, and these were establishe
 | `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls            |
 | `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context               |
 | `findNestedAssetFile(page, options)`                          | First file inside a folder via the API, plus its stored key when known, or `null`          |
+| `findAssetsWithFiles(page, count, options)`                   | Up to `count` distributable assets with one top-level file each via the API, or `null`     |
 | `selectedTreeNode(page)`                                      | The File Manager tree's single-selected row label, in the visible tree                     |
+| `VIEWPORTS`                                                   | The layout widths: phone 390, tablet 768, laptop 1280, desktop 1440 (use with `test.use`)  |
+| `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element          |
+| `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                    |
 
 **Selector facts worth not rediscovering:**
 
--   The orchestration search input is `getByLabel("Search")` — it has **no placeholder**, and there are
+-   The orchestration search input is `getByLabel("Search")`; match it by label, not by its placeholder
+    ("Search pipelines", "Search workflows", "Search executions"), and note there are
     **two** "Search" inputs on the page (filter bar + global nav). Scope to `.orchestration-root`.
 -   Filters are native `<select>`s labelled `Status`, `Execution Type`, `Database`, `Group by`,
     `Filter by status`, `Filter by trigger`, `Filter by group ID`, `Time window`.

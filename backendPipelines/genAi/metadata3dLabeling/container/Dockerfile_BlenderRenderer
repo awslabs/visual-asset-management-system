@@ -1,13 +1,30 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-alpine
+# Pinned by digest, not only by tag. The Alpine release decides which Blender `apk` installs, and with
+# it which importers exist: a floating `python:3.12-alpine` moved this image to a new Blender on every
+# build. The tag names the Alpine release for readability; Docker resolves the digest and ignores the
+# tag. The digest is the multi-arch INDEX, which keeps `--platform=linux/amd64` resolving.
+#
+# Alpine 3.24 is the only supported release whose Blender imports GLB and FBX here. On 3.22 and 3.23
+# Alpine's python3 is also 3.12, so Blender loads this image's /usr/local libpython instead of its own
+# and cannot import numpy, which the glTF and FBX importers need. No supported release's Blender is
+# built with USD or COLLADA, which is why the pipeline does not accept .usd or .dae.
+#
+# To move it: confirm the new release's Blender imports every format in the construct's
+# allowedInputFileExtensions on a real file, then resolve the index digest (see 3dThumbnail/Dockerfile).
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7
 
 #Create appuser for container runtime processes
 #RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 #Install blender + openCV (has all the libraries needed for blender rendering)
-RUN apk add --no-cache blender py3-numpy py3-opencv
+#
+# `blender~5.1` pins the Blender minor version and accepts any patch or package revision of it. Alpine's
+# release branches keep one version per package and replace it in place, so an exact `=5.1.2-r0` pin
+# would stop resolving at the branch's next rebuild and fail the image build. A different minor
+# version fails the build here instead of silently changing the importers.
+RUN apk add --no-cache blender~5.1 py3-numpy py3-opencv
 
 # python environment varibles
 ENV PYTHONDONTWRITEBYTECODE=1

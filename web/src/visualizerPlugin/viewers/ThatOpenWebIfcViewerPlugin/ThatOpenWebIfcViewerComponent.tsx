@@ -18,6 +18,8 @@ import {
     fitCameraToModels,
 } from "./utils/ifcLoader";
 import { buildSpatialTree } from "./utils/spatialTree";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 
 // Self-hosted Fragments model worker, copied next to the bundle by the
 // customInstall (see customInstalls/thatopenwebifc). Served same-origin so it
@@ -38,6 +40,7 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
     const [error, setError] = useState<string | null>(null);
     const [sceneReady, setSceneReady] = useState(false);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
 
     const viewerInstanceRef = useRef<IfcViewerInstance | null>(null);
     const initializationRef = useRef(false);
@@ -177,7 +180,9 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
                     .split("/")
                     .map((seg) => encodeURIComponent(seg))
                     .join("/");
-                let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                let assetUrl = `${config.api}database/${databaseId}/assets/${encodeURIComponent(
+                    assetId
+                )}/download/stream/${encodedFileKey}`;
                 if (assetVersionId) {
                     assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
                 } else if (versionId) {
@@ -395,7 +400,7 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
                 right: 0,
                 bottom: 0,
                 backgroundColor: "#f5f5f5",
-                zIndex: 1001,
+                zIndex: VIEWER_LAYER.cover,
             }}
         >
             <div
@@ -443,6 +448,7 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && showPanel && (
                 <ThatOpenWebIfcPanel
+                    panelRef={panelRef}
                     instance={viewerInstanceRef.current}
                     bundle={ThatOpenWebIfcDependencyManager.getBundle()}
                     spatialTree={spatialTree}
@@ -467,7 +473,7 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
                         borderRadius: "4px",
                         cursor: "pointer",
                         fontSize: "0.8em",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.panel,
                     }}
                     title="Show controls panel"
                 >
@@ -477,6 +483,7 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: "10px",
@@ -486,7 +493,8 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
                         backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "8px",
                         borderRadius: "4px",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>

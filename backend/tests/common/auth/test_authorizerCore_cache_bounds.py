@@ -108,7 +108,7 @@ class TestApiKeyCacheBound:
 
     def test_a_found_record_is_still_returned_after_a_flood(self):
         """Second control: the cap does not interfere with a real key's lookup."""
-        record = {"apiKeyId": "k1", "userId": "u1", "isActive": "true"}
+        record = {"apiKeyId": "k1", "userId": "u1", "isActive": "true"}  # pragma: allowlist secret
         empty = _CountingTable([])
         found = _CountingTable([record])
 

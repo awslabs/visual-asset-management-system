@@ -39,7 +39,7 @@ import { populatePhysnaSecret } from "../../lib/nestedStacks/addon/physna/custom
 /** Values chosen to be searchable in a staged file and obviously not real credentials. */
 const HF_TOKEN = "hf_UNITTESTtokenVALUE0000000000000000";
 const PHYSNA_CLIENT_ID = "unittest-physna-client-id";
-const PHYSNA_CLIENT_SECRET = "unittest-physna-client-secret-0000000";
+const PHYSNA_CLIENT_SECRET = "unittest-physna-client-secret-0000000"; // pragma: allowlist secret
 
 function tempDirs(prefix: string): Set<string> {
     const tmp = os.tmpdir();

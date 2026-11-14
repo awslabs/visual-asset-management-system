@@ -43,7 +43,7 @@ export const RESOURCE_PARAM_KEYS = {
         userRolesStorage: "dynamoTables/userRolesStorage",
         userStorage: "dynamoTables/userStorage",
         workflowExecutionsStorage: "dynamoTables/workflowExecutionsStorage",
-        apiKeyStorage: "dynamoTables/apiKeyStorage",
+        apiKeyStorage: "dynamoTables/apiKeyStorage", // pragma: allowlist secret
         workflowStorage: "dynamoTables/workflowStorage",
         // Workflow-execution V2 data model tables
         workflowExecutionsStorageV2: "dynamoTables/workflowExecutionsStorageV2",

@@ -24,7 +24,7 @@ import pytest
 
 from vams.connector.isaacsim import vams_cli_service as module
 
-PASSWORD = "n0t-in-argv-please"
+PASSWORD = "n0t-in-argv-please"  # pragma: allowlist secret
 OVERRIDE_TOKEN = "vams_n0t_in_argv_either"
 USERNAME = "user@example.invalid"
 

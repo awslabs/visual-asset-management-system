@@ -6,10 +6,12 @@
 import { test, expect } from "@playwright/test";
 import {
     collectPageErrors,
+    expectNoPageOverflowX,
     expectTableRendered,
     facet,
     gotoOrchestration,
     tableRows,
+    VIEWPORTS,
     wizardRail,
 } from "./support/fixtures";
 
@@ -147,6 +149,38 @@ test.describe("Executions board", () => {
         await expect(page.getByRole("dialog")).toHaveCount(0);
     });
 });
+
+for (const width of [390, 768, 1280, 1440]) {
+    test.describe(`Executions board — list response without Items at ${width} px`, () => {
+        test.use({ viewport: { width, height: 900 } });
+
+        /** The global list route itself, not an execution's detail routes below it. */
+        const LIST_ROUTE = /\/workflows\/executions(\?|$)/;
+
+        for (const [label, body] of [
+            ["an empty object", {}],
+            ["a message only", { message: "no rows" }],
+            ["a null Items", { Items: null }],
+        ] as const) {
+            test(`shows the empty state, not an error panel, for ${label}`, async ({ page }) => {
+                const errors = collectPageErrors(page);
+                await page.route(LIST_ROUTE, (route) =>
+                    route.request().method() === "GET"
+                        ? route.fulfill({ json: body })
+                        : route.continue()
+                );
+
+                await gotoOrchestration(page, "executions", /Executions/i);
+
+                await expect(page.getByText("No executions found.")).toBeVisible({
+                    timeout: 30_000,
+                });
+                await expect(page.getByText("Something went wrong on this page")).toHaveCount(0);
+                expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+            });
+        }
+    });
+}
 
 /**
  * A partial detail response. The server bounds each collection against the Lambda response limit and
@@ -329,6 +363,52 @@ test.describe("Executions board — partial detail responses", () => {
         await expect(timeline).toBeVisible({ timeout: 20_000 });
         if (injected) {
             await expect(timeline.getByText("SyntheticBatchJob")).toBeVisible();
+        }
+    });
+});
+
+/**
+ * The execution detail page fits a phone width on every tab, the Logs tab included: its selects are
+ * as wide as their longest option and its source chips as wide as a log group name unless they may
+ * shrink, which widened the page. Reads the first execution only.
+ */
+test.describe("Execution detail — fits a phone viewport", () => {
+    test.use({ viewport: VIEWPORTS.phone });
+
+    test("no tab scrolls the page sideways", async ({ page }) => {
+        await gotoOrchestration(page, "executions", /Executions/i);
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        await tableRows(page).first().getByRole("button").last().click();
+        const items = page.getByRole("menuitem");
+        await expect(items.first()).toBeVisible({ timeout: 15_000 });
+        await items
+            .filter({ hasText: /Open full details/ })
+            .first()
+            .click();
+        await expect(page.getByRole("heading", { name: "Execution Detail", level: 1 })).toBeVisible(
+            { timeout: 30_000 }
+        );
+
+        for (const tab of ["Inputs", "Pipelines", "Outputs", "Settings", "Logs"]) {
+            const control = page.getByRole("tab", { name: tab });
+            if ((await control.count()) === 0) continue;
+            await control.click();
+            let logsDenied = false;
+            if (tab === "Logs") {
+                // The toolbar renders at once; the chips arrive with the first read. A role that
+                // may not read logs gets a notice instead of the toolbar.
+                const scope = page.getByRole("combobox", { name: "Log scope" });
+                const denied = page.getByText("You do not have permission to view execution logs.");
+                await expect(scope.or(denied)).toBeVisible({ timeout: 15_000 });
+                logsDenied = await denied.isVisible();
+                if (!logsDenied) await page.waitForLoadState("networkidle").catch(() => undefined);
+            }
+            await expectNoPageOverflowX(page, `execution detail, ${tab} tab`);
+            test.skip(
+                logsDenied,
+                "This role may not read execution logs, so the Logs toolbar is not shown (the other tabs and the notice fit)"
+            );
         }
     });
 });

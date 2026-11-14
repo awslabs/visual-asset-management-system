@@ -59,6 +59,21 @@ def point_at(obj, target, roll=0):
     # using * still works but results in unexpected behaviour!
     obj.matrix_world = quat @ rollMatrix
     obj.location = loc
+
+# Cycles dropped the light setting `cast_shadow` in Blender 4.2 (a light's shadow switch is `Light.use_shadow`),
+# but the image's bundled FBX importer (io_scene_fbx 5.15.0) still copies `use_shadow` into it, so importing any FBX
+# that holds a light raises AttributeError. A placeholder property under the old name lets that line run;
+# the importer has already set `use_shadow`, and nothing reads the placeholder. Where the setting still
+# exists, or Cycles is absent (the importer then skips the line), this changes nothing.
+# shortcut: remove once the image's Blender bundles an FBX importer that no longer sets cast_shadow.
+def add_fbx_light_shadow_placeholder():
+    probe = bpy.data.lights.new(name="fbxLightShadowProbe", type='POINT')
+    try:
+        cycles_settings = getattr(probe, "cycles", None)
+        if cycles_settings is not None and not hasattr(cycles_settings, "cast_shadow"):
+            type(cycles_settings).cast_shadow = bpy.props.BoolProperty(default=True)
+    finally:
+        bpy.data.lights.remove(probe)
     
 #Set mesh origin to bottom of it's bounding box
 def origin_to_bottom(ob, matrix=Matrix()):
@@ -139,6 +154,7 @@ print("Import model data:")
 importExtension = inputFilePath.split('.').pop()
 if importExtension.lower() == 'fbx':
     # import fbx to scene
+    add_fbx_light_shadow_placeholder()
     bpy.ops.import_scene.fbx(filepath=inputFilePath)
 elif importExtension.lower() == 'glb':
     # import glb to scene
@@ -152,12 +168,6 @@ elif importExtension.lower() == 'stl':
 elif importExtension.lower() == 'ply':
     # import ply to scene
     bpy.ops.wm.ply_import(filepath=inputFilePath)
-elif importExtension.lower() == 'usd':
-    # import usd to scene
-    bpy.ops.wm.usd_import(filepath=inputFilePath)
-elif importExtension.lower() == 'dae':
-    # import dae to scene
-    bpy.ops.wm.collada_import(filepath=inputFilePath)
 elif importExtension.lower() == 'abc':
     # import abc to scene
     bpy.ops.wm.alembic_import(filepath=inputFilePath)

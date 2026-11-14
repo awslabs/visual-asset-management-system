@@ -3,7 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { validatePipeline } from "./pipelineValidation";
+import {
+    omitBlankEventBus,
+    validatePipeline,
+    withStoredWaitForCallback,
+} from "./pipelineValidation";
 import type { Pipeline } from "../types";
 
 describe("pipelineValidation", () => {
@@ -127,7 +131,10 @@ describe("pipelineValidation", () => {
         expect(r.ok).toBe(true);
     });
 
-    it("EventBridge requires busArn", () => {
+    // The API treats the bus as optional and publishes to the account's default event bus without
+    // one (models/pipelines.py _validate_execution_config); an empty value maps to the default bus too
+    // (common/workflows/workflowAsl.py). A form stricter than the API blocks a valid pipeline (#1030).
+    it("EventBridge accepts an absent busArn (the account's default event bus)", () => {
         const r = validatePipeline({
             pipelineName: "x",
             executionConfig: {
@@ -135,7 +142,20 @@ describe("pipelineValidation", () => {
                 eventBridge: { source: "test", detailType: "test" },
             },
         } as any);
-        expect(r.ok).toBe(false);
+        expect(r.errors).toBeUndefined();
+        expect(r.ok).toBe(true);
+    });
+
+    it("EventBridge accepts an empty busArn, as the API does", () => {
+        const r = validatePipeline({
+            pipelineName: "x",
+            executionConfig: {
+                executionType: "EventBridge",
+                eventBridge: { busArn: "", source: "test", detailType: "test" },
+            },
+        } as any);
+        expect(r.errors).toBeUndefined();
+        expect(r.ok).toBe(true);
     });
 
     it("EventBridge requires source", () => {
@@ -143,10 +163,13 @@ describe("pipelineValidation", () => {
             pipelineName: "x",
             executionConfig: {
                 executionType: "EventBridge",
-                eventBridge: { busArn: "arn:aws:events:...", detailType: "test" },
+                eventBridge: { detailType: "test" },
             },
         } as any);
         expect(r.ok).toBe(false);
+        expect(r.errors).toEqual({
+            "executionConfig.eventBridge.source": "EventBridge source is required",
+        });
     });
 
     it("EventBridge requires detailType", () => {
@@ -154,10 +177,13 @@ describe("pipelineValidation", () => {
             pipelineName: "x",
             executionConfig: {
                 executionType: "EventBridge",
-                eventBridge: { busArn: "arn:aws:events:...", source: "test" },
+                eventBridge: { source: "test" },
             },
         } as any);
         expect(r.ok).toBe(false);
+        expect(r.errors).toEqual({
+            "executionConfig.eventBridge.detailType": "EventBridge detailType is required",
+        });
     });
 
     it("accepts valid EventBridge with all fields", () => {
@@ -496,5 +522,98 @@ describe("pipelineValidation", () => {
                 (r.errors as Record<string, string>)["executionConfig.deadlineCloud.template"]
             ).toMatch(/Cannot exceed/);
         });
+    });
+});
+
+// An empty event-bus input must reach the API as no bus at all, so a create stores no empty string
+// and an edit of a pipeline saved without a bus sends back the block it read (#1030).
+describe("omitBlankEventBus", () => {
+    const bus = "arn:aws:events:us-east-1:123456789012:event-bus/my-bus";
+
+    it("drops an empty busArn and keeps the other EventBridge fields", () => {
+        const input = {
+            executionType: "EventBridge",
+            eventBridge: { busArn: "", source: "s", detailType: "d" },
+        };
+        const out = omitBlankEventBus(input);
+        expect(out.eventBridge).toStrictEqual({ source: "s", detailType: "d" });
+        // The form's values are not mutated.
+        expect(input.eventBridge.busArn).toBe("");
+    });
+
+    it("drops a null or undefined busArn key", () => {
+        expect(
+            omitBlankEventBus({ eventBridge: { busArn: undefined, source: "s" } }).eventBridge
+        ).toStrictEqual({ source: "s" });
+        expect(
+            omitBlankEventBus({ eventBridge: { busArn: null, source: "s" } }).eventBridge
+        ).toStrictEqual({ source: "s" });
+    });
+
+    it("keeps a supplied busArn, including one that will fail the format check", () => {
+        const withBus = { eventBridge: { busArn: bus, source: "s" } };
+        expect(omitBlankEventBus(withBus)).toBe(withBus);
+        const malformed = { eventBridge: { busArn: " ", source: "s" } };
+        expect(omitBlankEventBus(malformed)).toBe(malformed);
+    });
+
+    it("returns a config with no eventBridge block, or no config, unchanged", () => {
+        const lambda = { executionType: "Lambda", lambda: { resourceId: "fn" } };
+        expect(omitBlankEventBus(lambda)).toBe(lambda);
+        const noBusKey = { executionType: "EventBridge", eventBridge: { source: "s" } };
+        expect(omitBlankEventBus(noBusKey)).toBe(noBusKey);
+        expect(omitBlankEventBus(undefined)).toBeUndefined();
+    });
+});
+
+// A stored pipeline without waitForCallback runs Disabled, so the form must be seeded with Disabled
+// for it rather than the select's first option, Enabled (#1032).
+describe("withStoredWaitForCallback", () => {
+    const stored = (executionConfig: Record<string, unknown>) =>
+        ({ pipelineId: "p", executionConfig } as unknown as Partial<Pipeline>);
+
+    it.each(["Lambda", "SQS", "EventBridge"])(
+        "fills Disabled for a %s pipeline without the field and keeps the rest",
+        (executionType) => {
+            const input = stored({ executionType, lambda: { resourceId: "fn" } });
+            const out = withStoredWaitForCallback(input);
+            expect(out?.executionConfig).toStrictEqual({
+                executionType,
+                lambda: { resourceId: "fn" },
+                waitForCallback: "Disabled",
+            });
+            expect(out?.pipelineId).toBe("p");
+            // The caller's record is not mutated.
+            expect(input.executionConfig).not.toHaveProperty("waitForCallback");
+        }
+    );
+
+    it.each(["", null])(
+        "fills Disabled for a stored %p, which the API reads as absent",
+        (value) => {
+            const out = withStoredWaitForCallback(
+                stored({ executionType: "Lambda", waitForCallback: value })
+            );
+            expect(out?.executionConfig?.waitForCallback).toBe("Disabled");
+        }
+    );
+
+    it("fills Enabled for a DeadlineCloud pipeline, the only mode it runs with", () => {
+        const out = withStoredWaitForCallback(stored({ executionType: "DeadlineCloud" }));
+        expect(out?.executionConfig?.waitForCallback).toBe("Enabled");
+    });
+
+    it.each(["Enabled", "Disabled"])(
+        "returns a pipeline with an explicit %s unchanged",
+        (value) => {
+            const input = stored({ executionType: "SQS", waitForCallback: value });
+            expect(withStoredWaitForCallback(input)).toBe(input);
+        }
+    );
+
+    it("returns no pipeline, or one with no executionConfig, unchanged", () => {
+        expect(withStoredWaitForCallback(undefined)).toBeUndefined();
+        const noConfig = { pipelineId: "p" } as Partial<Pipeline>;
+        expect(withStoredWaitForCallback(noConfig)).toBe(noConfig);
     });
 });

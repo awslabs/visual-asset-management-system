@@ -49,6 +49,20 @@ OUTPUT_DIR = Path("/tmp/output")
 HF_CACHE_BASE = f"/mnt/efs/cosmos-models/hf_cache/{S3_HF_CACHE_PREFIX.split('/')[0]}"
 
 
+def describe_definition_source(definition_source: str) -> str:
+    """How the pipeline definition was passed, for the job log: inline JSON or a file path, and its
+    length. The text itself is not logged."""
+    kind = "inline JSON" if definition_source.lstrip().startswith("{") else "file path"
+    return f"{kind}, {len(definition_source)} characters"
+
+
+def describe_definition(definition) -> str:
+    """The parsed pipeline definition as the job log shows it: its top-level keys, not their values."""
+    if isinstance(definition, dict):
+        return f"keys {list(definition)}"
+    return f"a JSON {type(definition).__name__}"
+
+
 def load_pipeline_definition() -> Dict:
     """
     Load pipeline definition from command line argument or environment variable.
@@ -74,7 +88,7 @@ def load_pipeline_definition() -> Dict:
     else:
         raise ValueError("No pipeline definition provided via command line or PIPELINE_DEFINITION env var")
 
-    logger.info(f"Loading pipeline definition from: {definition_source[:100]}...")
+    logger.info(f"Loading pipeline definition: {describe_definition_source(definition_source)}")
 
     # Try parsing as JSON string first
     try:
@@ -88,10 +102,15 @@ def load_pipeline_definition() -> Dict:
         if definition_path.exists():
             with open(definition_path, "r") as f:
                 return json.load(f)
+    except OSError as e:
+        # An OSError names the path it was given, which here can be the inline text.
+        logger.warning(f"Failed to load as file: {e.strerror or type(e).__name__}")
     except Exception as e:
         logger.warning(f"Failed to load as file: {e}")
 
-    raise ValueError(f"Could not parse pipeline definition as JSON or load from file: {definition_source}")
+    raise ValueError(
+        f"Could not parse pipeline definition as JSON or load from file "
+        f"({describe_definition_source(definition_source)})")
 
 
 def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
@@ -199,7 +218,7 @@ def main():
         logger.info("=" * 80)
 
         definition = load_pipeline_definition()
-        logger.info(f"Pipeline definition loaded: {json.dumps(definition, indent=2)}")
+        logger.info(f"Pipeline definition loaded: {describe_definition(definition)}")
 
         # Extract required fields. The model size is fixed per registered pipeline and supplied by
         # the job definition's MODEL_SIZE environment variable; a definition value overrides it.

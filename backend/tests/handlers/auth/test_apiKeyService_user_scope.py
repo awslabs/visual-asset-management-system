@@ -62,8 +62,8 @@ def _own_key_item(created_at=None, expires_at=None):
     created = created_at or _iso(_now() - timedelta(days=10))
     return {
         'apiKeyId': KEY_ID_OWN,
-        'apiKeyName': 'own-key',
-        'apiKeyHash': 'hash',
+        'apiKeyName': 'own-key',  # pragma: allowlist secret
+        'apiKeyHash': 'hash',  # pragma: allowlist secret
         'description': 'mine',
         'userId': USER,
         'createdBy': USER,
@@ -78,8 +78,8 @@ def _other_key_item():
     created = _iso(_now() - timedelta(days=5))
     return {
         'apiKeyId': KEY_ID_OTHER,
-        'apiKeyName': 'other-key',
-        'apiKeyHash': 'hash2',
+        'apiKeyName': 'other-key',  # pragma: allowlist secret
+        'apiKeyHash': 'hash2',  # pragma: allowlist secret
         'description': 'not mine',
         'userId': OTHER_USER,
         'createdBy': 'admin',
@@ -251,7 +251,7 @@ class TestUserScopeGet:
 class TestUserScopeCreate:
     def _create_body(self, expires_days=30, **overrides):
         body = {
-            'apiKeyName': 'my-new-key',
+            'apiKeyName': 'my-new-key',  # pragma: allowlist secret
             'description': 'self-service key',
             'expiresAt': _iso(_now() + timedelta(days=expires_days)),
         }
@@ -309,7 +309,7 @@ class TestUserScopeCreate:
         """Backwards compatibility: the admin route still allows no expiration
         and creating keys for any user."""
         mock_env['table'].scan.return_value = {'Items': []}
-        body = {'apiKeyName': 'admin-key', 'userId': OTHER_USER, 'description': 'd'}
+        body = {'apiKeyName': 'admin-key', 'userId': OTHER_USER, 'description': 'd'}  # pragma: allowlist secret
         response = lambda_handler(_make_event('POST', '/auth/api-keys', body=body), {})
         assert response['statusCode'] == 200
         put_item = mock_env['table'].put_item.call_args[1]['Item']

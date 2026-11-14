@@ -70,7 +70,7 @@ def _event():
 def _emit(rel_path, service, log):
     """Load one copy, build its Logger on a StringIO handler, run `log(logger)`, return the output."""
     path = os.path.join(_REPO_ROOT, rel_path)
-    name = "pipeline_logger_formatter_" + hashlib.md5(rel_path.encode()).hexdigest()
+    name = "pipeline_logger_formatter_" + hashlib.md5(rel_path.encode(), usedforsecurity=False).hexdigest()
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module

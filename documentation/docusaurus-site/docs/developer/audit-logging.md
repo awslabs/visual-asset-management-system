@@ -333,28 +333,25 @@ fields @timestamp, @message
 
 ### What Is Never Logged
 
-The audit logging system is designed with security-first principles and never logs:
+The values of the redacted keys listed under [Automatic Data Masking](#automatic-data-masking) never reach an audit record. That covers:
 
--   JWT tokens (raw or decoded)
--   Authorization headers or bearer tokens
--   Passwords or secrets
--   API keys or access tokens
--   AWS credentials (access keys, secret keys, session tokens)
--   Token signatures or detailed token validation errors
+-   JWT tokens and bearer tokens in the `Authorization` header, and the raw token in `idJwtToken` fields
+-   API keys (`X-Api-Key` header, `apiKey`, `apiKeySecret` and `rawKey` fields) and cookies (`Cookie`, `Set-Cookie`)
+-   Proxy credentials (`Proxy-Authorization`) and AWS credentials (access keys, secret keys, session tokens, `X-Amz-Security-Token`)
+-   Token signatures or detailed token validation errors (the authorizer records a generic failure category)
 -   Pipeline template bodies -- stored or supplied inline as an execute-time override -- their form definitions and input instructions, and the tag values substituted into them
+
+Redaction is by key name. A secret typed into a free-form field that is not on the list, such as a description, a metadata value or a file name, is written as submitted.
 
 ### What Is Logged
 
-The system logs only non-sensitive operational data:
+Each record holds the bracketed prefix, a payload, and an echo of the triggering request:
 
--   User IDs (from verified JWT claims only)
--   Authorization results (boolean success/failure)
--   Generic failure reasons (safe categories)
--   Resource identifiers (database IDs, asset IDs, file paths)
--   Operation types (GET, POST, DELETE)
--   Source IP addresses (API Gateway authorizer only)
--   Timestamps
--   MFA status
+-   **Prefix** -- the event type, the user ID (from verified token claims), the user's roles and MFA status, and for the authorization log the allow or deny result.
+-   **Payload** -- what the calling handler records for the event: resource identifiers (database, asset, file path, pipeline, workflow and execution IDs), the action and the object checked, counts and flags, and for the authorizer the source IP address and a generic failure reason.
+-   **Request echo** (`--- [event: ...]`) -- the API Gateway event the handler received, after redaction: the method, path, path and query string parameters, the request headers other than the redacted ones (for example `User-Agent`, `Host`, `X-Forwarded-For`), the request context (source IP address, user agent, request ID and the claims the authorizer verified, which can include the user's email address and any other claim the identity provider puts in the token), and the request `body` with only the redacted keys removed. Data-level authorization records echo only the user ID.
+
+Because the body is echoed, whatever the caller submitted reaches the audit log: asset and database names and descriptions, metadata keys and values, tag names, comments, file names and paths, and any personal data a user types into them.
 
 ### Automatic Data Masking
 
@@ -365,6 +362,8 @@ Every audit entry carries an echo of the triggering API event, and the `mask_sen
 -   `authorization` headers
 -   `idJwtToken` fields
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken` objects
+-   `apiKey`, `apiKeySecret`, `rawKey` fields (the API key identifier fields `apiKeyId`, `apiKeyName` and `apiKeyHash` stay readable, so a record still names the key a call used)
+-   The credential-carrying request and response headers `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization` and `X-Amz-Security-Token`. A header is redacted in both `headers` and `multiValueHeaders`, whatever its letter case.
 
 **Content keys** -- caller-authored payloads. Every field that can deliver a template body belongs here, whichever request carries it:
 
@@ -376,7 +375,7 @@ Every audit entry carries an echo of the triggering API event, and the `mask_sen
 
 The field name is preserved when the value is redacted, so the audit trail still records that a template body, form definition, or tag value was submitted with the request. A request `body` is filtered whether it arrives as a JSON object or as a JSON string: the string is parsed, filtered, and re-serialized, and a string payload that names a redacted key but does not parse as JSON is dropped in full.
 
-The two families are declared as `SENSITIVE_KEYS` and `CONTENT_KEYS` in `backend/backend/customLogging/logger.py`. A new request field that carries a caller-authored body is protected only when its key is added to `CONTENT_KEYS`.
+The two families are declared as `SENSITIVE_KEYS` and `CONTENT_KEYS` in `backend/backend/customLogging/logger.py`. A new request field that carries a caller-authored body is protected only when its key is added to `CONTENT_KEYS`, and a new header or field that carries a credential only when its name is added to `SENSITIVE_KEYS`.
 
 ## Integration with SIEM Systems
 
@@ -518,7 +517,7 @@ The API Gateway custom Lambda authorizer (`apiGatewayAuthorizerRest.py`) uses a 
     - "Token verification failed"
     - "API key is disabled", "API key has expired", and the other API key denial categories
 3. **User context after verification only** -- User IDs are only extracted and logged after successful JWT verification. For failed authorization attempts, the user field is set to `"unknown"`.
-4. **Source IP only** -- The authorizer logs only the requesting IP address, not request headers or other potentially sensitive fields.
+4. **Source IP and the masked request** -- The payload carries the requesting IP address and the generic failure reason. The record's request echo is the authorizer event after redaction: the method, path and query string, and the request headers other than the redacted ones (see [Automatic Data Masking](#automatic-data-masking)).
 
 ### Why a Separate Function
 
@@ -546,10 +545,10 @@ The API Gateway authorizer runs before normal request processing and handles raw
 ### Privacy and Data Protection
 
 -   User IDs are logged for audit purposes (legitimate interest for security monitoring).
--   No personally identifiable information (PII) beyond user IDs is logged.
+-   Records can contain personal data beyond the user ID: the request echo carries the claims the authorizer verified (which can include an email address), the source IP address and user agent, and the submitted request body after redaction, so names, descriptions, metadata values, comments and file names a user enters are logged as entered (see [What Is Logged](#what-is-logged)). Treat the audit log groups as containing personal data when you set their access, retention and export.
 -   Logs can be exported for data subject access requests.
 -   The retention period is configurable; regulated environments that require multi-year audit records can extend it (see [Configuring Log Retention](#configuring-log-retention)).
--   Automatic data masking removes all authorization tokens, credentials, and secrets before writing.
+-   Automatic data masking removes the values of the credential and content keys listed under [Automatic Data Masking](#automatic-data-masking) before writing; it does not inspect the text of other fields.
 
 ## Maintenance and Troubleshooting
 

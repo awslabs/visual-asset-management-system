@@ -374,7 +374,7 @@ class TestPhysnaClientTokenCaching:
 
         # Fake secret retrieval
         def fake_load_secret():
-            return {"clientId": "test-client", "clientSecret": "test-secret"}
+            return {"clientId": "test-client", "clientSecret": "test-secret"}  # pragma: allowlist secret
 
         monkeypatch.setattr(pc, "_load_physna_credentials", fake_load_secret)
 

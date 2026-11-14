@@ -1,0 +1,9 @@
+# Installed first into every pipeline test environment (backendPipelines/ci/pipeline_tests.py).
+# pytest, plus the packages the pipeline Lambdas take from the common base layer
+# (backend/lambdaLayers/base/requirements.txt), at that layer's versions. A pipeline's own
+# requirements.txt is installed after this file, so its pins win.
+pytest==9.0.3
+aws-lambda-powertools==2.36.0
+boto3==1.43.45
+botocore==1.43.45
+requests==2.34.2

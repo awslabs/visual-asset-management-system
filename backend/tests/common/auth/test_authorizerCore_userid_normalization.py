@@ -139,7 +139,7 @@ class TestTheEffectOnEachCaller:
     def test_an_api_key_whose_user_holds_a_role_is_not_denied(self):
         """The API-key branch denies on an empty role list, so here the miss is a refused request
         rather than a degraded context."""
-        record = {'apiKeyId': 'k1', 'isActive': 'true', 'userId': ISSUED, 'expiresAt': ''}
+        record = {'apiKeyId': 'k1', 'isActive': 'true', 'userId': ISSUED, 'expiresAt': ''}  # pragma: allowlist secret
         table = _RolesTableByUserId({NORMALIZED: ['pipeline']})
         with patch.object(core, '_get_user_roles_table', return_value=table), \
              patch.object(core, '_lookup_api_key_by_hash', return_value=record):

@@ -67,7 +67,7 @@ class ResourceParamKeys:
     USER_ROLES_STORAGE_TABLE = "dynamoTables/userRolesStorage"
     USER_STORAGE_TABLE = "dynamoTables/userStorage"
     WORKFLOW_EXECUTIONS_STORAGE_TABLE = "dynamoTables/workflowExecutionsStorage"
-    API_KEY_STORAGE_TABLE = "dynamoTables/apiKeyStorage"
+    API_KEY_STORAGE_TABLE = "dynamoTables/apiKeyStorage"  # pragma: allowlist secret
     WORKFLOW_STORAGE_TABLE = "dynamoTables/workflowStorage"
     # Workflow-execution V2 data model tables
     WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2 = "dynamoTables/workflowExecutionsStorageV2"

@@ -107,7 +107,7 @@ Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed 
 -   [ ] **Normalize the REST event**: Call `request_to_claims(event)` as the first event access (it normalizes internally). Only if the handler reads `requestContext['http']` _before_ claims, `import normalize_event` from `common.auth.apiEvent` and call it as the first statement of `lambda_handler` (see Rule 1)
 -   [ ] **Implement Error Handling**: Use comprehensive try/catch with proper exceptions
 -   [ ] **Add Authorization**: Include Casbin enforcement with object-type checking
--   [ ] **Add Logging**: Use `safeLogger` for structured logging. It redacts credential keys (`authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`, `apiKey`, `apiKeySecret`, `rawKey`) and caller-authored content keys (`configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions`), at every nesting level in dicts, lists, and tuples, and inside a request `body` that arrives as a JSON string. Redaction is key-driven, so an f-string interpolating a payload value bypasses it — log identifiers and counts, never rendered template bodies or tag values
+-   [ ] **Add Logging**: Use `safeLogger` for structured logging. It redacts credential keys (`authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`, `apiKey`, `apiKeySecret`, `rawKey`, the credential headers `cookie`, `set-cookie`, `x-api-key`, `proxy-authorization`, `x-amz-security-token`) and caller-authored content keys (`configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions`), at every nesting level in dicts, lists, and tuples, and inside a request `body` that arrives as a JSON string. Redaction is key-driven, so an f-string interpolating a payload value bypasses it — log identifiers and counts, never rendered template bodies or tag values
 -   [ ] **Resolve Resource Names**: Use `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)` from `common.resourceNames` at module level in try/except
 -   [ ] **Add AWS Clients**: Configure AWS clients with retry configuration
 -   [ ] **Implement Business Logic**: Separate business logic from request handling
@@ -928,6 +928,10 @@ parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA fresh
 
 Because handlers compare against this exact string, a mismatched variant silently fails the comparison (or attributes records to a user ID that has no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
 
+#### **Single-asset routes: Tier 2 before existence**
+
+`models/common.py` defines two `VAMSGeneralErrorResponse` subclasses for single-asset routes that decide Tier 2 before existence (the assetFiles, assetVersions and assetExportService `get_asset_with_permissions` helpers): `VAMSAuthorizationDeniedResponse` (refused) and `VAMSAssetNotFoundResponse` (authorized, asset missing). A read route answers them with `authorization_error()` (403) and `general_error(status_code=404, body={'message': 'Asset not found'})`, as the asset GET does, by catching them ahead of `VAMSGeneralErrorResponse`. Every assetFiles and assetVersions route answers `VAMSAuthorizationDeniedResponse` with 403; the write routes catch only it and keep their 400 for a missing asset. A route that does not catch them keeps its 400 with the same message.
+
 ### **Rule 5: Storage Resources MUST Be Added to storageBuilder-nestedStack.ts**
 
 ```typescript
@@ -1101,7 +1105,7 @@ def [operation_name](self, [params]) -> Dict[str, Any]:
         APIError: When API call fails
     """
     try:
-        endpoint = API_[DOMAIN].format([param]=[param])
+        endpoint = route_path(API_[DOMAIN], [param]=[param])
         response = self.[method](endpoint, data=[data], include_auth=True)
         return response.json()
 
@@ -2362,6 +2366,8 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 
 **Every path that hands out asset file content applies three controls on top of Casbin.** A presigned GET URL or a streamed body — in `downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, and `assetExportService` — is refused (or, for the export's per-asset entries, withheld) when the asset's `isDistributable` is false; is refused (export: withheld, the file stays in the listing) when `validateUnallowedFileExtensionAndContentType` rejects the file's key or the `ContentType` a `head_object` of the version about to be served reports, or when that head fails; and every URL or body actually issued is written to the file-download audit log (`log_file_download` / `log_file_download_bulk` / `log_file_download_streamed` in `customLogging/auditLogging.py`). A new download surface gets all three; `downloadAsset.py`'s `lambda_handler` is the reference call shape, and `assetExportService.py` `file_type_allowed_for_download` is the withhold-not-refuse form. A surface that checks many files in one request runs the heads through a bounded pool (`downloadAsset.py`'s bulk branch, `assetExportService.py` `mark_files_allowed_for_download`): serial per-file heads over an asset of thousands of files exceed the API Gateway integration timeout.
 
+**Presigned GETs pass through `presigned_get_object_params()`.** Every presigned `get_object` URL those four surfaces mint passes its `Params` through `common.s3` `presigned_get_object_params()`. For a key ending in `.svg` (any case) it signs `ResponseContentType=image/svg+xml` and `ResponseContentDisposition=attachment`; every other key is signed unchanged. An SVG is stored as `application/octet-stream`, a browser `<img>` renders it only as `image/svg+xml`, and the attachment disposition keeps a directly opened link a download so no SVG script runs at the bucket origin (#1201). Never sign an SVG inline. `tests/handlers/assets/test_presigned_svg_response_overrides.py` pins each path.
+
 **Every path that writes an object under a new name checks that name first.** Upload initialize and completion (`uploadFile.py`) and the move, rename and copy destination (`assetFiles.py` `move_file` / `copy_file`) call `validateUnallowedFileExtensionAndContentType` on the key before any S3 write. A new write path gets the same check.
 
 **A multipart file completed with no parts is cancelled.** `complete_upload` (`uploadFile.py`) aborts that file's multipart upload, stores nothing and reports the file with `success=False`; `sqsUploadFileLarge.py` `complete_multipart_upload_for_large_file` does the same and returns `False`. Only a file initialized as `zero-byte` completes with an empty `parts` list.
@@ -2642,6 +2648,7 @@ black backend/                    # Format code
 flake8 backend/                   # Lint code
 mypy backend/                     # Type checking
 pytest                            # Run tests
+pytest -n auto --dist loadfile    # Run tests in parallel, one test file per worker (what CI runs)
 pytest --cov=backend             # Run tests with coverage
 
 # Run specific test files
@@ -2651,6 +2658,13 @@ pytest -v tests/handlers/[domain]/test_[handler].py  # Test specific handler
 # List tests that pin one past change rather than a durable rule (root CLAUDE.md Rule 13)
 pytest -m temporary --collect-only
 ```
+
+**Parallel runs (`pytest-xdist`).** CI runs the backend suite with `-n auto --dist loadfile`: each test file
+runs whole, in order, in one worker, and only the order of files changes. A backend test must pass whichever
+files ran before it in the same process: set env vars with `monkeypatch.setenv`, patch globals and
+`sys.modules` entries so they are restored, reset module-level caches in the fixture that fills them, and
+write files only under `tmp_path`. Fix an order-dependent test rather than skipping it. Details:
+`backend/tests/CLAUDE.md`, "Running in parallel".
 
 #### **Mark a Temporary Test with `@pytest.mark.temporary`**
 

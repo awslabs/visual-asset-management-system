@@ -38,9 +38,9 @@ import CreateApiKey from "./CreateApiKey";
 import UpdateApiKey from "./UpdateApiKey";
 import { usePageTitle } from "../../hooks/usePageTitle";
 
-export type ApiKeyManagementMode = "admin" | "user";
+export type ApiKeyManagementMode = "admin" | "user"; // pragma: allowlist secret
 
-export type ApiKeyStatus = "Active" | "Inactive" | "Expired";
+export type ApiKeyStatus = "Active" | "Inactive" | "Expired"; // pragma: allowlist secret
 
 /**
  * The status shown for an API key, matching how the authorizer treats it: Inactive when isActive is

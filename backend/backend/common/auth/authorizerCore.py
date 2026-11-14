@@ -77,7 +77,7 @@ except json.JSONDecodeError:
     IGNORED_PATHS = []
 
 # API Key Configuration
-API_KEY_HASH_INDEX_NAME = 'apiKeyHashIndex'
+API_KEY_HASH_INDEX_NAME = 'apiKeyHashIndex'  # pragma: allowlist secret
 API_KEY_CACHE_TTL = 15  # seconds before a cached entry expires
 
 # User Roles Configuration
@@ -921,6 +921,15 @@ def get_external_keys(jwt_issuer_url: str, force_refresh: bool = False) -> List[
         raise
 
 
+# Authorizer context keys with this prefix are set only by the authorizer itself (identity,
+# roles, MFA state, credential type); a verified token's claims never supply them.
+RESERVED_CONTEXT_KEY_PREFIX = 'vams:'
+
+
+def _is_reserved_context_key(key: Any) -> bool:
+    return str(key).lower().startswith(RESERVED_CONTEXT_KEY_PREFIX)
+
+
 def authenticate_request(event: dict, *, fronted: str = None) -> dict:
     """
     Authenticate API Gateway request using IP validation, ignored paths, API key, or JWT.
@@ -931,6 +940,11 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
     An ignored-path bypass additionally carries "ignoredPath": True. It is the one
     authorized result that establishes no identity, so a caller building an IAM policy
     can scope it to the ignored paths rather than to the whole API.
+
+    On an authorized JWT result every context key under RESERVED_CONTEXT_KEY_PREFIX
+    ("vams:") is set by this function, never copied from the token: vams:tokens names the
+    same username vams:roles and vams:mfaEnabled were resolved for. A verified JWT with no
+    username claim is not authorized.
 
     The IP check uses the clientIp module's resolve_client_ip to handle XFF/CloudFront-aware
     resolution based on the fronted parameter.
@@ -1009,10 +1023,12 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
 
     logger.info(f"Token verified successfully for user: {claims.get('sub', 'unknown')}")
 
-    # Build context with string coercion
+    # Build context with string coercion. Keys under the reserved "vams:" prefix are this
+    # authorizer's own output and are set below, so a claim of that prefix in the token is
+    # not copied (the prefix match ignores case).
     context = {}
     for key, value in claims.items():
-        if value is not None:
+        if value is not None and not _is_reserved_context_key(key):
             context[key] = str(value)
 
     username = (
@@ -1020,6 +1036,17 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
         or claims.get('username')
         or claims.get('sub')
     )
+    if not isinstance(username, str) or not username.strip():
+        logger.info("Verified token carries no username claim")
+        return {"authorized": False, "context": None, "reason": "Token names no user"}
+
+    # The caller's identity for every handler and for Casbin is the username the roles and the
+    # MFA state below are resolved for. For an Amazon Cognito token this is the value the
+    # pre-token-generation trigger writes (the user name, which Cognito also issues as
+    # cognito:username in an ID token and as username in an access token).
+    context['vams:tokens'] = json.dumps([username])
+    # Reserved for external system attributes; empty, as the Cognito trigger issues it.
+    context['vams:externalAttributes'] = json.dumps([])
 
     # Role resolution: read the user's roles from the user roles table at authorization time
     # so every JWT auth mode carries them, and assign unconditionally so the freshly-read

@@ -157,11 +157,12 @@ def _format_log_message(event_type: str, user_context: Dict[str, Any], custom_da
             f"[mfaEnabled: {mfa_enabled}]"
         ]
         
-        # Add custom data if provided
+        # Add custom data if provided. default=str writes a value JSON cannot encode (a
+        # DynamoDB Decimal, a set) as its string form instead of falling back to str().
         if custom_data is not None:
             if isinstance(custom_data, dict):
                 try:
-                    message_parts.append(json.dumps(custom_data))
+                    message_parts.append(json.dumps(custom_data, default=str))
                 except Exception as e:
                     message_parts.append(str(custom_data))
             else:
@@ -323,8 +324,9 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
                 return
             _created_log_streams[log_group_name] = log_stream_name
 
-        #Add event at the end of each message.
-        event_suffix = f" --- [event: {json.dumps(masked_event)}]" if masked_event else ""
+        # Add event at the end of each message. default=str writes a value JSON cannot encode
+        # (a DynamoDB Decimal, a set) as its string form, so such a value cannot drop the entry.
+        event_suffix = f" --- [event: {json.dumps(masked_event, default=str)}]" if masked_event else ""
 
         # What the entries after the first carry: the echo itself while replicating it stays inside
         # AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES, a reference to the first entry's copy beyond that.
@@ -759,15 +761,17 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
     Log authorization events from API Gateway authorizer with silent failure.
 
     SECURITY: This function is designed for the API Gateway authorizer which runs
-    BEFORE normal request processing. It only logs non-sensitive data:
+    BEFORE normal request processing. Its payload carries only non-sensitive data:
     - User ID (only from verified JWT claims after successful authorization)
     - Authorization result (success/failure)
     - Generic failure reason (no token details or sensitive data)
     - Source IP address
+    The record's request echo is the authorizer event after mask_sensitive_data, so the
+    headers it keeps are the ones not on the credential key list.
 
     NEVER logs:
     - Raw JWT tokens
-    - Authorization headers
+    - Authorization headers, or any other header on the credential key list
     - Token signatures
     - Detailed validation errors that could expose token structure
 

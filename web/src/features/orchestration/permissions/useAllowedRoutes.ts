@@ -63,12 +63,15 @@ function pathsMatch(templatePath: string, queryPath: string): boolean {
 /**
  * Hook to check if the current user is allowed to call a given API route.
  * Fetches allowed routes once per SPA session (module-level cached promise).
- * Returns { loading, can(method, pathTemplate) }.
- * Fail-closed: while loading or on error, can() returns false.
+ * Returns { loading, failed, retry, can(method, pathTemplate) }.
+ * Fail-closed: while loading or on error, can() returns false. `failed` is true when the last fetch
+ * failed, and `retry()` fetches again (a failed fetch is never cached).
  */
 export function useAllowedRoutes() {
     const [loading, setLoading] = useState(true);
     const [routes, setRoutes] = useState<AllowedRoute[]>([]);
+    const [failed, setFailed] = useState(false);
+    const [attempt, setAttempt] = useState(0);
 
     useEffect(() => {
         if (!cachedPromise) {
@@ -81,21 +84,29 @@ export function useAllowedRoutes() {
                 const [success, data] = result;
                 if (success && typeof data === "object" && "routes" in data) {
                     setRoutes((data as AllowedRoutesData).routes);
+                    setFailed(false);
                 } else {
                     // Only a successful fetch is cached; a failure is dropped so the next mount
                     // retries instead of pinning every action closed for the SPA session.
                     if (cachedPromise === promise) cachedPromise = null;
                     setRoutes([]);
+                    setFailed(true);
                 }
             })
             .catch(() => {
                 if (cachedPromise === promise) cachedPromise = null;
                 setRoutes([]);
+                setFailed(true);
             })
             .finally(() => {
                 setLoading(false);
             });
-    }, []);
+    }, [attempt]);
+
+    const retry = () => {
+        setLoading(true);
+        setAttempt((n) => n + 1);
+    };
 
     const can = (method: string, pathTemplate: string): boolean => {
         if (loading) {
@@ -110,5 +121,5 @@ export function useAllowedRoutes() {
         });
     };
 
-    return { loading, can };
+    return { loading, failed, retry, can };
 }

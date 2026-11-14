@@ -14,25 +14,28 @@ from common.logger import safeLogger
 
 logger = safeLogger(service="cadMetadataExtraction_CADExtractor")
 
-def extract_cad_metadata(file_path: str) -> Dict[str, Any]:
+def extract_cad_metadata(file_path: str, display_name: Optional[str] = None) -> Dict[str, Any]:
     """
     Extract metadata from CAD files using CADQuery.
     
     Args:
         file_path: Path to the CAD file
+        display_name: How to name the input in a failure message. The caller downloads the input
+            to a temporary path of its own, so the path above names that copy rather than the
+            file the operator selected; defaults to the local file name.
         
     Returns:
         Dictionary containing extracted metadata
     """
     logger.info(f"Extracting CAD metadata from {file_path}")
     
-    file_name = os.path.basename(file_path)
-    file_extension = os.path.splitext(file_name)[1].lower()
+    file_name = display_name or os.path.basename(file_path)
+    file_extension = os.path.splitext(file_path)[1].lower()
     
     try:
         # Load the CAD model based on file extension
         if file_extension in ['.step', '.stp']:
-            model = cq.importers.importStep(file_path)
+            model = step_shape(cq.importers.importStep(file_path))
             metadata = extract_step_metadata(model, file_path)
         elif file_extension == '.dxf':
             model = cq.importers.importDXF(file_path).wires()
@@ -50,6 +53,32 @@ def extract_cad_metadata(file_path: str) -> Dict[str, Any]:
         # the model imported, so each one records its own failure as an extraction_error value the
         # operator can see against the file.
         raise RuntimeError(f"Could not extract CAD metadata from {file_name}: {e}") from e
+
+def step_shape(imported: cq.Workplane) -> cq.Shape:
+    """
+    Take the shape out of a STEP import.
+
+    ``cq.importers.importStep`` returns a Workplane holding one shape per STEP root, while the
+    extractors below call Shape methods on the model. A file with one root gives that
+    shape: a Solid for a part, a Compound for an assembly. A file with several roots gives a
+    Compound of all of them, so none is left out; ``val()`` alone keeps only the first root, and
+    for an empty import it returns the workplane origin instead of a shape.
+
+    Args:
+        imported: The Workplane returned by cq.importers.importStep
+
+    Returns:
+        The imported shape
+
+    Raises:
+        ValueError: The STEP file contains no shapes
+    """
+    shapes = [obj for obj in imported.vals() if isinstance(obj, cq.Shape)]
+    if not shapes:
+        raise ValueError("the STEP file contains no shapes")
+    if len(shapes) == 1:
+        return shapes[0]
+    return cq.Compound.makeCompound(shapes)
 
 def extract_step_metadata(model: cq.Shape, file_path: str) -> Dict[str, Any]:
     """
@@ -136,10 +165,13 @@ def extract_geometric_metadata(model: cq.Shape) -> Dict[str, Any]:
             'depth': bbox.zmax - bbox.zmin
         }
         
-        # Calculate volume and surface area
+        # Calculate volume and surface area. The volume is that of the model's solids, because
+        # cadquery's Volume() of a shell or face (what a surface model holds) is its surface area.
+        # So a model with no solid has no volume, and surfaces beside solids add nothing to it.
         try:
-            volume = model.Volume()
-        except:
+            solids = model.Solids()
+            volume = sum(solid.Volume() for solid in solids) if solids else None
+        except Exception:
             volume = None
             
         try:

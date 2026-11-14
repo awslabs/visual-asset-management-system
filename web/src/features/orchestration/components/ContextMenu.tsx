@@ -22,7 +22,7 @@ interface ContextMenuProps {
 
 /**
  * Kebab action menu: the trigger control opens the menu on click. Backed by Radix
- * DropdownMenu so the visible ⋮/⋯ affordance behaves like a normal button.
+ * DropdownMenu so the three-dot trigger (RowActionsButton) behaves like a normal button.
  */
 const ContextMenu: React.FC<ContextMenuProps> = ({ items, trigger }) => {
     const visibleItems = items.filter((item) => !item.hidden);

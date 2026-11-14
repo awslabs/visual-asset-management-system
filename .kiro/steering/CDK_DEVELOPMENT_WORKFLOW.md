@@ -343,6 +343,18 @@ so a second synth in the same process otherwise fails with `There is already a C
 'bucketSyncCreated--<previous stack name>--...'`. **Any new module-level registry must be reset there too**,
 or the second template silently inherits the first one's state.
 
+**Each configuration is synthesized once per `jest` run** (`infra/test/support/synthCache.ts`): a per-run
+directory shared by all workers holds each result, keyed by a hash of the template name, the WAF ARNs and the
+full configuration after `mutate`. The key covers the configuration only. A file that mocks any `fs` function
+never shares (detected automatically); a file that mocks or spies on anything else the synth reads, or needs a
+fresh synth in its own process, passes `sharedCache: false`.
+`VAMS_SYNTH_CACHE=off` disables it; `VAMS_SYNTH_CACHE=verify` re-synthesizes on every hit and fails on a
+difference. A once-per-stack guard in `lib/` keys on the `Stack` object (a `WeakSet<Stack>`), never on
+`node.addr` or the stack name, which a second app in the same process repeats.
+
+**Jest compiles transpile-only** (`isolatedModules` in `infra/tsconfig.json`), so a type error does not fail
+`npm test`. Run `npm run typecheck` in `infra/` before pushing; the CI `infra-typecheck` job runs it.
+
 #### **Step 7: Documentation**
 
 -   [ ] **Update Configuration Reference**: Document new config options in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
@@ -480,6 +492,37 @@ const newFeatureArn = ServiceHelper.getNewFeatureArn();
 ```
 
 ### **Security and Compliance Standards**
+
+#### **IAM Role Aspects (Role Names and Permissions Boundary)**
+
+`IamRoleTransform` (`infra/lib/aspects/iam-role-transform.aspect.ts`, configured from `cdk.json` `environments.aws`) overrides `RoleName` on every core-stack role, nested stacks included; changing the name formula replaces every role. The REST API Deployment's logical id includes the authorizer invoke role's name (`addAuthorizerInvokeRoleToDeployment` in `rest-api-gateway-construct.ts`), so a rename also moves the stage to a new deployment that names the new role (#1210; tests: `infra/test/api/deploymentAuthorizerInvokeRole.test.ts`, `infra/test/api/t1RestApiDeploymentLogicalId.test.ts`). When `PermissionBoundaryArn` is non-empty, `IamRoleTransform.applyPermissionsBoundary(app, arn)` sets `PermissionsBoundary` on every role in the app without touching names, and a validation hook also bounds the roles CDK adds during prepare (cross-Region export reader/writer providers). An unbounded role left in a nested stack fails synth. An empty ARN leaves `PermissionsBoundary` untouched; never set it to `NO_VALUE`. `getConfig()` validates the ARN shape and partition (`validatePermissionBoundaryArn`). Tests: `infra/test/security/iamPermissionsBoundary.test.ts`.
+
+#### **CloudWatch Logs Resource Policies: Log-Group Scoped Only**
+
+An account holds at most 10 account-level CloudWatch Logs resource policies per Region (hard limit), so one per stack caps how many VAMS deployments fit in a Region (#1266). `aws-events-targets` `CloudWatchLogGroup`, `logs.LogGroup.addToResourcePolicy()`, `logs.ResourcePolicy` and a `putResourcePolicy` custom resource each create one; do not use them. Grant the service through the log group's own policy (mirrors `infra/CLAUDE.md` anti-pattern 14):
+
+```typescript
+// ✅ CORRECT - log-group-scoped policy; the log group name is a literal, not a Ref to itself (circular)
+(logGroup.node.defaultChild as logs.CfnLogGroup).resourcePolicyDocument = new iam.PolicyDocument({
+    statements: [
+        new iam.PolicyStatement({
+            principals: [Service("EVENTS").Principal],
+            actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+            resources: [`${logGroupArn}:*`],
+            conditions: {
+                StringEquals: { "aws:SourceAccount": stack.account },
+                ArnLike: { "aws:SourceArn": ruleArnPatternOnThisDeploymentsBus },
+            },
+        }),
+    ],
+});
+rule.addTarget({ bind: () => ({ arn: logGroupArn }) });
+
+// ❌ INCORRECT - adds a Custom::CloudwatchLogResourcePolicy (account-level) per stack
+rule.addTarget(new targets.CloudWatchLogGroup(logGroup));
+```
+
+The worked example is the orchestration bus audit rule in `storageBuilder-nestedStack.ts`, pinned by `infra/test/storage/orchestrationBusAuditLogPolicy.test.ts`. The CDK OpenSearch `Domain` still creates one account-level policy per provisioned domain for its logs.
 
 #### **Rule 6: CDK Nag Compliance Required**
 
@@ -898,6 +941,8 @@ four does not reach it.
 
 **Give every test module a suite-private basename.** `test_extension_gate.py`, `test_manifest_refactor.py`, `test_construct_pipeline_failure_reporting.py`, `test_open_pipeline_function_error.py`, `test_pipeline_end_token_routes.py`, `test_output_relative_subdir.py`, and both `pcPotreeViewer` `conftest.py` files each exist in two or more pipelines. No tests directory carries an `__init__.py`, so one pytest process collecting two same-named modules errors with `import file mismatch` — `pytest backendPipelines/` therefore cannot run as a single command, and under a different invocation order a suite can import another pipeline's same-named module and assert against the wrong file while passing. Prefix a new file with its pipeline (`test_splat_extension_gate.py`).
 
+**CI runs every tests directory, one process each.** The `pipelines-test` jobs in `.github/workflows/ci.yml` run `backendPipelines/ci/pipeline_tests.py`, which finds every directory named `tests` holding a `test_*.py` module and runs `python -m pytest tests -q` from its parent on Python 3.12, in a virtual environment built from `ci/requirements-common.txt` (pytest plus the common base layer packages), then the nearest `requirements.txt` above the tests directory (stopping below the use-case directory), then the directory's `extraRequirements` in `backendPipelines/ci/suite-settings.json` when present (test-only packages, or a pipeline Lambda layer via a repo-relative `-r backendPipelines/<use case>/<pipeline>/lambdaLayer/requirements.txt`, each with its reason). CI-only per-directory settings never go inside a pipeline folder: CDK packages those folders as Lambda code and container build contexts, so such a file changes the deployed asset. The directories are split into three groups, one job each; `pipeline_tests.py list` prints them and `run --group N --work-dir <dir>` runs one group as CI does (CI adds `--low-disk`: no pip cache, and each environment is removed after its last suite). A new tests directory runs without a workflow edit. One that cannot run on a CPU-only runner goes in `backendPipelines/ci/excluded-test-dirs.json` with its reason; a test needing an optional package the default image lacks skips with `pytest.importorskip` instead. A directory whose tests render (PyVista/VTK and the like) has a `headlessDisplay` entry in `suite-settings.json` stating why; the runner runs it under `xvfb-run -a` with the thumbnail image's rendering environment (`PYVISTA_OFF_SCREEN`, `MESA_GL_VERSION_OVERRIDE`, `VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN`), and the job installs the packages `pipeline_tests.py system-packages --group N` prints (Xvfb plus Mesa, only for a group holding a rendering suite). Without a display VTK segfaults on the first render. `backendPipelines/tests/test_ci_pipeline_suites.py` fails when a test module sits outside a `tests` directory, an exclusion or a suite-settings entry is stale or has no reason, a `requirements-test.txt` or `ci-headless-display.txt` sits under `backendPipelines/`, the workflow's group matrix and `GROUP_COUNT` differ, a suite whose pipeline code opens a render window declares no headless display, or the display environment drifts from the thumbnail Dockerfile.
+
 **A suite that reads configuration from the process environment must restore it.** `splatToolbox/lambda/tests/test_extension_gate.py` reads `ALLOWED_INPUT_FILEEXTENSIONS` from the process env at import, so another suite that sets it without restoring makes splat's tests fail on unrelated assertions. Pass the value explicitly on every load, or restore what you changed.
 
 ### **Pipeline Directory Structure (`/backendPipelines/`)**
@@ -906,6 +951,8 @@ All pipeline backend code (including containers) should be organized in `/backen
 
 ```
 backendPipelines/
+├── ci/                          # CI runner for the pipeline suites (pipeline_tests.py, exclusions)
+├── tests/                       # Rules that hold for every pipeline
 ├── conversion/                  # File conversion pipelines
 │   └── 3dBasic/                # 3D basic conversion
 │       ├── lambda/             # Lambda function code
@@ -1538,7 +1585,7 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
 2. **Configuration Driven**: All pipelines must be configurable via `config.ts`
 3. **VPC Awareness**: Distinguish between VPC-required and optional pipelines
 4. **Container Separation**: Keep container code separate from Lambda orchestration
-5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`.
+5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`. The CAD/Mesh Metadata Extraction image does not install `charset_normalizer`, which trimesh needs to decode model text that is not UTF-8, so that pipeline reads mesh text as UTF-8 first (`check_input_text` in its `lambdaContainer/input_text.py`) and fails with a message naming the file that could not be read (#1044). Full rule: `backendPipelines/CLAUDE.md` "Files a Model Input References".
 6. **Error Handling**: Implement comprehensive error handling and logging
 7. **Resource Cleanup**: Ensure proper cleanup of temporary resources
 8. **VPC Builder Updates (CRITICAL)**: A pipeline using AWS Batch, ECS, or Fargate goes into some of the three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Determine that from what `pipelineBuilder-nestedStack.ts` passes as its `pipelineSubnets` (`pipelineNetwork.isolatedSubnets.pipeline` vs `pipelineNetwork.privateSubnets.pipeline`). Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
@@ -3052,6 +3099,7 @@ dependentStack.addDependency(newFeatureStack);
 ### **Pre-Deployment**
 
 -   [ ] Configuration validated
+-   [ ] `npm run check.quotas` (`infra/scripts/assertDeployQuotas.ts`) exits `0`: it checks the API Gateway `L-E5AE38E3` quota and, when `app.addStackCloudTrailLogs` is not `false`, the Region's CloudTrail trail count against the fixed 5-per-Region limit (`checkCloudTrailTrails`; a core stack that already holds a trail passes; fewer than 5 home-Region trails that reach 5 with shadow trails, i.e. multi-Region or organization trails homed elsewhere, is UNKNOWN, exit `2`, naming them). Exit `1` means the deploy would fail, `2` that a check could not run
 -   [ ] CDK synth successful
 -   [ ] CDK diff reviewed
 -   [ ] Security review completed

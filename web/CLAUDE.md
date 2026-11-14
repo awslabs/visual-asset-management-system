@@ -19,7 +19,7 @@ VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application bu
 -   Custom apiClient (fetch-based) for API calls, AWS Amplify v6 for authentication
 -   HashRouter (`#/` URLs) for all routing
 -   Plugin-based 3D viewer architecture (see `src/visualizerPlugin/CLAUDE.md`)
--   React.lazy + Suspense for route-level code splitting
+-   `lazyWithRetry` (React.lazy plus chunk-download retry) + Suspense for route-level code splitting
 
 ---
 
@@ -34,7 +34,7 @@ web/
   e2e/                      # Playwright specs against a deployed stack — see e2e/CLAUDE.md (11.5)
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table, React.lazy, permission filtering
+    routes.tsx              # Centralized route table, lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
@@ -49,6 +49,9 @@ web/
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
                             #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
                             #   Callout, VirtualList (fixed-row-height windowed list), ...)
+                            #   RowActionsButton.tsx — three-dot SVG trigger for a row's ContextMenu
+                            #   BusyControls.tsx — BusyButton, BusyInput, openWhileBusy: a control whose own
+                            #     request is in flight keeps focus (aria-disabled, not disabled)
                             #   ToastProvider.tsx — notifications for the whole module (see 6.5)
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
                             #   live under executionConfig.sqs / executionConfig.eventBridge),
@@ -329,11 +332,11 @@ window.location.href = "/#/databases/mydb/assets";
 
 ### Rule 7: Lazy Load All Pages
 
-Every page component in `routes.tsx` MUST be lazy-loaded:
+Every page component in `routes.tsx` MUST be lazy-loaded through `lazyWithRetry` (`src/utils/chunkLoadRecovery.ts`), which retries a chunk that failed to download and then reloads the page once. The route `ErrorBoundary` passes the caught error to `PageErrorPanel`, which shows "This page could not be downloaded" with Reload for a chunk failure:
 
 ```typescript
 // CORRECT
-const MyNewPage = React.lazy(() => import("./pages/MyNewPage"));
+const MyNewPage = lazyWithRetry(() => import("./pages/MyNewPage"));
 
 // INCORRECT — eager import defeats route-level code splitting
 import MyNewPage from "./pages/MyNewPage";
@@ -514,6 +517,8 @@ POST   /database/{databaseId}/assets/{assetId}/download  # Download
 POST   /auth/routes                                 # Check allowed routes
 GET    /secure-config                               # Get runtime config
 ```
+
+**An id in a URL keeps every character it has (#1476).** An asset id may end in `#` or `%`. `apiClient.buildUrl` percent-encodes any `#` or `?` in a path before `new URL()`, which would read either as the start of a fragment or a query, and any `%` that does not start an escape (a `%` followed by two hex digits is kept, because callers pass segments they encoded themselves), so service paths interpolate ids as they are and pass query parameters in `queryStringParameters`, never inline. A URL built outside `apiClient` (a viewer's `${config.api}database/.../download/stream/...`) and every in-app link to an asset route wrap the asset id in `encodeURIComponent`; the router decodes route parameters, so the page receives the id as it is. `src/__tests__/assetIdInUrls.test.ts` fails on a raw asset id in either.
 
 ---
 
@@ -810,7 +815,7 @@ export default MyPage;
 
 ```typescript
 // In routes.tsx:
-const MyPage = React.lazy(() => import("./pages/MyPage"));
+const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 // In routeTable array:
 {
@@ -1152,7 +1157,7 @@ These extend the Critical Rules above. Where a rule already covers the anti-patt
 -   **Naming a div after a Tailwind utility outside the orchestration module** (`container`, `hidden`, `block`, `flex`, …) — see Rule 2. Tailwind's utility CSS is global even where its content glob is not, so the class silently applies its rule to a Cloudscape page.
 -   **`apiClient` / raw `fetch` / `axios` in components or pages** — see Rule 3. Only files in `src/services/` may import `apiClient`.
 -   **`BrowserRouter`** — see Rule 6. The app uses `HashRouter`.
--   **Eagerly importing page components in `routes.tsx`** — see Rule 7. All pages must be `React.lazy`-loaded.
+-   **Eagerly importing page components in `routes.tsx`** — see Rule 7. All pages must be loaded with `lazyWithRetry`.
 -   **yarn** — see Rule 4. npm only.
 
 ### 13.1 Do NOT Use Amplify Cache

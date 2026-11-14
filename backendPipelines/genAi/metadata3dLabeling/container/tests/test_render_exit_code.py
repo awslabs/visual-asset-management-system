@@ -90,6 +90,28 @@ def test_allconvert_reports_the_subprocess_exit_code(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
+def test_a_script_error_sets_blender_exit_code(monkeypatch, tmp_path):
+    """Blender exits 0 after a Python exception in its `-P` script unless `--python-exit-code` is set.
+
+    Without the flag a failed import (an operator the image lacks, an importer error) reaches the
+    stage as exit code 0 and an empty output folder, reported as "No output files generated." with no
+    cause. The flag only applies to scripts that follow it on the command line.
+    """
+    output_dir = str(tmp_path / "output")
+    os.makedirs(output_dir)
+    run_mock = MagicMock(return_value=MagicMock(returncode=1))
+    monkeypatch.setattr(pipeline.subprocess, "run", run_mock)
+
+    pipeline.allconvert_blenderrenderer_pipeline("/tmp/input/pump.fbx", output_dir)
+
+    command = run_mock.call_args.args[0]
+    assert "--python-exit-code" in command, f"no --python-exit-code in {command}"
+    flag = command.index("--python-exit-code")
+    assert command[flag + 1] == "1"
+    assert flag < command.index("-P"), "--python-exit-code must precede the -P script"
+
+
+@pytest.mark.unit
 def test_nonzero_exit_fails_the_local_test_stage(monkeypatch, tmp_path):
     """The local-test path reports the same failure rather than an unconditional success."""
     monkeypatch.chdir(tmp_path)

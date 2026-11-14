@@ -67,12 +67,12 @@ POST /subscriptions
 
 ### Request body
 
-| Field         | Type   | Required | Description                                                               |
-| ------------- | ------ | -------- | ------------------------------------------------------------------------- |
-| `eventName`   | string | Yes      | Event type. Must be `Asset Version Change`.                               |
-| `entityName`  | string | Yes      | Entity type. Must be `Asset`.                                             |
-| `entityId`    | string | Yes      | Asset ID to subscribe to (3-63 chars, alphanumeric, hyphens, underscores) |
-| `subscribers` | array  | Yes      | Array of user IDs to subscribe                                            |
+| Field         | Type   | Required | Description                                                                        |
+| ------------- | ------ | -------- | ---------------------------------------------------------------------------------- |
+| `eventName`   | string | Yes      | Event type. Must be `Asset Version Change`.                                        |
+| `entityName`  | string | Yes      | Entity type. Must be `Asset`.                                                      |
+| `entityId`    | string | Yes      | Asset ID to subscribe to (any ID the asset API accepts, including dots and spaces) |
+| `subscribers` | array  | Yes      | Array of user IDs to subscribe                                                     |
 
 ### Request body example
 

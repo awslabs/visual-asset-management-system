@@ -10,7 +10,7 @@ from vamscli.main import cli
 from vamscli.version import get_version
 from vamscli.utils.exceptions import (
     SetupRequiredError, APIError, ConfigurationError, AuthenticationError,
-    OverrideTokenError, APIUnavailableError
+    OverrideTokenError, APIUnavailableError, PermissionDeniedError, TokenExpiredError,
 )
 
 
@@ -702,7 +702,7 @@ class TestAuthCommands:
             # Verify credentials were saved
             mocks['profile_manager'].save_credentials.assert_called_once_with({
                 'username': 'test@example.com',
-                'password': 'password123'
+                'password': 'password123'  # pragma: allowlist secret
             })
     
     def test_auth_logout_success(self, cli_runner, auth_command_mocks):
@@ -1015,6 +1015,62 @@ class TestAuthCommands:
             assert result.exit_code == 1
             assert '✗ Token Override Authentication Error' in result.output
             assert 'Invalid token' in result.output
+
+    @pytest.mark.parametrize(
+        "raised",
+        [
+            AuthenticationError("Invalid token"),
+            OverrideTokenError("Override token authentication failed"),
+            TokenExpiredError("Override token has expired"),
+            PermissionDeniedError("Access forbidden"),
+        ],
+    )
+    def test_auth_login_token_override_refused_errors_fail_closed(
+        self, cli_runner, auth_command_mocks, raised
+    ):
+        """Typed auth refusals from login-profile must fail closed and clear the token (#817)."""
+        with auth_command_mocks as mocks:
+            mocks['api_client'].call_login_profile.side_effect = raised
+
+            result = cli_runner.invoke(cli, [
+                'auth', 'login',
+                '--user-id', 'test@example.com',
+                '--token-override', 'invalid-token',
+                '--json-output',
+            ])
+
+            assert result.exit_code != 0
+            assert 'Token override authentication successful' not in result.output
+            assert '"success": true' not in result.output
+            mocks['profile_manager'].delete_auth_profile.assert_called()
+
+    @pytest.mark.parametrize(
+        "raised",
+        [
+            AuthenticationError("Invalid token"),
+            OverrideTokenError("Override token authentication failed"),
+            TokenExpiredError("Override token has expired"),
+            PermissionDeniedError("Access forbidden"),
+        ],
+    )
+    def test_auth_set_override_refused_errors_fail_closed(
+        self, cli_runner, auth_command_mocks, raised
+    ):
+        """set-override must fail closed on typed auth refusals and clear the token (#817)."""
+        with auth_command_mocks as mocks:
+            mocks['api_client'].call_login_profile.side_effect = raised
+
+            result = cli_runner.invoke(cli, [
+                'auth', 'set-override',
+                '-u', 'test@example.com',
+                '--token', 'invalid-token',
+                '--json-output',
+            ])
+
+            assert result.exit_code != 0
+            assert 'Override token saved successfully' not in result.output
+            assert '"success": true' not in result.output
+            mocks['profile_manager'].delete_auth_profile.assert_called()
     
     def test_auth_login_token_override_with_save_credentials_error(self, cli_runner, auth_command_mocks):
         """Test auth login with token override and save credentials (should fail)."""

@@ -337,4 +337,46 @@ describe("PipelinesPage", () => {
         await openActionsFor(userEvent.setup(), "Pipeline One");
         expect(screen.getByRole("menuitem", { name: "Templates" })).toBeInTheDocument();
     });
+
+    const renderPage = () => {
+        (queries.usePipelines as jest.Mock).mockReturnValue(infinite(mockPipelines));
+        (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
+            loading: false,
+            can: () => true,
+        });
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <PipelinesPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+
+    it("draws the row actions button as an icon and opens its menu by click and by keyboard", async () => {
+        renderPage();
+        const button = screen.getByRole("button", { name: "Actions for Pipeline One" });
+        // An SVG icon, not a text glyph that renders blank without a font carrying it.
+        expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+        expect(button.textContent).toBe("");
+
+        const user = userEvent.setup();
+        await user.click(button);
+        expect(await screen.findByRole("menu")).toBeInTheDocument();
+        await user.keyboard("{Escape}");
+        await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+        expect(button).toHaveFocus();
+
+        await user.keyboard("{Enter}");
+        expect(await screen.findByRole("menu")).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "Edit" })).toBeInTheDocument();
+    });
+
+    it("shows a placeholder in the search box", () => {
+        renderPage();
+        expect(screen.getByRole("textbox", { name: "Search" })).toHaveAttribute(
+            "placeholder",
+            "Search pipelines"
+        );
+    });
 });

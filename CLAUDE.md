@@ -54,6 +54,7 @@ root/
 │   └── permissionsSetup/      # Permission bootstrap scripts
 ├── backendPipelines/          # Processing pipeline definitions (containers + Lambdas)
 │   ├── CLAUDE.md              # Pipeline development guide (S3 output paths, assetId threading, new-pipeline checklist)
+│   ├── ci/                    # CI runner for the pipeline suites (one pytest process per tests directory)
 │   ├── genAi/
 │   │   ├── nvidia/
 │   │   │   ├── cosmos/
@@ -470,6 +471,11 @@ cd web && npm run build                                    # Production build
 # Backend (backend/)
 cd backend && python -m pytest                             # All tests
 cd backend && python -m pytest tests/handlers/assets/ -v   # Specific handler tests
+
+# Pipelines (backendPipelines/) — one pytest process per tests directory, as CI runs them
+python backendPipelines/ci/pipeline_tests.py list                                  # Directories, groups, requirements
+python backendPipelines/ci/pipeline_tests.py system-packages --group 2             # Ubuntu packages a group needs (xvfb for rendering suites)
+python backendPipelines/ci/pipeline_tests.py run --group 1 --work-dir /tmp/pipeline-tests  # One CI group (1-3)
 
 # CDK (infra/)
 cd infra && npm install

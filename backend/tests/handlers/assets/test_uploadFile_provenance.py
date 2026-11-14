@@ -71,11 +71,11 @@ def test_external_complete_model_accepts_workflow_fields():
         uploadType="assetFile",
         files=[{"relativeKey": "/a.glb", "tempKey": "temp/upload123/a.glb"}],
         workflowId="wf-abc123",
-        workflowExecutionId="b9a3aba3c092475f978ad39e5d5a2657",
+        workflowExecutionId="b9a3aba3c092475f978ad39e5d5a2657",  # pragma: allowlist secret
         changeUserId="SYSTEM_USER",
     )
     assert m.workflowId == "wf-abc123"
-    assert m.workflowExecutionId == "b9a3aba3c092475f978ad39e5d5a2657"
+    assert m.workflowExecutionId == "b9a3aba3c092475f978ad39e5d5a2657"  # pragma: allowlist secret
     assert m.changeUserId == "SYSTEM_USER"
 
 
@@ -168,7 +168,7 @@ class TestWorkflowExecutionIdProvenanceIsGuidValidated:
         )
 
     @pytest.mark.parametrize("execution_id", [
-        "b9a3aba3c092475f978ad39e5d5a2657",       # new_guid(): 32 lowercase hex
+        "b9a3aba3c092475f978ad39e5d5a2657",       # new_guid(): 32 lowercase hex  # pragma: allowlist secret
         "b9a3aba3-c092-475f-978a-d39e5d5a2657",   # the dashed uuid Step Functions assigns
         "B9A3ABA3-C092-475F-978A-D39E5D5A2657",   # the dashed form is case-insensitive
     ])
@@ -178,8 +178,9 @@ class TestWorkflowExecutionIdProvenanceIsGuidValidated:
     @pytest.mark.parametrize("bad", [
         "exec-xyz789",                             # the placeholder shape this once allowed
         "not-an-execution-id",
+        # pragma: allowlist nextline secret
         "B9A3ABA3C092475F978AD39E5D5A2657",        # undashed stays lowercase-only (exact DDB key)
-        "b9a3aba3c092475f978ad39e5d5a26",          # too short
+        "b9a3aba3c092475f978ad39e5d5a26",          # too short  # pragma: allowlist secret
         "'; DROP TABLE assets; --",
     ])
     def test_a_value_that_is_not_an_execution_id_is_rejected(self, bad):

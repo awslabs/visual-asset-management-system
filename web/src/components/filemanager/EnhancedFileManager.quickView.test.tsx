@@ -32,6 +32,7 @@ jest.mock("./components/FileDetailsPanel", () => ({
         const { FileManagerContext: Ctx } = require("./components/FileTreeView");
         const ctx = useCtx(Ctx);
         return (
+            // pragma: allowlist nextline secret
             <button onClick={() => ctx?.onViewExecution?.("571a47bf03d645f08f9c11606f4f251e")}>
                 View execution
             </button>
@@ -86,6 +87,7 @@ describe("EnhancedFileManager hosts the execution quick view", () => {
         });
         useExecutionDetails.mockReturnValue({
             data: {
+                // pragma: allowlist nextline secret
                 workflowExecutionId: "571a47bf03d645f08f9c11606f4f251e",
                 workflowId: "conversion-3d-basic",
                 workflowDatabaseId: "GLOBAL",
@@ -115,8 +117,10 @@ describe("EnhancedFileManager hosts the execution quick view", () => {
         // The drawer is a dialog portalled to document.body, titled by the quick view.
         const dialog = await screen.findByRole("dialog");
         expect(dialog).toHaveTextContent("Execution Details");
+        // pragma: allowlist nextline secret
         expect(dialog).toHaveTextContent("571a47bf03d645f08f9c11606f4f251e");
         expect(dialog).toHaveTextContent("/optimized/BoomBox.glb");
+        // pragma: allowlist nextline secret
         expect(useExecutionDetails).toHaveBeenCalledWith("571a47bf03d645f08f9c11606f4f251e");
         // The module's styles are scoped to this root; the panel carries it so it renders themed.
         expect(dialog.className).toContain("orchestration-root");
@@ -142,6 +146,7 @@ describe("EnhancedFileManager hosts the execution quick view", () => {
         await userEvent.click(screen.getByText(/Open full details/));
 
         const page = await screen.findByTestId("execution-page");
+        // pragma: allowlist nextline secret
         expect(page).toHaveTextContent("571a47bf03d645f08f9c11606f4f251e");
         // Following the link closes the panel, as it does on the executions board.
         await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

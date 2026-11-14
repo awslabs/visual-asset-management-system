@@ -25,21 +25,24 @@ _PIPELINE_ROOT = os.path.dirname(_CONTAINER)
 RENDER_SCENE = os.path.join(_CONTAINER, "main", "blenderAppScripts", "renderScene.py")
 PIPELINE_SCHEMA = os.path.join(_PIPELINE_ROOT, "vamsSchema", "pipeline.json")
 
-# The operator each declared format must reach. These are the real Blender 4.x operator paths.
+# The operator each declared format must reach, on the Blender the image pins (5.1, Alpine 3.24).
 EXPECTED_IMPORTERS = {
     "fbx": "bpy.ops.import_scene.fbx",
     "glb": "bpy.ops.import_scene.gltf",
     "obj": "bpy.ops.wm.obj_import",
     "stl": "bpy.ops.wm.stl_import",
     "ply": "bpy.ops.wm.ply_import",
-    "usd": "bpy.ops.wm.usd_import",
-    "dae": "bpy.ops.wm.collada_import",
     "abc": "bpy.ops.wm.alembic_import",
 }
 
-# Operators the stand-in bpy exposes, grouped by the module they live on.
+# Formats the image's Blender cannot import: Alpine builds it without USD, and Blender 5 has no
+# COLLADA importer. Calling `bpy.ops.wm.usd_import` or `collada_import` there raises AttributeError.
+NOT_IMPORTABLE = ["dae", "usd"]
+
+# Operators the stand-in bpy exposes, grouped by the module they live on: exactly the importers the
+# pinned image's Blender has, so a dispatch branch for a missing importer fails here as it does there.
 _IMPORT_SCENE_OPS = ["fbx", "gltf"]
-_WM_OPS = ["obj_import", "stl_import", "ply_import", "usd_import", "collada_import", "alembic_import"]
+_WM_OPS = ["obj_import", "stl_import", "ply_import", "alembic_import"]
 
 
 class _OperatorModule:
@@ -77,17 +80,30 @@ def _dispatch_node():
     raise AssertionError("no importExtension dispatch chain found in renderScene.py")
 
 
-def _run_dispatch(extension, filepath="/tmp/input/model.bin"):
-    """Execute only the dispatch chain and return the (operator, kwargs) calls it made."""
+FBX_LIGHT_PLACEHOLDER = "add_fbx_light_shadow_placeholder"
+
+
+def _run_dispatch_all(extension, filepath="/tmp/input/model.bin"):
+    """Execute only the dispatch chain and return every call it made, in order.
+
+    The chain's own helper (`add_fbx_light_shadow_placeholder`, defined above it in renderScene.py) is
+    recorded by name; its behaviour is tested in test_metadata3d_fbx_light_shadow_placeholder.py.
+    """
     module = ast.fix_missing_locations(ast.Module(body=[_dispatch_node()], type_ignores=[]))
     calls = []
     namespace = {
         "bpy": _fake_bpy(calls),
         "importExtension": extension,
         "inputFilePath": filepath,
+        FBX_LIGHT_PLACEHOLDER: lambda: calls.append((FBX_LIGHT_PLACEHOLDER, {})),
     }
     exec(compile(module, "<renderScene-dispatch>", "exec"), namespace)  # nosemgrep: dangerous-exec-audit
     return calls
+
+
+def _run_dispatch(extension, filepath="/tmp/input/model.bin"):
+    """Execute only the dispatch chain and return the (operator, kwargs) Blender operator calls it made."""
+    return [call for call in _run_dispatch_all(extension, filepath) if call[0].startswith("bpy.ops.")]
 
 
 def _dispatch_extensions():
@@ -125,9 +141,9 @@ def _declared_extensions():
 @pytest.mark.unit
 @pytest.mark.parametrize("extension", sorted(EXPECTED_IMPORTERS))
 def test_every_declared_format_reaches_a_real_importer(extension):
-    """Each of the eight advertised formats calls exactly one existing Blender operator.
+    """Each advertised format calls exactly one Blender operator the image has.
 
-    Against the doubled-prefix form (`bpy.ops.wm.bpy.ops.wm.usd_import`) the usd/dae/abc cases raise
+    Against the doubled-prefix form (`bpy.ops.wm.bpy.ops.wm.alembic_import`) the abc case raises
     AttributeError here, which is the same failure the container hits.
     """
     calls = _run_dispatch(extension, filepath=f"/tmp/input/model.{extension}")
@@ -135,6 +151,24 @@ def test_every_declared_format_reaches_a_real_importer(extension):
     operator, kwargs = calls[0]
     assert operator == EXPECTED_IMPORTERS[extension]
     assert kwargs == {"filepath": f"/tmp/input/model.{extension}"}
+
+
+@pytest.mark.unit
+def test_fbx_import_adds_the_light_shadow_placeholder_first():
+    """The FBX importer of the image's Blender 5.1 fails on any file with a light unless the
+    placeholder exists before `import_scene.fbx` runs (#1181)."""
+    calls = _run_dispatch_all("fbx", filepath="/tmp/input/model.fbx")
+    assert calls == [
+        (FBX_LIGHT_PLACEHOLDER, {}),
+        ("bpy.ops.import_scene.fbx", {"filepath": "/tmp/input/model.fbx"}),
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("extension", sorted(set(EXPECTED_IMPORTERS) - {"fbx"}))
+def test_other_formats_do_not_add_the_placeholder(extension):
+    calls = _run_dispatch_all(extension, filepath=f"/tmp/input/model.{extension}")
+    assert [name for name, _ in calls if name == FBX_LIGHT_PLACEHOLDER] == []
 
 
 @pytest.mark.unit
@@ -156,6 +190,25 @@ def test_unsupported_extension_stops_the_script():
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("extension", NOT_IMPORTABLE)
+def test_a_format_the_image_cannot_import_stops_the_script(extension):
+    """`.usd` and `.dae` reach the unsupported-extension exit, not an importer the image lacks.
+
+    A branch that calls `usd_import` or `collada_import` raises AttributeError in the image, which
+    reports a missing operator rather than an unsupported format.
+    """
+    with pytest.raises(SystemExit) as excinfo:
+        _run_dispatch(extension, filepath=f"/tmp/input/model.{extension}")
+    assert extension in str(excinfo.value)
+
+
+@pytest.mark.unit
+def test_dispatch_has_no_branch_for_a_format_the_image_cannot_import():
+    dispatched = [extension.lower() for extension in _dispatch_extensions()]
+    assert [extension for extension in NOT_IMPORTABLE if extension in dispatched] == []
+
+
+@pytest.mark.unit
 def test_dispatch_chain_has_a_terminal_raise():
     body = _terminal_else()
     assert body is not None, "the import dispatch chain has no else branch"
@@ -174,3 +227,4 @@ def test_every_advertised_extension_has_a_dispatch_branch():
     missing = [extension for extension in declared if extension not in dispatched]
     assert missing == [], f"advertised with no importer branch: {missing}"
     assert declared == sorted(EXPECTED_IMPORTERS), "vamsSchema allow list changed; update the mapping"
+    assert [extension for extension in NOT_IMPORTABLE if extension in declared] == []

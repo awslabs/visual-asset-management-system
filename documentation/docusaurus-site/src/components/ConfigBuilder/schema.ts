@@ -319,7 +319,7 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "security",
         advanced: true,
-        help: "Create a dedicated CloudWatch Logs group and CloudTrail trail for this stack.",
+        help: "Create a dedicated CloudWatch Logs group and CloudTrail trail for this stack. CloudTrail allows five trails per Region; turn this off in a Region that already has five.",
     },
     {
         path: "app.useKmsCmkEncryption.enabled",
@@ -1011,7 +1011,7 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "pipelines-standard",
         advanced: true,
-        help: "Required when enabled (e.g. global.anthropic.claude-sonnet-4-5-20250929-v1:0).",
+        help: "Required when enabled (commercial default global.anthropic.claude-sonnet-5-5).",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
     },
     {

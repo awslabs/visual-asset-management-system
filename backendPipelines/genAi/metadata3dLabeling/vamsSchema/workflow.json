@@ -1,7 +1,7 @@
 {
     "workflowName": "GenAI 3D Metadata Labeling",
     "category": "GenAI",
-    "description": "GenAI 3D Metadata Labeling Pipeline (Asset-level metadata generation from file) - 3D Mesh files using Blender Image Extraction. Supported Input Formats: OBJ, GLB, FBX, ABC, DAE, PLY, STL, USD",
+    "description": "GenAI 3D Metadata Labeling Pipeline (Asset-level metadata generation from file) - 3D Mesh files using Blender Image Extraction. Supported Input Formats: OBJ, GLB, FBX, ABC, PLY, STL",
     "systemConfig": {
         "inputFileArity": "one",
         "assetScope": {
@@ -16,7 +16,7 @@
             "fileAttributes": true
         },
         "inputFileFilters": {
-            "allow": ["*.stl", "*.obj", "*.ply", "*.glb", "*.usd", "*.dae", "*.abc", "*.fbx"],
+            "allow": ["*.stl", "*.obj", "*.ply", "*.glb", "*.abc", "*.fbx"],
             "exclude": []
         },
         "concurrencyRestriction": "none",
@@ -30,7 +30,7 @@
         {
             "triggerType": "fileUpload",
             "inputFileFilters": {
-                "allow": ["*.stl", "*.obj", "*.ply", "*.glb", "*.usd", "*.dae", "*.abc", "*.fbx"],
+                "allow": ["*.stl", "*.obj", "*.ply", "*.glb", "*.abc", "*.fbx"],
                 "exclude": []
             },
             "defaultTemplateIds": {

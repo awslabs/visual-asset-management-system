@@ -3,6 +3,7 @@
 ARG ISAAC_LAB_VERSION=2.3.0
 ARG BASE_IMAGE=nvcr.io/nvidia/isaac-lab:${ISAAC_LAB_VERSION}
 
+# checkov:skip=CKV_DOCKER_7: BASE_IMAGE defaults to the versioned isaac-lab:${ISAAC_LAB_VERSION} tag; checkov does not resolve build args
 FROM ${BASE_IMAGE}
 
 # NVIDIA EULA acceptance - must be explicitly set to "Y" at build time

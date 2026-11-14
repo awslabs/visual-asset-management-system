@@ -13,6 +13,7 @@
         "build": "tsc",
         "watch": "tsc -w",
         "test": "jest",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
         "cdk": "cdk",
         "cdk.synth.app": "cdk synth --all --require-approval never",
         "cdk.deploy.app": "cdk deploy --all --require-approval never",

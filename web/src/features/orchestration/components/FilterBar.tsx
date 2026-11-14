@@ -22,6 +22,8 @@ interface FilterBarProps {
     value: FilterValue;
     onChange: (value: FilterValue) => void;
     facets?: FilterFacet[];
+    /** Placeholder for the search box; none when omitted. */
+    searchPlaceholder?: string;
     /** When provided, renders a refresh icon (next to the search box) that force-refetches the list. */
     onRefresh?: () => void;
     refreshing?: boolean;
@@ -31,6 +33,7 @@ const FilterBar: React.FC<FilterBarProps> = ({
     value,
     onChange,
     facets = [],
+    searchPlaceholder,
     onRefresh,
     refreshing = false,
 }) => {
@@ -50,7 +53,11 @@ const FilterBar: React.FC<FilterBarProps> = ({
     // so the row reads: search + refresh on the left, all filters + page controls on the right.
     return (
         <div className="flex flex-wrap gap-2 items-center">
-            <SearchInput value={value.searchText} onChange={handleSearchChange} />
+            <SearchInput
+                value={value.searchText}
+                onChange={handleSearchChange}
+                placeholder={searchPlaceholder}
+            />
             {onRefresh && <RefreshButton onClick={onRefresh} busy={refreshing} />}
             {/* Facets can still be passed for backward compatibility, but the standard layout renders
                 them on the right via <FilterFacets>. */}

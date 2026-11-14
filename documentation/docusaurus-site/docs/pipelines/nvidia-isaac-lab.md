@@ -8,16 +8,16 @@ Read the AWS blog post [GPU-Accelerated Robotic Simulation Training with NVIDIA 
 
 ## Overview
 
-| Property               | Value                                                   |
-| ---------------------- | ------------------------------------------------------- |
-| **Pipeline IDs**       | `isaaclab-training`, `isaaclab-evaluation`              |
-| **Configuration flag** | `app.pipelines.useIsaacLabTraining.enabled`             |
-| **Execution type**     | Lambda (asynchronous with callback)                     |
-| **Launch**             | Manual only -- neither workflow registers a trigger     |
-| **Compute**            | AWS Batch with GPU instances (G6, G6E, G5 families)     |
-| **Storage**            | Amazon Elastic File System (Amazon EFS) for checkpoints |
-| **Training timeout**   | 8 hours                                                 |
-| **Evaluation timeout** | 2 hours                                                 |
+| Property               | Value                                                                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **Pipeline IDs**       | `isaaclab-training`, `isaaclab-evaluation`                                                                                        |
+| **Configuration flag** | `app.pipelines.useIsaacLabTraining.enabled`                                                                                       |
+| **Execution type**     | Lambda (asynchronous with callback)                                                                                               |
+| **Launch**             | Manual only -- neither workflow registers a trigger                                                                               |
+| **Compute**            | AWS Batch with GPU instances (G6, G6E, G5 families)                                                                               |
+| **Storage**            | Amazon Elastic File System (Amazon EFS) for checkpoints                                                                           |
+| **Training timeout**   | 8 hours for the workflow step, including the wait for a GPU instance and the image pull. The AWS Batch job limit is also 8 hours. |
+| **Evaluation timeout** | 2 hours for the workflow step, including the wait for a GPU instance                                                              |
 
 ## Architecture
 
@@ -109,13 +109,16 @@ When `useCodeBuild: true`, the container is built in the cloud using AWS CodeBui
 **Troubleshooting CodeBuild failures:** CodeBuild runs asynchronously after CDK deployment completes. If a container build fails, the CDK deployment itself will succeed but the Batch pipeline will fail with a container image pull error. To check build status:
 
 ```bash
-# Get the CodeBuild project name from stack outputs
-aws cloudformation describe-stacks --stack-name <your-stack-name> --query "Stacks[0].Outputs[?contains(OutputKey,'IsaacLabTrainingCodeBuildProject')].OutputValue" --output text
+# Get the CodeBuild project name. The output is on the Isaac Lab nested stack,
+# whose name starts with the core stack's name (vams-core-<baseStackName>-<region>).
+aws cloudformation describe-stacks --query "Stacks[?starts_with(StackName, '<your-core-stack-name>')].Outputs[] | [?contains(OutputKey, 'IsaacLabTrainingCodeBuildProject')].OutputValue" --output text
 
-# Check build status
-aws codebuild list-builds-for-project --project-name <project-name>
-aws codebuild batch-get-builds --ids <build-id>
+# Check the status of the latest build
+aws codebuild list-builds-for-project --project-name <project-name> --no-paginate --query 'ids[0]' --output text
+aws codebuild batch-get-builds --ids <build-id> --query 'builds[0].buildStatus' --output text
 ```
+
+Start a training or evaluation run once the latest build prints `SUCCEEDED`. A deployment that changes the container source starts a new build, and runs started before it finishes use the previous image.
 
 :::warning[CodeBuild Internet Access]
 CodeBuild runs in the same private VPC subnets used by the Isaac Lab pipeline Batch compute environments. These private subnets require a NAT Gateway for internet egress, which is automatically provisioned when the Isaac Lab pipeline is enabled.
@@ -177,16 +180,22 @@ The **Template tag** column names the execute-form field that supplies each para
 | `trainingConfig.rlLibrary`     | `RL_LIBRARY`     | `"rsl_rl"`                   | RL library to use. Options: `"rsl_rl"`, `"rl_games"`, `"skrl"`. Any other value fails the execution, naming the value and the supported set. The rejection happens in the pipeline's first state, so no GPU node is provisioned and no container image is pulled. |
 | `trainingConfig.seed`          | `SEED`           | `null`                       | Optional random seed for reproducibility. Leaving the field blank lets Isaac Lab choose one.                                                                                                                                                                      |
 
+:::note[AutoMate assembly with rl_games]
+The rl_games configuration of `Isaac-AutoMate-Assembly-Direct-v0` collects 32 steps per environment and trains on minibatches of 4096, and rl_games requires the batch to divide evenly into minibatches. Use a multiple of 128 for `NUM_ENVS`. With fewer, for example 64, the environment builds and rl_games then stops with an `AssertionError`, which the execution reports as `Training failed with exit code 1`.
+:::
+
 ### Training output
 
-Training results are uploaded to the VAMS asset bucket under the job UUID prefix:
+Training results are added to the asset the run executed against. Both Isaac Lab workflows set `defaultOutputFileBaseExecutionPathExtension` to `/{{executionId}}/`, which places each output in a folder named for the workflow execution, immediately before the file name (see [Output path prefix](../api/workflows.md#output-path-prefix)):
 
-| Output                   | Format  | Description                                                              |
-| ------------------------ | ------- | ------------------------------------------------------------------------ |
-| `checkpoints/model_*.pt` | PyTorch | Model checkpoint files saved during training                             |
-| `metrics.csv`            | CSV     | Training metrics exported from TensorBoard event files                   |
-| `*_git_diff.txt`         | Text    | Configuration diff files (converted from `.diff` for VAMS compatibility) |
-| `train-config.json`      | JSON    | Input configuration saved for reference                                  |
+| Output                                 | Format  | Description                                                              |
+| -------------------------------------- | ------- | ------------------------------------------------------------------------ |
+| `checkpoints/<executionId>/model_*.pt` | PyTorch | Model checkpoint files saved during training                             |
+| `<executionId>/metrics.csv`            | CSV     | Training metrics exported from TensorBoard event files                   |
+| `<executionId>/*_git_diff.txt`         | Text    | Configuration diff files (converted from `.diff` for VAMS compatibility) |
+| `<executionId>/train-config.json`      | JSON    | Input configuration saved for reference                                  |
+
+For example, a run whose execution id is `3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a` writes its last rsl_rl checkpoint to `checkpoints/3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a/model_99.pt`.
 
 ## Evaluation mode
 
@@ -213,25 +222,27 @@ The evaluation pipeline requires a template (`systemConfig.requireTemplate` is `
 
 The **Template tag** column names the execute-form field that supplies each parameter. `mode` is fixed by the template body, because it is what makes this the evaluation pipeline rather than the training one.
 
-| Parameter                        | Template tag        | Default                      | Description                                                                                                                                                                                                                           |
-| -------------------------------- | ------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `trainingConfig.mode`            | --                  | (required)                   | Must be `"evaluate"` for evaluation mode.                                                                                                                                                                                             |
-| `trainingConfig.task`            | `TASK`              | `"Isaac-Cartpole-Direct-v0"` | The Isaac Lab task environment name. It must match the task the policy was trained on.                                                                                                                                                |
-| `trainingConfig.numEnvs`         | `NUM_ENVS`          | `100`                        | Number of parallel environments for evaluation.                                                                                                                                                                                       |
-| `trainingConfig.numEpisodes`     | `NUM_EPISODES`      | `50`                         | Number of evaluation episodes to run.                                                                                                                                                                                                 |
-| `trainingConfig.stepsPerEpisode` | `STEPS_PER_EPISODE` | `1000`                       | Steps per evaluation episode.                                                                                                                                                                                                         |
-| `trainingConfig.recordVideo`     | `RECORD_VIDEO`      | `false`                      | Whether the evaluation video is uploaded to the asset. Recording always happens, because the Isaac Lab play script requires `--video` to terminate; this controls publication only.                                                   |
-| `trainingConfig.rlLibrary`       | `RL_LIBRARY`        | `"rsl_rl"`                   | RL library the policy was trained with. Selects the Isaac Lab play script, so it must match the library used for training. Options: `"rsl_rl"`, `"rl_games"`, `"skrl"`; any other value fails the execution rather than falling back. |
-| `trainingConfig.checkpointPath`  | `CHECKPOINT_PATH`   | `null`                       | Path to the policy file within the asset, for example `checkpoints/model_300.pt`. Leaving the field blank evaluates the `.pt` file found on the asset.                                                                                |
-| `trainingConfig.policyS3Uri`     | --                  | `null`                       | Amazon S3 URI to a `.pt` policy file. Operator-supplied, and must name the executing asset's own bucket. Omit it to use `checkpointPath` or auto-discovery.                                                                           |
+| Parameter                        | Template tag        | Default                      | Description                                                                                                                                                                                                                                      |
+| -------------------------------- | ------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `trainingConfig.mode`            | --                  | (required)                   | Must be `"evaluate"` for evaluation mode.                                                                                                                                                                                                        |
+| `trainingConfig.task`            | `TASK`              | `"Isaac-Cartpole-Direct-v0"` | The Isaac Lab task environment name. It must match the task the policy was trained on.                                                                                                                                                           |
+| `trainingConfig.numEnvs`         | `NUM_ENVS`          | `100`                        | Number of parallel environments for evaluation.                                                                                                                                                                                                  |
+| `trainingConfig.numEpisodes`     | `NUM_EPISODES`      | `50`                         | Number of evaluation episodes to run.                                                                                                                                                                                                            |
+| `trainingConfig.stepsPerEpisode` | `STEPS_PER_EPISODE` | `1000`                       | Steps per evaluation episode.                                                                                                                                                                                                                    |
+| `trainingConfig.recordVideo`     | `RECORD_VIDEO`      | `false`                      | Whether the evaluation video is uploaded to the asset. Recording always happens, because the Isaac Lab play script requires `--video` to terminate; this controls publication only.                                                              |
+| `trainingConfig.rlLibrary`       | `RL_LIBRARY`        | `"rsl_rl"`                   | RL library the policy was trained with. Selects the Isaac Lab play script, so it must match the library used for training. Options: `"rsl_rl"`, `"rl_games"`, `"skrl"`; any other value fails the execution rather than falling back.            |
+| `trainingConfig.checkpointPath`  | `CHECKPOINT_PATH`   | `null`                       | Path to the policy file within the asset, for example `checkpoints/<executionId>/model_300.pt` for a checkpoint a training run wrote. Leaving the field blank evaluates the highest-numbered checkpoint in the run folder written most recently. |
+| `trainingConfig.policyS3Uri`     | --                  | `null`                       | Amazon S3 URI to a `.pt` policy file. Operator-supplied, and must name the executing asset's own bucket. Omit it to use `checkpointPath` or auto-discovery.                                                                                      |
 
 ### Evaluation output
 
-| Output                 | Format | Description                                                          |
-| ---------------------- | ------ | -------------------------------------------------------------------- |
-| `metrics.csv`          | CSV    | Evaluation metrics from TensorBoard                                  |
-| `videos/*.mp4`         | MP4    | Evaluation episode recordings, uploaded when `recordVideo` is `true` |
-| `evaluate-config.json` | JSON   | Input configuration saved for reference                              |
+Evaluation outputs use the same per-execution folders as training:
+
+| Output                               | Format | Description                                                          |
+| ------------------------------------ | ------ | -------------------------------------------------------------------- |
+| `<executionId>/metrics.csv`          | CSV    | Evaluation metrics from TensorBoard                                  |
+| `videos/<executionId>/*.mp4`         | MP4    | Evaluation episode recordings, uploaded when `recordVideo` is `true` |
+| `<executionId>/evaluate-config.json` | JSON   | Input configuration saved for reference                              |
 
 ## Custom environments
 

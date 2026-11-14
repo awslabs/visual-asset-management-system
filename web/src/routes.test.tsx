@@ -10,14 +10,17 @@
  *
  * The rendering tests below cover the two behaviours AppRoutes owns beyond the table itself: the
  * fail-open list used when the permission check is unavailable, and the per-page error boundary that
- * keeps a render error inside the layout instead of blanking the whole app.
+ * keeps a render error inside the layout instead of blanking the whole app. Pages load through
+ * lazyWithRetry, so a page chunk that fails to download once is retried, and one that keeps failing
+ * shows the could-not-be-downloaded panel.
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { matchRoutes, MemoryRouter } from "react-router-dom";
 import { routeTable, AppRoutes } from "./routes";
 import { checkWebRoutesAllowed, WebRouteCheck } from "./services/webRoutesCheck";
+import { CHUNK_RELOAD_GUARD_KEY } from "./utils/chunkLoadRecovery";
 
 jest.mock("./services/webRoutesCheck", () => ({ checkWebRoutesAllowed: jest.fn() }));
 
@@ -52,6 +55,30 @@ jest.mock("./pages/PipelinesPage2", () => ({
     __esModule: true,
     default: () => <div data-testid="pipelines-page" />,
 }));
+
+// A page module whose factory throws is not cached by Jest, so each import() of it runs the
+// factory again; that lets a test fail a page's "chunk download" a set number of times. Each
+// page is used by one test only, because React.lazy keeps the first result it resolves.
+const mockChunkError = (page: string) =>
+    new TypeError(
+        `Failed to fetch dynamically imported module: http://localhost/assets/${page}.js`
+    );
+let mockExecutionsChunkFailures = 0;
+jest.mock("./pages/ExecutionsPage", () => {
+    if (mockExecutionsChunkFailures > 0) {
+        mockExecutionsChunkFailures -= 1;
+        throw mockChunkError("ExecutionsPage-abc123");
+    }
+    return { __esModule: true, default: () => <div data-testid="executions-page" /> };
+});
+let mockDatabasesChunkFailures = 0;
+jest.mock("./pages/Databases", () => {
+    if (mockDatabasesChunkFailures > 0) {
+        mockDatabasesChunkFailures -= 1;
+        throw mockChunkError("Databases-abc123");
+    }
+    return { __esModule: true, default: () => <div data-testid="databases-page" /> };
+});
 
 const mockCheckWebRoutesAllowed = checkWebRoutesAllowed as jest.MockedFunction<
     typeof checkWebRoutesAllowed
@@ -254,6 +281,56 @@ describe("AppRoutes", () => {
             expect(screen.getByText("Go to Home")).toBeInTheDocument();
         } finally {
             consoleError.mockRestore();
+        }
+    });
+
+    it("retries a page whose code chunk failed to download once and renders it", async () => {
+        const consoleWarn = jest.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+            mockExecutionsChunkFailures = 1;
+            allowRoutes("/executions");
+
+            renderAt("/executions");
+
+            expect(
+                await screen.findByTestId("executions-page", undefined, { timeout: 4000 })
+            ).toBeInTheDocument();
+            expect(mockExecutionsChunkFailures).toBe(0);
+            expect(screen.queryByText("Something went wrong on this page")).not.toBeInTheDocument();
+        } finally {
+            consoleWarn.mockRestore();
+        }
+    });
+
+    it("says the page could not be downloaded, with Reload, when its chunk keeps failing", async () => {
+        const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+        const consoleWarn = jest.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+            // An automatic reload already happened moments ago, so the guard stops another one
+            // and the failure reaches the page's error boundary.
+            window.sessionStorage.setItem(CHUNK_RELOAD_GUARD_KEY, String(Date.now()));
+            mockDatabasesChunkFailures = 100;
+            allowRoutes("/databases");
+
+            renderAt("/databases");
+
+            expect(
+                await screen.findByText("This page could not be downloaded", undefined, {
+                    timeout: 4000,
+                })
+            ).toBeInTheDocument();
+            expect(screen.queryByText("Something went wrong on this page")).not.toBeInTheDocument();
+            expect(screen.getByTestId("side-navigation")).toBeInTheDocument();
+            expect(screen.getByText("Go to Home")).toBeInTheDocument();
+
+            // Reload clears the guard so the next chunk failure may reload again.
+            fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+            expect(window.sessionStorage.getItem(CHUNK_RELOAD_GUARD_KEY)).toBeNull();
+        } finally {
+            mockDatabasesChunkFailures = 0;
+            window.sessionStorage.removeItem(CHUNK_RELOAD_GUARD_KEY);
+            consoleError.mockRestore();
+            consoleWarn.mockRestore();
         }
     });
 

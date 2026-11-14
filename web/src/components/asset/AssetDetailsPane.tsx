@@ -30,6 +30,16 @@ import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
 import Synonyms from "../../synonyms";
 import { readCachedTagTypes } from "../../common/utils/tagOptions";
+import type { GridProps } from "@cloudscape-design/components/grid";
+
+// Header columns (id + description | type + tags | version). Cloudscape's Grid breakpoints follow
+// the grid's container width: one column per row below xxs, two then a full-width third up to xs,
+// and the 4 / 3 / 5 split from xs up.
+export const ASSET_HEADER_GRID: GridProps.ElementDefinition[] = [
+    { colspan: { default: 12, xxs: 6, xs: 4 } },
+    { colspan: { default: 12, xxs: 6, xs: 3 } },
+    { colspan: { default: 12, xs: 5 } },
+];
 
 interface AssetDetailsPaneProps {
     asset: any;
@@ -242,7 +252,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                 }
             >
                 <div style={{ marginBottom: "-10px" }}>
-                    <div style={{ display: "flex", gap: "20px" }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "20px" }}>
                         {/* Not-distributable notice. It sits in the slot the preview thumbnail would
                             occupy, which is always free when this shows because a non-distributable
                             asset renders no thumbnail, and it is capped in width and shorter than the
@@ -313,8 +323,11 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                         )}
 
                         {/* Info columns — fill remaining space */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                            <Grid gridDefinition={[{ colspan: 4 }, { colspan: 3 }, { colspan: 5 }]}>
+                        {/* The columns stack on a narrow container (one per row, then two) and sit side
+                            by side from xs up; the block wraps below a preview or notice that leaves it
+                            under 280px. */}
+                        <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+                            <Grid gridDefinition={ASSET_HEADER_GRID}>
                                 {/* Col: Asset Id */}
                                 <div>
                                     <div

@@ -71,12 +71,22 @@ describe("hashed names are identical across two synths of one configuration", ()
 
     beforeAll(() => {
         // Distinct cache keys with an identity mutation force two REAL synths in this one process, which
-        // is the case that discriminates: the CDK token counter does not reset between them.
+        // is the case that discriminates: the CDK token counter does not reset between them. The shared
+        // per-run cache is keyed by configuration, so it would answer both from one synth (possibly
+        // another worker's): `sharedCache: false` keeps both synths real and in this process.
         const same = () => {
             /* no change */
         };
-        first = synthTemplate("commercial", { mutate: same, mutateKey: "hash-stability-a" });
-        second = synthTemplate("commercial", { mutate: same, mutateKey: "hash-stability-b" });
+        first = synthTemplate("commercial", {
+            mutate: same,
+            mutateKey: "hash-stability-a",
+            sharedCache: false,
+        });
+        second = synthTemplate("commercial", {
+            mutate: same,
+            mutateKey: "hash-stability-b",
+            sharedCache: false,
+        });
     });
 
     const invokeIds = (s: SynthResult) =>
@@ -106,5 +116,14 @@ describe("hashed names are identical across two synths of one configuration", ()
 
     test("every OpenSearch Serverless access-policy name is the same in both synths", () => {
         expect(policyNames(second)).toEqual(policyNames(first));
+    });
+
+    test("the REST API deployment logical id is the same in both synths", () => {
+        // It is an md5 over the API definition, the gateway responses and the authorizer invoke role's
+        // name (#1210); a token string in any of them would give each deploy a new deployment.
+        const deploymentIds = (s: SynthResult) =>
+            s.ofType("AWS::ApiGateway::Deployment").map((r) => r.logicalId);
+        expect(deploymentIds(first)).toHaveLength(1);
+        expect(deploymentIds(second)).toEqual(deploymentIds(first));
     });
 });

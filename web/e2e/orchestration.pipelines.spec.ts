@@ -6,11 +6,13 @@
 import { test, expect } from "@playwright/test";
 import {
     collectPageErrors,
+    expectNoPageOverflowX,
     facet,
     firstCardId,
     gotoOrchestration,
     openCardMenu,
     searchBox,
+    VIEWPORTS,
 } from "./support/fixtures";
 
 /**
@@ -172,5 +174,40 @@ test.describe("Pipelines page", () => {
         await expect(page.getByText(/pipeline not found/i)).toBeVisible({ timeout: 30_000 });
         await expect(page.locator("#pipelineName")).toHaveCount(0);
         await expect(page.getByRole("button", { name: /^Update$/ })).toHaveCount(0);
+    });
+});
+
+/**
+ * The pipeline and template wizards share the workflow builder's step rail, so they fit a phone
+ * width too: the page does not scroll sideways on their first step. Opens the create forms only.
+ */
+test.describe("Pipeline and template wizards — fit a phone viewport", () => {
+    test.use({ viewport: VIEWPORTS.phone });
+
+    test("the pipeline create wizard does not scroll sideways", async ({ page }) => {
+        await page.goto("/#/databases/GLOBAL/pipelines/create", { waitUntil: "domcontentloaded" });
+        const heading = page.getByRole("heading", { name: "Create Pipeline", level: 1 });
+        await heading.waitFor({ state: "visible", timeout: 30_000 }).catch(() => undefined);
+        test.skip(!(await heading.isVisible()), "The create route is not allowed for this user");
+        await expect(page.locator("[aria-current='step']")).toBeVisible();
+        await expectNoPageOverflowX(page, "create pipeline, first step");
+    });
+
+    test("the template create wizard does not scroll sideways", async ({ page }) => {
+        await gotoOrchestration(page, "pipelines", "Pipelines");
+        const id = await firstCardId(page);
+        test.skip(!id, "No pipelines in this environment");
+        const items = await openCardMenu(page, id!);
+        await items.filter({ hasText: "Templates" }).click();
+        await expect(page.getByRole("heading", { name: "Templates", level: 1 })).toBeVisible({
+            timeout: 20_000,
+        });
+        const listUrl = page.url().replace(/\/+$/, "");
+        await page.goto(`${listUrl}/create`, { waitUntil: "domcontentloaded" });
+        const heading = page.getByRole("heading", { name: "Create Template", level: 1 });
+        await heading.waitFor({ state: "visible", timeout: 30_000 }).catch(() => undefined);
+        test.skip(!(await heading.isVisible()), "The template create route is not allowed");
+        await expect(page.locator("[aria-current='step']")).toBeVisible();
+        await expectNoPageOverflowX(page, "create template, first step");
     });
 });

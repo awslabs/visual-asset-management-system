@@ -258,10 +258,11 @@ class TestNameAndIdFieldsTrimWhitespace:
         from models.apiKeys import CreateApiKeyRequestModel, CreateUserApiKeyRequestModel
 
         assert CreateApiKeyRequestModel(
+            # pragma: allowlist nextline secret
             apiKeyName=" Build Key ", userId="bob", description="CI").apiKeyName == "Build Key"
         assert CreateUserApiKeyRequestModel(
             apiKeyName=" Build Key ", description="CI",
-            expiresAt="2027-01-01").apiKeyName == "Build Key"
+            expiresAt="2027-01-01").apiKeyName == "Build Key"  # pragma: allowlist secret
 
     def test_an_asset_name_database_id_and_asset_id_trim(self):
         from models.assetsV3 import (

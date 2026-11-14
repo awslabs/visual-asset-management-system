@@ -513,6 +513,8 @@ Restores a previously archived asset record, making it active again. The asset's
 
 Permanently deletes an asset, including all associated files, metadata, versions, and every version of its auxiliary data. The temporary working files a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `assetExports/`, are not deleted.
 
+Asset subscribers are notified by email when the asset is archived. A permanent delete removes the asset's subscriptions and notification topic and sends no email.
+
 :::danger[Irreversible Operation]
 This operation permanently removes the asset and all its data. It cannot be undone. Consider using [Archive Asset](#archive-asset) for soft-deletion instead.
 :::

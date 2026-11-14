@@ -57,6 +57,28 @@ describe("DataTable", () => {
         expect(onRowClick).toHaveBeenCalledWith({ id: 2, name: "Beta" });
     });
 
+    it("passes a search placeholder to its search box, and none by default", () => {
+        const rows = [{ id: 1, name: "Alpha" }];
+        const columns = [{ header: "Name", accessorKey: "name" }];
+
+        const { unmount } = render(
+            <DataTable
+                columns={columns}
+                rows={rows}
+                ariaLabel="Rows"
+                searchPlaceholder="Search rows"
+            />
+        );
+        expect(screen.getByRole("textbox", { name: "Search" })).toHaveAttribute(
+            "placeholder",
+            "Search rows"
+        );
+        unmount();
+
+        render(<DataTable columns={columns} rows={rows} ariaLabel="Rows" />);
+        expect(screen.getByRole("textbox", { name: "Search" })).not.toHaveAttribute("placeholder");
+    });
+
     it("sorts from a focusable header button and reports the direction via aria-sort", async () => {
         const rows = [
             { id: 2, name: "Beta" },

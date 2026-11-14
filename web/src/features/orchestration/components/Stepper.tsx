@@ -22,12 +22,16 @@ interface StepperProps {
 /**
  * The wizard progress strip. With `onJumpTo` the reachable steps render as buttons, so a completed
  * step can be reopened without walking Back through the ones between.
+ *
+ * Below the `sm` breakpoint only the current step shows its label; the others keep theirs for
+ * assistive technology (`sr-only`), so a five-step wizard fits a phone-width page. The strip also
+ * wraps rather than widening the page when the labels still do not fit.
  */
 const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo }) => {
     const currentIndex = steps.findIndex((step) => step.id === current);
 
     return (
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-2 sm:gap-2">
             {steps.map((step, index) => {
                 const isCurrent = step.id === current;
                 const isCompleted = index < currentIndex;
@@ -35,7 +39,7 @@ const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo }
                     !!onJumpTo && !isCurrent && (canJumpTo ? canJumpTo(step.id) : isCompleted);
                 const badge = (
                     <div
-                        className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-medium ${
+                        className={`flex shrink-0 items-center justify-center w-8 h-8 rounded-full text-sm font-medium ${
                             isCurrent
                                 ? "bg-blue-600 text-white"
                                 : isCompleted
@@ -49,6 +53,8 @@ const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo }
                 const label = (
                     <span
                         className={`text-sm ${
+                            isCurrent ? "min-w-0 break-words" : "sr-only sm:not-sr-only"
+                        } ${
                             isCurrent
                                 ? "font-semibold text-text-primary"
                                 : isCompleted
@@ -67,14 +73,14 @@ const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo }
                                 type="button"
                                 onClick={() => onJumpTo?.(step.id)}
                                 aria-label={`Go to step ${step.label}`}
-                                className="flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-surface-hover focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 hover:bg-surface-hover focus:outline-none focus:ring-2 focus:ring-blue-500"
                             >
                                 {badge}
                                 {label}
                             </button>
                         ) : (
                             <div
-                                className="flex items-center gap-2 px-1 py-0.5"
+                                className="flex min-w-0 items-center gap-2 px-1 py-0.5"
                                 aria-current={isCurrent ? "step" : undefined}
                             >
                                 {badge}
@@ -83,7 +89,7 @@ const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo }
                         )}
                         {index < steps.length - 1 && (
                             <div
-                                className={`w-8 h-0.5 ${
+                                className={`w-3 sm:w-8 h-0.5 shrink-0 ${
                                     isCompleted ? "bg-green-600" : "bg-gray-300 dark:bg-gray-700"
                                 }`}
                             />

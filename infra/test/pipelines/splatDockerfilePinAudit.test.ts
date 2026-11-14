@@ -68,12 +68,12 @@ const SYNCED_DOCKERFILE_LINES: string[] = [
     'ENV OPENIMAGEIO_VERSION="2.5.13.0"',
     "",
     "# Pinned versions",
-    'ENV CERES_HASH="0ba987acaf9e8674070f116ed624edf017d2b630"',
-    'ENV NERFSTUDIO_HASH="50e0e3c70c775e89333256213363badbf074f29d"',
-    'ENV GSPLAT_HASH="4e52698e45eaaed929ed3a5065e96a688d085df6"',
-    'ENV THREEDGRUT_HASH="9846a28babb2171802907017c44d3adaa927f4e4"',
-    'ENV BGREMOVER_HASH="d6278fef141d1669e5fffbbc4cf185edfdc89cf9"',
-    'ENV SAM2_HASH="2b90b9f5ceec907a1c18123530e92e794ad901a4"',
+    'ENV CERES_HASH="0ba987acaf9e8674070f116ed624edf017d2b630"', // pragma: allowlist secret
+    'ENV NERFSTUDIO_HASH="50e0e3c70c775e89333256213363badbf074f29d"', // pragma: allowlist secret
+    'ENV GSPLAT_HASH="4e52698e45eaaed929ed3a5065e96a688d085df6"', // pragma: allowlist secret
+    'ENV THREEDGRUT_HASH="9846a28babb2171802907017c44d3adaa927f4e4"', // pragma: allowlist secret
+    'ENV BGREMOVER_HASH="d6278fef141d1669e5fffbbc4cf185edfdc89cf9"', // pragma: allowlist secret
+    'ENV SAM2_HASH="2b90b9f5ceec907a1c18123530e92e794ad901a4"', // pragma: allowlist secret
     "# --- Dockerfile lines 206-208 ---",
     "",
     "# Install tiny-cuda-nn latest stable (requires torch to be installed first)",

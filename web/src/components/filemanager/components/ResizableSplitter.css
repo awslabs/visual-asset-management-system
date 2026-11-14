@@ -14,6 +14,8 @@
 
 .resizable-right-panel {
     flex: 1;
+    /* Without this the pane cannot shrink below its content and pushes the page wider. */
+    min-width: 0;
     overflow: auto;
     padding: 0 10px;
 }
@@ -75,4 +77,33 @@
 /* Disable text selection during drag */
 body.dragging * {
     user-select: none !important;
+}
+
+/*
+ * Phone widths (below Cloudscape's xs breakpoint): side by side, the fixed-width left pane leaves the
+ * right pane about 0 px wide, hiding its toolbar while keyboard focus can still land in it. Stack the
+ * panes instead and drop the separator, which has nothing to resize. !important is needed to beat
+ * the left pane's inline drag width; the saved width is kept and applies again when the page widens.
+ * Keep this block last so it overrides the rules above.
+ */
+@media (max-width: 687px) {
+    .resizable-splitter-container {
+        flex-direction: column;
+        height: auto;
+    }
+
+    .resizable-left-panel {
+        width: 100% !important;
+        max-height: 40vh;
+        border-right: none;
+        border-bottom: 1px solid var(--vams-border-default);
+    }
+
+    .resizable-splitter {
+        display: none;
+    }
+
+    .resizable-right-panel {
+        padding: 10px 0 0;
+    }
 }

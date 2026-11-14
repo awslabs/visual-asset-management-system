@@ -25,7 +25,7 @@ dotenv.config({ quiet: true });
 // CloudFormation receives.
 // ============================================================================================
 
-export const VAMS_VERSION = "2.6.6";
+export const VAMS_VERSION = "2.6.7";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_22_X;
@@ -108,6 +108,13 @@ export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
 // (backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json). The parent workflow waits this
 // long for the pipeline's task-token callback, so the Kubernetes job must not be allowed to run longer.
 export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
+
+// The Amazon Bedrock model the commercial partition uses when the GenAI 3D Metadata Labeling pipeline
+// names none. It is a commercial cross-Region inference profile, so the restricted-partition templates
+// ship the model id empty instead. Bedrock refuses a model whose lifecycle status is LEGACY to an
+// account that has not called it for 30 days, so this names an ACTIVE model; the config templates and
+// the ConfigBuilder presets carry the same id.
+export const GENAI_DEFAULT_BEDROCK_MODEL_ID = "global.anthropic.claude-sonnet-5-5";
 
 // GPUs per accelerated Amazon EC2 instance type, for the families the NVIDIA pipelines are deployed
 // on. The count is NOT derivable from the size: g6e.16xlarge carries one GPU while the nominally
@@ -417,6 +424,40 @@ function validateWafPolicy(policy: any) {
             `Configuration Warning: every managed rule group in ${where} sets block: false, so the ` +
                 `Web ACL counts matches instead of blocking them. This is correct for evaluating a ` +
                 `rule group and wrong for protecting a deployment.`
+        );
+    }
+}
+
+// An IAM managed policy ARN, with the partition captured: an account id (customer managed) or `aws`
+// (AWS managed), an optional path, and the policy name.
+export const IAM_MANAGED_POLICY_ARN_PATTERN =
+    /^arn:(aws[a-z-]*):iam::(?:\d{12}|aws):policy\/(?:[\w+=,.@-]+\/)*[\w+=,.@-]{1,128}$/;
+
+/**
+ * Requires `environments.aws.PermissionBoundaryArn` in infra/cdk.json, when set, to be an IAM managed
+ * policy ARN in the deployment's partition. The boundary is set on every IAM role VAMS creates, so a
+ * malformed or other-partition ARN would otherwise fail every role at deploy time. An empty or absent
+ * value means no boundary. An empty `partition` (unrecognized Region) skips the partition comparison.
+ */
+export function validatePermissionBoundaryArn(value: unknown, partition: string): void {
+    if (value === undefined || value === null || value === "") {
+        return;
+    }
+    const where = "environments.aws.PermissionBoundaryArn in infra/cdk.json";
+    const match = typeof value === "string" ? IAM_MANAGED_POLICY_ARN_PATTERN.exec(value) : null;
+    if (!match) {
+        throw new Error(
+            `Configuration Error: ${where} must be empty or an IAM managed policy ARN, for example ` +
+                `arn:${partition || "aws"}:iam::123456789012:policy/MyBoundary. Got: ${String(
+                    value
+                )}`
+        );
+    }
+    if (partition !== "" && match[1] !== partition) {
+        throw new Error(
+            `Configuration Error: ${where} is in the '${match[1]}' partition, but this deployment ` +
+                `targets the '${partition}' partition. Use the ARN of a managed policy in the ` +
+                `deployment's partition (arn:${partition}:iam::...). Got: ${value}`
         );
     }
 }
@@ -1315,6 +1356,13 @@ export function getConfig(app: cdk.App): Config {
                 "app.govCloud.il6Compliant to be true."
         );
     }
+
+    //The IAM permissions boundary comes from the cdk.json context, not config.json; the core stack
+    //reads it from there and sets it on every IAM role.
+    validatePermissionBoundaryArn(
+        app.node.tryGetContext("environments")?.aws?.PermissionBoundaryArn,
+        resolvedPartition
+    );
 
     //The in-account AWS CodeBuild container-build path is exercised in the commercial and GovCloud
     //partitions. Elsewhere the build host cannot reach the public nvcr.io / Docker Hub GPU base
@@ -2882,14 +2930,14 @@ export function getConfig(app: cdk.App): Config {
         // out of the CloudFormation template.
         const hasSecretArn =
             physna.credentialsSecretArn &&
-            physna.credentialsSecretArn !== "UNDEFINED" &&
+            physna.credentialsSecretArn !== "UNDEFINED" && // pragma: allowlist secret
             physna.credentialsSecretArn !== "";
         const hasInlineCreds =
             physna.clientId &&
             physna.clientId !== "UNDEFINED" &&
             physna.clientId !== "" &&
             physna.clientSecret &&
-            physna.clientSecret !== "UNDEFINED" &&
+            physna.clientSecret !== "UNDEFINED" && // pragma: allowlist secret
             physna.clientSecret !== "";
 
         // Default path: inline clientId/clientSecret. VAMS creates the Secrets Manager

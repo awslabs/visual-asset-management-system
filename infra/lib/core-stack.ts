@@ -77,12 +77,11 @@ export class CoreVAMSStack extends cdk.Stack {
         }
         if (awsEnv) {
             Aspects.of(this).add(
-                new IamRoleTransform(
-                    this,
-                    awsEnv["IamRoleNamePrefix"],
-                    awsEnv["PermissionBoundaryArn"]
-                )
+                new IamRoleTransform(awsEnv["IamRoleNamePrefix"], awsEnv["PermissionBoundaryArn"])
             );
+            //The boundary also covers the app's other stacks (WAF, API origin verification,
+            //cross-Region notifications); their role names are left as they are.
+            IamRoleTransform.applyPermissionsBoundary(scope, awsEnv["PermissionBoundaryArn"]);
         }
 
         // Apply the aspect to set log retention for all Log Groups in this stack

@@ -164,7 +164,7 @@ def roles():
 
 if __name__ == '__main__':
   app = Flask(__name__)
-  app.secret_key = 'development'
+  app.secret_key = 'development'  # pragma: allowlist secret
   app.register_blueprint(vams)
   # Local-development server only: run by hand under __main__, never packaged or deployed; 0.0.0.0
   # and debug=True are intentional for the dev loop (bandit B201 already annotated).

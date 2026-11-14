@@ -29,9 +29,9 @@
  */
 export const INDEX_HTML_INLINE_SCRIPT_HASHES: string[] = [
     // <script> — __publicField polyfill (esbuild class-field lowering helper)
-    "'sha256-hku/6aM3ooy29j14wba8NHxApTrddxAeTzjgmaQiE+g='",
+    "'sha256-hku/6aM3ooy29j14wba8NHxApTrddxAeTzjgmaQiE+g='", // pragma: allowlist secret
     // <script type="application/javascript"> — SharedArrayBuffer probe + ResizeObserver error filter
-    "'sha256-PtYWwvCy+HPI+Xsv6/nD6B/zQGV1AIHdbHRAS8VntJ0='",
+    "'sha256-PtYWwvCy+HPI+Xsv6/nD6B/zQGV1AIHdbHRAS8VntJ0='", // pragma: allowlist secret
     // <script> — pre-render theme application (prevents light-mode flash)
-    "'sha256-ypXICNBilhnt2x+THIkHJ78cCD0lsDnuXLbjgnJIy4o='",
+    "'sha256-ypXICNBilhnt2x+THIkHJ78cCD0lsDnuXLbjgnJIy4o='", // pragma: allowlist secret
 ];

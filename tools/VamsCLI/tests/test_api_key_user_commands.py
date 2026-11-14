@@ -21,6 +21,7 @@ class TestUserApiKeyList:
         with generic_command_mocks('apiKey') as mocks:
             mocks['api_client'].list_user_api_keys.return_value = {
                 'Items': [
+                    # pragma: allowlist nextline secret
                     {'apiKeyId': 'key-1', 'apiKeyName': 'My Key', 'userId': 'me@test.com',
                      'expiresAt': '2026-12-31T23:59:59Z', 'isActive': 'true'}
                 ]
@@ -32,12 +33,13 @@ class TestUserApiKeyList:
 
     def test_list_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('apiKey') as mocks:
+            # pragma: allowlist nextline secret
             expected = {'Items': [{'apiKeyId': 'key-1', 'apiKeyName': 'My Key'}]}
             mocks['api_client'].list_user_api_keys.return_value = expected
             result = cli_runner.invoke(cli, ['api-key', 'user', 'list', '--json-output'])
             assert result.exit_code == 0
             data = json.loads(result.output)
-            assert data['Items'][0]['apiKeyId'] == 'key-1'
+            assert data['Items'][0]['apiKeyId'] == 'key-1'  # pragma: allowlist secret
 
     def test_list_empty(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('apiKey') as mocks:
@@ -54,8 +56,10 @@ class TestUserApiKeyList:
 class TestUserApiKeyListPaging:
     """`api-key user list` carries the same paging contract as the admin listing."""
 
+    # pragma: allowlist nextline secret
     KEY_1 = {'apiKeyId': 'key-1', 'apiKeyName': 'One', 'userId': 'me@test.com',
              'isActive': 'true'}
+    # pragma: allowlist nextline secret
     KEY_2 = {'apiKeyId': 'key-2', 'apiKeyName': 'Two', 'userId': 'me@test.com',
              'isActive': 'true'}
 
@@ -122,10 +126,10 @@ class TestUserApiKeyCreate:
     def test_create_success(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('apiKey') as mocks:
             mocks['api_client'].create_user_api_key.return_value = {
-                'apiKeyId': 'new-key-id',
-                'apiKeyName': 'My Key',
+                'apiKeyId': 'new-key-id',  # pragma: allowlist secret
+                'apiKeyName': 'My Key',  # pragma: allowlist secret
                 'userId': 'me@test.com',
-                'apiKey': 'vams_selfkey123',
+                'apiKey': 'vams_selfkey123',  # pragma: allowlist secret
                 'expiresAt': '2026-12-31T23:59:59Z',
             }
             result = cli_runner.invoke(cli, [
@@ -137,7 +141,7 @@ class TestUserApiKeyCreate:
             assert result.exit_code == 0
             assert 'vams_selfkey123' in result.output
             mocks['api_client'].create_user_api_key.assert_called_once_with({
-                'apiKeyName': 'My Key',
+                'apiKeyName': 'My Key',  # pragma: allowlist secret
                 'description': 'Self-service key',
                 'expiresAt': '2026-12-31T23:59:59Z',
             })
@@ -188,7 +192,7 @@ class TestUserApiKeyCreate:
             ])
             assert result.exit_code == 0
             data = json.loads(result.output)
-            assert data['apiKey'] == 'vams_x'
+            assert data['apiKey'] == 'vams_x'  # pragma: allowlist secret
 
 
 class TestUserApiKeyUpdate:
@@ -197,6 +201,7 @@ class TestUserApiKeyUpdate:
     def test_update_success(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('apiKey') as mocks:
             mocks['api_client'].update_user_api_key.return_value = {
+                # pragma: allowlist nextline secret
                 'apiKeyId': 'key-1', 'description': 'Updated', 'expiresAt': '2026-11-30',
             }
             result = cli_runner.invoke(cli, [

@@ -11,6 +11,7 @@ FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.11-alpine@sha
 WORKDIR /
 
 # Latest Working Commit
+# pragma: allowlist nextline secret
 ARG GITHUB_SHA="c2328c433c7776e231d86712bb4074c82659e366" 
 ARG GITHUB_REPOSITORY="potree/PotreeConverter"
 ARG GITHUB_SERVER_URL="https://github.com"

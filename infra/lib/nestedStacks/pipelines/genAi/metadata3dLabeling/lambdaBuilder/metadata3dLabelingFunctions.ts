@@ -242,7 +242,7 @@ export function buildMetadataGenerationPipelineFunction(
         subnets: subnets,
     });
 
-    let bedrockModelId = "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    let bedrockModelId = Config.GENAI_DEFAULT_BEDROCK_MODEL_ID;
     if (
         config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId &&
         config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId != "" &&

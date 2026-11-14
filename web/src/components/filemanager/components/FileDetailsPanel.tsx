@@ -386,7 +386,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
             return !itemIsFolder;
         });
 
-        navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
+        navigate(`/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}/file`, {
             state: {
                 assetVersionId: state.assetVersionId,
                 files: viewableFiles.map((file) => ({
@@ -417,20 +417,23 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
         });
 
         // Navigate to download page with selected files
-        navigate(`/databases/${databaseId}/assets/${assetId}/download`, {
-            state: {
-                fileTree: {
-                    name: "Selected Files",
-                    displayName: "Selected Files",
-                    relativePath: "/",
-                    keyPrefix: "/",
-                    level: 0,
-                    expanded: true,
-                    subTree: downloadableFiles,
+        navigate(
+            `/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}/download`,
+            {
+                state: {
+                    fileTree: {
+                        name: "Selected Files",
+                        displayName: "Selected Files",
+                        relativePath: "/",
+                        keyPrefix: "/",
+                        level: 0,
+                        expanded: true,
+                        subTree: downloadableFiles,
+                    },
+                    assetVersionId: state.assetVersionId,
                 },
-                assetVersionId: state.assetVersionId,
-            },
-        });
+            }
+        );
     };
 
     // Multi-selection display
@@ -537,35 +540,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         assetVersionId={state.assetVersionId}
                     />
 
-                    <div
-                        className="file-info-header"
-                        style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            width: "100%",
-                        }}
-                    >
-                        <div
-                            style={{
-                                flexShrink: 1,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                marginRight: "16px",
-                                maxWidth: "50%",
-                            }}
-                        >
+                    <div className="file-info-header">
+                        <div className="file-info-title">
                             <Header variant="h3">{selectedItems.length} files selected</Header>
                         </div>
-                        <div
-                            className="file-actions"
-                            style={{
-                                flexShrink: 0,
-                                display: "flex",
-                                flexWrap: "nowrap",
-                                minWidth: "fit-content",
-                            }}
-                        >
+                        <div className="file-actions">
                             <SpaceBetween direction="horizontal" size="xs">
                                 {!hasSelectedFolders && (
                                     <>
@@ -751,7 +730,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     };
 
     const handleUpload = () => {
-        navigate(`/databases/${databaseId}/assets/${assetId}/uploads`, {
+        navigate(`/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}/uploads`, {
             state: {
                 fileTree: selectedItem,
                 isNewFiles: true,
@@ -772,7 +751,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
         const encodedPath = encodeURIComponent(pathForUrl);
 
         // Build URL with version query parameter — assetVersionId takes priority
-        let url = `/databases/${databaseId}/assets/${assetId}/file/${encodedPath}`;
+        let url = `/databases/${databaseId}/assets/${encodeURIComponent(
+            String(assetId)
+        )}/file/${encodedPath}`;
         if (state.assetVersionId) {
             url += `?assetVersion=${encodeURIComponent(state.assetVersionId)}`;
         } else if (selectedItem.versionId) {
@@ -1063,38 +1044,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     }}
                 />
 
-                <div
-                    className="file-info-header"
-                    style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        width: "100%",
-                    }}
-                >
-                    <div
-                        style={{
-                            flexShrink: 1,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            marginRight: "16px",
-                            maxWidth: "50%",
-                        }}
-                    >
+                <div className="file-info-header">
+                    <div className="file-info-title">
                         {selectedItem.isArchived && (
                             <div className="archived-file-label">ARCHIVED</div>
                         )}
                         <Header variant="h3">{selectedItem.displayName}</Header>
                     </div>
-                    <div
-                        className="file-actions"
-                        style={{
-                            flexShrink: 0,
-                            display: "flex",
-                            flexWrap: "nowrap",
-                            minWidth: "fit-content",
-                        }}
-                    >
+                    <div className="file-actions">
                         {isFolder ? (
                             <SpaceBetween direction="horizontal" size="xs">
                                 {/* Show operations dropdown for all folders, with different options based on level */}
@@ -1168,7 +1125,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                         onItemClick={({ detail }) => {
                                             if (detail.id === "download-folder") {
                                                 navigate(
-                                                    `/databases/${databaseId}/assets/${assetId}/download`,
+                                                    `/databases/${databaseId}/assets/${encodeURIComponent(
+                                                        String(assetId)
+                                                    )}/download`,
                                                     {
                                                         state: {
                                                             fileTree: selectedItem,

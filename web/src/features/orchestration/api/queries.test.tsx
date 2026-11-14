@@ -11,13 +11,17 @@ import {
     computeRefetchInterval,
     qk,
     useExecutions,
+    usePipelines,
     useTemplateMutations,
+    useWorkflows,
 } from "./queries";
 import * as executionService from "./executions";
 import * as pipelineService from "./pipelines";
+import * as workflowService from "./workflows";
 
 jest.mock("./executions");
 jest.mock("./pipelines");
+jest.mock("./workflows");
 
 describe("computeRefetchInterval", () => {
     it("polls only while a row is non-terminal", () => {
@@ -223,6 +227,107 @@ describe("useExecutions", () => {
 
         const query: any = qc.getQueryCache().find({ queryKey: qk.executions({ kind: "global" }) });
         expect(query.options.refetchIntervalInBackground).toBeFalsy();
+    });
+});
+
+/**
+ * A list response without an `Items` array (an empty body, a message-only body, `Items: null`) is a
+ * page with no rows. The hooks hand every consumer a page whose `Items` is an array, so the poll
+ * cadence and the list views never read a row that is not there.
+ */
+describe("paged list hooks: a response without Items", () => {
+    const itemlessBodies: [string, any][] = [
+        ["an empty body", {}],
+        ["a message-only body", { message: "no rows" }],
+        ["Items: null", { Items: null }],
+    ];
+
+    const renderWithClient = <T,>(hook: () => T) => {
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const Wrapper = ({ children }: any) => (
+            <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+        );
+        Wrapper.displayName = "QueryWrapper";
+        return { qc, ...renderHook(hook, { wrapper: Wrapper }) };
+    };
+
+    beforeEach(() => jest.clearAllMocks());
+
+    it.each(itemlessBodies)(
+        "useExecutions reads %s as a page with no rows and stops polling",
+        async (_label, body) => {
+            (executionService.listExecutionsGlobal as jest.Mock).mockResolvedValue([true, body]);
+            const { qc, result } = renderWithClient(() => useExecutions({ kind: "global" }));
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect((result.current.data?.pages as any[])[0].Items).toEqual([]);
+            const query: any = qc
+                .getQueryCache()
+                .find({ queryKey: qk.executions({ kind: "global" }) });
+            expect(query.options.refetchInterval(query)).toBe(false);
+        }
+    );
+
+    it("useExecutions keeps polling for the running rows of the other pages", async () => {
+        (executionService.listExecutionsGlobal as jest.Mock).mockResolvedValue([
+            true,
+            { Items: [{ executionStatus: "RUNNING" }], NextToken: "t1" },
+        ]);
+        const { qc, result } = renderWithClient(() => useExecutions({ kind: "global" }));
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+        (executionService.listExecutionsGlobal as jest.Mock).mockResolvedValue([true, {}]);
+        const next = await result.current.fetchNextPage();
+
+        expect(next.data?.pages).toHaveLength(2);
+        expect((next.data?.pages as any[])[1].Items).toEqual([]);
+        const query: any = qc.getQueryCache().find({ queryKey: qk.executions({ kind: "global" }) });
+        expect(query.options.refetchInterval(query)).toBe(10000);
+    });
+
+    it.each(itemlessBodies)(
+        "useExecutions for an asset reads %s as a page with no rows",
+        async (_label, body) => {
+            (executionService.listExecutionsForAsset as jest.Mock).mockResolvedValue([true, body]);
+            const { result } = renderWithClient(() =>
+                useExecutions({ kind: "asset", databaseId: "db1", assetId: "a1" })
+            );
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+            expect((result.current.data?.pages as any[])[0].Items).toEqual([]);
+        }
+    );
+
+    it.each(itemlessBodies)(
+        "useWorkflows reads %s as a page with no rows",
+        async (_label, body) => {
+            (workflowService.listWorkflows as jest.Mock).mockResolvedValue([true, body]);
+            const { result } = renderWithClient(() => useWorkflows("db1"));
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+            expect(result.current.data?.pages[0].Items).toEqual([]);
+        }
+    );
+
+    it.each(itemlessBodies)(
+        "usePipelines reads %s as a page with no rows",
+        async (_label, body) => {
+            (pipelineService.listPipelines as jest.Mock).mockResolvedValue([true, body]);
+            const { result } = renderWithClient(() => usePipelines("db1"));
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+            expect(result.current.data?.pages[0].Items).toEqual([]);
+        }
+    );
+
+    it("keeps the rows and NextToken of a page that has Items", async () => {
+        (workflowService.listWorkflows as jest.Mock).mockResolvedValue([
+            true,
+            { Items: [{ workflowId: "wf1" }], NextToken: "t1" },
+        ]);
+        const { result } = renderWithClient(() => useWorkflows("db1"));
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+        expect(result.current.data?.pages[0]).toEqual({
+            Items: [{ workflowId: "wf1" }],
+            NextToken: "t1",
+        });
     });
 });
 

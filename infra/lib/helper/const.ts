@@ -623,7 +623,7 @@ export const TYPE_SERVICE_LOOKUP = {
     SCHEDULER: "scheduler",
     SCHEMAS: "schemas",
     SDB: "sdb",
-    SECRETSMANAGER: "secretsmanager",
+    SECRETSMANAGER: "secretsmanager", // pragma: allowlist secret
     SECURITYHUB: "securityhub",
     SECURITYLAKE: "securitylake",
     SERVERLESSREPO: "serverlessrepo",
