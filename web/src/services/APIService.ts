@@ -3471,22 +3471,26 @@ export const fetchSearchMappings = async () => {
     }
 };
 
+/**
+ * POST /ingest-asset, either stage. The structured response is the data: the initialize stage
+ * answers `{ message, uploadId, files }` (each file with `relativeKey`, `uploadIdS3`, `numParts`
+ * and `partUploadUrls`), the complete stage `{ message, uploadId, assetId, fileResults,
+ * overallSuccess, largeFileAsynchronousHandling }`. Both carry a `message`, so returning the
+ * message in place of the response would drop the file list the caller uploads to.
+ * @returns {Promise<[boolean, any]>} `[true, response]`, or `[false, message]` for a failed request
+ */
 export const ingestAsset = async (body: any) => {
     try {
         const response = await apiClient.post("ingest-asset", { body });
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            }
-            return [true, response.message];
+        if (response?.success === false) {
+            return [false, response?.message ?? "The ingest request failed."];
         }
         return [true, response];
     } catch (error: any) {
         console.log(error);
+        if (isNetworkFailure(error)) {
+            return [false, NETWORK_FAILURE_MESSAGE];
+        }
         return [false, error?.message];
     }
 };
