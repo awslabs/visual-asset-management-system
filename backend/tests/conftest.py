@@ -181,6 +181,17 @@ _bif_module = _s3mk_importlib_util.module_from_spec(_bif_spec)
 _bif_spec.loader.exec_module(_bif_module)
 sys.modules['common.batchItemFailures'] = _bif_module
 sys.modules['common'].batchItemFailures = _bif_module
+# eventLogSummary describes an event for a log line from its shape alone (stdlib only). The indexers,
+# the bucket sync and the Garnet add-on indexers import it at module level, so it is registered for
+# the same reason as batchItemFailures: a MagicMock `common` cannot resolve the submodule import.
+_els_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.eventLogSummary',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'eventLogSummary.py')
+)
+_els_module = _s3mk_importlib_util.module_from_spec(_els_spec)
+_els_spec.loader.exec_module(_els_module)
+sys.modules['common.eventLogSummary'] = _els_module
+sys.modules['common'].eventLogSummary = _els_module
 # `query_all_items` is the shared read-to-exhaustion helper (backend/CLAUDE.md Rule 14). Bind the
 # REAL one onto the MagicMock module, for the same reason `get_asset_object_from_id` is bound above:
 # a handler does `from common.dynamodb import query_all_items` at import time, so it captures

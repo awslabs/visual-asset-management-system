@@ -20,6 +20,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
+from common.eventLogSummary import event_log_summary
 from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -257,7 +258,7 @@ def normalize_metadata_value(value: str, value_type: Optional[str] = None) -> An
         base_datetime = match.group(1)
         timezone = match.group(3)
         normalized = f"{base_datetime}{timezone}"
-        logger.debug(f"Normalized datetime from '{value}' to '{normalized}'")
+        logger.debug("Normalized a datetime metadata value (fractional seconds removed)")
         return normalized
     
     # 2. Try boolean detection
@@ -985,6 +986,8 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                 operation="skip"
             )
         
+        logger.info(f"Processing {event_name} metadata event for asset: {database_id}/{asset_id}")
+
         # Create asset index request
         request = AssetIndexRequest(
             databaseId=database_id,
@@ -1140,7 +1143,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     global claims_and_roles
 
     try:
-        logger.info(f"Processing asset indexing event: {json.dumps(event, default=str)}")
+        logger.info(f"Processing asset indexing event: {event_log_summary(event)}")
 
         results = []
         batch_item_failures: List[Dict[str, str]] = []

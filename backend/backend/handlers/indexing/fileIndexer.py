@@ -20,6 +20,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.eventLogSummary import event_log_summary
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
@@ -270,7 +271,7 @@ def normalize_metadata_value(value: str, value_type: Optional[str] = None) -> An
         base_datetime = match.group(1)
         timezone = match.group(3)
         normalized = f"{base_datetime}{timezone}"
-        logger.debug(f"Normalized datetime from '{value}' to '{normalized}'")
+        logger.debug("Normalized a datetime metadata value (fractional seconds removed)")
         return normalized
     
     # 2. Try boolean detection
@@ -1297,7 +1298,8 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
         # URL decode the S3 key
         import urllib.parse
         s3_key = urllib.parse.unquote_plus(s3_key)
-        
+        logger.info(f"Processing S3 {event_name} event for file: {s3_key}")
+
         # Skip folder markers
         if s3_key.endswith('/'):
             logger.info(f"Skipping folder marker: {s3_key}")
@@ -1963,6 +1965,8 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                 operation="skip"
             )
         
+        logger.info(f"Processing {event_name} metadata event for file: {database_id}/{asset_id}{file_path}")
+
         # Get asset details to determine bucket and S3 key
         asset_details = get_asset_details(database_id, asset_id)
         if not asset_details:
@@ -2075,7 +2079,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     global claims_and_roles
 
     try:
-        logger.info(f"Processing file indexing event: {json.dumps(event, default=str)}")
+        logger.info(f"Processing file indexing event: {event_log_summary(event)}")
 
         results = []
         batch_item_failures: List[Dict[str, str]] = []
