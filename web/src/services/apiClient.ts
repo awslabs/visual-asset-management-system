@@ -138,7 +138,7 @@ class ApiClient {
         // would address another resource. No API path carries either delimiter, because query
         // parameters go in queryParams, so both are percent-encoded here. So is a '%' that does
         // not start an escape (an asset id may also end in '%'). A '%' followed by two hex digits
-        // is kept: callers pass segments they already encoded (EDH ids, workflow trigger types).
+        // is kept: callers pass segments they already encoded (workflow trigger types).
         // shortcut: a raw value holding '%' and two hex digits is sent as that escape; no id the
         // backend accepts has one ('%' only as an asset id's last character). If one ever can,
         // encode that value in its service instead.

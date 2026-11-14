@@ -159,15 +159,15 @@ describe("buildUrl", () => {
         ]);
     });
 
-    // Callers that encode a segment themselves (EDH image, session, recipe, job and capacity
-    // reservation ids; workflow trigger types) pass encodeURIComponent output, in which every '%'
-    // starts an escape, so buildUrl sends it unchanged.
+    // Callers that encode a segment themselves (workflow trigger types, such as
+    // `fileUpload#<triggerId>`) pass encodeURIComponent output, in which every '%' starts an
+    // escape, so buildUrl sends it unchanged.
     it.each(["x-q%", "100%", "a%2Fb", "fileUpload#t-1", "img 1/2", "%%", "résumé%"])(
         "sends encodeURIComponent(%j) unchanged",
         async (value) => {
             const segment = encodeURIComponent(value);
-            await apiClient.get(`addon/edh/admin/images/vdi/${segment}`);
-            expect(sent()[0][1]).toBe(`${BASE}addon/edh/admin/images/vdi/${segment}`);
+            await apiClient.get(`database/db-1/workflows/wf-1/triggers/${segment}`);
+            expect(sent()[0][1]).toBe(`${BASE}database/db-1/workflows/wf-1/triggers/${segment}`);
             const sentSegment = new URL(sent()[0][1]).pathname.split("/")[6];
             expect(decodeURIComponent(sentSegment)).toBe(value);
         }
