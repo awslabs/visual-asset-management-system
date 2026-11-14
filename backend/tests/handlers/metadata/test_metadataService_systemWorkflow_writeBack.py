@@ -57,6 +57,7 @@ def test_every_row_of_the_run_is_tagged_and_every_deleted_row_marked(files):
         written = [request for c in client.batch_write_item.call_args_list
                    for request in c.kwargs["RequestItems"][table]]
         puts = [r["PutRequest"]["Item"] for r in written if "PutRequest" in r]
+        assert len(puts) == len(keys) > 0
         assert [item["metadataKey"]["S"] for item in puts] == keys
         assert all(item["lastChangeWorkflowExecutionId"] == {"S": EXECUTION_ID} for item in puts)
         mark = client.update_item.call_args.kwargs
