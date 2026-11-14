@@ -81,21 +81,25 @@ function describeError(error: unknown): string {
     return stripGeneralErrorPrefixes(text) || "An unexpected error occurred.";
 }
 
-/** `promise`, or a rejection once `ms` milliseconds pass without it settling. */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("the request timed out")), ms);
-        promise.then(
-            (value) => {
-                clearTimeout(timer);
-                resolve(value);
-            },
-            (error) => {
-                clearTimeout(timer);
-                reject(error);
-            }
-        );
-    });
+/**
+ * Upload one part, ending the request itself when it has not finished in `timeoutMs`: the timer
+ * aborts the in-flight PUT, so a part that timed out does not keep uploading in the background.
+ */
+async function uploadPartWithTimeout(url: string, part: Blob, timeoutMs: number): Promise<string> {
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, timeoutMs);
+    try {
+        return await AssetUploadService.uploadPart(url, part, controller.signal);
+    } catch (error) {
+        if (timedOut) throw new Error("the request timed out");
+        throw error;
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 /** The file split into `numParts` contiguous parts, the last one taking the remainder. */
@@ -141,8 +145,9 @@ export default function AssetIngestion() {
 
             showProgress(`Uploading part ${partNumber} of ${numParts}...`);
             try {
-                const etag = await withTimeout(
-                    AssetUploadService.uploadPart(partUploadUrl.UploadUrl, blobs[i]),
+                const etag = await uploadPartWithTimeout(
+                    partUploadUrl.UploadUrl,
+                    blobs[i],
                     PART_UPLOAD_TIMEOUT_MS
                 );
                 parts.push({ PartNumber: partNumber, ETag: etag });

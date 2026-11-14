@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import AssetIngestion from "./AssetIngestion";
 import { ingestAsset as ingestAssetService } from "../../services/APIService";
 import AssetUploadServiceDefault from "../../services/AssetUploadService";
@@ -214,5 +214,57 @@ describe("AssetIngestion", () => {
             await screen.findByText("The server did not return the upload details for the file.")
         ).toBeInTheDocument();
         await waitFor(() => expect(ingestAsset).toHaveBeenCalledTimes(1));
+    });
+
+    describe("a part that does not answer", () => {
+        afterEach(() => jest.useRealTimers());
+
+        it("aborts the in-flight request when the part times out and reports the part", async () => {
+            jest.useFakeTimers();
+            let signal: AbortSignal | undefined;
+            ingestAsset.mockResolvedValueOnce([true, initializeResponse("model.glb", 1)]);
+            // A part upload that never answers, and rejects only when its request is aborted.
+            AssetUploadService.uploadPart.mockImplementationOnce(
+                (_url: string, _part: Blob, partSignal?: AbortSignal) =>
+                    new Promise((_resolve, reject) => {
+                        signal = partSignal;
+                        partSignal?.addEventListener("abort", () =>
+                            reject(new DOMException("aborted", "AbortError"))
+                        );
+                    })
+            );
+
+            submit(new File(["x"], "model.glb"));
+            await waitFor(() => expect(signal).toBeDefined());
+            expect(signal?.aborted).toBe(false);
+
+            await act(async () => {
+                jest.advanceTimersByTime(300000);
+            });
+
+            expect(signal?.aborted).toBe(true);
+            expect(
+                await screen.findByText("Part 1 of 1 could not be uploaded: the request timed out")
+            ).toBeInTheDocument();
+            expect(ingestAsset).toHaveBeenCalledTimes(1);
+        });
+
+        it("does not abort a part that answers in time", async () => {
+            let signal: AbortSignal | undefined;
+            ingestAsset
+                .mockResolvedValueOnce([true, initializeResponse("model.glb", 1)])
+                .mockResolvedValueOnce([true, completeResponse("model.glb")]);
+            AssetUploadService.uploadPart.mockImplementationOnce(
+                async (_url: string, _part: Blob, partSignal?: AbortSignal) => {
+                    signal = partSignal;
+                    return "etag-1";
+                }
+            );
+
+            submit(new File(["x"], "model.glb"));
+
+            expect(await screen.findByText("Asset uploaded successfully")).toBeInTheDocument();
+            expect(signal?.aborted).toBe(false);
+        });
     });
 });
