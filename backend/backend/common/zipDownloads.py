@@ -612,6 +612,16 @@ def to_job_item(row: dict) -> dict:
     return item
 
 
+def to_own_job_item(row: dict, *, can_download: bool, can_remove: bool) -> dict:
+    """One job in the caller's own lists (all of their jobs, or their jobs on one asset). Carries the
+    API's own advisory decisions for the caller, defined once with the all-users list's: ``canDownload``
+    for the download URL route and ``canRemove`` for cancel and delete (#1125 D37)."""
+    item = to_job_item(row)
+    item["canDownload"] = bool(can_download)
+    item["canRemove"] = bool(can_remove)
+    return item
+
+
 def to_shared_job_item(row: dict, *, is_own: bool, can_download: bool, can_remove: bool) -> dict:
     """One job in the all-users list of an asset. Another user's job carries the requester's user id,
     the status, dates, size and the selection summary; never the selection preview, S3 keys, bucket

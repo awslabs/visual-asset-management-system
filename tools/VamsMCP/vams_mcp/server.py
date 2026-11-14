@@ -2147,8 +2147,8 @@ def list_zip_downloads(
     starting_token: Optional[str] = None,
 ) -> results.ZipDownloadPage:
     """Use to list zip download jobs, newest first: the caller's own (database_id + asset_id for
-    one asset, or neither), or with all_users=True every user's jobs for one asset (both ids). Rows
-    from other users carry `requestedBy` and the API's `canDownload` / `canRemove` flags. Jobs
+    one asset, or neither), or with all_users=True every user's jobs for one asset (both ids). Every
+    row carries the API's `canDownload` / `canRemove` flags; other users' rows add `requestedBy`. Jobs
     expire after 7 days. `truncated`: pass `NextToken` as `starting_token`."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_zip_downloads(

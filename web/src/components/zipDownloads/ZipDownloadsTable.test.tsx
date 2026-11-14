@@ -206,6 +206,46 @@ describe("ZipDownloadsTable", () => {
         );
     });
 
+    it("offers no Download on a finished job the API reports as not downloadable (D37)", async () => {
+        // The API says a finished job of a quarantined asset has no download; the role's route grants
+        // alone would have shown the button. Its Cancel / Delete stays with the caller.
+        mockAssetList.mockResolvedValue(
+            page([
+                job("1", "SUCCEEDED", { canDownload: false, canRemove: true }),
+                job("2", "SUCCEEDED", { canDownload: true, canRemove: true }),
+            ])
+        );
+        renderTable();
+        await screen.findByText("archive-1.zip");
+        const blocked = rowFor("archive-1.zip");
+        expect(within(blocked).queryByRole("button", { name: /^Download/ })).toBeNull();
+        expect(within(blocked).getByRole("button", { name: "Delete archive-1.zip" })).toBeEnabled();
+        const open = rowFor("archive-2.zip");
+        expect(within(open).getByRole("button", { name: "Download archive-2.zip" })).toBeEnabled();
+    });
+
+    it("offers no Download on the cross-asset page for a job the API reports as blocked (D37)", async () => {
+        mockGlobalList.mockResolvedValue(
+            page([job("1", "SUCCEEDED", { canDownload: false, canRemove: true })])
+        );
+        renderTable({ databaseId: undefined, assetId: undefined });
+        await screen.findByText("archive-1.zip");
+        expect(
+            within(rowFor("archive-1.zip")).queryByRole("button", { name: /^Download/ })
+        ).toBeNull();
+    });
+
+    it("greys Delete when the API reports the row as not removable (D37)", async () => {
+        mockAssetList.mockResolvedValue(
+            page([job("1", "SUCCEEDED", { canDownload: true, canRemove: false })])
+        );
+        renderTable();
+        await screen.findByText("archive-1.zip");
+        expect(
+            within(rowFor("archive-1.zip")).getByRole("button", { name: "Delete archive-1.zip" })
+        ).toHaveAttribute("aria-disabled", "true");
+    });
+
     it("does not load while its tab is inactive", () => {
         mockAssetList.mockResolvedValue(page([]));
         renderTable({ isActive: false });

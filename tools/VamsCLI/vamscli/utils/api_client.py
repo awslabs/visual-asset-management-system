@@ -4494,7 +4494,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         the caller's across every asset (GET /download/zip). With ``all_users`` (both IDs
         required), every user's jobs for the asset
         (GET /database/{databaseId}/assets/{assetId}/download/zip-all-users), each with
-        ``requestedBy``, ``isOwn`` and the API's ``canDownload`` / ``canRemove`` decisions.
+        ``requestedBy`` and ``isOwn``. Every list row carries the API's ``canDownload`` /
+        ``canRemove`` decisions for the caller.
 
         Args:
             database_id: Database ID (together with asset_id, or neither)

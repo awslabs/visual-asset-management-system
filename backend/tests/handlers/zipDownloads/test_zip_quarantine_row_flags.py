@@ -13,6 +13,9 @@ create and URL routes run (`check_quarantine_block`), once per call for the one 
   with the block off the asset-state table is never read;
 - a call with no finished job still asks once, never per row;
 - an unreadable state is advisory: the flag stays as it was and the URL route decides.
+
+The per-user and per-asset lists carry the same flags from the same definition (D37, see
+test_zip_own_row_flags.py).
 """
 
 from unittest.mock import MagicMock, patch
@@ -106,13 +109,3 @@ def test_an_unreadable_state_leaves_the_flag_to_the_url_route(env):
     table.get_item.side_effect = RuntimeError("throttled")
     with _guard(table):
         assert _flags(env) == {mine: True, theirs: True}
-
-
-def test_the_per_user_and_per_asset_lists_carry_no_flag(env):
-    # Their rows are the caller's own; the web follows the route decisions there. Pinned so a flag
-    # added to them later is a deliberate change with its own quarantine check.
-    _two_finished_jobs(env)
-    h.AUTH.user = "alice"
-    response = env.svc.lambda_handler(h.api_event(
-        "GET", h.asset_path(), {"databaseId": "db1", "assetId": "asset1"}), None)
-    assert all("canDownload" not in i for i in h.body_of(response)["Items"])

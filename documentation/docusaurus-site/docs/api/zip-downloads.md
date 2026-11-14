@@ -127,7 +127,7 @@ Selection rules:
 
 `GET /database/{databaseId}/assets/{assetId}/download/zip`
 
-Lists the caller's jobs for one asset, newest first.
+Lists the caller's jobs for one asset, newest first. Each row carries `canDownload` and `canRemove` (see [Job Fields](#job-fields)).
 
 ### List Every User's Zip Downloads for an Asset
 
@@ -135,12 +135,10 @@ Lists the caller's jobs for one asset, newest first.
 
 Lists every user's unexpired jobs for one asset, newest first (the web Download Queue's **Show all users**). The route is separate from the caller's own asset list, so a role can be granted or denied it on its own; the caller also needs asset `GET` permission on the asset. A caller without it, and a missing asset, get the same `404 Asset not found`, and the refusal is audited. Each item adds:
 
-| Field         | Type    | Description                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `requestedBy` | string  | The requester's user ID.                                                                                                                                                                                                                                                                                                                                                              |
-| `isOwn`       | boolean | Whether the caller requested the job.                                                                                                                                                                                                                                                                                                                                                 |
-| `canDownload` | boolean | The API's decision whether [Get Zip Download URL](#get-zip-download-url) would sign this archive for the caller: the job is `SUCCEEDED`, the caller may call the route, and the asset is not refused by the quarantine block (`false` for every row while the asset is quarantined without an exception and `app.compliance.quarantineBlocksDownload` is on). The route checks again. |
-| `canRemove`   | boolean | Whether the caller may cancel or delete the job; only its requester may.                                                                                                                                                                                                                                                                                                              |
+| Field         | Type    | Description                           |
+| ------------- | ------- | ------------------------------------- |
+| `requestedBy` | string  | The requester's user ID.              |
+| `isOwn`       | boolean | Whether the caller requested the job. |
 
 Another user's job carries its `selectionSummary` but an empty `selectionPreview`. Jobs created before this route existed are returned only in their requester's own lists, until they expire.
 
@@ -148,7 +146,7 @@ Another user's job carries its `selectionSummary` but an empty `selectionPreview
 
 `GET /download/zip`
 
-Lists the caller's jobs across every asset, newest first. A job on an asset the caller can no longer read is left out.
+Lists the caller's jobs across every asset, newest first. A job on an asset the caller can no longer read is left out. Each row carries `canDownload` and `canRemove` (see [Job Fields](#job-fields)).
 
 **Query Parameters (all three list routes):**
 
@@ -299,7 +297,7 @@ A terminal job returns `{"message": "Zip download deleted", "action": "deleted"}
 | `completedAt`      | string  | ISO 8601 time the job reached a terminal status, or `null`.                                                                                                           |
 | `expiresAt`        | string  | ISO 8601 time the job expires (`createdAt` plus 7 days); afterwards it is not listed and cannot be downloaded. See Retention above.                                   |
 
-A job never exposes the archive's storage location or the workflow run that produced it. Only the all-users list names the requester (`requestedBy`).
+A job never exposes the archive's storage location or the workflow run that produced it. Only the all-users list names the requester (`requestedBy`) and adds `isOwn`. The three list routes return `canDownload` and `canRemove` on every row, with the quarantine state read once per asset per call, so a client shows or hides Download and Cancel/Delete from them instead of deriving a permission.
 
 ## Related resources
 

@@ -55,16 +55,16 @@ vamscli zip-download list -d my-db -a my-asset --all-users
 vamscli zip-download list --page-size 50 --starting-token <token> --json-output
 ```
 
-| Option              | Description                                                                                                                |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `-d, --database-id` | Database ID (with `-a`, list one asset's jobs)                                                                             |
-| `-a, --asset-id`    | Asset ID (with `-d`)                                                                                                       |
-| `--max-items`       | Maximum jobs returned (1 to 1,000, default 100)                                                                            |
-| `--page-size`       | Jobs read per page (1 to 1,000, default 100)                                                                               |
-| `--starting-token`  | `NextToken` from a previous page                                                                                           |
-| `--all-users`       | Every user's jobs for the asset (needs `-d` and `-a`); each row adds `requestedBy`, `isOwn`, `canDownload` and `canRemove` |
+| Option              | Description                                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------------- |
+| `-d, --database-id` | Database ID (with `-a`, list one asset's jobs)                                                 |
+| `-a, --asset-id`    | Asset ID (with `-d`)                                                                           |
+| `--max-items`       | Maximum jobs returned (1 to 1,000, default 100)                                                |
+| `--page-size`       | Jobs read per page (1 to 1,000, default 100)                                                   |
+| `--starting-token`  | `NextToken` from a previous page                                                               |
+| `--all-users`       | Every user's jobs for the asset (needs `-d` and `-a`); each row adds `requestedBy` and `isOwn` |
 
-Jobs older than 7 days and jobs on assets you can no longer read are not listed. `--json-output` prints `{"Items": [...], "NextToken": ...}`.
+Jobs older than 7 days and jobs on assets you can no longer read are not listed. `--json-output` prints `{"Items": [...], "NextToken": ...}`; every job carries the API's `canDownload` and `canRemove` decisions for you.
 
 ---
 

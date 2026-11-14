@@ -1074,7 +1074,7 @@ def list_jobs(event, database_id=None, asset_id=None):
     if query.startingToken:
         kwargs["ExclusiveStartKey"] = _decode_token(query.startingToken, expected, token_keys)
     response = zip_table.query(**kwargs)
-    asset_decisions, items, reconciled = {}, [], 0
+    asset_decisions, quarantine_by_asset, items, reconciled = {}, {}, [], 0
     run_check_budget = [RUN_CHECKS_PER_CALL]
     for row in response.get("Items", []) or []:
         if zd.is_expired(row):
@@ -1087,7 +1087,8 @@ def list_jobs(event, database_id=None, asset_id=None):
         if row.get("status") in zd.ACTIVE_STATUSES and reconciled < RECONCILE_MAX_PER_CALL:
             reconciled += 1
             row = _reconcile(row, run_check_budget)
-        items.append(zd.to_job_item(row))
+        can_download, can_remove = _row_flags(row, True, True, quarantine_by_asset)
+        items.append(zd.to_own_job_item(row, can_download=can_download, can_remove=can_remove))
     result = {"Items": items}
     if "LastEvaluatedKey" in response:
         result["NextToken"] = _encode_token(response["LastEvaluatedKey"])
@@ -1119,6 +1120,33 @@ def _quarantine_refuses_download(database_id, asset_id) -> bool:
     return False
 
 
+def _row_flags(row, is_own, may_download_asset, quarantine_by_asset):
+    """The API's advisory decisions for one row and the caller, the one definition every list uses
+    (#1125 D36, D37): ``(can_download, can_remove)``.
+
+    canDownload: the job is SUCCEEDED, the URL route is allowed for the caller, the caller may download
+    another user's archive from the asset (own jobs need only the URL route, as the URL route itself
+    does), and the asset is not blocked by quarantine (the URL route refuses it, D35). canRemove: the
+    caller's own job and the delete route is allowed (cancel and delete stay with the requester).
+    Expired rows never reach here (the lists skip them). The quarantine state is read once per distinct
+    asset per call, into ``quarantine_by_asset``, and only for a row that could otherwise be
+    downloaded, never per row. The caller has passed Tier 2 on the asset before this runs."""
+    database_id, asset_id = row.get("databaseId", ""), row.get("assetId", "")
+    request_id = row.get("requestId", "")
+    can_download = False
+    if row.get("status") == zd.STATUS_SUCCEEDED and (is_own or may_download_asset) and _route_allowed(
+            "POST", _concrete_path(API_ZIP_DOWNLOADS_ASSET_REQUEST_URL.path, database_id, asset_id,
+                                   request_id)):
+        marker = (database_id, asset_id)
+        if marker not in quarantine_by_asset:
+            quarantine_by_asset[marker] = _quarantine_refuses_download(database_id, asset_id)
+        can_download = not quarantine_by_asset[marker]
+    can_remove = bool(is_own and _route_allowed(
+        "DELETE", _concrete_path(API_ZIP_DOWNLOADS_ASSET_REQUEST.path, database_id, asset_id,
+                                 request_id)))
+    return can_download, can_remove
+
+
 def list_all_users_jobs(event, database_id, asset_id):
     """Every user's unexpired jobs for one asset, newest first, one page (the asset index).
 
@@ -1145,7 +1173,7 @@ def list_all_users_jobs(event, database_id, asset_id):
     response = zip_table.query(**kwargs)
     caller = _caller_id()
     may_download_asset = _may_download_from_asset(database_id, asset_id)
-    quarantined = _quarantine_refuses_download(database_id, asset_id)
+    quarantine_by_asset = {}
     items, reconciled = [], 0
     run_check_budget = [RUN_CHECKS_PER_CALL]
     for row in response.get("Items", []) or []:
@@ -1155,16 +1183,7 @@ def list_all_users_jobs(event, database_id, asset_id):
             reconciled += 1
             row = _reconcile(row, run_check_budget)
         is_own = row.get("userId") == caller
-        request_id = row.get("requestId", "")
-        url_allowed = _route_allowed(
-            "POST", _concrete_path(API_ZIP_DOWNLOADS_ASSET_REQUEST_URL.path, database_id, asset_id,
-                                   request_id))
-        # The URL route refuses a quarantined asset (D35), so the row offers no download either (D36).
-        can_download = (row.get("status") == zd.STATUS_SUCCEEDED and url_allowed
-                        and (is_own or may_download_asset) and not quarantined)
-        can_remove = is_own and _route_allowed(
-            "DELETE", _concrete_path(API_ZIP_DOWNLOADS_ASSET_REQUEST.path, database_id, asset_id,
-                                     request_id))
+        can_download, can_remove = _row_flags(row, is_own, may_download_asset, quarantine_by_asset)
         items.append(zd.to_shared_job_item(row, is_own=is_own, can_download=can_download,
                                            can_remove=can_remove))
     result = {"Items": items}

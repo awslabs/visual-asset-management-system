@@ -42,11 +42,12 @@ export interface ZipDownloadJob {
     startedAt?: string | null;
     completedAt?: string | null;
     expiresAt?: string;
-    /** All-users list only: the requester's user id and the API's decisions for the caller. */
-    requestedBy?: string;
-    isOwn?: boolean;
+    /** The API's advisory decisions for the caller on this row, returned by every list. */
     canDownload?: boolean;
     canRemove?: boolean;
+    /** All-users list only: the requester's user id and whether the caller is the requester. */
+    requestedBy?: string;
+    isOwn?: boolean;
 }
 
 /** API route templates the controls are gated on through useAllowedRoutes().can(). */

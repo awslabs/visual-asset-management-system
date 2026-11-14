@@ -276,7 +276,8 @@ class ZipDownloadPage(Page):
     Items: Optional[List[Any]] = Field(
         None,
         description="Jobs: requestId, status, archiveFileName, archiveFormat, progress, errorMessage, "
-        "expiresAt; the all-users list adds requestedBy, isOwn, canDownload, canRemove.",
+        "expiresAt, canDownload, canRemove (the API's decisions for the caller); the all-users list adds "
+        "requestedBy, isOwn.",
     )
 
 

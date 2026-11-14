@@ -452,12 +452,17 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
             header: "Actions",
             cell: (job) => {
                 const terminal = isTerminalStatus(job.status);
-                // All-users view: each control follows the API's own decision for this row (the
-                // canDownload / canRemove flags it returns); another user's job is never cancelled
-                // or deleted here. The per-user views keep the route decisions above.
+                // Every view follows the API's own decision for this row (the canDownload /
+                // canRemove flags it returns): a finished job on a quarantined asset offers no
+                // Download, and another user's job is never cancelled or deleted here. The role's
+                // route decisions above still gate the controls, and the API checks each call.
+                // A response without the flags (an older API) is read as before.
                 const shared = showAllUsers;
-                const offerDownload = job.status === "SUCCEEDED" && (!shared || !!job.canDownload);
-                const offerRemove = !shared || !!job.canRemove;
+                const offerDownload =
+                    job.status === "SUCCEEDED" &&
+                    (shared ? !!job.canDownload : job.canDownload !== false);
+                const offerRemove = shared ? !!job.canRemove : true;
+                const removeDeniedByRow = !shared && job.canRemove === false;
                 return (
                     <SpaceBetween direction="horizontal" size="xxs">
                         {offerDownload && (
@@ -478,8 +483,15 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                                 onClick={() =>
                                     setConfirm({ job, kind: terminal ? "delete" : "cancel" })
                                 }
-                                disabled={!shared && !!removeReason}
-                                disabledReason={shared ? undefined : removeReason}
+                                disabled={!shared && (!!removeReason || removeDeniedByRow)}
+                                disabledReason={
+                                    shared
+                                        ? undefined
+                                        : removeReason ??
+                                          (removeDeniedByRow
+                                              ? "Your role does not allow cancelling or deleting download jobs."
+                                              : undefined)
+                                }
                                 ariaLabel={`${terminal ? "Delete" : "Cancel"} ${
                                     job.archiveFileName
                                 }`}
