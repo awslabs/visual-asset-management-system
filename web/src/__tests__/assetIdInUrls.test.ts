@@ -75,4 +75,11 @@ describe("asset ids in in-app links and direct API URLs", () => {
         // The raw link opens the sibling asset.
         expect(matchRoutes(routes, "/databases/db-1/assets/x-q#")?.[0].params.assetId).toBe("x-q");
     });
+
+    it("decode an id ending in '%' back to itself", () => {
+        const routes = [{ path: "/databases/:databaseId/assets/:assetId" }];
+        const link = `/databases/db-1/assets/${encodeURIComponent("x-q%")}`;
+        expect(link).toBe("/databases/db-1/assets/x-q%25");
+        expect(matchRoutes(routes, link)?.[0].params.assetId).toBe("x-q%");
+    });
 });
