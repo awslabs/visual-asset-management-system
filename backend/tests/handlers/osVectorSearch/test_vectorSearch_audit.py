@@ -123,6 +123,27 @@ class TestNaturalLanguageSearchRecordWritten:
         written = "".join(_every_record(clients))
         assert "secret-hit" not in written and "distance" not in written
 
+    def test_a_search_through_the_deployments_cloudfront_records_the_viewer_address(
+            self, svc, clients, monkeypatch):  # noqa: F811
+        """The search record carries the source IP development's handlers record: the CloudFront viewer
+        when the request carries the origin verification value the authorizer accepted
+        (`common/auth/viewerAddress.viewer_ip_for_audit`), the connection address otherwise."""
+        from common.auth import viewerAddress
+        handler = self._handler(svc, monkeypatch)
+        rows(svc, ("db1", "a1"))
+        svc._store = MagicMock(return_value=FakeStore([item(asset="a1", path="hit.glb")]))
+        verify_value = "origin-verify-value-0123456789abcdef"  # pragma: allowlist secret
+        for digest, expected in ((viewerAddress.origin_verify_digest(verify_value), "192.0.2.44"),
+                                 ("not-the-digest", "198.51.100.7")):
+            event = _nlp_event({"query": "pump housing"})
+            event["headers"] = {"x-vams-origin-verify": verify_value,
+                                "CloudFront-Viewer-Address": "192.0.2.44:51234"}
+            event["requestContext"]["authorizer"]["lambda"]["vams:originVerifyDigest"] = digest
+            assert handler(event, LAMBDA_CONTEXT)["statusCode"] == 200
+            record = _action_records(clients)[-1]
+            assert record["action"] == "search"
+            assert record["request"]["sourceIp"] == expected
+
     @pytest.mark.parametrize("body, reason", [
         ({"query": ""}, "validation"),
         ({"query": "pump", "size": 0}, "validation"),
