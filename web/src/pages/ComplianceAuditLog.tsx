@@ -418,7 +418,9 @@ const ComplianceAuditLog: React.FC = () => {
                                 const label =
                                     item.assetId && item.assetId !== "*" && canOpenAsset ? (
                                         <Link
-                                            href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
+                                            href={`#/databases/${
+                                                item.databaseId
+                                            }/assets/${encodeURIComponent(item.assetId)}`}
                                         >
                                             {item.assetName || item.assetId}
                                         </Link>

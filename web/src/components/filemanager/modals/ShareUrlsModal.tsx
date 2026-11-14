@@ -211,7 +211,9 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
                     .map((segment) => encodeURIComponent(segment))
                     .join("/");
 
-                let streamUrl = `${apiBase}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                let streamUrl = `${apiBase}database/${databaseId}/assets/${encodeURIComponent(
+                    assetId
+                )}/download/stream/${encodedFileKey}`;
                 if (assetVersionId) {
                     streamUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
                 }

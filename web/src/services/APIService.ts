@@ -329,7 +329,7 @@ export const runWorkflow = async ({
                 console.log(response.message);
                 return [false, response.message];
             } else {
-                return [true, `/databases/${databaseId}/assets/${assetId}`];
+                return [true, `/databases/${databaseId}/assets/${encodeURIComponent(assetId)}`];
             }
         } else {
             return false;
