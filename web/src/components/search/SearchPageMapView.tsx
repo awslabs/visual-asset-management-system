@@ -742,7 +742,11 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                                 <Box>
                                                     <Box variant="awsui-key-label">Asset Name</Box>
                                                     <Link
-                                                        href={`#/databases/${selectedItem.databaseId}/assets/${selectedItem.assetId}`}
+                                                        href={`#/databases/${
+                                                            selectedItem.databaseId
+                                                        }/assets/${encodeURIComponent(
+                                                            selectedItem.assetId
+                                                        )}`}
                                                     >
                                                         {selectedItem.parentAssetName}
                                                     </Link>
@@ -830,11 +834,19 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                                     : "";
                                                 return (
                                                     <Link
-                                                        href={`#/databases/${selectedItem.databaseId}/assets/${selectedItem.assetId}${filePathQuery}`}
+                                                        href={`#/databases/${
+                                                            selectedItem.databaseId
+                                                        }/assets/${encodeURIComponent(
+                                                            selectedItem.assetId
+                                                        )}${filePathQuery}`}
                                                         onFollow={(event) => {
                                                             event.preventDefault();
                                                             navigate(
-                                                                `/databases/${selectedItem.databaseId}/assets/${selectedItem.assetId}${filePathQuery}`,
+                                                                `/databases/${
+                                                                    selectedItem.databaseId
+                                                                }/assets/${encodeURIComponent(
+                                                                    selectedItem.assetId
+                                                                )}${filePathQuery}`,
                                                                 {
                                                                     state: {
                                                                         filePathToNavigate:
@@ -852,7 +864,11 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                             })()
                                         ) : (
                                             <Link
-                                                href={`#/databases/${selectedItem.databaseId}/assets/${selectedItem.assetId}`}
+                                                href={`#/databases/${
+                                                    selectedItem.databaseId
+                                                }/assets/${encodeURIComponent(
+                                                    selectedItem.assetId
+                                                )}`}
                                             >
                                                 <Button variant="primary" fullWidth>
                                                     View Asset Details

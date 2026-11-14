@@ -475,7 +475,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
             return;
         }
 
-        navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
+        navigate(`/databases/${databaseId}/assets/${encodeURIComponent(assetId)}/file`, {
             state: {
                 filename: file.relativeKey.split("/").pop() || file.relativeKey,
                 key: file.relativeKey,
@@ -1329,7 +1329,7 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
             return;
         }
 
-        navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
+        navigate(`/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}/file`, {
             state: {
                 filename: file.relativeKey.split("/").pop() || file.relativeKey,
                 key: file.relativeKey,
