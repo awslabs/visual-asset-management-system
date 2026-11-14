@@ -3,7 +3,8 @@
 
 """systemWorkflowLauncher: one execute-workflow cross-call per launch message.
 
-The launcher invokes executeWorkflowV2 exactly once (no retry: the call is not idempotent), as
+The launcher invokes executeWorkflowV2 once per message (botocore retries off: the call is not
+idempotent; the launcher itself repeats only a connection failure, see TestConnectionRetry), as
 SYSTEM_USER, with `triggerType: "systemReindex"` and `executionGroupId: vec-{runId}-{chunk}`, using the
 system workflow's fileUpload trigger defaults so a reindex run selects the template an upload run would.
 A 400 (the per-file-version lock or a validation refusal) is dropped; a throttle, a 5xx or an invocation
@@ -15,7 +16,14 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError,
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+    ResponseStreamingError,
+)
 
 from tests.handlers.osVectorSearch.vectorsearch_support import load_handler
 
@@ -156,3 +164,78 @@ class TestInvoke:
         response = launcher.lambda_handler({"Records": [_sqs("m1", body)]}, MagicMock())
         assert _identifiers(response) == ["m1"]
         launcher.lambda_client.invoke.assert_not_called()
+
+
+ENDPOINT = "https://lambda.us-east-1.amazonaws.com/2015-03-31/functions/execute/invocations"
+
+
+def _closed():
+    return ConnectionClosedError(endpoint_url=ENDPOINT, error="RemoteDisconnected", request=None)
+
+
+def _launched(response):
+    return json.loads(response["body"])["launched"]
+
+
+@pytest.mark.unit
+class TestConnectionRetry:
+    """D108: a launch over an idle pooled connection the network had closed failed with "Connection was
+    closed before we received a valid response", executeWorkflow never saw the call, and the message
+    waited out the queue's visibility timeout (three in a row dead-letter it). A connection failure is
+    repeated right away inside the launch; anything that answered, or may still be running, is not."""
+
+    @pytest.mark.parametrize("error", [
+        _closed(),
+        EndpointConnectionError(endpoint_url=ENDPOINT, error="Name or service not known"),
+        ConnectTimeoutError(endpoint_url=ENDPOINT, error="timed out"),
+    ], ids=["closed", "endpoint", "connect-timeout"])
+    def test_a_connection_failure_is_repeated_and_launches_once(self, launcher, error):
+        launcher.lambda_client.invoke.side_effect = [error, _invoke_response(200)]
+        response = launcher.lambda_handler({"Records": [_sqs("m1", MESSAGE)]}, MagicMock())
+        assert _identifiers(response) == [] and _launched(response) == 1
+        assert launcher.lambda_client.invoke.call_count == 2
+        first, second = (c.kwargs for c in launcher.lambda_client.invoke.call_args_list)
+        # The same launch is sent again: same target, same body, same slot candidates.
+        assert first == second
+
+    def test_a_second_closed_connection_is_repeated_too(self, launcher):
+        launcher.lambda_client.invoke.side_effect = [_closed(), _closed(), _invoke_response(200)]
+        response = launcher.lambda_handler({"Records": [_sqs("m1", MESSAGE)]}, MagicMock())
+        assert _identifiers(response) == [] and _launched(response) == 1
+        assert launcher.lambda_client.invoke.call_count == 3
+
+    def test_repeated_connection_failures_give_up_and_leave_the_message_to_sqs(self, launcher):
+        launcher.sqs_client = MagicMock()
+        launcher.lambda_client.invoke.side_effect = _closed()
+        response = launcher.lambda_handler({"Records": [_sqs("m1", MESSAGE)]}, MagicMock())
+        assert _identifiers(response) == ["m1"] and _launched(response) == 0
+        assert launcher.lambda_client.invoke.call_count == 3
+        launcher.sqs_client.send_message.assert_not_called()
+
+    def test_a_function_error_is_not_repeated(self, launcher):
+        launcher.lambda_client.invoke.return_value = _invoke_response(200, function_error="Unhandled")
+        assert _identifiers(launcher.lambda_handler({"Records": [_sqs("m1", MESSAGE)]}, MagicMock())) == ["m1"]
+        launcher.lambda_client.invoke.assert_called_once()
+
+    @pytest.mark.parametrize("status", [400, 500])
+    def test_an_http_answer_from_execute_workflow_is_not_repeated(self, launcher, status):
+        launcher.lambda_client.invoke.return_value = _invoke_response(status)
+        launcher.lambda_handler({"Records": [_sqs("m1", MESSAGE)]}, MagicMock())
+        launcher.lambda_client.invoke.assert_called_once()
+
+    def test_a_lambda_service_error_is_not_repeated(self, launcher):
+        launcher.lambda_client.invoke.side_effect = ClientError(
+            {"Error": {"Code": "TooManyRequestsException", "Message": "Rate Exceeded."}}, "Invoke")
+        assert _identifiers(launcher.lambda_handler({"Records": [_sqs("m1", MESSAGE)]}, MagicMock())) == ["m1"]
+        launcher.lambda_client.invoke.assert_called_once()
+
+    @pytest.mark.parametrize("error", [
+        ReadTimeoutError(endpoint_url=ENDPOINT, error="Read timed out"),
+        ResponseStreamingError(error="IncompleteRead"),
+    ], ids=["read-timeout", "response-stream"])
+    def test_a_failure_after_the_call_was_delivered_is_not_repeated(self, launcher, error):
+        # A read timeout comes after the 900 s executeWorkflow can run; a broken response stream after it
+        # answered. Either way the call reached the function, so it is left to SQS.
+        launcher.lambda_client.invoke.side_effect = error
+        assert _identifiers(launcher.lambda_handler({"Records": [_sqs("m1", MESSAGE)]}, MagicMock())) == ["m1"]
+        launcher.lambda_client.invoke.assert_called_once()
