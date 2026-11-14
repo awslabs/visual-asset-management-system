@@ -153,10 +153,16 @@ class ApiClient {
         // A '#' or '?' in the path can only come from a value placed in it (an asset id may end
         // in '#'): new URL() would read it as the start of a fragment or a query and the request
         // would address another resource. No API path carries either delimiter, because query
-        // parameters go in queryParams, so both are percent-encoded here.
+        // parameters go in queryParams, so both are percent-encoded here. So is a '%' that does
+        // not start an escape (an asset id may also end in '%'). A '%' followed by two hex digits
+        // is kept: callers pass segments they already encoded (EDH ids, workflow trigger types).
+        // shortcut: a raw value holding '%' and two hex digits is sent as that escape; no id the
+        // backend accepts has one ('%' only as an asset id's last character). If one ever can,
+        // encode that value in its service instead.
         const relativePath = path
             .replace(/^\/+/, "")
-            .replace(/[#?]/g, (c) => encodeURIComponent(c));
+            .replace(/[#?]/g, (c) => encodeURIComponent(c))
+            .replace(/%(?![0-9A-Fa-f]{2})/g, "%25");
         const url = new URL(relativePath, fullBase.endsWith("/") ? fullBase : fullBase + "/");
         if (queryParams) {
             Object.entries(queryParams).forEach(([key, value]) => {
