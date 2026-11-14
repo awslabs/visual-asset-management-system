@@ -736,8 +736,8 @@ aws bedrock get-foundation-model --region <region> \
   --model-identifier anthropic.claude-sonnet-5-5 --query modelDetails.modelLifecycle
 ```
 
--   **Commercial (`aws`):** a `global.` profile routes requests to any commercial Region. A geographic profile (`us.`, `eu.`, `apac.`) keeps inference inside that geography. A plain foundation-model id runs in the deployment Region only.
--   **AWS GovCloud (US) (`aws-us-gov`):** use a `us-gov.` inference profile or a foundation-model id offered in `us-gov-west-1`. Configuration validation rejects the commercial `global.` and `us.` prefixes. The pipeline cannot run in `us-gov-east-1`, which has no Amazon Rekognition.
+-   **Commercial (`aws`):** a `global.` profile routes requests to any commercial Region, and a plain foundation-model id runs in the deployment Region only. A geographic profile (`us.`, `eu.`, `apac.`) keeps inference inside that geography, but the pipeline can refuse it (below).
+-   **AWS GovCloud (US) (`aws-us-gov`):** use a foundation-model id offered on demand in `us-gov-west-1`; the pipeline can refuse a `us-gov.` inference profile (below). Configuration validation rejects the commercial `global.` and `us.` prefixes. The pipeline cannot run in `us-gov-east-1`, which has no Amazon Rekognition.
 -   **AWS European Sovereign Cloud (`aws-eusc`):** the pipeline cannot run in this partition, which has no Amazon Rekognition.
 
 Choose a `global.` profile or a foundation-model id offered on demand in the deployment Region. The pipeline's IAM grant covers the model in the deployment Region and the global profile's model only, so a geographic profile (`us.`, `eu.`, `apac.`, `us-gov.`) can be refused when a request is routed to another Region ([#1390](https://github.com/awslabs/visual-asset-management-system/issues/1390)).
@@ -1205,7 +1205,7 @@ The boundary ARN must be an IAM managed policy ARN in the partition you deploy t
 
 Adding, changing, or removing the boundary on an existing deployment updates each role in place; no role is replaced. The policy must allow everything VAMS grants its roles, because a boundary limits a role to the intersection of the boundary and the role's own policies. Use the IAM policy report (see [VAMS stack role customization](#vams-stack-role-customization-vamsstacks)) to list those permissions.
 
-Setting, changing, or removing `IamRoleNamePrefix` on an existing deployment renames, and so replaces, each IAM role in the core stack and its nested stacks. The REST API moves to a new deployment that uses the renamed authorizer role in the same update.
+Setting, changing, or removing `IamRoleNamePrefix` on an existing deployment renames, and so replaces, each IAM role in the core stack and its nested stacks. The REST API moves to a new deployment that uses the renamed authorizer role in the same update. The API Gateway account CloudWatch role is retained by design, so the update creates the renamed role and leaves the old one in the account, outside any stack. Delete the old role only when `aws apigateway get-account` in that Region no longer names it, as [Step 7 of the uninstall guide](uninstall.md#step-7-delete-the-api-gateway-account-cloudwatch-role) describes. Each workflow's state machine keeps the workflow role it was built with, so save every workflow again with its pipeline list after the rename, as [Renaming the IAM roles](update-the-solution.md#v267-and-later-renaming-the-iam-roles) describes.
 
 :::warning[Role name length limit]
 The total IAM role name character count limit is 64 characters. Long prefixes may affect role name uniqueness and cause deployment failures. Prefixes of 8 characters or fewer are recommended.
@@ -1260,6 +1260,8 @@ Any field left empty keeps the corresponding CDK default. ARNs may use the `${AW
 :::tip[Simpler middle ground]
 If your only concern is that the CloudFormation execution role gets `AdministratorAccess` by default, you do not need this feature. Instead bootstrap with `npx cdk bootstrap --cloudformation-execution-policies <your-managed-policy-arns>` and/or `--custom-permissions-boundary <name>`.
 :::
+
+A scoped CloudFormation execution role needs `cloudwatch:PutMetricAlarm`, `cloudwatch:DescribeAlarms`, `cloudwatch:DeleteAlarms` and `cloudwatch:TagResource` for the VAMS dead-letter queue alarms, `logs:PutResourcePolicy`, `logs:DescribeResourcePolicies` and `logs:DeleteResourcePolicy` for the orchestration bus audit log group policy, and `iam:PutRolePermissionsBoundary` when `PermissionBoundaryArn` is set. In the commercial partition and the AWS European Sovereign Cloud, where VAMS sets the recursive loop setting of the created-events bucket-sync Lambda to `Allow`, it also needs `lambda:PutFunctionRecursionConfig` and `lambda:GetFunctionRecursionConfig`. Without those two, the update that first sets it fails at that function, and its rollback fails there too and leaves the core stack in `UPDATE_ROLLBACK_FAILED`; [Updating the solution](update-the-solution.md#v267-and-later-scoped-aws-cloudformation-execution-role) describes the recovery.
 
 ### VAMS stack role customization (`vamsStacks`)
 

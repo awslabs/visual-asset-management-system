@@ -47,7 +47,7 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
 1. In `infra/config/config.json`, disable everything that requires VPC networking so the dependent ENIs are torn down. This includes:
     - Amazon OpenSearch Service provisioned (`openSearch.useProvisioned.enabled = false`)
     - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, ModelOps, RapidPipeline, point cloud / 3D thumbnail / GenAI labeling previews)
-    - `useGlobalVpc.useForAllLambdas = false` so Lambda functions are removed from the VPC (this releases the Lambda Hyperplane ENIs that most commonly block subnet deletion)
+    - `useGlobalVpc.useForAllLambdas = false` so Lambda functions are removed from the VPC. Their network interfaces stay in the VPC afterwards; step 2 removes them
     - The ALB public subnet if it is being removed (`useAlb.usePublicSubnet = false`), or the ALB itself if the web tier is changing
 2. Remove any Lambda functions and their VPC ENIs. Deploy with networking disabled so AWS CloudFormation detaches the Lambda functions from the VPC and deletes their ENIs:
 
@@ -55,7 +55,32 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
     cd infra && npx cdk deploy --all --require-approval never
     ```
 
-    If a Lambda ENI lingers (Lambda Hyperplane ENIs can take several minutes to detach after the function is removed from the VPC), wait for it to clear, or delete the orphaned ENI manually from the Amazon EC2 console (**Network Interfaces**, filter by the VPC, delete interfaces in the `available` state) before continuing.
+    The update that takes a function out of the VPC removes the function's permission to delete its network
+    interfaces before AWS Lambda deletes them, and Lambda does not try again. The interfaces stay in the VPC in the
+    `available` state, and the subnets and the old Lambda security groups cannot be deleted while they exist. List
+    them:
+
+    ```bash
+    aws ec2 describe-network-interfaces \
+        --filters Name=vpc-id,Values=<VAMS_VPC_ID> Name=status,Values=available "Name=description,Values=AWS Lambda VPC ENI-*" \
+        --query 'NetworkInterfaces[].[NetworkInterfaceId,Description,RequesterId,Attachment.AttachmentId]' --output text
+    ```
+
+    Lambda changes such an interface's type from `lambda` to `interface` when it stops managing it, so do not filter
+    on the interface type. Delete an interface only when its status is `available` and it has no attachment, its
+    `RequesterId` is the AWS Lambda service rather than your own account ID, and the function named after
+    `AWS Lambda VPC ENI-` in its description no longer exists or has no subnets in its VPC configuration
+    (`aws lambda get-function-configuration --function-name <FUNCTION_NAME> --query 'VpcConfig.SubnetIds'` returns
+    an empty list, or the function is not found):
+
+    ```bash
+    aws ec2 delete-network-interface --network-interface-id <ENI_ID>
+    ```
+
+    An old Lambda security group that no stack owns any more stays behind too. Before deleting one by hand, check
+    that no stack owns it (`aws cloudformation describe-stack-resources --physical-resource-id <SECURITY_GROUP_ID>`
+    finds no stack), that no network interface uses it and that no rule in another group references it. Never delete
+    a security group that a stack still owns, or one that an AWS Batch compute environment of a GPU pipeline uses.
 
 3. Re-enable the features you need in `infra/config/config.json`, including any new subnet or availability-zone configuration (for example, set `openSearch.useProvisioned.availabilityZoneCount` to `2` for a two-AZ Region such as `eusc-de-east-1`).
 4. Deploy again so the VPC is provisioned with the new subnet layout:
@@ -369,6 +394,42 @@ For operations that may exceed the integration timeout, check your AWS Lambda fu
 
 Deployments that regularly run these operations can raise `app.api.apiGatewayRest.apiGatewayTimeoutTime` (up to 300 seconds) so the request completes synchronously instead of returning a 504. Values above 29 seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md).
 
+### Asset ID Refused as Not Unique Although No Asset Exists
+
+**Symptoms:**
+
+-   Creating an asset returns HTTP 400 "Asset identifier is not unique for the given S3 bucket location"
+-   No asset with that ID exists: `vamscli assets get -d <DATABASE_ID> <ASSET_ID> --show-archived` reports that the asset is not found
+
+**Cause:**
+
+Asset creation first writes an empty folder object named after the asset ID into the database's default Amazon S3 bucket, then records the asset. When a later step fails, for example creating the asset's notification topic, the folder object stays behind. Creation refuses an asset ID whose folder holds any object version or delete marker, so that ID cannot be created again. [#1385](https://github.com/awslabs/visual-asset-management-system/issues/1385) tracks removing the leftover object.
+
+**Resolution:**
+
+Remove every version of the empty folder object, then create the asset again.
+
+1. Find the bucket and its base assets prefix: `vamscli database get -d <DATABASE_ID>` shows the database's default bucket ID, and `vamscli database list-buckets` shows that bucket's name and base assets prefix.
+2. Build the folder object's key: the base assets prefix with a trailing slash and no leading slash (a prefix of `/` is the bucket root and adds nothing), then the asset ID, then `/`. In a bucket whose base assets prefix is `/`, the key for asset `my.asset` is `my.asset/`.
+3. List every version and delete marker under that key:
+
+    ```bash
+    aws s3api list-object-versions --bucket <BUCKET_NAME> --prefix "<KEY>" \
+      --query "{Versions: Versions[].[Key, VersionId, Size], DeleteMarkers: DeleteMarkers[].[Key, VersionId]}"
+    ```
+
+    Continue only if every entry has exactly that key and every version has size 0. Anything else under the key is asset data. If another database uses the same bucket and base assets prefix, also confirm with `vamscli assets get -d <OTHER_DATABASE_ID> <ASSET_ID> --show-archived` that it holds no asset with this ID.
+
+4. Delete each listed version and delete marker by its version ID:
+
+    ```bash
+    aws s3api delete-object --bucket <BUCKET_NAME> --key "<KEY>" --version-id <VERSION_ID>
+    ```
+
+    A delete without `--version-id` adds a delete marker, which still blocks the asset ID.
+
+5. Create the asset again.
+
 ### Amazon OpenSearch Indexing Delays After Bulk Operations
 
 After uploading many files or performing bulk metadata changes, search results may not immediately reflect the updates.
@@ -405,7 +466,7 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 
 **Cause:**
 
-A bucket-sync or indexer Lambda could not process those events within three receives, so Amazon SQS moved them to the dead-letter queue of its source queue. The objects in Amazon S3 are unaffected. For the bucket-sync created queue before v2.6.7, AWS Lambda recursive loop detection caused this in the commercial partition under sustained parallel uploads; the bucket-sync Lambda's `RecursiveInvocationsDropped` metric is above zero when that was the cause. For the indexer queues, an interruption of the Amazon OpenSearch Service domain or collection is the usual cause.
+A bucket-sync or indexer Lambda could not process those events within three receives, so Amazon SQS moved them to the dead-letter queue of its source queue. The objects in Amazon S3 are unaffected. For the bucket-sync created queue in the commercial partition and the AWS European Sovereign Cloud, AWS Lambda recursive loop detection is a cause when the bucket-sync Lambda's recursive loop setting is not `Allow`; its `RecursiveInvocationsDropped` metric is above zero when that is the cause. For the indexer queues, an interruption of the Amazon OpenSearch Service domain or collection is the usual cause.
 
 **Resolution:**
 
