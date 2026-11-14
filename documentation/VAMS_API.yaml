@@ -12246,6 +12246,7 @@ components:
                         $ref: "#/components/schemas/fileCompletionResult"
                 overallSuccess:
                     type: boolean
+                    description: "True when every file in the upload succeeded; a file over 1 GiB that is processed asynchronously (largeFileAsynchronousHandling) counts as a success"
                 largeFileAsynchronousHandling:
                     type: boolean
                     description: "Indicates if any file in this upload is being processed asynchronously due to large file size"
