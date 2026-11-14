@@ -463,6 +463,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Ingest-asset upload completion** — The complete stage of `POST /ingest-asset` (the request that carries `uploadId`) finishes the upload instead of always failing with `400` "Invalid API path or method". (issue #1453)
 -   **The authorizer derives the caller's identity from the username claim** — The API authorizer identifies the caller only by the token's username claim (the first present of `cognito:username`, `username` and `sub`) and ignores claims a token carries under the reserved `vams:` prefix; a verified token with none of those claims is refused. Amazon Cognito users and API keys keep their identity. (PR #1490)
 -   **Asset IDs ending in `#` in VamsCLI and VamsMCP** — A `/`, `?`, `#` or `%` in an ID that VamsCLI or VamsMCP puts into a request path is sent as part of that ID, so an asset whose ID ends in `#` is read, updated, archived and deleted as itself. A request path that contains a control character is refused before anything is sent. (issue #1476, PR #1483)
+-   **Asset IDs ending in `#` in the web interface** — The asset page, its edit, archive, delete and file list, the links to an asset and the viewers' file requests carry the whole asset ID, so an asset whose ID ends in `#` is opened and changed as itself instead of reaching the asset without the `#`. (issue #1476)
 
 **Other changes:**
 
