@@ -104,6 +104,9 @@ class TestAComplianceRequestsRecordsAreDeliveredOnceEach:
         _approve(recording, outcome="denied")
         assert _all_messages(recording, recording.actions) == []
         payloads = [_payload(message) for message in _all_messages(recording, recording.auth)]
-        denied = [payload for payload in payloads if payload.get("action") == "complianceCascadeApprove"]
+        # Inside the context every authorization record names the route's action; the route action
+        # record is the one that is not a check (it carries no checked object).
+        denied = [payload for payload in payloads
+                  if payload.get("action") == "complianceCascadeApprove" and "obj" not in payload]
         assert len(payloads) == 1 + len(OTHER_DATABASES) + len(ASSET_DENIALS) + 1
         assert [payload["outcome"] for payload in denied] == ["denied"]

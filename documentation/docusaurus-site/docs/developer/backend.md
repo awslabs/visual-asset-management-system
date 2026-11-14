@@ -550,6 +550,7 @@ The logger automatically redacts sensitive fields at all nesting levels, in both
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`
 -   `apiKey`, `apiKeySecret`, `rawKey`
 -   the `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization`, `X-Amz-Security-Token` and `x-vams-origin-verify` headers, in any letter case
+-   `vams:originVerifyDigest`, the authorizer context key that carries the digest of the accepted origin verification value
 -   `configBody`, `templateTags`, `tagValues` -- caller-authored template content, also filtered inside a JSON-string request `body`
 
 Redaction is driven by the field name, so a message that interpolates a payload value into a formatted string is written as-is. Log identifiers, counts, and flags rather than rendered bodies or tag values.
