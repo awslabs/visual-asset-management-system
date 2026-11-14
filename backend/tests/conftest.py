@@ -206,6 +206,17 @@ _ixe_module = _s3mk_importlib_util.module_from_spec(_ixe_spec)
 _ixe_spec.loader.exec_module(_ixe_module)
 sys.modules['common.indexerEvents'] = _ixe_module
 sys.modules['common'].indexerEvents = _ixe_module
+# eventLogSummary describes an event for a log line from its shape alone (stdlib only). The indexers,
+# the bucket sync and the Garnet add-on indexers import it at module level, so it is registered for
+# the same reason as indexerEvents.
+_els_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.eventLogSummary',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'eventLogSummary.py')
+)
+_els_module = _s3mk_importlib_util.module_from_spec(_els_spec)
+_els_spec.loader.exec_module(_els_module)
+sys.modules['common.eventLogSummary'] = _els_module
+sys.modules['common'].eventLogSummary = _els_module
 # assetProvenance builds the asset-row change-provenance attributes (stdlib + the s3MetadataKeys
 # constants). The upload and large-file completion handlers import it at module level.
 _apv_spec = _s3mk_importlib_util.spec_from_file_location(

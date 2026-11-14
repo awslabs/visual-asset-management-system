@@ -60,12 +60,12 @@ def test_helper_imported_before_the_handler_logger_keeps_the_handler_service_nam
     lines = _by_message(_emitted_lines(helper_imported_first=True))
 
     assert "caller line" in lines
-    assert "Reporting 1 failed record(s) for redrive" in lines
+    assert "Reporting 1 failed record(s) for redrive: m1" in lines
     assert {line.get("service_name") for line in lines.values()} == {"SnsQueuing"}
 
 
 def test_helper_imported_after_the_handler_logger_carries_the_handler_service_name():
     lines = _by_message(_emitted_lines(helper_imported_first=False))
 
-    assert lines["Reporting 1 failed record(s) for redrive"].get("service_name") == "SnsQueuing"
+    assert lines["Reporting 1 failed record(s) for redrive: m1"].get("service_name") == "SnsQueuing"
     assert lines["caller line"].get("service_name") == "SnsQueuing"

@@ -23,6 +23,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config as BotoConfig
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
+from common.eventLogSummary import event_log_summary
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -1923,7 +1924,7 @@ def on_storage_event_created(event):
                indicating if processing completed without hard errors, and successful_records
                is a list of records that were successfully processed
     """
-    logger.info(f"Processing storage event: {json.dumps(event)}")
+    logger.info(f"Processing storage event: {event_log_summary(event)}")
     
     success_count = 0
     error_count = 0
@@ -2071,7 +2072,9 @@ def parse_event(event):
                     if 'Records' in message:
                         s3_events.append(message)
                 except json.JSONDecodeError as e:
-                    logger.warning(f"SNS Message field is not valid JSON: {e}. Message content: {record['Sns']['Message']}")
+                    logger.warning(
+                        f"SNS Message field is not valid JSON ({len(record['Sns']['Message'])} characters): {e}"
+                    )
                     # If Message contains S3 event data in a non-standard format, try to extract it
                     if 's3' in record['Sns']['Message'] or 'bucket' in record['Sns']['Message']:
                         logger.info("Attempting to process SNS Message as raw S3 event data")
@@ -2124,7 +2127,7 @@ def lambda_handler_created(event, context):
         reach the file indexer topic (every message when the invocation failed unexpectedly);
         an empty list when all of them did.
     """
-    logger.info(f"File creation event received: {json.dumps(event)}")
+    logger.info(f"File creation event received: {event_log_summary(event)}")
 
     failures = []
 
@@ -2197,7 +2200,7 @@ def lambda_handler_deleted(event, context):
         reach the file indexer topic (every message when the invocation failed unexpectedly);
         an empty list when all of them did.
     """
-    logger.info(f"File deletion event received: {json.dumps(event)}")
+    logger.info(f"File deletion event received: {event_log_summary(event)}")
 
     failures = []
 
