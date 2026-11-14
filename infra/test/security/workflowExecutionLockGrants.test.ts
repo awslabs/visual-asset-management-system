@@ -74,107 +74,138 @@ function lockGrants(synth: SynthResult): Map<string, string[]> {
     return grants;
 }
 
-describe.each(ALL_TEMPLATES)(
-    "concurrency lock table grants (%s template)",
-    (name: TemplateName) => {
-        let synth: SynthResult;
+/**
+ * Every shipped template, plus the commercial template with a customer managed key and the commercial
+ * worst case (key, Deadline Cloud, every Lambda in the VPC): the cells where roles are largest and CDK
+ * is most likely to split a default policy into overflow policies.
+ */
+interface LockCell {
+    label: string;
+    template: TemplateName;
+    mutate?: (c: any) => void;
+}
+const LOCK_CELLS: LockCell[] = [
+    ...ALL_TEMPLATES.map((t) => ({ label: t, template: t })),
+    {
+        label: "commercial-cmk",
+        template: "commercial" as TemplateName,
+        mutate: (c: any) => {
+            c.app.useKmsCmkEncryption.enabled = true;
+        },
+    },
+    {
+        label: "commercial-worst",
+        template: "commercial" as TemplateName,
+        mutate: (c: any) => {
+            c.app.useKmsCmkEncryption.enabled = true;
+            c.app.pipelines.deadlineCloudExecutionTypeEnabled = true;
+            c.app.useGlobalVpc.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+        },
+    },
+];
 
-        beforeAll(() => {
-            synth = synthTemplate(name);
-        });
+describe.each(LOCK_CELLS)("concurrency lock table grants ($label template)", (cell: LockCell) => {
+    let synth: SynthResult;
 
-        test("the lock table is in this synth", () => {
-            // Control for every assertion below: a template without the table satisfies "no grant" trivially.
-            expect(
-                synth.where("AWS::DynamoDB::Table", (r) => LOCK_TABLE.test(r.logicalId))
-            ).toHaveLength(1);
-        });
+    beforeAll(() => {
+        synth = cell.mutate
+            ? synthTemplate(cell.template, { mutate: cell.mutate, mutateKey: cell.label })
+            : synthTemplate(cell.template);
+    });
 
-        test("exactly the four lock handlers hold a grant on the table, with exactly the lock actions", () => {
-            const grants = lockGrants(synth);
-            const byPrefix: Record<string, string[]> = {};
-            for (const [roleId, actions] of grants) {
-                const prefix = Object.keys(EXPECTED).find((p) => roleId.startsWith(p)) ?? roleId;
-                byPrefix[prefix] = actions;
-            }
-            expect(byPrefix).toEqual(EXPECTED);
-        });
+    test("the lock table is in this synth", () => {
+        // Control for every assertion below: a template without the table satisfies "no grant" trivially.
+        expect(
+            synth.where("AWS::DynamoDB::Table", (r) => LOCK_TABLE.test(r.logicalId))
+        ).toHaveLength(1);
+    });
 
-        test("Query on the lock table reaches the holder index only, never the table itself", () => {
-            // CDK merges statements with the same actions, so one Query statement may also carry another
-            // table's ARN; only the entries that name the lock table are checked.
-            const rolesQueryingTheIndex = new Set<string>();
-            for (const [roleId, statements] of statementsByRole(synth)) {
-                for (const st of statements) {
-                    if (!actionsOf([st]).includes("dynamodb:Query")) {
-                        continue;
-                    }
-                    const onLock = ([] as any[])
-                        .concat(st.Resource ?? [])
-                        .map((entry) => JSON.stringify(entry))
-                        .filter((entry) => LOCK_TABLE.test(entry));
-                    for (const entry of onLock) {
-                        expect(entry).toContain(`/index/${HOLDER_INDEX}`);
-                        rolesQueryingTheIndex.add(roleId);
-                    }
+    test("exactly the four lock handlers hold a grant on the table, with exactly the lock actions", () => {
+        const grants = lockGrants(synth);
+        const byPrefix: Record<string, string[]> = {};
+        for (const [roleId, actions] of grants) {
+            const prefix = Object.keys(EXPECTED).find((p) => roleId.startsWith(p)) ?? roleId;
+            byPrefix[prefix] = actions;
+        }
+        expect(byPrefix).toEqual(EXPECTED);
+    });
+
+    test("Query on the lock table reaches the holder index only, never the table itself", () => {
+        // CDK merges statements with the same actions, so one Query statement may also carry another
+        // table's ARN; only the entries that name the lock table are checked.
+        const rolesQueryingTheIndex = new Set<string>();
+        for (const [roleId, statements] of statementsByRole(synth)) {
+            for (const st of statements) {
+                if (!actionsOf([st]).includes("dynamodb:Query")) {
+                    continue;
+                }
+                const onLock = ([] as any[])
+                    .concat(st.Resource ?? [])
+                    .map((entry) => JSON.stringify(entry))
+                    .filter((entry) => LOCK_TABLE.test(entry));
+                for (const entry of onLock) {
+                    expect(entry).toContain(`/index/${HOLDER_INDEX}`);
+                    rolesQueryingTheIndex.add(roleId);
                 }
             }
-            expect(rolesQueryingTheIndex.size).toBe(3);
-        });
+        }
+        expect(rolesQueryingTheIndex.size).toBe(3);
+    });
 
-        test("PutItem and DeleteItem reach the lock table itself, never an index", () => {
-            let entriesChecked = 0;
-            for (const statements of statementsByRole(synth).values()) {
-                for (const st of statements) {
-                    const actions = actionsOf([st]);
-                    if (
-                        !actions.some(
-                            (a) => a === "dynamodb:PutItem" || a === "dynamodb:DeleteItem"
-                        )
-                    ) {
-                        continue;
-                    }
-                    const onLock = ([] as any[])
-                        .concat(st.Resource ?? [])
-                        .map((entry) => JSON.stringify(entry))
-                        .filter((entry) => LOCK_TABLE.test(entry));
-                    for (const entry of onLock) {
-                        expect(entry).not.toContain("/index/");
-                        entriesChecked += 1;
-                    }
+    test("PutItem and DeleteItem reach the lock table itself, never an index", () => {
+        let entriesChecked = 0;
+        for (const statements of statementsByRole(synth).values()) {
+            for (const st of statements) {
+                const actions = actionsOf([st]);
+                if (!actions.some((a) => a === "dynamodb:PutItem" || a === "dynamodb:DeleteItem")) {
+                    continue;
+                }
+                const onLock = ([] as any[])
+                    .concat(st.Resource ?? [])
+                    .map((entry) => JSON.stringify(entry))
+                    .filter((entry) => LOCK_TABLE.test(entry));
+                for (const entry of onLock) {
+                    expect(entry).not.toContain("/index/");
+                    entriesChecked += 1;
                 }
             }
-            expect(entriesChecked).toBeGreaterThan(0);
-        });
+        }
+        expect(entriesChecked).toBeGreaterThan(0);
+    });
 
-        test("no grant on the lock table uses a wildcard action", () => {
-            for (const actions of lockGrants(synth).values()) {
-                expect(actions.filter((a) => a.includes("*"))).toEqual([]);
-            }
-        });
+    test("no grant on the lock table uses a wildcard action", () => {
+        for (const actions of lockGrants(synth).values()) {
+            expect(actions.filter((a) => a.includes("*"))).toEqual([]);
+        }
+    });
 
-        test("every lock-table statement lives in a lock policy, never a role's default or overflow policy", () => {
-            // A statement added to a role's default policy can move existing statements into an overflow
-            // policy, and CloudFormation updates the two separately during a deploy.
-            const holders = synth.resources
-                .filter((r) => /IAM::(Policy|ManagedPolicy)$/.test(r.type))
-                .filter((r) =>
-                    (((r.properties as any).PolicyDocument?.Statement ?? []) as any[]).some((st) =>
-                        LOCK_TABLE.test(JSON.stringify(st.Resource ?? ""))
-                    )
+    test("every lock-table statement lives in a lock policy, never a role's default or overflow policy", () => {
+        // A statement added to a role's default policy can move existing statements into an overflow
+        // policy, and CloudFormation updates the two separately during a deploy.
+        const holders = synth.resources
+            .filter((r) => /IAM::(Policy|ManagedPolicy)$/.test(r.type))
+            .filter((r) =>
+                (((r.properties as any).PolicyDocument?.Statement ?? []) as any[]).some((st) =>
+                    LOCK_TABLE.test(JSON.stringify(st.Resource ?? ""))
                 )
-                .map((r) => r.logicalId);
-            expect(holders).toHaveLength(Object.keys(EXPECTED).length);
-            for (const logicalId of holders) {
-                expect(logicalId).toMatch(new RegExp(`^[A-Za-z]+${EXECUTION_LOCK_POLICY_ID}`));
-                expect(logicalId).not.toMatch(/DefaultPolicy|OverflowPolicy/);
-            }
-            const inlineOnRoles = synth
-                .ofType("AWS::IAM::Role")
-                .flatMap((role) => ((role.properties as any).Policies ?? []) as any[])
-                .flatMap((doc) => (doc.PolicyDocument?.Statement ?? []) as any[])
-                .filter((st) => LOCK_TABLE.test(JSON.stringify(st.Resource ?? "")));
-            expect(inlineOnRoles).toEqual([]);
-        });
-    }
-);
+            )
+            .map((r) => r.logicalId);
+        expect(holders).toHaveLength(Object.keys(EXPECTED).length);
+        // Each is a role-inline AWS::IAM::Policy (the lock policy), never an AWS::IAM::ManagedPolicy,
+        // so CDK's overflow, which only splits a role's default policy, cannot move its statements.
+        for (const r of synth.resources.filter((x) => holders.includes(x.logicalId))) {
+            expect(r.type).toBe("AWS::IAM::Policy");
+        }
+        for (const logicalId of holders) {
+            expect(logicalId).toMatch(new RegExp(`^[A-Za-z]+${EXECUTION_LOCK_POLICY_ID}`));
+            expect(logicalId).not.toMatch(/DefaultPolicy|OverflowPolicy/);
+        }
+        const inlineOnRoles = synth
+            .ofType("AWS::IAM::Role")
+            .flatMap((role) => ((role.properties as any).Policies ?? []) as any[])
+            .flatMap((doc) => (doc.PolicyDocument?.Statement ?? []) as any[])
+            .filter((st) => LOCK_TABLE.test(JSON.stringify(st.Resource ?? "")));
+        expect(inlineOnRoles).toEqual([]);
+    });
+});
