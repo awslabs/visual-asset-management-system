@@ -305,13 +305,13 @@ Repeat the asset fields from the initialize request, and add:
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                                   |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, an upload that cannot be completed, or a failure creating the asset or the upload. |
-| `403`  | Not authorized to write this asset, or the upload step refused the request.                                                                                                                                   |
-| `404`  | The upload step reported its target as not found.                                                                                                                                                             |
-| `429`  | Rate limit exceeded: more than 20 upload initializations by the user in one minute. The response carries a `Retry-After` header (seconds).                                                                    |
-| `500`  | Internal server error.                                                                                                                                                                                        |
+| Status | Description                                                                                                                                                                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, a file the upload step refuses for its name (initialize), an upload that cannot be completed (complete; no asset is created in either case), or a failure creating the asset or the upload. |
+| `403`  | Not authorized to write this asset, or the upload step refused the request.                                                                                                                                                                                                                                            |
+| `404`  | The upload step reported its target as not found.                                                                                                                                                                                                                                                                      |
+| `429`  | Rate limit exceeded: more than 20 upload initializations by the user in one minute. The response carries a `Retry-After` header (seconds).                                                                                                                                                                             |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                 |
 
 ---
 
