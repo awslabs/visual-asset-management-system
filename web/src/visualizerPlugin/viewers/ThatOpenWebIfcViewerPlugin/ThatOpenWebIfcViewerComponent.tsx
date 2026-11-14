@@ -180,7 +180,9 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
                     .split("/")
                     .map((seg) => encodeURIComponent(seg))
                     .join("/");
-                let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                let assetUrl = `${config.api}database/${databaseId}/assets/${encodeURIComponent(
+                    assetId
+                )}/download/stream/${encodedFileKey}`;
                 if (assetVersionId) {
                     assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
                 } else if (versionId) {
