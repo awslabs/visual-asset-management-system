@@ -427,7 +427,7 @@ The following table provides guidance on which logging function to call in diffe
 | `log_authentication()`         | Authentication results a VAMS handler determines itself -- token validation outcomes and session creation. The identity provider records sign-in itself, so most deployments emit no entries here.                                                                                    |
 | `log_authorization()`          | Permission checks using claims and roles directly. Called inside Casbin enforcement logic where the `claims_and_roles` dictionary is available (not the full API Gateway event). Only log on data-level authorization failures for performance.                                       |
 | `log_authorization_api()`      | API-level permission checks using the full API Gateway event. Called in handler entry points where `enforceAPI()` is evaluated.                                                                                                                                                       |
-| `log_authorization_gateway()`  | Authorization events from the API Gateway custom Lambda authorizer. Uses enhanced security: never logs JWT tokens, uses generic failure categories only, and extracts user IDs only after successful JWT verification.                                                                |
+| `log_authorization_gateway()`  | Authorization events from the API Gateway custom Lambda authorizer. Uses enhanced security: never logs JWT tokens, uses generic failure categories only, and names the user only from the context the authorizer built after successful verification.                                                                |
 | `log_file_upload()`            | File uploads to Amazon S3, multipart uploads, and upload validation results (including denied uploads with reasons).                                                                                                                                                                  |
 | `log_file_download()`          | Direct file downloads and presigned URL generation.                                                                                                                                                                                                                                   |
 | `log_file_download_bulk()`     | Multi-file downloads, where one entry per file is written to the file download log group in a single Amazon CloudWatch call.                                                                                                                                                          |
@@ -516,7 +516,7 @@ The API Gateway custom Lambda authorizer (`apiGatewayAuthorizerRest.py`) uses a 
     - "Token missing or invalid format"
     - "Token verification failed"
     - "API key is disabled", "API key has expired", and the other API key denial categories
-3. **User context after verification only** -- User IDs are only extracted and logged after successful JWT verification. For failed authorization attempts, the user field is set to `"unknown"`.
+3. **User context after verification only** -- An allowed record names the user, roles and MFA state from the context the authorizer built out of the verified token or API key (the same user ID the handlers resolve). For failed authorization attempts, the user field is set to `"unknown"`; so is an allowed request to an ignored path, which establishes no identity. Before v2.6.7 an allowed record also showed `"unknown"` ([#1437](https://github.com/awslabs/visual-asset-management-system/issues/1437)).
 4. **Source IP and the masked request** -- The payload carries the requesting IP address and the generic failure reason. The record's request echo is the authorizer event after redaction: the method, path and query string, and the request headers other than the redacted ones (see [Automatic Data Masking](#automatic-data-masking)).
 
 ### Why a Separate Function
@@ -524,7 +524,7 @@ The API Gateway custom Lambda authorizer (`apiGatewayAuthorizerRest.py`) uses a 
 The API Gateway authorizer runs before normal request processing and handles raw JWT tokens. A separate `log_authorization_gateway()` function ensures that:
 
 -   The full API Gateway event (which contains the `Authorization` header) is passed to the standard `mask_sensitive_data()` filter before any Amazon CloudWatch write.
--   Only the `context` field (populated after successful JWT verification) is used for user identity extraction.
+-   Only the context the authorizer built after a successful verification is used for user identity extraction.
 -   MFA status is read from verified claims only, never from unverified token contents.
 
 ## Compliance Considerations
