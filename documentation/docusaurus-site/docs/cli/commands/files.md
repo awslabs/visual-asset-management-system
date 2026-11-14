@@ -64,6 +64,10 @@ vamscli file upload -d my-db -a my-asset --asset-location /models/v2/ file.gltf
 vamscli file upload --json-input @upload-config.json --json-output
 ```
 
+:::note[Where a Directory Upload Lands]
+A directory upload stores the directory's contents under `--asset-location` (default `/`) and drops the directory's own name: `--directory ./pack` stores `/scene.usda` and `/props/pallet.usda`. This matches the web app's **Upload folder contents** option. To keep the folder name, as the web app's **Upload folder** option does, pass it as the location: `--asset-location /scene/pack/`. Without `--recursive`, only the directory's top-level files are uploaded and its subfolders are skipped, so pass `--recursive` for multi-file content such as USD scenes with sublayers in subfolders. A change to these defaults is tracked in [#1474](https://github.com/awslabs/visual-asset-management-system/issues/1474).
+:::
+
 :::note[Upload Limits]
 Files are split into parts and grouped into upload sequences. Each sequence is limited to 50 files, 1,000 total parts, and 3 GB; an individual file is limited to 1,000 parts with a 5 GB maximum part size. VamsCLI creates additional sequences automatically, so the total number of files is unbounded (for example, 200 files become 4 sequences of 50). The backend rate-limits upload initialization to 20 sequences per user per minute, which VamsCLI handles with exponential backoff. Files are chunked at 150 MB for files under 15 GB and at 1 GB for larger files. Zero-byte files are supported and created at completion.
 :::

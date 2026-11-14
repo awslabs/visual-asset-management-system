@@ -657,6 +657,15 @@ def _non_blank(value: Any) -> bool:
     return isinstance(value, str) and value.strip() != ''
 
 
+# Authorizer context keys with this prefix are set only by the authorizer itself (identity,
+# roles, MFA state, credential type); a verified token's claims never supply them.
+RESERVED_CONTEXT_KEY_PREFIX = 'vams:'
+
+
+def _is_reserved_context_key(key: Any) -> bool:
+    return str(key).lower().startswith(RESERVED_CONTEXT_KEY_PREFIX)
+
+
 # Claims an OAuth access token names its client with. A token whose user identity equals one of
 # them was issued to the client itself (a client_credentials grant), not to a user.
 _CLIENT_IDENTIFIER_CLAIMS = ('client_id', 'azp', 'cid')
@@ -1201,11 +1210,16 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
         {"authorized": bool, "context": dict|None, "reason": str|None}
 
     An unauthorized result also carries "failure": FAILURE_UNAUTHENTICATED when the
-    credential did not authenticate (missing or malformed header, rejected JWT, an unknown,
-    disabled or expired API key), or FAILURE_FORBIDDEN for every other denial (IP not
-    allowed, an API key whose user has no roles, a misconfigured AUTH_MODE, a key-set or
-    lookup outage). A caller must treat a missing failure kind as FAILURE_FORBIDDEN. The
-    "reason" is internal (audit and logs only) and is never sent to the client.
+    credential did not authenticate (missing or malformed header, rejected JWT, a verified
+    JWT with no username claim, an unknown, disabled or expired API key), or
+    FAILURE_FORBIDDEN for every other denial (IP not allowed, an API key whose user has no
+    roles, a misconfigured AUTH_MODE, a key-set or lookup outage). A caller must treat a
+    missing failure kind as FAILURE_FORBIDDEN. The "reason" is internal (audit and logs
+    only) and is never sent to the client.
+
+    On an authorized JWT result every context key under RESERVED_CONTEXT_KEY_PREFIX
+    ("vams:") is set by this function, never copied from the token: vams:tokens names the
+    same username vams:roles and vams:mfaEnabled were resolved for.
 
     An ignored-path bypass additionally carries "ignoredPath": True. It is the one
     authorized result that establishes no identity, so a caller building an IAM policy
@@ -1286,10 +1300,12 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
 
     logger.info(f"Token verified successfully for user: {claims.get('sub', 'unknown')}")
 
-    # Build context with string coercion
+    # Build context with string coercion. Keys under the reserved "vams:" prefix are this
+    # authorizer's own output and are set below, so a claim of that prefix in the token is
+    # not copied (the prefix match ignores case).
     context = {}
     for key, value in claims.items():
-        if value is not None:
+        if value is not None and not _is_reserved_context_key(key):
             context[key] = str(value)
 
     username = (
@@ -1297,6 +1313,17 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
         or claims.get('username')
         or claims.get('sub')
     )
+    if not _non_blank(username):
+        logger.info("Verified token carries no username claim")
+        return _denied("Token names no user", FAILURE_UNAUTHENTICATED)
+
+    # The caller's identity for every handler and for Casbin is the username the roles and the
+    # MFA state below are resolved for. For an Amazon Cognito token this is the value the
+    # pre-token-generation trigger writes (the user name, which Cognito also issues as
+    # cognito:username in an ID token and as username in an access token).
+    context['vams:tokens'] = json.dumps([username])
+    # Reserved for external system attributes; empty, as the Cognito trigger issues it.
+    context['vams:externalAttributes'] = json.dumps([])
 
     # Role resolution: read the user's roles from the user roles table at authorization time
     # so every JWT auth mode carries them, and assign unconditionally so the freshly-read

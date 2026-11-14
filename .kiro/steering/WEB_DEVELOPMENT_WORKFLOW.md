@@ -112,7 +112,7 @@ web/
                             #   outcomes, paged and sorted in the browser)
       createupdate/         # CreateDatabase, UpdateAsset + form definitions
       filemanager/          # File tree and file operations
-      form/
+      form/                 # Shared upload control + uploadPaths.ts (the one upload path rule)
       list/                 # TableList.tsx (standard list page); ListToolbar.tsx (search + refresh
                             #   left, filters right, for a page with its own Table); tableSorting.ts
                             #   (column comparators, useSortedItems, useBrowserPagedItems)
