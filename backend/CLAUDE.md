@@ -218,7 +218,8 @@ backend/
 │   │   ├── assetUploads.py                         # completion_refusal: record-level checks on a stored upload record
 │   │   │                                           #   (asset/database, upload type, expiry, workflow output), shared by
 │   │   │                                           #   the upload completion and the ingest-asset complete stage, which
-│   │   │                                           #   checks before it creates a missing asset (pure)
+│   │   │                                           #   checks before it creates a missing asset (pure); also the database
+│   │   │                                           #   extension rule, shared with the ingest initialize stage's name check
 │   │   ├── indexerEvents.py                        # s3_records_from_indexer_message: SQS→SNS→S3 unwrapping of a
 │   │   │                                           #   file-indexer message, shared by fileIndexer and complianceTrigger
 │   │   ├── timestamps.py                           # utc_now(): naive UTC "now" (stored-string format); use instead of datetime.utcnow()

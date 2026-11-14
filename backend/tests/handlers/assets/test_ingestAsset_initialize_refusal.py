@@ -139,8 +139,8 @@ class TestInitializeStageChecksTheFilesBeforeCreatingTheAsset:
     def test_the_refusal_is_the_one_the_upload_step_gives_for_an_existing_asset(
             self, ingest, files, restriction, reason):
         ingest.database = {"databaseId": DATABASE_ID, "restrictFileUploadsToExtensions": restriction}
-        ingest.assets[(DATABASE_ID, ASSET_ID)] = {"databaseId": DATABASE_ID, "assetId": ASSET_ID,
-                                                   "bucketId": "bucket-1"}
+        ingest.assets[(DATABASE_ID, ASSET_ID)] = {
+            "databaseId": DATABASE_ID, "assetId": ASSET_ID, "bucketId": "bucket-1"}
 
         response = ingest.run(*files)
 

@@ -10,7 +10,8 @@ complete stage (`handlers/assets/ingestAsset.py`) asks the same question before 
 missing asset, so a completion that cannot proceed writes nothing. Both read the record
 themselves and pass it here, so the two answer identically.
 
-`completion_refusal` and `validate_file_extension_against_database` are pure: it reads no table and writes no log. The caller audits and raises.
+`completion_refusal` and `validate_file_extension_against_database` are pure: they read no
+table and write no log. The caller audits and raises.
 """
 
 import os
@@ -73,11 +74,11 @@ def completion_refusal(upload_record: dict, database_id: str, asset_id: str, upl
 
 def validate_file_extension_against_database(file_path: str, allowed_extensions: str) -> tuple:
     """Validate file extension against database restrictions
-    
+
     Args:
         file_path: The file path to validate
         allowed_extensions: Comma-delimited list of allowed extensions (e.g., ".pdf,.jpg,.png")
-        
+
     Returns:
         Tuple of (is_valid, error_message)
         - is_valid: True if extension is allowed, False otherwise
@@ -86,20 +87,20 @@ def validate_file_extension_against_database(file_path: str, allowed_extensions:
     # Handle empty or None allowed_extensions (no restrictions)
     if not allowed_extensions or allowed_extensions.strip() == "":
         return True, None
-    
+
     # Parse comma-delimited extensions and normalize to lowercase
     allowed_list = [ext.strip().lower() for ext in allowed_extensions.split(',') if ext.strip()]
-    
+
     # Check for ".all" bypass
     if ".all" in allowed_list:
         return True, None
-    
+
     # Extract file extension (case-insensitive)
     file_extension = os.path.splitext(file_path)[1].lower()
-    
+
     # Validate extension
     if file_extension not in allowed_list:
         error_message = f"Database does not allow this file extension. Allowed extensions: {', '.join(allowed_list)}"
         return False, error_message
-    
+
     return True, None
