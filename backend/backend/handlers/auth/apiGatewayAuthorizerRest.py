@@ -117,7 +117,8 @@ def lambda_handler(event, context):
         res = authenticate_request(event)
         # After authenticate_request so nothing the auth decision reads is touched first.
         _set_audit_client_ip(event)
-        log_authorization_gateway(event, res["authorized"], res.get("reason"))
+        log_authorization_gateway(event, res["authorized"], res.get("reason"),
+                                  verified_context=res.get("context"))
         if not res["authorized"]:
             return _policy("user", "Deny", resource)
         if res.get("ignoredPath"):
