@@ -1,5 +1,5 @@
 {
-    "vamsCommit": "edbfcf87c5ab48cfb6c3678a2966990ec0fbcca5",
+    "vamsCommit": "5b3b22d7c67cf51e7c82be1904c152cdbca80940",
     "modules": [
         "apigateway",
         "apigatewayv2",
@@ -31,6 +31,7 @@
         "iam",
         "kms",
         "lambda",
+        "lambda_destinations",
         "lambda_event_sources",
         "lambda_nodejs",
         "lambda_python_alpha",

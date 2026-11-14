@@ -60,6 +60,7 @@ MODULES: dict[str, tuple[list[str], list[str]]] = {
     "iam": (["iam"], []),
     "kms": (["kms"], []),
     "lambda": (["lambda"], ["lambda"]),
+    "lambda_destinations": (["lambda"], []),                  # configureAsyncInvoke: EventInvokeConfig; the queue grant is on the function role
     "lambda_event_sources": (["lambda"], []),
     "lambda_nodejs": (["lambda"], ["lambda"]),
     "lambda_python_alpha": (["lambda"], ["lambda"]),

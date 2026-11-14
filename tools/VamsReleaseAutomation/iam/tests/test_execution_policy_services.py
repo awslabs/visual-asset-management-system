@@ -110,6 +110,20 @@ def test_extraction_maps_every_module_it_finds():
         mod.summarize("0" * 40, {"infra/lib/b.ts": 'import * as n from "aws-cdk-lib/aws-newservice";'})
 
 
+def test_lambda_destinations_need_lambda_calls_and_no_passed_role():
+    # `fn.configureAsyncInvoke({ onFailure: new destinations.SqsDestination(q) })` makes an
+    # AWS::Lambda::EventInvokeConfig (a lambda call) and grants the queue write on the function role's own policy.
+    spec = importlib.util.spec_from_file_location("extract_vams_services", IAM / "scripts" / "extract_vams_services.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    text = 'import * as destinations from "aws-cdk-lib/aws-lambda-destinations";\n'
+    assert mod.modules_in(text) == {"lambda_destinations"}
+    data = mod.summarize("0" * 40, {"infra/lib/c.ts": text})
+    assert data["iamPrefixes"] == ["lambda"]
+    assert data["passRoleServices"] == []
+    assert "lambda_destinations" in SERVICES["modules"]
+
+
 @pytest.mark.skipif(not os.environ.get("VAMS_REPO"), reason="set VAMS_REPO=<VAMS clone> to re-extract from source")
 def test_committed_extraction_matches_vams_source():
     spec = importlib.util.spec_from_file_location("extract_vams_services", IAM / "scripts" / "extract_vams_services.py")
