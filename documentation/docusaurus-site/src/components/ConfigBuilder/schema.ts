@@ -16,6 +16,7 @@
 
 import type { ConfigShape, FieldMeta, Section } from "./types";
 import { getByPath } from "./pathUtils";
+import { embeddingFamilySummary } from "./fields/bedrockModelFormats";
 import { ADDON_FIELDS } from "./addon";
 
 export const SECTIONS: Section[] = [
@@ -46,8 +47,9 @@ export const SECTIONS: Section[] = [
     },
     {
         id: "search",
-        label: "Search (OpenSearch)",
-        description: "Optional. Enable at most one of Serverless or Provisioned.",
+        label: "Search (OpenSearch & vector search)",
+        description:
+            "Optional. Enable at most one of OpenSearch Serverless or Provisioned; natural-language (vector) search is independent of both.",
         order: 5,
     },
     {
@@ -114,6 +116,9 @@ const externalVpc = (c: ConfigShape) => {
 };
 const garnet = (c: ConfigShape) => !!getByPath(c, "app.addons.useGarnetFramework.enabled");
 const physna = (c: ConfigShape) => !!getByPath(c, "app.addons.usePhysnaSync.enabled");
+const vectorSearch = (c: ConfigShape) => !!getByPath(c, "app.vectorSearch.enabled");
+const systemGenAi = (c: ConfigShape) =>
+    !!getByPath(c, "app.pipelines.useSystemGenAiMetadata.enabled");
 
 /**
  * Factory for a GPU model sub-tree (Cosmos / Gr00t). Each model has enabled,
@@ -768,6 +773,32 @@ const CORE_FIELDS: FieldMeta[] = [
         help: "Enable only for a second deploy after initial deploy/upgrade, then set back to false.",
     },
     {
+        path: "app.vectorSearch.enabled",
+        label: "Natural-language (vector) file search",
+        input: "boolean",
+        section: "search",
+        help: "Semantic search over files. The SYSTEM GenAI metadata pipeline produces the embeddings, indexed into an Amazon DynamoDB vector index; requires that pipeline with its upload trigger. Not available in the AWS European Sovereign Cloud.",
+    },
+    {
+        path: "app.vectorSearch.indexingConcurrency",
+        label: "Vector search — indexing concurrency",
+        input: "number",
+        section: "search",
+        advanced: true,
+        min: 2,
+        help: "Maximum concurrent system-workflow launches while a reindex runs (2–1000).",
+        visibleWhen: vectorSearch,
+    },
+    {
+        path: "app.vectorSearch.reindexOnCdkDeploy",
+        label: "Vector search — reindex on CDK deploy",
+        input: "boolean",
+        section: "search",
+        advanced: true,
+        help: "Clears the vector table and re-launches the SYSTEM GenAI metadata workflow for every latest live file during the deploy. Re-runs the analysis model on every file; enable for one deploy, then set back to false.",
+        visibleWhen: vectorSearch,
+    },
+    {
         path: "app.useLocationService.enabled",
         label: "Amazon Location Service",
         input: "boolean",
@@ -991,31 +1022,6 @@ const CORE_FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
     },
     {
-        path: "app.pipelines.useConversionCadMeshMetadataExtraction.enabled",
-        label: "CAD/mesh metadata extraction",
-        input: "boolean",
-        section: "pipelines-standard",
-        advanced: true,
-    },
-    {
-        path: "app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS",
-        label: "CAD/mesh extraction — auto-register",
-        input: "boolean",
-        section: "pipelines-standard",
-        advanced: true,
-        visibleWhen: (c) =>
-            !!getByPath(c, "app.pipelines.useConversionCadMeshMetadataExtraction.enabled"),
-    },
-    {
-        path: "app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterAutoTriggerOnFileUpload",
-        label: "CAD/mesh extraction — auto-trigger on upload",
-        input: "boolean",
-        section: "pipelines-standard",
-        advanced: true,
-        visibleWhen: (c) =>
-            !!getByPath(c, "app.pipelines.useConversionCadMeshMetadataExtraction.enabled"),
-    },
-    {
         path: "app.pipelines.useConversionCoordinateTransform.enabled",
         label: "Coordinate transform conversion",
         input: "boolean",
@@ -1221,6 +1227,190 @@ const CORE_FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
     },
     {
+        path: "app.pipelines.useSystemGenAiMetadata.enabled",
+        label: "SYSTEM GenAI metadata",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "File attributes and typed metadata extracted from every uploaded file (any type), Amazon Bedrock-generated descriptive metadata when the GenAI analysis is on, and the embeddings vector search indexes. Lambda-only by default (no VPC).",
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis",
+        label: "SYSTEM GenAI — GenAI analysis",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "On: the Bedrock analysis model describes and classifies each file (genai_* metadata). Off: attributes-only — extracted sys_*/ext_* attributes and the location, no Converse call, no analysis model needed; vector search still embeds the extracted text and attributes.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId",
+        label: "SYSTEM GenAI — Bedrock analysis model ID",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Vision-capable model id or inference profile (commercial default global.anthropic.claude-haiku-4-5-20251001-v1:0; GovCloud us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0). Required only with the GenAI analysis on. A model id or system-defined inference-profile id, not an ARN. Anthropic models require the one-time use-case form per organization.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.textModelId",
+        label: "SYSTEM GenAI — Bedrock text model ID",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Optional model id or inference profile for the text-only requests (no images). Empty: the analysis model answers them. Same id rules and partition prefixes as the analysis model.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelSupportsImages",
+        label: "SYSTEM GenAI — analysis model accepts images",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "On (default): rendered views are sent with the analysis prompt. Off, for a text-only analysis model: no views are rendered and the model receives the extracted attributes and text only.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId",
+        label: "SYSTEM GenAI — Bedrock embedding model ID",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "In-Region Amazon Bedrock embedding model id the vector index is built from, of a supported family (see the widths below). Required with vector search on. Embedding models have no cross-Region inference profiles.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions",
+        label: "SYSTEM GenAI — embedding dimensions",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: `Vector width the embedding model emits, by family: ${embeddingFamilySummary()}. Immutable per index: a different width is a new index and a reindex.`,
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.maxTokens",
+        label: "SYSTEM GenAI — analysis max output tokens",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 256,
+        help: "Output token limit of each analysis request (256–8192, default 2048).",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.temperature",
+        label: "SYSTEM GenAI — analysis temperature",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0,
+        help: "Sampling temperature of each analysis request (0–1, default 0.2). For a model that rejects the parameter, set it to null in config.json and no temperature is sent.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS",
+        label: "SYSTEM GenAI — auto-register",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload",
+        label: "SYSTEM GenAI — auto-trigger on upload",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Required together with auto-register while vector search is enabled: the upload trigger is what produces embeddings.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.useFargateRenderer",
+        label: "SYSTEM GenAI — Fargate renderer for oversized files",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Adds an AWS Batch (Fargate) render branch for files above the Lambda limits. The only option of this pipeline that requires a VPC.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxInputFileSizeMb",
+        label: "SYSTEM GenAI — max input file size (MB)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "Files above this size are analysed from attributes only unless the Fargate renderer is enabled.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxPointCloudPoints",
+        label: "SYSTEM GenAI — max point cloud points",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "Point clouds above this count (read from the file header) are analysed from attributes only unless the Fargate renderer is enabled.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled",
+        label: "SYSTEM GenAI — create the Bedrock guardrail",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Creates an Amazon Bedrock guardrail with a prompt-attack input filter and PII filters as part of the deployment and applies it to every analysis prompt. Turn off to bring your own guardrail (identifier and version below) or to run without one.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.promptAttackInputStrength",
+        label: "SYSTEM GenAI — created guardrail prompt-attack strength",
+        input: "select",
+        section: "pipelines-standard",
+        advanced: true,
+        options: [
+            { value: "LOW", label: "LOW" },
+            { value: "MEDIUM", label: "MEDIUM" },
+            { value: "HIGH", label: "HIGH" },
+        ],
+        help: "Input strength of the created guardrail's prompt-attack filter. Start at LOW and raise it if malicious prompts pass; a higher strength blocks more legitimate file content.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.piiFilter",
+        label: "SYSTEM GenAI — created guardrail PII filter",
+        input: "select",
+        section: "pipelines-standard",
+        advanced: true,
+        options: [
+            { value: "off", label: "off" },
+            { value: "anonymize", label: "anonymize" },
+            { value: "block", label: "block" },
+        ],
+        help: "How the created guardrail treats personal data and credentials it detects in a prompt: anonymize masks them before the model reads the prompt, block fails the analysis, off adds no PII filter.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier",
+        label: "SYSTEM GenAI — Bedrock guardrail identifier",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Identifier of an operator-owned Amazon Bedrock guardrail applied to every analysis prompt (prompt-attack input filter) instead of the created one. Set together with the version and turn off the created guardrail, or leave both empty.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion",
+        label: "SYSTEM GenAI — Bedrock guardrail version",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Version of the guardrail (a number or DRAFT). Set together with the identifier, or leave both empty.",
+        visibleWhen: systemGenAi,
+    },
+    {
         path: "app.pipelines.usePreview3dThumbnail.computeTiers.standard.vcpu",
         label: "3D thumbnail — standard tier vCPU",
         input: "number",
@@ -1292,42 +1482,6 @@ const CORE_FIELDS: FieldMeta[] = [
         section: "pipelines-standard",
         advanced: true,
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreviewPcPotreeViewer.enabled"),
-    },
-    {
-        path: "app.pipelines.useGenAiMetadata3dLabeling.enabled",
-        label: "GenAI metadata labeling",
-        input: "boolean",
-        section: "pipelines-standard",
-        advanced: true,
-        help: "Use Amazon Bedrock to label GLB/FBX/OBJ files. Requires VPC.",
-    },
-    {
-        path: "app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId",
-        label: "GenAI — Bedrock model ID",
-        input: "text",
-        section: "pipelines-standard",
-        advanced: true,
-        help:
-            "Required when enabled outside the commercial partition, where VAMS supplies no default: " +
-            "model availability differs by partition and account entitlement. Commercial defaults to " +
-            "global.anthropic.claude-sonnet-5-5. Accepts a model id or an inference-profile ARN.",
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
-    },
-    {
-        path: "app.pipelines.useGenAiMetadata3dLabeling.autoRegisterWithVAMS",
-        label: "GenAI — auto-register",
-        input: "boolean",
-        section: "pipelines-standard",
-        advanced: true,
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
-    },
-    {
-        path: "app.pipelines.useGenAiMetadata3dLabeling.autoRegisterAutoTriggerOnFileUpload",
-        label: "GenAI — auto-trigger on upload",
-        input: "boolean",
-        section: "pipelines-standard",
-        advanced: true,
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
     },
     {
         path: "app.pipelines.useGenAiVideoSopBom.enabled",

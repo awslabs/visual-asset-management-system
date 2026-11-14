@@ -93,6 +93,7 @@ from common.s3MetadataKeys import (
 )
 from common.workflows import executionLocks as execution_locks
 from common.workflows import executionValidation as execution_validation
+from common.workflows import systemRecords
 from common.workflows.executionRecords import pipeline_composite_key
 from customLogging.logger import safeLogger
 from models.compliance import (
@@ -1469,6 +1470,23 @@ def invoke_execute_workflow(workflow_database_id: str, workflow_id: str,
     return execution_id
 
 
+def workflow_uses_system_record(workflow: Optional[Dict[str, Any]],
+                                pipelines: Iterable[Optional[Dict[str, Any]]] = ()) -> bool:
+    """Whether a pipeline rule's launch would run a system record: the workflow row, one of the
+    given pipeline rows, or a pipeline the workflow runs (read here) is a system record
+    (`systemRecords.names_system_record`). Such a rule is never launched: a schema saved before
+    saves refused it can still name one (`complianceSchemaService.system_pipeline_rule_refused`)."""
+    given = list(pipelines)
+    if systemRecords.names_system_record(workflow, given):
+        return True
+    seen = {(p.get("databaseId"), p.get("pipelineId")) for p in given if isinstance(p, dict)}
+    steps = [get_pipeline_item(pipeline_database_id, pipeline_id)
+             for pipeline_database_id, pipeline_id in
+             dict.fromkeys(systemRecords.workflow_pipeline_keys(workflow))
+             if (pipeline_database_id, pipeline_id) not in seen]
+    return systemRecords.names_system_record(None, steps)
+
+
 def pipeline_execution_record_id(evaluation_id: str, rule_name: str) -> str:
     """Tracking-row key for one pipeline rule of an evaluation."""
     return f"{evaluation_id}{PIPELINE_EXECUTION_KEY_SEPARATOR}{rule_name}"
@@ -1586,6 +1604,9 @@ def start_pipeline_rule_executions(
                 logger.error(f"Pipeline rule '{rule_name}' references a pipeline that does not exist")
             elif ref.templateId and template is None:
                 logger.error(f"Pipeline rule '{rule_name}' references a template that does not exist")
+            elif workflow_uses_system_record(workflow, [pipeline]):
+                logger.info(f"Pipeline rule '{rule_name}' uses a system pipeline; it is not launched")
+                failure_message = systemRecords.SYSTEM_RECORD_PIPELINE_RULE_MESSAGE
             else:
                 inputs, selection_error = resolve_pipeline_rule_inputs(
                     rule, database_id, asset_id, workflow, pipeline, template, asset_file_keys,
@@ -3114,6 +3135,11 @@ def _launch_waiting_rule(row: Dict[str, Any], parent: Dict[str, Any],
     workflow_id = row.get("workflowId", "")
     execution_id, held = None, False
     try:
+        if workflow_uses_system_record(get_workflow_item(workflow_database_id, workflow_id)):
+            # A rule stored before saves refused system pipelines, waiting since then.
+            _close_waiting_rule(row, parent, systemRecords.SYSTEM_RECORD_PIPELINE_RULE_MESSAGE, now,
+                                claim_id=claim_id, audit=True)
+            return "failed"
         request = json.loads(row.get("launchRequest") or "{}")
         execution_id, held = launch_workflow_execution(workflow_database_id, workflow_id, request)
     except Exception as e:

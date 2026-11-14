@@ -247,7 +247,7 @@ class TestPerKeyLogFiltersShareOnePredicate:
                 "Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig",
                 "X-Api-Key": "vams_LIVEKEYVALUE0123456789",
                 "Content-Type": "application/json",
-                "User-Agent": "vamscli/2.6.6",
+                "User-Agent": "vamscli/2.7.0",
             },
         )
         joined = " ".join(records)
@@ -256,7 +256,7 @@ class TestPerKeyLogFiltersShareOnePredicate:
         assert "eyJhbGciOiJIUzI1NiJ9.payload.sig" not in joined
         # Non-credential headers are the reason the log is worth keeping.
         assert "application/json" in joined
-        assert "vamscli/2.6.6" in joined
+        assert "vamscli/2.7.0" in joined
 
 
 class TestSinkIntegration:

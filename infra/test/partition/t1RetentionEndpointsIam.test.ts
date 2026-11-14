@@ -211,13 +211,13 @@ describe("FIX-011: the physna sync lambdas have ephemeral storage for large CAD 
     });
 });
 
-describe("FIX-011: the conversion pipeline lambdas have ephemeral storage for large models", () => {
-    // The other half of the /tmp audit. Both conversion handlers stage the downloaded asset under
-    // /tmp — 3dBasic writes its export there as well — so both need more than the 512 MB default.
+describe("FIX-011: the conversion pipeline lambda has ephemeral storage for large models", () => {
+    // The other half of the /tmp audit. The 3dBasic conversion handler stages the downloaded asset and
+    // its export under /tmp, so it needs more than the 512 MB default.
     //
-    // Selection is by logical id, not by Handler: both are `lambda.DockerImageFunction`, which emits
+    // Selection is by logical id, not by Handler: it is a `lambda.DockerImageFunction`, which emits
     // PackageType Image and NO Handler property, so the physna describe's handler-substring match
-    // cannot see them. Each is created directly on its own nested stack, so the logical id is the
+    // cannot see it. It is created directly on its own nested stack, so the logical id is the
     // construct id plus CDK's hash suffix.
     const imageLambda =
         (constructId: string) =>
@@ -228,16 +228,6 @@ describe("FIX-011: the conversion pipeline lambdas have ephemeral storage for la
             );
 
     const basicConversion = imageLambda("vamsExecute3dBasicConversion");
-    const meshCadExtraction = imageLambda("vamsExecuteMeshCadMetadataExtractionConversion");
-
-    /** meshCad hybrid — `useConversionCadMeshMetadataExtraction` is disabled in every shipped template. */
-    const synthMeshCad = (name: TemplateName): SynthResult =>
-        synthTemplate(name, {
-            mutate: (c: any) => {
-                c.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = true;
-            },
-            mutateKey: "meshcad-enabled",
-        });
 
     it("3dBasic is emitted by the shipped commercial template", () => {
         // Control: it ships enabled, so no hybrid is needed and an empty selector would be a bug in the
@@ -245,46 +235,9 @@ describe("FIX-011: the conversion pipeline lambdas have ephemeral storage for la
         expect(basicConversion(synth("commercial"))).toHaveLength(1);
     });
 
-    it("meshCad needs the hybrid, because no shipped template enables it", () => {
-        expectAbsent(
-            "meshCad conversion lambda in the shipped commercial template",
-            meshCadExtraction(synth("commercial")),
-            {
-                description: "container-image lambdas emitted by the commercial template",
-                count: synth("commercial").where(
-                    "AWS::Lambda::Function",
-                    (r) => r.properties.PackageType === "Image"
-                ).length,
-            }
-        );
-        expect(meshCadExtraction(synthMeshCad("commercial"))).toHaveLength(1);
-    });
-
-    it.each([
-        ["vamsExecute3dBasicConversion", basicConversion, () => synth("commercial")],
-        [
-            "vamsExecuteMeshCadMetadataExtractionConversion",
-            meshCadExtraction,
-            () => synthMeshCad("commercial"),
-        ],
-    ] as const)(
-        "%s declares more than the default 512 MB of ephemeral storage",
-        (_name, select, source) => {
-            const fn = select(source())[0];
-            expect(fn.properties.EphemeralStorage?.Size ?? 512).toBeGreaterThan(512);
-        }
-    );
-
-    it("both conversion lambdas carry the same budget", () => {
-        // One figure across the two conversion pipelines, so the docs can state one number. Their
-        // staging needs differ (3dBasic holds input plus export, meshCad only the input), so this pins a
-        // deliberate choice rather than a derivation.
-        const basicSize =
-            basicConversion(synth("commercial"))[0].properties.EphemeralStorage?.Size ?? 512;
-        const meshCadSize =
-            meshCadExtraction(synthMeshCad("commercial"))[0].properties.EphemeralStorage?.Size ??
-            512;
-        expect(meshCadSize).toBe(basicSize);
+    it("vamsExecute3dBasicConversion declares more than the default 512 MB of ephemeral storage", () => {
+        const fn = basicConversion(synth("commercial"))[0];
+        expect(fn.properties.EphemeralStorage?.Size ?? 512).toBeGreaterThan(512);
     });
 });
 

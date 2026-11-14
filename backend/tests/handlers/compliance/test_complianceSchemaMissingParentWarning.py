@@ -69,6 +69,7 @@ def _run(event, rows_by_name=None, enforcer=None):
     with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
             patch(f"{MOD}.CasbinEnforcer", return_value=enforcer or _enforcer()), \
             patch(f"{MOD}.may_run_workflow", return_value=True), \
+            patch(f"{MOD}._rule_uses_system_record", return_value=False), \
             patch(f"{MOD}.schema_table", schema_table), \
             patch.object(svc.databaseRetirement, "move_in_progress", return_value=False), \
             patch.multiple(MOD, **others):

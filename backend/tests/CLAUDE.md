@@ -61,7 +61,7 @@ The root `backend/conftest.py` performs critical setup before every test:
 
 1.  **`sys.path` manipulation** -- adds `backend/`, `backend/backend/`, and `tests/mocks/` to Python path so handlers can import their normal module paths.
 2.  **Environment variables** -- seeds test values for all required env vars (table names, bucket names, `VAMS_RESOURCE_PARAM_PREFIX`, etc.). These act as break-glass overrides so `get_table_name(ResourceKeys.*)` returns the test names without an SSM call.
-3.  **Mock imports** -- replaces real modules in `sys.modules` with mocks from `tests/mocks/` (see below).
+3.  **Mock imports** -- replaces real modules in `sys.modules` with mocks from `tests/mocks/` (see below), and loads a few pure-stdlib `common` modules by path early so they are real even though `common` is mocked. `common.vectorsearch.fileClassIntent` is one: `models/vectorsearch` reads its class ids at module level, and the model test modules import that model when tests are collected.
 4.  **Autouse fixture `setup_mock_imports()`** -- runs before every test to re-establish the mock module hierarchy.
 
 ## Mocks Directory
@@ -196,6 +196,17 @@ The stubs' own contract — which sequences they accept, which they reject, and 
 actually fire — is covered by `tests/test_pagingStub.py`. Change a check in `pagingStub.py` and that
 file is the one to run first: a stub that rejects legitimate behaviour makes correct code look broken,
 which is how a real paging fix gets reverted.
+
+#### Use the shared Stubber helper in `tests/vectorStub.py`
+
+Vector-search code talks to two APIs that `moto` cannot serve: DynamoDB `SearchVectors` and Amazon Bedrock Runtime. `tests/vectorStub.py` wraps `botocore.stub.Stubber` for both — `stubbed_dynamodb(expected_calls)` and `stubbed_bedrock_runtime(expected_calls)` are context managers that yield a real botocore client with the scripted responses queued, so a test exercises request serialization against the live service model rather than a `MagicMock` that accepts anything. Write one Stubber contract test per vector operation the code performs; the helper's own checks are mutation-verified in `tests/test_vectorStub.py`, the same way `pagingStub.py` is.
+
+Two rules follow from what the fakes can and cannot do:
+
+-   **Never `create_table(VectorIndexes=…)` under moto.** moto's DynamoDB does not implement vector indexes; the call either raises on the unknown parameter or silently creates a table without the index, and the test then asserts against a shape the service would never produce. Use moto for plain DynamoDB, S3, SQS, SNS, SSM, and Step Functions plumbing and the Stubber helper for the vector and Bedrock calls.
+-   **Bedrock is fakes only.** No test invokes a model; `stubbed_bedrock_runtime` and the house `_boto_client` fake are the only two doubles, and a handler's Bedrock error path is exercised by scripting the `ClientError` code (`AccessDeniedException`, `ThrottlingException`, `ValidationException`) into the stub.
+
+The service-model floor that makes `SearchVectors` stubbable at all is pinned by `tests/common/test_vector_api_floor.py`, which fails loudly (never skips) when the installed botocore lacks the operation — so a dependency downgrade shows up as one clear failure rather than as a hundred `ParamValidationError`s.
 
 The loop FORM is additionally guarded across the whole of `backend/backend` by
 `tests/common/test_paging_key_presence_form.py`, which walks the tree rather than carrying a module

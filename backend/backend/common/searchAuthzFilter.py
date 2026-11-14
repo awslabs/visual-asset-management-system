@@ -16,7 +16,7 @@ into two filters per index:
 When every criterion translates, the two are the same clause and ``exact`` is True.
 
 What the per-hit check decides, and so what the filters reproduce (``handlers/authz`` and
-``handlers/search/search.py`` ``_is_hit_authorized``):
+``handlers/osSemanticSearch/search.py`` ``_is_hit_authorized``):
 
 * The effect is ``some(allow) && !some(deny)``; a line holds when all its AND criteria hold and, when
   it has OR criteria, one of them does; a multi-value criterion holds when any value does, and a

@@ -83,6 +83,8 @@ Executes a search query across the asset and file indexes with full control over
 | `from`                    | integer | `0`          | Starting offset for pagination (0-10,000).                                                                                                                                                                                                                    |
 | `size`                    | integer | `100`        | Number of results to return (1-2,000).                                                                                                                                                                                                                        |
 
+The `query` text is split at whitespace into words. Each word matches anywhere inside a value, so `pump` finds `hydraulic-pump-housing`, and a record matches when at least one of the words does: `maintenance log` finds a file whose metadata reads `night shift, maintenance log` as well as one whose file name contains `log`. `*`, `?`, quotes and the words `AND`, `OR` and `NOT` are matched as literal text. `POST /search/simple` reads its `query` the same way.
+
 :::warning[Pagination Limits]
 The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearch limitation. For deep pagination, use more specific search criteria to narrow results.
 :::
@@ -182,12 +184,13 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
 
 **Error Responses:**
 
-| Status | Description                                                         |
-| ------ | ------------------------------------------------------------------- |
-| `400`  | Invalid search parameters.                                          |
-| `403`  | Not authorized to access search.                                    |
-| `404`  | Search is not available when the OpenSearch feature is not enabled. |
-| `500`  | Internal server error.                                              |
+| Status | Description                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid search parameters.                                                                                     |
+| `403`  | Not authorized to access search.                                                                               |
+| `404`  | Search is not available when the OpenSearch feature is not enabled.                                            |
+| `503`  | OpenSearch is enabled but cannot be reached now (`Search is temporarily unavailable. Try again in a moment.`). |
+| `500`  | Internal server error.                                                                                         |
 
 ---
 
@@ -232,6 +235,12 @@ Executes a simplified search with basic parameters for easy API integration. The
 | `from`            | integer       | `0`     | Starting offset (0-10,000).                              |
 | `size`            | integer       | `100`   | Number of results (1-2,000).                             |
 
+A field filter narrows the results, so a value of several words asks for every word:
+
+-   `assetName`, `assetId`, `assetType`, `fileKey` and each `tags` entry: a value without `*` or `?` matches the field's exact value. A value with `*` or `?` matches a record whose field contains every word, each word with its own wildcards: `gearbox hous*` finds `gearbox housing`, and `gearbox zzz*` does not find `gearbox`.
+-   `metadataValue`: a value without wildcards matches a record whose metadata (and, on files, attribute) values contain every word, each anywhere inside a value; the words may sit in different keys. A value with wildcards is one pattern for a whole value: `Line 3*` matches a value that starts with `Line 3`.
+-   A value of any of these fields wrapped in one pair of double quotes is matched exactly: `"Line 3"` matches the whole value `Line 3` and not `Line 30` or `Assembly Line 3`, and `*` and `?` inside the quotes are literal characters. A quote that is not part of such a pair is a character of the value.
+
 :::tip[When to Use Simple Search]
 Use simple search when you need basic filtering by known fields. Use [Advanced Search](#advanced-search) when you need structured tokens, custom filters, or fine-grained control over query behavior.
 :::
@@ -242,12 +251,173 @@ Same format as [Advanced Search](#advanced-search).
 
 **Error Responses:**
 
-| Status | Description                                                         |
-| ------ | ------------------------------------------------------------------- |
-| `400`  | Invalid search parameters.                                          |
-| `403`  | Not authorized to access search.                                    |
-| `404`  | Search is not available when the OpenSearch feature is not enabled. |
-| `500`  | Internal server error.                                              |
+| Status | Description                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid search parameters.                                                                                     |
+| `403`  | Not authorized to access search.                                                                               |
+| `404`  | Search is not available when the OpenSearch feature is not enabled.                                            |
+| `503`  | OpenSearch is enabled but cannot be reached now (`Search is temporarily unavailable. Try again in a moment.`). |
+| `500`  | Internal server error.                                                                                         |
+
+---
+
+### NLP Search
+
+`POST /search/nlp`
+
+Searches by meaning. The query is embedded with the deployment's embedding model and matched against the vector embeddings of the latest, non-archived files in every database the caller may read. The route exists only when `app.vectorSearch.enabled` is set; it does not need OpenSearch.
+
+**Request Body:**
+
+```json
+{
+    "query": "drone footage of the harbour crane",
+    "entityTypes": ["file"],
+    "databaseIds": ["site-surveys"],
+    "includeArchived": false,
+    "includeSegments": true,
+    "fileClasses": [],
+    "fileExtensions": [],
+    "size": 25
+}
+```
+
+| Field                | Type          | Default    | Description                                                                                                                                                                                                                                                                                |
+| -------------------- | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `query`              | string        | --         | Natural-language query (1-1,000 characters). Required.                                                                                                                                                                                                                                     |
+| `entityTypes`        | array         | `["file"]` | Exactly one of `["file"]` or `["asset"]`. Asset mode keeps the highest-ranked file hit of each asset.                                                                                                                                                                                      |
+| `databaseIds`        | array[string] | `[]`       | Databases to search (at most 100), intersected with the caller's accessible databases. Empty searches every accessible database.                                                                                                                                                           |
+| `includeArchived`    | boolean       | `false`    | Include archived files.                                                                                                                                                                                                                                                                    |
+| `includeSegments`    | boolean       | `true`     | Also match video time windows and text chunks. A file found through a segment reports it in `_vector.bestSegment`.                                                                                                                                                                         |
+| `fileClasses`        | array[string] | `[]`       | File classes to keep, from exactly `image`, `video`, `audio`, `document`, `text`, `data`, `tiles3d`, `mesh`, `usd`, `cad`, `pointcloud`, `splat`, `ifc`, `other` (3D models are `mesh`, `usd` or `cad`); any other value is refused with `400`. One value is pushed into the index filter. |
+| `fileExtensions`     | array[string] | `[]`       | Extensions to keep, with or without the leading dot (at most 100, each at most 256 characters).                                                                                                                                                                                            |
+| `size`               | integer       | `25`       | Hits returned (1-100). There is no pagination: `size` is the whole window.                                                                                                                                                                                                                 |
+| `filters`            | array         | --         | OpenSearch-only: `query_string` filter clauses as on [Advanced Search](#advanced-search), with the same bounds (at most 100).                                                                                                                                                              |
+| `metadataQuery`      | string        | --         | OpenSearch-only: metadata search text as on Advanced Search.                                                                                                                                                                                                                               |
+| `metadataSearchMode` | string        | --         | OpenSearch-only: `key`, `value`, or `both`.                                                                                                                                                                                                                                                |
+| `geoSearch`          | object        | --         | OpenSearch-only: [geospatial filter](#geospatial-search).                                                                                                                                                                                                                                  |
+| `tags`               | array[string] | --         | OpenSearch-only: keep hits carrying any of these tags (at most 500, each at most 256 characters).                                                                                                                                                                                          |
+| `enrich`             | boolean       | `true`     | When an OpenSearch mode is enabled, merge the file index document (metadata fields, preview key) into a file hit's `_source`; an asset hit gets its asset's location from the asset index.                                                                                                 |
+
+The OpenSearch-only fields are applied, and hits enriched, only when an OpenSearch mode is enabled. They are applied to the index of `entityTypes`, as in [Advanced Search](#advanced-search): the file index for `file`, whose documents hold each file's own metadata and attributes, and the asset index for `asset`, whose documents hold the asset's own metadata, tags and location; an asset metadata filter therefore finds assets in asset mode and matches no file in file mode. In asset mode an enriched hit also carries its asset's location from the asset index, the fields the web app's Map view plots: `geo_MD_location`, and in `MD_` only the `location`, `latitude`, `lat`, `longitude`, `lon` and `long` keys (in any letter case). A file hit carries its own file's location with the rest of the file index document. Without OpenSearch they are ignored and the response carries an `opensearch:fields_ignored` warning. They are validated like the [Advanced Search](#advanced-search) fields, so a malformed value is refused with `400`. When an OpenSearch mode is enabled and the request carries an OpenSearch-only constraint that the index cannot apply (the index cannot be reached, or the query fails), the request fails with `503` instead of returning hits the constraint was not applied to.
+
+File-type words in the query (`video`, `footage`, `point cloud`, `pdf`, `3D model`, ...) add a fixed bonus of 0.1 to the ranking value of hits of those file classes, so such a hit moves ahead of a hit of another class that scores less than 0.1 higher; the detected classes are reported in `nlp.classIntent`. The bonus changes the order only: `_score` and `_vector.distance` are the similarity without it. Words that describe content rather than a file type, such as `report` or `manual`, are not type words. This is a soft preference, not a filter; use `fileClasses` to filter.
+
+**Response:**
+
+The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nlp` summary and a `warnings` list. Each hit's `_source` carries the same keys as a file hit of the OpenSearch file index; the vector-specific values are under `_vector`.
+
+```json
+{
+    "took": 412,
+    "timed_out": false,
+    "_shards": { "total": 1, "successful": 1, "skipped": 0, "failed": 0 },
+    "hits": {
+        "total": { "value": 3, "relation": "gte" },
+        "max_score": 0.81,
+        "hits": [
+            {
+                "_index": "vams-vectors",
+                "_id": "site-surveys#asset-123#/videos/crane.mp4#3sL9kQ",
+                "_score": 0.81,
+                "_index_type": "file",
+                "_source": {
+                    "str_rectype": "file",
+                    "str_databaseid": "site-surveys",
+                    "str_assetid": "asset-123",
+                    "str_key": "/videos/crane.mp4",
+                    "str_fileext": "mp4",
+                    "str_assetname": "Harbour crane survey",
+                    "str_assettype": "video",
+                    "list_tags": ["survey"],
+                    "bool_archived": false,
+                    "str_s3_version_id": "3sL9kQ",
+                    "num_filesize": 734003200
+                },
+                "_vector": {
+                    "distance": 0.19,
+                    "embeddingModelId": "amazon.titan-embed-text-v2:0",
+                    "sourceModalities": [
+                        "asset-metadata",
+                        "file-identity",
+                        "segment-frames",
+                        "genai-metadata"
+                    ],
+                    "indexedAt": "2026-09-13T10:22:41Z",
+                    "fileClass": "video",
+                    "segmentHits": 2,
+                    "bestSegment": {
+                        "segmentKey": "t0000083456",
+                        "segmentKind": "videoTime",
+                        "segmentLabel": "00:01:23.456–00:01:28.456",
+                        "segmentStartMs": 83456,
+                        "segmentEndMs": 88456
+                    }
+                }
+            }
+        ]
+    },
+    "aggregations": {
+        "str_fileext": {
+            "doc_count_error_upper_bound": 0,
+            "sum_other_doc_count": 0,
+            "buckets": [
+                { "key": "mp4", "doc_count": 2 },
+                { "key": "jpg", "doc_count": 1 }
+            ]
+        },
+        "str_databaseid": {
+            "doc_count_error_upper_bound": 0,
+            "sum_other_doc_count": 0,
+            "buckets": [{ "key": "site-surveys", "doc_count": 3 }]
+        },
+        "list_tags": {
+            "doc_count_error_upper_bound": 0,
+            "sum_other_doc_count": 0,
+            "buckets": [{ "key": "survey", "doc_count": 3 }]
+        }
+    },
+    "aggregationTotal": 3,
+    "nlp": {
+        "query": "drone footage of the harbour crane",
+        "embeddingModelId": "amazon.titan-embed-text-v2:0",
+        "databasesSearched": 1,
+        "candidatesEvaluated": 5,
+        "itemsCollapsed": 2,
+        "classIntent": ["video"],
+        "truncated": false
+    },
+    "warnings": []
+}
+```
+
+-   `_id` is `databaseId#assetId#filePath#versionId` for a file hit and `databaseId#assetId` for an asset hit. `_score` is `1 - distance`, clipped to `[0, 1]`.
+-   Segment items collapse to one hit per file version. `_vector.segmentHits` counts the file's segment items among the candidates; `_vector.bestSegment` names the winning segment when a segment matched better than the whole file, else it is `null`.
+-   `hits.total.value` and `aggregationTotal` count the authorized hits before the `size` cut. `hits.total.relation` is `gte` for every answer with at least one hit: the vector index uses approximate nearest-neighbour (ANN) search ([Using vector indexes in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/VectorSearch.html)), so a weak match can be left out even when no window filled, and identical requests can differ in their weakest matches. A total of `0` is `eq`, unless `nlp.truncated` is `true`. `nlp.truncated` is `true` when a whole-file result window filled, when the accessible database list was cut, or when a searched database is one the caller may open only in part (see [Vector search](../concepts/vector-search.md#searching)).
+-   `aggregations` carries terms buckets in the shape [Advanced Search](#advanced-search) returns, counted over the same authorized hits before the `size` cut, so the filter counts match `hits.total.value`. File mode returns `str_fileext` (the extension in lower case without the dot; a file without an extension is in no bucket), `str_databaseid`, and `list_tags`; asset mode returns `str_assettype`, `str_databaseid`, and `list_tags`, counting each asset once. Buckets are ordered by `doc_count`, then by `key`, at most 1,000 per aggregation, with the remainder summed in `sum_other_doc_count`. `aggregations` is `{}` when the answer holds no hits.
+-   `nlp.candidatesEvaluated` is the number of distinct vector items of the files the caller may open, after the per-database results were merged; `nlp.itemsCollapsed` is how many of those items folded into another hit of the same file. Neither counts an item of a file the caller cannot open. Both are counted before the OpenSearch-only constraints (`filters`, `metadataQuery`, `geoSearch`, `tags`) are applied, so an answer those constraints empty can still report them above 0.
+
+**Warnings:**
+
+| Code                           | Meaning                                                                                                                                                                                                                                             |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `truncated:window`             | A whole-file result window filled, or a searched database is one the caller may open only in part (see [Vector search](../concepts/vector-search.md#searching)), so more files may match. `nlp.truncated` is `true`.                                |
+| `truncated:targets`            | The caller can read more than 200 databases and only the first 200 were searched. `nlp.truncated` is `true`.                                                                                                                                        |
+| `databases:none_accessible`    | No searchable database is accessible to the caller; the answer is empty, its total is `0` (`eq`), and the query was not embedded.                                                                                                                   |
+| `opensearch:fields_ignored`    | OpenSearch-only fields were sent to a deployment without an OpenSearch mode; the message names them.                                                                                                                                                |
+| `opensearch:enrichment_failed` | File details from the OpenSearch file index, or asset locations from the asset index, could not be loaded; the hits are returned without them. Sent only for a request with no OpenSearch-only constraint (one with a constraint fails with `503`). |
+| `segments:window_full`         | A segment result window filled while the whole-file windows did not, in databases the caller may open in full, so more segments may match. `nlp.truncated` stays `false`.                                                                           |
+
+**Error Responses:**
+
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid search parameters, or the query could not be embedded.                                                                                                                                                                                                                                                                                                                                  |
+| `403`  | Not authorized to access search.                                                                                                                                                                                                                                                                                                                                                                |
+| `503`  | Retry later. The message is one of `Vector index is being built` (the index is still being created), `The search filters could not be applied. Try again; if it keeps failing, contact your administrator.` (an OpenSearch-only constraint could not be applied), or `Search is busy right now. Try again in a moment.` (Amazon Bedrock or Amazon DynamoDB throttled or timed out the request). |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                                          |
+
+A query longer than 1,000 characters is refused with `400` and the message `The query is <length> characters; the limit is 1000.` A query that is empty or only whitespace is refused with `400` and the message `The query must not be blank.`, before the query is embedded. When the embedding model call fails, the response is `400` with the message `The query could not be prepared for search. Try again; if it keeps failing, contact your administrator.`; the cause is written to the function's log.
 
 ---
 
@@ -342,11 +512,12 @@ The response returns the mappings for both indexes, keyed by `asset_index` and `
 
 **Error Responses:**
 
-| Status | Description                                                         |
-| ------ | ------------------------------------------------------------------- |
-| `403`  | Not authorized to access search.                                    |
-| `404`  | Search is not available when the OpenSearch feature is not enabled. |
-| `500`  | Internal server error.                                              |
+| Status | Description                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------- |
+| `403`  | Not authorized to access search.                                                                               |
+| `404`  | Search is not available when the OpenSearch feature is not enabled.                                            |
+| `503`  | OpenSearch is enabled but cannot be reached now (`Search is temporarily unavailable. Try again in a moment.`). |
+| `500`  | Internal server error.                                                                                         |
 
 ---
 
@@ -446,6 +617,8 @@ The `sort` field accepts an array of sort specifications. Each item can be a str
 :::note[Sort Field Prefixes]
 When sorting by indexed fields, use the prefixed field names (e.g., `str_assetname`, `date_lastmodified`, `num_filesize`). Sorting on non-prefixed or text-analyzed fields may produce unexpected results.
 :::
+
+Records equal on every sort key you give are ordered by their database ID, asset ID, archive state and, for files, file path, all ascending. The search adds these keys after your sort (a key your sort already names keeps your direction), so every record has one place in the order: following `from`/`size` pages lists each record once, also when records are re-indexed between pages without a change to the values they are sorted by. `POST /search/simple` sorts by `_score` with the same keys after it.
 
 ---
 
@@ -579,8 +752,14 @@ One field per index rather than one field per key is what keeps a deployment's m
 Three separate things are worth keeping apart when reading the rest of this page:
 
 -   **What the index stores** — the `MD_` and `AB_` objects above.
--   **What a query addresses internally** — one key as `MD_.{key}` or `AB_.{key}`, and a value-only search as `MD_._value` (plus `AB_._value` on the file index), the `flat_object` subfield holding every value in the object.
+-   **What a query addresses internally** — one key as `MD_.{key}` or `AB_.{key}`, and a value-only search as the object itself, `MD_` (plus `AB_` on the file index), which matches any of its values. A value pattern that is not a prefix (a leading `*`, a `?` or an inner `*`) is sent to the `flat_object` value subfield `MD_._value` / `AB_._value` instead, and a key pattern of that kind to `MD_._valueAndPath` / `AB_._valueAndPath`, because OpenSearch answers such patterns on the object itself with key names and on a key with nothing. An exact value or a prefix (`PRJ-325`, `PRJ*`) matches the whole value. This is the same on Amazon OpenSearch Serverless and on provisioned domains.
 -   **What a request may submit** — see below. The submitted spelling is normalized before the query is built, so it need not match either of the above.
+
+#### Values of Several Words
+
+A `metadataQuery` term is one value. In `both` mode a `key:value` term with a value without wildcards matches that key's exact value (`Plant:Line 3`), and a value with `*` or `?` is one pattern for the key's whole value (`Plant:Line 3*` matches `Line 3` and `Line 30`); a bare term without wildcards matches an exact value. In `value` mode a term without wildcards matches a record whose values contain every word, each anywhere inside a value, and a term with wildcards is one pattern for a whole value. Unlike the general `query`, no word of a value is matched on its own.
+
+A value wrapped in one pair of double quotes is matched exactly, in `both` and `value` mode, as a bare term or as the value of a `key:value` term: `"SBXC-325"` and `ProjectCode:"SBXC-325"` match a value that is exactly `SBXC-325`, and `"Line 3"` matches the whole value `Line 3`. Inside the quotes `*` and `?` are literal characters, and a `:`, `AND` or `OR` belongs to the value. A quote that is not part of such a pair is a character of the value.
 
 #### Metadata Key Spellings a Request May Use
 
@@ -617,6 +796,8 @@ All search endpoints return the same response structure.
 | `hits.hits[].explanation` | object  | Match explanation (if requested).                                                                                                                                                            |
 | `aggregations`            | object  | Faceted aggregation buckets (if requested). Bucket keys and counts cover only records the caller can open; see [Counts and permissions](#counts-and-permissions).                            |
 | `aggregationTotal`        | integer | Sum of the `str_databaseid` aggregation buckets (or `str_assetid` when that aggregation is absent), counted the same way as `aggregations`; `null` when no aggregation buckets are returned. |
+
+Each aggregation returns at most 1,000 buckets per index, the values with the most records first, and `sum_other_doc_count`: the number of records whose value is not among the returned buckets, counted the same way as the buckets. It is `0` when every value is listed, so a value above `0` means the bucket list is cut. `aggregationTotal` also counts the records whose database is not among the returned buckets, so a search whose results span more than 1,000 databases is counted whole.
 
 ### Counts and permissions
 

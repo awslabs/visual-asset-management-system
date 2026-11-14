@@ -18,7 +18,10 @@
  *  * **S1-INFRA-035** — the restricted templates pinned a `global.` Bedrock cross-Region inference
  *    profile, which is commercial-only, and nothing validated it. The IAM grant is derived by stripping
  *    the prefix and understood only the commercial ones, so a GovCloud deployment got both a model that
- *    does not exist and a grant that would not have matched it.
+ *    does not exist and a grant that would not have matched it. The rule now guards
+ *    `pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId` (see "system GenAI metadata pipeline
+ *    validation" below); the two retired configuration keys that carried the original field fail
+ *    validation when their block is enabled.
  *
  *  * **S1-INFRA-069** — the Physna endpoints were checked for parseability alone. `new URL()` accepts
  *    `http://` and `http://169.254.169.254/`, and the add-on sends the Physna OAuth client secret to
@@ -38,6 +41,8 @@ import * as path from "path";
 import * as fs from "fs";
 import * as Config from "../../config/config";
 import commercialTemplate from "../../config/config.template.commercial.json";
+import { evaluateRules } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
+import { makeDefaultConfig } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/defaults";
 import { oidcSettings } from "../../config/oidc-config";
 import { newTestApp } from "../support/testApp";
 
@@ -221,72 +226,159 @@ describe("container image placeholder rejection (S1-INFRA-099)", () => {
     });
 });
 
-describe("Bedrock model id validation (S1-INFRA-035)", () => {
-    const enableGenAi = (c: any) => {
-        c.app.useGlobalVpc.enabled = true;
-        c.app.pipelines.useGenAiMetadata3dLabeling.enabled = true;
+describe("retired pipeline configuration keys", () => {
+    const RETIRED = [
+        "useGenAiMetadata3dLabeling",
+        "useConversionCadMeshMetadataExtraction",
+    ] as const;
+
+    /** The two blocks exactly as the 2.6.6 commercial template ships them: both disabled. */
+    const shipped266 = (c: any) => {
+        c.app.pipelines.useGenAiMetadata3dLabeling = {
+            enabled: false,
+            bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            autoRegisterWithVAMS: true,
+            autoRegisterAutoTriggerOnFileUpload: false,
+        };
+        c.app.pipelines.useConversionCadMeshMetadataExtraction = {
+            enabled: false,
+            autoRegisterWithVAMS: true,
+            autoRegisterAutoTriggerOnFileUpload: true,
+        };
     };
 
-    test("a commercial inference profile is accepted in the commercial partition", () => {
-        // The control: the shipped commercial value must keep working.
-        expect(
-            resolve((c) => {
-                enableGenAi(c);
-                c.env.partition = "aws";
-                c.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId =
-                    Config.GENAI_DEFAULT_BEDROCK_MODEL_ID;
-            })
-        ).not.toThrow(/bedrockModelId/);
+    test.each(RETIRED)(
+        "an enabled app.pipelines.%s block fails, naming the key, the replacement, the remedy and the update guide",
+        (key) => {
+            const run = resolve((c) => {
+                shipped266(c);
+                c.app.pipelines[key].enabled = true;
+            });
+            expect(run).toThrow(
+                new RegExp(
+                    `app\\.pipelines\\.${key} is enabled, and it is not a supported configuration option`
+                )
+            );
+            expect(run).toThrow(/app\.pipelines\.useSystemGenAiMetadata/);
+            expect(run).toThrow(
+                new RegExp(`Set app\\.pipelines\\.${key}\\.enabled to false or remove the block`)
+            );
+            expect(run).toThrow(/update-the-solution\.md#v26-to-v27/);
+        }
+    );
+
+    test("a 2.6.6 config.json carrying both blocks disabled passes getConfig() unchanged", () => {
+        const config = resolve(shipped266)();
+        const pipelines = config.app.pipelines as any;
+        // Left as written: no warning-free rewrite, no deletion, no default added.
+        expect(pipelines.useGenAiMetadata3dLabeling).toEqual({
+            enabled: false,
+            bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            autoRegisterWithVAMS: true,
+            autoRegisterAutoTriggerOnFileUpload: false,
+        });
+        expect(pipelines.useConversionCadMeshMetadataExtraction).toEqual({
+            enabled: false,
+            autoRegisterWithVAMS: true,
+            autoRegisterAutoTriggerOnFileUpload: true,
+        });
     });
 
-    test("a commercial inference profile is rejected in a restricted partition", () => {
-        expect(
-            resolve((c) => {
-                enableGenAi(c);
-                restrictedPartition(c);
-                c.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId =
-                    "global.anthropic.claude-sonnet-4-20250514-v1:0";
-            })
-        ).toThrow(/exists only in the commercial partition/);
+    test("a disabled block is ignored silently: no warning names the retired key", () => {
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+        const log = jest.spyOn(console, "log").mockImplementation(() => undefined);
+        try {
+            resolve(shipped266)();
+            const printed = [...warn.mock.calls, ...log.mock.calls]
+                .map((call) => call.map(String).join(" "))
+                .join("\n");
+            for (const key of RETIRED) {
+                expect(printed).not.toContain(key);
+            }
+        } finally {
+            warn.mockRestore();
+            log.mockRestore();
+        }
     });
 
-    test('the "us." prefix is rejected there as well', () => {
-        expect(
+    test.each(RETIRED)("a %s block without enabled passes", (key) => {
+        expect(() =>
             resolve((c) => {
-                enableGenAi(c);
-                restrictedPartition(c);
-                c.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId =
-                    "us.anthropic.claude-sonnet-4-20250514-v1:0";
-            })
-        ).toThrow(/exists only in the commercial partition/);
+                c.app.pipelines[key] = { autoRegisterWithVAMS: true };
+            })()
+        ).not.toThrow();
     });
 
-    test('a "us-gov." prefix is accepted in GovCloud', () => {
-        // The escape hatch has to work, or the rule is a way of writing "this pipeline is unavailable".
-        expect(
-            resolve((c) => {
-                enableGenAi(c);
-                restrictedPartition(c);
-                c.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId =
-                    "us-gov.anthropic.claude-sonnet-4-20250514-v1:0";
-            })
-        ).not.toThrow(/bedrockModelId/);
+    test.each([["true"], [1], [null], ["yes"]])(
+        "only the boolean true fails: enabled %p passes",
+        (value) => {
+            expect(() =>
+                resolve((c) => {
+                    shipped266(c);
+                    c.app.pipelines.useGenAiMetadata3dLabeling.enabled = value;
+                    c.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = value;
+                })()
+            ).not.toThrow();
+        }
+    );
+
+    describe("the ConfigBuilder flags exactly the blocks getConfig() refuses", () => {
+        const builderFlags = (mutate: (c: any) => void) => {
+            const c = JSON.parse(JSON.stringify(commercialTemplate));
+            mutate(c);
+            return evaluateRules(c).some((r) => r.id === "retired-pipeline-keys");
+        };
+
+        test.each(RETIRED)("an enabled %s block is flagged", (key) => {
+            expect(
+                builderFlags((c) => {
+                    shipped266(c);
+                    c.app.pipelines[key].enabled = true;
+                })
+            ).toBe(true);
+        });
+
+        test("the two disabled 2.6.6 blocks are not flagged", () => {
+            expect(builderFlags(shipped266)).toBe(false);
+        });
+
+        test.each(RETIRED)(
+            'a %s block without enabled, or enabled "true", is not flagged',
+            (key) => {
+                expect(
+                    builderFlags((c) => {
+                        c.app.pipelines[key] = { autoRegisterWithVAMS: true };
+                    })
+                ).toBe(false);
+                expect(
+                    builderFlags((c) => {
+                        c.app.pipelines[key] = { enabled: "true" };
+                    })
+                ).toBe(false);
+            }
+        );
+
+        test("[control] the shipped template is not flagged", () => {
+            expect(builderFlags(() => undefined)).toBe(false);
+        });
     });
 
-    test("an empty model id is rejected when the pipeline is enabled", () => {
-        // Which is the state the restricted templates now ship in, so enabling the pipeline there
-        // fails at synth naming the field rather than at the first job.
-        expect(
-            resolve((c) => {
-                enableGenAi(c);
-                c.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId = "";
-            })
-        ).toThrow(/bedrockModelId is empty/);
+    test("no shipped template carries either key", () => {
+        for (const name of ["commercial", "govcloud", "eusovereign"]) {
+            const template = JSON.parse(
+                realReadFileSync(
+                    path.resolve(__dirname, `../../config/config.template.${name}.json`),
+                    "utf-8"
+                )
+            );
+            for (const key of RETIRED) {
+                expect(template.app.pipelines).not.toHaveProperty(key);
+            }
+        }
     });
 
-    test("the restricted templates ship it empty and the pipeline disabled", () => {
-        // The pairing that makes emptying the value safe: it is only required when enabled. The
-        // Video SOP/BOM pipeline ships the same way, for the same reason.
+    test("the restricted templates ship the system GenAI pipeline disabled and vector search off", () => {
+        // The pairing that makes their model ids safe: they are only validated when enabled.
         for (const name of ["govcloud", "eusovereign"]) {
             const template = JSON.parse(
                 realReadFileSync(
@@ -294,12 +386,37 @@ describe("Bedrock model id validation (S1-INFRA-035)", () => {
                     "utf-8"
                 )
             );
-            for (const pipeline of ["useGenAiMetadata3dLabeling", "useGenAiVideoSopBom"]) {
-                const block = template.app.pipelines[pipeline];
-                expect(block.bedrockModelId).toBe("");
-                expect(block.enabled).toBe(false);
-            }
+            expect(template.app.pipelines.useSystemGenAiMetadata.enabled).toBe(false);
+            expect(template.app.vectorSearch.enabled).toBe(false);
+            // The Video SOP/BOM pipeline ships disabled with its model id empty, for the same reason.
+            expect(template.app.pipelines.useGenAiVideoSopBom.bedrockModelId).toBe("");
+            expect(template.app.pipelines.useGenAiVideoSopBom.enabled).toBe(false);
         }
+    });
+
+    test("the govcloud template names a us-gov. analysis model; the EU Sovereign template names none", () => {
+        const govcloud = JSON.parse(
+            realReadFileSync(
+                path.resolve(__dirname, "../../config/config.template.govcloud.json"),
+                "utf-8"
+            )
+        );
+        const eusovereign = JSON.parse(
+            realReadFileSync(
+                path.resolve(__dirname, "../../config/config.template.eusovereign.json"),
+                "utf-8"
+            )
+        );
+        expect(govcloud.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId).toMatch(
+            /^us-gov\./
+        );
+        expect(eusovereign.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId).toBe(
+            ""
+        );
+        expect(
+            eusovereign.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId
+        ).toBe("");
+        expect(eusovereign.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis).toBe(false);
     });
 });
 
@@ -368,14 +485,729 @@ describe("Physna outbound endpoint validation (S1-INFRA-069)", () => {
     });
 });
 
+/** Everything a European Sovereign Cloud config needs to reach the rule under test. */
+function euSovereignPartition(c: any) {
+    restrictedPartition(c);
+    c.env.region = "eusc-de-east-1";
+}
+
+/** The IL6 control set an ISO partition requires before any feature rule is reached. */
+function isoControls(c: any) {
+    c.app.govCloud.il6Compliant = true;
+    c.app.authProvider.useCognito.enabled = false;
+    c.app.useWaf = false;
+    c.app.useKmsCmkEncryption.enabled = true;
+}
+
+/** Vector search on, with an analysis model id every partition accepts (a bare in-Region id). */
+function vectorSearchOn(c: any) {
+    c.app.vectorSearch.enabled = true;
+    c.app.pipelines.useSystemGenAiMetadata.enabled = true;
+    c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = true;
+    c.app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload = true;
+    c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
+        "anthropic.claude-sonnet-4-5-20250929-v1:0";
+}
+
+describe("vector search validation", () => {
+    let warn: jest.SpyInstance;
+    beforeEach(() => {
+        warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    });
+    afterEach(() => warn.mockRestore());
+    const warnings = () => warn.mock.calls.map((call) => String(call[0])).join("\n");
+
+    test("is rejected in the European Sovereign Cloud, naming the partition", () => {
+        expect(
+            resolve((c) => {
+                euSovereignPartition(c);
+                vectorSearchOn(c);
+            })
+        ).toThrow(/vector search .*is not available in the 'aws-eusc' partition/);
+    });
+
+    test.each([
+        ["aws-cn", "cn-north-1"],
+        ["aws-iso", "us-iso-east-1"],
+        ["aws-iso-b", "us-isob-east-1"],
+    ])(
+        "is rejected in %s, where neither DynamoDB vector search nor the embedding model is verified",
+        (partition, region) => {
+            // An allow-list of the partitions it runs in, so a partition nobody named is refused too.
+            expect(
+                resolve((c) => {
+                    restrictedPartition(c);
+                    c.env.region = region;
+                    if (partition.startsWith("aws-iso")) isoControls(c);
+                    vectorSearchOn(c);
+                })
+            ).toThrow(
+                new RegExp(
+                    `vector search .*is not available in the '${partition}' partition; it is ` +
+                        "supported in 'aws' and 'aws-us-gov'"
+                )
+            );
+        }
+    );
+
+    test("the ConfigBuilder mirrors the allow-list for every partition its Region names", () => {
+        const flagged = (region: string, enabled = true) => {
+            const c = makeDefaultConfig("commercial");
+            c.env.region = region;
+            c.app.vectorSearch.enabled = enabled;
+            return evaluateRules(c).some((r) => r.id === "vector-search-partition");
+        };
+        for (const region of ["eusc-de-east-1", "cn-north-1", "us-iso-east-1", "us-isob-east-1"]) {
+            expect([region, flagged(region)]).toEqual([region, true]);
+            expect([region, flagged(region, false)]).toEqual([region, false]);
+        }
+        expect(flagged("us-east-1")).toBe(false);
+        expect(flagged("us-gov-west-1")).toBe(false);
+        // An unset Region names no partition, so the rule stays silent.
+        expect(flagged("")).toBe(false);
+    });
+
+    test("the same configurations deploy with vector search off", () => {
+        // Control for the three refusals above: it is the vector flag that each one rejects.
+        for (const region of ["eusc-de-east-1", "cn-north-1", "us-iso-east-1"]) {
+            expect(
+                resolve((c) => {
+                    restrictedPartition(c);
+                    c.env.region = region;
+                    if (region.startsWith("us-iso")) isoControls(c);
+                    vectorSearchOn(c);
+                    c.app.vectorSearch.enabled = false;
+                })
+            ).not.toThrow(/vector search/);
+        }
+    });
+
+    test("is accepted in GovCloud, with a warning about manual model access", () => {
+        // Control for the EUSC rule: it is keyed on the partition, not on app.govCloud.enabled.
+        expect(
+            resolve((c) => {
+                restrictedPartition(c);
+                vectorSearchOn(c);
+            })
+        ).not.toThrow();
+        expect(warnings()).toContain("app.vectorSearch.enabled is true in a GovCloud deployment");
+    });
+
+    test("the shipped commercial template gets no GovCloud warning", () => {
+        expect(resolve(() => undefined)).not.toThrow();
+        expect(warnings()).not.toContain("GovCloud deployment");
+    });
+
+    test("requires the system GenAI metadata pipeline", () => {
+        expect(
+            resolve((c) => {
+                c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+            })
+        ).toThrow(
+            /app\.vectorSearch\.enabled requires app\.pipelines\.useSystemGenAiMetadata\.enabled/
+        );
+    });
+
+    test("requires the pipeline's registration AND upload trigger, and switches neither on", () => {
+        // Explicit rejection rather than auto-mutation, per the policy stated above vpcRequiringFeatures.
+        const pattern = /autoRegisterWithVAMS and autoRegisterAutoTriggerOnFileUpload to be true/;
+        expect(
+            resolve((c) => {
+                c.app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload = false;
+            })
+        ).toThrow(pattern);
+        expect(
+            resolve((c) => {
+                c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = false;
+            })
+        ).toThrow(pattern);
+    });
+
+    test("the pipeline may run with its trigger disarmed while vector search is off", () => {
+        expect(
+            resolve((c) => {
+                c.app.vectorSearch.enabled = false;
+                c.app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload = false;
+            })
+        ).not.toThrow();
+    });
+
+    test("an empty embedding model id is rejected", () => {
+        expect(
+            resolve((c) => {
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId = "   ";
+            })
+        ).toThrow(
+            /bedrockModels\.embeddingModelId is empty while app\.vectorSearch\.enabled is true/
+        );
+    });
+
+    test.each([[0], [4097], [1.5], ["1024"], [-1]])(
+        "embeddingDimensions %p is rejected",
+        (value) => {
+            expect(
+                resolve((c) => {
+                    c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions =
+                        value;
+                })
+            ).toThrow(/embeddingDimensions must be an integer between 1 and 4096/);
+        }
+    );
+
+    // In range and a width the shipped model (Titan Text Embeddings V2) produces; the family widths
+    // have their own suite (systemGenAiModelConfig.test.ts).
+    test.each([[256], [512], [1024]])("embeddingDimensions %p is accepted", (value) => {
+        expect(
+            resolve((c) => {
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions = value;
+            })
+        ).not.toThrow(/embeddingDimensions/);
+    });
+
+    test.each([[0], [1], [1001], [2.5], ["5"]])(
+        "indexingConcurrency %p is rejected with the message that names the bound",
+        (value) => {
+            // CDK's own synth check on the ESM misses 0 and non-integers and names the CDK prop.
+            expect(
+                resolve((c) => {
+                    c.app.vectorSearch.indexingConcurrency = value;
+                })
+            ).toThrow(
+                /vectorSearch\.indexingConcurrency must be an integer between 2 and 1000 \(Lambda SQS event-source MaximumConcurrency bound\)/
+            );
+        }
+    );
+
+    test.each([[2], [1000]])("indexingConcurrency %p (a bound) is accepted", (value) => {
+        expect(
+            resolve((c) => {
+                c.app.vectorSearch.indexingConcurrency = value;
+            })
+        ).not.toThrow(/indexingConcurrency/);
+    });
+
+    test("the embedding checks are skipped while vector search is disabled", () => {
+        expect(
+            resolve((c) => {
+                c.app.vectorSearch.enabled = false;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId = "";
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions = 0;
+            })
+        ).not.toThrow();
+    });
+
+    // indexingConcurrency paces the system-workflow reindexer, which exists whenever the system
+    // pipeline is on and registered, so it is checked with vector search off too.
+    test("indexingConcurrency is checked with vector search off while the system pipeline is on", () => {
+        expect(
+            resolve((c) => {
+                c.app.vectorSearch.enabled = false;
+                c.app.vectorSearch.indexingConcurrency = 0;
+            })
+        ).toThrow(/vectorSearch\.indexingConcurrency must be an integer between 2 and 1000/);
+    });
+
+    test("indexingConcurrency is not checked when the system pipeline is off (no reindexer)", () => {
+        expect(
+            resolve((c) => {
+                c.app.vectorSearch.enabled = false;
+                c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+                c.app.vectorSearch.indexingConcurrency = 0;
+            })
+        ).not.toThrow(/indexingConcurrency/);
+    });
+});
+
+describe("system GenAI metadata pipeline validation", () => {
+    /** Isolates the pipeline rules from the vector-search rules that depend on the pipeline. */
+    const vectorSearchOff = (c: any) => {
+        c.app.vectorSearch.enabled = false;
+    };
+    let warn: jest.SpyInstance;
+    beforeEach(() => {
+        warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    });
+    afterEach(() => warn.mockRestore());
+    const warnings = () => warn.mock.calls.map((call) => String(call[0])).join("\n");
+
+    describe.each(["maxInputFileSizeMb", "maxPointCloudPoints"])("lambdaLimits.%s", (field) => {
+        const message = new RegExp(
+            `pipelines\\.useSystemGenAiMetadata\\.lambdaLimits\\.${field} must be a positive integer`
+        );
+
+        test.each([[0], [-5], [1.5], ["2048"]])("%p is rejected, naming the field", (value) => {
+            expect(
+                resolve((c) => {
+                    vectorSearchOff(c);
+                    c.app.pipelines.useSystemGenAiMetadata.lambdaLimits[field] = value;
+                })
+            ).toThrow(message);
+        });
+
+        test("1 is accepted", () => {
+            expect(
+                resolve((c) => {
+                    vectorSearchOff(c);
+                    c.app.pipelines.useSystemGenAiMetadata.lambdaLimits[field] = 1;
+                })
+            ).not.toThrow(message);
+        });
+
+        test("is not checked while the pipeline is disabled", () => {
+            expect(
+                resolve((c) => {
+                    vectorSearchOff(c);
+                    c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+                    c.app.pipelines.useSystemGenAiMetadata.lambdaLimits[field] = 0;
+                })
+            ).not.toThrow();
+        });
+    });
+
+    test("the shipped commercial analysis model is accepted (control)", () => {
+        expect(resolve(() => undefined)).not.toThrow(/analysisModelId/);
+    });
+
+    test("an empty analysis model id is rejected when the pipeline is enabled", () => {
+        expect(
+            resolve((c) => {
+                vectorSearchOff(c);
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = "";
+            })
+        ).toThrow(
+            /pipelines\.useSystemGenAiMetadata is enabled with useGenAiAnalysis but bedrockModels\.analysisModelId is empty/
+        );
+    });
+
+    test("an empty analysis model id is accepted when the GenAI layer is off (attributes-only)", () => {
+        expect(
+            resolve((c) => {
+                vectorSearchOff(c);
+                c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = "";
+            })
+        ).not.toThrow();
+        // The partition-prefix checks are the GenAI layer's too: a wrong-partition id is not rejected
+        // when no Converse call will carry it.
+        expect(
+            resolve((c) => {
+                vectorSearchOff(c);
+                c.env.region = "us-gov-west-1";
+                c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
+                    "global.anthropic.claude-x:0";
+            })
+        ).not.toThrow(/analysisModelId/);
+    });
+
+    test("vector search on with the GenAI layer off still requires the embedding model", () => {
+        expect(
+            resolve((c) => {
+                vectorSearchOn(c);
+                c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = "";
+            })
+        ).not.toThrow();
+        expect(
+            resolve((c) => {
+                vectorSearchOn(c);
+                c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId = "";
+            })
+        ).toThrow(/bedrockModels\.embeddingModelId is empty/);
+    });
+
+    test('a "global." profile is rejected in GovCloud, naming the prefix', () => {
+        expect(
+            resolve((c) => {
+                restrictedPartition(c);
+                vectorSearchOff(c);
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
+                    "global.anthropic.claude-haiku-4-5-20251001-v1:0";
+            })
+        ).toThrow(
+            /"global\." cross-Region inference-profile prefix exists only in the commercial partition/
+        );
+    });
+
+    test.each([
+        ["global.anthropic.claude-haiku-4-5-20251001-v1:0", "global."],
+        ["us.anthropic.claude-sonnet-4-5-20250929-v1:0", "us."],
+    ])("%s is rejected in the EU Sovereign Cloud, naming the %s prefix", (id, prefix) => {
+        expect(
+            resolve((c) => {
+                euSovereignPartition(c);
+                vectorSearchOff(c);
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = id;
+            })
+        ).toThrow(
+            new RegExp(
+                `"${prefix.replace(
+                    ".",
+                    "\\."
+                )}" cross-Region inference-profile prefix exists only in the commercial partition`
+            )
+        );
+    });
+
+    test('a "us." profile is accepted in GovCloud, with a warning to verify it exists there', () => {
+        // The GovCloud inference-profile prefix is unverified and the Claude Sonnet 4.5 model card
+        // lists the GovCloud source Regions under the `us.` Geo id, so `us.` is let through in GovCloud
+        // with a warning rather than rejected.
+        expect(
+            resolve((c) => {
+                restrictedPartition(c);
+                vectorSearchOff(c);
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
+                    "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+            })
+        ).not.toThrow();
+        expect(warnings()).toContain(
+            "verify that this inference profile exists in your GovCloud account"
+        );
+    });
+
+    test('a "us." profile in the commercial partition gets no GovCloud warning (control)', () => {
+        resolve((c) => {
+            vectorSearchOff(c);
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
+                "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+        })();
+        expect(warnings()).not.toContain(
+            "verify that this inference profile exists in your GovCloud account"
+        );
+    });
+
+    test('a "us-gov." profile is accepted in GovCloud', () => {
+        expect(
+            resolve((c) => {
+                restrictedPartition(c);
+                vectorSearchOff(c);
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
+                    "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0";
+            })
+        ).not.toThrow(/analysisModelId/);
+    });
+
+    test('a "us-gov." profile is rejected in the commercial partition', () => {
+        expect(
+            resolve((c) => {
+                vectorSearchOff(c);
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
+                    "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0";
+            })
+        ).toThrow(
+            /"us-gov\." cross-Region inference-profile prefix exists only in the AWS GovCloud \(US\) partition/
+        );
+    });
+
+    test.each([
+        ["commercial", (c: any) => undefined],
+        ["GovCloud", restrictedPartition],
+        ["EU Sovereign Cloud", euSovereignPartition],
+    ])("a bare in-Region model id is accepted in %s", (_name, partition) => {
+        expect(
+            resolve((c) => {
+                partition(c);
+                vectorSearchOff(c);
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
+                    "amazon.nova-2-lite-v1:0";
+            })
+        ).not.toThrow();
+    });
+
+    test("an Anthropic model id warns about the one-time use-case form", () => {
+        // The shipped commercial template names Claude Haiku 4.5, so this warning is printed by every
+        // commercial synth until the form is submitted; it never fails the synth.
+        expect(resolve(() => undefined)).not.toThrow();
+        expect(warnings()).toContain("Anthropic requires a one-time use-case form");
+    });
+
+    test("a non-Anthropic model id does not get that warning", () => {
+        resolve((c) => {
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
+                "amazon.nova-2-lite-v1:0";
+        })();
+        expect(warnings()).not.toContain("Anthropic requires a one-time use-case form");
+    });
+
+    test("an Anthropic id on a disabled pipeline still warns (the rule reads the id, not the pipeline state)", () => {
+        // The condition is the id alone. The shipped govcloud template is this case.
+        resolve((c) => {
+            vectorSearchOff(c);
+            c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+        })();
+        expect(warnings()).toContain("Anthropic requires a one-time use-case form");
+    });
+
+    test("useFargateRenderer requires a VPC, and the error names the sub-flag rather than the pipeline", () => {
+        expect(
+            resolve((c) => {
+                c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
+            })
+        ).toThrow(/require a VPC: pipelines\.useSystemGenAiMetadata\.useFargateRenderer\./);
+    });
+
+    test("the pipeline itself never requires a VPC", () => {
+        // The shipped commercial template enables the pipeline with useGlobalVpc.enabled false.
+        expect(resolve(() => undefined)).not.toThrow(/require a VPC/);
+    });
+
+    test("useFargateRenderer on a disabled pipeline requires no VPC (the render branch exists only in an enabled pipeline)", () => {
+        // The VPC builder keys the renderer's endpoints on `enabled && useFargateRenderer`; the config
+        // gate agrees, so a disabled pipeline with the sub-flag left on deploys without a VPC.
+        expect(
+            resolve((c) => {
+                vectorSearchOff(c);
+                c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+                c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
+            })
+        ).not.toThrow(/require a VPC/);
+    });
+
+    describe("bedrockGuardrail", () => {
+        const withGuardrail = (identifier: string, version: string) => (c: any) => {
+            vectorSearchOff(c);
+            c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail = {
+                guardrailIdentifier: identifier,
+                guardrailVersion: version,
+            };
+        };
+
+        test("accepts both fields set", () => {
+            expect(resolve(withGuardrail("kb4v3hkqvi6f", "1"))).not.toThrow();
+        });
+
+        test("accepts both fields empty", () => {
+            expect(resolve(withGuardrail("", ""))).not.toThrow();
+        });
+
+        test.each([
+            ["identifier only", "kb4v3hkqvi6f", ""],
+            ["version only", "", "DRAFT"],
+        ])("rejects %s", (_label, identifier, version) => {
+            expect(resolve(withGuardrail(identifier, version))).toThrow(
+                /bedrockGuardrail requires both guardrailIdentifier and guardrailVersion, or neither/
+            );
+        });
+
+        test("a half-set pair is rejected on a disabled pipeline too", () => {
+            expect(
+                resolve((c) => {
+                    withGuardrail("kb4v3hkqvi6f", "")(c);
+                    c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+                })
+            ).toThrow(/bedrockGuardrail requires both/);
+        });
+
+        test("backfills an absent block to two empty strings and a created guardrail", () => {
+            const config = resolve((c) => {
+                vectorSearchOff(c);
+                delete c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail;
+            })();
+            expect(config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail).toEqual({
+                guardrailIdentifier: "",
+                guardrailVersion: "",
+                create: { enabled: true, promptAttackInputStrength: "LOW", piiFilter: "anonymize" },
+            });
+        });
+
+        test.each(["DRAFT", "1", "42", "99999999"])("accepts guardrailVersion %s", (version) => {
+            expect(resolve(withGuardrail("kb4v3hkqvi6f", version))).not.toThrow();
+        });
+
+        test.each([
+            ["an ARN", "arn:aws:bedrock:us-east-1:123456789012:guardrail/kb4v3hkqvi6f"],
+            ["a name", "my-guardrail"],
+            ["an upper-case id", "KB4V3HKQVI6F"],
+            ["a short id", "kb4v3hkqvi6"],
+            ["a long id", "kb4v3hkqvi6f0"],
+        ])(
+            "rejects guardrailIdentifier that is %s: the IAM grant composes the ARN from the id",
+            (_label, identifier) => {
+                expect(resolve(withGuardrail(identifier, "1"))).toThrow(
+                    /guardrailIdentifier must be the guardrail's 12-character id .* not its ARN or name/
+                );
+            }
+        );
+
+        test.each([
+            ["a lower-case draft", "draft"],
+            ["zero", "0"],
+            ["a negative number", "-1"],
+            ["a decimal", "1.0"],
+            ["a nine-digit number", "100000000"],
+            ["an alias", "latest"],
+        ])("rejects guardrailVersion that is %s", (_label, version) => {
+            expect(resolve(withGuardrail("kb4v3hkqvi6f", version))).toThrow(
+                /guardrailVersion must be "DRAFT" or a published version number/
+            );
+        });
+
+        test("the format checks apply on a disabled pipeline too, like the pair check", () => {
+            expect(
+                resolve((c) => {
+                    withGuardrail("my-guardrail", "1")(c);
+                    c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+                })
+            ).toThrow(/guardrailIdentifier must be the guardrail's 12-character id/);
+        });
+
+        const noGuardrail = (c: any) => {
+            withGuardrail("", "")(c);
+            c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create = {
+                enabled: false,
+                promptAttackInputStrength: "LOW",
+                piiFilter: "anonymize",
+            };
+        };
+        const NO_GUARDRAIL = /bedrockGuardrail creates no guardrail and names none/;
+
+        test("the GenAI analysis with no guardrail created or named is refused, with no opt-out", () => {
+            const message = (() => {
+                try {
+                    resolve((c) => {
+                        noGuardrail(c);
+                        c.app.vectorSearch.enabled = false;
+                    })();
+                } catch (e) {
+                    return (e as Error).message;
+                }
+                return "";
+            })();
+            expect(message).toMatch(NO_GUARDRAIL);
+            expect(message).toContain(
+                "the GenAI analysis (useSystemGenAiMetadata.useGenAiAnalysis)"
+            );
+            expect(message).not.toContain("vector search (app.vectorSearch.enabled)");
+            expect(message).toContain("prompt-attack input filter");
+            expect(message).toContain("bedrockGuardrail.create.enabled to true");
+        });
+
+        test("vector search on an attributes-only pipeline with no guardrail is refused: the embedded text is screened", () => {
+            expect(
+                resolve((c) => {
+                    noGuardrail(c);
+                    c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                    c.app.vectorSearch.enabled = true;
+                })
+            ).toThrow(/names none, while vector search \(app\.vectorSearch\.enabled\) sends/);
+        });
+
+        test("an unset vectorSearch that follows the pipeline on is refused the same way", () => {
+            expect(
+                resolve((c) => {
+                    noGuardrail(c);
+                    c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                    delete c.app.vectorSearch;
+                })
+            ).toThrow(NO_GUARDRAIL);
+        });
+
+        test("is refused in GovCloud too, which gets no partition exemption", () => {
+            expect(
+                resolve((c) => {
+                    restrictedPartition(c);
+                    vectorSearchOn(c);
+                    noGuardrail(c);
+                    c.app.vectorSearch.enabled = true;
+                })
+            ).toThrow(NO_GUARDRAIL);
+        });
+
+        test("accepted with a created or an operator-owned guardrail, on an attributes-only pipeline with vector search off, or on a disabled pipeline", () => {
+            // An empty pair with no create block: the guardrail is created by default.
+            expect(resolve(withGuardrail("", ""))).not.toThrow();
+            expect(resolve(withGuardrail("kb4v3hkqvi6f", "1"))).not.toThrow();
+            expect(
+                resolve((c) => {
+                    noGuardrail(c);
+                    c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                    c.app.vectorSearch.enabled = false;
+                })
+            ).not.toThrow();
+            expect(
+                resolve((c) => {
+                    noGuardrail(c);
+                    c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+                    c.app.vectorSearch.enabled = false;
+                })
+            ).not.toThrow();
+        });
+
+        test("the GovCloud template and its ConfigBuilder preset create the guardrail", () => {
+            // Turning the pipeline on in GovCloud then needs no further guardrail setting.
+            const govcloud = JSON.parse(
+                fs.readFileSync(
+                    path.join(__dirname, "../../config/config.template.govcloud.json"),
+                    "utf8"
+                )
+            );
+            expect(govcloud.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create).toEqual({
+                enabled: true,
+                promptAttackInputStrength: "LOW",
+                piiFilter: "anonymize",
+            });
+            expect(
+                makeDefaultConfig("govcloud").app.pipelines.useSystemGenAiMetadata.bedrockGuardrail
+                    .create.enabled
+            ).toBe(true);
+            // The EU Sovereign preset ships the attributes-only pipeline and creates none.
+            expect(
+                makeDefaultConfig("eusovereign").app.pipelines.useSystemGenAiMetadata
+                    .bedrockGuardrail.create.enabled
+            ).toBe(false);
+        });
+
+        test("the ConfigBuilder mirrors the refusal as an error rule", () => {
+            const ids = (mutate: (c: any) => void) => {
+                const c = makeDefaultConfig("commercial");
+                mutate(c);
+                return evaluateRules(c)
+                    .filter((r) => r.severity === "error")
+                    .map((r) => r.id);
+            };
+            const off = (c: any) => {
+                c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled = false;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier = "";
+            };
+            expect(ids(off)).toContain("system-genai-guardrail-required");
+            expect(
+                ids((c) => {
+                    off(c);
+                    c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                })
+            ).toContain("system-genai-guardrail-required");
+            expect(
+                ids((c) => {
+                    off(c);
+                    c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                    c.app.vectorSearch.enabled = false;
+                })
+            ).not.toContain("system-genai-guardrail-required");
+            expect(ids(() => undefined)).not.toContain("system-genai-guardrail-required");
+        });
+    });
+});
+
 describe("Video SOP/BOM Extraction pipeline validation (useGenAiVideoSopBom)", () => {
     const enableVideoSopBom = (c: any) => {
         c.app.useGlobalVpc.enabled = true;
         c.app.pipelines.useGenAiVideoSopBom.enabled = true;
     };
+    /**
+     * The restricted-partition shape with the SYSTEM GenAI metadata pipeline and vector search off: the
+     * commercial template enables both with commercial-only model ids, and their model-id rule runs
+     * before this pipeline's, so leaving them on would make every assertion here see that rejection.
+     */
+    const videoSopBomRestrictedPartition = (c: any) => {
+        restrictedPartition(c);
+        c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+        c.app.vectorSearch.enabled = false;
+    };
     /** The GovCloud-shaped config re-pointed at the EU Sovereign Cloud, which resolves to aws-eusc. */
     const euSovereignPartition = (c: any) => {
-        restrictedPartition(c);
+        videoSopBomRestrictedPartition(c);
         c.env.region = "eusc-de-east-1";
     };
     const US_GOV_ID = "us-gov.anthropic.claude-sonnet-4-20250514-v1:0";
@@ -398,7 +1230,7 @@ describe("Video SOP/BOM Extraction pipeline validation (useGenAiVideoSopBom)", (
             expect(
                 resolve((c) => {
                     enableVideoSopBom(c);
-                    restrictedPartition(c);
+                    videoSopBomRestrictedPartition(c);
                     c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
                         "global.anthropic.claude-sonnet-5-5";
                 })
@@ -411,7 +1243,7 @@ describe("Video SOP/BOM Extraction pipeline validation (useGenAiVideoSopBom)", (
             expect(
                 resolve((c) => {
                     enableVideoSopBom(c);
-                    restrictedPartition(c);
+                    videoSopBomRestrictedPartition(c);
                     c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
                         "us.anthropic.claude-sonnet-4-20250514-v1:0";
                 })
@@ -424,7 +1256,7 @@ describe("Video SOP/BOM Extraction pipeline validation (useGenAiVideoSopBom)", (
             expect(
                 resolve((c) => {
                     enableVideoSopBom(c);
-                    restrictedPartition(c);
+                    videoSopBomRestrictedPartition(c);
                     c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = US_GOV_ID;
                 })
             ).not.toThrow();
@@ -437,22 +1269,6 @@ describe("Video SOP/BOM Extraction pipeline validation (useGenAiVideoSopBom)", (
                     c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
                 })
             ).toThrow(/pipelines\.useGenAiVideoSopBom is enabled but bedrockModelId is empty/);
-        });
-
-        test("the labeling pipeline's own rejection still names the labeling pipeline", () => {
-            // Both pipelines enabled in GovCloud; only the labeling id is empty. The helper must report
-            // the flag whose value is wrong, not the last one it was called for.
-            expect(
-                resolve((c) => {
-                    restrictedPartition(c);
-                    c.app.pipelines.useGenAiMetadata3dLabeling.enabled = true;
-                    c.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId = "";
-                    enableVideoSopBom(c);
-                    c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = US_GOV_ID;
-                })
-            ).toThrow(
-                /pipelines\.useGenAiMetadata3dLabeling is enabled but bedrockModelId is empty/
-            );
         });
     });
 
@@ -545,7 +1361,7 @@ describe("Video SOP/BOM Extraction pipeline validation (useGenAiVideoSopBom)", (
             expect(
                 resolve((c) => {
                     enableVideoSopBom(c);
-                    restrictedPartition(c);
+                    videoSopBomRestrictedPartition(c);
                     c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = US_GOV_ID;
                 })
             ).not.toThrow();

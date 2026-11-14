@@ -469,6 +469,6 @@ This pipeline uses a third-party open-source library with a GPL license. Refer t
 ## Related Resources
 
 -   [Pipeline System Overview](overview.md)
--   [GenAI 3D Metadata Labeling Pipeline](genai-labeling.md) -- the other Amazon Bedrock pipeline, whose model-access prerequisite is the same
+-   [SYSTEM GenAI Metadata Pipeline](system-genai-metadata.md) -- the other Amazon Bedrock pipeline, whose model-access prerequisite is the same
 -   [Configuration Reference](../deployment/configuration-reference.md) -- all pipeline configuration options
 -   [Service Quotas and Limits](../additional/quotas.md) -- the pipeline-specific limits table

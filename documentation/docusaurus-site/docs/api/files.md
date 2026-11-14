@@ -743,12 +743,12 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                  |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | The asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable.                                                                                                |
-| `404`  | File not found.                                                                                                                                                              |
-| `500`  | Internal server error.                                                                                                                                                       |
+| Status | Description                                                                                                                                                                                                                                                                                              |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | The asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). A file's `{file}.previewFile.{ext}` preview image with an allowed image extension and no version parameter is still served. |
+| `403`  | Not authorized to stream this file, or the asset is not marked distributable.                                                                                                                                                                                                                            |
+| `404`  | File not found.                                                                                                                                                                                                                                                                                          |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                   |
 
 ---
 

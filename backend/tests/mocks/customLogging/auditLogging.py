@@ -85,6 +85,11 @@ def internal_call_marker(event=None):
     return {}
 
 
+def skip_route_outcome(event):
+    """Stand-in for the real marker that an error answer is no outcome: nothing to skip here."""
+    return None
+
+
 def audit_failure_reason(status):
     """Stand-in for the real mapping of an error status to its generic reason."""
     return "internal" if status >= 500 else "clientError"

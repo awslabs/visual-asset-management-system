@@ -94,7 +94,7 @@ A top-level Amazon EventBridge orchestration bus is also exposed through `storag
 
 ## Lambda Builder Pattern
 
-All Lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. There are approximately 17 builder files containing 40+ function builders.
+All Lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. There are approximately 18 builder files containing 40+ function builders.
 
 ### Standard Function Signature
 
@@ -375,6 +375,7 @@ enum VAMS_APP_FEATURES {
     AUTHPROVIDER_COGNITO_OIDC,
     AUTHPROVIDER_EXTERNALOAUTHIDP,
     DEADLINECLOUD_PIPELINES,
+    VECTORSEARCH,
 }
 
 // common/addonAppFeatures.ts

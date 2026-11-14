@@ -59,7 +59,7 @@ All VAMS DynamoDB tables use on-demand (pay-per-request) billing mode, which aut
 | Billing mode                | On-demand (PAY_PER_REQUEST)               |
 | Maximum item size           | 400 KB (DynamoDB service limit)           |
 | Metadata records per entity | 500                                       |
-| Table count                 | 52 tables (plus 7 retained for migration) |
+| Table count                 | 53 tables (plus 7 retained for migration) |
 
 :::info
 On-demand mode has no provisioned throughput to configure. Amazon DynamoDB automatically allocates capacity based on traffic patterns. For sustained high-throughput workloads, monitor your account-level DynamoDB service quotas.
@@ -316,7 +316,7 @@ Amazon Cognito service quotas can be increased through the AWS Service Quotas co
 
 | Parameter                                            | Value                                                                                                                                                                                                                                                                                                                                         |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| VPC interface endpoints per configuration            | 9-24 created by the VPC stack (up to 22 in GovCloud), each in every Availability Zone the VPC uses; a private Amazon OpenSearch Serverless collection and the ALB web distribution add one each, and each other Region that holds an external asset bucket adds a cross-Region Amazon S3 endpoint when `addCrossRegionS3Endpoints` is enabled |
+| VPC interface endpoints per configuration            | 9-23 created by the VPC stack (up to 21 in GovCloud), each in every Availability Zone the VPC uses; a private Amazon OpenSearch Serverless collection and the ALB web distribution add one each, and each other Region that holds an external asset bucket adds a cross-Region Amazon S3 endpoint when `addCrossRegionS3Endpoints` is enabled |
 | Availability Zones required (ALB)                    | 2 minimum                                                                                                                                                                                                                                                                                                                                     |
 | Availability Zones required (OpenSearch Provisioned) | 2 or 3 (default 2)                                                                                                                                                                                                                                                                                                                            |
 | Availability Zones required (Lambda in VPC)          | 1 minimum                                                                                                                                                                                                                                                                                                                                     |

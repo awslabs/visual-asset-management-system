@@ -6,6 +6,7 @@
 import React from "react";
 import ListDefinition from "./types/ListDefinition";
 import { Link } from "@cloudscape-design/components";
+import Badge from "@cloudscape-design/components/badge";
 import ColumnDefinition from "./types/ColumnDefinition";
 import Synonyms from "../../../synonyms";
 
@@ -26,13 +27,21 @@ export const AssetListDefinition = new ListDefinition({
             cellWrapper: (props: any) => {
                 const { item } = props;
                 return (
-                    <Link
-                        href={`#/databases/${item.databaseId}/assets/${encodeURIComponent(
-                            item.assetId
-                        )}`}
-                    >
-                        {props.children}
-                    </Link>
+                    <>
+                        <Link
+                            href={`#/databases/${item.databaseId}/assets/${encodeURIComponent(
+                                item.assetId
+                            )}`}
+                        >
+                            {props.children}
+                        </Link>
+                        {item.status === "archived" && (
+                            <>
+                                {" "}
+                                <Badge color="grey">Archived</Badge>
+                            </>
+                        )}
+                    </>
                 );
             },
             sortingField: "assetName",

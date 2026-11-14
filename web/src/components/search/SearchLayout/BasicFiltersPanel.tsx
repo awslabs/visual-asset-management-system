@@ -4,20 +4,17 @@
  */
 
 import React, { useState, useEffect } from "react";
-import {
-    Container,
-    Header,
-    FormField,
-    Multiselect,
-    Toggle,
-    SpaceBetween,
-    ExpandableSection,
-    Box,
-    Input,
-} from "@cloudscape-design/components";
+import FormField from "@cloudscape-design/components/form-field";
+import Multiselect from "@cloudscape-design/components/multiselect";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import ExpandableSection from "@cloudscape-design/components/expandable-section";
+import Box from "@cloudscape-design/components/box";
+import Input from "@cloudscape-design/components/input";
 import { SearchFilters } from "../types";
 import { fetchAllDatabases, fetchTags } from "../../../services/APIService";
 import Synonyms from "../../../synonyms";
+import { selectedValues as filterValues } from "../hooks/searchRequestBuilders";
+import { lockedDatabasePlaceholder } from "./lockedDatabase";
 
 /** Sort dropdown options case-insensitively by label so users get a predictable list. */
 const sortOptionsByLabel = <T extends { label?: string; value?: string }>(opts: T[]): T[] =>
@@ -27,6 +24,52 @@ const sortOptionsByLabel = <T extends { label?: string; value?: string }>(opts: 
         })
     );
 
+/** A terms aggregation as both search routes return it. */
+type FacetAggregation =
+    | {
+          buckets?: Array<{ key: string; doc_count: number }>;
+          /** Records whose value is not among the buckets; 0 when every value is listed, null when not reported. */
+          sum_other_doc_count?: number | null;
+      }
+    | undefined;
+
+/**
+ * Whether a facet's bucket list is cut: the search counted records of values it did not return as
+ * buckets (`sum_other_doc_count` above 0, #1283). A list with no such count reads as complete.
+ */
+export function isFacetCut(aggregation: FacetAggregation): boolean {
+    return (aggregation?.sum_other_doc_count ?? 0) > 0;
+}
+
+/** The note under a value list built from a cut facet. */
+export const facetCutNote = (values: string) => `Only the most common ${values} are listed.`;
+
+/** Values kept from the last non-filtered search, and whether that search's list was cut. */
+interface CachedFacet {
+    values: string[];
+    cut: boolean;
+}
+const NO_CACHED_FACET: CachedFacet = { values: [], cut: false };
+
+/**
+ * Each value a terms aggregation's buckets name, with its bucket's count. A tag bucket's key can join
+ * several values with commas (`splitKeys`); a value named by more than one bucket keeps the first count.
+ */
+function bucketCounts(aggregation: FacetAggregation, splitKeys = false): Map<string, number> {
+    const counts = new Map<string, number>();
+    (aggregation?.buckets || []).forEach((bucket) => {
+        const values = splitKeys
+            ? String(bucket.key)
+                  .split(",")
+                  .map((value) => value.trim())
+            : [bucket.key];
+        values.forEach((value) => {
+            if (!counts.has(value)) counts.set(value, bucket.doc_count);
+        });
+    });
+    return counts;
+}
+
 interface BasicFiltersPanelProps {
     filters: SearchFilters;
     onFilterChange: (key: string, value: any) => void;
@@ -34,6 +77,8 @@ interface BasicFiltersPanelProps {
     searchResult?: any;
     databaseLocked?: boolean;
     recordType: "asset" | "file";
+    /** Show each count as a minimum ("100+"): a natural-language answer whose count is one. */
+    countsAreMinimums?: boolean;
 }
 
 const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
@@ -43,18 +88,18 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
     searchResult,
     databaseLocked = false,
     recordType,
+    countsAreMinimums = false,
 }) => {
+    const facetCount = (value: number) => `${value}${countsAreMinimums ? "+" : ""}`;
     const [databases, setDatabases] = useState<any[]>([]);
     const [tags, setTags] = useState<any[]>([]);
 
-    // Cache for aggregation results from non-filtered searches
-    const [cachedAssetTypes, setCachedAssetTypes] = useState<
-        Array<{ label: string; value: string }>
-    >([]);
-    const [cachedFileTypes, setCachedFileTypes] = useState<Array<{ label: string; value: string }>>(
-        []
-    );
-    const [cachedTags, setCachedTags] = useState<Array<{ label: string; value: string }>>([]);
+    // The type and tag values of the last non-filtered search, kept so a filtered search can still
+    // offer the other values. Values only: their counts belong to that search, not to the one shown.
+    // Whether that search's list was cut is kept with them, for the note under the list.
+    const [cachedAssetTypes, setCachedAssetTypes] = useState<CachedFacet>(NO_CACHED_FACET);
+    const [cachedFileTypes, setCachedFileTypes] = useState<CachedFacet>(NO_CACHED_FACET);
+    const [cachedTags, setCachedTags] = useState<CachedFacet>(NO_CACHED_FACET);
 
     useEffect(() => {
         // Load databases
@@ -72,7 +117,9 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
         });
     }, []);
 
-    // Check if this is a non-filtered search (no query, no basic filters except rectype)
+    // Check if this is a non-filtered search (no query, no basic filters except rectype). The
+    // keyword and natural-language search options are not filters: they change how a query is
+    // matched, not which records are in scope, so the facets of such an answer are still complete.
     const isNonFilteredSearch = () => {
         const hasQuery = filters._rectype; // Always has rectype
         const filterKeys = Object.keys(filters).filter(
@@ -80,6 +127,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 key !== "_rectype" &&
                 key !== "includeMetadataInKeywordSearch" &&
                 key !== "showResultExplanation" &&
+                key !== "includeSegments" &&
                 filters[key] !== null &&
                 filters[key] !== undefined
         );
@@ -89,116 +137,86 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
     // Update cache when we get results from a non-filtered search
     useEffect(() => {
         if (searchResult?.aggregations && isNonFilteredSearch()) {
-            // Cache asset types
-            if (recordType === "asset" && searchResult.aggregations.str_assettype?.buckets) {
-                const assetTypes = searchResult.aggregations.str_assettype.buckets.map(
-                    (bucket: any) => ({
-                        label: `${bucket.key} (${bucket.doc_count})`,
-                        value: bucket.key,
-                    })
-                );
-                setCachedAssetTypes(assetTypes);
+            const aggregations = searchResult.aggregations;
+            const cache = (aggregation: FacetAggregation, splitKeys = false): CachedFacet => ({
+                values: Array.from(bucketCounts(aggregation, splitKeys).keys()),
+                cut: isFacetCut(aggregation),
+            });
+            if (recordType === "asset" && aggregations.str_assettype?.buckets) {
+                setCachedAssetTypes(cache(aggregations.str_assettype));
             }
-
-            // Cache file types
-            if (recordType === "file" && searchResult.aggregations.str_fileext?.buckets) {
-                const fileTypes = searchResult.aggregations.str_fileext.buckets.map(
-                    (bucket: any) => ({
-                        label: `${bucket.key} (${bucket.doc_count})`,
-                        value: bucket.key,
-                    })
-                );
-                setCachedFileTypes(fileTypes);
+            if (recordType === "file" && aggregations.str_fileext?.buckets) {
+                setCachedFileTypes(cache(aggregations.str_fileext));
             }
-
-            // Cache tags
-            if (searchResult.aggregations.list_tags?.buckets) {
-                const tagList = searchResult.aggregations.list_tags.buckets.flatMap((tag: any) =>
-                    tag.key.split(",").map((value: string) => ({
-                        label: `${value.trim()} (${tag.doc_count})`,
-                        value: value.trim(),
-                    }))
-                );
-                setCachedTags(tagList);
+            if (aggregations.list_tags?.buckets) {
+                setCachedTags(cache(aggregations.list_tags, true));
             }
         }
     }, [searchResult, recordType, filters]);
 
-    // Build database options with result counts (alphabetized by database id)
+    /**
+     * A facet's options: `value (count)` from the answer on screen. In a filtered search the values
+     * kept from the last non-filtered search are offered too, so another value can still be picked;
+     * each shows the count of the answer on screen, and a value with no bucket in it shows none, so
+     * no option repeats a count from a search that is no longer shown.
+     */
+    const facetList = (aggregation: FacetAggregation, cached: CachedFacet, splitKeys = false) => {
+        const counts = bucketCounts(aggregation, splitKeys);
+        const usesCache = cached.values.length > 0 && !isNonFilteredSearch();
+        const values = usesCache
+            ? Array.from(new Set([...cached.values, ...Array.from(counts.keys())]))
+            : Array.from(counts.keys());
+        return {
+            options: sortOptionsByLabel(
+                values.map((value) => {
+                    const count = counts.get(value);
+                    return {
+                        label: count === undefined ? value : `${value} (${facetCount(count)})`,
+                        value,
+                    };
+                })
+            ),
+            // The list may lack values when a facet it was built from was cut: the answer's, or the
+            // cached search's when its values are offered too.
+            cut: isFacetCut(aggregation) || (usesCache && cached.cut),
+        };
+    };
+
+    // Build database options with result counts (alphabetized by database id). Every database comes
+    // from the database API; a database without a bucket counts 0, unless the facet is cut, when its
+    // records may be among those past the returned buckets, so it shows no count.
+    const databaseAggregation: FacetAggregation = searchResult?.aggregations?.str_databaseid;
+    const databaseFacetCut = isFacetCut(databaseAggregation);
     const databaseOptions = sortOptionsByLabel(
         databases.map((db: any) => {
-            let count = 0;
-            // Map through result aggregation to find doc_count for each database
-            if (searchResult?.aggregations?.str_databaseid?.buckets) {
-                const bucket = searchResult.aggregations.str_databaseid.buckets.find(
-                    (b: any) => b.key === db.databaseId
-                );
-                if (bucket) {
-                    count = bucket.doc_count;
-                }
+            const bucket = (databaseAggregation?.buckets || []).find(
+                (b: any) => b.key === db.databaseId
+            );
+            if (!bucket && databaseFacetCut) {
+                return { label: db.databaseId, value: db.databaseId };
             }
+            const count = bucket ? bucket.doc_count : 0;
 
+            // "1 result" for exactly one match; a minimum stays plural ("1+ results"), as the page's
+            // "Found 1+ results" reads.
+            const noun = count === 1 && !countsAreMinimums ? "result" : "results";
             return {
-                label: `${db.databaseId} (${count} results)`,
+                label: `${db.databaseId} (${facetCount(count)} ${noun})`,
                 value: db.databaseId,
             };
         })
     );
 
-    // Build asset type options - use cache if available and we're in a filtered search
-    const assetTypeOptions = (() => {
-        const currentOptions =
-            searchResult?.aggregations?.str_assettype?.buckets?.map((bucket: any) => ({
-                label: `${bucket.key} (${bucket.doc_count})`,
-                value: bucket.key,
-            })) || [];
+    const assetTypes = facetList(searchResult?.aggregations?.str_assettype, cachedAssetTypes);
+    const fileTypes = facetList(searchResult?.aggregations?.str_fileext, cachedFileTypes);
+    const tagList = facetList(searchResult?.aggregations?.list_tags, cachedTags, true);
 
-        // Use cache if we have it and current results are filtered
-        if (cachedAssetTypes.length > 0 && !isNonFilteredSearch()) {
-            return sortOptionsByLabel(cachedAssetTypes);
-        }
-        return sortOptionsByLabel(currentOptions);
-    })();
-
-    // Build file type options - use cache if available and we're in a filtered search
-    const fileTypeOptions = (() => {
-        const currentOptions =
-            searchResult?.aggregations?.str_fileext?.buckets?.map((bucket: any) => ({
-                label: `${bucket.key} (${bucket.doc_count})`,
-                value: bucket.key,
-            })) || [];
-
-        // Use cache if we have it and current results are filtered
-        if (cachedFileTypes.length > 0 && !isNonFilteredSearch()) {
-            return sortOptionsByLabel(cachedFileTypes);
-        }
-        return sortOptionsByLabel(currentOptions);
-    })();
-
-    // Build tag options - use cache if available and we're in a filtered search
-    const tagOptions = (() => {
-        const currentOptions =
-            searchResult?.aggregations?.list_tags?.buckets?.flatMap((tag: any) =>
-                tag.key.split(",").map((value: string) => ({
-                    label: `${value.trim()} (${tag.doc_count})`,
-                    value: value.trim(),
-                }))
-            ) || [];
-
-        // Use cache if we have it and current results are filtered
-        if (cachedTags.length > 0 && !isNonFilteredSearch()) {
-            return sortOptionsByLabel(cachedTags);
-        }
-        return sortOptionsByLabel(currentOptions);
-    })();
-
-    // Get selected options for each filter
-    const selectedDatabases = filters.str_databaseid?.values
-        ? filters.str_databaseid.values.map((val) => ({
-              label: val,
-              value: val,
-          }))
-        : [];
+    // Get selected options for each filter. A database route locks the filter with `value` only, so the
+    // locked control shows that database rather than its "All databases" placeholder.
+    const selectedDatabases = filterValues(filters.str_databaseid).map((val) => ({
+        label: val,
+        value: val,
+    }));
 
     const selectedAssetTypes = filters.str_assettype?.values
         ? filters.str_assettype.values.map((val) => ({
@@ -229,8 +247,8 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
             headingTagOverride="h5"
         >
             <Box variant="p" color="text-body-secondary" margin={{ bottom: "s" }}>
-                Note: Type and tag values are cached from non-filtered searches for easier
-                multi-selection
+                Note: Type and tag values are kept from the last unfiltered search for easier
+                multi-selection. Counts are for the current results.
             </Box>
             <SpaceBetween direction="vertical" size="m">
                 {/* Asset Name Filter */}
@@ -284,10 +302,13 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             }
                         }}
                         options={databaseOptions}
-                        placeholder={`All ${Synonyms.databases}`}
+                        // Locked: the control names the database it is locked to.
+                        placeholder={lockedDatabasePlaceholder(databaseLocked, selectedDatabases)}
+                        hideTokens={databaseLocked}
                         disabled={databaseLocked}
                         readOnly={loading}
                         filteringType="auto"
+                        filteringAriaLabel={`Filter ${Synonyms.databases}`}
                     />
                 </FormField>
 
@@ -296,6 +317,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                     <FormField
                         label={`${Synonyms.Asset} Type`}
                         description="Select one or more types (empty = all)"
+                        constraintText={assetTypes.cut ? facetCutNote("types") : undefined}
                     >
                         <Multiselect
                             selectedOptions={selectedAssetTypes}
@@ -315,10 +337,11 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                                     });
                                 }
                             }}
-                            options={assetTypeOptions}
+                            options={assetTypes.options}
                             placeholder="All types"
                             readOnly={loading}
                             filteringType="auto"
+                            filteringAriaLabel={`Filter ${Synonyms.asset} types`}
                         />
                     </FormField>
                 )}
@@ -328,6 +351,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                     <FormField
                         label="File Type"
                         description="Select one or more types (empty = all)"
+                        constraintText={fileTypes.cut ? facetCutNote("types") : undefined}
                     >
                         <Multiselect
                             selectedOptions={selectedFileTypes}
@@ -347,16 +371,21 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                                     });
                                 }
                             }}
-                            options={fileTypeOptions}
+                            options={fileTypes.options}
                             placeholder="All types"
                             readOnly={loading}
                             filteringType="auto"
+                            filteringAriaLabel="Filter file types"
                         />
                     </FormField>
                 )}
 
                 {/* Tags Filter */}
-                <FormField label="Tags" description="Select one or more tags (empty = all)">
+                <FormField
+                    label="Tags"
+                    description="Select one or more tags (empty = all)"
+                    constraintText={tagList.cut ? facetCutNote("tags") : undefined}
+                >
                     <Multiselect
                         selectedOptions={selectedTags}
                         onChange={({ detail }) => {
@@ -375,10 +404,11 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                                 });
                             }
                         }}
-                        options={tagOptions}
+                        options={tagList.options}
                         placeholder="All tags"
                         readOnly={loading}
                         filteringType="auto"
+                        filteringAriaLabel="Filter tags"
                     />
                 </FormField>
             </SpaceBetween>

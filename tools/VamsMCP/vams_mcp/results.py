@@ -197,6 +197,22 @@ class SearchResult(ToolResult):
     )
 
 
+class NlpSearchResult(SearchResult):
+    """search_nlp: the keyword shape plus the vector search's own report."""
+
+    returned: Optional[int] = Field(None, description="Hits returned. No offset paging: narrow the filters.")
+    results: Optional[List[Any]] = Field(
+        None, description="Hits: id, score, source (str_ fields plus _vector: distance, fileClass, bestSegment)."
+    )
+    relation: Optional[str] = Field(
+        None, description='"gte": total is a lower bound (every non-zero total); "eq": exact (zero).'
+    )
+    nlp: Optional[Dict[str, Any]] = Field(
+        None, description="truncated: a window filled or a database was not searched; classIntent: boosted classes."
+    )
+    warnings: Optional[List[Any]] = Field(None, description="Codes from the closed set the tool description lists.")
+
+
 class ExecutionPage(Page):
     Items: Optional[List[Any]] = Field(
         None,

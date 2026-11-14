@@ -7,7 +7,8 @@ import {
     PropertyFilterOperator,
     PropertyFilterProperty,
 } from "@cloudscape-design/collection-hooks";
-import { Select, SpaceBetween } from "@cloudscape-design/components";
+import Select from "@cloudscape-design/components/select";
+import SpaceBetween from "@cloudscape-design/components/space-between";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 
 interface SearchPropertyFilterProps {

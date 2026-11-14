@@ -171,6 +171,8 @@ const BACKEND_PAIRS = new Set(
 /** Enable every optional feature that contributes an API route. */
 function withRouteContributingFeatures(c: any) {
     c.app.useGlobalVpc.enabled = true;
+    // Vector search registers POST /search/nlp and ships disabled in the templates.
+    c.app.vectorSearch.enabled = true;
     // Every add-on that registers routes ships disabled; the hook turns each one on.
     enableRouteContributingAddons(c);
 }

@@ -37,6 +37,7 @@ from backend.backend.common.apiRoutes import (  # noqa: E402
     API_REVERT_ASSET_VERSION,
     API_REVERT_FILE_VERSION,
     API_SEARCH,
+    API_SEARCH_NLP,
     API_SEARCH_SIMPLE,
     DELETE,
     POST,
@@ -199,11 +200,11 @@ def _fillings(route_path):
         yield path
 
 
-# The write-method routes a read-only role is meant to reach: POST reads that carry a body, and, for
-# the seeded role only, management of the caller's own API keys.
+# The write-method routes a read-only role is meant to reach: POST reads that carry a body (the
+# natural-language search included), and, for the seeded role only, management of the caller's own API keys.
 _TEMPLATE_ALLOWED = {(POST, route) for route in (
-    API_AUTH_ROUTES, API_AUTH_LOGIN_PROFILE, API_SEARCH, API_SEARCH_SIMPLE, API_CHECK_SUBSCRIPTION,
-    API_DOWNLOAD_ASSET, API_ASSET_EXPORT)}
+    API_AUTH_ROUTES, API_AUTH_LOGIN_PROFILE, API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_NLP,
+    API_CHECK_SUBSCRIPTION, API_DOWNLOAD_ASSET, API_ASSET_EXPORT)}
 EXPECTED_WRITE_METHOD_ROUTES = {
     "template database-readonly.json": _TEMPLATE_ALLOWED,
     "template global-readonly.json": _TEMPLATE_ALLOWED,

@@ -18,7 +18,7 @@ a relative import (`from .batchFailures import ...`) raises
 `attempted relative import with no known parent package` under path loading, which is how the Garnet
 suites load these modules -- measured, after it broke 22 of them.
 
-Mirrors the semantics in `handlers/indexing/assetIndexer.py` rather than importing from it: that
+Mirrors the semantics in `handlers/osSemanticSearch/osAssetIndexer.py` rather than importing from it: that
 module builds its OpenSearch client and resolves its own resource names at import time, so importing
 it here would pull an unrelated dependency into every cold start.
 """

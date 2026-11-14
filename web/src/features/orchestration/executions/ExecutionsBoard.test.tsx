@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import ExecutionsBoard, { notAbortableSummary } from "./ExecutionsBoard";
 import type { Execution } from "../types";
+import { appCache } from "../../../services/appCache";
 
 // Mock the query hooks
 jest.mock("../api/queries", () => ({
@@ -741,6 +742,47 @@ describe("ExecutionsBoard", () => {
         await waitFor(() => {
             const lastFilters = useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
             expect(lastFilters.triggerType).toBe("File-Upload");
+        });
+    });
+
+    describe("the System reindex trigger filter", () => {
+        afterEach(() => appCache.removeItem("config"));
+
+        it("is offered with vector search on, and sends the stored value unchanged", async () => {
+            appCache.setItem("config", { featuresEnabled: ["VECTORSEARCH"] });
+            const { useExecutions } = require("../api/queries");
+            renderBoard([]);
+
+            const select = screen.getByLabelText("Filter by trigger") as HTMLSelectElement;
+            expect(Array.from(select.options).map((option) => option.value)).toEqual([
+                "",
+                "Manual",
+                "File-Upload",
+                "System-Reindex",
+            ]);
+
+            await userEvent.selectOptions(
+                select,
+                screen.getByRole("option", { name: "System reindex" })
+            );
+            await waitFor(() => {
+                const lastFilters =
+                    useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
+                expect(lastFilters.triggerType).toBe("System-Reindex");
+            });
+        });
+
+        it("is not offered with vector search off, where no such run can exist", () => {
+            appCache.setItem("config", { featuresEnabled: ["LOCATIONSERVICES"] });
+            renderBoard([]);
+
+            const select = screen.getByLabelText("Filter by trigger") as HTMLSelectElement;
+            expect(Array.from(select.options).map((option) => option.value)).toEqual([
+                "",
+                "Manual",
+                "File-Upload",
+            ]);
+            expect(screen.queryByRole("option", { name: "System reindex" })).toBeNull();
         });
     });
 

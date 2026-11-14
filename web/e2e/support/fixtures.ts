@@ -167,6 +167,131 @@ export async function expectTableRendered(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Search page
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The feature switches the app cached from /api/secure-config after login. Reading them from the
+ * app's own cache lets a spec assert what the deployment implies instead of assuming a fixture.
+ * `null` when nothing is cached yet; `[]` when the cache holds a config with no switches.
+ */
+export async function readFeaturesEnabled(page: Page): Promise<string[] | null> {
+    return page.evaluate(() => {
+        const raw = window.localStorage.getItem("vams_cache_config");
+        if (!raw) return null;
+        const config = JSON.parse(raw);
+        const value = config?.featuresEnabled;
+        if (Array.isArray(value)) return value.filter((v: unknown) => typeof v === "string");
+        if (typeof value === "string") {
+            return value
+                .split(",")
+                .map((v: string) => v.trim())
+                .filter(Boolean);
+        }
+        return [];
+    });
+}
+
+/**
+ * The search page's view switch in its title row: a Cloudscape SegmentedControl, so a `toolbar`
+ * named by its label holding one `aria-pressed` button per view. Exact, because the results'
+ * "Result view" toolbar contains the same word. Absent when only one view is available.
+ */
+export function searchViewSwitch(page: Page): Locator {
+    return page.getByRole("toolbar", { name: "Page view", exact: true });
+}
+
+/** One view's segment in the view switch, by its label (`Search`, or `/list$/i` for the asset list). */
+export function searchViewSegment(page: Page, name: string | RegExp): Locator {
+    return searchViewSwitch(page).getByRole("button", {
+        name,
+        ...(typeof name === "string" ? { exact: true } : {}),
+    });
+}
+
+/**
+ * The result-count badge beside the search page h1: "23 results", "1 result", or "9+ results" when
+ * the count is a minimum. Matches any count, with or without the "+", so an absence check catches
+ * both; assert what it says with `searchCountBadgeText`.
+ */
+export function searchCountBadge(page: Page): Locator {
+    return page.getByText(/^\d[\d,]*\+? results?$/);
+}
+
+/**
+ * The badge text for a search answer's total: the count, a "+" only when the route reports the
+ * total as a minimum (`hits.total.relation` "gte"), and "result" for exactly one. Anything else is
+ * an exact count and must read as one.
+ */
+export function searchCountBadgeText(total: { value: number; relation?: string }): string {
+    const minimum = total.relation === "gte";
+    const noun = total.value === 1 && !minimum ? "result" : "results";
+    return `${total.value.toLocaleString()}${minimum ? "+" : ""} ${noun}`;
+}
+
+/**
+ * The Search view's Search notice: a dismissible Alert above the results holding the rare
+ * natural-language warnings, one line each, in the page's own words. Absent for an answer without
+ * one (the two window-full codes are stated under the results instead), for a keyword answer, and
+ * once dismissed for the answer on screen. It is in the page, never a toast.
+ */
+export function searchNotice(page: Page): Locator {
+    return page.getByTestId("search-notice");
+}
+
+/**
+ * The search page h1, shared by every view: `<Assets> and Files`, or `<Assets> for <databaseId>` on
+ * a database route. Matched on its tail so a deployment's asset synonym does not matter.
+ */
+export function searchPageHeading(page: Page, databaseId?: string): Locator {
+    const tail = databaseId
+        ? ` for ${databaseId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`
+        : " and Files$";
+    return page.getByRole("heading", { level: 1, name: new RegExp(tail) });
+}
+
+/**
+ * Navigate to the search page — optionally database-locked and optionally straight to a view
+ * (`?tab=`) — and wait for its h1 and the active view's body. Waits on structure, never on data:
+ * the title row renders before the view's chunk loads, so the wait ends on the body's first
+ * searchbox (the Search view's query box, or the asset list table's filter).
+ */
+export async function gotoSearch(
+    page: Page,
+    options: { databaseId?: string; tab?: string } = {}
+): Promise<void> {
+    const path = options.databaseId ? `/#/databases/${options.databaseId}/assets/` : "/#/assets/";
+    const query = options.tab ? `?tab=${encodeURIComponent(options.tab)}` : "";
+    await page.goto(`${path}${query}`, { waitUntil: "domcontentloaded" });
+    await expect(searchPageHeading(page, options.databaseId)).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole("searchbox").first()).toBeVisible({ timeout: 60_000 });
+    await page.waitForLoadState("networkidle").catch(() => undefined);
+}
+
+/**
+ * Assert the active search view rendered rows or one of its empty states — the search table's
+ * "No matches", its idle natural-language state ("Describe what you are looking for"), or the asset
+ * list's "No assets to display." — never that specific data exists. `expectTableRendered`'s
+ * `/no .*found/i` matches none of them, which is why this exists.
+ */
+export async function expectSearchRendered(page: Page): Promise<number> {
+    const rows = tableRows(page);
+    await expect
+        .poll(
+            async () =>
+                (await rows.count()) > 0 ||
+                (await page.getByText(/No matches/).count()) > 0 ||
+                (await page
+                    .getByText("Describe what you are looking for", { exact: true })
+                    .count()) > 0 ||
+                (await page.getByText(/^No .+ to display\.$/).count()) > 0,
+            { timeout: 60_000 }
+        )
+        .toBe(true);
+    return rows.count();
+}
+
+// ---------------------------------------------------------------------------------------------
 // Responsive layout
 // ---------------------------------------------------------------------------------------------
 
@@ -227,6 +352,32 @@ export async function expectReachable(target: Locator, what: string): Promise<vo
     expect(box!.x + box!.width, `${what} ends right of the viewport`).toBeLessThanOrEqual(
         viewport!.width + 0.5
     );
+}
+
+/** The reason a permission-gated action shows while the allowed-routes check is still running. */
+const PERMISSIONS_CHECKING_REASON = "Checking your permissions.";
+
+/**
+ * The reason a Cloudscape Button gives for being disabled — the hidden text its `aria-describedby`
+ * names — or `""` when it gives none. A permission-gated action reads "Checking your permissions."
+ * while the page's allowed-routes check runs; this waits that out, so the answer is the role's:
+ * `""` when the API allows the action, the role's refusal (e.g. "Your role does not allow …")
+ * when it does not. The API still enforces every call; this only reads what the page shows.
+ */
+export async function actionDisabledReason(button: Locator): Promise<string> {
+    const read = () =>
+        button.evaluate((el) =>
+            (el.getAttribute("aria-describedby") ?? "")
+                .split(/\s+/)
+                .filter(Boolean)
+                .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
+                .join(" ")
+                .trim()
+        );
+    await expect
+        .poll(read, { message: "the permission check did not settle", timeout: 30_000 })
+        .not.toBe(PERMISSIONS_CHECKING_REASON);
+    return read();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -367,8 +518,24 @@ export async function selectTreePath(
         if (isLeaf && options.modifiers?.length) {
             await node.scrollIntoViewIfNeeded().catch(() => undefined);
             await node.click({ modifiers: options.modifiers, timeout: 8_000 });
-        } else {
+        } else if (isLeaf) {
             await clickWhenActionable(node, `tree node "${segment}"`);
+        } else {
+            // A click on a folder's label selects it; only its caret expands it. Expand a folder whose
+            // children are not rendered yet, and leave one that already is alone (the caret toggles).
+            const row = node.locator("xpath=ancestor::*[contains(@class, 'tree-item-content')][1]");
+            const children = row.locator(
+                "xpath=following-sibling::*[contains(@class, 'tree-item-children')]"
+            );
+            if ((await children.count()) === 0) {
+                await clickWhenActionable(
+                    row.locator(".tree-item-caret"),
+                    `caret of folder "${segment}"`
+                );
+            }
+            await expect(children, `folder "${segment}" did not expand`).toHaveCount(1, {
+                timeout: 15_000,
+            });
         }
         if (!isLeaf) {
             const next = treeNode(page, segments[index + 1]);
@@ -584,6 +751,95 @@ export async function chooseSelectOption(
         await page.waitForTimeout(200);
     }
     await page.keyboard.press("Enter");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Unified search: keyword / natural-language mode
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Which engines the deployment offers, from the cached feature switches — the same derivation the
+ * container makes (`searchMode.ts`): NOOPENSEARCH is the negative switch, VECTORSEARCH the positive
+ * one. Specs derive their expected controls from this rather than assuming a fixture.
+ */
+export type SearchModeCase = "both" | "nlp-only" | "keyword-only" | "none";
+
+export function searchModeCase(features: string[]): SearchModeCase {
+    const vector = features.includes("VECTORSEARCH");
+    const keyword = !features.includes("NOOPENSEARCH");
+    if (vector && keyword) return "both";
+    if (vector) return "nlp-only";
+    if (keyword) return "keyword-only";
+    return "none";
+}
+
+/**
+ * The keyword / natural-language switch. Cloudscape renders SegmentedControl as a `toolbar` named by
+ * its `label`, holding one `aria-pressed` button per option — so this is where the mode lives, not
+ * under a `group` or `radiogroup`. Absent when only OpenSearch is on.
+ */
+export function modeToolbar(page: Page): Locator {
+    return page.getByRole("toolbar", { name: "Search mode" });
+}
+
+/** The Search view's query box: an `Input type="search"`, so a `searchbox`, never a `textbox`. */
+export function searchQueryBox(page: Page): Locator {
+    return page.getByRole("searchbox").first();
+}
+
+/**
+ * The Search view's Search button, in the query band. Scoped there because the view switch in the
+ * title row has a `Search` segment, which is a button of the same name.
+ */
+export function searchSubmitButton(page: Page): Locator {
+    return page.locator(".search-query-band").getByRole("button", { name: "Search", exact: true });
+}
+
+/** Press the mode segment and wait for the placeholder to confirm the container switched. */
+export async function selectSearchMode(page: Page, mode: "keyword" | "nlp"): Promise<void> {
+    const name = mode === "nlp" ? "Natural language" : "Keyword";
+    await modeToolbar(page).getByRole("button", { name }).click();
+    await expect(searchQueryBox(page)).toHaveAttribute(
+        "placeholder",
+        mode === "nlp" ? /Describe what you are looking for/ : /Search by keywords/
+    );
+}
+
+/**
+ * WCAG contrast ratio of an element's text against its effective background, walking up the tree
+ * until an opaque background is found (Cloudscape leaves most containers transparent).
+ */
+export async function textContrastRatio(target: Locator): Promise<number> {
+    return target.evaluate((el) => {
+        const parse = (c: string): [number, number, number, number] => {
+            const m = c.match(/rgba?\(([^)]+)\)/);
+            if (!m) return [255, 255, 255, 1];
+            const p = m[1].split(",").map((v) => parseFloat(v.trim()));
+            return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+        };
+        const lum = ([r, g, b]: number[]) => {
+            const f = (v: number) => {
+                const s = v / 255;
+                return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+            };
+            return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+        };
+        let node: HTMLElement | null = el as HTMLElement;
+        let bg: [number, number, number, number] = [255, 255, 255, 0];
+        while (node) {
+            const c = parse(getComputedStyle(node).backgroundColor);
+            if (c[3] > 0.99) {
+                bg = c;
+                break;
+            }
+            node = node.parentElement;
+        }
+        const fg = parse(getComputedStyle(el).color);
+        const l1 = lum(fg);
+        const l2 = lum(bg);
+        const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1];
+        return (hi + 0.05) / (lo + 0.05);
+    });
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -3,18 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState, useCallback } from "react";
-import { useParams } from "react-router-dom";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import Box from "@cloudscape-design/components/box";
+import LiveRegion from "@cloudscape-design/components/live-region";
+import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import { appCache } from "../../services/appCache";
-import { useNavigate } from "react-router-dom";
-import { Grid, SegmentedControl, Box } from "@cloudscape-design/components";
 import Alert from "@cloudscape-design/components/alert";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import {
     SearchContainerProps,
-    MetadataFilter,
+    NlpSearchResponse,
+    SearchMode,
+    SearchResponse,
+    SearchQuery,
     getTotalResultCount,
     getPageCount,
+    getPagedResultCount,
     SEARCH_RESULT_WINDOW,
     formatTotalResultCount,
     isTotalLowerBound,
@@ -25,20 +30,87 @@ import { usePreferences } from "./hooks/usePreferences";
 import { useToasts } from "./hooks/useToasts";
 import { useDebounce } from "./hooks/useDebounce";
 import { SearchTopBar, SearchSidebar } from "./SearchLayout";
+import type { SearchModeControl } from "./SearchLayout/SearchTopBar";
 import CardView from "./SearchResults/CardView";
 import ToastManager from "./SearchNotifications/ToastManager";
 import SearchPageListView from "./SearchPageListView";
-import { AssetActionDisabledReasons } from "./SearchPageTypes";
+import { AssetActionDisabledReasons, SearchTitleSlots } from "./SearchPageTypes";
 import SearchPageMapView from "./SearchPageMapView";
-import ListPage from "../../pages/ListPage";
-import { AssetListDefinition } from "../list/list-definitions/AssetListDefinition";
-import { fetchAllAssets, fetchDatabaseAssets } from "../../services/APIService";
 import { ResizableSplitter } from "../filemanager/components/ResizableSplitter";
+import "./SearchLayout/searchSplitter.css";
 import { initializePluginRegistry } from "../../visualizerPlugin";
+import { resolveSearchModeCase, effectiveSearchMode } from "./utils/searchMode";
+import { EMPTY_NLP_RESPONSE, pageNlpResult, withNlpResultTotal } from "./utils/nlpResultPaging";
+import {
+    nlpSearchedNoDatabase,
+    rareNlpWarningText,
+    rareNlpWarningTexts,
+} from "./utils/nlpWarnings";
+import { NLP_QUERY_MAX_LENGTH, nlpQueryLength } from "./hooks/searchRequestBuilders";
 import Synonyms from "../../synonyms";
 
+/**
+ * Columns shown when OpenSearch is off: the fields every natural-language hit carries without
+ * OpenSearch enrichment. Per record type because asset-mode hits have no file fields.
+ */
+// The note under an empty natural-language answer whose candidate window may hold more (nlp.truncated):
+// the search found no match among the closest results it checked, and the answer is still a minimum.
+export const NLP_EMPTY_TRUNCATED_NOTE =
+    "No match among the closest results searched; more may exist.";
+
+// The note under a natural-language answer of `count` (1 or more) matches whose candidate window may
+// hold more: singular for one match.
+export const nlpTopMatchesNote = (count: number): string =>
+    `Showing the top ${count} semantic ${count === 1 ? "match" : "matches"}; more may exist.`;
+
+export const REDUCED_FILE_COLUMNS = [
+    "relevance",
+    "str_assetname",
+    "str_databaseid",
+    "str_key",
+    "str_fileext",
+    "num_filesize",
+    "bool_archived",
+];
+export const REDUCED_ASSET_COLUMNS = [
+    "relevance",
+    "str_assetname",
+    "str_databaseid",
+    "str_assettype",
+    "list_tags",
+    "bool_archived",
+];
+
+/**
+ * "Found 1 result" / "Found N results", with "+" when N is a minimum ("Found 1,200+ results"). A
+ * minimum of one reads "Found 1+ results", as a natural-language answer with one hit does: the API
+ * reports every natural-language total that is not zero as a minimum.
+ */
+const resultCountMessage = (result: SearchResponse) => {
+    const exactOne = getTotalResultCount(result) === 1 && !isTotalLowerBound(result);
+    return `Found ${formatTotalResultCount(result)} ${exactOne ? "result" : "results"}`;
+};
+
+/**
+ * What a finished search announces to screen readers: its count, then, for a natural-language answer,
+ * the text of the Search notice shown above the results ("Found 0 results. You don't have access to
+ * any database this search covers. Ask your administrator for access."). The count alone when the
+ * answer has no rare warning, and always for a keyword answer.
+ */
+const searchAnnouncement = (result: SearchResponse, naturalLanguage: boolean) => {
+    const count = resultCountMessage(result);
+    const notice = naturalLanguage
+        ? rareNlpWarningText((result as Partial<NlpSearchResponse>).warnings)
+        : "";
+    return notice ? `${count}. ${notice}` : count;
+};
+
 const ModernSearchContainer: React.FC<
-    SearchContainerProps & { assetActionDisabledReasons?: AssetActionDisabledReasons }
+    SearchContainerProps & {
+        assetActionDisabledReasons?: AssetActionDisabledReasons;
+        /** The search page's title row; the top bar then renders no heading (see SearchTopBar). */
+        titleSlots?: SearchTitleSlots;
+    }
 > = ({
     mode = "full",
     initialFilters,
@@ -51,6 +123,7 @@ const ModernSearchContainer: React.FC<
     databaseId: propDatabaseId,
     embedded,
     assetActionDisabledReasons,
+    titleSlots,
 }) => {
     const config = appCache.getItem("config");
     const navigate = useNavigate();
@@ -60,27 +133,30 @@ const ModernSearchContainer: React.FC<
     const databaseId = urlDatabaseId || propDatabaseId;
     const databaseLocked = !!urlDatabaseId;
 
-    // Feature flags
+    // Feature flags, read once per mount
     const [useNoOpenSearch] = useState(
-        config.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
+        !!config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
+    );
+    const [useVectorSearch] = useState(
+        !!config?.featuresEnabled?.includes(featuresEnabled.VECTORSEARCH)
     );
     const [useMapView] = useState(
-        config.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES) &&
+        !!config?.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES) &&
             !useNoOpenSearch &&
             allowedViews.includes("map")
     );
+    const modeCase = resolveSearchModeCase(useNoOpenSearch, useVectorSearch);
+    const searchAvailable = modeCase !== "none";
 
     // Hooks
     const searchState = useSearchState(initialFilters, databaseId);
     const searchAPI = useSearchAPI();
-    const {
-        preferences,
-        updatePreferences,
-        savePreferences,
-        hasUnsavedChanges,
-        isLoaded: preferencesLoaded,
-    } = usePreferences();
-    const { toasts, showSuccess, showError, showWarning, removeToast } = useToasts();
+    const { preferences, updatePreferences, isLoaded: preferencesLoaded } = usePreferences();
+    const { toasts, showSuccess, showError, removeToast } = useToasts();
+
+    // Which engine answers a search. Derived from the preference so it persists with the cookie and
+    // is settled by the time the mount search runs (which waits for the preferences to load).
+    const searchMode: SearchMode = effectiveSearchMode(modeCase, preferences.searchMode);
 
     // Local state
     const [recordType, setRecordType] = useState<"asset" | "file">("asset");
@@ -96,9 +172,39 @@ const ModernSearchContainer: React.FC<
         }
         return supportedViews[0] as "table" | "card" | "map";
     });
+    // The Map view shows only records with a location: a keyword search on it adds that one filter
+    // to the request and leaves the user's own filters, metadata mode and operator as set.
+    const mapScoped = useMapView && currentView === "map";
     const [autoRefreshing, setAutoRefreshing] = useState(false);
     const [hasInitialLoad, setHasInitialLoad] = useState(false);
     const [sidebarWidth, setSidebarWidth] = useState(preferences.sidebarWidth || 400);
+    // The full natural-language result (at most 100 hits); the table pages within it client-side.
+    const [nlpResult, setNlpResult] = useState<NlpSearchResponse | null>(null);
+    // The engine whose answer the page holds: null before the first search and while natural-
+    // language mode idles on an empty query. The count badge and the "No matches" state describe a
+    // search only in the mode that ran it, so a keyword listing is never presented as a natural-
+    // language answer.
+    const [answeredMode, setAnsweredMode] = useState<SearchMode | null>(null);
+    // The count a finished search announces to screen readers through the polite live region below:
+    // "Found N results", followed by the Search notice's text when the answer has one. Cleared when
+    // the next search starts, so the same count is announced again.
+    const [countAnnouncement, setCountAnnouncement] = useState("");
+    // The natural-language answer whose Search notice the user dismissed. The notice is hidden only
+    // while that answer is on screen; the next answer (a new search, Clear all filters, a mode or view
+    // switch) shows its own notice again.
+    const [dismissedNoticeAnswer, setDismissedNoticeAnswer] = useState<NlpSearchResponse | null>(
+        null
+    );
+    // The number of the newest search. Each search takes the next one, and only the newest applies its
+    // answer, its error and the end of the loading state: an older search that answers later (a page
+    // change, a refresh or an auto-refresh still running) never replaces a newer one. Clear all
+    // filters takes a number too, so no answer from before it is applied.
+    const latestSearchRef = useRef(0);
+    const startSearch = () => {
+        latestSearchRef.current += 1;
+        return latestSearchRef.current;
+    };
+    const isLatestSearch = (searchNumber: number) => searchNumber === latestSearchRef.current;
 
     // Initialize search query if provided
     useEffect(() => {
@@ -141,10 +247,6 @@ const ModernSearchContainer: React.FC<
     // Sync pagination size with preferences when preferences are loaded - MUST happen before initial search
     useEffect(() => {
         if (preferencesLoaded && searchState.pagination.size !== preferences.pageSize) {
-            console.log("[Pagination] Syncing pagination size with preferences:", {
-                currentSize: searchState.pagination.size,
-                preferenceSize: preferences.pageSize,
-            });
             searchState.setPagination({
                 from: 0, // Reset to first page when size changes
                 size: preferences.pageSize,
@@ -152,11 +254,113 @@ const ModernSearchContainer: React.FC<
         }
     }, [preferencesLoaded, preferences.pageSize]); // React to preferences loading and changes
 
-    // Auto-search on mount if not using NoOpenSearch - wait for preferences to load AND sync first
+    /**
+     * One search against the engine the current mode selects, as search number `searchNumber`
+     * (startSearch). Natural-language mode with nothing typed issues no request: there is nothing to
+     * embed, so the table shows its empty state and `null` is returned so callers do not announce a
+     * search that never ran. An answer that arrives after a newer search started is dropped, and
+     * `null` is returned for it too.
+     */
+    const runSearch = async (searchQuery: SearchQuery, searchNumber: number) => {
+        if (searchMode === "nlp") {
+            if (!searchQuery.query.trim()) {
+                setNlpResult(null);
+                setAnsweredMode(null);
+                searchState.setResult(EMPTY_NLP_RESPONSE);
+                return null;
+            }
+            // Past the route's limit nothing is sent (an auto-refresh included); the query band
+            // shows the limit and how much to shorten the query.
+            if (nlpQueryLength(searchQuery.query) > NLP_QUERY_MAX_LENGTH) {
+                return null;
+            }
+            const result = await searchAPI.executeNlpSearch(searchQuery, {
+                databaseId,
+                metadataSearchMode,
+                metadataOperator,
+                includeOpenSearchConstraints: !useNoOpenSearch,
+            });
+            if (!isLatestSearch(searchNumber)) return null;
+            setNlpResult(result);
+            setAnsweredMode("nlp");
+            searchState.setResult(result);
+            // The answer's rare warnings are shown in the Search notice above the results, which
+            // reads them from the answer held here; nothing is toasted, so no toast covers the title
+            // row's controls. A filled window is stated under the results instead.
+            // The announcement reads the count the badge and the table header show.
+            return withNlpResultTotal(result);
+        }
+        const result = await searchAPI.executeSearch(
+            searchQuery,
+            databaseId,
+            metadataSearchMode,
+            metadataOperator,
+            { requireLocation: mapScoped }
+        );
+        if (!isLatestSearch(searchNumber)) return null;
+        setNlpResult(null);
+        setAnsweredMode("keyword");
+        searchState.setResult(result);
+        return result;
+    };
+
+    /**
+     * A failed search, reported as "Search failed" with the API's message (a 503 included: the
+     * search ran and failed, the feature is not off). An older search's failure is dropped like its
+     * answer would be.
+     */
+    const reportSearchError = (error: any, searchNumber: number) => {
+        if (!isLatestSearch(searchNumber)) return;
+        console.error("Search error:", error);
+        searchState.setError(error.message || "Search failed");
+        showError("Search failed", error.message || "An error occurred while searching");
+    };
+
+    const handleSearch = async () => {
+        const searchNumber = startSearch();
+        try {
+            searchState.setLoading(true);
+            setCountAnnouncement("");
+            const result = await runSearch(searchState.buildSearchQuery(), searchNumber);
+
+            // `null` means no request was issued (empty natural-language query) or a newer search
+            // started: nothing to announce. An auto-refresh is not announced either. No toast: the
+            // badge in the title row shows the count, and a toast would cover the title row's controls.
+            if (result && !autoRefreshing) {
+                setCountAnnouncement(searchAnnouncement(result, searchMode === "nlp"));
+            }
+        } catch (error: any) {
+            reportSearchError(error, searchNumber);
+        } finally {
+            // The loading state lasts until the newest search ends.
+            if (isLatestSearch(searchNumber)) {
+                searchState.setLoading(false);
+                setAutoRefreshing(false);
+            }
+        }
+    };
+
+    // A search whose query differs from state (a sort or page change applied before the reducer
+    // re-renders), reported like handleSearch but without the count announcement.
+    const runOverride = async (searchQuery: SearchQuery) => {
+        const searchNumber = startSearch();
+        try {
+            searchState.setLoading(true);
+            await runSearch(searchQuery, searchNumber);
+        } catch (error: any) {
+            reportSearchError(error, searchNumber);
+        } finally {
+            if (isLatestSearch(searchNumber)) {
+                searchState.setLoading(false);
+            }
+        }
+    };
+
+    // Auto-search on mount when a search engine is enabled - wait for preferences to load AND sync first
     useEffect(() => {
         if (
             !searchState.initialResult &&
-            !useNoOpenSearch &&
+            searchAvailable &&
             preferencesLoaded &&
             searchState.pagination.size === preferences.pageSize
         ) {
@@ -180,49 +384,28 @@ const ModernSearchContainer: React.FC<
         }
     }, [searchState.selectedItems, onSelectionChange]);
 
-    const handleSearch = async () => {
-        try {
-            searchState.setLoading(true);
-            const searchQuery = searchState.buildSearchQuery();
-            console.log(
-                "[Search] Executing search with sort:",
-                searchQuery.sort,
-                "tableSort:",
-                searchState.tableSort
-            );
-            const result = await searchAPI.executeSearch(
-                searchQuery,
-                databaseId,
-                metadataSearchMode,
-                metadataOperator
-            );
-            searchState.setResult(result);
-
-            if (!autoRefreshing) {
-                showSuccess("Search completed", `Found ${formatTotalResultCount(result)} results`);
-            }
-        } catch (error: any) {
-            console.error("Search error:", error);
-            searchState.setError(error.message || "Search failed");
-            showError("Search failed", error.message || "An error occurred while searching");
-        } finally {
-            searchState.setLoading(false);
-            setAutoRefreshing(false);
-        }
-    };
-
-    // Debounced auto-refresh function
-    const debouncedAutoRefresh = useDebounce(() => {
-        if (hasInitialLoad) {
+    // Debounced auto-refresh: re-runs the query as it stood when a filter or mode change armed it.
+    // If the text has changed since, the user is mid-edit and will submit; searching what they had
+    // typed 500 ms in would embed a fragment and flash results for it.
+    const debouncedAutoRefresh = useDebounce((armedQuery: string) => {
+        if (hasInitialLoad && armedQuery === searchState.query) {
             setAutoRefreshing(true);
             handleSearch();
         }
     }, 500);
 
-    // Auto-refresh when filters change
+    // A search the user asks for (Enter or the Search button) supersedes an auto-refresh still
+    // waiting on its debounce — otherwise a mode or filter change followed by a quick submit runs
+    // the same query twice, which in natural-language mode embeds it twice.
+    const handleExplicitSearch = async () => {
+        debouncedAutoRefresh.cancel();
+        await handleSearch();
+    };
+
+    // Auto-refresh when filters or the search mode change
     useEffect(() => {
         if (hasInitialLoad) {
-            debouncedAutoRefresh();
+            debouncedAutoRefresh(searchState.query);
         }
     }, [
         searchState.filters,
@@ -230,6 +413,7 @@ const ModernSearchContainer: React.FC<
         recordType,
         metadataSearchMode,
         metadataOperator,
+        searchMode,
     ]);
 
     // Add/remove Archived column when includeArchived filter changes
@@ -260,33 +444,13 @@ const ModernSearchContainer: React.FC<
         }
     }, [searchState.filters.bool_archived, recordType]);
 
-    const handleSort = async (sortField: string, isDescending: boolean) => {
-        try {
-            const sortQuery = searchAPI.buildSortQuery(sortField, isDescending);
-            searchState.setSort(sortQuery);
-            searchState.setTableSort({
-                sortingField: sortField,
-                sortingDescending: isDescending,
-            });
-            await handleSearch();
-        } catch (error: any) {
-            showError("Sort failed", error.message);
-        }
-    };
-
     const handlePagination = async (from: number, size?: number) => {
         try {
-            console.log("[Pagination] handlePagination called with:", {
-                from,
-                size,
-                pageSize: preferences.pageSize,
-            });
             searchState.setPagination({ from, size: size || preferences.pageSize });
-            console.log(
-                "[Pagination] After setPagination, searchState.pagination:",
-                searchState.pagination
-            );
-            await handleSearch();
+            // Natural-language hits are paged client-side from the result already held.
+            if (searchMode !== "nlp") {
+                await handleSearch();
+            }
         } catch (error: any) {
             showError("Pagination failed", error.message);
         }
@@ -312,31 +476,46 @@ const ModernSearchContainer: React.FC<
             // Update pagination state with new page size and reset to page 1
             const newPagination = { from: 0, size: newPreferences.pageSize };
             searchState.setPagination(newPagination);
+            if (searchMode === "nlp") return;
 
             // Trigger search with the new page size - pass pagination directly to avoid closure
+            const searchNumber = startSearch();
             try {
                 searchState.setLoading(true);
-                const searchQuery = searchState.buildSearchQuery(newPagination);
-                const result = await searchAPI.executeSearch(
-                    searchQuery,
-                    databaseId,
-                    metadataSearchMode,
-                    metadataOperator
+                setCountAnnouncement("");
+                const result = await runSearch(
+                    searchState.buildSearchQuery(newPagination),
+                    searchNumber
                 );
-                searchState.setResult(result);
-                showSuccess("Search completed", `Found ${formatTotalResultCount(result)} results`);
+                if (result) {
+                    setCountAnnouncement(searchAnnouncement(result, false));
+                }
             } catch (error: any) {
-                console.error("Search error:", error);
-                searchState.setError(error.message || "Search failed");
-                showError("Search failed", error.message || "An error occurred while searching");
+                reportSearchError(error, searchNumber);
             } finally {
-                searchState.setLoading(false);
+                if (isLatestSearch(searchNumber)) {
+                    searchState.setLoading(false);
+                }
             }
         }
     };
 
+    // A search still running when the mode changes is not dropped: its answer records the mode it ran
+    // in (answeredMode), so the other mode never presents it, and the search in the new mode that the
+    // auto-refresh starts is newer and wins.
+    const handleSearchModeChange = (nextMode: SearchMode) => {
+        updatePreferences({ searchMode: nextMode });
+        setNlpResult(null);
+        searchState.setPagination({ from: 0 });
+    };
+
     const handleClearSearch = () => {
-        searchState.clearSearch();
+        // Drop any search still running, and show no count until the reloaded answer arrives.
+        startSearch();
+        setAnsweredMode(null);
+        // A database route's locked database is the page's scope, not a filter: it stays.
+        searchState.clearSearch(databaseLocked ? ["str_databaseid"] : []);
+        setNlpResult(null);
         // Don't reset recordType - preserve the current search mode (asset/file)
         setMetadataSearchMode("both");
         setMetadataOperator("OR");
@@ -354,17 +533,9 @@ const ModernSearchContainer: React.FC<
     const handleRecordTypeChange = (type: "asset" | "file") => {
         setRecordType(type);
 
-        // Map view only available for assets — switch to table and clean up map filters
+        // Switching to files on the Map view returns to the table; the user's metadata filters stay.
         if (type === "file" && currentView === "map") {
             setCurrentView("table");
-            // Remove location metadata filters that map view added
-            const filteredMetadata = searchState.metadataFilters.filter((filter) => {
-                const keyLower = filter.key.toLowerCase();
-                return (
-                    keyLower !== "location" && keyLower !== "latitude" && keyLower !== "longitude"
-                );
-            });
-            searchState.setMetadataFilters(filteredMetadata);
         }
 
         // Remove mode-specific filters that don't apply to the new mode
@@ -389,43 +560,21 @@ const ModernSearchContainer: React.FC<
         // The PreferencesPanel will automatically use the correct column list
     };
 
-    // Handle view changes - add/remove location metadata filters for map view
+    // Entering or leaving the Map view changes only the view. The location scope it needs is added
+    // to the request (mapScoped), never to the user's filters, metadata mode or operator, so the
+    // sidebar shows and the other views search exactly what the user set.
     const handleViewChange = (view: "table" | "card" | "map") => {
-        const previousView = currentView;
+        if (view === currentView) return;
         setCurrentView(view);
-
-        // When switching TO map view, add location metadata filters
-        if (view === "map" && previousView !== "map") {
-            // Add location metadata filters (disabled from editing)
-            // Include both lowercase and capitalized versions to handle different capitalizations
-            const locationFilters: MetadataFilter[] = [
-                { key: "location", value: "*", operator: "=", type: "string" },
-                { key: "Location", value: "*", operator: "=", type: "string" },
-                { key: "latitude", value: "*", operator: "=", type: "string" },
-                { key: "Latitude", value: "*", operator: "=", type: "string" },
-                { key: "longitude", value: "*", operator: "=", type: "string" },
-                { key: "Longitude", value: "*", operator: "=", type: "string" },
-            ];
-
-            // Add these filters to existing metadata filters
-            searchState.setMetadataFilters([...searchState.metadataFilters, ...locationFilters]);
-
-            // Set metadata search mode to "both" and operator to "OR"
-            setMetadataSearchMode("both");
-            setMetadataOperator("OR");
-        }
-
-        // When switching FROM map view, remove location metadata filters
-        if (previousView === "map" && view !== "map") {
-            // Remove the location filters we added (both lowercase and capitalized versions)
-            const filteredMetadata = searchState.metadataFilters.filter((filter) => {
-                // Remove filters that match our location filter pattern (case-insensitive)
-                const keyLower = filter.key.toLowerCase();
-                const isLocationFilter =
-                    keyLower === "location" || keyLower === "latitude" || keyLower === "longitude";
-                return !isLocationFilter;
-            });
-            searchState.setMetadataFilters(filteredMetadata);
+        if ((view === "map") !== (currentView === "map")) {
+            // A keyword search on the map covers other records than the table's: it runs again,
+            // with or without the location scope, from page 1. In natural-language mode the map
+            // pages through the answer already held, as the table does, so no search runs and the
+            // query is not embedded again.
+            searchState.setPagination({ from: 0 });
+            if (hasInitialLoad && searchMode !== "nlp") {
+                debouncedAutoRefresh(searchState.query);
+            }
         }
     };
 
@@ -434,40 +583,77 @@ const ModernSearchContainer: React.FC<
         updatePreferences({ sidebarWidth: width });
     };
 
-    // Calculate pagination values
-    const totalResults = getTotalResultCount(searchState.result);
+    // What the table renders: in natural-language mode the page slice of its own answer, or the
+    // empty set when none is held (a keyword listing from before a switch is never shown there);
+    // in keyword mode the server page as returned.
+    const displayedResult = useMemo(() => {
+        if (searchMode === "nlp") {
+            if (!nlpResult) return EMPTY_NLP_RESPONSE;
+            return pageNlpResult(
+                nlpResult,
+                { from: searchState.pagination.from, size: preferences.pageSize },
+                searchState.sort
+            );
+        }
+        return searchState.result;
+    }, [
+        searchMode,
+        nlpResult,
+        searchState.result,
+        searchState.pagination.from,
+        preferences.pageSize,
+        searchState.sort,
+    ]);
+
+    // Whether the page holds an answer to show a count for: one from the mode on screen, and not the
+    // empty result Clear all filters leaves while the reloaded list is on its way ("0 results" would
+    // describe a search that has not answered).
+    const hasAnswer =
+        answeredMode === searchMode && (searchMode === "nlp" ? !!nlpResult : !!searchState.result);
+
+    // Calculate pagination values: the count shown, and the pages over the records that can be shown
+    // (fewer in natural-language mode, which counts every match but returns at most 100).
+    const totalResults = getTotalResultCount(displayedResult);
     const currentPage = 1 + Math.floor(searchState.pagination.from / preferences.pageSize);
-    const pageCount = getPageCount(totalResults, preferences.pageSize);
+    const pageCount = getPageCount(getPagedResultCount(displayedResult), preferences.pageSize);
 
-    console.log("[Pagination] Current page calculation:", {
-        from: searchState.pagination.from,
-        pageSize: preferences.pageSize,
-        currentPage,
-        pageCount,
-        totalResults,
-        hitsTotal: searchState.result?.hits?.total?.value,
-        aggregationTotal: searchState.result?.aggregationTotal,
-    });
+    // The Search notice above the results: the rare warnings of the natural-language answer on screen,
+    // in the page's own words. Derived from that answer, so it can't outlive it: a new search, Clear all
+    // filters or a mode switch replaces the answer, and a keyword answer never has one. Dismissing it
+    // hides it for that answer only.
+    const searchNotices = useMemo(
+        () =>
+            searchMode === "nlp" && answeredMode === "nlp" && nlpResult
+                ? rareNlpWarningTexts(nlpResult.warnings)
+                : [],
+        [searchMode, answeredMode, nlpResult]
+    );
+    const showSearchNotice = searchNotices.length > 0 && dismissedNoticeAnswer !== nlpResult;
 
-    // Render fallback for NoOpenSearch mode
-    if (useNoOpenSearch) {
-        return (
-            <Box>
-                <ListPage
-                    singularName={Synonyms.Asset}
-                    singularNameTitleCase={Synonyms.Asset}
-                    pluralName={Synonyms.assets}
-                    pluralNameTitleCase={Synonyms.Assets}
-                    onCreateCallback={handleCreateAsset}
-                    createDisabledReason={assetActionDisabledReasons?.create}
-                    listDefinition={AssetListDefinition}
-                    fetchAllElements={fetchAllAssets}
-                    fetchElements={fetchDatabaseAssets}
-                    hideDeleteButton={true}
-                />
-            </Box>
-        );
-    }
+    // The columns the list renders: the fallback set without OpenSearch (only the fields a
+    // natural-language hit carries), the user's set otherwise, with relevance first in NLP mode.
+    const visibleColumns = useMemo(() => {
+        if (useNoOpenSearch) {
+            return recordType === "asset" ? REDUCED_ASSET_COLUMNS : REDUCED_FILE_COLUMNS;
+        }
+        const preferred =
+            recordType === "asset" ? preferences.assetTableColumns : preferences.fileTableColumns;
+        if (searchMode === "nlp" && !preferred.includes("relevance")) {
+            return ["relevance", ...preferred];
+        }
+        return preferred;
+    }, [
+        useNoOpenSearch,
+        recordType,
+        searchMode,
+        preferences.assetTableColumns,
+        preferences.fileTableColumns,
+    ]);
+
+    // Keyword / natural-language switch: offered only when both engines are on. A single-engine
+    // deployment has nothing to choose, so the top bar shows the query box alone.
+    const searchModeControl: SearchModeControl | undefined =
+        modeCase === "both" ? { mode: searchMode, onChange: handleSearchModeChange } : undefined;
 
     // Render view selector
     const renderViewSelector = () => {
@@ -490,11 +676,82 @@ const ModernSearchContainer: React.FC<
 
         return (
             <SegmentedControl
+                label="Result view"
                 selectedId={currentView}
                 onChange={({ detail }) => handleViewChange(detail.selectedId as any)}
                 options={viewOptions}
             />
         );
+    };
+
+    // Actions the list view raises. Natural-language sort and paging change only the slice the
+    // table shows; keyword mode re-queries the server.
+    const handleListDispatch = (action: any) => {
+        switch (action.type) {
+            case "set-selected-items":
+                searchState.setSelectedItems(action.selectedItems);
+                break;
+            case "query-sort":
+                if (action.sort && action.tableSort) {
+                    searchState.setSort(action.sort);
+                    searchState.setTableSort(action.tableSort);
+                    if (searchMode !== "nlp") {
+                        // Build the query with the new sort from the action, not the (lagging) state
+                        void runOverride({ ...searchState.buildSearchQuery(), sort: action.sort });
+                    }
+                }
+                break;
+            case "query-paginate":
+                if (action.pagination) {
+                    searchState.setPagination(action.pagination);
+                    if (searchMode !== "nlp") {
+                        // Pass pagination directly to buildSearchQuery to avoid stale closure
+                        void runOverride(searchState.buildSearchQuery(action.pagination));
+                    }
+                }
+                break;
+            case "set-search-table-preferences":
+                if (action.payload) {
+                    handlePreferencesChange(action.payload);
+                }
+                break;
+            case "query-criteria-cleared":
+                handleClearSearch();
+                break;
+            case "refresh":
+                // An archive, delete or unarchive in the table re-runs the current search.
+                setAutoRefreshing(true);
+                void handleSearch();
+                break;
+            default:
+                console.log("Unhandled dispatch action:", action.type);
+        }
+    };
+
+    // The visible column list below is chosen by recordType, so the view has to judge file mode by
+    // the same value rather than by the _rectype filter, which trails it by a render (see isFileMode
+    // there). The column list is copied because the view rewrites it for the thumbnail columns.
+    const listViewState = {
+        ...searchState,
+        result: displayedResult,
+        recordType,
+        tablePreferences: {
+            pageSize: preferences.pageSize,
+            visibleContent: [...visibleColumns],
+        },
+        showPreviewThumbnails: preferences.showThumbnails,
+        showMapThumbnails: preferences.showMapThumbnails,
+        useMapView: useMapView,
+        // Natural-language mode without its own answer (no query yet, or only a keyword listing
+        // from before a switch): the table explains what to type rather than reporting no matches.
+        nlpIdle: searchMode === "nlp" && answeredMode !== "nlp",
+        // The natural-language answer on screen searched no database (none it covers is one the user
+        // can access): the empty table says so, as the Search notice does, instead of "No matches"
+        // with a Clear filter action that suggests the filters are the cause.
+        nlpNoDatabaseSearched:
+            searchMode === "nlp" &&
+            answeredMode === "nlp" &&
+            nlpSearchedNoDatabase(nlpResult?.warnings),
     };
 
     // Render main content
@@ -503,7 +760,7 @@ const ModernSearchContainer: React.FC<
             case "card":
                 return (
                     <CardView
-                        items={searchState.result?.hits?.hits || []}
+                        items={displayedResult?.hits?.hits || []}
                         selectedItems={searchState.selectedItems}
                         onSelectionChange={searchState.setSelectedItems}
                         loading={searchState.loading}
@@ -521,207 +778,38 @@ const ModernSearchContainer: React.FC<
                         onCreateAsset={showBulkActions ? handleCreateAsset : undefined}
                         onDeleteSelected={showBulkActions ? () => {} : undefined}
                         totalItems={totalResults}
+                        totalItemsIsLowerBound={isTotalLowerBound(displayedResult)}
                     />
                 );
 
             case "map":
                 if (useMapView) {
+                    // The map shows what the table would: in natural-language mode the page of the
+                    // answer held, paged in the browser through the same dispatch as the table, so a
+                    // page change never runs a keyword search; in keyword mode the server page.
                     return (
                         <SearchPageMapView
                             state={{
                                 ...searchState,
+                                result: displayedResult,
                                 tablePreferences: {
                                     pageSize: preferences.pageSize,
                                 },
                                 showMapThumbnails: preferences.showMapThumbnails,
                                 useMapView: useMapView,
                             }}
-                            dispatch={(action: any) => {
-                                switch (action.type) {
-                                    case "set-selected-items":
-                                        searchState.setSelectedItems(action.selectedItems);
-                                        break;
-                                    case "query-paginate":
-                                        if (action.pagination) {
-                                            console.log(
-                                                "[Pagination] query-paginate action received:",
-                                                action.pagination
-                                            );
-                                            searchState.setPagination(action.pagination);
-                                            (async () => {
-                                                try {
-                                                    searchState.setLoading(true);
-                                                    const searchQuery =
-                                                        searchState.buildSearchQuery(
-                                                            action.pagination
-                                                        );
-                                                    console.log(
-                                                        "[Pagination] Executing search with pagination:",
-                                                        searchQuery.pagination
-                                                    );
-                                                    const result = await searchAPI.executeSearch(
-                                                        searchQuery,
-                                                        databaseId,
-                                                        metadataSearchMode,
-                                                        metadataOperator
-                                                    );
-                                                    searchState.setResult(result);
-                                                } catch (error: any) {
-                                                    console.error(
-                                                        "Pagination search error:",
-                                                        error
-                                                    );
-                                                    searchState.setError(
-                                                        error.message || "Search failed"
-                                                    );
-                                                    showError(
-                                                        "Search failed",
-                                                        error.message ||
-                                                            "An error occurred while searching"
-                                                    );
-                                                } finally {
-                                                    searchState.setLoading(false);
-                                                }
-                                            })();
-                                        }
-                                        break;
-                                    default:
-                                        console.log("Unhandled dispatch action:", action.type);
-                                }
-                            }}
+                            dispatch={handleListDispatch}
                         />
                     );
                 }
                 // Fall through to table view if map not available
                 return (
                     <SearchPageListView
-                        state={{
-                            ...searchState,
-                            // The visible column list below is chosen by recordType, so the view has
-                            // to judge file mode by the same value rather than by the _rectype
-                            // filter, which trails it by a render (see isFileMode there).
-                            recordType,
-                            tablePreferences: {
-                                pageSize: preferences.pageSize,
-                                visibleContent:
-                                    recordType === "asset"
-                                        ? preferences.assetTableColumns
-                                        : preferences.fileTableColumns,
-                            },
-                            showPreviewThumbnails: preferences.showThumbnails,
-                            showMapThumbnails: preferences.showMapThumbnails,
-                            useMapView: useMapView,
-                        }}
+                        state={listViewState}
                         onShowToast={showSuccess}
                         onCreateAsset={handleCreateAsset}
                         assetActionDisabledReasons={assetActionDisabledReasons}
-                        dispatch={(action: any) => {
-                            // Handle dispatch actions from SearchPageListView
-                            switch (action.type) {
-                                case "set-selected-items":
-                                    searchState.setSelectedItems(action.selectedItems);
-                                    break;
-                                case "query-sort":
-                                    if (action.sort && action.tableSort) {
-                                        searchState.setSort(action.sort);
-                                        searchState.setTableSort(action.tableSort);
-                                        // Execute search with the new sort immediately
-                                        (async () => {
-                                            try {
-                                                searchState.setLoading(true);
-                                                // Build query with the new sort from action, not state
-                                                const searchQuery = {
-                                                    ...searchState.buildSearchQuery(),
-                                                    sort: action.sort,
-                                                };
-                                                console.log(
-                                                    "[Sort] Executing search with sort from action:",
-                                                    action.sort
-                                                );
-                                                const result = await searchAPI.executeSearch(
-                                                    searchQuery,
-                                                    databaseId,
-                                                    metadataSearchMode,
-                                                    metadataOperator
-                                                );
-                                                searchState.setResult(result);
-                                            } catch (error: any) {
-                                                console.error("Sort search error:", error);
-                                                searchState.setError(
-                                                    error.message || "Search failed"
-                                                );
-                                                showError(
-                                                    "Search failed",
-                                                    error.message ||
-                                                        "An error occurred while searching"
-                                                );
-                                            } finally {
-                                                searchState.setLoading(false);
-                                            }
-                                        })();
-                                    }
-                                    break;
-                                case "query-paginate":
-                                    if (action.pagination) {
-                                        console.log(
-                                            "[Pagination] query-paginate action received:",
-                                            action.pagination
-                                        );
-                                        // Update pagination state
-                                        searchState.setPagination(action.pagination);
-
-                                        // Execute search immediately with the new pagination values
-                                        // Pass pagination directly to buildSearchQuery to avoid stale closure
-                                        (async () => {
-                                            try {
-                                                searchState.setLoading(true);
-                                                // Pass pagination directly to buildSearchQuery to avoid stale closure
-                                                const searchQuery = searchState.buildSearchQuery(
-                                                    action.pagination
-                                                );
-                                                console.log(
-                                                    "[Pagination] Executing search with pagination:",
-                                                    searchQuery.pagination
-                                                );
-                                                const result = await searchAPI.executeSearch(
-                                                    searchQuery,
-                                                    databaseId,
-                                                    metadataSearchMode,
-                                                    metadataOperator
-                                                );
-                                                searchState.setResult(result);
-                                            } catch (error: any) {
-                                                console.error("Pagination search error:", error);
-                                                searchState.setError(
-                                                    error.message || "Search failed"
-                                                );
-                                                showError(
-                                                    "Search failed",
-                                                    error.message ||
-                                                        "An error occurred while searching"
-                                                );
-                                            } finally {
-                                                searchState.setLoading(false);
-                                            }
-                                        })();
-                                    }
-                                    break;
-                                case "set-search-table-preferences":
-                                    if (action.payload) {
-                                        handlePreferencesChange(action.payload);
-                                    }
-                                    break;
-                                case "query-criteria-cleared":
-                                    handleClearSearch();
-                                    break;
-                                case "refresh":
-                                    setAutoRefreshing(true);
-                                    handleSearch();
-                                    break;
-                                default:
-                                    console.log("Unhandled dispatch action:", action.type);
-                            }
-                        }}
+                        dispatch={handleListDispatch}
                     />
                 );
 
@@ -729,133 +817,11 @@ const ModernSearchContainer: React.FC<
             default:
                 return (
                     <SearchPageListView
-                        state={{
-                            ...searchState,
-                            // The visible column list below is chosen by recordType, so the view has
-                            // to judge file mode by the same value rather than by the _rectype
-                            // filter, which trails it by a render (see isFileMode there).
-                            recordType,
-                            tablePreferences: {
-                                pageSize: preferences.pageSize,
-                                visibleContent:
-                                    recordType === "asset"
-                                        ? preferences.assetTableColumns
-                                        : preferences.fileTableColumns,
-                            },
-                            showPreviewThumbnails: preferences.showThumbnails,
-                            showMapThumbnails: preferences.showMapThumbnails,
-                            useMapView: useMapView,
-                        }}
+                        state={listViewState}
                         onShowToast={showSuccess}
                         onCreateAsset={handleCreateAsset}
                         assetActionDisabledReasons={assetActionDisabledReasons}
-                        dispatch={(action: any) => {
-                            // Handle dispatch actions from SearchPageListView
-                            switch (action.type) {
-                                case "set-selected-items":
-                                    searchState.setSelectedItems(action.selectedItems);
-                                    break;
-                                case "query-sort":
-                                    if (action.sort && action.tableSort) {
-                                        searchState.setSort(action.sort);
-                                        searchState.setTableSort(action.tableSort);
-                                        // Execute search with the new sort immediately
-                                        (async () => {
-                                            try {
-                                                searchState.setLoading(true);
-                                                // Build query with the new sort from action, not state
-                                                const searchQuery = {
-                                                    ...searchState.buildSearchQuery(),
-                                                    sort: action.sort,
-                                                };
-                                                console.log(
-                                                    "[Sort] Executing search with sort from action:",
-                                                    action.sort
-                                                );
-                                                const result = await searchAPI.executeSearch(
-                                                    searchQuery,
-                                                    databaseId,
-                                                    metadataSearchMode,
-                                                    metadataOperator
-                                                );
-                                                searchState.setResult(result);
-                                            } catch (error: any) {
-                                                console.error("Sort search error:", error);
-                                                searchState.setError(
-                                                    error.message || "Search failed"
-                                                );
-                                                showError(
-                                                    "Search failed",
-                                                    error.message ||
-                                                        "An error occurred while searching"
-                                                );
-                                            } finally {
-                                                searchState.setLoading(false);
-                                            }
-                                        })();
-                                    }
-                                    break;
-                                case "query-paginate":
-                                    if (action.pagination) {
-                                        console.log(
-                                            "[Pagination] query-paginate action received:",
-                                            action.pagination
-                                        );
-                                        // Update pagination state
-                                        searchState.setPagination(action.pagination);
-
-                                        // Execute search immediately with the new pagination values
-                                        // Pass pagination directly to buildSearchQuery to avoid stale closure
-                                        (async () => {
-                                            try {
-                                                searchState.setLoading(true);
-                                                // Pass pagination directly to buildSearchQuery to avoid stale closure
-                                                const searchQuery = searchState.buildSearchQuery(
-                                                    action.pagination
-                                                );
-                                                console.log(
-                                                    "[Pagination] Executing search with pagination:",
-                                                    searchQuery.pagination
-                                                );
-                                                const result = await searchAPI.executeSearch(
-                                                    searchQuery,
-                                                    databaseId,
-                                                    metadataSearchMode,
-                                                    metadataOperator
-                                                );
-                                                searchState.setResult(result);
-                                            } catch (error: any) {
-                                                console.error("Pagination search error:", error);
-                                                searchState.setError(
-                                                    error.message || "Search failed"
-                                                );
-                                                showError(
-                                                    "Search failed",
-                                                    error.message ||
-                                                        "An error occurred while searching"
-                                                );
-                                            } finally {
-                                                searchState.setLoading(false);
-                                            }
-                                        })();
-                                    }
-                                    break;
-                                case "set-search-table-preferences":
-                                    if (action.payload) {
-                                        handlePreferencesChange(action.payload);
-                                    }
-                                    break;
-                                case "query-criteria-cleared":
-                                    handleClearSearch();
-                                    break;
-                                case "refresh":
-                                    setAutoRefreshing(true);
-                                    handleSearch();
-                                    break;
-                                default:
-                                    console.log("Unhandled dispatch action:", action.type);
-                            }
-                        }}
+                        dispatch={handleListDispatch}
                     />
                 );
         }
@@ -864,31 +830,35 @@ const ModernSearchContainer: React.FC<
     const containerStyle = maxHeight ? { maxHeight, overflow: "auto" } : {};
 
     return (
-        <div style={containerStyle}>
+        <div className="search-page" style={containerStyle}>
             {/* Toast notifications at the very top */}
             <ToastManager toasts={toasts} onDismiss={removeToast} />
+
+            {/* Visually hidden; announces a finished search's count politely to screen readers. */}
+            <LiveRegion hidden data-testid="search-count-announcement">
+                {countAnnouncement}
+            </LiveRegion>
 
             {/* Top Bar */}
             <SearchTopBar
                 query={searchState.query}
                 onQueryChange={searchState.setQuery}
-                onSearch={handleSearch}
+                onSearch={handleExplicitSearch}
                 onClearAll={handleClearSearch}
                 loading={searchState.loading}
-                // No result yet (first load, or just after Clear All Filters): show no count rather
-                // than "0 results" until the search answers.
-                resultCount={searchState.result ? totalResults : undefined}
-                resultCountIsLowerBound={isTotalLowerBound(searchState.result)}
-                hasActiveFilters={searchState.hasActiveFilters()}
+                resultCount={hasAnswer ? totalResults : undefined}
+                resultCountIsLowerBound={hasAnswer && isTotalLowerBound(displayedResult)}
+                hasActiveFilters={searchState.hasActiveFilters({ databaseLocked })}
                 title={
                     embedded?.title ||
                     (databaseId
                         ? `${Synonyms.Assets} for ${databaseId}`
                         : `${Synonyms.Assets} and Files - Search`)
                 }
+                searchMode={searchMode}
+                searchModeControl={searchModeControl}
+                titleSlots={titleSlots}
             />
-
-            {/* Error Display - removed, using toast notifications instead */}
 
             {/* Main Layout: Sidebar + Content with Resizable Splitter */}
             <ResizableSplitter
@@ -920,14 +890,18 @@ const ModernSearchContainer: React.FC<
                         preferences={preferences}
                         onPreferencesChange={handlePreferencesChange}
                         loading={searchState.loading}
-                        searchResult={searchState.result}
+                        // The file-type facet reflects the whole natural-language result set, not one page
+                        searchResult={
+                            searchMode === "nlp" && nlpResult ? nlpResult : displayedResult
+                        }
                         databaseLocked={databaseLocked}
                         showThumbnails={preferences.showThumbnails}
                         onThumbnailToggle={handleThumbnailToggle}
                         showMapThumbnails={preferences.showMapThumbnails}
                         onMapThumbnailToggle={handleMapThumbnailToggle}
                         useMapView={useMapView}
-                        isMapView={currentView === "map"}
+                        reduced={useNoOpenSearch}
+                        searchMode={searchMode}
                     />
                 }
                 rightPanel={
@@ -944,14 +918,67 @@ const ModernSearchContainer: React.FC<
                             </Box>
                         )}
 
+                        {/* The rare natural-language warnings, in the page rather than a toast: the
+                            toast stack sits over the title row's view switch and Clear all filters. */}
+                        {showSearchNotice && (
+                            <Box padding={{ bottom: "m" }}>
+                                <Alert
+                                    type="info"
+                                    header="Search notice"
+                                    statusIconAriaLabel="Info"
+                                    dismissible
+                                    dismissAriaLabel="Dismiss search notice"
+                                    onDismiss={() => setDismissedNoticeAnswer(nlpResult)}
+                                    data-testid="search-notice"
+                                >
+                                    {searchNotices.map((text) => (
+                                        <div key={text}>{text}</div>
+                                    ))}
+                                </Alert>
+                            </Box>
+                        )}
+
                         {/* Results */}
                         {renderContent()}
+
+                        {/* A natural-language call that filled its candidate window found at least
+                            this many matches; there is no cursor to fetch the rest. An empty answer
+                            names no number: nothing matched among the closest results searched. */}
+                        {searchMode === "nlp" && nlpResult?.nlp?.truncated && (
+                            <Box
+                                padding={{ top: "s" }}
+                                color="text-body-secondary"
+                                fontSize="body-s"
+                            >
+                                {nlpResult.hits.hits.length > 0
+                                    ? nlpTopMatchesNote(nlpResult.hits.hits.length)
+                                    : NLP_EMPTY_TRUNCATED_NOTE}
+                            </Box>
+                        )}
+                        {/* Only a segment window filled: no whole-file window did, but some files
+                            may match in more scenes or passages than were checked. */}
+                        {searchMode === "nlp" &&
+                            nlpResult &&
+                            !nlpResult.nlp?.truncated &&
+                            (nlpResult.warnings ?? []).some(
+                                (w) => w.code === "segments:window_full"
+                            ) && (
+                                <Box
+                                    padding={{ top: "s" }}
+                                    color="text-body-secondary"
+                                    fontSize="body-s"
+                                >
+                                    Some files have more matching scenes or passages than were
+                                    checked; more may exist.
+                                </Box>
+                            )}
                     </Box>
                 }
                 initialLeftWidth={sidebarWidth}
                 minLeftWidth={300}
                 maxLeftWidth={600}
                 onWidthChange={handleSidebarWidthChange}
+                className="search-splitter"
             />
         </div>
     );

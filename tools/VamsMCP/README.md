@@ -281,7 +281,7 @@ call it, or why none does, or that it is not exposed yet.
 `list_assets`, `get_asset`, `list_asset_files`, `get_file_info`, `get_file_metadata`,
 `get_asset_metadata`, `get_database_metadata`, `list_asset_versions`, `get_asset_version`,
 `get_asset_history`, `get_asset_links`, `get_asset_link_metadata`, `export_asset`,
-`search_assets`, `search_files`, `get_search_fields`, `list_workflows`,
+`search_assets`, `search_files`, `search_nlp`, `get_search_fields`, `list_workflows`,
 `list_workflow_executions`, `list_tags`, `list_tag_types`, `list_metadata_schemas`,
 `generate_download_url`, `generate_download_urls_bulk`, `find_and_summarize`.
 
@@ -546,6 +546,26 @@ to continue. A `truncated` result must never be used to report a count or to
 conclude that something does not exist. `find_and_summarize` issues one extra
 paginated request per hit, so its `size` is clamped to 25; use
 `search_assets(from_offset=...)` to page a larger result set.
+
+`search_nlp` is the natural-language search: the query is embedded with the
+deployment's Amazon Bedrock model and ranked against the vector index, with or
+without OpenSearch (it needs the `VECTORSEARCH` feature switch instead). The tool
+is registered on every deployment and does not read the switch itself: where vector
+search is off the route does not exist, and the call returns an `APIError` result
+(`No deployed API route matches POST …/search/nlp (HTTP 403)…`) instead of hits. It takes
+`database_ids`, `entity_type`, `size` (1–100), `include_archived`, `file_classes`
+(validated against the indexed class ids, which the docstring lists),
+`file_extensions`, `metadata_query`, `geo_search`, `tags` and `include_segments`,
+and returns `relation`, `nlp` and `warnings` beside the hits — a `gte` relation
+means the total is a lower bound, and every total that is not zero is one,
+because the vector index uses approximate nearest-neighbour search, as is a zero
+total when `nlp.truncated` is `true` (a filled window, an unsearched database, or a
+database the caller may open only in part).
+`metadata_query`, `geo_search` and `tags` are
+OpenSearch-only constraints: without OpenSearch they are ignored and reported as
+the `opensearch:fields_ignored` warning. It is a read tool, but every call bills a
+Bedrock embedding, so it is deliberately left out of the `autoApprove` sample
+above.
 
 ### Write (require `VAMS_ENABLE_WRITES=true`)
 

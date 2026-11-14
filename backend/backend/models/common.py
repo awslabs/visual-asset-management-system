@@ -218,6 +218,30 @@ def internal_error(status_code: int = 500, body: Any = {'message': 'Internal Ser
     )
 
 
+def service_unavailable(body: dict = {'message': 'Service Unavailable'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
+    """503: the request was valid but a dependency could not answer it now (an index still being built,
+    throttling, a search backend that cannot be reached). The message tells the caller to try again and
+    carries no internal detail; the cause goes to the service log."""
+    logger.warning("Service unavailable", extra={'statusCode': 503, 'errorBody': body})
+
+    # AUDIT LOG: Log the unavailable answer if event provided
+    if event:
+        try:
+            log_errors(event, "unavailable", {
+                "statusCode": 503,
+                "errorMessage": body.get('message', 'Service Unavailable') if isinstance(body, dict) else str(body)
+            })
+        except Exception as audit_error:
+            logger.exception(f"Failed to log service unavailable audit: {audit_error}")
+
+    return APIGatewayProxyResponseV2(
+        isBase64Encoded=False,
+        statusCode=503,
+        headers=commonHeaders(),
+        body=json.dumps(body, default=_json_default)
+    )
+
+
 #Define VAMS Custom Exceptions
 
 class VAMSGeneralError(Exception):

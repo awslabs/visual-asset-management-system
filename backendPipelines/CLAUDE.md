@@ -129,6 +129,84 @@ service's message (for example a value that does not match its declared type) fo
 generic write-back failure, bounded to 1,024 characters
 (`backend/tests/handlers/workflows/test_processOutput_metadata_write_back_message.py`).
 
+## Publishing an Embedding for Vector Search (`vector.embedding.ready`)
+
+Any pipeline may contribute a per-file-version embedding to the vector index. The pipeline never writes
+the vector table: it writes one embedding document and publishes one event on the orchestration bus, and
+the vector indexer in the search stack (present only when `app.vectorSearch.enabled`) owns every table
+write, including the latest/archived lifecycle of the item.
+
+-   **Document** — `{auxTempPrefix}embedding/{sha256(fileVersionKey)}.json` in the auxiliary bucket
+    (`inputOutputS3AssetAuxiliaryFilesPath` is `auxBucket` + `auxTempPrefix`), body
+    `{schemaVersion: 1, databaseId, assetId, filePath, versionId, contentEtag, bucketId, fileClass, fileExt, fileSize, contentType, embeddingModelId, embeddingDimensions, analysisModelId, embedding: [...], sourceText, sourceModalities, pipelineExecutionId, workflowExecutionId, generatedAt, segmentKey, segmentKind, segmentLabel, segmentStartMs, segmentEndMs, segmentCount}`.
+    `fileVersionKey` is `build_vector_file_version_key(filePath, versionId)` from
+    `backend/backend/common/indexing/documentIds.py`; the object name is independent of the table key
+    and consumers follow `documentS3Location`.
+-   **Event** — `EventBusName` the deployment's orchestration bus, `Source` the manifest's
+    `systemConfig.orchestrationEventPrefix` (`resolve_inputs()["orchestrationEventPrefix"]`),
+    `DetailType` `vector.embedding.ready`, `Detail` the document's fields **without** `embedding` and
+    `sourceText` plus `documentS3Location` (the `s3://` URI of the document). The publishing Lambda needs
+    `events:PutEvents` on the bus and write access to the auxiliary bucket; the indexer deletes the
+    document once the item is written.
+-   **Segments** — one file version may carry several vectors: the whole-file document (`segmentKey ""`,
+    `segmentKind "none"`, `segmentLabel ""`, `segmentStartMs`/`segmentEndMs` null) plus one document and
+    one event per segment, each with a distinct `segmentKey` (≤ `SEGMENT_KEY_MAX_BYTES = 32`, built with
+    `build_video_segment_key(start_ms)` / `build_text_chunk_key(index)` from
+    `backend/backend/common/indexing/documentIds.py`), a `segmentKind` from `SEGMENT_KINDS`
+    (`videoTime`, `textChunk`; `animationTime` reserved), and the run's total in `segmentCount`. The aux
+    object name of a segment document is `{auxTempPrefix}embedding/{sha256(fileVersionKey + "#" + segmentKey)}.json`.
+    Give every document of one run the same `pipelineExecutionId`: the indexer, on the whole-file document,
+    deletes the version's segment items whose `pipelineExecutionId` differs, and the current run's own
+    segments may arrive before or after it. A `Detail` without the six fields is indexed as a whole-file
+    vector with the defaults above; an over-long key or an unknown kind is logged and dropped. Reference
+    producers: `containers/media/segment_handler.py` (windows) and the chunk loop of `generateEmbedding.py`.
+-   **Model discipline** — `embeddingModelId` / `embeddingDimensions` must equal the deployment's
+    configured `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` / `embeddingDimensions`; the indexer logs and drops a
+    document produced with any other model. Embed through the canonical adapter
+    `backend/backend/common/vectorsearch/embeddings.py`, vendored byte-identical into the pipeline the
+    way `manifestHelper.py` is, rather than calling Amazon Bedrock directly.
+-   **Reference producer** — `backendPipelines/system/genAiMetadata/lambda/generateEmbedding.py`; its
+    bundle and tests are the worked example of the document, the event, and the failure path
+    (`execution.status.json` above). The user-facing statement of this contract is
+    `documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`.
+-   **Environment variables** (pipeline handlers read `os.environ` directly; none of these resolves
+    through SSM). `EMBEDDING_MODEL_ID` and `EMBEDDING_DIMENSIONS` (`bedrockModels.embeddingModelId` /
+    `embeddingDimensions`, the same values the search stack's `vectorIndexEnvironment()` gives the
+    indexer) are set by `systemGenAiMetadataFunctions.ts` on `generateEmbedding` and `segmentAnalyze` and
+    read at import by `containers/media/segment_handler.py` — the model-discipline rule above is what
+    makes them mandatory on every producer. `BEDROCK_GUARDRAIL_IDENTIFIER` and `BEDROCK_GUARDRAIL_VERSION`
+    (the created guardrail's `GuardrailId` and published `Version` attributes when
+    `app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled`, else the operator's
+    `bedrockGuardrail.{guardrailIdentifier,guardrailVersion}` pair, set both or neither — `config.ts` refuses
+    one without the other and refuses the pair together with `create.enabled`, and refuses a configuration in which the pipeline calls Amazon Bedrock, with `useGenAiAnalysis` or `app.vectorSearch.enabled` on, and names no guardrail; every partition, no opt-out) are set on `generateMetadata`,
+    `segmentAnalyze` and `generateEmbedding` and read through `bedrockGuardrail.py` (byte-identical copy in the
+    media image): when unset, the process logs `GUARDRAIL_UNCONFIGURED_WARNING` once at cold start, every
+    Converse call runs without prompt-attack filters, and the embedded text is embedded and stored as composed.
+    An embeddings `InvokeModel` carries no guardrail of its own, so a producer that embeds file-derived text
+    screens it first with `bedrockGuardrail.apply_guardrail_to_texts` (`ApplyGuardrail`, source `INPUT`, texts
+    batched ten blocks / 20,000 characters per call) and embeds and stores the returned `GuardedText.text` — the
+    masked output — never the composed text; a `blocked` verdict is not embedded and is recorded as
+    `BedrockGuardrailIntervened` the way the analysis side records one. The builder grants
+    `bedrock:ApplyGuardrail` on the guardrail ARN to every function that names it (`grantApplyGuardrail`), and
+    `infra/test/pipelines/systemGenAiMetadataGuardrail.test.ts` pins the three grantees and no others; the asset
+    summary's `summarizeAsset` (built beside it, `systemGenAiAssetSummaryFunctions.ts`) is granted the same
+    guardrail for its one prompt and for screening a structured-output tool answer as OUTPUT.
+    `BEDROCK_MAX_TOKENS` and `BEDROCK_TEMPERATURE` (`bedrockModels.inference`; temperature absent when it is
+    `null`, and absent or blank means the request carries none) are set on `generateMetadata` and
+    `segmentAnalyze` and read through `analysisCommon.max_tokens_from_env` / `temperature_from_env`;
+    `segment_handler.py` cannot import `analysisCommon`, so it restates the two readers and its suite pins them
+    equal. `BEDROCK_TEXT_MODEL_ID` (requests without an image) is on `generateMetadata` and `summarizeAsset`
+    (the asset summary's one text request; empty means the analysis model): every window request carries
+    frames, so `segmentAnalyze` never reads it. `ANALYSIS_MODEL_SUPPORTS_IMAGES` is on `constructPipeline` and `generateMetadata`;
+    false makes `constructPipeline` set the state's `renderImages` false and `analysisModelSupportsImages`
+    false, and the media branch then writes no video window plan (`VideoSegmentChoice` routes past the Map)
+    and records `sys_media.videoSegments` with the reason instead.
+    `VIDEO_SEGMENT_SECONDS` and `CONTENT_CHUNKING` are **not**
+    environment variables: they are `{{tag}}` keys of the default template
+    (`vamsSchema/templates/system-genai-metadata-default.json`) that `constructPipeline.py` resolves into
+    the state's `videoSegmentSeconds` (0 = whole-file analysis only) / `contentChunking` (default `true`),
+    which the media container reads from its payload with the same defaults.
+
 ## Preserving Relative Paths for Asset-Adjacent Outputs
 
 When a pipeline writes output files that correspond to a specific input file (e.g., `.previewFile.X` thumbnails), the output **must preserve the input file's relative path within the asset**. The process-output step expects outputs at the same relative location as the input so it can move them to the correct final location in the asset bucket.
@@ -153,11 +231,12 @@ A container job role usually reads every asset bucket, so a path written inside 
 -   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
 -   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference. Report what was skipped: one WARNING summary listing each skipped file with its reason (quoted with `repr`), grouped by what the loss costs (geometry layers from a USD layer's composition arcs to USD layer files, never from layer or prim metadata such as an `assetInfo` `identifier` or `customLayerData`, which stay unreported; data files, value clips included; textures and other files; read only `asset`-typed attributes to classify, never geometry samples), and a completion message that says the output is incomplete (`dependencies.IncompletePreview`). When the run has a results folder, also write one small, bounded result document there (`preview-incomplete.json`: the message, the counts by kind, at most 100 entries with a `truncated` flag, asset-relative paths, and for a reference refused as outside the asset only its reason and at most a sanitized base file name, never a bucket, host or folder), so the run's Output Results show it; a complete run writes none, and a failed write is a WARNING, never a failed run.
 -   When a third-party tool opens the referenced files itself (splat-transform reads an `.lcc2` scene's chunk files by the names its description lists), check every name the description lists before the tool starts, and refuse the conversion when one would leave the work directory or a needed file is missing. Do not rely on the fetch having skipped it: the tool would still open the path. `format_handlers/splat_handler.prepare_lcc2` is the worked example.
--   Ask only for the files the loader or tool reads, and report only what it uses: an `.lcc` scene's `shcoef.bin` only when splat-transform reads it (`format_handlers/lcc_meta.lcc_data_files`, the same test as its reader) and never its `environment.bin`; an FBX's texture names are fetched but never reported, since the FBX loader samples no textures (`dependencies.KIND_UNSAMPLED_TEXTURE`). Load the fetched files through a resolver confined to the same local root (`format_handlers/mesh_handler.asset_resolver` for glTF and OBJ), not one rooted at the input's folder: otherwise a `../` reference the fetch accepted is refused by the loader, while one outside the asset must still be refused.
+-   To render a whole scene, use `resolve()` in the same module rather than the thumbnail's one-pass `fetch_referenced_files`: discovery downloads only the documents that name further files and sizes the rest with HeadObject, pinning each version it returned; the fetch then downloads at those versions, so a file replaced mid-run never mixes two versions into one scene. Between the phases a caller can compare the predicted bytes with its budget and re-route the run (the SYSTEM GenAI Blender branch hands an over-budget scene to its Fargate job). Every bound stops the walk instead of failing it, and the run receives a `DependencyReport` (fetched, missing, refused, cycles, the bound that stopped it, the graph) for its manifest. The SYSTEM GenAI Blender image carries a byte-identical copy as `containers/blender/scene_dependencies.py`, pinned by `system/genAiMetadata/lambda/tests/test_sysgenai_vendored_copies.py`: edit the thumbnail module, then `cp` it over the copy.
+-   Ask only for the files the loader or tool reads, and report only what it uses: an `.lcc` scene's `shcoef.bin` only when splat-transform reads it (`format_handlers/lcc_meta.lcc_data_files`, the same test as its reader) and never its `environment.bin`; an FBX's texture names are fetched but never reported in the thumbnail's incomplete preview, since its FBX loader samples no textures (`dependencies.KIND_UNSAMPLED_TEXTURE`); the scene report `resolve()` returns still lists a missing one, because Blender's FBX importer loads them. Each collector entry is `(name, percent_encoded, required, kind)`: a three-element entry reads its third element as `required`. Load the fetched files through a resolver confined to the same local root (`format_handlers/mesh_handler.asset_resolver` for glTF and OBJ), not one rooted at the input's folder: otherwise a `../` reference the fetch accepted is refused by the loader, while one outside the asset must still be refused.
 
 ## Parsing XML From Uploaded Files
 
-An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expands entities without bound or an external entity that reads local files or URLs. Parse it as `preview/3dThumbnail/container/preview_pipeline/format_handlers/xml_mesh_handler.py` does (ARCC BSC12, secure XML parsing): an `xml.parsers.expat` parser whose `StartDoctypeDeclHandler`, `EntityDeclHandler`, `UnparsedEntityDeclHandler` and `ExternalEntityRefHandler` raise, with `SetParamEntityParsing(XML_PARAM_ENTITY_PARSING_NEVER)`, feeding an `ElementTree.TreeBuilder`. Never call `ElementTree.parse`/`fromstring` or `lxml` on input. The C-accelerated `ElementTree.XMLParser` does not expose its expat parser, so the handlers cannot be set on it. Check a zip-based input's central directory (total uncompressed size against free disk, compression ratio per member) before decompressing it (`utils/archive.py`). A format whose elements reference one another (3MF components, COLLADA `instance_node`) also bounds its expansion; see [Sizing a Container's Work to Its Task](#sizing-a-containers-work-to-its-task).
+An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expands entities without bound or an external entity that reads local files or URLs. Parse it as `preview/3dThumbnail/container/preview_pipeline/format_handlers/xml_mesh_handler.py` does (ARCC BSC12, secure XML parsing): an `xml.parsers.expat` parser whose `StartDoctypeDeclHandler`, `EntityDeclHandler`, `UnparsedEntityDeclHandler` and `ExternalEntityRefHandler` raise, with `SetParamEntityParsing(XML_PARAM_ENTITY_PARSING_NEVER)`, feeding an `ElementTree.TreeBuilder`. Never call `ElementTree.parse`/`fromstring` or `lxml` on input. The C-accelerated `ElementTree.XMLParser` does not expose its expat parser, so the handlers cannot be set on it. Check a zip-based input's central directory (total uncompressed size against free disk, compression ratio per member) before decompressing it (`utils/archive.py`). A format whose elements reference one another (3MF components, COLLADA `instance_node`) also bounds its expansion; see [Sizing a Container's Work to Its Task](#sizing-a-containers-work-to-its-task). The SYSTEM GenAI media image, which has no `xml_mesh_handler`, parses the XML parts of Office files and of the generic zip probe with `defusedxml` and reads every zip member through `media_extractors/common.read_zip_member`, which refuses, without decompressing it, a member whose central-directory size is above `ZIP_MEMBER_READ_MAX_BYTES` (4 MiB).
 
 ## Sizing a Container's Work to Its Task
 
@@ -169,7 +248,7 @@ A Batch/Fargate container sizes its work to the limits of the task it runs in ra
 -   Charge a path's own copies to that path. The renderer draws a mesh coloured per face from a copy with three corners per triangle, which measured up to 475 bytes per triangle at render against the 200 `BYTES_PER_TRIANGLE` charges. Measure such a cost on every task shape the configuration allows, not only the default: it was highest on 2 vCPU. `geometry_budget.apply_budgets` therefore holds such a mesh to `resources.cell_colour_triangle_limit` (the triangles that keep the measured peak within 60% of memory). Raising the shared constant instead would cut the budget of every mesh.
 -   Bound how far an instancing format expands before any budget applies. A 3MF component, a COLLADA `instance_node`, a STEP assembly component or an FBX model connected to several parents may place the same child several times per level, so a few-KB file describes 2^depth placements and a depth limit alone allows billions. Each walk counts its nodes and placed geometry against one `format_handlers/scene_limits.SceneLimit` (the triangle budget, three vertices per triangle of it, 1,000,000 nodes) and parses each object or geometry once (ARCC BSC1). Where a library expands the scene itself (OCCT's STEP transfer visits every placement; Assimp builds every FBX model placement and copies instanced geometry), count the placements from the file before handing it over (`cad_handler.assembly_occurrences`, `format_handlers/fbx_scene.scene_size`) and refuse a file over the bound. A recursive native parser can also be exhausted by nesting depth alone, independent of placement count: in the same pass `fbx_scene.scene_size` refuses an FBX whose scopes (ASCII) or node records (binary) nest past a fixed depth (`MAX_FBX_NESTING_DEPTH`), since the reader descends into each level as it opens.
 -   Check the input size plus output headroom against `shutil.disk_usage` before downloading, and fail with a message naming both sizes; do not keep a fixed maximum-size constant.
--   Download with a `TransferConfig` (parallel ranged GETs); stream line-oriented inputs from S3 (`get_object` + `iter_chunks`, resuming with a `Range` header after a dropped stream) and sample as they are read (`format_handlers/point_streams.py`).
+-   Download with a `TransferConfig` (parallel ranged GETs) on a client whose `max_pool_connections` is at least its `max_concurrency` (`utils/s3_utils.py`): botocore pools 10 connections, and urllib3 discards the connection of each concurrent request beyond the pool and reconnects. Stream line-oriented inputs from S3 (`get_object` + `iter_chunks`, resuming with a `Range` header after a dropped stream) and sample as they are read (`format_handlers/point_streams.py`).
 -   Log a compute-tier environment variable when the orchestration sets one, but never branch on it; log each phase's duration (`utils/timing.py`).
 
 ## Pinning a Container's Dependencies
@@ -177,6 +256,7 @@ A Batch/Fargate container sizes its work to the limits of the task it runs in ra
 Install a container's dependencies so that two builds of one commit ship the same code. `preview/3dThumbnail/container/Dockerfile` is the worked example:
 
 -   Python packages come from a lock generated from `requirements.txt` with `uv pip compile --generate-hashes`, installed with `pip install --require-hashes`; `requirements.txt` holds only the direct dependencies, and the lock's header carries the command that regenerates it.
+    -   A Lambda container image follows the same rule: the SYSTEM GenAI Blender image (`system/genAiMetadata/containers/blender/Dockerfile`) and media image (`system/genAiMetadata/containers/media/Dockerfile`) install their `requirements.lock`, and the 3D render Lambda image (`preview/3dThumbnail/container/Dockerfile.lambda`) its `requirements.lambda.lock`, with `--require-hashes --only-binary=:all:`.
 -   npm tools come from a committed `package-lock.json`, installed with `npm ci`.
 -   A release tarball (Node.js) is downloaded at a fixed version and its SHA-256 is checked in the same `RUN`.
 -   Compilers and build tools stay in a builder stage; the runtime stage copies only the installed results, from the same digest-pinned base image.
@@ -217,27 +297,27 @@ trimesh decodes model text (OBJ, MTL, ASCII STL, XYZ, glTF, a GLB's JSON chunk) 
 does not install it, as the 3D Basic Conversion's does not, such an input ends the run with `No module
 named 'charset_normalizer'`. The 3D Basic Conversion therefore reads that text as UTF-8 first, in
 `check_input_text` (`lambda.py`) before the reference fetch, and fails with a message saying the file could
-not be read rather than guessing another encoding (#910). The CAD/Mesh Metadata Extraction image does not
-install it either and applies the same check to mesh inputs, from its own `lambdaContainer/input_text.py`,
-after the download and before the mesh extractor runs, with the input's file name in the message (#1044).
-A new pipeline that loads model text through trimesh does the same. Read an image's lock file before
-assuming either behaviour for another pipeline.
+not be read rather than guessing another encoding (#910). The SYSTEM GenAI metadata pipeline's Blender
+image does not install it either, but there trimesh only adds the `sys_*` attributes it can measure
+(`meshAttributes.compute_trimesh_attributes`): a load that fails, non-UTF-8 text included, is a warning on
+the run and the attributes come from Blender's own import. A new pipeline that loads model text through
+trimesh and fails the run when the load fails does what the 3D Basic Conversion does. Read an image's lock
+file before assuming either behaviour for another pipeline.
 
-The two Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through
-`lambdaContainer/common/logger.py`, which is **not** in the `customLogging/logger.py` byte-identity set
-and redacts only `authorization`. A Lambda-container handler therefore checks `TaskToken` before it
-logs anything and never logs the event, as both handlers do
-(`tests/test_3dbasic_task_token_logging.py`, `tests/test_meshcad_task_token_logging.py`). The 3dBasic
+The 3dBasic Lambda-container pipeline logs through `lambdaContainer/common/logger.py`, which is **not**
+in the `customLogging/logger.py` byte-identity set and redacts only `authorization`. Its handler
+therefore checks `TaskToken` before it logs anything and never logs the event
+(`tests/test_3dbasic_task_token_logging.py`). The 3dBasic
 `.dockerignore` keeps `tests/`, the Poetry files and caches out of its `COPY . .`.
 
 VAMS reads a Lambda step's log group only for lines that contain the workflow execution id, so a line
-that names no run path (a referenced-file warning, for one) is missing from the run's log in VAMS. Both
-Lambda-container handlers therefore put the body's `workflowExecutionId` on every line with
+that names no run path (a referenced-file warning, for one) is missing from the run's log in VAMS. The
+3dBasic handler therefore puts the body's `workflowExecutionId` on every line with
 `logger.append_keys` after the task-token check, and remove it with `remove_keys` first thing in each
 invocation, because a reused execution environment keeps the logger's keys
-(`tests/test_3dbasic_execution_id_logging.py`, `tests/test_cadmesh_execution_id_logging.py`). A module
+(`tests/test_3dbasic_execution_id_logging.py`). A module
 that logs on the handler's behalf creates its logger as a Powertools child of the handler's service
-(`safeLogger(service=<handler's service>, child=True)`, as the CAD/mesh `metadata_extractors` do), so its
+(`safeLogger(service=<handler's service>, child=True)`), so its
 lines go through the handler's formatter and carry the same keys; a logger with a service of its own
 does not.
 
@@ -422,6 +502,9 @@ manifest inputFiles[].versionId
         → container: VersionId on every read of the input file
 ```
 
+The SYSTEM GenAI metadata pipeline carries the same value under the manifest entry's own name, `versionId`,
+at every hop (`MANIFEST_NAMED_VERSION_PIPELINES` in `backendPipelines/tests/test_pipeline_input_versions.py`).
+
 -   **Every read of the input file sends it**: the download (`ExtraArgs={"VersionId": v}` for
     `download_file`/`download_fileobj`), `head_object` and size checks, streamed `get_object` reads and
     their `Range` resumes, and existence checks. An AWS CLI container uses
@@ -434,8 +517,8 @@ manifest inputFiles[].versionId
     `constructPipeline` can run while the state machine still submits the old job definition, and every
     launch carries a version (the selected one or the one current at launch). An image that reads its
     definition with `.get` ignores an extra key, so the version may sit in the definition. An image that
-    parses it into plain dataclasses (3dThumbnail, pcPotreeViewer PDAL/Potree, coordinateTransform,
-    metadata3dLabeling: `StageInput(**inputFile)`, `PipelineDefinition(**params)`) rejects ANY unknown
+    parses it into plain dataclasses (3dThumbnail, pcPotreeViewer PDAL/Potree, coordinateTransform:
+    `StageInput(**inputFile)`, `PipelineDefinition(**params)`) rejects ANY unknown
     key at any level, so `constructPipeline` keeps the definition byte-identical to the one written
     before the field and returns the version as a second command element,
     `{"inputVersions": {"<first stage type>": "<version id>"}}` (`definition_command`). Those images
@@ -623,7 +706,7 @@ entry whose `fileKeyTypeRestriction` lists its extension, else the one with an e
    workflow's triggers** — how a preview or metadata built-in runs on a conversion pipeline's result. A
    workflow never fires on output it wrote itself whatever the value, so it cannot loop on its own
    files; a chained file must still match the trigger's `inputFileFilters`. The Potree preview, 3D
-   preview thumbnail, and GenAI 3D metadata labeling bundles enable it.
+   preview thumbnail, and SYSTEM GenAI metadata bundles enable it.
 7. **A workflow's `defaultOutputFileBaseExecutionPathExtension` supplies the output path prefix when
    an execution names none.** It is stored UNRESOLVED, so its `{{tag}}` placeholders resolve per run --
    one stored `/{{jobName}}/` gives every execution its own output folder, because the `{{jobName}}`
@@ -722,8 +805,11 @@ entry whose `fileKeyTypeRestriction` lists its extension, else the one with an e
     and unarchived and sets the trigger from its shipped value (for a built-in,
     `autoRegisterAutoTriggerOnFileUpload`). The durable way to stop a system pipeline is the deployment
     configuration (`autoRegisterWithVAMS: false` archives it, `autoRegisterAutoTriggerOnFileUpload:
-false` keeps its trigger off). No built-in bundle sets the flag yet; marking one changes nothing
-    about its `category`, which role constraints may scope on. Tests:
+false` keeps its trigger off). Pair the flag with a
+    `SYSTEM - <Area>` category — the shipped bundles are `system/genAiMetadata` and its second registration
+    `system/genAiMetadata/vamsSchema/assetSummary` (both `SYSTEM - GenAI`) and
+    `preview/3dThumbnail` (`SYSTEM - Preview`) — and list the pipeline in
+    `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`. Tests:
     `backend/tests/common/workflows/test_systemRecords.py`, `test_vamsSchemaImport_isSystem.py` and
     the `test_*_isSystem*.py` handler modules.
 
@@ -1138,6 +1224,15 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
     whichever state was listed first. The 3D thumbnail pipeline's standard and large tiers are the case
     in the tree (`preview/3dThumbnail/lambda/openPipeline.py`).
 
+-   **A state machine that runs Lambda tasks registers each task's `/aws/lambda/<function>` group** with
+    `sourceType: "lambda"` and `stageName` = the state that runs it (the Map state for a function inside a
+    Map), and those functions put BOTH the workflow and the pipeline execution id on every line they log.
+    Every run shares the group, and a registered shared group is read with both ids as required terms, so
+    a line without them is not shown and an unregistered group is not read at all. `system/genAiMetadata`
+    is the example: `openPipeline` takes the function names from `ANALYSIS_FUNCTION_NAMES` and derives
+    each ARN from the state machine group's, and every handler calls
+    `executionLogKeys.bind_execution_ids` before it logs (the 3D render image uses a root-handler filter).
+
 CDK rules for those env values (`infra/lib/nestedStacks/pipelines/**`):
 
 -   The registering lambda's environment spreads one of the two helpers in
@@ -1171,7 +1266,9 @@ CDK rules for those env values (`infra/lib/nestedStacks/pipelines/**`):
     string literal, never built at runtime, or the test cannot see it.
 -   A `lambda` entry uses `` `/aws/lambda/${fn.functionName}` `` with `IAMArn(name).loggroup`; never read
     `fn.logGroup` on a function without an explicit log group (it synthesizes a `Custom::LogRetention`
-    resource).
+    resource). A producer registering many functions may take only their names in one JSON env value and
+    derive each ARN from its state machine group's ARN, as `system/genAiMetadata` does, which keeps the
+    function inside the 4 KB Lambda environment limit.
 
 Producer tests (`lambda/tests/test_manifest_refactor.py`, `test_batch_job_registration.py`) assert the new
 keys and that the emitted `logGroupArn` passes `CLOUDWATCH_LOG_GROUP_ARN` and `logStreamPrefix` passes
@@ -1328,6 +1425,14 @@ holding:
 -   the `customLogging/logger.py` byte-identity check and the emitted-line token redaction checks
     (`backendPipelines/tests/test_pipeline_logger_identity.py`, `test_pipeline_logger_formatter.py`) — a
     handler can always be edited back to an f-string event log or a drifting logger copy
+-   the `vectorsearch/embeddings.py` byte-identity check against its canonical
+    `backend/backend/common/vectorsearch/embeddings.py`
+    (`backendPipelines/system/genAiMetadata/lambda/tests/test_sysgenai_vendored_copies.py`)
+-   the `containers/blender/scene_dependencies.py` byte-identity check against its canonical
+    `preview/3dThumbnail/container/preview_pipeline/dependencies.py` (same test file)
+-   the system GenAI metadata pipeline's whole-state log scan
+    (`backendPipelines/system/genAiMetadata/lambda/tests/test_sysgenai_no_whole_state_logs.py`) — a
+    handler can always be edited back to `logger.info(f"Event: {event}")`
 -   the `_run_streaming` no-drift comparison across the four deployable NVIDIA containers
 -   `test_container_file_inventory.py`'s `from .utils` scan — the package is `vams_utils`, so that import
     fails at container **runtime** on a GPU Batch job, invisible to the image build and to CDK synth
@@ -1409,9 +1514,13 @@ it for a new container that runs an upstream tool as a non-root user.
     copy, then propagate to the rest in the same change, and add the new pipeline's path to the
     `LOGGER_COPIES` tuple in `backendPipelines/tests/test_pipeline_logger_identity.py`, which pins the
     single digest, fails on an unlisted copy, and is the list `test_pipeline_logger_formatter.py` reads
-    too. Log an
+    too. The system GenAI metadata pipeline's two container images carry the same file as well
+    (`containers/media/customLogging/logger.py`, `containers/blender/containerLogger.py`), listed in
+    the same tuple. Log an
     event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never
-    log a task token on its own.
+    log a task token on its own. `backendPipelines/system/genAiMetadata` goes further: no module there
+    may log the whole `event`, `state`, `sfn_input` or token at all — log identifiers, keys and counts —
+    and `lambda/tests/test_sysgenai_no_whole_state_logs.py` walks the AST to enforce it.
 
     A pipeline that reads the workflow manifest also vendors `manifestHelper.py`. **All copies must stay
     byte-identical** — `backendPipelines/tests/test_manifest_helper_byte_identity.py` holds every copy to
@@ -1419,6 +1528,9 @@ it for a new container that runs an upstream tool as a non-root user.
     `find backendPipelines -name manifestHelper.py -exec md5sum {} \; | awk '{print $1}' | sort -u`
     must print exactly one hash. Edit the canonical copy, then `cp` it over the rest in the same change
     (`backendPipelines/tests/test_pipeline_cross_region_inputs.py` lists the copies and pins the digest too).
+    A pipeline that embeds also vendors `vectorsearch/embeddings.py`; its canonical copy is
+    `backend/backend/common/vectorsearch/embeddings.py` and the same edit-then-`cp` rule applies, pinned by
+    `backendPipelines/system/genAiMetadata/lambda/tests/test_sysgenai_vendored_copies.py`.
 
     An asset bucket may be in another Region than the deployment. The manifest names it on every input
     file (`inputFiles[].bucketRegion`, plus `bucketAccountId` for a cross-account bucket) and on the
@@ -1426,7 +1538,7 @@ it for a new container that runs an upstream tool as a non-root user.
     exposes them as `inputBucketRegion` / `outputBucketRegion`, and `manifestHelper.s3_client_for_region()`
     builds the client that reads or writes there (adaptive retries, regional `us-east-1` endpoint, no
     `endpoint_url`). **A pipeline whose AWS Batch compute runs in the isolated subnets** (Potree viewer,
-    3D thumbnail, GenAI metadata labeling, coordinate transform, Video SOP/BOM) reaches Amazon S3 in the
+    3D thumbnail, SYSTEM GenAI metadata, coordinate transform, Video SOP/BOM) reaches Amazon S3 in the
     deployment
     Region through the S3 gateway endpoint and in each cross-Region asset bucket's Region through the
     cross-Region S3 interface endpoint the VPC builder creates in those subnets
@@ -1443,7 +1555,14 @@ it for a new container that runs an upstream tool as a non-root user.
     entry points (`lambdaContainer/lambda.py`) read the input and write the output with a client for the
     Region the manifest names. Moving a pipeline between placements means adding or removing that call
     and the env var. `infra/test/pipelines/isolatedPipelinesCrossRegionEndpointEnv.test.ts` holds the
-    four functions' value to the VPC builder's endpoint list.
+    four functions' value to the VPC builder's endpoint list. The SYSTEM GenAI metadata pipeline's
+    readers are Lambda functions that sit in the isolated subnets only with `useForAllLambdas`, so its
+    `vamsExecute` calls the gate only when `PIPELINE_LAMBDAS_IN_VPC` (set by its lambda builder) is
+    `true`; its Fargate renderer, always in the isolated subnets, is skipped for an input Region the VPC
+    cannot reach (`constructPipeline.fargate_reads_region` for an over-limit file, which stays on NONE
+    with a warning, and the Blender handler's `fargate_reads_region` for a dependency overflow, which
+    renders in Lambda with what fits). `constructPipeline` and the Blender function carry
+    `CROSS_REGION_S3_ENDPOINT_REGIONS` for that check.
     **Batch containers get the Regions through the job definition:** `vamsExecute` passes
     `inputBucketRegion` / `outputBucketRegion` to `openPipeline` (state-machine input), `constructPipeline`
     turns them into the definition's `bucketRegions` map (`bucket_regions(event)`: bucket name -> Region,
@@ -1538,7 +1657,7 @@ it for a new container that runs an upstream tool as a non-root user.
     - **Pipeline-only endpoint condition** (~line 651) — the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints in the isolated subnets. **Required for every pipeline, either placement.** Without it Batch jobs cannot pull container images.
     - **ECS endpoint condition** (~line 736) — the `needsEcsPrivate` variable. **Private-subnet pipelines only.** This is the ECS _control-plane_ endpoint that the ECS agent on an EC2-launch-type container instance needs; **Fargate tasks do not use it** (they need ECR, Amazon S3 and CloudWatch Logs, supplied by the block above). Each endpoint adds one ENI per AZ, ~$15/month.
 
-    Which blocks a flag belongs in is derived from the source, not from a list kept here. Read the placement off `pipelineBuilder-nestedStack.ts`: a stack given `pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline` is an isolated-subnet pipeline (endpoint block only); one given `privateSubnets.pipeline`, or both `pipelineSubnetsPrivate` and `pipelineSubnetsIsolated`, is a private-subnet pipeline (all three). A containerized Lambda pipeline (3dBasic, CAD/mesh metadata extraction) is placed in isolated subnets but runs no Batch job, so it appears in no block. A pipeline whose container calls a service that has no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime / Rekognition `if` — the Bedrock Runtime endpoint is created when `bedrockRuntimeFromLambda` (`useForAllLambdas && useGenAiMetadata3dLabeling.enabled`) **or** `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Isaac Lab training is one of two placements the derivation does not predict: its EC2 Batch compute is placed in `privateSubnets.pipeline` (its EFS in isolated subnets) and the flag appears in the subnet-creation and endpoint blocks, while its ECS endpoint is gated separately by `needsEcsIsolated` rather than `needsEcsPrivate`. The other is the GenAI CAD STEP agent, whose placement follows its `runtime`: `pipelineBuilder-nestedStack.ts` gives it `privateSubnets.pipeline` on `fargate`, where its flag appears in all three blocks under a `runtime === "fargate"` condition, and `isolatedSubnets.pipeline` on `agentcore`, where only its Lambdas are in the VPC (the agent runs on Amazon Bedrock AgentCore outside it), so it appears in none of the three and instead gates the AgentCore interface endpoint (`BedrockAgentCoreEndpoint`, created with `useForAllLambdas` because its caller is the invoke Lambda) beside the Bedrock Runtime gate. Recompute the membership with `grep -n "pipelineSubnets" infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` against `grep -n "subnetConfigurations.push(subnetPublicConfig)\|Pipeline-Only Required Endpoints\|const needsEcsPrivate\|bedrockRuntimeFromContainer" infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` (no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one) and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` (the service-endpoint gate widened for the container without widening the Lambda gate). `infra/test/security/vpcEndpointsAndAuthGrants.test.ts` asserts each flag's block membership from its `privateSubnetBatchFlags` / `isolatedSubnetBatchFlags` lists — add a new pipeline's flag to the matching list.
+    Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `useGenAiVideoSopBom`, `usePreview3dThumbnail`, `usePreviewPcPotreeViewer`, `useSystemGenAiMetadata.useFargateRenderer`. Private-subnet flags (all three blocks): `useGenAiCadStepAgent.runtime`, `useImageTo3d`, `useModelOps`, `useNvidiaCosmos`, `useNvidiaCosmos3`, `useNvidiaGr00t`, `useRapidPipeline.useEcs`, `useRapidPipeline.useEks`, `useSplatToolbox`. The GenAI CAD STEP agent is keyed on `useGenAiCadStepAgent.runtime` because only its `fargate` runtime runs a Batch job; its `agentcore` runtime appears in no block. `useIsaacLabTraining` sits in blocks 1 and 2 and takes the ECS endpoint through `needsEcsIsolated`, so it is in neither list. Lambda-only pipelines (3D basic conversion, the SYSTEM GenAI metadata pipeline without its Fargate renderer) appear in no block; a container branch behind a sub-flag keys the block condition and the `vpcRequiringFeatures` entry on the sub-flag, never on the pipeline's `enabled`. A container that calls a service with no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime `if` (block 4): the Bedrock Runtime endpoint is created when `bedrockFromAllLambdas` (`useForAllLambdas` with the SYSTEM GenAI metadata pipeline or vector search), `bedrockFromSearch` (vector search with the search Lambdas in the VPC) or `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. The authoritative lists live in `infra/lib/nestedStacks/pipelines/CLAUDE.md` and are asserted against the source by `infra/test/platform/steeringVectorSearchRelease.test.ts`. Regression coverage: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` asserts both directions — no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one — and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` asserts that block 4's container gate creates `.transcribe` and `.bedrock-runtime` without `useForAllLambdas`. `infra/test/security/vpcEndpointsAndAuthGrants.test.ts` asserts each flag's block membership from its `privateSubnetBatchFlags` / `isolatedSubnetBatchFlags` lists — add a new pipeline's flag to the matching list.
 
 11. **Pass through all output paths at EVERY hop**, not just in `vamsExecute` — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, `outputS3AssetMetadataPath`, or `outputS3AssetResultsPath`. A path crosses three lambdas before the container sees it — `vamsExecute` → `openPipeline` → `constructPipeline` — and **each one enumerates the paths explicitly**, so a path added at one hop is dropped silently at the next unless it is named there too. The results prefix was lost exactly that way twice over: first `manifestHelper.resolve_inputs` documented it in the manifest contract and dropped it, then with that fixed and both ends wired, `openPipeline` in the middle still did not forward it, so the container received an empty results target and wrote its report into asset metadata instead. Nothing failed either time. Assert the whole chain, not one hop: `backendPipelines/genAi/imageTo3d/lambda/tests/test_imageto3d_pipeline.py` covers all three. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
 12. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).

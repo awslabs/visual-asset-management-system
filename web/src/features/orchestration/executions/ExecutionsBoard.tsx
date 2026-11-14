@@ -30,6 +30,11 @@ import {
 } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
+import { appCache } from "../../../services/appCache";
+import {
+    featuresEnabled,
+    normalizeFeaturesEnabled,
+} from "../../../common/constants/featuresEnabled";
 import type { Execution, NotAbortableSubExecution } from "../types";
 import { resourceTypeLabel } from "./resourceTypeLabels";
 
@@ -136,6 +141,13 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
     const [searchText, setSearchText] = useState("");
     const [statusFilter, setStatusFilter] = useState("");
     const [triggerFilter, setTriggerFilter] = useState("");
+    // A System-Reindex run is started only by the vector-search reindexer, so the trigger filter
+    // offers that value only on a deployment with vector search on.
+    const [vectorSearchEnabled] = useState(() =>
+        normalizeFeaturesEnabled(appCache.getItem("config")?.featuresEnabled).includes(
+            featuresEnabled.VECTORSEARCH
+        )
+    );
     // Workflow-database / workflow filters. Only meaningful in the global scope: a WORKFLOW-scoped
     // board already has these pinned by the scope (see useExecutions), so the controls are hidden
     // there rather than offering a choice that would be overridden.
@@ -758,11 +770,15 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
                         onChange={(e) => setTriggerFilter(e.target.value)}
                         className={control}
                     >
-                        {/* Values are the stored trigger vocabulary ("Manual"/"File-Upload"), which
-                            is what the server-side triggerType filter compares against. */}
+                        {/* Values are the stored trigger vocabulary ("Manual"/"File-Upload"/
+                            "System-Reindex"), which is what the server-side triggerType filter
+                            compares against. */}
                         <option value="">All triggers</option>
                         <option value="Manual">Manual</option>
                         <option value="File-Upload">File upload</option>
+                        {vectorSearchEnabled && (
+                            <option value="System-Reindex">System reindex</option>
+                        )}
                     </select>
                     {isGlobalScope && (
                         <select

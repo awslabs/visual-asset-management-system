@@ -133,7 +133,7 @@ class DetailsGroup(click.Group):
 @click.option('--exclude-status',
               help='Exclude executions of these statuses, one or comma-separated (e.g. SKIPPED); applied by '
                    'the service before the page is cut')
-@click.option('--trigger-type', help='Filter by trigger type (Manual / File-Upload)')
+@click.option('--trigger-type', help='Filter by trigger type (Manual / File-Upload / System-Reindex)')
 @click.option('--group-id', help='Filter by executionGroupId')
 @click.option('--triggered-by', help='Filter by the user ID that triggered the execution')
 @click.option('--filter-start-date',

@@ -1,0 +1,7 @@
+# Build-context exclusions shared by Dockerfile (Fargate) and Dockerfile.lambda.
+tests/
+tmp/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+*.md

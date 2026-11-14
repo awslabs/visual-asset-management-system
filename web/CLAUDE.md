@@ -194,7 +194,10 @@ web/
                               #   comparators byText/byDate/byNumber, useSortedItems for a page the server
                               #   returned, useBrowserPagedItems for a whole list, PAGE_SORTING_NOTE)
       loading/ metadata/ metadataSchema/ metadataV2/ modals/
-      search/                 # ModernSearchContainer.tsx - main search UI
+      search/                 # ModernSearchContainer.tsx - unified keyword / natural-language search
+                              #   (the body of the search page's "Search" view; see 8.1)
+                              #   SearchLayout/lockedDatabase.ts — trigger text of the Database filter
+                              #   a database route locks (names the database, not "All databases")
       searchSmall/ selectors/
       single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
@@ -203,7 +206,9 @@ web/
       AssetDownload.tsx AssetUpload/
       auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
-      search/                 # SearchPage.tsx
+                            #   ListPage.tsx keys its body by the route's databaseId: the routes
+                            #   that share one page component keep it mounted (#1228)
+      search/                 # SearchPage.tsx — breadcrumbs + searchPlugin's SearchTabsHost (title row, views)
       Subscription/ Tag/
 
       # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
@@ -239,6 +244,14 @@ web/
       components/               # Shared viewer UI components
       viewers/                  # Individual viewer plugins + manifest.ts, addonManifest.ts,
                                 #   custom/customManifest.ts
+
+    searchPlugin/           # Search page provider host (title row + view switch) — see 8.1
+      index.ts
+      config/searchProviderConfig.json  # Provider catalog (searchProviderConfig.test.ts guards it)
+      core/                     # SearchProviderRegistry.ts, providerAvailability.ts,
+                                #   useSearchProvidersReady.ts, types.ts
+      components/SearchTabsHost.tsx  # title row (h1, view switch, titleSlots) + active body
+      providers/                # manifest.ts + AssetListProvider/, UnifiedSearchProvider/
 
     common/                 # Shared utilities and helpers
       GlobalHeader.tsx common-components.tsx
@@ -761,7 +774,7 @@ const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent")
 
 **Admin-only actions** (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. The trigger list (`TriggersEditor`, on the Triggers page and the builder's Triggers step) offers **Add**, **Edit** and **Retry** only to a role that may call the trigger `PUT` route and **Delete** only to one that may call its `DELETE`; the create flow's Triggers step is gated on the `PUT` as a whole. **Tier-2 is not pre-checked client-side** — the backend filters lists to what the user can access, so inaccessible objects never appear. A per-object action that returns 403 surfaces a clean inline message.
 
-The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the asset search list (Create Asset, Delete Selected). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
+The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the search page's Search and Asset list views (Create Asset, Delete Selected, and Unarchive Selected, gated on `PUT /database/{databaseId}/assets/{assetId}/unarchiveAsset` as the asset page's Unarchive is: `database-admin` reaches it through `starts_with /database`, `database-user` denies it and `database-readonly` has no `PUT`; `pages/search/SearchPage.tsx` computes the three reasons). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
 
 A **navigational surface** is the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer. Removing a tab from a strip makes the capability undiscoverable and reads as though the deployment has no logs at all, whereas an unavailable menu entry simply narrows a list of actions. Gate the panel's contents, not the tab.
 
@@ -801,7 +814,7 @@ try {
 Rules:
 
 -   **Match the app's message convention**: a short header naming the outcome (`"Archive failed"`,
-    `"Pipeline archived"` — mirroring `"Search failed"` / `"Search completed"`), with the entity name
+    `"Pipeline archived"` — mirroring `"Search failed"` / `"Search cleared"`), with the entity name
     and the backend's message in the `description`. Do not put the entity name in the header.
 -   **Never leave a mutation's `catch` as `console.error` only, and never use `alert()`.** A silent
     failure is indistinguishable from success; a native `alert()` is a blocking modal.
@@ -1000,6 +1013,29 @@ The 3D/media viewer system is a plugin-based architecture under `src/visualizerP
 
 For the current viewer catalog, plugin config field reference, and the step-by-step "adding a new viewer plugin" walkthrough, see `web/src/visualizerPlugin/CLAUDE.md` (auto-loaded when editing viewer-plugin code).
 
+### 8.1 Search Provider Registry
+
+The search page is a set of **search provider** views under `src/searchPlugin/`, built the same way as the viewer plugins: a JSON catalog (`config/searchProviderConfig.json`), a manifest (`providers/manifest.ts`) so Vite sees every provider chunk, a singleton `core/SearchProviderRegistry.ts` (lazy `import.meta.glob` loading; availability read from `appCache` config), a pure `core/providerAvailability.ts` Jest can import, `core/useSearchProvidersReady.ts`, and `components/SearchTabsHost.tsx`. The host renders the page title row, then the active provider's body, loaded through `lazyWithRetry` like a route page. The title row holds the one h1 ("Assets and Files", or "Assets for <databaseId>" on a database route, in the deployment's asset synonym; `searchPageTitle`) and, when more than one provider is available, the view switch on its right: a Cloudscape `SegmentedControl` labelled `Page view` (Cloudscape shows it as a select below 688 px). The active view is the `?tab=` hash query, written with `replace`; an unknown or absent value selects the default view. Only the active body is mounted, and it receives `databaseId`, `isActive`, `assetActionDisabledReasons` and `titleSlots`. A body renders no page heading of its own: it portals its title-row content into `titleSlots.info` (beside the h1, the Search view's result count) and `titleSlots.actions` (before the switch, **Clear all filters**), and the asset list passes `hidePageHeading` to `ListPage`. The switch sits outside the body, so the control the user pressed stays mounted and keeps focus across a switch. Availability is `{ "always": true }` or `{ "anyOf": [ { "featureEnabled": X } | { "featureDisabled": X } ] }` over `featuresEnabled`; the lowest priority number is the default view. There is no runtime registration API and no add-on or fork lane for providers: adding a provider is a source change in the three places `manifest.ts` lists, plus a row here. The catalog holds the core providers only, so the switch is always a segmented control.
+
+| ID               | Name       | Priority | Availability                                |
+| ---------------- | ---------- | -------- | ------------------------------------------- |
+| `asset-list`     | Asset list | 100      | always                                      |
+| `unified-search` | Search     | 10       | VECTORSEARCH enabled or NOOPENSEARCH absent |
+
+`config/searchProviderConfig.test.ts` fails when this table and the catalog disagree. The Search provider offers a `Keyword | Natural language` mode toggle when both engines are enabled, a reduced filter sidebar (database, file type, archived, **Search inside files**) when `NOOPENSEARCH` is present, and relevance as a percentage with a modality popover on natural-language hits. A finished search's count is not toasted (the toast stack sits over the title row's controls): `ModernSearchContainer` puts `Found N results` in a hidden Cloudscape `LiveRegion` for screen readers, and toasts only failures, **Search cleared** and row-action confirmations. The rare natural-language warnings show in a dismissible **Search notice** Alert above the results, derived from the answer on screen, and the live region reads their text after the count; `truncated:window` and `segments:window_full` raise no notice and are stated under the results instead. Pipeline, workflow, and trigger records with `isSystem: true` show a **System** badge and open read-only except for their `enabled` switches and template `configBody`/`tagSchema`.
+
+The Search view's answers follow these rules (`ModernSearchContainer.tsx`):
+
+-   **Newest search wins.** Each search takes the next number (`latestSearchRef`, through `startSearch`), and only the newest applies its answer, its error and the end of the loading state, so a page change, refresh or auto-refresh still running never replaces a newer answer. **Clear all filters** takes a number too and clears `answeredMode`, so no count shows until the reloaded list answers. Pass the number to `runSearch`; do not call the search API from a view.
+-   **Clear all filters only for a change from the defaults.** `hasActiveFilters({ databaseLocked })` asks `hasUserSearchCriteria` (`hooks/useSearchState.tsx`): a query, a metadata filter row, or a filter that narrows or changes the search. The record type, the result explanation preference and a database route's locked database never count, and **Keyword Search Scope** and **Search inside files** count only once cleared. `clearSearch(["str_databaseid"])` keeps the locked database.
+-   **One result and one dispatch for every view.** The table and the Map view both get `displayedResult` and `handleListDispatch`, so in natural-language mode both page through the answer held in the browser and a page change runs no search; the map's paginator sizes itself from `getPagedResultCount`.
+-   **The Map view scopes by request.** A keyword search on the map adds `HAS_LOCATION_FILTER` (`_exists_:geo_MD_location`, `hooks/searchRequestBuilders.ts`) through `executeSearch`'s `requireLocation` option. It never adds metadata filter rows or changes the metadata mode or operator, and entering or leaving the map runs the keyword search again from page 1; in natural-language mode a view switch runs no search. A natural-language asset hit's `MD_` holds only its asset's location keys (`hasLocationOnlyMetadata`, `utils/recordType.ts`), so neither the map popup nor the Metadata column lists them as metadata.
+-   **A 503 is a failed search, not a feature-off state.** `POST /search/nlp` answers 503 when OpenSearch cannot apply a metadata, tag or location filter, when Amazon Bedrock or Amazon DynamoDB is throttled or times out, or while the vector index is built, and `POST /search` when OpenSearch is enabled but unreachable. The page reports each as a **Search failed** toast with the API's message and keeps its controls; `opensearch:enrichment_failed` (sent only for a request with no such filter) is a Search notice.
+-   **Controls only in the mode that uses them.** **Keyword Search Scope** (`includeMetadataInKeywordSearch`) and **Show result explanation** (`showResultExplanation`) are not rendered in natural-language mode, which never sends them.
+-   **Filter panels.** The Database multiselect reads its selection through `selectedValues` (`hooks/searchRequestBuilders.ts`), because a database route locks the filter with `value` only, and the locked control names that database (`SearchLayout/lockedDatabase.ts`). Facet counts carry `+` when the count beside them is a minimum (`nlpCountsAreMinimums` in natural-language mode, `isTotalLowerBound` for a keyword answer). In a filtered search the type and tag lists keep the values of the last unfiltered search but show the current answer's counts, and none for a value it has no bucket for. A facet whose `sum_other_doc_count` is above 0 is cut (`isFacetCut`, `SearchLayout/BasicFiltersPanel.tsx`): the Database filter shows no count for a database without a bucket, and a type or tag list built from a cut facet (the answer's, or the cached unfiltered search's) shows `facetCutNote` under it.
+-   **Breadcrumb.** `pages/search/SearchPage.tsx` ends the trail with `searchPageTitle(databaseId)` and adds only **Databases** before it on a database route; no step links to the page itself.
+-   **"About this count".** The table header opens it from a Cloudscape `Button variant="inline-icon" iconName="status-info"` named "About this count", so the keyboard reaches and opens it.
+
 ---
 
 ## 9. Configuration System
@@ -1061,7 +1097,9 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval). The Three.js viewer opens USD (.usd/.usda/.usdc/.usdz) without it; with it, Needle and Three.js both match USD and the user picks.
+-   Three.js referenced files (textures, `.mtl`, USD layers) are fetched only through `ThreeJSViewerPlugin/utils/assetDependencyResolver.ts` (path rules, limits, URL modifier with placeholder); see "Three.js Referenced Files" in `web/src/visualizerPlugin/CLAUDE.md`.
+-   `VECTORSEARCH` -- Natural-language (vector) search: enables the NLP mode of the search page's Search view and `POST /search/nlp`; with `NOOPENSEARCH` also present the view runs in its reduced (NLP-only) form. The Executions board offers its `System-Reindex` trigger filter only with it (only the vector reindexer starts such runs)
 -   Add-on flags (`addons/addonFeatures.ts`) are described in each add-on module's own `CLAUDE.md`
 -   Additional flags may exist in deployed configurations
 
@@ -1427,6 +1465,7 @@ When in doubt about patterns, reference these well-structured files:
 | Viewer config        | `src/visualizerPlugin/config/viewerConfig.json`   |
 | Complex component    | `src/components/asset/ViewAsset.tsx`              |
 | Search UI            | `src/components/search/ModernSearchContainer.tsx` |
+| Search page views    | `src/searchPlugin/components/SearchTabsHost.tsx`  |
 | Upload service       | `src/services/AssetUploadService.ts`              |
 | File operations      | `src/services/FileOperationsService.ts`           |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |

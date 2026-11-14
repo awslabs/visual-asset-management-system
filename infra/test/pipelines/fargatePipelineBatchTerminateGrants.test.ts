@@ -12,7 +12,7 @@
  * `batch:TerminateJob` on the account's jobs. Without them the state machine stops and the Fargate
  * container keeps running, and billing, until its attempt duration ends.
  *
- * The three Fargate pipelines that submit through `.sync` are asserted alongside the Splat Toolbox
+ * The Fargate pipelines that submit through `.sync` are asserted alongside the Splat Toolbox
  * GPU pipeline, which is the positive control: it has carried both grants throughout, so the
  * assertion is known to find them where they exist.
  */
@@ -29,10 +29,10 @@ import * as Config from "../../config/config";
 import * as Service from "../../lib/helper/service-helper";
 import * as s3AssetBuckets from "../../lib/helper/s3AssetBuckets";
 import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
-import { Metadata3dLabelingConstruct } from "../../lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/metadata3dLabeling-construct";
 import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct";
 import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
 import { SplatToolboxConstruct } from "../../lib/nestedStacks/pipelines/3dRecon/splatToolbox/constructs/splatToolbox-construct";
+import { SystemGenAiMetadataConstruct } from "../../lib/nestedStacks/pipelines/system/genAiMetadata/constructs/systemGenAiMetadata-construct";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
 
@@ -135,23 +135,6 @@ const stateMachineRoleStatements = (template: Template): any[] => {
 
 describe.each([
     [
-        "GenAI 3D metadata labeling",
-        "Metadata3dLabelingTerminateStack",
-        (c: Config.Config) => {
-            c.app.pipelines.useGenAiMetadata3dLabeling.enabled = true;
-            c.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterWithVAMS = false;
-        },
-        // The construct IS a NestedStack, so its resources are in its own template.
-        (h: Harness) =>
-            Template.fromStack(
-                new Metadata3dLabelingConstruct(
-                    h.stack,
-                    "Metadata3dLabelingPipeline",
-                    commonProps(h)
-                )
-            ),
-    ],
-    [
         "3D preview thumbnail",
         "Preview3dThumbnailTerminateStack",
         (c: Config.Config) => {
@@ -163,6 +146,24 @@ describe.each([
                 new Preview3dThumbnailConstruct(
                     h.stack,
                     "Preview3dThumbnailPipeline",
+                    commonProps(h)
+                )
+            ),
+    ],
+    [
+        // The Batch branch exists on the useFargateRenderer sub-flag only.
+        "System GenAI metadata (Fargate renderer)",
+        "SystemGenAiMetadataTerminateStack",
+        (c: Config.Config) => {
+            c.app.pipelines.useSystemGenAiMetadata.enabled = true;
+            c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = false;
+            c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
+        },
+        (h: Harness) =>
+            Template.fromStack(
+                new SystemGenAiMetadataConstruct(
+                    h.stack,
+                    "SystemGenAiMetadataPipeline",
                     commonProps(h)
                 )
             ),

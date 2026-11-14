@@ -279,8 +279,12 @@ def normalize_s3_path(base_path, relative_path):
 # Core Download Logic
 #######################
 
-def get_distributable_asset_context(databaseId, assetId):
-    """Get the asset's bucket and base key, verifying the asset is downloadable"""
+def get_distributable_asset_context(databaseId, assetId, quarantine_checked_per_key=False):
+    """Get the asset's bucket and base key, verifying the asset is downloadable.
+
+    `quarantine_checked_per_key` leaves the quarantine block to `resolve_and_sign_file_key`, which
+    applies it to the one resolved key (a single-file download, whose key may be a preview
+    companion); every other caller is guarded here for the whole asset."""
     asset = get_asset_details(databaseId, assetId)
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found in database")
@@ -291,7 +295,8 @@ def get_distributable_asset_context(databaseId, assetId):
 
     # Quarantine block (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The caller has
     # already passed authorization, so a denied caller never reaches this read.
-    check_quarantine_block(databaseId, assetId)
+    if not quarantine_checked_per_key:
+        check_quarantine_block(databaseId, assetId)
 
     # Get asset location
     asset_location = asset.get('assetLocation')
@@ -303,8 +308,13 @@ def get_distributable_asset_context(databaseId, assetId):
     return bucketDetails['bucketName'], asset_location.get('Key')
 
 def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key, raw_key,
-                              version_id=None, asset_version_id=None, asset_version_alias=None):
+                              version_id=None, asset_version_id=None, asset_version_alias=None,
+                              check_quarantine_for_key=False):
     """Resolve one file key against the asset and generate its presigned URL
+
+    With `check_quarantine_for_key` (a single-file download) the quarantine block is applied here
+    to the resolved key, before any S3 call: a preview companion at its current version is served
+    for a quarantined asset (#1495), any other key, or any version pin, is refused.
 
     Returns:
         (downloadUrl, versionId) tuple
@@ -343,6 +353,11 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
     # per-file channel as the other refusals, so a bulk request skips just this key.
     if exceeds_s3_object_key_limit(final_key):
         raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
+
+    if check_quarantine_for_key:
+        version_pinned = bool(version_id or asset_version_id or asset_version_alias)
+        check_quarantine_block(databaseId, assetId,
+                               object_key=None if version_pinned else final_key)
 
     # Resolve version ID first -- an asset-version pin (whole-set) resolves the
     # per-file S3 version from the snapshot; otherwise version_id is either the
@@ -421,13 +436,15 @@ def download_asset_file(databaseId, assetId, request_model):
     Returns:
         DownloadAssetResponseModel instance
     """
-    asset_bucket, asset_base_key = get_distributable_asset_context(databaseId, assetId)
+    asset_bucket, asset_base_key = get_distributable_asset_context(
+        databaseId, assetId, quarantine_checked_per_key=True)
 
     url, version_id = resolve_and_sign_file_key(
         databaseId, assetId, asset_bucket, asset_base_key, request_model.key,
         version_id=request_model.versionId,
         asset_version_id=request_model.assetVersionId,
-        asset_version_alias=request_model.assetVersionIdAlias
+        asset_version_alias=request_model.assetVersionIdAlias,
+        check_quarantine_for_key=True
     )
 
     # Return response model
@@ -524,12 +541,17 @@ def download_asset_preview(databaseId, assetId, request_model):
     if not asset.get('isDistributable', False):
         raise VAMSGeneralErrorResponse("Asset not distributable")
 
-    # Quarantine block (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The caller has
-    # already passed authorization, so a denied caller never reaches this read.
-    check_quarantine_block(databaseId, assetId)
-
     # Get preview location
     preview_location = asset.get('previewLocation')
+
+    # Quarantine block (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The caller has
+    # already passed authorization, so a denied caller never reaches this read. The asset's preview
+    # image is still served for a quarantined asset (#1495); a preview location without an allowed
+    # preview image extension is guarded like a file.
+    check_quarantine_block(databaseId, assetId,
+                           object_key=(preview_location or {}).get('Key') or None,
+                           asset_preview=True)
+
     if not preview_location:
         raise VAMSGeneralErrorResponse("Asset preview location not found")
         

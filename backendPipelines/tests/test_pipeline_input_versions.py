@@ -44,6 +44,19 @@ PER_ENTRY_VERSION_PIPELINES = (
     "backendPipelines/genAi/videoSopBom/lambda",
 )
 
+# Pipelines that carry the first input file's version under the manifest entry's own name, `versionId`:
+# vamsExecute copies it from the first entry, openPipeline forwards it in its field list, and
+# constructPipeline reads the input with it (and pins the current version when it is ""). The rule is the
+# same; only the name differs, so each hop is checked for that name instead.
+MANIFEST_NAMED_VERSION_PIPELINES = (
+    "backendPipelines/system/genAiMetadata/lambda",
+)
+MANIFEST_NAMED_VERSION_CHECKS = {
+    "vamsExecute": r"first_file\.get\(['\"]versionId['\"]",
+    "openPipeline": r"['\"]versionId['\"]",
+    "constructPipeline": r"event\.get\(['\"]versionId['\"]",
+}
+
 # Pipelines whose container definition is built by a module other than constructPipeline.py.
 CONSTRUCT_PIPELINE_BUILDERS = {
     "backendPipelines/multi/rapidPipelineEKS/lambda/consolidated_handler.py",
@@ -118,13 +131,21 @@ def _whole_asset(relative):
     return any(relative.startswith(f"{pipeline}/") for pipeline in WHOLE_ASSET_PIPELINES)
 
 
+def _carries(relative, hop, inputVersionId_pattern):
+    """Whether ``relative`` (a ``hop`` handler) carries the input version: under the manifest's own
+    name in a MANIFEST_NAMED_VERSION_PIPELINES directory, as ``inputVersionId`` elsewhere."""
+    pattern = (MANIFEST_NAMED_VERSION_CHECKS[hop]
+               if relative.rsplit("/", 1)[0] in MANIFEST_NAMED_VERSION_PIPELINES else inputVersionId_pattern)
+    return re.search(pattern, _read(relative)) is not None
+
+
 class TestEveryPipelineCarriesTheVersion:
     def test_every_vams_execute_handler_forwards_it(self):
         missing = [relative for relative in _lambda_files("vamsExecute")
                    if relative not in NO_INPUT_FILE_VAMS_EXECUTE
                    and not _whole_asset(relative)
                    and relative.rsplit("/", 1)[0] not in PER_ENTRY_VERSION_PIPELINES
-                   and not re.search(r"resolved\[['\"]inputVersionId['\"]\]", _read(relative))]
+                   and not _carries(relative, "vamsExecute", r"resolved\[['\"]inputVersionId['\"]\]")]
         assert not missing, f"vamsExecute handlers that drop the input version: {missing}"
 
     def test_the_exempt_handlers_exist(self):
@@ -132,6 +153,13 @@ class TestEveryPipelineCarriesTheVersion:
         assert all(relative in handlers for relative in NO_INPUT_FILE_VAMS_EXECUTE)
         assert all(os.path.isfile(os.path.join(_REPO_ROOT, *relative.split("/")))
                    for relative in CONSTRUCT_PIPELINE_BUILDERS)
+
+    @pytest.mark.parametrize("pipeline", MANIFEST_NAMED_VERSION_PIPELINES)
+    def test_the_manifest_named_pipelines_have_every_hop(self, pipeline):
+        # The name exemption covers a directory only while it has the three hops it is checked on.
+        hops = {name.split("/")[-1].split(".")[0] for name in _lambda_files("") if name.startswith(f"{pipeline}/")}
+        assert {"openPipeline", "constructPipeline"} <= hops
+        assert any(hop.startswith("vamsExecute") for hop in hops)
 
     @pytest.mark.parametrize("pipeline", WHOLE_ASSET_PIPELINES)
     def test_the_whole_asset_pipelines_still_take_the_whole_asset(self, pipeline):
@@ -145,7 +173,7 @@ class TestEveryPipelineCarriesTheVersion:
         missing = [relative for relative in _lambda_files("openPipeline")
                    if not _whole_asset(relative)
                    and relative.rsplit("/", 1)[0] not in PER_ENTRY_VERSION_PIPELINES
-                   and not re.search(r"['\"]inputVersionId['\"]", _read(relative))]
+                   and not _carries(relative, "openPipeline", r"['\"]inputVersionId['\"]")]
         assert not missing, f"state machine inputs without the input version: {missing}"
 
     def test_every_construct_pipeline_reads_it(self):
@@ -153,7 +181,7 @@ class TestEveryPipelineCarriesTheVersion:
             source = _read(relative)
             if relative.rsplit("/", 1)[0] in PER_ENTRY_VERSION_PIPELINES:
                 return re.search(r"entry\.get\(['\"]versionId['\"]\)", source) is not None
-            return "inputVersionId" in source
+            return _carries(relative, "constructPipeline", r"inputVersionId")
         builders = _lambda_files("constructPipeline") + sorted(CONSTRUCT_PIPELINE_BUILDERS)
         missing = [relative for relative in builders if not _whole_asset(relative) and not carries(relative)]
         assert not missing, f"constructPipeline handlers that drop the input version: {missing}"

@@ -268,9 +268,12 @@ def _take_over_or_raise(table, item, error, now_epoch, stranded_after_seconds, h
 
 
 def _scope_of_key(lock_key: str) -> str:
-    """The scope segment of a key built by build_lock_key ("" for any other shape)."""
+    """The scope segment of a key built by build_lock_key or reindex_slot_key ("" for any other shape)."""
     parts = (lock_key or "").split("|")
-    return parts[1] if len(parts) == 3 and parts[1] in LOCK_SCOPE_BY_RESTRICTION.values() else ""
+    if len(parts) != 3:
+        return ""
+    return parts[1] if parts[1] in LOCK_SCOPE_BY_RESTRICTION.values() or parts[1] == LOCK_SCOPE_REINDEX_SLOT \
+        else ""
 
 
 def acquire_locks(table, lock_keys, execution_id, ttl_seconds, now=None, *,
@@ -424,3 +427,96 @@ def release_locks_for_execution(dynamo, *, locks_table_name, workflow_table_name
     except Exception as error:
         logger.exception(f"Lock release for execution {workflow_execution_id} failed: {error}")
         return 0
+
+
+# ---------------------------------------------------------------------------------------------------
+# Reindex slots: at most `app.vectorSearch.indexingConcurrency` reindex runs of a workflow at once
+# ---------------------------------------------------------------------------------------------------
+#
+# A run the vector reindexer launches (trigger type System-Reindex) holds one of the workflow's N slot
+# rows in this table for its whole life:
+#
+#     {workflowDatabaseId}:{workflowId}|reindexSlot|{0..N-1}
+#
+# executeWorkflow claims a slot with the same conditional PutItem as a lock, immediately before the
+# run's first side effect, and every release site frees it through the holder index like any lock row,
+# so a run that ends in any way frees its slot. A row whose holder is lost expires at
+# reindex_slot_ttl_seconds; one whose holder wrote no record, or whose record is terminal, is taken over
+# once it is older than the launch handler can run. At most N rows exist, so at most N reindex runs hold
+# one. Uploads and manual runs never claim a slot.
+
+LOCK_SCOPE_REINDEX_SLOT = "reindexSlot"
+# Bounds of the slot count (app.vectorSearch.indexingConcurrency, validated 2..1000 at synth).
+MAX_REINDEX_SLOTS = 1000
+# Slots one launch tries before it is told to wait.
+MAX_REINDEX_SLOT_CANDIDATES = 16
+REINDEX_SLOTS_BUSY_MESSAGE = "Every reindex slot is in use; the launch waits for one."
+
+
+class ReindexSlotsBusy(Exception):
+    """No candidate slot could be claimed: the launch is not started and is retried later."""
+
+
+def reindex_slot_key(workflow_database_id, workflow_id, index) -> str:
+    return f"{workflow_database_id}:{workflow_id}|{LOCK_SCOPE_REINDEX_SLOT}|{int(index)}"
+
+
+def reindex_slot_keys(workflow_database_id, workflow_id, slot_count) -> List[str]:
+    count = max(0, min(int(slot_count), MAX_REINDEX_SLOTS))
+    return [reindex_slot_key(workflow_database_id, workflow_id, index) for index in range(count)]
+
+
+def reindex_slot_ttl_seconds(pipeline_records) -> int:
+    """Lifetime of a slot row: the longest the run can last (the sum of its pipelines' bounds, as for a
+    lock) plus the margin. Unlike a lock it is not lifted to a day, so a slot whose holder was lost is
+    usable again once no run could still hold it."""
+    total = sum(pipeline_timeout_seconds(record) for record in pipeline_records or [])
+    return total + LOCK_TTL_MARGIN_SECONDS
+
+
+def slot_is_free(item, now_epoch) -> bool:
+    """Whether a slot row (None when absent) can be claimed with a plain conditional put."""
+    if not item:
+        return True
+    try:
+        return int(item.get(EXPIRES_AT_ATTRIBUTE, 0)) < int(now_epoch)
+    except (TypeError, ValueError):
+        return False
+
+
+def slot_acquired_epoch(item) -> Optional[int]:
+    """When a slot row was taken (epoch seconds), or None when it carries no readable time."""
+    return _epoch_of_iso((item or {}).get(ACQUIRED_AT_ATTRIBUTE))
+
+
+def acquire_reindex_slot(table, candidate_keys, execution_id, ttl_seconds, now=None, *,
+                         stranded_after_seconds=None, holder_has_record=None) -> str:
+    """Claim the first of `candidate_keys` that is free (no row, or an expired one) or whose holder is
+    stranded (`holder_has_record` answers False for it once its row is older than
+    `stranded_after_seconds`), and return its key. Raises ReindexSlotsBusy when every candidate is held;
+    any other DynamoDB error propagates. Each candidate costs one conditional PutItem, and a held one
+    whose row is old enough also one read of its holder's record."""
+    now_epoch = _now_epoch(now)
+    for slot_key in list(dict.fromkeys(candidate_keys or []))[:MAX_REINDEX_SLOT_CANDIDATES]:
+        item = {
+            LOCK_KEY_ATTRIBUTE: slot_key,
+            HOLDER_ATTRIBUTE: execution_id,
+            LOCK_SCOPE_ATTRIBUTE: LOCK_SCOPE_REINDEX_SLOT,
+            ACQUIRED_AT_ATTRIBUTE: _iso(now_epoch),
+            EXPIRES_AT_ATTRIBUTE: now_epoch + int(ttl_seconds),
+        }
+        try:
+            table.put_item(
+                Item=item,
+                ConditionExpression=_PUT_CONDITION,
+                ExpressionAttributeValues={":now": now_epoch},
+                ReturnValuesOnConditionCheckFailure="ALL_OLD",
+            )
+            return slot_key
+        except ClientError as error:
+            try:
+                _take_over_or_raise(table, item, error, now_epoch, stranded_after_seconds, holder_has_record)
+                return slot_key
+            except ExecutionLockConflict:
+                continue
+    raise ReindexSlotsBusy(REINDEX_SLOTS_BUSY_MESSAGE)

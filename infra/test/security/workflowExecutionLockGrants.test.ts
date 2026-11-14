@@ -30,6 +30,11 @@ const EXPECTED: Record<string, string[]> = {
     handleExecutionErrorServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
     executionServiceServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
 };
+// The reindex launcher reads the workflow's reindex slot rows (one BatchGetItem per 100 slots) to decide
+// whether to call executeWorkflow; it writes none. Present where the system pipeline is on and registered.
+const LAUNCHER: Record<string, string[]> = {
+    VectorIndexingsystemWorkflowLauncherServiceRole: ["dynamodb:BatchGetItem"],
+};
 const HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";
 
 const actionsOf = (statements: any[]): string[] =>
@@ -59,6 +64,12 @@ function statementsByRole(synth: SynthResult): Map<string, any[]> {
     }
     return byRole;
 }
+
+/** Whether the synth deploys the system-workflow launcher (the system pipeline on and registered). */
+const launcherDeployed = (synth: SynthResult): boolean =>
+    synth
+        .ofType("AWS::IAM::Role")
+        .some((role) => role.logicalId.startsWith(Object.keys(LAUNCHER)[0]));
 
 /** role logical id -> sorted distinct actions it holds on the lock table (roles with none omitted). */
 function lockGrants(synth: SynthResult): Map<string, string[]> {
@@ -90,14 +101,16 @@ describe.each(ALL_TEMPLATES)(
             ).toHaveLength(1);
         });
 
-        test("exactly the four lock handlers hold a grant on the table, with exactly the lock actions", () => {
+        test("exactly the four lock handlers hold a grant on the table, with exactly the lock actions, and the reindex launcher only reads it", () => {
             const grants = lockGrants(synth);
             const byPrefix: Record<string, string[]> = {};
             for (const [roleId, actions] of grants) {
-                const prefix = Object.keys(EXPECTED).find((p) => roleId.startsWith(p)) ?? roleId;
+                const prefix =
+                    Object.keys({ ...EXPECTED, ...LAUNCHER }).find((p) => roleId.startsWith(p)) ??
+                    roleId;
                 byPrefix[prefix] = actions;
             }
-            expect(byPrefix).toEqual(EXPECTED);
+            expect(byPrefix).toEqual({ ...EXPECTED, ...(launcherDeployed(synth) ? LAUNCHER : {}) });
         });
 
         test("Query on the lock table reaches the holder index only, never the table itself", () => {
@@ -164,7 +177,9 @@ describe.each(ALL_TEMPLATES)(
                     )
                 )
                 .map((r) => r.logicalId);
-            expect(holders).toHaveLength(Object.keys(EXPECTED).length);
+            expect(holders).toHaveLength(
+                Object.keys(EXPECTED).length + (launcherDeployed(synth) ? 1 : 0)
+            );
             for (const logicalId of holders) {
                 expect(logicalId).toMatch(new RegExp(`^[A-Za-z]+${EXECUTION_LOCK_POLICY_ID}`));
                 expect(logicalId).not.toMatch(/DefaultPolicy|OverflowPolicy/);

@@ -1,0 +1,36 @@
+{
+    "pipelineName": "SYSTEM - GenAI Asset Summary",
+    "category": "SYSTEM - GenAI",
+    "description": "Describes and classifies a whole asset, or one folder of it, with the deployment's Amazon Bedrock text model from the descriptions the SYSTEM GenAI metadata pipeline wrote on its files, scene files that load other files first, and writes the result as the asset's genai_asset_* metadata; lists the files that have no description yet. A system pipeline: read-only through the API except its enabled switch.",
+    "isSystem": true,
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "3600",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "crossAssetAllowed": false,
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": true,
+            "folderAllowed": true
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": true,
+            "fileAttributes": true,
+            "databaseMetadata": false,
+            "assetFileMetadata": true,
+            "metadataSchema": true
+        },
+        "requireTemplate": false,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": ["*"],
+            "exclude": ["*.previewFile.*"]
+        }
+    }
+}

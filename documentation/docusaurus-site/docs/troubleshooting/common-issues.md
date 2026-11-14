@@ -76,13 +76,13 @@ To minimize the chance of these failures, keep the availability zone count and s
 
 ### Docker Buildx Container Image Errors
 
-The 3D Basic Conversion and CAD/Mesh Metadata Extraction pipelines deploy as AWS Lambda container images, which AWS CDK builds with Docker and pushes to Amazon ECR during `npx cdk deploy`. Pushing one of these images or creating its function can fail with `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
+The 3D Basic Conversion pipeline and the SYSTEM GenAI metadata pipeline deploy AWS Lambda functions as container images, which AWS CDK builds with Docker and pushes to Amazon ECR during `npx cdk deploy`. Pushing one of these images or creating its function can fail with `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
 
 **Symptoms:**
 
 -   `unexpected status from PUT request to https://....dkr.ecr.REGION.amazonaws.com/v2/foo/manifests/bar: 400 Bad Request`
 -   `InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected)` or `The image manifest, config or layer media type for the source image ... is not supported` while AWS CloudFormation creates the pipeline's Lambda function
--   The conversion pipeline nested stack fails and the core stack rolls back
+-   The pipeline's nested stack fails and the core stack rolls back
 
 **Cause:**
 
@@ -93,10 +93,10 @@ When the error appears anyway, the image index is already cached. AWS CDK tags e
 **Resolution:**
 
 1. Run the deployment from the `infra/` directory with `npx cdk` so that the pinned AWS CDK CLI builds the images. `npx cdk --version` shows the version in use.
-2. List the asset hashes of the two conversion images. In `cdk.out/*.assets.json`, written by the failed deployment or by `npx cdk synth`, each image under `dockerImages` is keyed by its hash, which this command (run from the `infra/` directory) prints on the line before the image's `displayName`:
+2. List the asset hashes of the Lambda container images. In `cdk.out/*.assets.json`, written by the failed deployment or by `npx cdk synth`, each image under `dockerImages` is keyed by its hash, which this command (run from the `infra/` directory) prints on the line before the image's `displayName`:
 
     ```bash
-    grep -B1 -E 'vamsExecute(3dBasic|MeshCadMetadataExtraction)Conversion/AssetImage' cdk.out/*.assets.json
+    grep -B1 -E '(vamsExecute3dBasicConversion|SystemGenAiMetadata(BlenderRender|Render3d|MediaExtract|SegmentAnalyze))/AssetImage' cdk.out/*.assets.json
     ```
 
 3. Delete those image tags from the container assets repository. With the default bootstrap qualifier, the repository is named `cdk-hnb659fds-container-assets-<account>-<region>`:
@@ -437,19 +437,25 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 
 -   One of these Amazon CloudWatch alarms is in the `ALARM` state:
 
-    | Alarm                                                                         | Source queue                                                               |
-    | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreatedDLQ--<n>` | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreated--<n>` |
-    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeletedDLQ--<n>` | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeleted--<n>` |
-    | `<configuration name>-<app.baseStackName>-<region>-fileIndexerDLQ`            | `<configuration name>-<app.baseStackName>-<region>-fileIndexer`            |
-    | `<configuration name>-<app.baseStackName>-<region>-assetIndexerDLQ`           | `<configuration name>-<app.baseStackName>-<region>-assetIndexer`           |
+    | Alarm                                                                           | Source queue                                                                                |
+    | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreatedDLQ--<n>`   | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreated--<n>`                  |
+    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeletedDLQ--<n>`   | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeleted--<n>`                  |
+    | `<configuration name>-<app.baseStackName>-<region>-fileIndexerDLQ`              | `<configuration name>-<app.baseStackName>-<region>-fileIndexer`                             |
+    | `<configuration name>-<app.baseStackName>-<region>-assetIndexerDLQ`             | `<configuration name>-<app.baseStackName>-<region>-assetIndexer`                            |
+    | `<configuration name>-<app.baseStackName>-<region>-vectorIndexerDLQ`            | The vector indexer queue (auto-named; see the note below)                                   |
+    | `<configuration name>-<app.baseStackName>-<region>-vectorEmbeddingReadyRuleDLQ` | None: the `vector.embedding.ready` rule's dead-letter queue (see the note below)            |
+    | `<configuration name>-<app.baseStackName>-<region>-systemWorkflowLaunchDLQ`     | The system-workflow launch queue (auto-named; see the note below)                           |
+    | `<configuration name>-<app.baseStackName>-<region>-vectorReindexerAsyncDLQ`     | None: the vector reindexer's asynchronous-invocation dead-letter queue (see the note below) |
 
 -   Files appear in the asset's file list but not in search results, have no version history entry, or did not fire a file-upload workflow trigger
 -   Deleted assets or files still appear in search results
+-   Natural-language search does not rank a file whose SYSTEM GenAI metadata execution succeeded
+-   A vector reindex run stopped before it finished: its `System-Reindex` executions stop arriving, or vectors remain after a `clear`
 
 **Cause:**
 
-A bucket-sync or indexer Lambda could not process those events within three receives, so Amazon SQS moved them to the dead-letter queue of its source queue. The objects in Amazon S3 are unaffected. For the bucket-sync created queue before v2.6.7, AWS Lambda recursive loop detection caused this in the commercial partition under sustained parallel uploads; the bucket-sync Lambda's `RecursiveInvocationsDropped` metric is above zero when that was the cause. For the indexer queues, an interruption of the Amazon OpenSearch Service domain or collection is the usual cause.
+A bucket-sync or indexer Lambda could not process those events within three receives, so Amazon SQS moved them to the dead-letter queue of its source queue. For the vector search alarms, the vector indexer or the system-workflow launcher could not process a record, Amazon EventBridge could not deliver a `vector.embedding.ready` event to the vector indexer queue, or an asynchronous continuation of the vector reindexer failed. The objects in Amazon S3 are unaffected. For the bucket-sync created queue before v2.6.7, AWS Lambda recursive loop detection caused this in the commercial partition under sustained parallel uploads; the bucket-sync Lambda's `RecursiveInvocationsDropped` metric is above zero when that was the cause. For the indexer queues, an interruption of the Amazon OpenSearch Service domain or collection is the usual cause.
 
 **Resolution:**
 
@@ -475,6 +481,53 @@ Fix the cause shown in the logs of the Lambda that reads the source queue, if an
     ```
 
 The credentials you use need `sqs:StartMessageMoveTask`, `sqs:ListMessageMoveTasks`, `sqs:ReceiveMessage`, `sqs:DeleteMessage` and `sqs:GetQueueAttributes` on the dead-letter queue, `sqs:SendMessage` on the source queue and, with `app.useKmsCmkEncryption.enabled`, `kms:Decrypt` and `kms:GenerateDataKey` on the VAMS key. Each replayed event is processed as the original event would have been. A bucket-sync created event indexes the file, writes its version history row, and fires matching file-upload workflow triggers; a bucket-sync deleted event removes the file's metadata and search entry; an indexer event updates the search index. The alarm returns to `OK` once the queue is empty. The [Reindex utility](../developer/utilities/reindex.md) restores the search entries only.
+
+**Vector search dead-letter queues:** the vector indexer and system-workflow launch queues are auto-named. Read a dead-letter queue's name from the `QueueName` dimension of its alarm (`aws cloudwatch describe-alarms --alarm-names <alarm name>`) and its source queue from `aws sqs list-dead-letter-source-queues --queue-url <dead-letter queue URL>`, then follow the steps above. The `vectorEmbeddingReadyRuleDLQ` queue receives events from the Amazon EventBridge rule rather than from a source queue, and a message move task accepts only the dead-letter queue of another Amazon SQS queue, so the steps above cannot redrive it. Each of its messages holds one `vector.embedding.ready` event naming a file version: after fixing the cause, re-run that file's SYSTEM GenAI metadata execution or run the [vector reindexer](../concepts/vector-search.md#reindexing), then purge the queue.
+
+**Vector reindexer dead-letter queue:** the `vectorReindexerAsyncDLQ` queue is the on-failure destination of the vector reindexer's asynchronous invocations, so a message move task cannot redrive it either. Each message is the AWS Lambda record of one invocation that failed: a continuation that hit an error (an Amazon SQS send that failed, the system workflow not being registered, Amazon DynamoDB retries exhausted, or its own next self-invocation refused), an invocation that timed out or crashed, or one that aged out while the function was throttled. A failed invocation is not retried, so each failure leaves one message. Its `requestPayload` is the payload the invocation started with, including the `continuation` token that holds the run id, the phase (`clear` or `enqueue`) and the position the run had reached when that invocation started. When the continuation caught the error itself, `responsePayload.errorType` is `ReindexContinuationFailed` and `responsePayload.errorMessage` is a JSON object holding the run id, the phase, the error, and `resumePayload`: the payload that continues the run after the last file that invocation sent. For a timeout or a crash, `requestContext.condition` and `responsePayload` give the failure and only the `requestPayload` is there. To resume the run:
+
+1. Read the dead-letter queue's name from the `QueueName` dimension of the alarm, then receive a message and save the payload to resume from (the `resumePayload` when the message has one, otherwise the `requestPayload`):
+
+    ```bash
+    aws sqs get-queue-url --queue-name <dead-letter queue name>
+    aws sqs receive-message --queue-url <dead-letter queue URL> --visibility-timeout 600 > message.json
+    jq '.Messages[0].Body | fromjson | ((.responsePayload.errorMessage // "" | fromjson? | .resumePayload) // .requestPayload)' \
+        message.json > continuation.json
+    ```
+
+2. After fixing the cause, invoke the reindexer asynchronously with that payload. Its function name is published under the deployment's `resourceNames/lambdaFunctions/vectorReindexer` parameter:
+
+    ```bash
+    aws lambda invoke --function-name <vector reindexer function name> --invocation-type Event \
+        --cli-binary-format raw-in-base64-out --payload file://continuation.json response.json
+    ```
+
+3. Delete the message:
+
+    ```bash
+    aws sqs delete-message --queue-url <dead-letter queue URL> --receipt-handle "$(jq -r '.Messages[0].ReceiptHandle' message.json)"
+    ```
+
+The run continues under the same run id, so its executions keep their `vec-<runId>-<chunk>` execution groups. In the `clear` phase the scan resumes from the saved position and deletes what remains. In the `enqueue` phase a `resumePayload` continues after the last file the failed invocation sent, so no file is sent twice, with one exception: when Amazon SQS refused part of one batch of ten twice, the files of that batch after the first refused one that it did accept are sent again (at most nine). A `requestPayload` starts from where the failed invocation started, so the files that invocation enqueued before it timed out or crashed are enqueued again. A file sent again is analyzed again unless its first execution is still running, in which case the system workflow's per-input-file-version lock declines it. A `requestPayload` with no `continuation` is the first invocation of a run that was itself started asynchronously and timed out or crashed, and invoking it starts that run again from the beginning. The credentials you use need `sqs:ReceiveMessage` and `sqs:DeleteMessage` on the dead-letter queue, `lambda:InvokeFunction` on the reindexer and, with `app.useKmsCmkEncryption.enabled`, `kms:Decrypt` on the VAMS key. An error the reindexer catches in the first invocation of a run, such as the system workflow not being registered, is returned to the caller as a 500 response naming the run and leaves no message in this queue; when that first invocation was itself asynchronous, the error is recorded only in the reindexer's log group.
+
+### Natural-Language Search Does Not Return a Newly Uploaded File
+
+A file appears in the asset list and in keyword search but a natural-language query that clearly describes it returns nothing.
+
+**Symptoms:**
+
+-   The file was uploaded minutes ago.
+-   Keyword search finds it by name; natural-language search does not rank it.
+
+**Resolution:**
+
+Natural-language search reads embeddings produced by the SYSTEM GenAI metadata pipeline, which runs as a workflow execution after upload — rendering, analysis, and embedding take from one to several minutes per file. Check the file's asset **Executions** tab:
+
+1. **No execution** — the pipeline's file-upload trigger is off or the extension is not allow-listed. Confirm `app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload` is `true` and that the file type has a viewer.
+2. **Execution FAILED with `BedrockAccessDenied` or `BedrockModelError`** — the analysis model is not enabled for the account (see [Prerequisites](../deployment/prerequisites.md#amazon-bedrock-model-access)). Attributes were still written; no embedding was produced. Enable the model and re-run the execution, or run the vector reindexer.
+3. **Execution SUCCEEDED** — allow up to a minute for the vector indexer to consume the `vector.embedding.ready` event, then retry. If the vector indexer's Amazon CloudWatch log shows `embedding.ready names a model or dimension other than the configured index; dropping`, `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` or `embeddingDimensions` changed after the pipeline produced the embedding, and the indexer dropped it: follow the model-change procedure in [Vector search](../concepts/vector-search.md#changing-the-embedding-model). Messages in the vector indexer's dead-letter queue are records it failed to apply; see [Indexing Dead-Letter Queue Holds Messages](#indexing-dead-letter-queue-holds-messages).
+
+A `503` from `POST /search/nlp` names its cause in its message: `Vector index is being built` (the index is being created or re-created; wait until `DescribeTable` shows it `ACTIVE`), `The search filters could not be applied…` (Amazon OpenSearch Service could not apply a metadata, tag, or location constraint), or `Search is busy right now…` (Amazon Bedrock or Amazon DynamoDB throttled the call or was briefly unavailable). Retry in each case.
 
 ---
 

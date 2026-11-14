@@ -16,28 +16,34 @@ import Map, {
 import "maplibre-gl/dist/maplibre-gl.css";
 import "../../common/utils/maplibreWorker";
 import { SearchPageViewProps } from "./SearchPageTypes";
-import {
-    Box,
-    Button,
-    Link,
-    Pagination,
-    SpaceBetween,
-    Popover,
-    Icon,
-} from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import Link from "@cloudscape-design/components/link";
+import Pagination from "@cloudscape-design/components/pagination";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Popover from "@cloudscape-design/components/popover";
+import Icon from "@cloudscape-design/components/icon";
 import { appCache } from "../../services/appCache";
-import type { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
 import {
     SearchExplanation,
     formatTotalResultCount,
     getPageCount,
+    getPagedResultCount,
     getTotalResultCount,
     isTotalLowerBound,
 } from "./types";
 import { extractLocationData } from "./utils/locationUtils";
-import { isFileHitSource } from "./utils/recordType";
+import { hasLocationOnlyMetadata, isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
+import { FIT_BOUNDS_OPTIONS, locationDataBounds } from "./utils/mapBounds";
+import {
+    MAP_MARKER_SIZE_PX,
+    MAP_PIN_PATH,
+    MAP_PIN_VIEW_BOX,
+    POPUP_PADDING,
+    popupOffsetsFor,
+} from "./utils/mapPopupPlacement";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 
 interface LocationDataWithDetails {
@@ -246,11 +252,11 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     const config = appCache.getItem("config");
     const navigate = useNavigate();
 
-    // Get pagination info from state
+    // Get pagination info from state. The pages cover the records the result can page through: a
+    // natural-language answer counts every match but holds at most 100, so it pages over those.
     const pageSize = state.tablePreferences?.pageSize || 50;
     const currentPage = 1 + Math.floor((state.pagination?.from || 0) / pageSize);
-    const totalResults = getTotalResultCount(state?.result);
-    const pageCount = getPageCount(totalResults, pageSize);
+    const pageCount = getPageCount(getPagedResultCount(state?.result), pageSize);
 
     // The "Files" / "Assets" toggle on the search page is driven by the
     // `_rectype` filter on search state, not by a per-document field. Read
@@ -271,7 +277,14 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
 
             const location = extractLocationData(source);
             if (location && location.type) {
-                const { metadata, attributes } = extractMetadata(source);
+                // A natural-language asset hit's MD_ is its asset's location only, not its metadata.
+                const { metadata, attributes } = hasLocationOnlyMetadata(
+                    source,
+                    hit._vector,
+                    isFileSearchMode
+                )
+                    ? { metadata: [], attributes: [] }
+                    : extractMetadata(source);
                 // Authoritative source: the search-state `_rectype` filter.
                 // Fall back to the document's own record type only if the
                 // filter is unset (e.g., a future "all" mode).
@@ -390,72 +403,19 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
         if (map) map.getCanvas().style.cursor = "";
     };
 
-    // Calculate bounds and fit map when location data changes. Considers BOTH
-    // point markers and polygon/line shapes so a results page that contains only
-    // GeoJSON shapes (no points) still gets framed correctly. Previously this
-    // only inspected points, leaving the map stuck on a default San Francisco
-    // viewport whenever every result was polygon-based.
+    // Frame every plotted result whenever the results change and once the map has loaded. The map's
+    // instance, which mapRef exposes, exists only after the map library has loaded, so an effect that ran
+    // before then had nothing to move: a view that opens with its results already in hand (a
+    // natural-language answer, reused rather than fetched again) stayed on the first point. Waiting for
+    // onLoad, and running again on it, frames those results too. Points and GeoJSON shapes both count,
+    // so a page of shapes alone is framed as well (locationDataBounds).
+    const [mapLoaded, setMapLoaded] = useState(false);
     useEffect(() => {
-        if (!mapRef.current || locationData.length === 0) return;
-
-        const allLats: number[] = [];
-        const allLons: number[] = [];
-
-        // Walk arbitrary nested coordinate arrays from a GeoJSON geometry.
-        const collectCoords = (coords: any) => {
-            if (!Array.isArray(coords)) return;
-            if (typeof coords[0] === "number" && typeof coords[1] === "number") {
-                allLons.push(coords[0]);
-                allLats.push(coords[1]);
-                return;
-            }
-            for (const c of coords) collectCoords(c);
-        };
-
-        locationData.forEach((item) => {
-            if (
-                item.type === "point" &&
-                item.latitude !== undefined &&
-                item.longitude !== undefined
-            ) {
-                allLats.push(item.latitude);
-                allLons.push(item.longitude);
-                return;
-            }
-            if (item.type === "geojson" && item.geoJson) {
-                const geom =
-                    item.geoJson?.type === "Feature" ? item.geoJson.geometry : item.geoJson;
-                if (geom?.coordinates) collectCoords(geom.coordinates);
-                if (geom?.geometries) {
-                    // GeometryCollection
-                    for (const sub of geom.geometries) {
-                        if (sub?.coordinates) collectCoords(sub.coordinates);
-                    }
-                }
-            }
-        });
-
-        if (allLats.length === 0) return;
-
-        const minLat = Math.min(...allLats);
-        const maxLat = Math.max(...allLats);
-        const minLon = Math.min(...allLons);
-        const maxLon = Math.max(...allLons);
-
-        const padding = 0.01;
-        const bounds: LngLatBoundsLike = [
-            [minLon - padding, minLat - padding],
-            [maxLon + padding, maxLat + padding],
-        ];
-
-        mapRef.current.fitBounds(bounds, {
-            padding: 40,
-            duration: 1000,
-            // For a single point, fitBounds collapses to a tiny bbox; cap the zoom
-            // so we don't slam to street-level on a single result.
-            maxZoom: 14,
-        });
-    }, [locationData]);
+        if (!mapLoaded || !mapRef.current) return;
+        const bounds = locationDataBounds(locationData);
+        if (!bounds) return;
+        mapRef.current.fitBounds(bounds, FIT_BOUNDS_OPTIONS);
+    }, [locationData, mapLoaded]);
 
     // Handle pagination
     const handlePageChange = (pageIndex: number) => {
@@ -485,7 +445,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
 
     // Calculate initial view state from the first piece of location data we can
     // anchor to -- a point if available, otherwise the first vertex of the first
-    // GeoJSON shape. fitBounds (above) immediately reframes once the data loads,
+    // GeoJSON shape. fitBounds (above) reframes once the map has loaded,
     // but this seeds the initial render so we're already in roughly the right
     // region. Falls back to a neutral world view if nothing has coordinates.
     const initialViewState = (() => {
@@ -589,6 +549,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                 onClick={handleMapClick}
                 onMouseEnter={handleMapMouseEnter}
                 onMouseLeave={handleMapMouseLeave}
+                onLoad={() => setMapLoaded(true)}
             >
                 <NavigationControl position="bottom-right" showZoom showCompass={false} />
 
@@ -644,20 +605,24 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                 setSelectedItem(item);
                             }}
                         >
+                            {/* No transform: anchor="bottom" already puts the bottom centre
+                                of this element, the icon's tip, on the point (#1306) */}
                             <div
                                 style={{
-                                    width: "30px",
-                                    height: "30px",
+                                    width: `${MAP_MARKER_SIZE_PX}px`,
+                                    height: `${MAP_MARKER_SIZE_PX}px`,
                                     cursor: "pointer",
-                                    transform: "translate(-50%, -100%)",
                                 }}
                             >
                                 <svg
-                                    viewBox="0 0 24 24"
+                                    viewBox={MAP_PIN_VIEW_BOX}
+                                    width={MAP_MARKER_SIZE_PX}
+                                    height={MAP_MARKER_SIZE_PX}
+                                    style={{ display: "block" }}
                                     fill={selectedItem?.id === item.id ? "#0972d3" : "#d91515"}
                                     xmlns="http://www.w3.org/2000/svg"
                                 >
-                                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />
+                                    <path d={MAP_PIN_PATH} />
                                 </svg>
                             </div>
                         </Marker>
@@ -683,10 +648,14 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                         if (popupLat === undefined || popupLon === undefined) return null;
 
                         return (
+                            // No fixed anchor: maplibre opens the popup on the side of the point
+                            // where it fits inside the map, and moves it on every pan and zoom
+                            // (utils/mapPopupPlacement.ts, #1303)
                             <Popup
                                 latitude={popupLat}
                                 longitude={popupLon}
-                                anchor="top"
+                                padding={POPUP_PADDING}
+                                offset={popupOffsetsFor(selectedItem.type)}
                                 onClose={() => setSelectedItem(null)}
                                 closeButton={true}
                                 closeOnClick={false}

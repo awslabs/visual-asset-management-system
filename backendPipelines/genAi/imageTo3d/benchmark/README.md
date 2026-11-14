@@ -159,7 +159,7 @@ the account rather than trusting the default in `likeness.py`.
 
 If it later moves in-loop -- deferred requirement 9.1, an agent that judges and then drives the repair --
 the prompt and parsing in `likeness.py` are import-clean and reusable, and the gating follows the
-existing Bedrock caller: `app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId` for the config shape,
+existing Bedrock caller: `app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId` for the config shape,
 a `throw new Error("Configuration Error: ...")` in `getConfig()` for the GovCloud combination, a
 `bedrock:InvokeModel` statement on `ImageTo3dContainerJobRole`, and the **existing**
 `BedrockEndpoint` in the VPC builder widened rather than duplicated -- its construct id is already taken.

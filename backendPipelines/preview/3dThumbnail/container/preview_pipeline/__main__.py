@@ -25,6 +25,13 @@ set_log_level(logging.INFO)
 
 
 def main():
+    # The SYSTEM GenAI metadata pipeline's Fargate render branch runs this image with the state in
+    # ANALYSIS_STATE_JSON and no thumbnail definition; the branch entry module owns that run.
+    if len(sys.argv) > 1 and sys.argv[1] == "analysisBatch":
+        from .analysis import batch_job
+
+        sys.exit(batch_job.main())
+
     hello()
 
     # Run the CPU rasteriser on the task's CPUs (the cgroup quota, not the host's CPU count). Set

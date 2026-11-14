@@ -58,7 +58,7 @@ describe("SearchTopBar while a search runs", () => {
         const user = userEvent.setup({ delay: null });
         const onSearch = jest.fn();
         const { rerender } = render(<TopBar loading={false} onSearch={onSearch} />);
-        const box = screen.getByPlaceholderText("Search by keywords (wildcard)...");
+        const box = screen.getByPlaceholderText("Search by keywords...");
         box.focus();
         await user.keyboard("{Enter}");
         expect(onSearch).toHaveBeenCalledTimes(1);
@@ -78,14 +78,14 @@ describe("SearchTopBar while a search runs", () => {
         expect(onSearch).toHaveBeenCalledTimes(2);
     });
 
-    it("keeps Search and Clear All Filters focusable, says a search is running and ignores a press", async () => {
+    it("keeps Search and Clear all filters focusable, says a search is running and ignores a press", async () => {
         const user = userEvent.setup({ delay: null });
         const onSearch = jest.fn();
         const onClearAll = jest.fn();
         const { rerender } = render(
             <TopBar loading={false} onSearch={onSearch} onClearAll={onClearAll} />
         );
-        const clear = screen.getByRole("button", { name: "Clear All Filters" });
+        const clear = screen.getByRole("button", { name: "Clear all filters" });
         clear.focus();
         await user.keyboard("{Enter}");
         expect(onClearAll).toHaveBeenCalledTimes(1);

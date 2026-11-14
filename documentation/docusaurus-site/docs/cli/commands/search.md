@@ -8,7 +8,7 @@ title: Search Commands
 Search assets and files using the dual-index Amazon OpenSearch Service system. VAMS maintains separate indexes for assets and files, allowing optimized queries and precise results per entity type.
 
 :::note[Prerequisite]
-Search requires Amazon OpenSearch Service to be enabled in your VAMS deployment. If the `NOOPENSEARCH` feature switch is enabled, search commands are unavailable and exit with a "Search Disabled" error. Use `vamscli assets list` as an alternative.
+The keyword commands (`search assets`, `search files`, `search simple`, `search mapping`) require Amazon OpenSearch Service to be enabled in your VAMS deployment. If the `NOOPENSEARCH` feature switch is enabled they exit with a "Search Disabled" error that names the alternative: `vamscli search nlp` or `vamscli assets list` when the `VECTORSEARCH` switch is on, `vamscli assets list` otherwise. `search nlp` is the exception: it requires the `VECTORSEARCH` feature switch instead and works with or without OpenSearch.
 :::
 
 ---
@@ -45,6 +45,8 @@ vamscli search assets [OPTIONS]
 `--output-format json` and `--json-output` are equivalent: both emit the raw API response. Use `--output-format csv` to write comma-separated rows to standard output, suitable for redirecting to a file.
 :::
 
+`--query` is split at whitespace into words. Each word matches anywhere inside a value, and a record matches when at least one of the words does, so `-q "maintenance log"` finds a file whose metadata reads `night shift, maintenance log`. `*` and `?` are literal characters here. The same applies to `search files` and `search simple`.
+
 ### Filter syntax
 
 The `--filters` option accepts two formats. A query string is converted to an OpenSearch `query_string` clause. A JSON array is sent as it is, and each item must be a `query_string` clause; the API rejects any other clause type, such as `term` or `range`, with a 400 error.
@@ -71,7 +73,9 @@ Identifier fields such as `str_databaseid` are analyzed text: the index splits a
 
 ### Metadata search
 
-`--metadata-query` searches indexed metadata fields. The query supports `AND`/`OR` operators within the metadata group, and the group as a whole is combined with `--query` and `--filters` using `AND` logic. `--metadata-mode` controls whether the query matches metadata field names (`key`), field values (`value`), or both (`both`, the default). `field:value` terms are parsed only in `both` mode; in `key` and `value` mode each `AND`/`OR` term is a field name or a value.
+`--metadata-query` searches indexed metadata fields. The query supports `AND`/`OR` operators within the metadata group, and the group as a whole is combined with `--query` and `--filters` using `AND` logic. `--metadata-mode` controls whether the query matches metadata field names (`key`), field values (`value`), or both (`both`, the default). `field:value` terms are parsed only in `both` mode; in `key` and `value` mode each `AND`/`OR` term is a field name or a value. A value of several words is one value: `Plant:Line 3` matches that exact value, `Plant:Line 3*` a value starting with `Line 3`, and a `value`-mode term without wildcards a record whose values contain every word. In `search simple`, a wildcard value of `--asset-name`, `--asset-id`, `--asset-type`, `--file-key` or `--tags` matches a record whose field holds every word (`--asset-name "gearbox hous*"`).
+
+A value wrapped in one pair of double quotes is matched exactly: `--metadata-query '"SBXC-325"'` and `--metadata-query 'ProjectCode:"SBXC-325"'` match a value that is exactly `SBXC-325`, in `value` mode too, and `--metadata-value '"Line 3"'` matches the whole value `Line 3` and not `Line 30`. Inside the quotes `*` and `?` are literal characters. The same holds for the `search simple` options above. Put single quotes around the argument so the shell passes the double quotes on.
 
 The key may be given bare, with the `MD_` / `AB_` entity prefix, or with a type prefix; all three address the same field. See [Search field reference](#search-field-reference).
 
@@ -97,6 +101,9 @@ vamscli search assets --metadata-query "product" --metadata-mode key
 
 # Match metadata field values only
 vamscli search assets --metadata-query "Training" --metadata-mode value
+
+# An exact value: the double quotes inside the single quotes reach the search
+vamscli search assets --metadata-query '"SBXC-325"'
 
 # Combine text query with metadata search (both must match)
 vamscli search assets -q "model" --metadata-query "MD_str_category:Training"
@@ -195,7 +202,7 @@ vamscli search simple [OPTIONS]
 | `-d`, `--database`   | TEXT    | No       | Filter by database ID                                                      |
 | `--tags`             | TEXT    | No       | Filter by tags (comma-separated)                                           |
 | `--metadata-key`     | TEXT    | No       | Search metadata field names                                                |
-| `--metadata-value`   | TEXT    | No       | Search metadata field values                                               |
+| `--metadata-value`   | TEXT    | No       | Search metadata field values; a value in double quotes is matched exactly  |
 | `--entity-types`     | TEXT    | No       | Entity types to search: `asset`, `file`, or `asset,file` (comma-separated) |
 | `--include-archived` | Flag    | No       | Include archived items                                                     |
 | `--geo-point`        | TEXT    | No       | Geo point filter: `lat,lon` or `lat,lon,radiusMeters`                      |
@@ -247,11 +254,51 @@ vamscli search mapping --json-output
 
 ---
 
+## search nlp
+
+Search files by meaning. The query is embedded with the deployment's Amazon Bedrock embedding model and ranked against the latest live version of every indexed file; `_score` is `1 - distance`. Works with or without Amazon OpenSearch Service; requires the `VECTORSEARCH` feature switch.
+
+```bash
+vamscli search nlp -q TEXT [OPTIONS]
+```
+
+| Option               | Type    | Required | Description                                                                                                                                                                                                                                                |
+| -------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-q`, `--query`      | TEXT    | Yes      | Natural-language description of what to find (1–1000 characters)                                                                                                                                                                                           |
+| `--entity-type`      | CHOICE  | No       | `file` (default, one hit per file) or `asset` (file hits grouped by asset, best score kept)                                                                                                                                                                |
+| `-d`, `--database`   | TEXT    | No       | Restrict to a database ID; repeatable, at most 100. Intersected with the databases you can access                                                                                                                                                          |
+| `--include-archived` | Flag    | No       | Include archived files                                                                                                                                                                                                                                     |
+| `--size`             | INTEGER | No       | Number of hits to return (1–100, default 25)                                                                                                                                                                                                               |
+| `--file-class`       | TEXT    | No       | Hard filter on the indexed file class; repeatable. One of `image`, `video`, `audio`, `document`, `text`, `data`, `tiles3d`, `mesh`, `usd`, `cad`, `pointcloud`, `splat`, `ifc`, `other` (3D models are `mesh`, `usd` or `cad`); any other value is refused |
+| `--file-ext`         | TEXT    | No       | Hard filter on the file extension; repeatable                                                                                                                                                                                                              |
+| `--no-segments`      | Flag    | No       | Match whole-file vectors only; skip video time windows and text chunks                                                                                                                                                                                     |
+| `--filters`          | TEXT    | No       | OpenSearch filters (JSON array or query string, as for `search assets`); ignored with a warning when OpenSearch is disabled                                                                                                                                |
+| `--metadata-query`   | TEXT    | No       | Metadata `key:value` constraint; OpenSearch-only, like `--filters`                                                                                                                                                                                         |
+| `--output-format`    | CHOICE  | No       | `table` (default), `json`, or `csv`                                                                                                                                                                                                                        |
+| `--json-output`      | Flag    | No       | Output the raw API response as JSON                                                                                                                                                                                                                        |
+
+`--filter` is accepted as an alias of `--filters`.
+
+When no `--file-class` is given, type words in the query (`video`, `pdf`, `point cloud`, …) give matching classes a ranking bonus of 0.1 rather than filtering: a hit of a named class moves ahead of one of another class that scores less than 0.1 higher, and the `score` column still shows the similarity without the bonus. Words that describe content, such as `report` or `manual`, name no type. The classes detected are echoed in `nlp.classIntent` of the JSON response.
+
+The `table` output shows `score`, `database`, `asset`, `file` and `class` for every hit, and adds a `segment` column with the best-matching window or chunk label whenever a hit was found through a segment. Every total that is not zero reads `N+`, because the vector index uses approximate nearest-neighbour search and can miss a weak match even when no window filled, and so does a zero total when the answer is truncated (`0+`); a filled window or an unsearched database (the `truncated:*` warnings) means more files may match than were ranked. Each `warnings[]` entry of the response is printed as a `Warning:` line (`truncated:window`, `truncated:targets`, `databases:none_accessible`, `opensearch:fields_ignored`, `opensearch:enrichment_failed`, `segments:window_full`). Narrow with `-d`, `--file-class` or `--file-ext` rather than raising `--size`.
+
+`--filters` and `--metadata-query` are applied by the OpenSearch index of the entity type, as in `search assets` and `search files`: the file index by default, which holds each file's own metadata, and the asset index with `--entity-type asset`, which holds each asset's own metadata. When OpenSearch is enabled but cannot apply them, the command fails with `Search Unavailable` and the server's message instead of printing hits the filters were not applied to. The same error, with its own message, is printed while the vector index is still being built and when the search service is busy; retry in a few minutes. An unknown `--file-class` or a malformed `--filters` value fails with `Invalid search parameters` and the server's message.
+
+```bash
+vamscli search nlp -q "rusty pipe near the north tank"
+vamscli search nlp -q "forklift safety training video" -d plant-a -d plant-b --size 10
+vamscli search nlp -q "hydraulic schematic" --file-class document --no-segments
+vamscli search nlp -q "turbine blade" --entity-type asset --json-output
+```
+
+---
+
 ## Output formats
 
 All search commands support three output formats via `--output-format` (default `table`):
 
--   **table** — Aligned columns derived from the `_source` fields of each hit, prefixed with the total result count. The mapping command renders `Index | Field | Type` rows.
+-   **table** — Aligned columns derived from the `_source` fields of each hit, prefixed with the total result count. The mapping command renders `Index | Field | Type` rows. The `nlp` command instead projects `score | database | asset | file | class [| segment]` (see above).
 -   **json** — The raw API response. Equivalent to passing `--json-output`.
 -   **csv** — Comma-separated rows written directly to standard output, with list values joined by semicolons. Suitable for redirecting to a file.
 

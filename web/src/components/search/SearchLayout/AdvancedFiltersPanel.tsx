@@ -4,19 +4,16 @@
  */
 
 import React, { useState } from "react";
-import {
-    ExpandableSection,
-    FormField,
-    Toggle,
-    SpaceBetween,
-    Checkbox,
-    Box,
-    Grid,
-    Select,
-    DatePicker,
-    Input,
-} from "@cloudscape-design/components";
-import { SearchFilters } from "../types";
+import ExpandableSection from "@cloudscape-design/components/expandable-section";
+import FormField from "@cloudscape-design/components/form-field";
+import Toggle from "@cloudscape-design/components/toggle";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Checkbox from "@cloudscape-design/components/checkbox";
+import Grid from "@cloudscape-design/components/grid";
+import Select from "@cloudscape-design/components/select";
+import DatePicker from "@cloudscape-design/components/date-picker";
+import Input from "@cloudscape-design/components/input";
+import { SearchFilters, SearchMode } from "../types";
 import Synonyms from "../../../synonyms";
 import { datePickerStrings } from "../../../common/helpers/datePickerStrings";
 
@@ -25,6 +22,8 @@ interface AdvancedFiltersPanelProps {
     onFilterChange: (key: string, value: any) => void;
     loading?: boolean;
     recordType: "asset" | "file";
+    /** The effective search mode; the keyword-only Keyword Search Scope toggle is left out under `nlp`. */
+    searchMode?: SearchMode;
 }
 
 const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
@@ -32,6 +31,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
     onFilterChange,
     loading = false,
     recordType,
+    searchMode = "keyword",
 }) => {
     // Local state for file filters
     const [dateOperator, setDateOperator] = useState<">" | "<" | "=" | "between">(
@@ -543,18 +543,21 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                 )}
 
                 {/* COMMON FILTERS - Same order for both modes: Keyword Search, Archived */}
-                {/* Include Metadata in Keyword Search Toggle */}
-                <FormField label="Keyword Search Scope">
-                    <Toggle
-                        onChange={({ detail }) =>
-                            onFilterChange("includeMetadataInKeywordSearch", detail.checked)
-                        }
-                        checked={filters.includeMetadataInKeywordSearch !== false}
-                        readOnly={loading}
-                    >
-                        Include metadata field data in keyword search
-                    </Toggle>
-                </FormField>
+                {/* Include Metadata in Keyword Search Toggle. Keyword search only: a
+                    natural-language search does not send it, so it is not offered there. */}
+                {searchMode !== "nlp" && (
+                    <FormField label="Keyword Search Scope">
+                        <Toggle
+                            onChange={({ detail }) =>
+                                onFilterChange("includeMetadataInKeywordSearch", detail.checked)
+                            }
+                            checked={filters.includeMetadataInKeywordSearch !== false}
+                            readOnly={loading}
+                        >
+                            Include metadata field data in keyword search
+                        </Toggle>
+                    </FormField>
+                )}
 
                 {/* Include Archived Toggle */}
                 <FormField label="Archived Items">

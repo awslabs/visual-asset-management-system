@@ -1,0 +1,12 @@
+# Direct dependencies of the Blender render image's handler (not Blender's bundled Python). The image
+# installs requirements.lock, generated from this file and pinning every package by version and hash.
+# After editing this file, regenerate the lock with the command in its header.
+boto3==1.43.89
+botocore==1.43.89
+numpy==2.4.3
+trimesh==4.11.4
+aws-lambda-powertools==3.2.0
+# OpenUSD for the referenced-file walk over USD layers (scene_dependencies.py), at the release the 3D
+# renderer image pins for the same module (preview/3dThumbnail/container/requirements.lock). Releases
+# before 25.11 carry OpenUSD parser advisories (GHSA-58p5-r2f6-g2cj, GHSA-grjp-54v3-c442).
+usd-core==26.8

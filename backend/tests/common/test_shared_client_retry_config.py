@@ -104,6 +104,14 @@ DELIBERATE_DEPARTURES = {
     ("handlers/addon/edh/common/edhImageBuilder.py", "lookup_retry_config"),
     # The executeWorkflowV2 Invoke is not idempotent: a retry would launch a duplicate execution.
     ("handlers/workflows/sfn/workflowTriggerDispatch.py", "invoke_config"),
+    # The same executeWorkflowV2 Invoke, issued per reindex launch message.
+    ("handlers/osVectorSearch/systemWorkflowLauncher.py", "invoke_config"),
+    # The reindexer's asynchronous self-invoke re-queues from a cursor; a retried duplicate would enqueue
+    # the same files twice.
+    ("handlers/osVectorSearch/vectorReindexer.py", "invoke_config"),
+    # The natural-language search's query embedding: bounded connect/read timeouts over three attempts,
+    # so a hung Amazon Bedrock call fails inside the API Gateway integration timeout and answers 503.
+    ("handlers/osVectorSearch/vectorSearchService.py", "BEDROCK_QUERY_CONFIG"),
     # One apiKeyService Invoke per EDH session key: a retried create would mint a second key that no
     # session row names, so the single attempt is bounded by its own timeouts instead.
     ("handlers/addon/edh/common/edhSessionBootstrap.py", "cross_call_config"),

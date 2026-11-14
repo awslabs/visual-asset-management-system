@@ -62,7 +62,7 @@ vamscli execution list --triggered-by user@example.com --json-output
 | `--workflow-database-id`          | Filter by workflow database ID                                                                         |
 | `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`, `SKIPPED`)                          |
 | `--exclude-status`                | Leave out these statuses, one or comma-separated (e.g. `SKIPPED`); applied by the service              |
-| `--trigger-type`                  | Filter by trigger type (`Manual` / `File-Upload`)                                                      |
+| `--trigger-type`                  | Filter by trigger type (`Manual` / `File-Upload` / `System-Reindex`)                                   |
 | `--group-id`                      | Filter by `executionGroupId`                                                                           |
 | `--triggered-by`                  | Filter by the user ID that triggered the execution                                                     |
 | `--filter-start-date`             | Only executions started on/after this UTC date-time, as `YYYY-MM-DDTHH:MM:SSZ` (default: 90 days ago)  |

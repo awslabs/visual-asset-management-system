@@ -115,31 +115,32 @@ SERVER_INSTRUCTIONS = """\
 VAMS (Visual Asset Management System) stores 3D, point-cloud, image and other files as ASSETS \
 inside DATABASES, runs WORKFLOWS (made of pipelines) on them, and records each run as an \
 EXECUTION. These tools call the VAMS API as the signed-in user; that user's permissions bound every \
-answer, and a 403 means this user may not do it.
+answer, and a 403 means they may not.
 
 Identifiers: an asset is addressed by databaseId + assetId; a file by its relativePath inside the \
-asset (the file_key); a version by its Version id. Workflows and pipelines may live in a database or \
-in the shared "GLOBAL" catalog.
+asset (the file_key); a version by its Version id. Workflows and pipelines live in a database or \
+the shared "GLOBAL" catalog.
 
 Start points:
-- Find assets: search_assets (by name, text or metadata), or list_databases then list_assets.
+- Find assets: search_assets (name, text or metadata), search_nlp (files or assets by meaning; billed \
+per call), or list_databases then list_assets.
 - Then: get_asset -> list_asset_files / get_asset_metadata / list_asset_versions.
 - Download: generate_download_url, only when a download was asked.
 - Runs: list_executions (newest first, last 90 days) -> get_execution_details -> \
 get_execution_logs.
-- vams_status says who is signed in, which deployment, and which tool tiers are on.
+- vams_status says who is signed in, which deployment and which tool tiers are on.
 
-Results are BOUNDED. When a result has truncated=true, a NextToken, or warnings, rows exist that you \
-did not see: never report its count as a total or conclude something does not exist. Continue with \
-starting_token, or narrow the query. Search totals with total_is_lower_bound are minimums.
+Results are BOUNDED. A result with truncated=true, a NextToken or warnings has rows you did not see: \
+never report its count as a total or conclude something does not exist. Continue with \
+starting_token or narrow the query. Search totals with total_is_lower_bound are minimums.
 
-Errors come back as data with error and error_type. NotAuthenticated means nobody is signed in: ask \
+Errors come back as data (error, error_type). NotAuthenticated means nobody is signed in: ask \
 the user to sign in (user_action says how) and stop; do not try to sign in yourself.
 
 Use these tools, not shell commands, the vamscli CLI or the VAMS source code, to answer questions \
 about this deployment. If no tool covers what is asked, say so plainly instead of working around it. \
 Uploads, sync and user, role or constraint administration have no tools: the user runs them in the \
-vamscli CLI. Create, update and delete tools exist only when the operator enabled them; tools that start compute \
+vamscli CLI. Write and delete tools exist only when the operator enabled them; tools that start compute \
 (execute_workflow, rerun_execution, abort_execution) need the user's confirmation first.
 """
 
@@ -1302,6 +1303,122 @@ def search_files(
     return CLIENT.trim_search_results(raw, max_hits=request["size"])
 
 
+_NLP_ENTITY_TYPES = ("file", "asset")
+_NLP_SIZE_MAX = 100
+# The fileClass ids the vector index stores, in the order the backend declares them
+# (backend/backend/common/vectorsearch/fileClassIntent.py FILE_CLASSES). The route refuses an unknown
+# id with a 400 as well; the tool refuses it before the call, with the list in the error.
+# tests/test_search_nlp_tool.py pins this copy to the backend's.
+_NLP_FILE_CLASSES = (
+    "image", "video", "audio", "document", "text", "data", "tiles3d", "mesh", "usd", "cad",
+    "pointcloud", "splat", "ifc", "other",
+)
+
+
+def _normalise_nlp_list(values: Optional[List[str]], strip_dot: bool = False) -> List[str]:
+    """Lower-cased, trimmed, de-duplicated, first-seen order — the backend's own normalisation,
+    applied here so validation sees what the route will see."""
+    seen: List[str] = []
+    for value in values or []:
+        item = value.strip().lower()
+        if strip_dot:
+            item = item.lstrip(".")
+        if item and item not in seen:
+            seen.append(item)
+    return seen
+
+
+def _build_nlp_search_request(
+    query: str,
+    database_ids: Optional[List[str]],
+    entity_type: str,
+    size: int,
+    include_archived: bool,
+    file_classes: Optional[List[str]],
+    metadata_query: Optional[str],
+    include_segments: bool,
+    file_extensions: Optional[List[str]] = None,
+    geo_search: Optional[Dict[str, Any]] = None,
+    tags: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    if entity_type not in _NLP_ENTITY_TYPES:
+        raise ValueError(f"entity_type must be one of {_NLP_ENTITY_TYPES}, got {entity_type!r}")
+    classes = _normalise_nlp_list(file_classes)
+    unknown = [c for c in classes if c not in _NLP_FILE_CLASSES]
+    if unknown:
+        raise ValueError(
+            f"file_classes must be from {list(_NLP_FILE_CLASSES)}, got {unknown}"
+        )
+    request: Dict[str, Any] = {
+        "query": query,
+        "entityTypes": [entity_type],
+        "size": max(1, min(size, _NLP_SIZE_MAX)),
+        "includeArchived": include_archived,
+    }
+    scoped = [d for d in (database_ids or []) if d not in _UNSCOPED_DATABASE_IDS]
+    if scoped:
+        request["databaseIds"] = scoped
+    if classes:
+        request["fileClasses"] = classes
+    extensions = _normalise_nlp_list(file_extensions, strip_dot=True)
+    if extensions:
+        request["fileExtensions"] = extensions
+    if metadata_query:
+        request["metadataQuery"] = metadata_query
+        request["metadataSearchMode"] = "both"
+    if geo_search:
+        request["geoSearch"] = geo_search
+    if tags:
+        request["tags"] = list(tags)
+    # The server default is to search segments; only the opt-out travels on the wire.
+    if not include_segments:
+        request["includeSegments"] = False
+    return request
+
+
+# Not in the README's autoApprove sample: every call is a billed Amazon Bedrock embedding request.
+@mcp.tool(title="Natural-language search", annotations=READ)
+@tool_result
+def search_nlp(
+    query: str,
+    database_ids: Optional[List[str]] = None,
+    entity_type: str = "file",
+    size: int = 25,
+    include_archived: bool = False,
+    file_classes: Optional[List[str]] = None,
+    file_extensions: Optional[List[str]] = None,
+    metadata_query: Optional[str] = None,
+    geo_search: Optional[Dict[str, Any]] = None,
+    tags: Optional[List[str]] = None,
+    include_segments: bool = True,
+) -> results.NlpSearchResult:
+    """Use to find files or assets by meaning (vector index; needs the VECTORSEARCH switch, not
+    OpenSearch). Each call embeds `query` with Amazon Bedrock and is billed.
+
+    query: 1..1000 characters. database_ids: at most 100 ids. entity_type: "file" or "asset" (each
+    asset's best file). size: 1..100; no offset paging, so narrow the filters instead.
+    file_classes: image, video, audio, document, text, data, tiles3d, mesh, usd, cad, pointcloud,
+    splat, ifc, other. metadata_query, geo_search and tags need OpenSearch (else ignored with a
+    warning). include_segments=False matches whole-file vectors only.
+
+    Every `total` that is not zero is a LOWER BOUND (`relation` "gte"; report `total_display`):
+    approximate nearest-neighbour search can miss weak matches; so is zero when nlp.truncated.
+    `warnings`: truncated:window,
+    truncated:targets, databases:none_accessible (no readable database, not "no match"),
+    opensearch:fields_ignored, opensearch:enrichment_failed, segments:window_full. A 503: retry later."""
+    request = _build_nlp_search_request(
+        query, database_ids, entity_type, size, include_archived, file_classes, metadata_query,
+        include_segments, file_extensions=file_extensions, geo_search=geo_search, tags=tags,
+    )
+    raw = CLIENT.api.search_nlp(request)
+    trimmed = CLIENT.trim_search_results(raw, max_hits=request["size"])
+    total = raw.get("hits", {}).get("total", {}) if isinstance(raw, dict) else {}
+    trimmed["relation"] = total.get("relation", "eq") if isinstance(total, dict) else "eq"
+    trimmed["nlp"] = raw.get("nlp", {}) if isinstance(raw, dict) else {}
+    trimmed["warnings"] = raw.get("warnings", []) if isinstance(raw, dict) else []
+    return trimmed
+
+
 @mcp.tool(title="Get search fields", annotations=READ)
 @tool_result
 def get_search_fields() -> Dict[str, Any]:
@@ -1677,8 +1794,9 @@ def list_executions(
     use list_workflow_executions().
 
     Equality filters: status (RUNNING, SUCCEEDED, FAILED, ABORTED, SKIPPED), workflow_id,
-    workflow_database_id, trigger_type ('manual' or 'fileUpload'), group_id, triggered_by_user_id;
-    exclude_status drops statuses (e.g. "SKIPPED"). A SKIPPED row is not a run: do not count it.
+    workflow_database_id, trigger_type ('manual', 'fileUpload' or 'systemReindex'), group_id,
+    triggered_by_user_id; exclude_status drops statuses (e.g. "SKIPPED"). A SKIPPED row is not a
+    run: do not count it.
 
     `filterStartDate` is the applied window (90 days by default): older runs are absent by design;
     widen it with filter_start_date / filter_end_date (UTC "YYYY-MM-DDTHH:MM:SSZ"). A run is listed

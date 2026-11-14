@@ -9,7 +9,7 @@ exposes both on the resolved inputs and builds an S3 client per Region, so a pip
 input in another Region signs the request for that Region.
 
 The five Batch pipelines whose compute runs in the VPC's isolated subnets (Potree viewer, 3D
-thumbnail, GenAI metadata labeling, coordinate transform, Video SOP/BOM) reach Amazon S3 in the deployment Region
+thumbnail, SYSTEM GenAI metadata, coordinate transform, Video SOP/BOM) reach Amazon S3 in the deployment Region
 through the S3 gateway endpoint and in each cross-Region asset bucket's Region through the
 cross-Region S3 interface endpoint the VPC builder creates there (`addCrossRegionS3Endpoints`). The
 CDK names those Regions in `CROSS_REGION_S3_ENDPOINT_REGIONS` on their `vamsExecute` Lambdas, and
@@ -39,7 +39,6 @@ MANIFEST_HELPER_COPIES = (
     "backendPipelines/conversion/coordinateTransform/lambda/manifestHelper.py",
     "backendPipelines/genAi/cadStepAgent/lambda/manifestHelper.py",
     "backendPipelines/genAi/imageTo3d/lambda/manifestHelper.py",
-    "backendPipelines/genAi/metadata3dLabeling/lambda/manifestHelper.py",
     "backendPipelines/genAi/nvidia/cosmos/3/lambda/manifestHelper.py",
     "backendPipelines/genAi/nvidia/cosmos/predict/lambda/manifestHelper.py",
     "backendPipelines/genAi/nvidia/cosmos/reason/lambda/manifestHelper.py",
@@ -52,12 +51,13 @@ MANIFEST_HELPER_COPIES = (
     "backendPipelines/preview/3dThumbnail/lambda/manifestHelper.py",
     "backendPipelines/preview/pcPotreeViewer/lambda/manifestHelper.py",
     "backendPipelines/simulation/isaacLabTraining/lambda/manifestHelper.py",
+    "backendPipelines/system/genAiMetadata/lambda/manifestHelper.py",
 )
 
 ISOLATED_SUBNET_VAMS_EXECUTE = (
     "backendPipelines/preview/pcPotreeViewer/lambda/vamsExecutePreviewPcPotreeViewerPipeline.py",
     "backendPipelines/preview/3dThumbnail/lambda/vamsExecutePreview3dThumbnailPipeline.py",
-    "backendPipelines/genAi/metadata3dLabeling/lambda/vamsExecuteGenAiMetadata3dLabelingPipeline.py",
+    "backendPipelines/system/genAiMetadata/lambda/vamsExecuteSystemGenAiMetadataPipeline.py",
     "backendPipelines/conversion/coordinateTransform/lambda/vamsExecuteCoordinateTransformPipeline.py",
     "backendPipelines/genAi/videoSopBom/lambda/vamsExecuteVideoSopBomPipeline.py",
 )
@@ -84,6 +84,13 @@ SAME_REGION_ONLY_VAMS_EXECUTE = (
     "backendPipelines/multi/modelOps/lambda/vamsExecuteModelOps.py",
     "backendPipelines/multi/rapidPipeline/lambda/vamsExecuteRapidPipeline.py",
     "backendPipelines/multi/rapidPipelineEKS/lambda/vamsExecuteRapidPipelineEKS.py",
+)
+
+# Handlers whose pipeline reads no input object: the SYSTEM GenAI asset summary describes a whole asset or
+# folder from the run's metadata envelope and configuration, which are in the deployment's default bucket,
+# so the selection's own bucket Region does not matter to it.
+NO_INPUT_OBJECT_VAMS_EXECUTE = (
+    "backendPipelines/system/genAiMetadata/lambda/vamsExecuteSystemGenAiAssetSummary.py",
 )
 
 # The Lambda-container pipelines have no vamsExecute handler: their entry point reads the manifest
@@ -308,7 +315,8 @@ class TestEveryVamsExecuteHandlerConsumesOrGatesTheRegion:
     addresses a cross-Region bucket as if it were in the deployment Region."""
 
     def test_every_handler_is_in_exactly_one_class(self):
-        listed = ISOLATED_SUBNET_VAMS_EXECUTE + REGION_CONSUMING_VAMS_EXECUTE + SAME_REGION_ONLY_VAMS_EXECUTE
+        listed = (ISOLATED_SUBNET_VAMS_EXECUTE + REGION_CONSUMING_VAMS_EXECUTE + SAME_REGION_ONLY_VAMS_EXECUTE
+                  + NO_INPUT_OBJECT_VAMS_EXECUTE)
         assert len(set(listed)) == len(listed), "a handler is listed twice"
         assert _vams_execute_handlers() == sorted(listed)
 
@@ -348,3 +356,9 @@ class TestEveryVamsExecuteHandlerConsumesOrGatesTheRegion:
         assert "send_task_failure" in source, relative
         # Not the isolated-subnet gate: the compute reaches the Region, the vendor image is the limit.
         assert "enforce_inputs_in_region" not in source, relative
+
+    @pytest.mark.parametrize("relative", NO_INPUT_OBJECT_VAMS_EXECUTE)
+    def test_a_handler_that_reads_no_input_object_neither_gates_nor_signs_for_a_region(self, relative):
+        source = _read(relative).decode("utf-8")
+        assert "enforce_inputs_in_region" not in source and "enforce_same_region_io" not in source, relative
+        assert "s3_client_for_region" not in source, relative

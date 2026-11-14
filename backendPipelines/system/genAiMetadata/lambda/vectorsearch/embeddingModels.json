@@ -1,0 +1,28 @@
+{
+    "families": [
+        {
+            "family": "titan-v2",
+            "displayName": "Amazon Titan Text Embeddings V2",
+            "exampleModelId": "amazon.titan-embed-text-v2:0",
+            "modelIdPattern": "titan-embed-text-v2",
+            "dimensions": [256, 512, 1024],
+            "maxInputChars": 30000
+        },
+        {
+            "family": "nova-mme",
+            "displayName": "Amazon Nova Multimodal Embeddings",
+            "exampleModelId": "amazon.nova-2-multimodal-embeddings-v1:0",
+            "modelIdPattern": "nova-2-multimodal-embeddings",
+            "dimensions": [256, 384, 1024, 3072],
+            "maxInputChars": 8192
+        },
+        {
+            "family": "cohere-v3",
+            "displayName": "Cohere Embed v3",
+            "exampleModelId": "cohere.embed-english-v3",
+            "modelIdPattern": "^(?=.*-v3)cohere\\.embed-",
+            "dimensions": [1024],
+            "maxInputChars": 2048
+        }
+    ]
+}

@@ -9,8 +9,7 @@
  * inference profile still lists as ACTIVE, and refuses every account once the model reaches end of
  * life, so a deployment on such a default synthesizes cleanly and fails every run. Each default site
  * (getConfig(), the commercial template, config.json and the ConfigBuilder presets) is checked against
- * those models, and the GenAI 3D Metadata Labeling and CAD STEP agent defaults against
- * GENAI_DEFAULT_BEDROCK_MODEL_ID.
+ * those models, and the CAD STEP agent default against GENAI_DEFAULT_BEDROCK_MODEL_ID.
  */
 
 import * as fs from "fs";
@@ -37,7 +36,7 @@ const RETIRED_BEDROCK_MODELS = [
 ];
 
 /** The pipelines whose model id defaults to GENAI_DEFAULT_BEDROCK_MODEL_ID in the commercial partition. */
-const DEFAULTED_PIPELINES = ["useGenAiMetadata3dLabeling", "useGenAiCadStepAgent"] as const;
+const DEFAULTED_PIPELINES = ["useGenAiCadStepAgent"] as const;
 /** Every pipeline block that carries a `bedrockModelId`. */
 const MODEL_PIPELINES = [...DEFAULTED_PIPELINES, "useGenAiVideoSopBom"] as const;
 
@@ -104,7 +103,7 @@ describe("GenAI pipeline default Amazon Bedrock models", () => {
         expect(retired).toEqual([]);
     });
 
-    test("the Labeling and CAD STEP agent defaults are GENAI_DEFAULT_BEDROCK_MODEL_ID everywhere", () => {
+    test("the CAD STEP agent default is GENAI_DEFAULT_BEDROCK_MODEL_ID everywhere", () => {
         expect(Config.GENAI_DEFAULT_BEDROCK_MODEL_ID).toMatch(/^global\.anthropic\./);
         const commercialSites: [string, any][] = [
             ["config.template.commercial.json", commercialTemplate],

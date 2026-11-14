@@ -67,6 +67,9 @@ describe("system records are documented", () => {
         // Who sets the flag, and that an API caller cannot.
         expect(body).toContain("Only the deployment's registration importer sets `isSystem`");
         expect(body).toContain("creates an ordinary record");
+        // The two bundles this deployment ships as system records.
+        expect(body).toContain("`SYSTEM - GenAI`");
+        expect(body).toContain("`SYSTEM - Preview`");
         for (const name of [
             "SYSTEM_PIPELINE_READONLY_MESSAGE",
             "SYSTEM_WORKFLOW_READONLY_MESSAGE",
@@ -92,6 +95,13 @@ describe("system records are documented", () => {
         expect(body).toContain("`autoRegisterAutoTriggerOnFileUpload`");
         expect(body).toContain("`isSystem: true`");
         expect(body).toContain("[System pipelines](#system-pipelines)");
+    });
+
+    test("the built-in list names the shipped metadata pipeline", () => {
+        // Durable: the tip must name the pipeline the deployment ships. No negative assertion on the
+        // former wording — that would pin one past rewording (Rule 13's temporary case).
+        const tip = admonitionBody(concepts, ":::tip[Built-in pipelines]");
+        expect(tip).toContain("GenAI metadata generation");
     });
 
     test("the data model states isSystem beside both record tables", () => {

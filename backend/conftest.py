@@ -136,6 +136,14 @@ common_sync_tracking_early = import_module_from_path_early(
 )
 sys.modules['common.syncTracking'] = common_sync_tracking_early
 
+# fileClassIntent is pure stdlib; models/vectorsearch reads its class ids at module level, and the model
+# test modules import that model at collection time.
+common_file_class_intent_early = import_module_from_path_early(
+    'common.vectorsearch.fileClassIntent',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'vectorsearch', 'fileClassIntent.py')
+)
+sys.modules['common.vectorsearch.fileClassIntent'] = common_file_class_intent_early
+
 # logRedaction is pure regex logic; load early since executionService imports it at module level.
 common_log_redaction_early = import_module_from_path_early(
     'common.logRedaction',
@@ -301,6 +309,54 @@ def setup_mock_imports():
 
     geolocation_module = import_module_from_path('common.indexing.geoLocation', os.path.join(mocks_base_path, 'common', 'indexing', 'geoLocation.py'))
     sys.modules['common.indexing.geoLocation'] = geolocation_module
+
+    # documentIds is pure (hashlib + typing) and is the single definition of the OpenSearch _id and
+    # the vector sort key, so load the REAL module by path rather than a mock copy.
+    document_ids_module = import_module_from_path(
+        'common.indexing.documentIds',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'indexing', 'documentIds.py')
+    )
+    sys.modules['common.indexing.documentIds'] = document_ids_module
+    indexing_pkg_module.documentIds = document_ids_module
+
+    # fileEnumeration composes the pure key helpers with the injected S3/DynamoDB clients its callers
+    # pass in; it creates no client of its own, so load the REAL module by path.
+    file_enumeration_module = import_module_from_path(
+        'common.indexing.fileEnumeration',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'indexing', 'fileEnumeration.py')
+    )
+    sys.modules['common.indexing.fileEnumeration'] = file_enumeration_module
+    indexing_pkg_module.fileEnumeration = file_enumeration_module
+
+    # databaseAccess is the search routes' database pre-filter. The real module builds DynamoDB
+    # clients and binds CasbinEnforcer at import, so the default here is the mock stand-in; tests of
+    # the pre-filter load the real module by path.
+    database_access_module = import_module_from_path(
+        'common.databaseAccess', os.path.join(mocks_base_path, 'common', 'databaseAccess.py')
+    )
+    sys.modules['common.databaseAccess'] = database_access_module
+    common_module.databaseAccess = database_access_module
+
+    # vectorsearch: embeddings is self-contained (stdlib + boto3, no client at import) and vectorStore
+    # is a store over an injected low-level client, so load the REAL package and modules by path.
+    vectorsearch_pkg_module = import_module_from_path(
+        'common.vectorsearch',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'vectorsearch', '__init__.py')
+    )
+    sys.modules['common.vectorsearch'] = vectorsearch_pkg_module
+    common_module.vectorsearch = vectorsearch_pkg_module
+    embeddings_module = import_module_from_path(
+        'common.vectorsearch.embeddings',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'vectorsearch', 'embeddings.py')
+    )
+    sys.modules['common.vectorsearch.embeddings'] = embeddings_module
+    vectorsearch_pkg_module.embeddings = embeddings_module
+    vector_store_module = import_module_from_path(
+        'common.vectorsearch.vectorStore',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'vectorsearch', 'vectorStore.py')
+    )
+    sys.modules['common.vectorsearch.vectorStore'] = vector_store_module
+    vectorsearch_pkg_module.vectorStore = vector_store_module
     
     # Import customLogging modules
     customLogging_module = import_module_from_path('customLogging', os.path.join(mocks_base_path, 'customLogging', '__init__.py'))
@@ -375,7 +431,6 @@ def setup_mock_imports():
         os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'indexing'),
         os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'metadata'),
         os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'metadataschema'),
-        os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'search'),
         os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'pipelines'),
         os.path.join(os.path.dirname(__file__), 'backend', 'models', 'assets'),
     ]
@@ -629,9 +684,9 @@ def setup_mock_imports():
         )
     
     # Add mock modules for search
-    if 'backend.handlers.search' not in sys.modules:
-        sys.modules['backend.handlers.search'] = MockModule()
-    if 'backend.handlers.search.search' not in sys.modules:
+    if 'backend.handlers.osSemanticSearch' not in sys.modules:
+        sys.modules['backend.handlers.osSemanticSearch'] = MockModule()
+    if 'backend.handlers.osSemanticSearch.search' not in sys.modules:
         def property_token_filter_to_opensearch_query(body):
             result = {
                 "query": {
@@ -700,7 +755,7 @@ def setup_mock_imports():
             def lambda_handler(self, event, context):
                 return {"statusCode": 200, "body": "{}"}
                 
-        sys.modules['backend.handlers.search.search'] = MockModule(
+        sys.modules['backend.handlers.osSemanticSearch.search'] = MockModule(
             SearchHandler=SearchHandler,
             property_token_filter_to_opensearch_query=property_token_filter_to_opensearch_query
         )

@@ -33,6 +33,11 @@
  * hybrid config, so each gets one. An assertion limited to the shipped templates would leave four of
  * the eight call sites free to ship inert.
  *
+ * The vector indexing construct (`app.vectorSearch.enabled`) adds two more consumers — the vector
+ * indexer and the system-workflow launcher — built at ONE further place each (its `addSqsConsumer`
+ * helper, which branches on the partition). The `govcloud + vectorSearch` hybrid reaches that
+ * construct's GovCloud branch; the shipped restricted templates disable the feature.
+ *
  * Every negative assertion is paired with a positive control on the same template, because a template
  * that emitted no mapping at all satisfies all of them.
  */
@@ -45,21 +50,51 @@ import {
     synthTemplate,
 } from "../support/templateSynth";
 import { batchSizeOffenders } from "../support/sqsEventSourceBounds";
+import commercialTemplate from "../../config/config.template.commercial.json";
+import govcloudTemplate from "../../config/config.template.govcloud.json";
 
-// A full-app synth is ~20-30 s and this file needs five of them (three shipped + two hybrids).
+// A full-app synth is ~20-30 s and this file needs six of them (three shipped + three hybrids).
 jest.setTimeout(900_000);
 
-/** The two indexer queues, matched on the name `searchBuilder-nestedStack.ts` gives them. */
-const INDEXER_QUEUE_SUFFIXES = ["fileIndexer", "assetIndexer"] as const;
+/** How a consumer's source queue is recognized in the emitted template. */
+type QueueIdentity =
+    | { kind: "nameSuffix"; value: string } // explicitly named `${config.name}-${baseStackName}-<suffix>`
+    | { kind: "logicalIdPrefix"; value: string }; // auto-named: only the construct id reaches the template
 
-const queueIndexer = (name: string): string | undefined =>
-    INDEXER_QUEUE_SUFFIXES.find((suffix) => name.endsWith(`-${suffix}`));
+/**
+ * Every SQS consumer in the search/indexing stack, keyed by the string its Lambda's logical id AND
+ * handler module both contain (see `mappingTarget`). The OpenSearch indexers consume explicitly named
+ * queues; the vector search queues are auto-named, so they are matched on the logical-id prefix, which
+ * carries the id of the construct they are children of (`VectorIndexing<ChildId><8HEX>`; a bare child id
+ * matches nothing). Each prefix stops short of the sibling DLQ: `VectorIndexingVectorIndexerQueue` never
+ * matches `VectorIndexingVectorIndexerDLQ`.
+ */
+const INDEXER_QUEUES: Record<string, QueueIdentity> = {
+    fileIndexer: { kind: "nameSuffix", value: "fileIndexer" },
+    assetIndexer: { kind: "nameSuffix", value: "assetIndexer" },
+    vectorIndexer: { kind: "logicalIdPrefix", value: "VectorIndexingVectorIndexerQueue" },
+    systemWorkflowLauncher: {
+        kind: "logicalIdPrefix",
+        value: "VectorIndexingSystemWorkflowLaunchQueue",
+    },
+};
+
+const OPENSEARCH_INDEXERS = ["assetIndexer", "fileIndexer"];
+const ALL_INDEXERS = [...OPENSEARCH_INDEXERS, "systemWorkflowLauncher", "vectorIndexer"].sort();
+/** The vector indexer mapping's `ScalingConfig.MaximumConcurrency` on every branch that emits it. */
+const VECTOR_INDEXER_CONCURRENCY = 10;
+
+const queueIndexer = (q: Resource): string | undefined => {
+    const name = SynthResult.flatten(q.properties.QueueName);
+    return Object.entries(INDEXER_QUEUES).find(([, identity]) =>
+        identity.kind === "nameSuffix"
+            ? name.endsWith(`-${identity.value}`)
+            : q.logicalId.startsWith(identity.value)
+    )?.[0];
+};
 
 const indexerQueues = (s: SynthResult) =>
-    s.where(
-        "AWS::SQS::Queue",
-        (q) => queueIndexer(SynthResult.flatten(q.properties.QueueName)) !== undefined
-    );
+    s.where("AWS::SQS::Queue", (q) => queueIndexer(q) !== undefined);
 
 /**
  * Event source mappings whose EventSourceArn resolves to one of the two indexer queues.
@@ -108,11 +143,11 @@ const encryptionShape = (q: Resource) => ({
 /** SQS's own default message retention, 4 days. A DLQ must not expire sooner than the source queue. */
 const SQS_DEFAULT_RETENTION_SECONDS = 4 * 24 * 60 * 60;
 
-/** Which indexer a mapping belongs to, resolved through its EventSourceArn -> queue name. */
+/** Which consumer a mapping belongs to, resolved through its EventSourceArn -> queue. */
 const mappingIndexer = (s: SynthResult, mapping: Resource): string => {
     const arn = SynthResult.flatten(mapping.properties.EventSourceArn);
     const queue = indexerQueues(s).find((q) => arn.includes(q.logicalId));
-    return queueIndexer(SynthResult.flatten(queue?.properties.QueueName)) ?? `unresolved:${arn}`;
+    return (queue && queueIndexer(queue)) ?? `unresolved:${arn}`;
 };
 
 /**
@@ -142,6 +177,10 @@ interface IndexerCase {
     synth: () => SynthResult;
     /** Restricted partitions build the L1 and delete Tags; commercial goes through addEventSource(). */
     stripsTags: boolean;
+    /** The consumers this configuration emits, sorted. Vector search adds two when it is enabled. */
+    expectedIndexers: string[];
+    /** `ScalingConfig.MaximumConcurrency` the launcher mapping must carry, when the launcher is emitted. */
+    launcherConcurrency?: number;
 }
 
 /** commercial with OpenSearch switched to provisioned; a provisioned domain needs a VPC to live in. */
@@ -165,6 +204,20 @@ const serverlessGovcloud = (): SynthResult =>
         },
     });
 
+/**
+ * govcloud with vector search switched on. No shipped restricted template emits the vector indexing
+ * construct, so its GovCloud L1 branch is reachable only through this mutation. `vectorIndexName` is set
+ * here as well so the case does not depend on the harness deriving it after the mutation runs.
+ */
+const vectorGovcloud = (): SynthResult =>
+    synthTemplate("govcloud", {
+        mutateKey: "vectorGovcloud",
+        mutate: (c: any) => {
+            c.app.vectorSearch.enabled = true;
+            c.vectorIndexName = "vec-amazon-titan-embed-text-v2-0-1024";
+        },
+    });
+
 const shipped = (name: TemplateName) => () => synthTemplate(name);
 
 const CASES: IndexerCase[] = [
@@ -173,30 +226,45 @@ const CASES: IndexerCase[] = [
         branch: "serverless + commercial addEventSource()",
         synth: shipped("commercial"),
         stripsTags: false,
+        expectedIndexers: ALL_INDEXERS,
+        launcherConcurrency: (commercialTemplate as any).app.vectorSearch.indexingConcurrency,
     },
     {
         label: "govcloud",
         branch: "provisioned + govCloud L1",
         synth: shipped("govcloud"),
         stripsTags: true,
+        expectedIndexers: OPENSEARCH_INDEXERS,
     },
     {
         label: "eusovereign",
         branch: "provisioned + govCloud L1",
         synth: shipped("eusovereign"),
         stripsTags: true,
+        expectedIndexers: OPENSEARCH_INDEXERS,
     },
     {
         label: "commercial+provisioned hybrid",
         branch: "provisioned + commercial addEventSource()",
         synth: provisionedCommercial,
         stripsTags: false,
+        expectedIndexers: ALL_INDEXERS,
+        launcherConcurrency: (commercialTemplate as any).app.vectorSearch.indexingConcurrency,
     },
     {
         label: "govcloud+serverless hybrid",
         branch: "serverless + govCloud L1",
         synth: serverlessGovcloud,
         stripsTags: true,
+        expectedIndexers: OPENSEARCH_INDEXERS,
+    },
+    {
+        label: "govcloud+vectorSearch hybrid",
+        branch: "provisioned + govCloud L1 + vector indexing L1",
+        synth: vectorGovcloud,
+        stripsTags: true,
+        expectedIndexers: ALL_INDEXERS,
+        launcherConcurrency: (govcloudTemplate as any).app.vectorSearch.indexingConcurrency,
     },
 ];
 
@@ -211,15 +279,12 @@ describe("indexer SQS event source mappings report partial batch failures", () =
             const s = c.synth();
             expect(
                 indexerQueues(s)
-                    .map((q) => queueIndexer(SynthResult.flatten(q.properties.QueueName)))
+                    .map((q) => queueIndexer(q))
                     .sort()
-            ).toEqual(["assetIndexer", "fileIndexer"]);
+            ).toEqual(c.expectedIndexers);
 
             const mappings = indexerMappings(s);
-            expect(mappings.map((m) => mappingIndexer(s, m)).sort()).toEqual([
-                "assetIndexer",
-                "fileIndexer",
-            ]);
+            expect(mappings.map((m) => mappingIndexer(s, m)).sort()).toEqual(c.expectedIndexers);
             // Each mapping reaches ITS OWN indexer: the fileIndexer queue must be consumed by the
             // file indexer handler and not the asset one. Eight call sites build these mappings, so a
             // copy-paste swap is the live risk, and a swap leaves both queues draining with the wrong
@@ -232,6 +297,34 @@ describe("indexer SQS event source mappings report partial batch failures", () =
                     ({ indexer, target }) => `${label} (${c.branch}) ${indexer} queue -> ${target}`
                 );
             expect(crossWired).toEqual([]);
+
+            // The launcher's mapping is what paces a reindex: MaximumConcurrency is the config field
+            // `vectorSearch.indexingConcurrency`, and it must be set on BOTH partition branches.
+            const launcherMappings = mappings.filter(
+                (m) => mappingIndexer(s, m) === "systemWorkflowLauncher"
+            );
+            if (c.launcherConcurrency === undefined) {
+                expect(launcherMappings).toEqual([]);
+            } else {
+                expect(launcherMappings).toHaveLength(1);
+                expect(launcherMappings[0].properties.ScalingConfig).toEqual({
+                    MaximumConcurrency: c.launcherConcurrency,
+                });
+                expect(launcherMappings[0].properties.BatchSize).toBe(1);
+            }
+            // The indexer's mapping is capped at 10 on both branches: one asset's item collection is
+            // one DynamoDB partition, and continuation messages re-enter the same queue.
+            const indexerMappingsOnly = mappings.filter(
+                (m) => mappingIndexer(s, m) === "vectorIndexer"
+            );
+            if (!c.expectedIndexers.includes("vectorIndexer")) {
+                expect(indexerMappingsOnly).toEqual([]);
+            } else {
+                expect(indexerMappingsOnly).toHaveLength(1);
+                expect(indexerMappingsOnly[0].properties.ScalingConfig).toEqual({
+                    MaximumConcurrency: VECTOR_INDEXER_CONCURRENCY,
+                });
+            }
 
             // Batch size is bounded from ABOVE rather than pinned. A smaller batch is a strictly
             // safer change -- it narrows what one poison record holds up -- so an exact value would
@@ -258,7 +351,7 @@ describe("indexer SQS event source mappings report partial batch failures", () =
             const s = c.synth();
             const mappings = indexerMappings(s);
             // Control: a template with no mappings would satisfy the loop below vacuously.
-            expect(mappings.length).toBe(2);
+            expect(mappings.length).toBe(c.expectedIndexers.length);
 
             // Asserted on the EMITTED template rather than on the construct props: the failure mode
             // being guarded is a handler that reports per-record failures while the mapping never
@@ -284,7 +377,7 @@ describe("indexer SQS event source mappings report partial batch failures", () =
         (label, c) => {
             const s = c.synth();
             const mappings = indexerMappings(s);
-            expect(mappings.length).toBe(2);
+            expect(mappings.length).toBe(c.expectedIndexers.length);
 
             if (!c.stripsTags) return;
 
@@ -312,7 +405,7 @@ describe("indexer SQS event source mappings report partial batch failures", () =
 });
 
 interface RedrivePair {
-    /** `fileIndexer` or `assetIndexer`, resolved from the source queue's name. */
+    /** The consumer the source queue belongs to (`INDEXER_QUEUES` key), resolved from the queue resource. */
     indexer: string;
     source: Resource;
     dlq: Resource;
@@ -326,7 +419,7 @@ interface RedrivePair {
  */
 const redrivePairs = (s: SynthResult): RedrivePair[] =>
     indexerQueues(s).flatMap((source) => {
-        const indexer = queueIndexer(SynthResult.flatten(source.properties.QueueName));
+        const indexer = queueIndexer(source);
         const dlq = redriveTargetQueue(s, source);
         return indexer && dlq ? [{ indexer, source, dlq }] : [];
     });
@@ -340,16 +433,14 @@ describe("indexer SQS source queues dead-letter the records they cannot process"
             // Positive control for everything below: both source queues are emitted at all. A queue
             // that is not in the template satisfies a RedrivePolicy assertion vacuously.
             const sources = indexerQueues(s);
-            expect(
-                sources.map((q) => queueIndexer(SynthResult.flatten(q.properties.QueueName))).sort()
-            ).toEqual(["assetIndexer", "fileIndexer"]);
+            expect(sources.map((q) => queueIndexer(q)).sort()).toEqual(c.expectedIndexers);
 
             // Asserted on the EMITTED template rather than on the construct props: a `deadLetterQueue`
             // that never reaches `AWS::SQS::Queue.RedrivePolicy` leaves a permanently failing record
             // recycling for the whole retention window with no terminal state — the exact shape a
             // reportBatchItemFailures mapping turns from "deleted on 200" into "never drains".
             const offenders = sources.flatMap((source) => {
-                const indexer = queueIndexer(SynthResult.flatten(source.properties.QueueName));
+                const indexer = queueIndexer(source);
                 const at = `${label} (${c.branch}) ${indexer}`;
                 const policy = source.properties.RedrivePolicy;
                 if (policy === undefined) return [`${at}: no RedrivePolicy`];
@@ -368,11 +459,11 @@ describe("indexer SQS source queues dead-letter the records they cannot process"
             expect(offenders).toEqual([]);
 
             const pairs = redrivePairs(s);
-            expect(pairs.map((p) => p.indexer).sort()).toEqual(["assetIndexer", "fileIndexer"]);
+            expect(pairs.map((p) => p.indexer).sort()).toEqual(c.expectedIndexers);
 
             // One DLQ per source queue. A shared DLQ mixes the file indexer's poison records in with
             // the asset indexer's, so neither can be redriven without replaying the other's.
-            expect(new Set(pairs.map((p) => p.dlq.logicalId)).size).toBe(2);
+            expect(new Set(pairs.map((p) => p.dlq.logicalId)).size).toBe(c.expectedIndexers.length);
 
             // ...and the target is a dead-letter queue rather than the sibling source queue. The
             // control is the two assertions above: both source ids and both targets are known here.
@@ -389,7 +480,7 @@ describe("indexer SQS source queues dead-letter the records they cannot process"
             const s = c.synth();
             const pairs = redrivePairs(s);
             // Control: the pair lookup found both DLQs, so a comparison below is being made at all.
-            expect(pairs.length).toBe(2);
+            expect(pairs.length).toBe(c.expectedIndexers.length);
 
             // Both restricted templates set useKmsCmkEncryption while commercial does not, so the
             // expected shape is taken from the SOURCE queue in the same template rather than pinned.
@@ -421,7 +512,7 @@ describe("indexer SQS source queues dead-letter the records they cannot process"
         (label, c) => {
             const s = c.synth();
             const pairs = redrivePairs(s);
-            expect(pairs.length).toBe(2);
+            expect(pairs.length).toBe(c.expectedIndexers.length);
 
             for (const { indexer, dlq } of pairs) {
                 const retention =
@@ -442,7 +533,7 @@ describe("indexer SQS source queues dead-letter the records they cannot process"
     test.each(CASE_ARGS)("%s: each dead-letter queue denies non-TLS access", (label, c) => {
         const s = c.synth();
         const pairs = redrivePairs(s);
-        expect(pairs.length).toBe(2);
+        expect(pairs.length).toBe(c.expectedIndexers.length);
 
         const unprotected = pairs
             .filter(

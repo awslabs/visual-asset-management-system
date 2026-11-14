@@ -96,6 +96,9 @@ tools/VamsMCP/
     test_remote_auth.py      # TokenVerifier rules (Cognito, external IdP, keys) and the auth file
     test_remote_mode.py      # remote start-up rules, per-request client, CLI log silenced, budget
     test_setup_remote.py     # `vams-mcp setup-remote`
+    test_search_nlp_remote.py
+                             # search_nlp in the consumer and operator sets only; in remote mode each
+                             # user's token reaches /search/nlp, and an error never shows it
     api_coverage.py          # COVERAGE MANIFEST: every public APIClient method -> the tools that call
                              # it, an exclusion with its reason, or a not-yet-exposed gap (Rule 15)
     test_api_coverage.py     # the manifest against APIClient and the tools' client.api calls
@@ -229,6 +232,9 @@ asymmetry other callers rely on):
    `revoke_quarantine_exception` is write-tier too, although it can put an asset back
    into quarantine (and notify its subscribers) — it only restores the asset's last
    recorded verdict.
+   The same three-place rule covers a read that BILLS on every call: `search_nlp`
+   embeds the query with Bedrock, so it stays out of `autoApprove` and its docstring
+   says so.
    An add-on tool that starts, resumes, extends the lease of or interrupts billed
    compute stays out of `autoApprove` the same way, and its add-on's subsection of
    "Add-on Tools" below names it.

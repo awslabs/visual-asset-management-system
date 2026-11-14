@@ -11,3 +11,4 @@ export { default as AdvancedFiltersPanel } from "./AdvancedFiltersPanel";
 export { default as MetadataSearchPanel } from "./MetadataSearchPanel";
 export { default as DisplayOptionsPanel } from "./DisplayOptionsPanel";
 export { default as PreferencesPanel } from "./PreferencesPanel";
+export { default as ReducedFiltersPanel } from "./ReducedFiltersPanel";

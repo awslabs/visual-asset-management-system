@@ -344,6 +344,8 @@ class VamsClient:
         ``total`` stays the numeric ``hits.total.value``. ``total_is_lower_bound`` is True when the
         API reports ``hits.total.relation == "gte"`` (the true total is at least ``total``), and
         ``total_display`` is the total as text with a trailing '+' in that case (e.g. "120+").
+        ``POST /search/nlp`` reports every total that is not zero that way (approximate matching);
+        keyword search does when some permission rules can only be counted as a minimum.
         """
         hits_container = raw.get("hits", {}) if isinstance(raw, dict) else {}
         total = hits_container.get("total", {})
@@ -358,6 +360,10 @@ class VamsClient:
         compact = []
         for hit in hits[:max_hits]:
             source = hit.get("_source", {}) if isinstance(hit, dict) else {}
+            # Vector-search hits carry their ranking extras beside _source, not inside it; folding
+            # them under one key keeps every consumer's `source` reading valid.
+            if isinstance(hit, dict) and "_vector" in hit:
+                source = {**source, "_vector": hit["_vector"]}
             compact.append(
                 {
                     "id": hit.get("_id"),

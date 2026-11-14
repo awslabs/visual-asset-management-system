@@ -1,12 +1,40 @@
 # Search and Discovery
 
-VAMS provides a powerful search interface for locating assets and files across all databases. The search system is powered by Amazon OpenSearch Service and supports full-text queries, metadata filtering, and geospatial map visualization.
+The **Assets and Files** page is where you locate assets and files across every database you can access. A switch in the page title row chooses between two views: an **Asset list** that is always available, and a **Search** view — available when your deployment has Amazon OpenSearch Service, natural-language search, or both — that offers keyword search with full-text queries, metadata filtering, and geospatial map visualization, and natural-language search that ranks files by what they show or contain.
 
-![Asset search page showing table view with filters and search bar](/img/asset_search_table_20260323_v2.5.png)
+![Assets and Files page in the Search view: the Search and Asset list switch in the title row, the Keyword and Natural language switch above the search box, and the asset results for gearbox in the table](/img/asset_search_table_20261110_v2.7.png)
 
-## Search modes
+## Search views
 
-The search page supports two entity types that you can toggle between using the mode selector in the sidebar.
+| View           | Available when                                          | What it offers                                                                                                                                                                                                         |
+| -------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Search**     | Amazon OpenSearch or natural-language search is enabled | Keyword search over assets and files, natural-language search over files, filters, and table, card, and map views                                                                                                      |
+| **Asset list** | Always                                                  | A paginated table of the assets you are authorized to see, with database locking, column preferences, a **Show archived** toggle, and the same **Delete Selected** / **Unarchive Selected** actions as the Search view |
+
+Choose a view with the switch at the right of the page title; the page has one title, **Assets and Files**, whichever view is shown. The page opens on the **Search** view when it is available and on **Asset list** otherwise, and a deployment that offers only the asset list shows no switch. The active view is kept in the page URL (`?tab=asset-list`, `?tab=unified-search`), so a bookmark or shared link opens the same view. A database-scoped link (`/#/databases/{databaseId}/assets` or `/#/search/{databaseId}/assets`) locks both views to that database, and the title names the database (**Assets for {databaseId}**).
+
+The breadcrumb above the title ends with the page itself and never links back to it: on the all-databases page it is the page title alone, and on a database's page it reads **Databases > Assets for {databaseId}**, where **Databases** opens the database list.
+
+## The query band
+
+Below the page title, the Search view places the query in a band of its own: the **Keyword / Natural language** switch (only when both engines are enabled), a full-width search box with the **Search** button, and one line beneath the box that states what the active mode does. The two modes start differently, and that line is where the difference is stated:
+
+-   **Keyword** matches asset and file names, descriptions, tags, and metadata. With an empty query it lists everything in scope, so results appear as soon as the view opens or a filter changes; filters narrow the list.
+-   **Natural language** matches on meaning across file contents — including image and video scenes — as well as names, descriptions, tags, and metadata. Nothing is searched until you describe what you are looking for: the table shows "Describe what you are looking for" instead of a result count, and filters take effect once a description is entered. Switching from **Keyword** with an empty box shows the same state; the keyword listing is not carried over.
+
+The result count next to the title reports the last search that ran, so it appears only after one has. **Clear all filters** appears in the title row once you have changed the search from the page's defaults with a query, a filter, or a metadata filter, and resets them; the count disappears until the reloaded list arrives. It keeps the asset or file choice, and on a database's page it keeps that database. When searches overlap (a page change while a search is still running, for example), the page shows the answer to the newest one and stays in its loading state until that answer arrives.
+
+A search that cannot finish shows a **Search failed** notification with the reason, and the page keeps its previous results and every search control. For example:
+
+-   "The search filters could not be applied. Try again; if it keeps failing, contact your administrator." when a natural-language search asked for metadata, tag, or location filters that could not be applied at that moment. The search does not show unfiltered results instead.
+-   "Search is busy right now. Try again in a moment." when a natural-language search was throttled or timed out.
+-   "Search is temporarily unavailable. Try again in a moment." when a keyword search cannot reach Amazon OpenSearch.
+
+These are temporary failures of a search that is enabled, not a sign that search is turned off; run the search again.
+
+## What to search for
+
+The Search view returns either assets or the individual files inside them. Choose with the **Search for** selector at the top of the sidebar.
 
 | Entity type | Description                                                                                              | Selection                             |
 | ----------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------- |
@@ -17,15 +45,40 @@ The search page supports two entity types that you can toggle between using the 
 When you switch between Assets and Files mode, filters that do not apply to the new mode are automatically removed. For example, file extension filters are removed when switching to Assets mode.
 :::
 
-## Text search
+## Keyword search
 
-The search bar at the top of the page performs a general text query across all indexed fields. Type any term and press **Enter** or choose the search button. The search runs against asset names, descriptions, tags, metadata values, file paths, and other indexed fields simultaneously.
+When both Amazon OpenSearch and natural-language search are enabled, the **Keyword / Natural language** switch in the query band selects how the query is interpreted; the choice is remembered in your preferences. A deployment with a single search engine shows no switch: keyword search is the only mode when natural-language search is not enabled, and natural-language search is the only mode when Amazon OpenSearch is not enabled.
+
+The search box performs a general text query across all indexed fields. Type any term and press **Enter** or choose the search button. The search runs against asset names, descriptions, tags, metadata values, file paths, and other indexed fields simultaneously. The term matches anywhere inside a value, so `pump` finds `hydraulic-pump-housing`; `*` and `?` are treated as literal characters here. A query of several words is split at the spaces, and a record matches when at least one of its words does: `maintenance log` finds a file whose metadata reads `night shift, maintenance log` as well as one whose file name contains `log`. Quotes and the words `AND`, `OR`, and `NOT` are matched as literal text. Wildcards are honoured in the per-field filters in the sidebar, such as the asset name filter (`My*`).
 
 The text query is combined with all other active filters using **AND** logic — results must match both the text query and any filters you have applied. For example, searching for "pump" with a database filter of "facility-db" returns only items that contain "pump" AND belong to "facility-db".
 
-Results include a relevance score. Choose the information icon next to any result to see which fields matched and why the result was returned.
+Results include a relevance score. With **Show result explanation** turned on (in **Display & Preferences**), choose the information icon next to any result to see which fields matched and why the result was returned. **Show result explanation** and the **Keyword Search Scope** toggle (**Include metadata field data in keyword search**, in **Advanced Filters**) shape keyword search only, so the sidebar offers them in keyword mode and not in natural-language mode.
 
-![File search page showing file results in table view](/img/file_search_table_20260323_v2.5.png)
+![Search view in Files mode with the keyword results for gearbox: file path, asset, database, type, size and last modified columns](/img/file_search_table_20261110_v2.7.png)
+
+## Natural language search
+
+Choose **Natural language** to describe what you are looking for instead of naming it — "a rusted pump housing", "drone footage of a bridge deck", "a floor plan with two stairwells". VAMS embeds your description with an Amazon Bedrock model and ranks files by the similarity of the text embedded for each file: the metadata the pipeline generated from renders, keyframes, and extracted text, the metadata already recorded on the file, its asset, and its database, the file's attributes, and the extracted text itself. Natural-language mode searches **files**; in Assets mode the results are grouped by asset and each asset is ranked by its best-matching file.
+
+![Search view in Natural language mode with files for a narrated video showing how to assemble a gearbox: the mode line under the search box, the Search inside files checkbox in the sidebar, and the Relevance column](/img/search_nlp_mode_20261110_v2.7.png)
+
+-   Only the latest live version of each file is searched, and archived files are excluded unless **Include archived** is on.
+-   The **Relevance** column shows the similarity as a percentage; the modality popover beside it lists which parts of the embedded text contributed to the match: `asset-metadata`, `file-identity`, `genai-metadata`, `file-attributes`, `existing-file-metadata`, `existing-asset-metadata`, `existing-database-metadata`, `existing-file-attributes`, and `file-text`. A video analyzed in time windows or a document embedded in content chunks is listed once however many of them match; the popover then also names the best-matching window or chunk and how many matched. A match on a time window also lists `segment-frames`; a match on a content chunk lists `asset-metadata`, `file-identity`, `genai-metadata`, and `file-text`.
+-   **Search inside files**, on by default, also matches file contents — a video's scenes and a document's content chunks — so a scene deep in an hour of footage or a topic on page 150 finds its file; clear it to rank whole files only. A file larger than 50 MiB carries only its whole-file vector and no content chunks.
+-   Naming a file type in your description — "video of a loading bay", "pdf about torque settings" — ranks files of that type a little higher without hiding the others, so a much closer match of another type still comes first.
+-   The match is computed over the asset's name, description, and tags, the file's generated `genai_*` block (title, description, keywords, category, style, materials, colors, objects, orientation, size estimate, text summary), the metadata already recorded on the file, its asset, and its database, and its attribute facts such as dimensions, counts, duration, and resolution. A metadata edit reaches natural-language results only after the pipeline runs again on that file version — a re-run of the execution or a reindex. The `ext_*` facts the pipeline derives from those attributes, and its `genai_model`, `genai_generated_at`, `genai_source_modalities`, `genai_complexity`, and `genai_content_chunk_count` provenance rows, are file **attributes** shown on the file's **Attributes** tab; the descriptive `genai_*` rows (title, description, keywords, and the rest) are file **metadata**. When Amazon OpenSearch is enabled, both are available to the metadata filters in their respective attribute and metadata scopes.
+-   Results are the top matches, not an exhaustive list: the page shows up to 100 candidates with client-side paging and notes "Showing the top N semantic matches; more may exist" ("the top 1 semantic match" for one) under the results when more files could match, or "No match among the closest results searched; more may exist" when none of them matched. For a role that may open only some of the assets in a database, natural-language answers can be thinner than keyword answers, because access is applied after the closest results are chosen; the page then always notes that more may exist. When every matching file is counted but some may match in more video scenes or document passages than were checked, it notes "Some files have more matching scenes or passages than were checked; more may exist" instead. Other search notices appear in a **Search notice** above the results, one line per notice, which you can dismiss; the next search shows its own notices again:
+    -   "You don't have access to any database this search covers. Ask your administrator for access."
+    -   "Not every database you can access was searched. Choose a database in the filters to search it fully."
+    -   "Some filters aren't available for natural-language search in this deployment and weren't applied."
+    -   "Some result details couldn't be loaded. The matches are still shown." This notice appears only for a search without metadata, tag, or location filters; a search with such filters that cannot have them applied fails instead (see [The query band](#the-query-band)).
+-   A description can be up to 1,000 characters. Past that, the search box states the limit and how much to shorten the description, and **Search** stays unavailable until it fits.
+-   The **Database**, **File type**, and **Include archived** filters apply in this mode in every deployment; the **File type** list offers the types found in the current results, with their counts. When the result count is a minimum (shown with `+`), the counts in the **Database**, **File type**, and other filter lists are minimums too and carry a `+`. When Amazon OpenSearch is also enabled, metadata, tag, and geospatial filters narrow the natural-language results too, as in keyword search: with **Assets** selected they match each asset's own metadata, tags, and location, and with **Files** each file's own metadata. Without OpenSearch those filters are hidden. The keyword-only **Keyword Search Scope** and **Show result explanation** toggles are not offered in this mode.
+-   Personal information in a file is masked before its text is embedded, so it cannot be searched for. With the deployment's default Amazon Bedrock guardrail (`bedrockGuardrail.create.piiFilter` set to `anonymize`), a person's name, an email address, a phone number, a postal address, and the other entity types the PII filter detects are replaced by type tokens such as `{NAME}` and `{EMAIL}`. A description that names a person or an email address therefore does not find a file by that value; the file is still found by everything else it contains. Keyword search, which indexes names, descriptions, tags, and metadata as they were entered, still matches a name typed into one of those fields. An administrator whose data holds no personal information can set `piiFilter` to `off`, or reference a guardrail of their own; see [Amazon Bedrock guardrail](../pipelines/system-genai-metadata.md#amazon-bedrock-guardrail).
+-   A new or re-uploaded file becomes searchable once the SYSTEM GenAI metadata pipeline has analyzed it, which takes from one to several minutes after upload.
+
+Natural-language search is available when your deployment enables vector search (the `VECTORSEARCH` feature). See [Vector search](../concepts/vector-search.md) for what is embedded and how results are ranked, and [Cost](../overview/costs.md#natural-language-vector-search) for what the feature costs to run.
 
 ## Filters
 
@@ -33,12 +86,14 @@ The sidebar provides several categories of filters that narrow search results in
 
 ### Basic filters
 
-| Filter             | Applies to    | Description                                                                                          |
-| ------------------ | ------------- | ---------------------------------------------------------------------------------------------------- |
-| **Database**       | Assets, Files | Restrict results to a specific database. Automatically locked when viewing a database-specific page. |
-| **Asset type**     | Assets        | Filter by the asset type classification (for example, `3D Model`, `Point Cloud`).                    |
-| **Tags**           | Assets        | Filter by one or more tags assigned to assets.                                                       |
-| **File extension** | Files         | Filter by file extension (for example, `.e57`, `.las`, `.pdf`).                                      |
+| Filter             | Applies to    | Description                                                                                                     |
+| ------------------ | ------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Database**       | Assets, Files | Restrict results to a specific database. On a database's page it is locked to that database and shows its name. |
+| **Asset type**     | Assets        | Filter by the asset type classification (for example, `3D Model`, `Point Cloud`).                               |
+| **Tags**           | Assets        | Filter by one or more tags assigned to assets.                                                                  |
+| **File extension** | Files         | Filter by file extension (for example, `.e57`, `.las`, `.pdf`).                                                 |
+
+Each option shows how many current results carry that value. The type and tag lists keep the values of the last unfiltered search, so you can still add another value once a filter narrows the results; their counts are always for the current results, and a value with no count in the current results shows none. When the result count is a minimum (shown with `+`), the filter counts are minimums too and carry a `+`. A keyword search counts up to 1,000 values per filter; when the results hold more, the type and tag lists offer the most common values and say so under the list ("Only the most common tags are listed."), and a database the counted values do not include shows no count rather than 0.
 
 ### Advanced filters
 
@@ -79,7 +134,7 @@ VAMS provides multiple ways to view search results. Use the segmented control ab
 The default view displays results in a sortable, paginated table. Key features include:
 
 -   **Resizable columns** -- Drag column borders to adjust widths.
--   **Sortable columns** -- Choose any column header to sort ascending or descending. Sorting is performed server-side.
+-   **Sortable columns** -- Choose any column header to sort ascending or descending. In keyword mode sorting is performed server-side; in natural-language mode sorting and paging act on the top 100 hits in the browser.
 -   **Sticky header** -- Column headers remain visible as you scroll.
 -   **Dual scroll bars** -- A synchronized scroll bar appears above the table when content overflows horizontally.
 -   **Clickable links** -- Asset names link to the asset detail page. Database names link to the database asset listing. In Files mode, file paths link to the asset detail page and navigate directly to that file.
@@ -121,11 +176,13 @@ The map view plots search hits on an interactive map. A result appears on the ma
 To place an asset on the map, add a `location` metadata field of type `geopoint` or `geojson`, or add `latitude` and `longitude` number fields. See [Metadata Management](metadata-management.md#metadata-value-types) for the available value types.
 :::
 
-When you switch to map view, location-related metadata filters are automatically added so only geolocated results are returned. Choosing a map marker opens a popup with the entity's name, database, description, tags, and a **View Asset Details** button (or **View Parent Asset** for file results).
+In keyword mode the map view searches only for results with an indexed geographic shape (the first form above), in addition to your own query and filters. Your filters, metadata filters, metadata mode, and AND or OR choice stay as you set them, on the map and after you leave it, and **Clear all filters** keeps the map to results with a location. Choosing a map marker opens a popup with the entity's name, database, description, tags, and a **View Asset Details** button (or **View Parent Asset** for file results).
+
+In natural-language mode the map shows the same page of the natural-language answer as the table, and its page controls move through that answer's top matches without running another search; the results stay natural-language results on every page. In keyword mode each page is fetched from the server.
 
 GeoJSON polygons and multi-polygons are rendered as filled shapes with outline borders. Points are rendered as map markers.
 
-![Map view showing assets plotted on a geographic map](/img/asset_search_mapView__dark_20260323_v2.5.png)
+![Map view with three asset results plotted as markers on Seattle, Spokane and Portland, under the line 3 of 3 results with location data](/img/asset_search_mapView__dark_20261110_v2.7.png)
 
 ### Geospatial filter
 
@@ -146,8 +203,8 @@ The **Relation** dropdown controls the spatial relationship between the input sh
 
 The geospatial filter applies in addition to all other filters; results must satisfy every active filter group.
 
-:::note[An asset on the map may still be missing from filtered results]
-The geospatial filter matches only against the indexed geographic shape, so an asset or file whose location has not been indexed as a shape is not returned by the filter. The map view is more forgiving and continues to plot such results using the other location metadata forms listed above. If an asset appears on the map but never satisfies the geospatial filter, ask your administrator to reindex the search data.
+:::note[A location must be indexed as a shape to be found]
+The geospatial filter and a keyword search on the map view both match the indexed geographic shape, so an asset or file whose location has not been indexed as a shape is not returned by either. In natural-language mode the map shows the answer's page as the table does, without narrowing it to results with a location. If an asset has location metadata but never appears on the map in keyword mode or in geospatially filtered results, ask your administrator to reindex the search data.
 :::
 
 ## Preview thumbnails
@@ -175,9 +232,9 @@ Column preferences are saved to your browser and persist across sessions.
 
 ## Sorting and pagination
 
--   **Sorting** is performed server-side. Choose any sortable column header to sort results. The current sort field and direction are indicated in the column header.
+-   **Sorting** is performed server-side in keyword mode; in natural-language mode sorting and paging act on the top 100 hits in the browser. Choose any sortable column header to sort results. The current sort field and direction are indicated in the column header.
 -   **Pagination** controls appear at the bottom of the results. Page sizes of 10, 25, 50, or 100 are available through preferences. Navigate between pages using the pagination controls.
--   The total result count is displayed in the table header. A `+` suffix means the count is a minimum: either more results exist than can be precisely counted, or some of your permission rules can only be counted as a minimum (see [Counts and permissions](../api/search.md#counts-and-permissions)).
+-   The total result count is displayed in the table header. A `+` suffix means the count is a minimum: either more results exist than can be precisely counted, or some of your permission rules can only be counted as a minimum (see [Counts and permissions](../api/search.md#counts-and-permissions)). The **About this count** info button beside a minimum explains it; it can be reached with **Tab** and opened with **Enter** or **Space**. In natural-language mode the count is every match the search found that you can open, the same count the badge next to the title shows and screen readers announce when the search finishes, and the table lists the top 100 of them. There every count except zero carries a `+`: natural-language search finds the closest matches approximately, so it can miss a weak match, and a filled search window or a database that was not searched can leave out more.
 
 ## Direct URL navigation to files
 
@@ -199,13 +256,15 @@ In Assets mode, you can select multiple assets using the checkboxes and perform 
 | **Unarchive Selected** | Restore a single archived asset. This button appears when exactly one archived asset is selected.                                         |
 | **Create Asset**       | Navigate to the upload page to create a new asset. From a database's asset page, the upload page opens with that database selected.       |
 
+The same actions appear in the **Asset list** view. Each is offered according to your role: an action your role does not allow, such as **Unarchive Selected** for a role built from the `database-user` or `database-readonly` template, is shown disabled with the reason, and VAMS still checks every request.
+
 :::warning
 Permanently deleting an archived asset cannot be undone. The asset and all its files are removed from the system.
 :::
 
 ## Limited search mode
 
-If your deployment has Amazon OpenSearch Service disabled (the `NOOPENSEARCH` feature flag is active), the search page falls back to a basic asset listing mode. In this mode, full-text search, metadata filtering, and map view are unavailable. Only a paginated table of assets is displayed.
+If your deployment has Amazon OpenSearch Service disabled (the `NOOPENSEARCH` feature flag is active), keyword search, metadata filtering, and map view are unavailable. When vector search is also disabled, the page shows only the **Asset list** view, with no view switch — a paginated table of assets with archive, permanent-delete, and unarchive actions. When vector search is enabled, the **Search** view remains available in natural-language mode with the database, file-type, and archived filters and the **Search inside files** checkbox, and its table shows the asset name, database, file path, extension, size, archived status, and relevance columns.
 
 :::tip[CLI alternative]
 Search operations can also be performed via the command line. See [CLI Search Commands](../cli/commands/search.md).

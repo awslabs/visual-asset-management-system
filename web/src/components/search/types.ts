@@ -30,6 +30,7 @@ export interface SearchFilters {
     };
     includeMetadataInKeywordSearch?: boolean;
     showResultExplanation?: boolean;
+    includeSegments?: boolean; // `Search inside files` (NLP mode); false only when cleared
     bool_has_asset_children?: {
         value: boolean;
     } | null;
@@ -106,8 +107,36 @@ export interface SearchExplanation {
     };
 }
 
+/**
+ * The segment vector that scored best for a hit: a video time window (`videoTime`, with a
+ * millisecond range) or a document content chunk (`textChunk`, range `null`). `null` on the hit
+ * when the whole-file vector won.
+ */
+export interface NlpSegmentRef {
+    segmentKey: string;
+    segmentKind: string;
+    segmentLabel: string;
+    segmentStartMs: number | null;
+    segmentEndMs: number | null;
+}
+
+/** Per-hit vector details the NLP search returns beside `_score`; never part of `_source`. */
+export interface NlpVectorInfo {
+    distance: number;
+    embeddingModelId: string;
+    sourceModalities: string[];
+    indexedAt: string;
+    fileClass: string;
+    /** Segment vectors collapsed into this hit; `0` when only the whole-file vector matched. */
+    segmentHits: number;
+    bestSegment: NlpSegmentRef | null;
+}
+
 export interface SearchResult {
     _id: string;
+    _score?: number;
+    _index_type?: string;
+    _vector?: NlpVectorInfo;
     _source: {
         str_assetid?: string;
         str_assetname?: string;
@@ -142,9 +171,72 @@ export interface SearchResponse {
                 key: string;
                 doc_count: number;
             }>;
+            /**
+             * Records whose value is not among `buckets` (a facet returns at most 1,000 per index);
+             * 0 when every value is listed, null when the aggregation reports no such count.
+             */
+            sum_other_doc_count?: number | null;
         };
     };
     aggregationTotal?: number;
+    /**
+     * How many records the result can page through, when that is fewer than the count it shows: a
+     * natural-language answer counts every match it found but returns at most 100 of them, so the
+     * pages cover the returned hits. Unset for keyword search, which pages through its total.
+     */
+    pagedTotal?: number;
+}
+
+export type SearchMode = "keyword" | "nlp";
+
+/** Body of `POST /search/nlp`. The OpenSearch-only constraints are ignored (with a warning) when OpenSearch is off. */
+export interface NlpSearchRequest {
+    query: string;
+    entityTypes?: ("asset" | "file")[];
+    databaseIds?: string[];
+    includeArchived?: boolean;
+    includeSegments?: boolean;
+    fileClasses?: string[];
+    fileExtensions?: string[];
+    size?: number;
+    filters?: object[];
+    metadataQuery?: string;
+    metadataSearchMode?: string;
+    geoSearch?: GeoSearchFilter;
+    tags?: string[];
+    enrich?: boolean;
+}
+
+export interface NlpSearchSummary {
+    query: string;
+    embeddingModelId: string;
+    databasesSearched: number;
+    candidatesEvaluated: number;
+    /** Segment items folded into their file's hit. */
+    itemsCollapsed: number;
+    /** File classes the query's type words named; their hits get a small ranking bonus. */
+    classIntent: string[];
+    truncated: boolean;
+}
+
+/**
+ * One advisory attached to an otherwise successful natural-language response. `code` is one of a
+ * fixed set (`truncated:window`, `truncated:targets`, `databases:none_accessible`,
+ * `opensearch:fields_ignored`, `opensearch:enrichment_failed`, `segments:window_full` — a segment
+ * search window filled while the answer is not already truncated); `message` is written for API and
+ * CLI callers. The search page states the two window-full codes under the results and shows every
+ * other code in its Search notice above the results, in its own text for each code
+ * (utils/nlpWarnings.ts) and the API's `message` only for a code it does not know.
+ */
+export interface NlpSearchWarning {
+    code: string;
+    message: string;
+}
+
+/** The `POST /search` envelope plus the `nlp` summary and `warnings` the NLP route adds. */
+export interface NlpSearchResponse extends SearchResponse {
+    nlp: NlpSearchSummary;
+    warnings: NlpSearchWarning[];
 }
 
 export interface SearchPreferences {
@@ -160,6 +252,7 @@ export interface SearchPreferences {
     filterPresets: FilterPreset[];
     lastUsedFilters: SearchFilters;
     sidebarWidth?: number; // Width of the search sidebar (resizable)
+    searchMode?: SearchMode; // Keyword vs natural-language search when both engines are enabled
 }
 
 export interface FilterPreset {
@@ -388,6 +481,14 @@ export const FIELD_MAPPINGS: FieldMapping = {
         filterable: true,
         searchable: false,
     },
+    // Natural-language search only: the hit's `_score` (1 - cosine distance) shown as a percentage
+    relevance: {
+        label: "Relevance",
+        type: "number",
+        sortable: true,
+        filterable: false,
+        searchable: false,
+    },
 
     // Metadata fields (dynamic)
     "MD_*": {
@@ -418,9 +519,10 @@ export function getTotalResultCount(result: SearchResponse | null | undefined): 
 }
 
 /**
- * Whether the total is a minimum rather than an exact count. The backend reports a lower bound
- * (hits.total.relation "gte") when some of the caller's permission rules cannot be counted ahead of
- * the per-record check.
+ * Whether the total is a minimum rather than an exact count, as the backend reports it
+ * (hits.total.relation "gte"). Keyword search reports one when some of the caller's permission rules
+ * cannot be counted ahead of the per-record check; natural-language search reports every total that is
+ * not zero as one, because its matching is approximate.
  */
 export function isTotalLowerBound(result: SearchResponse | null | undefined): boolean {
     return result?.hits?.total?.relation === "gte";
@@ -429,6 +531,12 @@ export function isTotalLowerBound(result: SearchResponse | null | undefined): bo
 /** A total for display, with "+" when it is a minimum. */
 export function formatTotalResultCount(result: SearchResponse | null | undefined): string {
     return `${getTotalResultCount(result).toLocaleString()}${isTotalLowerBound(result) ? "+" : ""}`;
+}
+
+/** The number of records the pages cover: `pagedTotal` when the result sets it, else its total. */
+export function getPagedResultCount(result: SearchResponse | null | undefined): number {
+    if (result && typeof result.pagedTotal === "number") return result.pagedTotal;
+    return getTotalResultCount(result);
 }
 
 /**
@@ -481,4 +589,5 @@ export const DEFAULT_PREFERENCES: SearchPreferences = {
         },
     },
     sidebarWidth: 400, // Default sidebar width
+    searchMode: "keyword",
 };

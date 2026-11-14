@@ -13,7 +13,7 @@ import * as s3not from "aws-cdk-lib/aws-s3-notifications";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as events from "aws-cdk-lib/aws-events";
 import * as cdk from "aws-cdk-lib";
-import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
+import { Duration, RemovalPolicy, NestedStack, Validations } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import {
@@ -43,9 +43,50 @@ import {
     buildFileIndexerSnsQueuingFunction,
     buildAssetIndexerSnsQueuingFunction,
     buildDatabaseIndexerSnsQueuingFunction,
-} from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
+} from "../../lambdaBuilder/indexingFunctions";
 import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
+
+/** Attribute that holds the embedding vector (a list of numbers) on a vector embeddings item. */
+const VECTOR_ATTRIBUTE_NAME = "embedding";
+
+/**
+ * Equality-filter attributes of the vector index; every item writes all seven as strings. The
+ * SearchSchema is fixed for the life of an index, so every attribute a search may filter on is
+ * declared here (segmentKind is "none" on a whole-file item, "videoTime" or "textChunk" on a segment).
+ */
+const VECTOR_INDEX_FILTER_ATTRIBUTES = [
+    "databaseId",
+    "isLatest",
+    "isArchived",
+    "fileClass",
+    "fileExt",
+    "embeddingModelId",
+    "segmentKind",
+] as const;
+
+/** Non-key attributes projected into the vector index, so a search hit needs no base-table read. */
+const VECTOR_INDEX_PROJECTED_ATTRIBUTES = [
+    "databaseId",
+    "assetId",
+    "filePath",
+    "versionId",
+    "isLatest",
+    "isArchived",
+    "fileClass",
+    "fileExt",
+    "embeddingModelId",
+    "fileSize",
+    "contentType",
+    "indexedAt",
+    "sourceModalities",
+    "previewFileKey",
+    "segmentKey",
+    "segmentKind",
+    "segmentLabel",
+    "segmentStartMs",
+    "segmentEndMs",
+] as const;
 
 /**
  * KEYS_ONLY index of WorkflowExecutionLocksStorageTable on the holder (workflowExecutionId): the lock rows
@@ -156,6 +197,8 @@ export interface storageResources {
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock a running execution holds
+        // Vector search tables
+        vectorEmbeddingsStorageTable: dynamodb.Table;
         // Compliance tables
         complianceSchemaStorageTable: dynamodb.Table;
         complianceAssetStateStorageTable: dynamodb.Table;
@@ -2400,6 +2443,73 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Vector Embeddings — one item per (file, S3 version) embedding plus one per segment (video time
+    // window or text chunk) of a version, written only by the vector indexer in the search stack. PK
+    // is the composite databaseId:assetId; SK is the fileVersionKey (hash-bounded file path + "#" +
+    // S3 VersionId, "null" on unversioned buckets, + "#" + segment key on a segment item), so one
+    // Query covers an asset, begins_with covers a file's items across versions, and a longer
+    // begins_with covers one version's segments. No streams, TTL, or GSIs.
+    //
+    // Created in every deployment, vector search on or off; only its vector index follows the switch.
+    // It holds items only after vector search has been enabled, and keeping it while the feature is
+    // off preserves the embeddings across an off-on cycle: a table gated on the switch would be
+    // retained on the way off (RETAIN) and a new, empty one created on the way back on, orphaning the
+    // embeddings and re-billing every file's analysis on the reindex. It also keeps its resource-name
+    // parameter and backend constant independent of the switch.
+    const vectorEmbeddingsStorageTable = new dynamodb.Table(scope, "VectorEmbeddingsStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "fileVersionKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // The vector index and its filter attributes exist only while vector search is enabled. The L2
+    // Table has no typed VectorIndexes property, so the index is a raw property override on the
+    // CfnTable, and AttributeDefinitions is overridden in full because CreateTable rejects a
+    // SearchSchema attribute that is declared without an index using it. The SearchSchema cannot be
+    // changed after the index is created; a new filter attribute means a new index name. Both
+    // overrides should become the typed property once aws-cdk-lib ships one.
+    if (config.app.vectorSearch.enabled) {
+        const cfnVectorTable = vectorEmbeddingsStorageTable.node.defaultChild as dynamodb.CfnTable;
+        cfnVectorTable.addPropertyOverride("AttributeDefinitions", [
+            { AttributeName: "databaseId:assetId", AttributeType: "S" },
+            { AttributeName: "fileVersionKey", AttributeType: "S" },
+            ...VECTOR_INDEX_FILTER_ATTRIBUTES.map((name) => ({
+                AttributeName: name,
+                AttributeType: "S",
+            })),
+        ]);
+        cfnVectorTable.addPropertyOverride("VectorIndexes", [
+            {
+                IndexName: config.vectorIndexName,
+                VectorAttribute: { AttributeName: VECTOR_ATTRIBUTE_NAME },
+                Dimensions:
+                    config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions,
+                DistanceFunction: "COSINE",
+                Projection: {
+                    ProjectionType: "INCLUDE",
+                    NonKeyAttributes: [...VECTOR_INDEX_PROJECTED_ATTRIBUTES],
+                },
+                SearchSchema: VECTOR_INDEX_FILTER_ATTRIBUTES.map((name) => ({
+                    AttributeName: name,
+                    SearchSchemaElementType: "INLINE_FILTER",
+                })),
+            },
+        ]);
+        // CloudFormation creates, updates, and drift-checks VectorIndexes, but the published resource
+        // schema and the bundled CloudFormation-Validate rules do not list the property, so the
+        // validator's schema warning is acknowledged here.
+        Validations.of(cfnVectorTable).acknowledge({
+            id: "CloudFormation-Validate::F3002",
+            reason: "AWS::DynamoDB::Table.VectorIndexes is accepted by CloudFormation but absent from the published resource schema; the VAMS vector embeddings table needs the index and the L2 Table has no typed property for it.",
+        });
+    }
+
     ///DEPRECATED TABLES - KEPT FOR DATA MIGRATION PURPOSES
 
     const assetLinksStorageTableDeprecated = new dynamodb.Table(scope, "AssetLinksStorageTable", {
@@ -2744,6 +2854,8 @@ export function storageResourcesBuilder(
             workflowStorageTableV2: workflowStorageTableV2,
             workflowTriggersStorageTable: workflowTriggersStorageTable,
             workflowExecutionLocksStorageTable: workflowExecutionLocksStorageTable,
+            // Vector search tables
+            vectorEmbeddingsStorageTable: vectorEmbeddingsStorageTable,
             // Compliance tables
             complianceSchemaStorageTable: complianceSchemaStorageTable,
             complianceAssetStateStorageTable: complianceAssetStateStorageTable,
@@ -3392,6 +3504,9 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowTriggersStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionLocksStorage]:
             storageResources.dynamo.workflowExecutionLocksStorageTable.tableName,
+        // Vector search tables
+        [RESOURCE_PARAM_KEYS.dynamoTables.vectorEmbeddingsStorage]:
+            storageResources.dynamo.vectorEmbeddingsStorageTable.tableName,
         // Compliance tables
         [RESOURCE_PARAM_KEYS.dynamoTables.complianceSchemaStorage]:
             storageResources.dynamo.complianceSchemaStorageTable.tableName,

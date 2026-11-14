@@ -464,6 +464,10 @@ class AggregationModel(BaseModel, extra='ignore'):
     """Model for search aggregations"""
     doc_count: Optional[int] = None
     buckets: Optional[List[AggregationBucketModel]] = None
+    # Records whose value is not among the returned buckets (a facet returns at most 1,000), as
+    # OpenSearch reports it for a terms aggregation and summed over both indexes; 0 when every value
+    # is listed. None for an aggregation that reports no such count (#1283).
+    sum_other_doc_count: Optional[int] = None
     
     # For nested aggregations (filtered aggregations) - using Dict to avoid forward reference
     filtered_assettype: Optional[Dict[str, Any]] = None

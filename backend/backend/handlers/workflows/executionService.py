@@ -2091,14 +2091,11 @@ def abort_execution(event, execution_id):
             main_item['executionStopDate'] = now
         main_item['lastSfnSyncCheckDate'] = now
         # Stopping the state machine skips its error handler, so the abort publishes the completion
-        # event itself once the ABORTED status lands.
-        if _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
-                                        only_if_not_terminal=True):
-            emit_workflow_execution_completed(
-                execution_id, main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''),
-                ABORTED_STATUS, started_at=main_item.get('executionStartDate', ''),
-                completed_at=main_item['executionStopDate'],
-                execution_group_id=main_item.get('executionGroupId', ''))
+        # event itself once the ABORTED status lands, after the locks are released below.
+        aborted_here = _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
+                                                    only_if_not_terminal=True)
+    else:
+        aborted_here = False
 
     # The run is terminal, so a launch under a locking restriction may now take the same assets, files or
     # file versions. A no-op under `none`; best-effort (an unreleased row expires through the table's TTL).
@@ -2111,6 +2108,15 @@ def abort_execution(event, execution_id):
             workflow_execution_id=execution_id,
             workflow_database_id=main_item.get('workflowDatabaseId', ''),
             workflow_id=main_item.get('workflowId', ''))
+
+    # Announced once the locks are free, so a consumer that relaunches on the event (the compliance
+    # callback's waiting pipeline rules) is not refused again by the run it was told had ended.
+    if aborted_here:
+        emit_workflow_execution_completed(
+            execution_id, main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''),
+            ABORTED_STATUS, started_at=main_item.get('executionStartDate', ''),
+            completed_at=main_item['executionStopDate'],
+            execution_group_id=main_item.get('executionGroupId', ''))
 
     logger.info(f"Aborted execution {execution_id}")
     # AUDIT LOG: execution aborted — it stops a run mid-flight, so who stopped it is audit-worthy.

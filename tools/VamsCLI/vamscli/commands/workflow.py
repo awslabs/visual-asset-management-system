@@ -359,7 +359,7 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
         vamscli workflow create -d my-db -n "Convert for web" \\
             --pipeline global:conversion-3d-basic:convert-to-glb:convert-for-web
         vamscli workflow create -d my-db -n "Label only" \\
-            --pipeline global:metadata-3d-labeling::label-step
+            --pipeline my-db:my-labeler
         vamscli workflow create -d my-db -n "WF" --specified-pipelines-file pipes.json
     """
     api_client = _api(ctx)

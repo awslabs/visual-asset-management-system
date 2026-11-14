@@ -69,6 +69,7 @@ TOOLS = {
     "get_asset_link_metadata_v2": ("get_asset_link_metadata",),
     # --- Search ---
     "search_query": ("find_and_summarize", "search_assets", "search_files"),
+    "search_nlp": ("search_nlp",),
     "get_search_mapping": ("get_search_fields",),
     # --- Tags and tag types ---
     "get_tags": ("list_tags",),
