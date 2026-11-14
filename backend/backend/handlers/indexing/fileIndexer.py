@@ -20,6 +20,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.batchItemFailures import failed_records_log_line
 from common.eventLogSummary import event_log_summary, exception_log_summary
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
@@ -2070,7 +2071,7 @@ def with_batch_item_failures(response, event, failures: List[Dict[str, str]]):
     """
     if isinstance(event, dict) and 'Records' in event:
         if failures:
-            logger.warning(f"Reporting {len(failures)} failed record(s) for redrive")
+            logger.warning(failed_records_log_line(failures))
         response['batchItemFailures'] = failures
     return response
 
