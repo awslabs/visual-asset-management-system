@@ -30,7 +30,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_auth_changes, audited_handler
+from customLogging.auditLogging import log_action, log_auth_changes, audited_handler
 from common.dynamodb import validate_pagination_info
 from models.common import (
     validation_error_message,
@@ -643,6 +643,7 @@ def handle_get_request(event):
             # Note: Constraints don't have object-level authorization in Casbin
             # Only API-level authorization is checked in the lambda_handler
             if constraint:
+                log_action(event, "constraintGet", constraintId=constraint_id)
                 # Convert to ConstraintResponseModel for consistent response format
                 try:
                     response_model = ConstraintResponseModel(**constraint)
@@ -685,6 +686,9 @@ def handle_get_request(event):
                     # Fall back to raw item if conversion fails
                     formatted_items.append(item)
             
+            log_action(event, "constraintList", item_count=len(formatted_items),
+                       request_parameters=dict(query_params))
+
             # Build response
             response = {"message": {"Items": formatted_items}}
             if 'NextToken' in constraints_result:
@@ -762,7 +766,7 @@ def handle_post_request(event):
             "objectType": request_model.objectType,
             "groupPermissions": request_model.groupPermissions,
             "userPermissions": request_model.userPermissions
-        })
+        }, entity_id=result.constraintId, changes=request_model.dict(exclude_unset=True))
         
         # Return success response with constraint data
         response_body = result.dict()

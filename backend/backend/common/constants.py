@@ -533,6 +533,9 @@ CORE_LOG_SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "Access
                            # The origin verification value CloudFront adds to forwarded API requests
                            # (common/auth/originVerify.py ORIGIN_VERIFY_HEADER_NAME).
                            "x-vams-origin-verify",
+                           # The digest of that value the REST authorizer adds to its context for
+                           # handlers' audit records (common/auth/viewerAddress.py).
+                           "vams:originVerifyDigest",
                            # Request and response headers that carry a credential: a client's
                            # cookies (session cookies included), an API Gateway API key, proxy
                            # credentials, and an AWS SigV4 session token.
