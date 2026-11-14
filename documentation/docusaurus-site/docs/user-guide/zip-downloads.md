@@ -34,7 +34,7 @@ The Download Queue lists your download jobs. Archive jobs from Download as Zip a
 
 ### Your jobs and every user's jobs
 
-The asset's **Download Queue** tab opens on **My jobs**. When your role allows it, a **My jobs** / **Show all users** toggle at the right end of the row above the table lists every user's jobs for that asset, with a **Requested by** column. Your administrator grants it through the all-users list route (see [Permissions](../developer/permissions.md#zip-download-routes-on-roles-built-from-earlier-templates)); you also need read access to the asset. Without it, the choice is not shown.
+The asset's **Download Queue** tab opens on **My jobs**. When your role allows it, a **My jobs** / **Show all users** toggle at the right end of the row above the table lists every user's jobs for that asset, with a **Requested by** column. Your administrator grants it through the all-users list route (see [Permissions](../developer/permissions.md#zip-download-routes-on-roles-built-from-earlier-templates)); you also need read access to the asset. Without it, the choice is not shown. A finished job shows its download button only when the download would be allowed: on an asset that is quarantined without an exception, while `app.compliance.quarantineBlocksDownload` is on, no row offers one.
 
 -   You can download another user's finished archive when your role lets you download files from that asset. VAMS checks the archive's files again when you choose **Download**: if a file in it has since been archived, deleted, or blocked, the download is refused with the same message a new zip download would get.
 -   Only the user who requested a job can cancel or delete it, so another user's job shows no **Cancel** or **Delete**.

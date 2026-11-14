@@ -20994,7 +20994,7 @@ components:
                     description: "All-users list only: whether the caller requested this job."
                 canDownload:
                     type: boolean
-                    description: "All-users list only: the API's decision whether the download URL route would sign this archive for the caller (advisory; the route checks again)."
+                    description: "All-users list only: the API's decision whether the download URL route would sign this archive for the caller: the job is SUCCEEDED, the caller may call the route, and the asset is not refused by the quarantine block (false on every row while the asset is quarantined without an exception and app.compliance.quarantineBlocksDownload is on). Advisory; the route checks again."
                 canRemove:
                     type: boolean
                     description: "All-users list only: whether the caller may cancel or delete the job (only its requester may)."

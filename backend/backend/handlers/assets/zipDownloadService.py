@@ -1105,6 +1105,20 @@ def _list_parameters(query) -> dict:
     return asked
 
 
+def _quarantine_refuses_download(database_id, asset_id) -> bool:
+    """Whether the quarantine block would refuse a download of this asset right now: the check the
+    create and URL routes run (`check_quarantine_block`, a no-op while the block is off), asked once
+    per list call for the one asset. Advisory like every row flag, so a read that fails is logged and
+    answers False: the URL route decides again and refuses a quarantined asset itself (#1125 D36)."""
+    try:
+        check_quarantine_block(database_id, asset_id)
+    except QuarantineBlockedResponse:
+        return True
+    except Exception as e:
+        logger.warning(f"Quarantine state of {database_id}:{asset_id} unreadable for the list flags: {e}")
+    return False
+
+
 def list_all_users_jobs(event, database_id, asset_id):
     """Every user's unexpired jobs for one asset, newest first, one page (the asset index).
 
@@ -1131,6 +1145,7 @@ def list_all_users_jobs(event, database_id, asset_id):
     response = zip_table.query(**kwargs)
     caller = _caller_id()
     may_download_asset = _may_download_from_asset(database_id, asset_id)
+    quarantined = _quarantine_refuses_download(database_id, asset_id)
     items, reconciled = [], 0
     run_check_budget = [RUN_CHECKS_PER_CALL]
     for row in response.get("Items", []) or []:
@@ -1144,8 +1159,9 @@ def list_all_users_jobs(event, database_id, asset_id):
         url_allowed = _route_allowed(
             "POST", _concrete_path(API_ZIP_DOWNLOADS_ASSET_REQUEST_URL.path, database_id, asset_id,
                                    request_id))
+        # The URL route refuses a quarantined asset (D35), so the row offers no download either (D36).
         can_download = (row.get("status") == zd.STATUS_SUCCEEDED and url_allowed
-                        and (is_own or may_download_asset))
+                        and (is_own or may_download_asset) and not quarantined)
         can_remove = is_own and _route_allowed(
             "DELETE", _concrete_path(API_ZIP_DOWNLOADS_ASSET_REQUEST.path, database_id, asset_id,
                                      request_id))
