@@ -88,10 +88,14 @@ def check_parse(root: Path, extra: list[Path]) -> list[str]:
     repo = root.parent.parent
     bad = []
     for p in scanned(root, extra, (".yaml", ".yml")):
+        loader = _Loader(p.read_text(encoding="utf-8"))  # a yaml.SafeLoader subclass that only adds the CFN tags
         try:
-            list(yaml.load_all(p.read_text(encoding="utf-8"), Loader=_Loader))
+            while loader.check_data():
+                loader.get_data()
         except yaml.YAMLError as exc:
             bad.append(f"{display(p, repo)}: YAML: {exc}".splitlines()[0])
+        finally:
+            loader.dispose()
     for p in scanned(root, extra, (".json", ".kiro.hook")):
         if p.name in ("tsconfig.json",):  # JSONC (comments allowed by TypeScript)
             continue

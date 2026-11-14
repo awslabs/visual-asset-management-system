@@ -44,7 +44,11 @@ NOVALUE = object()
 
 
 def load_cfn(rel: str) -> dict:
-    return yaml.load((PKG / rel).read_text(), Loader=_CfnLoader)
+    loader = _CfnLoader((PKG / rel).read_text())  # a yaml.SafeLoader subclass that only adds the CFN tags
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
 
 
 def render(node, params: dict, conditions: dict, resources: dict):

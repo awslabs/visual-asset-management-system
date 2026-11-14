@@ -42,7 +42,11 @@ _Loader.add_multi_constructor("!", _tag)
 
 
 def _statements() -> list[dict]:
-    doc = yaml.load(POLICY.read_text(), Loader=_Loader)
+    loader = _Loader(POLICY.read_text())  # a yaml.SafeLoader subclass that only adds the CFN tags
+    try:
+        doc = loader.get_single_data()
+    finally:
+        loader.dispose()
     out: list[dict] = []
 
     def walk(node):

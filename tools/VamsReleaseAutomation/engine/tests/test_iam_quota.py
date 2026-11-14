@@ -201,7 +201,11 @@ def test_get_account_summary_is_in_the_manifests_and_the_deploy_role():
         pass
 
     _L.add_multi_constructor("!", lambda loader, suffix, node: None)
-    t = yaml.load((PKG / "iam/cloudformation/vra-deploy-role.yaml").read_text(), Loader=_L)
+    ldr = _L((PKG / "iam/cloudformation/vra-deploy-role.yaml").read_text())  # a SafeLoader subclass
+    try:
+        t = ldr.get_single_data()
+    finally:
+        ldr.dispose()
     stmts = [s for s in t["Resources"]["DeployPolicy"]["Properties"]["PolicyDocument"]["Statement"]
              if isinstance(s, dict) and action in json.dumps(s.get("Action"))]
     assert stmts and all(s.get("Resource") == "*" for s in stmts)

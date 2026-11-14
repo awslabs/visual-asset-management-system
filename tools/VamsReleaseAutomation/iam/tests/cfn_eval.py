@@ -40,7 +40,11 @@ _Loader.add_multi_constructor("!", _tag)
 
 
 def load_cfn(path: Path) -> dict:
-    return yaml.load(Path(path).read_text(), Loader=_Loader)
+    loader = _Loader(Path(path).read_text())  # a yaml.SafeLoader subclass that only adds the CFN tags
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
 
 
 def render(node, params: dict, conditions: dict, resources: dict | None = None):

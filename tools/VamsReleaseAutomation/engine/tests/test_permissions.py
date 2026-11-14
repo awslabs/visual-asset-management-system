@@ -449,7 +449,11 @@ def test_drift_detection_status_is_granted_and_simulated_on_star():
         pass
 
     _L.add_multi_constructor("!", lambda loader, suffix, node: None)
-    t = _yaml.load((pkg / "iam/cloudformation/vra-deploy-role.yaml").read_text(), Loader=_L)
+    ldr = _L((pkg / "iam/cloudformation/vra-deploy-role.yaml").read_text())  # a SafeLoader subclass
+    try:
+        t = ldr.get_single_data()
+    finally:
+        ldr.dispose()
     stmts = [s for s in t["Resources"]["DeployPolicy"]["Properties"]["PolicyDocument"]["Statement"]
              if isinstance(s, dict) and action in (s.get("Action") or [])]
     assert stmts and all(s.get("Resource") == "*" for s in stmts)
