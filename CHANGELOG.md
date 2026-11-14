@@ -6,7 +6,9 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
--   Behavior changes to review before upgrading: on a deployment with an external OAuth identity provider, VAMS identifies each user by the first present of the token's `cognito:username`, `username` and `sub` claims and no longer reads a `vams:tokens` claim; an identity provider that issued `vams:tokens` with a different value must have its users' role assignments keyed by the username claim, and one whose access tokens carry none of the three claims has every request refused (see the update guide). ([PR #1490](https://github.com/awslabs/visual-asset-management-system/pull/1490), [PR #1491](https://github.com/awslabs/visual-asset-management-system/pull/1491))
+-   Behavior changes to review before upgrading:
+    -   On a deployment with an external OAuth identity provider, VAMS identifies each user by the first present of the token's `cognito:username`, `username` and `sub` claims and no longer reads a `vams:tokens` claim; an identity provider that issued `vams:tokens` with a different value must have its users' role assignments keyed by the username claim, and one whose access tokens carry none of the three claims has every request refused (see the update guide). ([PR #1490](https://github.com/awslabs/visual-asset-management-system/pull/1490), [PR #1491](https://github.com/awslabs/visual-asset-management-system/pull/1491))
+    -   A 3D Preview Thumbnail run on a point cloud with no valid point (every point NaN or infinite) fails with "The point cloud has no valid points" instead of succeeding with an empty preview. A scene that also contains meshes still renders its meshes. ([#1460](https://github.com/awslabs/visual-asset-management-system/issues/1460))
 
 ### ⚠ BREAKING CHANGES
 
@@ -99,6 +101,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend/Auth** The API authorizer derives the caller's identity only from the token's username claim and ignores claims a token carries under the reserved `vams:` prefix. ([PR #1490](https://github.com/awslabs/visual-asset-management-system/pull/1490), [PR #1491](https://github.com/awslabs/visual-asset-management-system/pull/1491))
     -   Note: the username claim is the first present of `cognito:username`, `username` and `sub`; a verified token with none of them is refused. Amazon Cognito users and API keys keep their identity. See the update guide for external OAuth identity providers.
 -   **Backend** Fixed the complete stage of `POST /ingest-asset` (the request that carries `uploadId`) always failing with `400` "Invalid API path or method": ingest-asset now forwards the completion to the upload-completion route `/uploads/{uploadId}/complete`, so the upload is completed. An `uploadId` that is not a single path segment is refused with `400` "Invalid uploadId" before anything is written. ([#1453](https://github.com/awslabs/visual-asset-management-system/issues/1453))
+-   **Pipelines** Fixed the 3D Preview Thumbnail pipeline producing an empty preview and reporting success for a point cloud with NaN or infinite points, such as an organized PCD from a depth camera; those points are dropped before the preview is framed, and a point cloud with no valid point fails with "The point cloud has no valid points". ([#1460](https://github.com/awslabs/visual-asset-management-system/issues/1460))
 
 ### Chores
 
