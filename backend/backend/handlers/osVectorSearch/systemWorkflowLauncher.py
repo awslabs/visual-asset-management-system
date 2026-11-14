@@ -23,8 +23,8 @@ A 400 (the workflow's per-input-file-version lock refusing a version already run
 refusal) is final for this message and is dropped. A throttle, a 5xx, or an invocation fault is reported
 as a batch item failure: SQS redelivers it and dead-letters it after three attempts. A connection that
 fails before the call reaches executeWorkflow is tried again at once, at most twice, before that
-(`invoke_execute_workflow`), so a pooled connection the network closed while the container was idle does
-not leave the message waiting out the queue's visibility timeout.
+(`common/workflows/executeWorkflowInvoke.py`), so a pooled connection the network closed while the
+container was idle does not leave the message waiting out the queue's visibility timeout.
 """
 
 import json
@@ -36,7 +36,6 @@ from typing import Any, Dict, List
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
-from botocore.exceptions import ConnectionClosedError, ConnectTimeoutError, EndpointConnectionError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from common.batchItemFailures import (
@@ -46,6 +45,7 @@ from common.batchItemFailures import (
 )
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
+from common.workflows import executeWorkflowInvoke as ewi
 from common.workflows import executionLocks as el
 from common.workflows import triggerMatching as tm
 from common.workflows.executionRecords import workflow_composite_key
@@ -56,8 +56,9 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 # The executeWorkflowV2 Invoke is synchronous and NOT idempotent: botocore's retries would also repeat a
 # read timeout, which follows a delivered call, and launch a duplicate execution. So this client delivers
-# one Invoke per attempt and waits out the callee's full 15-minute runtime; `invoke_execute_workflow`
-# repeats only a failed connection. The retrying config stays on the read-only clients.
+# one Invoke per attempt and waits out the callee's full 15-minute runtime;
+# `executeWorkflowInvoke.invoke_execute_workflow` repeats only a failed connection. The retrying config
+# stays on the read-only clients.
 invoke_config = Config(retries={"total_max_attempts": 1}, read_timeout=900, connect_timeout=60)
 
 dynamodb = boto3.resource("dynamodb", config=retry_config)
@@ -89,18 +90,6 @@ _ENDED_STATUSES = frozenset({"SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", "SKI
 _BATCH_GET_KEYS = 100
 # The expiry an unread slot row is given: held.
 _HELD_FOREVER = 2 ** 62
-# Invoke failures that come before executeWorkflow has the call, repeated right away up to
-# INVOKE_CONNECTION_RETRIES times before the message is left to SQS. EndpointConnectionError and
-# ConnectTimeoutError: no connection was made, so nothing was sent. ConnectionClosedError (urllib3's
-# ProtocolError): the connection closed before any response, typically a pooled connection the network
-# dropped while the container was idle, and urllib3 discards it, so the next attempt opens a new one. In
-# the rare case a request did reach the function before the close, the repeat is a second launch of the
-# same file version: the system workflow locks per input file version, which executeWorkflow takes
-# before it claims a reindex slot, so it answers 400 and the repeat is dropped. Never repeated: a
-# ReadTimeoutError (the call was delivered and ran to the read timeout) or a broken response stream,
-# a Lambda service error (ClientError), a FunctionError, or any status executeWorkflow returned.
-INVOKE_CONNECTION_RETRIES = 2
-_INVOKE_CONNECTION_ERRORS = (ConnectionClosedError, ConnectTimeoutError, EndpointConnectionError)
 
 try:
     workflow_triggers_table_name = get_table_name(ResourceKeys.WORKFLOW_TRIGGERS_STORAGE_TABLE)
@@ -237,26 +226,6 @@ def requeue(message: Dict[str, Any]) -> int:
     return delay
 
 
-def invoke_execute_workflow(payload: bytes) -> Dict[str, Any]:
-    """The synchronous executeWorkflow Invoke, repeated right away when the connection failed before the
-    call was delivered (`_INVOKE_CONNECTION_ERRORS`, at most INVOKE_CONNECTION_RETRIES repeats); the last
-    such failure, and every other failure, is raised to the caller."""
-    attempts = INVOKE_CONNECTION_RETRIES + 1
-    attempt = 1
-    while True:
-        try:
-            return lambda_client.invoke(
-                FunctionName=execute_workflow_v2_function,
-                InvocationType="RequestResponse",
-                Payload=payload)
-        except _INVOKE_CONNECTION_ERRORS as error:
-            if attempt == attempts:
-                raise
-            logger.warning(f"executeWorkflow invoke attempt {attempt} of {attempts} failed before delivery "
-                           f"({type(error).__name__}), sending it again")
-            attempt += 1
-
-
 def launch(message: Dict[str, Any]) -> str:
     """LAUNCHED on a 200, DROPPED on a 400, WAITED when no reindex slot is free (the message is sent
     again with a delay); raises on any other status or an invocation fault."""
@@ -277,7 +246,12 @@ def launch(message: Dict[str, Any]) -> str:
         "lambdaCrossCall": {"userName": "SYSTEM_USER",
                             "reindexSlots": {"count": reindex_slot_count, "candidates": candidates}},
     }
-    response = invoke_execute_workflow(json.dumps(invoke_event).encode("utf-8"))
+    # A connection that failed before delivery is tried again at once (common/workflows/
+    # executeWorkflowInvoke.py). If a closed connection did deliver the call, the system workflow's
+    # per-input-file-version lock, taken before a reindex slot is claimed, refuses the repeat with a 400,
+    # which is dropped below.
+    response = ewi.invoke_execute_workflow(
+        lambda_client, execute_workflow_v2_function, json.dumps(invoke_event).encode("utf-8"), logger)
     if response.get("FunctionError"):
         raise RuntimeError(f"executeWorkflow invocation faulted: {response['FunctionError']}")
     payload = json.loads(response["Payload"].read().decode("utf-8"))

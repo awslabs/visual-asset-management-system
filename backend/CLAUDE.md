@@ -239,6 +239,7 @@ backend/
 │   │       ├── systemRecords.py                    #   isSystem: importer cross-call check + read-only guard rules/messages;
 │   │       │                                       #   is_system_record / names_system_record (no compliance pipeline rule on one)
 │   │       ├── executionLocks.py                   #   concurrency lock rows for perAsset / perInputFile / perInputFileVersion (sorted all-or-none acquire, holder-conditional release, TTL)
+│   │       ├── executeWorkflowInvoke.py            #   the executeWorkflowV2 Invoke of the trigger dispatcher and the reindex launcher: one attempt per call, sent again (at most twice) only after a connection failure before delivery
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)

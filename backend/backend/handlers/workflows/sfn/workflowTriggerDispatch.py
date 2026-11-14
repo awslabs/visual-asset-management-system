@@ -14,7 +14,9 @@ enumerates the fileUpload trigger rows (WorkflowTriggersTable TriggersByBaseType
 inputFileFilters + database scope (common.workflows.triggerMatching), skips a trigger whose workflow row
 is archived, disabled, or absent, and invokes the asset-less executeWorkflowV2 handler once per remaining
 trigger as SYSTEM_USER with triggerType=fileUpload. Each launch is best-effort + isolated: one failing
-workflow does not stop the others or fail the batch.
+workflow does not stop the others or fail the batch. A launch whose connection failed before the call was
+delivered (a pooled connection the network closed while the dispatcher was idle) is sent again at once,
+at most twice (`common/workflows/executeWorkflowInvoke.py`), so the upload's workflow is not dropped.
 """
 
 import json
@@ -35,6 +37,7 @@ from common.s3MetadataKeys import (
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 from common.workflows import triggerMatching as tm
 from common.workflows import executionLocks as el
+from common.workflows import executeWorkflowInvoke as ewi
 from common.s3 import region_routing_s3_client
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler
@@ -43,9 +46,10 @@ from models.common import APIGatewayProxyResponseV2, success
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 
 # The executeWorkflowV2 Invoke is synchronous and NOT idempotent: each delivered request launches an
-# execution. A retry on a slow-but-successful call would therefore launch a duplicate run, so this
-# client delivers exactly one Invoke and waits out the callee's full 15-minute runtime instead. The
-# retrying config stays on the read-only clients.
+# execution. A botocore retry would also repeat a read timeout, which follows a delivered call, and launch
+# a duplicate run, so this client delivers one Invoke per attempt and waits out the callee's full
+# 15-minute runtime; `executeWorkflowInvoke.invoke_execute_workflow` repeats only a connection that failed
+# before delivery. The retrying config stays on the read-only clients.
 invoke_config = Config(retries={"total_max_attempts": 1}, read_timeout=900, connect_timeout=60)
 
 dynamodb = boto3.resource("dynamodb", config=retry_config)
@@ -291,7 +295,8 @@ def _lock_conflict_message(inner):
 
 def _invoke_execute(workflow_database_id, workflow_id, body):
     """Invoke executeWorkflowV2 as SYSTEM_USER for one fired trigger. Returns True on a 200 launch.
-    Best-effort: logs and returns False on any error (one workflow must not break the others).
+    Best-effort: logs and returns False on any error (one workflow must not break the others); a
+    connection that failed before delivery is sent again first (at most twice).
 
     A launch refused by the workflow's concurrency restriction (a run already holds the asset, file or
     file version) is the restriction working, not a failure, so it is logged at INFO with the reason."""
@@ -306,10 +311,11 @@ def _invoke_execute(workflow_database_id, workflow_id, body):
             "body": json.dumps(body),
             "lambdaCrossCall": {"userName": "SYSTEM_USER"},
         }
-        response = lambda_client.invoke(
-            FunctionName=execute_workflow_v2_function,
-            InvocationType="RequestResponse",
-            Payload=json.dumps(invoke_event).encode("utf-8"))
+        # A connection that failed before delivery is tried again at once (common/workflows/
+        # executeWorkflowInvoke.py, shared with the reindex launcher); its last failure, like any other,
+        # is logged below and the launch reported failed.
+        response = ewi.invoke_execute_workflow(
+            lambda_client, execute_workflow_v2_function, json.dumps(invoke_event).encode("utf-8"), logger)
         payload = response.get("Payload")
         if not payload:
             return False
