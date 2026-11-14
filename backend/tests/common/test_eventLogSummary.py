@@ -50,3 +50,22 @@ class TestEventLogSummary:
     def test_long_labels_are_cut(self):
         summary = event_log_summary({"Records": [{"eventSource": "s" * 1000}]})
         assert len(summary) < 300
+
+
+@pytest.mark.unit
+class TestExceptionLogSummary:
+    def test_names_class_and_status_not_text(self):
+        from common.eventLogSummary import exception_log_summary
+
+        class RequestError(Exception):
+            status_code = 400
+
+        assert exception_log_summary(RequestError(SECRET_VALUE)) == "RequestError (HTTP 400)"
+
+    def test_without_a_status(self):
+        from common.eventLogSummary import exception_log_summary
+
+        assert exception_log_summary(ValueError(SECRET_VALUE)) == "ValueError"
+        error = ValueError("x")
+        error.status_code = "not-a-number"
+        assert exception_log_summary(error) == "ValueError"

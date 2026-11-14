@@ -196,3 +196,83 @@ class TestBucketSyncLogsNoEventContent:
         text = _logged_text(mock_logger)
         assert SECRET_VALUE not in text
         assert f"{len(message)} characters" in text
+
+
+# What OpenSearch answers for a metadata value longer than the index term limit: the reason quotes
+# the first bytes of the value.
+VALUE_FRAGMENT = "s3cr3t-fragment-4d1e"
+IMMENSE_TERM_REASON = (
+    "Document contains at least one immense term in field=\"MD_note\" (whose UTF8 encoding is longer "
+    "than the max length 32766), all of which were skipped. The prefix of the first immense term is: "
+    "'[" + VALUE_FRAGMENT + "...]'"
+)
+
+
+def _immense_term_error():
+    from opensearchpy.exceptions import RequestError
+    return RequestError(400, "illegal_argument_exception", {"error": {"reason": IMMENSE_TERM_REASON}})
+
+
+def _logged_calls(mock_logger):
+    """Every logger call with its keyword arguments, so exception info would show up too."""
+    return "\n".join(repr(call) for call in mock_logger.mock_calls)
+
+
+@pytest.mark.unit
+class TestIndexerSearchServiceErrorsCarryNoValues:
+    def _client(self):
+        client = MagicMock()
+        client.index.side_effect = _immense_term_error()
+        manager = MagicMock()
+        manager.is_available.return_value = True
+        manager.get_client.return_value = client
+        return manager
+
+    def test_asset_document_index_failure(self):
+        m = _load_indexer("assetIndexer")
+        mock_logger = MagicMock()
+        document = MagicMock(str_databaseid="db1", str_assetid="x-asset1", bool_archived=False)
+        document.dict.return_value = {"MD_note": VALUE_FRAGMENT}
+        with patch.object(m, "logger", mock_logger), patch.object(m, "opensearch_manager", self._client()):
+            assert m.index_asset_document(document) is False
+        text = _logged_calls(mock_logger)
+        assert VALUE_FRAGMENT not in text
+        assert "db1#x-asset1" in text and "RequestError" in text and "HTTP 400" in text
+        mock_logger.exception.assert_not_called()
+
+    def test_file_document_index_failure(self):
+        m = _load_indexer("fileIndexer")
+        mock_logger = MagicMock()
+        document = MagicMock(str_databaseid="db1", str_assetid="x-asset1", str_key="/part.glb")
+        document.dict.return_value = {"MD_note": VALUE_FRAGMENT}
+        with patch.object(m, "logger", mock_logger), patch.object(m, "opensearch_manager", self._client()):
+            assert m.index_file_document(document) is False
+        text = _logged_calls(mock_logger)
+        assert VALUE_FRAGMENT not in text
+        assert "RequestError" in text and "HTTP 400" in text
+        mock_logger.exception.assert_not_called()
+
+    @pytest.mark.parametrize("module_name, function, document_kwargs", [
+        ("assetIndexer", "index_asset_document", {"str_databaseid": "db1", "str_assetid": "a1", "bool_archived": False}),
+        ("fileIndexer", "index_file_document", {"str_databaseid": "db1", "str_assetid": "a1", "str_key": "/p.glb"}),
+    ])
+    def test_rejected_geo_shape_is_not_echoed(self, module_name, function, document_kwargs):
+        from opensearchpy.exceptions import RequestError
+        bad_shape = "POLYGON((" + VALUE_FRAGMENT + "))"
+        geo_error = RequestError(
+            400, "mapper_parsing_exception",
+            {"error": {"root_cause": [{"type": "mapper_parsing_exception",
+                                       "reason": "invalid_shape_exception " + bad_shape}]}})
+        client = MagicMock()
+        client.index.side_effect = [geo_error, {"result": "created"}]
+        manager = MagicMock()
+        manager.is_available.return_value = True
+        manager.get_client.return_value = client
+        m = _load_indexer(module_name)
+        mock_logger = MagicMock()
+        document = MagicMock(**document_kwargs)
+        document.dict.return_value = {"geo_MD_location": bad_shape, "MD_note": "x"}
+        with patch.object(m, "logger", mock_logger), patch.object(m, "opensearch_manager", manager):
+            assert getattr(m, function)(document) is True
+        assert VALUE_FRAGMENT not in _logged_calls(mock_logger)
+        assert client.index.call_count == 2
