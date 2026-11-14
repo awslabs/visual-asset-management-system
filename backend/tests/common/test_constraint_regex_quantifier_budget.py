@@ -20,8 +20,8 @@ constraint — while a fourth, which measures 0.97 s against an adversarial subj
 
 TIMING IS ASSERTED, not just the verdict. A rule that agrees with the code it guards proves nothing
 about the hazard; `TestTheAcceptedWorstCaseIsActuallyFast` matches the most expensive value this
-validator still admits against the longest subject a rule can be compared with, and bounds the wall
-clock. OVER-TIGHTENING is the other risk, and `test_constraint_regex_complexity.py` carries the
+validator still admits against the longest subject a rule can be compared with, and bounds the CPU
+time it takes. OVER-TIGHTENING is the other risk, and `test_constraint_regex_complexity.py` carries the
 accept-side corpus read from the shipped permission templates; the classes here add the values a
 constraint author plausibly writes.
 """
@@ -128,18 +128,22 @@ class TestPlausibleAuthoredValuesStillAccepted:
 
 @pytest.mark.unit
 class TestTheAcceptedWorstCaseIsActuallyFast:
-    """The budget's purpose, asserted in wall clock rather than in agreement with the code.
+    """The budget's purpose, asserted in measured time rather than in agreement with the code.
 
     The subject is the longest a rule is compared against (OBJECT_NAME's 256 characters) and is a
     single run of the separator character, which is the shape that maximises the split count.
+
+    The time is the CPU time of the thread running the match (`time.thread_time`), not wall clock.
+    Backtracking cost is CPU work; wall clock also counts the time the process waits for a CPU, so on
+    a busy machine or a full `-n auto` run it reads several times the real cost.
     """
 
     # The interpolation shape the Casbin rule builder emits for `equals`.
     @staticmethod
     def _evaluate(value, subject):
-        started = time.perf_counter()
+        started = time.thread_time()
         re.match('^' + value + r'\Z', subject)
-        return time.perf_counter() - started
+        return time.thread_time() - started
 
     @pytest.mark.parametrize('value', [
         '.*a.*a.*az',                   # three unbounded, separated: the estimate's worst admitted
