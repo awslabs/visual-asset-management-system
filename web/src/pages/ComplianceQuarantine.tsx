@@ -46,6 +46,7 @@ import {
 } from "../components/compliance/listingStates";
 import ListToolbar from "../components/list/ListToolbar";
 import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../components/list/tableSorting";
+import { tableSelectionLabels } from "../common/helpers/labels";
 
 /** The listing's server-side filters, kept in the URL. */
 export const QUARANTINE_FILTER_KEYS = ["databaseId", "text"] as const;
@@ -67,6 +68,17 @@ export const QUARANTINE_EXCEPTION_API_ROUTE =
 
 /** How an asset is named in the page's messages: its name, else its id (never `db:asset`). */
 const assetLabel = (item: QuarantinedAsset): string => item.assetName || item.assetId;
+
+/**
+ * The accessible names of the row selection (#1520): the selection column is named by this group
+ * label, and each row's radio button "Select <asset name, or id>" (tableSelectionLabels, as the
+ * asset and search tables do).
+ */
+export const QUARANTINE_SELECTION_GROUP_LABEL = `Quarantined ${Synonyms.assets} selection`;
+const quarantineSelectionLabels = tableSelectionLabels(
+    assetLabel,
+    QUARANTINE_SELECTION_GROUP_LABEL
+);
 
 const ComplianceQuarantine: React.FC = () => {
     // Asset names link to the asset page only when the caller may open it.
@@ -283,6 +295,7 @@ const ComplianceQuarantine: React.FC = () => {
                     selectedItems={selectedItems}
                     onSelectionChange={({ detail }) => setSelectedItems(detail.selectedItems)}
                     selectionType="single"
+                    ariaLabels={quarantineSelectionLabels}
                     pagination={
                         <Pagination
                             currentPageIndex={currentPageIndex}
