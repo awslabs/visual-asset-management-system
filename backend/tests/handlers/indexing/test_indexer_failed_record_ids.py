@@ -17,6 +17,7 @@ class TestFailedRecordIdentifiers:
         m = _load_indexer(module_name)
         mock_logger = MagicMock()
         with patch.object(m, "logger", mock_logger):
-            m.with_batch_item_failures({}, {"Records": [{}]}, [{"itemIdentifier": "msg-7"}, {"itemIdentifier": "msg-8"}])
+            failures = [{"itemIdentifier": "msg-7"}, {"itemIdentifier": "msg-8"}]
+            m.with_batch_item_failures({}, {"Records": [{}]}, failures)
         text = "\n".join(repr(c) for c in mock_logger.mock_calls)
         assert "2 failed record(s)" in text and "msg-7" in text and "msg-8" in text

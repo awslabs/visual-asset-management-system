@@ -253,7 +253,8 @@ class TestIndexerSearchServiceErrorsCarryNoValues:
         mock_logger.exception.assert_not_called()
 
     @pytest.mark.parametrize("module_name, function, document_kwargs", [
-        ("assetIndexer", "index_asset_document", {"str_databaseid": "db1", "str_assetid": "a1", "bool_archived": False}),
+        ("assetIndexer", "index_asset_document",
+         {"str_databaseid": "db1", "str_assetid": "a1", "bool_archived": False}),
         ("fileIndexer", "index_file_document", {"str_databaseid": "db1", "str_assetid": "a1", "str_key": "/p.glb"}),
     ])
     def test_rejected_geo_shape_is_not_echoed(self, module_name, function, document_kwargs):
