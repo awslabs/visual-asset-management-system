@@ -192,6 +192,8 @@ Both stages require `PUT` permission on the asset (`objectType: "asset"`) in add
 
 When the complete stage finds no asset, it checks the upload before it creates the asset: an `uploadId` that is unknown, already completed, initialized for another asset or database, or expired is refused with `400` and nothing is created.
 
+Likewise, when the initialize stage finds no asset, it checks the file names first: a file with a blocked extension, an extension the database does not allow, or a `.previewFile.` file with a disallowed extension is refused with `400` and the asset is not created.
+
 #### Initialize request body
 
 | Field             | Type          | Required | Description                                                                                                          |

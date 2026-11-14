@@ -138,7 +138,7 @@ def ingest(monkeypatch):
 
     monkeypatch.setattr(_ingestAsset, "request_to_claims", lambda event: CLAIMS)
     monkeypatch.setattr(_ingestAsset, "CasbinEnforcer", _Allow)
-    monkeypatch.setattr(_ingestAsset, "verify_database_exists", lambda database_id: True)
+    monkeypatch.setattr(_ingestAsset, "verify_database_exists", lambda database_id: {})
     monkeypatch.setattr(_ingestAsset, "verify_asset_exists",
                         lambda database_id, asset_id: (database_id, asset_id) in state.assets)
     monkeypatch.setattr(_ingestAsset, "invoke_lambda", invoke_lambda)

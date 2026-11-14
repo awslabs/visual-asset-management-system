@@ -18,7 +18,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.assetProvenance import asset_change_provenance
-from common.assetUploads import UPLOAD_RECORD_NOT_FOUND, completion_refusal
+from common.assetUploads import UPLOAD_RECORD_NOT_FOUND, completion_refusal, validate_file_extension_against_database
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -219,39 +219,6 @@ def get_database_details(databaseId):
     except Exception as e:
         logger.exception(f"Error getting database details: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving database configuration")
-
-def validate_file_extension_against_database(file_path: str, allowed_extensions: str) -> tuple:
-    """Validate file extension against database restrictions
-    
-    Args:
-        file_path: The file path to validate
-        allowed_extensions: Comma-delimited list of allowed extensions (e.g., ".pdf,.jpg,.png")
-        
-    Returns:
-        Tuple of (is_valid, error_message)
-        - is_valid: True if extension is allowed, False otherwise
-        - error_message: Error message if validation fails, None otherwise
-    """
-    # Handle empty or None allowed_extensions (no restrictions)
-    if not allowed_extensions or allowed_extensions.strip() == "":
-        return True, None
-    
-    # Parse comma-delimited extensions and normalize to lowercase
-    allowed_list = [ext.strip().lower() for ext in allowed_extensions.split(',') if ext.strip()]
-    
-    # Check for ".all" bypass
-    if ".all" in allowed_list:
-        return True, None
-    
-    # Extract file extension (case-insensitive)
-    file_extension = os.path.splitext(file_path)[1].lower()
-    
-    # Validate extension
-    if file_extension not in allowed_list:
-        error_message = f"Database does not allow this file extension. Allowed extensions: {', '.join(allowed_list)}"
-        return False, error_message
-    
-    return True, None
 
 def get_default_bucket_details(bucketId):
     """Get default S3 bucket details from database default bucket DynamoDB"""

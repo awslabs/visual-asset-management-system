@@ -3,7 +3,7 @@
 
 import os
 import boto3
-from common.s3 import region_routing_s3_client
+from common.s3 import region_routing_s3_client, validateUnallowedFileExtensionAndContentType
 import json
 from botocore.config import Config
 from handlers.authz import CasbinEnforcer
@@ -13,7 +13,8 @@ from customLogging.auditLogging import (
     AUDIT_INTERNAL_CALL_KEY, audited_handler, internal_call_marker, log_action, log_file_upload
 )
 from common.apiRoutes import API_ASSETS, API_UPLOADS, API_UPLOAD_COMPLETE
-from common.assetUploads import UPLOAD_RECORD_NOT_FOUND, completion_refusal
+from common.assetUploads import UPLOAD_RECORD_NOT_FOUND, completion_refusal, validate_file_extension_against_database
+from common.s3PathPatterns import ALLOWED_PREVIEW_FILE_EXTENSIONS, PREVIEW_FILE_PATTERN
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from models.common import (
@@ -71,13 +72,13 @@ class UploadResponsePassThrough(Exception):
         self.response = response
 
 def verify_database_exists(database_id):
-    """Check if a database exists"""
+    """Check if a database exists; returns its stored record"""
     table = dynamodb.Table(db_table_name)
     try:
         response = table.get_item(Key={'databaseId': database_id})
         if 'Item' not in response:
             raise VAMSGeneralErrorResponse("Database does not exist")
-        return True
+        return response['Item']
     except Exception as e:
         if isinstance(e, VAMSGeneralErrorResponse):
             raise e
@@ -133,6 +134,35 @@ def verify_upload_can_complete(event, request_model: IngestAssetCompleteRequestM
     raise VAMSGeneralErrorResponse(f"Error completing upload: {reason}")
 
 
+def verify_files_can_initialize(database, files):
+    """Refuse, before an asset is created, a file the upload initialization would refuse for its name.
+
+    Runs the rules of `uploadFile.initialize_upload` that read only the file names and the database
+    (the database's allowed extensions, the blocked extension list, the allowed extensions of a
+    `.previewFile.` file), in the same order and with the same messages, so an initialize that the
+    upload step would refuse creates no asset. The rules that need the asset's bucket (key length,
+    response size) and the per-user rate limit stay with the upload step.
+    """
+    allowed_extensions = (database or {}).get('restrictFileUploadsToExtensions', '')
+    if allowed_extensions and allowed_extensions.strip() != "":
+        for file in files:
+            if PREVIEW_FILE_PATTERN not in file.relativeKey:
+                is_valid, error_message = validate_file_extension_against_database(
+                    file.relativeKey, allowed_extensions)
+                if not is_valid:
+                    raise VAMSGeneralErrorResponse(f"Error initializing upload: {error_message}")
+
+    for file in files:
+        if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
+            raise VAMSGeneralErrorResponse("Error initializing upload: Files contain an unsupported file extension")
+        if PREVIEW_FILE_PATTERN in file.relativeKey:
+            extension = '.' + file.relativeKey.split(PREVIEW_FILE_PATTERN)[1].lower()
+            if extension not in ALLOWED_PREVIEW_FILE_EXTENSIONS:
+                raise VAMSGeneralErrorResponse(
+                    "Error initializing upload: Preview files must have one of the allowed extensions: "
+                    ".png, .jpg, .jpeg, .svg, .gif")
+
+
 def invoke_lambda(function_name, payload, invocation_type="RequestResponse"):
     """Invoke a lambda function with the given payload"""
     try:
@@ -164,13 +194,16 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
     asset_id = request_model.assetId
     
     # Verify database exists
-    verify_database_exists(database_id)
+    database = verify_database_exists(database_id)
 
     # Check if asset exists
     asset_exists = verify_asset_exists(database_id, asset_id)
     
-    # If asset doesn't exist, create it first
+    # If asset doesn't exist, create it first, but only for files the upload step would accept by
+    # name: a refused initialize must not leave a new, empty asset behind.
     if not asset_exists:
+        verify_files_can_initialize(database, request_model.files)
+
         logger.info(f"Asset {asset_id} does not exist. Creating it first.")
         
         # Prepare payload for createAsset lambda

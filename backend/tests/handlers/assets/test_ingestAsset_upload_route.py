@@ -118,7 +118,7 @@ def forwarded(monkeypatch):
     enforcer.return_value.enforceAPI.return_value = True
     monkeypatch.setattr(_ingestAsset, "request_to_claims", lambda event: CLAIMS)
     monkeypatch.setattr(_ingestAsset, "CasbinEnforcer", enforcer)
-    monkeypatch.setattr(_ingestAsset, "verify_database_exists", lambda database_id: True)
+    monkeypatch.setattr(_ingestAsset, "verify_database_exists", lambda database_id: {})
     monkeypatch.setattr(_ingestAsset, "verify_asset_exists", lambda database_id, asset_id: True)
     monkeypatch.setattr(_ingestAsset, "invoke_lambda", invoke_lambda)
 
