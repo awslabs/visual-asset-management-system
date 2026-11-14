@@ -9,6 +9,10 @@ value). A handler logs `common.eventLogSummary.event_log_summary(event)` and the
 instead. This scan reads every module under `backend/handlers` and fails on an f-string passed to a
 logger method that renders one of the event-shaped names below, directly or through `json.dumps`,
 `str` or `repr`.
+
+Scope: this catches an event rendered into an f-string only. Nine handlers still pass the event to
+the logger unformatted (`logger.info(event)`), which this scan does not flag; they are tracked
+separately, so a green result is not a statement that no handler logs a whole event.
 """
 
 import ast
