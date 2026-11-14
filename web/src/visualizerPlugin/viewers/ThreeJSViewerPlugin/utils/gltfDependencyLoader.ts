@@ -90,7 +90,9 @@ async function downloadDependency(
     // Construct streaming URL
     const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
     const encodedPath = encodedSegments.join("/");
-    let url = `${config.apiEndpoint}database/${config.databaseId}/assets/${config.assetId}/download/stream/${encodedPath}`;
+    let url = `${config.apiEndpoint}database/${config.databaseId}/assets/${encodeURIComponent(
+        config.assetId
+    )}/download/stream/${encodedPath}`;
 
     // Note: versionId is intentionally NOT passed for dependencies.
     // Dependencies are always loaded without versionId because they are

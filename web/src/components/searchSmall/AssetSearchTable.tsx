@@ -342,9 +342,9 @@ export function AssetSearchTable({
                 header: `${Synonyms.Asset} Name`,
                 cell: (item: AssetSearchItem) => (
                     <Link
-                        href={`#/databases/${item.databaseName || item.databaseId}/assets/${
-                            item.assetId
-                        }`}
+                        href={`#/databases/${
+                            item.databaseName || item.databaseId
+                        }/assets/${encodeURIComponent(item.assetId)}`}
                         external
                         target="_blank"
                     >
