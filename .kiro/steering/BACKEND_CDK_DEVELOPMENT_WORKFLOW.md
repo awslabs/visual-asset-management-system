@@ -1105,7 +1105,7 @@ def [operation_name](self, [params]) -> Dict[str, Any]:
         APIError: When API call fails
     """
     try:
-        endpoint = API_[DOMAIN].format([param]=[param])
+        endpoint = route_path(API_[DOMAIN], [param]=[param])
         response = self.[method](endpoint, data=[data], include_auth=True)
         return response.json()
 
