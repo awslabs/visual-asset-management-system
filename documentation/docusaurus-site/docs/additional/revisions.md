@@ -121,6 +121,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **The authorizer derives the caller's identity from the username claim** — The API authorizer identifies the caller only by the token's username claim (the first present of `cognito:username`, `username` and `sub`) and ignores claims a token carries under the reserved `vams:` prefix; a verified token with none of those claims is refused. Amazon Cognito users and API keys keep their identity. (PR #1491)
 -   **Ingest-asset upload completion** — The complete stage of `POST /ingest-asset` (the request that carries `uploadId`) finishes the upload instead of always failing with `400` "Invalid API path or method". (issue #1453)
 -   **Point clouds with NaN points get a preview** — The 3D Preview Thumbnail pipeline drops points with NaN or infinite coordinates, such as the empty pixels of an organized PCD from a depth camera, before framing the preview, instead of producing an empty preview and reporting success; a point cloud with no valid point fails with "The point cloud has no valid points". (issue #1460)
+-   **Asset IDs ending in `#` in VamsCLI and VamsMCP** — A `/`, `?`, `#` or `%` in an ID that VamsCLI or VamsMCP puts into a request path is sent as part of that ID, so an asset whose ID ends in `#` is read, updated, archived and deleted as itself. A request path that contains a control character is refused before anything is sent. (issue #1476, PR #1483)
 
 **Other changes:**
 

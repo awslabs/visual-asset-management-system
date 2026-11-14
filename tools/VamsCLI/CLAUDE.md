@@ -65,6 +65,7 @@ tools/VamsCLI/
           glb.py             # GLB file combination operations
     utils/
       api_client.py          # APIClient class (HTTP, retries, error mapping)
+      request_paths.py       # route_path(): one path segment per value; imports nothing from the package
       profile.py             # ProfileManager (multi-profile, config dirs)
       exceptions.py          # Two-tier exception hierarchy (~140 classes)
       global_exceptions.py   # @handle_global_exceptions() decorator
@@ -218,6 +219,8 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 -   Sets headers: `Content-Type: application/json`, `User-Agent: vamscli/{version}`
 -   Bearer token from `ProfileManager.load_auth_profile()`
 -   Pre-flight token validation for override tokens (checks expiry before request)
+-   Refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded), a control character (raw or percent-encoded), or a raw `?` or `#` with `InvalidRequestPathError` before anything is sent: the URL join drops or resolves such a segment and changes a path that contains a control character, and a `?` or `#` ends the path, so a path value carrying one would address another route. Query parameters go in `params=` (`tests/test_api_request_path.py`)
+-   Endpoints are built with `route_path(API_X, name=value)` from `utils/request_paths.py` (re-exported by `api_client`), never `API_X.format(...)`: it percent-encodes a `/`, `?`, `#` or `%` in each value so the value stays in its own segment and the API, which decodes each path value once, reads it as given; every other character is left to requests. A ratchet test fails on a new `API_*.format(` call; VamsMCP's `tests/test_path_value_encoding.py` holds `vams_mcp` to the same rule
 -   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header
 -   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens
 -   HTTP 403: Distinguishes expired tokens vs. permission denied
@@ -754,7 +757,7 @@ Follow this checklist:
 
     def get_my_resource(self, resource_id):
         """Get a specific resource."""
-        endpoint = API_MY_RESOURCE_BY_ID.format(resourceId=resource_id)
+        endpoint = route_path(API_MY_RESOURCE_BY_ID, resourceId=resource_id)
         response = self._make_request('GET', endpoint)
         return self._handle_response(response)
     ```
