@@ -26,7 +26,11 @@ export const AssetListDefinition = new ListDefinition({
             cellWrapper: (props: any) => {
                 const { item } = props;
                 return (
-                    <Link href={`#/databases/${item.databaseId}/assets/${item.assetId}`}>
+                    <Link
+                        href={`#/databases/${item.databaseId}/assets/${encodeURIComponent(
+                            item.assetId
+                        )}`}
+                    >
                         {props.children}
                     </Link>
                 );

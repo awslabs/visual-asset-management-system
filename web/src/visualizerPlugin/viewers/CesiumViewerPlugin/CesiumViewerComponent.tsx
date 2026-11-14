@@ -174,7 +174,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
             const encodedFileKey = encodedSegments.join("/");
 
-            let url = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+            let url = `${config.api}database/${databaseId}/assets/${encodeURIComponent(
+                assetId
+            )}/download/stream/${encodedFileKey}`;
             if (assetVersionId) {
                 url += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
             }

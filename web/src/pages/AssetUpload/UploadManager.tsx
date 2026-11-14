@@ -1690,7 +1690,11 @@ export default function UploadManager({
                                     {uploadState.assetCreationStatus === "completed" &&
                                         uploadState.createdAssetId && (
                                             <Link
-                                                href={`#/databases/${assetDetail.databaseId}/assets/${uploadState.createdAssetId}`}
+                                                href={`#/databases/${
+                                                    assetDetail.databaseId
+                                                }/assets/${encodeURIComponent(
+                                                    uploadState.createdAssetId
+                                                )}`}
                                             >
                                                 {uploadState.createdAssetId}
                                             </Link>
