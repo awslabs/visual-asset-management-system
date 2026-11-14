@@ -126,14 +126,17 @@ describe("AssetIngestion", () => {
     });
 
     it("reports a refused initialize with the server's message", async () => {
-        ingestAsset.mockResolvedValueOnce([false, "VAMS General Error: Database does not exist"]);
+        ingestAsset.mockResolvedValueOnce([
+            false,
+            "VAMS General Error: Error initializing upload: VAMS General Error: Files contain an unsupported file extension",
+        ]);
 
         submit(new File(["x"], "model.glb"));
 
         expect(await screen.findByText("Upload failed")).toBeInTheDocument();
         expect(
             screen.getByText(
-                "The upload could not be started: VAMS General Error: Database does not exist"
+                "The upload could not be started: Error initializing upload: Files contain an unsupported file extension"
             )
         ).toBeInTheDocument();
         expect(AssetUploadService.uploadPart).not.toHaveBeenCalled();
@@ -161,7 +164,7 @@ describe("AssetIngestion", () => {
             .mockResolvedValueOnce([true, initializeResponse("model.glb", 1)])
             .mockResolvedValueOnce([
                 false,
-                "VAMS General Error: Error completing upload: Upload has expired",
+                "VAMS General Error: VAMS General Error: Error completing upload: Upload has expired",
             ]);
         AssetUploadService.uploadPart.mockResolvedValueOnce("etag-1");
 
@@ -169,7 +172,7 @@ describe("AssetIngestion", () => {
 
         expect(
             await screen.findByText(
-                "The upload could not be completed: VAMS General Error: Error completing upload: Upload has expired"
+                "The upload could not be completed: Error completing upload: Upload has expired"
             )
         ).toBeInTheDocument();
     });

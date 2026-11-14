@@ -62,11 +62,23 @@ type UploadStatus =
     | { kind: "error"; text: string }
     | { kind: "success"; asset: UploadedAsset };
 
-/** The text of a thrown value, for a failure the page reports. */
+/** The prefix the API puts before a general error's text; each layer of the ingest adds one. */
+const GENERAL_ERROR_PREFIX = /VAMS General Error:\s*/g;
+
+/** `message` without its `VAMS General Error:` prefixes, however many layers added one. */
+function stripGeneralErrorPrefixes(message: string): string {
+    return message.replace(GENERAL_ERROR_PREFIX, "").trim();
+}
+
+/** The server's reason for a refused step, without its general error prefixes. */
+function serverReason(message: unknown): string {
+    return (typeof message === "string" && stripGeneralErrorPrefixes(message)) || "no reason given";
+}
+
+/** The text of a thrown value or server message, for a failure the page reports. */
 function describeError(error: unknown): string {
-    if (error instanceof Error && error.message) return error.message;
-    if (typeof error === "string" && error) return error;
-    return "An unexpected error occurred.";
+    const text = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+    return stripGeneralErrorPrefixes(text) || "An unexpected error occurred.";
 }
 
 /** `promise`, or a rejection once `ms` milliseconds pass without it settling. */
@@ -198,9 +210,7 @@ export default function AssetIngestion() {
                 files: [{ relativeKey, file_size: file.size }],
             })) as [boolean, any];
             if (!initSuccess) {
-                throw new Error(
-                    `The upload could not be started: ${initData || "no reason given"}`
-                );
+                throw new Error(`The upload could not be started: ${serverReason(initData)}`);
             }
             const files: FileUploadResponse[] = Array.isArray(initData?.files)
                 ? initData.files
@@ -228,9 +238,7 @@ export default function AssetIngestion() {
                 ],
             })) as [boolean, any];
             if (!completeSuccess) {
-                throw new Error(
-                    `The upload could not be completed: ${completeData || "no reason given"}`
-                );
+                throw new Error(`The upload could not be completed: ${serverReason(completeData)}`);
             }
 
             const rejected: FileCompletionResult[] = Array.isArray(completeData?.fileResults)
