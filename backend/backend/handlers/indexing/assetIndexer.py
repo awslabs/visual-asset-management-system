@@ -20,7 +20,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
-from common.eventLogSummary import event_log_summary
+from common.eventLogSummary import event_log_summary, exception_log_summary
 from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -603,6 +603,7 @@ def index_asset_document(document: AssetDocumentModel) -> bool:
     editor), we retry once without the geo field so the rest of the document --
     including MD_ metadata -- still lands in the index.
     """
+    doc_id = None
     try:
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
@@ -631,10 +632,10 @@ def index_asset_document(document: AssetDocumentModel) -> bool:
             )
         except Exception as e:
             if _is_invalid_geo_shape_error(e) and "geo_MD_location" in doc_dict:
-                bad_geo = doc_dict.pop("geo_MD_location", None)
+                doc_dict.pop("geo_MD_location", None)
                 logger.warning(
-                    f"OpenSearch rejected geo_MD_location for {doc_id}: {e}. "
-                    f"Retrying without the geo field. Bad shape: {bad_geo}"
+                    f"OpenSearch rejected geo_MD_location for {doc_id}: {exception_log_summary(e)}. "
+                    "Retrying without the geo field"
                 )
                 response = opensearch_operation_with_retry(
                     lambda: client.index(
@@ -651,7 +652,7 @@ def index_asset_document(document: AssetDocumentModel) -> bool:
         return response.get('result') in ['created', 'updated']
 
     except Exception as e:
-        logger.exception(f"Error indexing asset document: {e}")
+        logger.error(f"Error indexing asset document {doc_id}: {exception_log_summary(e)}")
         return False
 
 def delete_asset_document(database_id: str, asset_id: str) -> bool:
@@ -679,7 +680,7 @@ def delete_asset_document(database_id: str, asset_id: str) -> bool:
         return True
         
     except Exception as e:
-        logger.exception(f"Error deleting asset document: {e}")
+        logger.error(f"Error deleting asset document {database_id}#{asset_id}: {exception_log_summary(e)}")
         return False
 
 #######################

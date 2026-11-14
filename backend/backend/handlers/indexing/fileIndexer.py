@@ -20,7 +20,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
-from common.eventLogSummary import event_log_summary
+from common.eventLogSummary import event_log_summary, exception_log_summary
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
@@ -958,6 +958,7 @@ def index_file_document(document: FileDocumentModel) -> bool:
     including MD_ / AB_ metadata -- still lands in the index. The bad geometry
     is logged so it can be cleaned up.
     """
+    doc_id = None
     try:
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
@@ -993,10 +994,10 @@ def index_file_document(document: FileDocumentModel) -> bool:
             # Drop the geo field and retry so a single malformed shape doesn't
             # also wipe out the rest of the document's metadata fields.
             if _is_invalid_geo_shape_error(e) and "geo_MD_location" in doc_dict:
-                bad_geo = doc_dict.pop("geo_MD_location", None)
+                doc_dict.pop("geo_MD_location", None)
                 logger.warning(
-                    f"OpenSearch rejected geo_MD_location for {doc_id}: {e}. "
-                    f"Retrying without the geo field. Bad shape: {bad_geo}"
+                    f"OpenSearch rejected geo_MD_location for {doc_id}: {exception_log_summary(e)}. "
+                    "Retrying without the geo field"
                 )
                 response = opensearch_operation_with_retry(
                     lambda: client.index(
@@ -1013,7 +1014,7 @@ def index_file_document(document: FileDocumentModel) -> bool:
         return response.get('result') in ['created', 'updated']
 
     except Exception as e:
-        logger.exception(f"Error indexing file document: {e}")
+        logger.error(f"Error indexing file document {doc_id}: {exception_log_summary(e)}")
         return False
 
 def delete_file_document(database_id: str, asset_id: str, file_path: str) -> bool:
@@ -1041,7 +1042,7 @@ def delete_file_document(database_id: str, asset_id: str, file_path: str) -> boo
         return True
         
     except Exception as e:
-        logger.exception(f"Error deleting file document: {e}")
+        logger.error(f"Error deleting file document {database_id}#{asset_id}#{file_path}: {exception_log_summary(e)}")
         return False
 
 
@@ -1132,7 +1133,7 @@ def delete_file_documents_by_asset_and_path(asset_id: str, file_path: str,
 
         return deleted
     except Exception as e:
-        logger.exception(f"Error deleting orphaned file documents for {asset_id}{file_path}: {e}")
+        logger.error(f"Error deleting orphaned file documents for {asset_id}{file_path}: {exception_log_summary(e)}")
         return 0
 
 #######################

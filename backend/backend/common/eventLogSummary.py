@@ -39,6 +39,19 @@ def _record_source(record: Any) -> str:
     return _label(source) if source else "unknown"
 
 
+def exception_log_summary(error: BaseException) -> str:
+    """Describe a search-service exception by class and HTTP status, never its text.
+
+    An OpenSearch `RequestError` carries the service's reason, and for a rejected document that
+    reason quotes the offending field value (the "immense term" error prints the first bytes of
+    the value). The exception text and the traceback `logger.exception` adds both carry it, so a
+    caller that indexes a document logs this summary with `logger.error` and no exception info.
+    """
+    status = getattr(error, "status_code", None)
+    name = type(error).__name__
+    return f"{name} (HTTP {status})" if isinstance(status, int) else name
+
+
 def event_log_summary(event: Any) -> str:
     """Describe `event` by record count and event source, or by the ids of a direct invocation.
 
