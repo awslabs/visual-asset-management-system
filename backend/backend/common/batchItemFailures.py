@@ -62,6 +62,22 @@ def all_batch_item_failures(event) -> List[Dict[str, str]]:
     return failures
 
 
+# Failed identifiers named in one warning; the rest are counted.
+MAX_LOGGED_FAILURE_IDS = 10
+
+
+def failed_records_log_line(failures: List[Dict[str, str]]) -> str:
+    """The warning for a failure report: the count and the identifiers of the records being redriven.
+
+    The identifier is an SQS `messageId` or a stream `SequenceNumber`, so it traces a record in the
+    queue and the stream without carrying any of its content.
+    """
+    ids = [str(f.get('itemIdentifier')) for f in failures[:MAX_LOGGED_FAILURE_IDS]]
+    more = len(failures) - len(ids)
+    listed = ", ".join(ids) + (f" and {more} more" if more > 0 else "")
+    return f"Reporting {len(failures)} failed record(s) for redrive: {listed}"
+
+
 def with_batch_item_failures(response, event, failures: List[Dict[str, str]]):
     """Attach the partial-batch failure report to an event-source response.
 
@@ -75,6 +91,6 @@ def with_batch_item_failures(response, event, failures: List[Dict[str, str]]):
     """
     if isinstance(event, dict) and 'Records' in event:
         if failures:
-            logger.warning(f"Reporting {len(failures)} failed record(s) for redrive")
+            logger.warning(failed_records_log_line(failures))
         response['batchItemFailures'] = failures
     return response
