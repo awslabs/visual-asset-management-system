@@ -13,6 +13,7 @@ without it. A section that cannot be computed is reported as a warning string, n
 data.
 """
 
+import math
 import os
 
 MATERIAL_NAME_LIMIT = 20
@@ -54,8 +55,26 @@ def _geometries(loaded, trimesh):
     return []
 
 
+def _finite_bounds(loaded, trimesh):
+    """(mins, maxs) over every point of `loaded` (a Scene's meshes and point clouds in world space, or
+    one geometry) whose three coordinates are finite. trimesh's own `bounds` turn NaN on a single
+    non-finite point, as the 3D thumbnail's point clouds did (#1460); the points of a file without one
+    give trimesh's bounds. Raises ValueError when no point is finite."""
+    import numpy as np
+
+    parts = loaded.dump() if isinstance(loaded, trimesh.Scene) else [loaded]
+    points = [np.asarray(getattr(part, "vertices", ()), dtype=float).reshape(-1, 3) for part in parts]
+    points = np.vstack(points) if points else np.empty((0, 3))
+    points = points[np.isfinite(points).all(axis=1)]
+    if len(points) == 0:
+        raise ValueError("no point with finite coordinates")
+    return points.min(axis=0), points.max(axis=0)
+
+
 def _geometry(loaded, geometries, extension, trimesh):
     bounds = loaded.bounds
+    if bounds is None or not all(math.isfinite(float(value)) for corner in bounds for value in corner):
+        bounds = _finite_bounds(loaded, trimesh)
     size = [float(bounds[1][axis] - bounds[0][axis]) for axis in range(3)]
     section = {
         "boundsMin": _vector(bounds[0]),

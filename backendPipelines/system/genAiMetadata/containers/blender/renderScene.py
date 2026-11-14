@@ -137,8 +137,10 @@ def combine_bounds(corners):
     """Centre and size of the axis-aligned box enclosing every corner of every object.
 
     `corners` is an iterable of (x, y, z) tuples: the eight bound_box corners of each mesh object with its
-    matrix_world applied. Raises ValueError when there are none."""
-    corners = list(corners)
+    matrix_world applied. A corner with a NaN or infinite coordinate (a point whose position is not a
+    number, D107) is left out, since `min` and `max` would keep a NaN that comes first. Raises ValueError
+    when no finite corner is left."""
+    corners = [corner for corner in corners if all(math.isfinite(value) for value in corner)]
     if not corners:
         raise ValueError("no corners to frame")
     mins = [min(corner[axis] for corner in corners) for axis in range(3)]
@@ -196,7 +198,8 @@ def backdrop_mask(boxes):
 def framing_bounds(boxes):
     """Centre and size of the box the camera frames: the union of every (mins, maxs) box that is not a
     backdrop (`backdrop_mask`), or of every box when none is."""
-    boxes = list(boxes)
+    boxes = [(lo, hi) for lo, hi in boxes
+             if all(math.isfinite(value) for value in tuple(lo) + tuple(hi))]
     mask = backdrop_mask(boxes)
     kept = [box for box, backdrop in zip(boxes, mask) if not backdrop] or boxes
     corners = [corner for lo, hi in kept for corner in (tuple(lo), tuple(hi))]
