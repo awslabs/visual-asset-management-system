@@ -224,6 +224,12 @@ class TestVerifiedTokenLogNamesTheResolvedUserId:
         assert "sub-1" not in logged
         assert token.split(".")[1] not in logged
 
+    @pytest.mark.parametrize("value", ["", " ", "   ", "\t\n"], ids=["empty", "space", "spaces", "tab-newline"])
+    def test_verify_external_jwt_refuses_a_blank_configured_claim(self, value):
+        """A blank value is refused at verification, as authenticate_request would refuse it."""
+        with _user_id_claim("email"), patch.object(core, "AUTH_MODE", "external"):
+            assert core.verify_external_jwt(_token(email=value)) is None
+
     def test_verify_external_jwt_logs_the_chain_value_when_not_set(self):
         with patch.object(core, "AUTH_MODE", "external"), \
              patch.object(core.logger, "info") as log_info:

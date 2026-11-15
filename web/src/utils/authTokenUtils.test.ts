@@ -285,6 +285,7 @@ describe("external OAuth user id", () => {
         it.each([
             ["absent", {}],
             ["empty", { email: "" }],
+            ["blank", { email: "   " }],
             ["a number", { email: 7 }],
             ["a list", { email: ["first.last@example.com"] }],
         ])(
@@ -433,6 +434,7 @@ describe("external OAuth user id", () => {
             [{ sub: "sub-1" }, null, "sub-1"],
             [{}, null, ""],
             [{ email: ["a@example.com"] }, "email", ""],
+            [{ email: "   ", sub: "sub-1" }, "email", ""],
             [{ "custom:id": "e-1", sub: "sub-1" }, "custom:id", "e-1"],
         ])("%p with claim %p is %p", (claims, claim, expected) => {
             expect(resolveExternalUserId(claims as Record<string, unknown>, claim)).toBe(expected);

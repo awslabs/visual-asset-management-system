@@ -954,9 +954,9 @@ def verify_external_audience(claims: Dict[str, Any]) -> bool:
 
 
 def _external_user_id_claim_value(claims: Dict[str, Any]) -> Optional[str]:
-    """The configured JWT_USER_ID_CLAIM's value when it is a non-empty string, else None."""
+    """The configured JWT_USER_ID_CLAIM's value when it is a non-blank string, else None."""
     value = claims.get(JWT_USER_ID_CLAIM)
-    return value if isinstance(value, str) and value else None
+    return value if _non_blank(value) else None
 
 
 def resolve_user_id(claims: Dict[str, Any]) -> Optional[str]:

@@ -12,6 +12,8 @@ A credential that does not authenticate (missing, malformed, expired, rejected, 
 unknown, disabled or expired API key) is answered with 401 by raising "Unauthorized"; every
 other denial is a Deny policy, which API Gateway answers with 403 (issue #1212).
 """
+import json
+
 from common.auth.apiEvent import normalize_event
 from common.auth.authorizerCore import (
     authenticate_request,
@@ -63,6 +65,24 @@ def _wildcard_resource(method_arn: str) -> str:
     # GET/database/{db}/assets/{a}/... — API Gateway then 403s the reused-cache request without
     # re-invoking the authorizer. The single-star wildcard covers every method + path for the API+stage.
     return f"{_api_stage_prefix(method_arn)}/*"
+
+
+def _principal_id(ctx: dict) -> str:
+    """The principalId of an authenticated Allow: the user id the authorizer resolved.
+
+    vams:tokens is set by authenticate_request from resolve_user_id (the configured user id
+    claim, else the username chain), so the principal names the same user as the roles, the
+    audit record and the handlers. Nothing reads principalId as a decision input and the
+    authorizer result cache is keyed on the identity source, not on the principal. A context
+    without a usable vams:tokens falls back to the earlier sub / cognito:username choice.
+    """
+    try:
+        tokens = json.loads(ctx.get("vams:tokens") or "[]")
+        if isinstance(tokens, list) and tokens and isinstance(tokens[0], str) and tokens[0].strip():
+            return tokens[0]
+    except (TypeError, ValueError):
+        pass
+    return ctx.get("sub") or ctx.get("cognito:username") or "user"
 
 
 def _policy(principal_id: str, effect: str, resource, context: dict = None) -> dict:
@@ -155,7 +175,7 @@ def lambda_handler(event, context):
                 )
                 return _policy("user", "Allow", ignored_resource)
             ctx = dict(res.get("context") or {})
-            principal = ctx.get("sub") or ctx.get("cognito:username") or "user"
+            principal = _principal_id(ctx)
             # Lets the handler's audit records name the CloudFront viewer (audit only; see
             # common/auth/viewerAddress.py). Added after the decision, never read by one. The
             # context is built from the verified token's claims, so a claim of the same name is

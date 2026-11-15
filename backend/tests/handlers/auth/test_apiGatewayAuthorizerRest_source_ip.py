@@ -271,6 +271,27 @@ class TestAuthorizationOutcomeUnchanged:
         assert policy["principalId"] == "u1"
         assert recorder.calls[0]["authorized"] is True
 
+    def test_principal_is_the_resolved_user_id_when_it_differs_from_sub(self):
+        policy, _ = _run(
+            _rest_event(),
+            auth_result={
+                "authorized": True,
+                "context": {"sub": "u1", "vams:tokens": '["alice@example.com"]'},
+                "reason": None,
+            },
+        )
+        assert policy["principalId"] == "alice@example.com"
+        assert policy["context"]["sub"] == "u1"
+
+    @pytest.mark.parametrize("tokens", ["", "not json", "[]", "[7]", '["  "]', '{"a": 1}'])
+    def test_principal_falls_back_to_sub_without_a_usable_vams_tokens(self, tokens):
+        policy, _ = _run(
+            _rest_event(),
+            auth_result={"authorized": True, "context": {"sub": "u1", "vams:tokens": tokens},
+                         "reason": None},
+        )
+        assert policy["principalId"] == "u1"
+
     def test_deny_policy_preserved(self):
         policy, _ = _run(
             _rest_event(source_ip="8.8.8.8"),

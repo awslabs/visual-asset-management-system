@@ -138,7 +138,7 @@ export function resolveExternalUserId(
 ): string {
     if (userIdClaim) {
         const value = claims[userIdClaim];
-        return typeof value === "string" ? value : "";
+        return typeof value === "string" && value.trim() !== "" ? value : "";
     }
     for (const name of EXTERNAL_USER_ID_CLAIM_CHAIN) {
         const value = claims[name];
@@ -157,7 +157,7 @@ export function resolveExternalUserId(
 export const MISSING_USER_ID_CLAIM_KEY = "auth_missing_user_id_claim";
 
 /**
- * Thrown for an external OAuth access token without the configured user id claim (absent, empty
+ * Thrown for an external OAuth access token without the configured user id claim (absent, blank
  * or not a string). The API refuses such a token on every request, so no session is opened for
  * it. Carries the claim name only, never the token or a claim value.
  */
