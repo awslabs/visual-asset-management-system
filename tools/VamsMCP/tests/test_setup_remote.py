@@ -157,3 +157,154 @@ def test_the_fallback_user_pool_host_follows_the_partition():
     assert setup_remote._dns_suffix("eusc-de-east-1") == "amazonaws.eu"
     assert setup_remote._dns_suffix("us-gov-west-1") == "amazonaws.com"
     assert setup_remote._dns_suffix("us-east-1") == "amazonaws.com"
+
+
+def test_external_idp_setup_records_the_deployments_user_id_claim_and_the_audience_claims(
+    external, tmp_path, capsys
+):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpUserIdClaim": "email"}
+    code, output = _run(external, tmp_path, "--audience-claim", "client_id", "--audience-claim", "aud")
+    assert code == 0
+    settings = RemoteAuthSettings.load(str(output))
+    assert (settings.audience_claims, settings.user_id_claim) == (("client_id", "aud"), "email")
+    written = json.loads(output.read_text())
+    assert (written["audienceClaims"], written["userIdClaim"]) == (["client_id", "aud"], "email")
+
+
+def test_external_idp_setup_without_the_claim_settings_writes_neither_key(external, tmp_path, capsys):
+    external.amplify_config = lambda: {**FakeDeployment.amplify_config(external), "externalOAuthIdpUserIdClaim": "undefined"}
+    code, output = _run(external, tmp_path)
+    assert code == 0
+    written = json.loads(output.read_text())
+    assert "audienceClaims" not in written and "userIdClaim" not in written
+
+
+def test_the_user_id_claim_flag_overrides_the_deployments(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpUserIdClaim": "email"}
+    code, output = _run(external, tmp_path, "--user-id-claim", "preferred_username")
+    assert code == 0
+    assert RemoteAuthSettings.load(str(output)).user_id_claim == "preferred_username"
+
+
+@pytest.mark.parametrize("flags", [
+    ("--audience-claim", "client_id"),
+    ("--user-id-claim", "email"),
+])
+def test_the_claim_flags_are_refused_for_cognito(cognito, tmp_path, capsys, flags):
+    code, _ = _run(cognito, tmp_path, *flags)
+    assert code == 1
+    assert "external IdP" in capsys.readouterr().err
+
+
+def test_a_reserved_user_id_claim_is_refused(external, tmp_path, capsys):
+    code, _ = _run(external, tmp_path, "--user-id-claim", "vams:tokens")
+    assert code == 1
+    assert "userIdClaim" in capsys.readouterr().err
+
+
+def test_external_idp_setup_reads_the_published_audience_claims(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpAudienceClaims": "client_id,aud"}
+    code, output = _run(external, tmp_path)
+    assert code == 0
+    assert RemoteAuthSettings.load(str(output)).audience_claims == ("client_id", "aud")
+    assert "does not publish" not in capsys.readouterr().err
+
+
+def test_the_audience_claim_flag_overrides_the_published_claims_with_a_note(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpAudienceClaims": "client_id"}
+    code, output = _run(external, tmp_path, "--audience-claim", "aud")
+    assert code == 0
+    assert RemoteAuthSettings.load(str(output)).audience_claims == ("aud",)
+    assert "overrides the deployment's published audience claims" in capsys.readouterr().err
+
+
+def test_an_older_deployment_without_the_field_falls_back_to_the_default_with_a_note(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {k: v for k, v in original().items() if k != "externalOAuthIdpAudienceClaims"}
+    code, output = _run(external, tmp_path)
+    assert code == 0
+    assert "audienceClaims" not in json.loads(output.read_text())
+    assert "does not publish its audience claims" in capsys.readouterr().err
+
+
+def test_an_unrecognized_published_audience_claim_value_is_refused(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpAudienceClaims": "azp"}
+    code, output = _run(external, tmp_path)
+    assert code == 1
+    assert "externalOAuthIdpAudienceClaims" in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_the_user_id_claim_flag_that_differs_from_the_published_claim_gives_a_note(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpUserIdClaim": "sub"}
+    code, output = _run(external, tmp_path, "--user-id-claim", "email")
+    assert code == 0
+    assert RemoteAuthSettings.load(str(output)).user_id_claim == "email"
+    assert "differs from the deployment's published user id claim (sub)" in capsys.readouterr().err
+
+
+def test_the_user_id_claim_flag_equal_to_the_published_claim_gives_no_note(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpUserIdClaim": "sub"}
+    code, _ = _run(external, tmp_path, "--user-id-claim", "sub")
+    assert code == 0
+    assert "published user id claim" not in capsys.readouterr().err
+
+
+def test_the_user_id_claim_flag_with_no_published_claim_gives_a_note(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpUserIdClaim": "undefined"}
+    code, output = _run(external, tmp_path, "--user-id-claim", "sub")
+    assert code == 0
+    assert RemoteAuthSettings.load(str(output)).user_id_claim == "sub"
+    err = capsys.readouterr().err
+    assert "publishes no user id claim; using --user-id-claim sub" in err
+    assert "cognito:username, username and sub" in err
+
+
+def test_the_audience_claim_flag_with_no_published_claims_gives_a_note(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpAudienceClaims": "undefined"}
+    code, _ = _run(external, tmp_path, "--audience-claim", "client_id")
+    assert code == 0
+    assert "publishes no audience claims; using --audience-claim client_id" in capsys.readouterr().err
+
+
+def test_a_relative_published_discovery_path_is_joined_to_the_provider_url(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpDiscoveryEndpoint": "/.well-known/openid-configuration"}
+    code, output = _run(external, tmp_path)
+    assert code == 0, capsys.readouterr().err
+    assert RemoteAuthSettings.load(str(output)).issuer == external.issuer
+    # with --issuer too: the issuer only overrides the issuer recorded, discovery still succeeds
+    code, _ = _run(external, tmp_path, "--force", "--issuer", external.issuer)
+    assert code == 0
+
+
+def test_an_absolute_published_discovery_url_is_used_as_given(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {
+        **original(),
+        "externalOAuthIdpDiscoveryEndpoint": f"{external.issuer}/.well-known/openid-configuration",
+    }
+    code, output = _run(external, tmp_path)
+    assert code == 0, capsys.readouterr().err
+    assert RemoteAuthSettings.load(str(output)).jwks_uri == external.jwks_uri
+
+
+def test_the_issuer_flag_is_the_fallback_when_the_published_discovery_path_does_not_resolve(
+    external, tmp_path, capsys
+):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpDiscoveryEndpoint": "/no/such/document"}
+    code, _ = _run(external, tmp_path)
+    assert code == 1 and "pass --issuer" in capsys.readouterr().err
+    code, output = _run(external, tmp_path, "--issuer", external.issuer)
+    assert code == 0, capsys.readouterr().err
+    assert RemoteAuthSettings.load(str(output)).jwks_uri == external.jwks_uri

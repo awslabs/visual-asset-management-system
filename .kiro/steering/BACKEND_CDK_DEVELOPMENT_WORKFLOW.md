@@ -852,14 +852,15 @@ is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-
 -   **The authorizer owns the `vams:` context namespace**: `authenticate_request` copies a
     verified token's claims into the context except every key under the reserved `vams:` prefix
     (`RESERVED_CONTEXT_KEY_PREFIX`, matched without regard to case), then sets `vams:tokens` to
-    `[username]` (`cognito:username`, then `username`, then `sub` -- the value roles and MFA are
-    resolved for), `vams:roles`, `vams:mfaEnabled` and `vams:externalAttributes` (`[]`). A
+    `[username]` (the one id `resolve_user_id` returns: `cognito:username`, then `username`, then `sub`,
+    or in external mode the configured `JWT_USER_ID_CLAIM` -- the value roles, MFA and audit use), `vams:roles`, `vams:mfaEnabled` and `vams:externalAttributes` (`[]`). A
     verified token with no username is unauthenticated (401). A new value the authorizer passes
     to handlers takes the `vams:` prefix and is written after the claim copy; never treat a token
     claim as identity, role, MFA or credential-type input.
 -   **Accepted token audiences (#1337)**: the authorizer accepts a Cognito token issued to
     `APP_CLIENT_ID` or to one of `ADDITIONAL_APP_CLIENT_IDS`, and an external IdP token whose
-    `aud` is `JWT_AUDIENCE` or one of `JWT_ADDITIONAL_AUDIENCES` (JSON arrays CDK sets only when
+    audience (read through `JWT_AUDIENCE_CLAIMS`: `aud` and/or `client_id`, default `aud`, the first listed
+    claim present decides) is `JWT_AUDIENCE` or one of `JWT_ADDITIONAL_AUDIENCES` (JSON arrays CDK sets only when
     `app.authProvider.<provider>.additionalTokenAudiences` is non-empty; parsed fail-closed,
     matched exactly). Signature, issuer, expiry and `token_use` checks never depend on the
     audience, and the user's roles still decide. A token that names no user (a Cognito access

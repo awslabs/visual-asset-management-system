@@ -271,6 +271,50 @@ class TestAuthorizationOutcomeUnchanged:
         assert policy["principalId"] == "u1"
         assert recorder.calls[0]["authorized"] is True
 
+    def test_principal_stays_sub_when_no_user_id_claim_is_configured(self):
+        """Absent setting: the principal is the earlier sub choice, whatever vams:tokens names."""
+        policy, _ = _run(
+            _rest_event(),
+            auth_result={
+                "authorized": True,
+                "context": {"sub": "u1", "vams:tokens": '["alice@example.com"]'},
+                "reason": None,
+            },
+        )
+        assert policy["principalId"] == "u1"
+
+    def test_principal_is_cognito_username_without_sub_when_no_claim_is_configured(self):
+        policy, _ = _run(
+            _rest_event(),
+            auth_result={"authorized": True,
+                         "context": {"cognito:username": "bob", "vams:tokens": '["carol"]'},
+                         "reason": None},
+        )
+        assert policy["principalId"] == "bob"
+
+    def test_principal_is_the_resolved_user_id_when_a_user_id_claim_is_configured(self):
+        with patch.object(rest, "external_user_id_claim_configured", return_value=True):
+            policy, _ = _run(
+                _rest_event(),
+                auth_result={
+                    "authorized": True,
+                    "context": {"sub": "u1", "vams:tokens": '["alice@example.com"]'},
+                    "reason": None,
+                },
+            )
+        assert policy["principalId"] == "alice@example.com"
+        assert policy["context"]["sub"] == "u1"
+
+    @pytest.mark.parametrize("tokens", ["", "not json", "[]", "[7]", '["  "]', '{"a": 1}'])
+    def test_principal_falls_back_to_sub_without_a_usable_vams_tokens(self, tokens):
+        with patch.object(rest, "external_user_id_claim_configured", return_value=True):
+            policy, _ = _run(
+                _rest_event(),
+                auth_result={"authorized": True, "context": {"sub": "u1", "vams:tokens": tokens},
+                             "reason": None},
+            )
+        assert policy["principalId"] == "u1"
+
     def test_deny_policy_preserved(self):
         policy, _ = _run(
             _rest_event(source_ip="8.8.8.8"),

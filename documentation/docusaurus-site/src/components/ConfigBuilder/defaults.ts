@@ -456,6 +456,8 @@ const COMMERCIAL: ConfigShape = {
                 idpAuthProviderDiscoveryEndpoint: null,
                 lambdaAuthorizorJWTIssuerUrl: null,
                 lambdaAuthorizorJWTAudience: null,
+                lambdaAuthorizorJWTAudienceClaims: ["aud"],
+                lambdaAuthorizorJWTUserIdClaim: "",
                 additionalTokenAudiences: [],
             },
         },
