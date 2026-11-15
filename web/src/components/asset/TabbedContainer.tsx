@@ -178,7 +178,22 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                     </Suspense>
                                 ),
                             },
-                            // Download as Zip: present only when the deployment has the feature
+                            {
+                                id: "compliance",
+                                label: "Compliance",
+                                content: (
+                                    <Suspense
+                                        fallback={<LoadingSpinner text="Loading Compliance..." />}
+                                    >
+                                        <ComplianceTab
+                                            databaseId={databaseId}
+                                            assetId={assetId}
+                                            isActive={activeTabId === "compliance"}
+                                        />
+                                    </Suspense>
+                                ),
+                            },
+                            // Download as Zip: after Compliance; present only when the deployment has the feature
                             ...(zipDownloadsEnabled
                                 ? [
                                       {
@@ -202,21 +217,6 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                       },
                                   ]
                                 : []),
-                            {
-                                id: "compliance",
-                                label: "Compliance",
-                                content: (
-                                    <Suspense
-                                        fallback={<LoadingSpinner text="Loading Compliance..." />}
-                                    >
-                                        <ComplianceTab
-                                            databaseId={databaseId}
-                                            assetId={assetId}
-                                            isActive={activeTabId === "compliance"}
-                                        />
-                                    </Suspense>
-                                ),
-                            },
                         ]}
                     />
                 </div>

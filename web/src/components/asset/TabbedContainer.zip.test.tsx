@@ -41,6 +41,20 @@ describe("TabbedContainer — Download Queue tab", () => {
         expect(await screen.findByTestId("zip-tab")).toHaveTextContent("db1/a1/true");
     });
 
+    it("is the last tab, after Compliance (owner UAT 2026-11-15)", () => {
+        appCache.setItem("config", { featuresEnabled: ["ZIPDOWNLOADS"] });
+        renderContainer();
+        const names = screen.getAllByRole("tab").map((tab) => tab.textContent);
+        expect(names.slice(-3)).toEqual(["Versions", "Compliance", "Download Queue"]);
+    });
+
+    it("leaves Compliance the last tab when the feature is off", () => {
+        appCache.setItem("config", { featuresEnabled: [] });
+        renderContainer();
+        const names = screen.getAllByRole("tab").map((tab) => tab.textContent);
+        expect(names[names.length - 1]).toBe("Compliance");
+    });
+
     it("is absent when the deployment has the feature off", () => {
         appCache.setItem("config", { featuresEnabled: ["LOCATIONSERVICES"] });
         renderContainer();
