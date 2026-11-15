@@ -143,7 +143,7 @@ Each vector query evaluates at most **100 candidates** per call (the DynamoDB `S
 
 ### SYSTEM GenAI Metadata Pipeline Size Limits
 
-Files above `app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxInputFileSizeMb` (default 2048) and point clouds above `lambdaLimits.maxPointCloudPoints` (default 20,000,000) are analyzed attributes-only unless `useFargateRenderer` is enabled, which adds an AWS Batch renderer and requires a VPC. Proprietary CAD formats receive `sys_file` attributes and metadata derived from the file name and asset context only. Content chunks are produced for document, text, and data files up to 50 MiB; a larger file keeps its whole-file vector only. Per-window video analysis is capped at 360 windows per file.
+3D files above `app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxInputFileSizeMb` (default 2048) and point clouds above `lambdaLimits.maxPointCloudPoints` (default 20,000,000) are analyzed attributes-only unless `useFargateRenderer` is enabled, which adds an AWS Batch renderer and requires a VPC. The media branch downloads files up to 3,500 MiB; above that a video or audio file is read by URL, a ZIP is listed from its central directory, and any other file gets `sys_file` only. Archive members are not unpacked or analyzed individually. Proprietary CAD formats receive `sys_file` attributes and metadata derived from the file name and asset context only. Content chunks are produced for document, text, and data files up to 50 MiB; a larger file keeps its whole-file vector only. Per-window video analysis is capped at 360 windows per file.
 
 ## Web Application Limitations
 

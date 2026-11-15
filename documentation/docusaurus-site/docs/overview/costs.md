@@ -168,7 +168,7 @@ The settings below change what each file costs:
 | `useFargateRenderer` (default `false`)                                        | Renders files above the Lambda limits on AWS Fargate. Requires `app.useGlobalVpc.enabled`, which adds the standing VPC endpoint charge.                                                                   |
 | `VIDEO_SEGMENT_SECONDS` template tag (default `0`)                            | A value of `2` or more adds one analysis call and one embedding per video window.                                                                                                                         |
 
-Without the Fargate renderer, a file above `lambdaLimits.maxInputFileSizeMb` (2,048 MB by default), or a point cloud above `lambdaLimits.maxPointCloudPoints` (20,000,000 points by default), is analyzed from its name, attributes, and asset context alone, with no rendered views.
+Without the Fargate renderer, a 3D file above `lambdaLimits.maxInputFileSizeMb` (2,048 MB by default), or a point cloud above `lambdaLimits.maxPointCloudPoints` (20,000,000 points by default), is analyzed from its name, attributes, and asset context alone, with no rendered views.
 
 ### Standing monthly cost
 
@@ -256,7 +256,7 @@ Enabling the feature on a deployment that already holds files, re-enabling it, c
 -   **Choose the analysis model.** Claude Haiku 4.5 is the commercial default; Claude Sonnet 4.5 costs about three times as much per file. `useGenAiAnalysis: false` removes the analysis call, its guardrail charges, and the renders, for about $0.005 per file version; natural-language search then finds documents, text, and data files by their content and every other file by its attributes.
 -   **Tune the template tags.** `RENDER_VIEWS` (8 by default; each 768-pixel view is about 800 input tokens), `MAX_TEXT_CHARS` (12,000 by default), `CONTENT_CHUNKING`, and `VIDEO_SEGMENT_SECONDS` set how much each file sends to Amazon Bedrock. See [Template](../pipelines/system-genai-metadata.md#template).
 -   **Match the PII filter to the data.** The created guardrail's PII filter is $0.10 of the $0.25 charged per 1,000 text units; `bedrockGuardrail.create.piiFilter: off` suits data that holds no personal information.
--   **Set `lambdaLimits`.** AWS Lambda does not render a file above `maxInputFileSizeMb` or a point cloud above `maxPointCloudPoints`; with the Fargate renderer on, AWS Fargate renders it instead.
+-   **Set `lambdaLimits`.** AWS Lambda does not render a 3D file above `maxInputFileSizeMb` or a point cloud above `maxPointCloudPoints`; with the Fargate renderer on, AWS Fargate renders it instead. The limits do not apply to images, video, audio, documents, text, data or archives, which never run on Fargate.
 -   **Plan reindex runs.** `app.vectorSearch.indexingConcurrency` (default 5) caps how many workflow executions a reindex has running at once, from launch to end, which spreads its cost over time without reducing it. A file waiting for a free place costs a few Amazon SQS and Amazon DynamoDB requests per look, at most one look every 15 minutes once it has waited a while. Because a waiting file looks again only after a delay that grows from 30 seconds to 15 minutes, the last files of a run can start up to 15 minutes after a slot frees. Set `reindexOnCdkDeploy` back to `false` after the deployment that needed it.
 
 The pipeline has no per-file-type exclusion: its trigger runs on every new file version except the preview thumbnails that the preview pipelines write.
