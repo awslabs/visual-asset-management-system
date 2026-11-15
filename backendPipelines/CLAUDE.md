@@ -1578,7 +1578,11 @@ it for a new container that runs an upstream tool as a non-root user.
     images build every S3 client from a Signature Version 4, path-style, regional configuration
     (`media_extractors.s3_regions.S3_CLIENT_CONFIG`, the Blender handler's `s3_config`, as the backend's
     `common.s3.S3_ASSET_CLIENT_CONFIG`); `test_system_genai_media_presign_signing.py` pins the pipeline's
-    presign sites. Splat Toolbox hands the map to
+    presign sites. **A presigned URL is a credential in text:** any message that may quote one (ffmpeg's
+    stderr, an imageio-ffmpeg or botocore error) goes through `media_extractors.common.scrub_urls` over its
+    whole text before it is cut (`scrubbed_tail` for a stderr tail), and the scrub removes every URL and every
+    run holding a signing parameter of either signature version in any case (`X-Amz-*`, `AWSAccessKeyId`,
+    `Signature`, `Expires`); `test_system_genai_media_signed_url_scrub.py` covers it. Splat Toolbox hands the map to
     the upstream `main.py`'s process (`VAMS_BUCKET_REGIONS`), where the launcher replaces a bare
     `boto3.client('s3')` with `vams_utils.aws.s3.region_routing_client()`; Isaac Lab carries the map in
     its job config and `openPipeline` reads the asset bucket with `manifestHelper.s3_client_for_region`.

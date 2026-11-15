@@ -795,9 +795,9 @@ class TestPresignedUrlNeverLeaves:
         module = _load(monkeypatch, FakeS3(), FakeBedrockRuntime([_reply()]), FakeEvents())
         assert module.scrub_urls("read https://b.s3.amazonaws.com/k?X-Amz-Signature=abc failed") == "read <url> failed"
         assert module.scrub_urls("http://host/a and https://host/b") == "<url> and <url>"
-        # A URL cut by truncation leaves its query parameters without a scheme; those go too.
-        assert module.scrub_urls("amazonaws.com/k?X-Amz-Security-Token=tok&X-Amz-Signature=sig end") == (
-            "amazonaws.com/k?<url> end")
+        # A URL cut by truncation leaves its query parameters without a scheme; the whole run goes, so no part of
+        # a signing value is left before the first parameter name.
+        assert module.scrub_urls("amazonaws.com/k?X-Amz-Security-Token=tok&X-Amz-Signature=sig end") == "<url> end"
         assert module.scrub_urls("Output file is empty, nothing was encoded") == "Output file is empty, nothing was encoded"
         assert module.URL_PLACEHOLDER == "<url>"
 

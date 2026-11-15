@@ -330,17 +330,27 @@ def list_zip_by_range(bucket: str, key: str, version_id: Optional[str], file_siz
     (signed for the bucket's Region) instead of downloaded: the end-of-central-directory record, the central
     directory (up to ZIP_CENTRAL_DIRECTORY_MAX_BYTES; a larger one is not read) and, for an OPC package, its two
     bounded docProps parts. None when the bytes carry no end-of-central-directory record (a truncated file, or not
-    a zip), so the caller takes the usual path. One log line counts the GETs and the bytes they read."""
-    reader = RangedS3Reader(client_for_bucket(bucket, s3_client), bucket, key, version_id, size=file_size or None)
+    a zip), so the caller takes the usual path. One log line counts the GETs and the bytes they read. Every warning,
+    and the error of a failed read, is scrubbed of URLs (scrub_urls): a failed request's text may name the object's
+    endpoint URL and its query string."""
+    reader = None
     result = None
     try:
+        reader = RangedS3Reader(client_for_bucket(bucket, s3_client), bucket, key, version_id, size=file_size or None)
         result = generic.list_zip(reader, reader.size, ctx)
+    except Exception as exc:  # noqa: BLE001 - re-raised scrubbed: a request error's text may quote a URL
+        raise MediaTaskError(f"{ctx.file_name}: the zip container could not be read by range: "
+                             f"{type(exc).__name__}: {scrub_urls(exc)}") from None
     finally:
-        archive = (result.attributes.get("sys_archive") if result is not None else None) or {}
-        logger.info({"message": "ZIP container read by range", "fileSize": reader.size,
-                     "rangedGets": reader.gets, "bytesRead": reader.bytes_read,
-                     "listed": result is not None, "listing": archive.get("listing", "full" if archive else None),
-                     "entryCount": archive.get("entryCount")})
+        if reader is not None:
+            archive = (result.attributes.get("sys_archive") if result is not None else None) or {}
+            logger.info({"message": "ZIP container read by range", "fileSize": reader.size,
+                         "rangedGets": reader.gets, "bytesRead": reader.bytes_read,
+                         "listed": result is not None,
+                         "listing": archive.get("listing", "full" if archive else None),
+                         "entryCount": archive.get("entryCount")})
+    if result is not None:
+        result.warnings = [scrub_urls(warning) for warning in result.warnings]
     return result
 
 

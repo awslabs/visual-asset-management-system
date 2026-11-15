@@ -132,17 +132,45 @@ DATA_SNIFF_BYTES = 64 * 1024
 # the handler records why.
 INPUT_MAX_DOWNLOAD_BYTES = 3_500 * 1024 * 1024
 
-# A presigned URL carries its credential in the query string (X-Amz-Signature, X-Amz-Security-Token), and
-# ffmpeg echoes its input URL in error lines. scrub_urls replaces every URL, and every stray X-Amz-... query
-# parameter, before a message read from a URL reaches a warning, a log line or an error.
+# A presigned URL carries its credential in the query string: Signature Version 4 in X-Amz-Credential,
+# X-Amz-Security-Token and X-Amz-Signature; Signature Version 2 in AWSAccessKeyId, Signature, Expires and a
+# lower-case x-amz-security-token. ffmpeg echoes its input URL in error lines and imageio-ffmpeg quotes ffmpeg's
+# whole stderr in its errors. scrub_urls replaces every URL, and every run of URL characters that holds a signing
+# parameter (what is left of a URL whose scheme or start was cut off), before a message read from a URL reaches a
+# warning, a log line, a record or an error. A caller that bounds the text scrubs the whole text first and cuts
+# after (scrubbed_tail).
 URL_PLACEHOLDER = "<url>"
-_URL_TEXT = re.compile(r"https?://\S+")
-_SIGNED_QUERY_TEXT = re.compile(r"X-Amz-[A-Za-z-]+=\S*")
+# The characters a URL is made of here: up to whitespace, a quote or an angle bracket (ffmpeg quotes its input).
+_URL_RUN = re.compile(r"[^\s'\"<>]+")
+_URL_SCHEME = re.compile(r"https?://", re.IGNORECASE)
+# A signing parameter name followed by `=`, matched without regard to case: any X-Amz-* name (Signature Version 4,
+# and Signature Version 2's x-amz-security-token), AWSAccessKeyId, Signature and Expires.
+_SIGNING_PARAMETER = re.compile(r"(?<![A-Za-z0-9_.-])(?:x-amz-[a-z0-9-]*|awsaccesskeyid|signature|expires)=",
+                                re.IGNORECASE)
+# The characters of an ffmpeg stderr tail quoted in a warning.
+FFMPEG_STDERR_TAIL_CHARS = 300
 
 
-def scrub_urls(text: str) -> str:
-    """``text`` with every URL, and every stray ``X-Amz-...=`` query parameter, replaced by URL_PLACEHOLDER."""
-    return _SIGNED_QUERY_TEXT.sub(URL_PLACEHOLDER, _URL_TEXT.sub(URL_PLACEHOLDER, str(text)))
+def _scrub_run(match: "re.Match") -> str:
+    run = match.group(0)
+    scheme = _URL_SCHEME.search(run)
+    if scheme is not None:
+        prefix = run[:scheme.start()]
+        return URL_PLACEHOLDER if _SIGNING_PARAMETER.search(prefix) else prefix + URL_PLACEHOLDER
+    return URL_PLACEHOLDER if _SIGNING_PARAMETER.search(run) else run
+
+
+def scrub_urls(text) -> str:
+    """``text`` with every ``http(s)://`` URL replaced by URL_PLACEHOLDER (the characters before its scheme in the
+    same run are kept), and every run of URL characters that holds a signing parameter (``X-Amz-*``,
+    ``AWSAccessKeyId``, ``Signature``, ``Expires``, any case) replaced whole, so no query string and no signing
+    value survives, whether or not the URL's scheme is still in the text."""
+    return _URL_RUN.sub(_scrub_run, str(text))
+
+
+def scrubbed_tail(text, limit: int = FFMPEG_STDERR_TAIL_CHARS) -> str:
+    """The last ``limit`` characters of ``text`` after scrub_urls ran over all of it, stripped."""
+    return scrub_urls(text)[-limit:].strip()
 
 
 RENDER_SKIPPED_SIZE = "size"

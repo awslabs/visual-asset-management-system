@@ -40,7 +40,7 @@ import executionLogKeys
 from PIL import Image
 
 import bedrockGuardrail
-from media_extractors.common import INPUT_MAX_DOWNLOAD_BYTES, human_duration, scrub_urls
+from media_extractors.common import INPUT_MAX_DOWNLOAD_BYTES, human_duration, scrub_urls, scrubbed_tail
 from media_extractors.common import URL_PLACEHOLDER  # noqa: F401 - the placeholder scrub_urls writes, for tests
 from media_extractors.imaging import normalise_for_vision, write_png
 from media_extractors.s3_regions import S3_CLIENT_CONFIG, client_for_bucket, register_bucket_regions
@@ -82,10 +82,11 @@ SEGMENT_PRESIGN_SECONDS = 900
 SEGMENT_MAX_LONG_EDGE_PX = 1024
 # Per ffmpeg call; three URL reads, one download and three local reads must fit the function's 300 s.
 SEGMENT_FFMPEG_TIMEOUT_SECONDS = 30
-# ffmpeg reads the video over a presigned URL whose query string is the credential (X-Amz-Signature,
-# X-Amz-Security-Token), and echoes that URL in its error lines. Every URL, and every stray X-Amz-… query
-# parameter, is replaced (media_extractors.common.scrub_urls, URL_PLACEHOLDER) before an ffmpeg message
-# reaches a log line or the window's results record.
+# ffmpeg reads the video over a presigned URL whose query string is the credential (Signature Version 4's
+# X-Amz-* parameters, or Signature Version 2's AWSAccessKeyId, Signature, Expires and x-amz-security-token), and
+# echoes that URL in its error lines. Every URL, and every run of URL characters holding a signing parameter, is
+# replaced (media_extractors.common.scrub_urls, URL_PLACEHOLDER) over the whole text, before any cut, before an
+# ffmpeg message or an exception's text reaches a log line or the window's results record.
 SEGMENT_JSON_KEYS = ("description", "keywords", "objects", "actions", "textSeen")
 ERROR_BEDROCK_SEGMENT = "BedrockSegmentError"
 # A guardrail intervention is a caught failure recorded under its own code, like the whole-file analysis.
@@ -257,7 +258,7 @@ def _read_json_or_empty(uri: Optional[str]) -> dict:
     try:
         return read_json(uri)
     except Exception as exc:  # noqa: BLE001 - context is optional; the window is still analysed without it
-        logger.warning(f"Context object unreadable ({uri}): {exc}")
+        logger.warning(scrub_urls(f"Context object unreadable ({uri}): {exc}"))
         return {}
 
 
@@ -313,7 +314,7 @@ def extract_frames(source: str, times: List[float], work_dir: str, run: Callable
                 "-vf", f"scale='min({SEGMENT_MAX_LONG_EDGE_PX},iw)':-2", "-y", raw,
             ], run=run, timeout=SEGMENT_FFMPEG_TIMEOUT_SECONDS)
             if proc.returncode != 0 or not os.path.exists(raw):
-                tail = scrub_urls(proc.stderr.decode("utf-8", "replace"))[-300:].strip()
+                tail = scrubbed_tail(proc.stderr.decode("utf-8", "replace"))
                 warnings.append(f"Frame at {seconds:.1f}s failed (exit {proc.returncode}): {tail}")
                 continue
             with Image.open(raw) as frame:
@@ -601,7 +602,7 @@ def lambda_handler(event, context):
         frames, warnings = frames_for_window(bucket, key, version_id, start_ms, end_ms, work_dir, ffmpeg_run,
                                              file_size=int(state.get("fileSize", 0) or 0))
         if not frames:
-            cause = f"segment {segment_key}: no frame could be read: " + "; ".join(warnings)
+            cause = scrub_urls(f"segment {segment_key}: no frame could be read: " + "; ".join(warnings))
             logger.warning(cause)
             write_failure(results_uri, segment, STATUS_SKIPPED, ERROR_NO_FRAMES, cause[:STATUS_CAUSE_MAX_CHARS],
                           generated_at, write_status=False)
@@ -631,7 +632,7 @@ def lambda_handler(event, context):
             client=bedrock_runtime))
     except (SegmentAnalysisFailure, ClientError, embeddings.EmbeddingModelError) as exc:
         error = getattr(exc, "code", None) if isinstance(exc, SegmentAnalysisFailure) else ERROR_BEDROCK_SEGMENT
-        cause = f"segment {segment_key}: {exc}"[:STATUS_CAUSE_MAX_CHARS]
+        cause = scrub_urls(f"segment {segment_key}: {exc}")[:STATUS_CAUSE_MAX_CHARS]
         logger.error(f"Segment analysis failed ({error}): {cause}")
         write_failure(results_uri, segment, STATUS_FAILED, error, cause, generated_at, write_status=True)
         return {"segmentKey": segment_key, "status": STATUS_FAILED, "error": error, "documentS3Location": None}
@@ -673,7 +674,7 @@ def lambda_handler(event, context):
     try:
         publish(detail, str(state.get("orchestrationEventPrefix") or ""))
     except SegmentPublishFailure as exc:
-        cause = f"segment {segment_key}: {exc}"[:STATUS_CAUSE_MAX_CHARS]
+        cause = scrub_urls(f"segment {segment_key}: {exc}")[:STATUS_CAUSE_MAX_CHARS]
         logger.error(f"Segment event not published ({ERROR_SEGMENT_PUBLISH}): {cause}")
         write_failure(results_uri, segment, STATUS_FAILED, ERROR_SEGMENT_PUBLISH, cause, generated_at, write_status=True)
         return {"segmentKey": segment_key, "status": STATUS_FAILED, "error": ERROR_SEGMENT_PUBLISH,

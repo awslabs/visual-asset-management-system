@@ -32,6 +32,8 @@ from .common import (
     ExtractContext,
     human_duration,
     record_media_position,
+    scrub_urls,
+    scrubbed_tail,
     year_number,
 )
 from .imaging import normalise_for_vision, write_png
@@ -215,7 +217,9 @@ def probe_video(
     run: Callable = subprocess.run,
     read_frames: Callable = imageio_ffmpeg.read_frames,
 ) -> Tuple[Dict[str, object], List[str]]:
-    """(facts, warnings) from two independent sources; one failing is a warning, both failing is an error."""
+    """(facts, warnings) from two independent sources; one failing is a warning, both failing is an error.
+    ``path`` may be a presigned URL, which ffmpeg's stderr and imageio-ffmpeg's errors quote: every warning, and
+    so the error, is scrubbed of it (scrub_urls) over its whole text before any cut."""
     facts: Dict[str, object] = {}
     warnings: List[str] = []
     try:
@@ -223,11 +227,11 @@ def probe_video(
         stderr = proc.stderr.decode("utf-8", "replace")
         parsed = parse_ffmpeg_header_text(stderr)
         if proc.returncode != 0 and "videoCodec" not in parsed:
-            warnings.append(f"ffmpeg header probe exited {proc.returncode}: {stderr[-300:].strip()}")
+            warnings.append(f"ffmpeg header probe exited {proc.returncode}: {scrubbed_tail(stderr)}")
         else:
             facts.update(parsed)
     except (OSError, subprocess.TimeoutExpired, RuntimeError) as exc:
-        warnings.append(f"ffmpeg header probe failed: {exc}")
+        warnings.append(f"ffmpeg header probe failed: {scrub_urls(exc)}")
     try:
         generator = read_frames(path)
         try:
@@ -247,7 +251,7 @@ def probe_video(
         if meta.get("rotate") and not facts.get("rotation"):
             facts["rotation"] = int(meta["rotate"]) % 360
     except Exception as exc:  # noqa: BLE001 - imageio raises IOError/RuntimeError/StopIteration on undecodable input
-        warnings.append(f"imageio-ffmpeg metadata failed: {exc}")
+        warnings.append(f"imageio-ffmpeg metadata failed: {scrub_urls(exc)}")
     if "width" not in facts and "durationSeconds" not in facts:
         raise RuntimeError("No video facts could be read: " + "; ".join(warnings))
     facts.setdefault("rotation", 0)
@@ -267,7 +271,8 @@ def extract_keyframes(
     work_dir: str,
     run: Callable = subprocess.run,
 ) -> Tuple[List[str], List[str]]:
-    """PNG paths for the keyframes that decoded, and one warning per keyframe that did not."""
+    """PNG paths for the keyframes that decoded, and one warning per keyframe that did not: the scrubbed tail
+    of ffmpeg's stderr (scrubbed_tail), since ``path`` may be a presigned URL."""
     paths: List[str] = []
     warnings: List[str] = []
     for index, seconds in enumerate(keyframe_times(duration), start=1):
@@ -278,14 +283,14 @@ def extract_keyframes(
                 "-vf", f"scale='min({VISION_MAX_LONG_EDGE_PX},iw)':-2", "-y", raw,
             ], run=run)
             if proc.returncode != 0 or not os.path.exists(raw):
-                tail = proc.stderr.decode("utf-8", "replace")[-300:].strip()
+                tail = scrubbed_tail(proc.stderr.decode("utf-8", "replace"))
                 warnings.append(f"Keyframe at {seconds:.1f}s failed (exit {proc.returncode}): {tail}")
                 continue
             with Image.open(raw) as frame:
                 png, _ = normalise_for_vision(frame.copy())
             paths.append(write_png(png, work_dir, f"media-{index:02d}.png"))
         except (OSError, subprocess.TimeoutExpired) as exc:
-            warnings.append(f"Keyframe at {seconds:.1f}s failed: {exc}")
+            warnings.append(f"Keyframe at {seconds:.1f}s failed: {scrub_urls(exc)}")
     return paths, warnings
 
 
