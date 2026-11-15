@@ -5,7 +5,7 @@ import os
 import boto3
 import json
 import uuid
-from datetime import datetime
+from common.timestamps import utc_now
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
@@ -23,8 +23,11 @@ from handlers.assets.assetCount import update_asset_count
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.tagScope import GLOBAL_SCOPE
 from common.s3 import region_routing_s3_client, bucket_region_fields
+from common.snsTopicNames import asset_sns_topic_name
+from common.s3MetadataKeys import folder_marker_metadata
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
@@ -177,9 +180,14 @@ def save_asset_details(asset_data):
         raise VAMSGeneralErrorResponse("Error saving asset.")
 
 def create_sns_topic_for_asset(database_id, asset_id):
-    """Create an SNS topic for an asset"""
+    """Create an SNS topic for an asset.
+
+    Topic names are built by common.snsTopicNames.asset_sns_topic_name so asset
+    creation and subscription recreate the same collision-safe name.
+    """
     try:
-        topic_response = sns_client.create_topic(Name=f'AssetTopic{database_id}-{asset_id}')
+        topic_response = sns_client.create_topic(
+            Name=asset_sns_topic_name(database_id, asset_id))
         return topic_response['TopicArn']
     except Exception as e:
         logger.exception(f"Error creating SNS topic: {e}")
@@ -627,12 +635,15 @@ def derived_key_conflict_message(owner_database_id, requesting_database_id):
     return "An asset in this database already occupies this asset identifier's S3 location"
 
 
-def create_prefix_folder(bucket, prefix):
+def create_prefix_folder(bucket, prefix, database_id, asset_id):
     """Create a prefix folder in S3 bucket.
 
     Raises rather than reporting failure through a return value: the folder
     marker is the only live object under a new asset's prefix, so an asset
     persisted without it holds a prefix that lists as empty.
+
+    The marker carries the asset metadata the bucket-sync handler checks, so
+    the handler does not stamp it by copying it onto itself.
     """
     try:
         # Create an empty object with the prefix to simulate a folder
@@ -642,7 +653,8 @@ def create_prefix_folder(bucket, prefix):
             Body='',
             # Grant the bucket owner full control so a folder marker written into a
             # cross-account asset bucket is owned/readable by that account.
-            ACL='bucket-owner-full-control'
+            ACL='bucket-owner-full-control',
+            Metadata=folder_marker_metadata(database_id, asset_id),
         )
         logger.info(f"Created prefix folder {prefix} in bucket {bucket}")
         return True
@@ -663,7 +675,7 @@ def create_initial_version_record(database_id, asset_id, version_id, description
     try:
         versions_table = dynamodb.Table(asset_versions_table_name)
         version_id = f"{version_id}"
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
 
         version_record = {
             'databaseId:assetId': f"{database_id}:{asset_id}",
@@ -750,7 +762,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         verify_all_required_tags_satisfied(request_model.tags, databaseId)
     
     # Create asset record
-    now = datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
+    now = utc_now().strftime('%B %d %Y - %H:%M:%S')
 
     #Get bucket and prefix details
     bucketDetails = get_default_bucket_details(databaseId)
@@ -849,7 +861,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
             logger.info(f"Binding S3-external asset to existing prefix: {s3_key} in bucket: {s3_bucket}")
         else:
             logger.info(f"Creating new prefix folder: {s3_key} in bucket: {s3_bucket}")
-            create_prefix_folder(s3_bucket, s3_key)
+            create_prefix_folder(s3_bucket, s3_key, databaseId, assetId)
     
     # Get username for version creation
     username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -908,6 +920,8 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset creation API"""
     global claims_and_roles
@@ -962,6 +976,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         # Process request
         response = create_asset(request_model, claims_and_roles)
+        log_action(event, "assetCreate", database_id=request_model.databaseId, asset_id=response.assetId,
+                   changes=request_model.dict(exclude_none=True))
         return success(body=response.dict())
             
     except ValidationError as v:

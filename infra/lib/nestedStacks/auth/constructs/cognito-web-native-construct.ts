@@ -181,11 +181,15 @@ export class CognitoWebNativeConstructStack extends Construct {
                 requireSymbols: true,
                 tempPasswordValidity: Duration.days(3),
             },
-            customAttributes: {
-                "custom:groups": new cognito.StringAttribute({
-                    mutable: true,
-                }),
-            },
+            // The attribute user pools created by earlier versions declare. Amazon Cognito keeps a custom
+            // attribute for the life of the pool, so a pool that declares it keeps declaring it.
+            customAttributes: props.config.app.authProvider.useCognito.retainLegacyGroupsAttribute
+                ? {
+                      "custom:groups": new cognito.StringAttribute({
+                          mutable: true,
+                      }),
+                  }
+                : undefined,
         });
 
         const cfnUserPool = userPool.node.defaultChild as cognito.CfnUserPool;

@@ -44,6 +44,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Key
 
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from common.s3PathPatterns import join_asset_location_key
@@ -97,6 +98,12 @@ _MAX_REPAIR_UPLOADS_PER_ASSET = 100
 
 def _record_asset_sync(database_id, asset_id, action, sync_status, error_message=None):
     """Best-effort outbound sync tracking record for an asset-level Physna sync."""
+    ctx = current_audit_context()
+    if ctx is not None:
+        failed = sync_status == SYNC_STATUS_FAILED
+        log_action(ctx.event, "physnaAssetSync", outcome="failed" if failed else "success",
+                   reason="internal" if failed else None, database_id=database_id, asset_id=asset_id,
+                   details={"operation": action, "syncStatus": sync_status})
     write_outbound_sync_record(
         SYNC_OBJECT_TYPE_ASSET,
         database_id,
@@ -826,6 +833,7 @@ def _extract_ids_from_stream_record(
     return comp_db, comp_asset, False
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     """Process every record in the SQS batch independently.
 

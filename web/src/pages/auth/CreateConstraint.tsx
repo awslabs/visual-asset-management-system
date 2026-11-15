@@ -26,7 +26,8 @@ import {
     fetchConstraintPermissionObjects,
 } from "../../services/APIService";
 import { generateUUID } from "../../common/utils/utils";
-import { routeTable } from "../../routes";
+import { routeTableFor } from "../../routes";
+import { useFeaturesEnabled } from "../../context/RuntimeConfigContext";
 import RoleGroupPermissionsTable, { RoleGroupPermission } from "./RoleGroupPermissionsTable";
 import UserPermissionsTable, { UserPermission } from "./UserPermissionsTable";
 // import { fetchMetadataSchema } from "../../services/APIService";
@@ -39,6 +40,25 @@ function isSeededConstraint(constraintId?: string): boolean {
         typeof constraintId === "string" &&
         SEEDED_CONSTRAINT_ID_PREFIXES.some((prefix) => constraintId.startsWith(prefix))
     );
+}
+
+/**
+ * The web route values the constraint editor offers: a leading ".*" wildcard, then the path of every
+ * page this deployment has (routes.tsx `routeTableFor`), so an add-on's pages are offered only where
+ * the add-on is deployed. The website is the sole definer of web routes.
+ */
+export function webRouteOptionsFor(enabledFeatures: string[]): { value: string; label: string }[] {
+    return [
+        { value: ".*", label: ".* (all routes)" },
+        ...routeTableFor(enabledFeatures)
+            .filter((r) => r.path)
+            .map((r) => ({ value: r.path, label: r.path })),
+    ];
+}
+
+/** The Object Type option for a stored constraint whose type this deployment does not offer. */
+export function unofferedObjectTypeOption(objectType: string): { label: string; value: string } {
+    return { label: `${objectType} (not offered on this deployment)`, value: objectType };
 }
 
 interface ConstraintCriteria {
@@ -133,14 +153,8 @@ export default function CreateConstraint({
         fieldNamesToObjectTypeMapping[t.value] = t.fields;
     });
 
-    // Web route path options (the website is the sole definer of web routes).
-    // A leading ".*" regex wildcard option matches all routes.
-    const webRouteOptions = [
-        { value: ".*", label: ".* (all routes)" },
-        ...routeTable
-            .filter((r: any) => r.path)
-            .map((r: any) => ({ value: r.path, label: r.path })),
-    ];
+    // Web route path options: the pages this deployment has, after a ".*" wildcard.
+    const webRouteOptions = webRouteOptionsFor(useFeaturesEnabled());
 
     // Ensure all criteria have unique IDs when loading from API
     const ensureUniqueIds = (criteria: ConstraintCriteria[] | undefined): ConstraintCriteria[] => {
@@ -173,6 +187,14 @@ export default function CreateConstraint({
     };
 
     const [formState, setFormState] = useState<ConstraintFields>(buildFormState);
+
+    // A stored constraint can name a type the deployment no longer offers, such as one of an add-on,
+    // or of an optional add-on feature, that is not enabled. It is shown by its stored name and kept
+    // as it is; the API refuses saving it.
+    const objectTypeNotOffered =
+        objectTypeData.length > 0 &&
+        !!formState.objectType &&
+        !objectTypes.some((option) => option.value === formState.objectType);
 
     const [selectedCriteriaAnd, setSelectedCriteriaAnd] = useState<ConstraintCriteria[]>([]);
     const [selectedCriteriaOr, setSelectedCriteriaOr] = useState<ConstraintCriteria[]>([]);
@@ -716,7 +738,10 @@ export default function CreateConstraint({
                             selectedOption={
                                 objectTypes.find(
                                     (option) => option.value === formState.objectType
-                                ) ?? null
+                                ) ??
+                                (objectTypeNotOffered
+                                    ? unofferedObjectTypeOption(formState.objectType)
+                                    : null)
                             }
                             placeholder="Object Type"
                             options={objectTypes}
@@ -729,6 +754,19 @@ export default function CreateConstraint({
                             }}
                         />
                     </FormField>
+                    {objectTypeNotOffered && (
+                        <Alert
+                            type="info"
+                            statusIconAriaLabel="Info"
+                            header="This object type is not offered on this deployment"
+                        >
+                            The object type of this constraint, {formState.objectType}, is not
+                            offered on this deployment, usually because the add-on, or the optional
+                            add-on feature, that declares it is not enabled. The constraint is kept
+                            as stored and applies again once that add-on or feature is enabled. You
+                            can delete it from the list; saving changes to it is refused.
+                        </Alert>
+                    )}
 
                     <ExpandableSection
                         headerText="Criteria (AND)"
@@ -837,7 +875,7 @@ export default function CreateConstraint({
                                                           formState.objectType
                                                       ] ?? []
                                                   ).find((option) => option.value === item.field)
-                                                      ?.label
+                                                      ?.label ?? item.field
                                                 : null;
                                         },
                                     },
@@ -1060,7 +1098,7 @@ export default function CreateConstraint({
                                                           formState.objectType
                                                       ] ?? []
                                                   ).find((option) => option.value === item.field)
-                                                      ?.label
+                                                      ?.label ?? item.field
                                                 : null;
                                         },
                                     },

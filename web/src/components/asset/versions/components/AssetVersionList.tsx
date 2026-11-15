@@ -20,6 +20,7 @@ import { useNavigate, useParams } from "react-router";
 import { AssetVersionContext, AssetVersion, FileVersion } from "../AssetVersionManager";
 import { fetchAssetVersion, unarchiveAssetVersion } from "../../../../services/AssetVersionService";
 import Synonyms from "../../../../synonyms";
+import { useAssetArchived } from "../../../../context/ArchivedAssetContext";
 
 interface AssetVersionListProps {
     onRevertVersion: (version: AssetVersion) => void;
@@ -36,6 +37,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
 }) => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
     const navigate = useNavigate();
+    const assetArchived = useAssetArchived();
 
     // State for unarchive loading
     const [unarchiveLoading, setUnarchiveLoading] = useState<string | null>(null);
@@ -78,6 +80,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         setPageSize,
         setSelectedVersion,
         refreshVersions,
+        onVersionsChanged,
         compareMode,
         versionToCompare,
         // New properties for enhanced functionality
@@ -227,12 +230,15 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
             setShowDownloadModal(false);
 
             // Navigate to the AssetDownload page
-            navigate(`/databases/${databaseId}/assets/${assetId}/download`, {
-                state: {
-                    assetVersionId: `${downloadVersion.Version}`,
-                    fileTree: fileTree,
-                },
-            });
+            navigate(
+                `/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}/download`,
+                {
+                    state: {
+                        assetVersionId: `${downloadVersion.Version}`,
+                        fileTree: fileTree,
+                    },
+                }
+            );
         } catch (error) {
             console.error("Error preparing download:", error);
             setShowDownloadModal(false);
@@ -283,6 +289,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
 
             if (success) {
                 refreshVersions();
+                onVersionsChanged?.();
             } else {
                 console.log("Failed to unarchive version:", response);
             }
@@ -429,6 +436,13 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         {
             id: "actions",
             header: "Actions",
+            // Four labelled buttons sit in this cell, and without a minimum the column only gets
+            // the width the other columns leave - about 110px at 1440px with the navigation open,
+            // which breaks the labels inside their words and makes every row several hundred
+            // pixels tall. This value keeps every label on one line; it is not wide enough for
+            // the widest row (Edit, Download, Revert, Archive), which needs about 457px before
+            // the cell padding, so that set wraps onto two rows of whole buttons instead.
+            minWidth: 420,
             cell: (item: AssetVersion) => (
                 <SpaceBetween direction="horizontal" size="xs">
                     <Button
@@ -479,6 +493,11 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
             ),
         },
     ];
+    // An archived asset's versions are listed without their comparison and action columns: each
+    // action either writes or reads the files, which need the asset unarchived
+    const tableColumns = assetArchived
+        ? columns.filter((column) => column.id !== "compare" && column.id !== "actions")
+        : columns;
 
     // Handle selection
     const handleSelectionChange = (selectedItems: AssetVersion[]) => {
@@ -512,7 +531,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         <>
             <Table
                 trackBy="Version"
-                columnDefinitions={columns}
+                columnDefinitions={tableColumns}
                 items={versions}
                 loading={loading}
                 loadingText="Loading asset versions"

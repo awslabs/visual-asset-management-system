@@ -144,6 +144,22 @@ describe("CoordTransformContainerJobRole", () => {
         // One grant per bucket policy: reading inputs and writing outputs are separate calls.
         expect(statements.filter(grantsSharedKeyDecrypt)).toHaveLength(2);
     });
+
+    test("can read an asset bucket object at a version", () => {
+        // The container downloads its input at the S3 version the run recorded at launch, which is
+        // a GetObject with a VersionId and so needs s3:GetObjectVersion on the asset bucket.
+        // The auxiliary bucket holds only objects the run writes and reads back at their current
+        // version, so the version action is granted on the asset buckets alone.
+        const statements = inlineStatements("CoordTransformContainerJobRole");
+        const reads = statements.filter((statement) =>
+            actionsOf(statement).includes("s3:GetObject")
+        );
+        const versioned = reads.filter((statement) =>
+            actionsOf(statement).includes("s3:GetObjectVersion")
+        );
+        expect(reads).toHaveLength(2);
+        expect(versioned).toHaveLength(1);
+    });
 });
 
 /**

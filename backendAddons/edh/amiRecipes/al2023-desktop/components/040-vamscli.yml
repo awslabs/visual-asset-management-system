@@ -1,0 +1,43 @@
+name: vams-al2023-vamscli
+description: The VAMS CLI installed from the recipe's repository asset into an isolated virtual environment.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: FetchSource
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - rm -rf /opt/vams/vamscli-src
+                    - mkdir -p /opt/vams/vamscli-src
+                    - /usr/bin/aws s3 cp --recursive --only-show-errors "${ASSET_vamscli}" /opt/vams/vamscli-src
+                    - test -f /opt/vams/vamscli-src/pyproject.toml
+          - name: BuildVirtualEnvironment
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        # The CLI needs Python 3.12; Amazon Linux 2023 keeps python3 at 3.9, so the environment is
+                        # built from the python3.12 package the baseline component installs.
+                        rm -rf /opt/vams/vamscli-venv
+                        /usr/bin/python3.12 -m venv /opt/vams/vamscli-venv
+                        /opt/vams/vamscli-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel
+                        /opt/vams/vamscli-venv/bin/pip install --no-cache-dir /opt/vams/vamscli-src
+                    - ln -sfn /opt/vams/vamscli-venv/bin/vamscli /usr/local/bin/vamscli
+          - name: OpenPermissionsToEveryDesktopUser
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - chmod -R a+rX /opt/vams
+    - name: validate
+      steps:
+          - name: CliRuns
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -eux
+                    - /opt/vams/vamscli-venv/bin/vamscli --version
+                    - /usr/local/bin/vamscli --version

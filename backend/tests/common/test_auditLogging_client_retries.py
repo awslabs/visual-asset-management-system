@@ -86,14 +86,9 @@ class _RecordingLogsClient:
         return [event for call in self.put_calls for event in call["logEvents"]]
 
 
-class _FrozenClock:
-    """Stands in for the module's `datetime`, so the stream name (the current UTC date) is fixed."""
-
-    def __init__(self, moment):
-        self._moment = moment
-
-    def utcnow(self):
-        return self._moment
+def _frozen_clock(moment):
+    """Stands in for the module's `utc_now`, so the stream name (the current UTC date) is fixed."""
+    return lambda: moment
 
 
 @pytest.fixture(autouse=True)
@@ -239,10 +234,10 @@ class TestCreateLogStreamIsNotPaidPerWrite:
         does not age out at midnight would leave a long-lived container writing to a stream it never
         created -- every audit write for the rest of its life dropped."""
         client = _RecordingLogsClient()
-        with patch.object(auditLogging, "datetime", _FrozenClock(datetime(2026, 3, 1, 23, 59))):
+        with patch.object(auditLogging, "utc_now", _frozen_clock(datetime(2026, 3, 1, 23, 59))):
             _write(client)
             _write(client)
-        with patch.object(auditLogging, "datetime", _FrozenClock(datetime(2026, 3, 2, 0, 1))):
+        with patch.object(auditLogging, "utc_now", _frozen_clock(datetime(2026, 3, 2, 0, 1))):
             _write(client)
 
         assert (GROUP, "2026/03/01") in client.created_streams

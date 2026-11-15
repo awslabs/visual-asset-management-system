@@ -81,6 +81,35 @@ describe("ExecutionQuickView", () => {
         expect(screen.getByText("/")).toBeInTheDocument();
     });
 
+    it("tells two versions of one input file apart", () => {
+        renderPanel({
+            inputFiles: [
+                {
+                    assetId: "a-1",
+                    inputAssetFileKey: "/a-1/f.glb",
+                    versionId: "3HL4kqtJlcpXroDTDmJ",
+                },
+                {
+                    assetId: "a-1",
+                    inputAssetFileKey: "/a-1/f.glb",
+                    versionId: "Zq9WpL0aB7cDeFgHiJk",
+                },
+            ],
+        });
+        const rows = screen.getAllByText("/f.glb").map((el) => el.closest("li")!);
+        expect(rows).toHaveLength(2);
+        expect(rows[0]).toHaveTextContent("3HL4kqtJ");
+        expect(rows[1]).toHaveTextContent("Zq9WpL0a");
+        expect(rows[0]).toHaveAttribute("title", expect.stringContaining("3HL4kqtJlcpXroDTDmJ"));
+    });
+
+    it("shows no version for an input without one", () => {
+        renderPanel();
+        const row = screen.getByText("/models/pump.laz").closest("li")!;
+        expect(row).toHaveTextContent(/^\/models\/pump\.laz$/);
+        expect(row).not.toHaveAttribute("title");
+    });
+
     it("names the execution it shows", () => {
         // Opened from a file's provenance link, nothing else on screen identifies the run.
         renderPanel();

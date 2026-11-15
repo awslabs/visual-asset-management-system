@@ -871,7 +871,7 @@ class TestAssetVersionGetCommand:
             
             # Verify API call
             mocks['api_client'].get_asset_version.assert_called_once_with(
-                'test-db', 'test-asset', '1'
+                'test-db', 'test-asset', '1', show_archived=False
             )
     
     def test_get_no_files(self, cli_runner, asset_version_command_mocks):

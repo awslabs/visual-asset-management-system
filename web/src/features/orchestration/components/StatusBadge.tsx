@@ -52,6 +52,12 @@ const statusConfig: Record<ExecutionStatus, StatusStyle> = {
         textColor: "text-red-800 dark:text-red-300",
         icon: "⏱",
     },
+    SKIPPED: {
+        label: "Skipped",
+        bgColor: "bg-gray-100 dark:bg-gray-800",
+        textColor: "text-gray-800 dark:text-gray-200",
+        icon: "↷",
+    },
     COMPLETE: {
         label: "Complete",
         bgColor: "bg-green-100 dark:bg-green-900/30",

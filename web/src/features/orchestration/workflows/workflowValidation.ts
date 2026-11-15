@@ -24,6 +24,8 @@ const METADATA_KEYS = [
     "fileMetadata",
     "fileAttributes",
     "databaseMetadata",
+    "assetFileMetadata",
+    "metadataSchema",
 ] as const;
 
 /** The two extension forms the backend recognises: '*.ext' (canonical) and '.ext' (shorthand). */

@@ -31,6 +31,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from botocore.exceptions import ClientError
 
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -423,6 +424,12 @@ def _delete_physna_asset_by_uuid(
 def _record_file_sync(database_id, asset_id, relative_path, action, sync_status,
                       s3_version_id=None, physna_asset_uuid=None, error_message=None):
     """Best-effort outbound sync tracking record for a file-level Physna sync."""
+    ctx = current_audit_context()
+    if ctx is not None:
+        failed = sync_status == SYNC_STATUS_FAILED
+        log_action(ctx.event, "physnaFileSync", outcome="failed" if failed else "success",
+                   reason="internal" if failed else None, database_id=database_id, asset_id=asset_id,
+                   file_path=relative_path, details={"operation": action, "syncStatus": sync_status})
     write_outbound_sync_record(
         SYNC_OBJECT_TYPE_ASSET_FILE,
         database_id,
@@ -1578,6 +1585,7 @@ def _walk_records(event: Dict[str, Any]) -> Tuple[int, List[Dict[str, str]]]:
     return successful, failures
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     total = len(event.get("Records", []))
     logger.info(

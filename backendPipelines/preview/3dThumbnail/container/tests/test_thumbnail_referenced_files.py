@@ -209,7 +209,7 @@ class TestFbxTextureNames:
         path.write_bytes(b"Kaydara FBX Binary  \x00\x1a\x00" + b"\x00\x05\x00\x00\x00"
                          + record(b"C:\\Users\\artist\\maps\\Wood.PNG") + b"\x00\x00"
                          + record(b"maps/Wood.PNG") + record(b"Amaps/Wood.png") + b"\x00\x01")
-        names = [name for name, _ in dependencies._fbx_references(str(path))]
+        names = [entry[0] for entry in dependencies._fbx_references(str(path))]
         assert "maps/Wood.PNG" in names and "Wood.PNG" in names
         resolved = {dependencies.resolve_reference(name, "") for name in names}
         assert {"maps/Wood.PNG", "Wood.PNG"} <= resolved - {None}
@@ -321,6 +321,140 @@ class TestObjWithMaterial:
         textured = getattr(data, "_preview_texture", None) is not None
         coloured = "RGB" in data.point_data and len(np.unique(data.point_data["RGB"], axis=0)) > 1
         assert textured or coloured, "the OBJ rendered without its material"
+
+
+def _textured_triangle_gltf(buffer_uri, image_uri):
+    """A glTF triangle with UVs and a base-colour texture, naming its buffer and image by URI, plus the
+    buffer's bytes."""
+    import json
+    import struct
+
+    positions = struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0)
+    uvs = struct.pack("<6f", 0, 0, 1, 0, 0, 1)
+    data = positions + uvs
+    document = {
+        "asset": {"version": "2.0"},
+        "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}, "material": 0}]}],
+        "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
+        "textures": [{"source": 0}], "images": [{"uri": image_uri}],
+        "buffers": [{"uri": buffer_uri, "byteLength": len(data)}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(positions)},
+                        {"buffer": 0, "byteOffset": len(positions), "byteLength": len(uvs)}],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                       "min": [0, 0, 0], "max": [1, 1, 0]},
+                      {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC2"}],
+    }
+    return json.dumps(document), data
+
+
+_CHECKER_SIZE = (64, 64)  # _checker_png
+
+
+def _texture_size(data):
+    texture = getattr(data, "_preview_texture", None)
+    return tuple(texture.dimensions) if texture is not None else None
+
+
+@pytest.mark.unit
+@requires_real("trimesh", "pyvista", "vtk", "PIL")
+class TestParentFolderReferences:
+    """A glTF or OBJ may name files above its own folder (``../buffers/``, ``../materials/``) as long as
+    they stay inside the asset: the fetch accepts and fetches them, and the loader reads them from
+    there. A file outside the asset is refused by both, even when one is on disk."""
+
+    def test_a_gltf_reads_its_buffer_and_image_from_sibling_folders(self, tmp_path):
+        from preview_pipeline import core
+
+        bucket = FakeBucket(tmp_path / "bucket")
+        gltf, data = _textured_triangle_gltf("../buffers/tri.bin", "../textures/checker.png")
+        bucket.put("xid/models/tri.gltf", gltf)
+        bucket.put("xid/buffers/tri.bin", data)
+        os.makedirs(os.path.join(bucket.root, "xid/textures"), exist_ok=True)
+        _checker_png(os.path.join(bucket.root, "xid/textures/checker.png"))
+        report, local_root, local_input = _fetch(tmp_path, bucket, "xid/models/tri.gltf", ".gltf")
+        assert sorted(report.fetched) == ["buffers/tri.bin", "textures/checker.png"]
+
+        loaded = core._load_file(local_input, ".gltf", asset_root=local_root)
+        assert loaded.n_points == 3
+        assert _texture_size(loaded) == _CHECKER_SIZE
+
+    def test_an_obj_reads_its_material_and_texture_from_sibling_folders(self, tmp_path):
+        from preview_pipeline import core
+
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/models/model.obj", OBJ.replace("../materials/model.mtl extra.mtl",
+                                                       "../materials/model.mtl"))
+        bucket.put("xid/materials/model.mtl", "newmtl wood\nKd 1 1 1\nmap_Kd tex/wood.png\n")
+        os.makedirs(os.path.join(bucket.root, "xid/materials/tex"), exist_ok=True)
+        _checker_png(os.path.join(bucket.root, "xid/materials/tex/wood.png"))
+        report, local_root, local_input = _fetch(tmp_path, bucket, "xid/models/model.obj", ".obj")
+        assert sorted(report.fetched) == ["materials/model.mtl", "materials/tex/wood.png"]
+
+        loaded = core._load_file(local_input, ".obj", asset_root=local_root)
+        # Without its material trimesh gives the OBJ a 2 x 2 placeholder texture.
+        assert _texture_size(loaded) == _CHECKER_SIZE, "the OBJ lost its material"
+
+    def test_a_file_outside_the_asset_is_not_read_even_when_it_is_on_disk(self, tmp_path):
+        from preview_pipeline import core
+        from preview_pipeline.format_handlers import mesh_handler
+
+        bucket = FakeBucket(tmp_path / "bucket")
+        gltf, data = _textured_triangle_gltf("../../outside.bin", "../textures/none.png")
+        bucket.put("xid/models/tri.gltf", gltf)
+        bucket.put("outside.bin", data)
+        report, local_root, local_input = _fetch(tmp_path, bucket, "xid/models/tri.gltf", ".gltf")
+        assert report.rejected == ["../../outside.bin"]
+        # A copy just outside the local asset root, where '../../' from the input leads.
+        with open(os.path.join(os.path.dirname(local_root), "outside.bin"), "wb") as handle:
+            handle.write(data)
+
+        resolver = mesh_handler.asset_resolver(local_input, local_root)
+        with pytest.raises((ValueError, FileNotFoundError)):
+            resolver.get("../../outside.bin")
+        with pytest.raises(ValueError, match="outside the asset"):
+            resolver.get("../../")
+        with pytest.raises(ValueError, match="outside the asset"):
+            resolver.absolute("../../outside.bin")
+        with pytest.raises(Exception):
+            core._load_file(local_input, ".gltf", asset_root=local_root)
+
+    def test_a_symlink_inside_the_asset_that_leads_outside_it_is_refused(self, tmp_path):
+        """A link in the local asset root to a file outside it resolves outside, so it is refused
+        however the name is spelled."""
+        from preview_pipeline import core
+        from preview_pipeline.format_handlers import mesh_handler
+
+        root = tmp_path / "local"
+        (root / "models").mkdir(parents=True)
+        gltf, data = _textured_triangle_gltf("../buffers/tri.bin", "../textures/checker.png")
+        (root / "models" / "tri.gltf").write_text(gltf)
+        outside = tmp_path / "secret.bin"
+        outside.write_bytes(data)
+        (root / "buffers").mkdir()
+        os.symlink(outside, root / "buffers" / "tri.bin")
+        os.symlink(tmp_path, root / "escape")
+        resolver = mesh_handler.asset_resolver(str(root / "models" / "tri.gltf"), str(root))
+        for name in ("../buffers/tri.bin", "../escape/secret.bin"):
+            with pytest.raises((ValueError, FileNotFoundError)):  # never the outside file's bytes
+                resolver.get(name)
+            with pytest.raises(ValueError, match="outside the asset"):
+                resolver.absolute(name)
+        with pytest.raises(Exception):
+            core._load_file(str(root / "models" / "tri.gltf"), ".gltf", asset_root=str(root))
+
+    def test_without_an_asset_root_trimesh_resolves_as_before(self, tmp_path):
+        """Local test mode passes no asset root: the input's folder is trimesh's default root."""
+        from preview_pipeline import core
+
+        folder = tmp_path / "models"
+        folder.mkdir()
+        gltf, data = _textured_triangle_gltf("tri.bin", "checker.png")
+        (folder / "tri.gltf").write_text(gltf)
+        (folder / "tri.bin").write_bytes(data)
+        _checker_png(str(folder / "checker.png"))
+        loaded = core._load_file(str(folder / "tri.gltf"), ".gltf")
+        assert loaded.n_points == 3 and _texture_size(loaded) == _CHECKER_SIZE
 
 
 def _lcc2_meta(files, levels, counts=True, extra=None):

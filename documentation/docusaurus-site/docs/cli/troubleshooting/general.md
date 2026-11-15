@@ -77,11 +77,11 @@ VamsCLI prints Unicode status indicators (for example, `✓` and `✗`) and sets
 
 **Cause:**
 
-An older VamsCLI release left the output encoding to the operating system. On Windows that resolves to the ANSI code page (typically `cp1252`) whenever output is not going to a console, so redirecting or piping a command that printed a status indicator failed instead of producing output — `vamscli profile list > profiles.txt` wrote a single line naming a codec error.
+The installed VamsCLI leaves the output encoding to the operating system. On Windows that resolves to the ANSI code page (typically `cp1252`) whenever output is not going to a console, so redirecting or piping a command that prints a status indicator fails instead of producing output — `vamscli profile list > profiles.txt` writes a single line naming a codec error.
 
 **Resolution:**
 
-Upgrade to VamsCLI 2.6.0 or later, which sets the encoding itself. On an earlier release, set the encoding before invoking the CLI:
+Update VamsCLI to the release that matches your deployment (see [Updating VamsCLI](../installation.md#updating-vamscli)); it sets the encoding itself. Until you can update, set the encoding before invoking the CLI:
 
 ```bash
 export PYTHONIOENCODING=utf-8
@@ -182,6 +182,16 @@ Give the VAMS administrator the request ID and the time of the command. The requ
 **A bare `Forbidden` (`waf-or-stage`):**
 
 API Gateway also answers a block with a bare `403` `{"message": "Forbidden"}` where the deployment's API does not return the web ACL body, and it answers the same way for a base URL that names no deployed stage. On a signed-in command the CLI reports this as `Request Blocked` too, with `blockedBy` `waf-or-stage`, the message `Amazon API Gateway refused this request with a bare 403 "Forbidden". ...`, and a line that names both checks: the web ACL's logs when the deployment has one, otherwise the stored URL's stage path. Check the stored API Gateway URL with `vamscli profile info`: it must end in the stage path, `/api`. If it does, treat the error as a web ACL block. A request the CLI sends without credentials reports the same bare `Forbidden` as an API error whose message names both causes, and the version check as `API Unavailable`.
+
+---
+
+## Request Path Refused
+
+**Symptoms:** A command fails before anything is sent, with an error that includes `A request path may not have an empty, '.' or '..' segment`, `A request path may not contain a control character` or `A request path may not contain '?' or '#'`. With `--json-output`, the `error_type` is `InvalidRequestPathError`, or the command's own error type with that text in its message.
+
+**Cause:** A value the command puts into the request path, such as a database, asset or other ID, is empty, `.` or `..`, contains such a segment, or contains a control character such as a tab or a line break. The CLI refuses such a path. A `/`, `?`, `#` or `%` in an ID is sent percent-encoded as part of that ID.
+
+**Resolution:** Pass the ID as the API returns it, for example from the matching `list` command.
 
 ---
 

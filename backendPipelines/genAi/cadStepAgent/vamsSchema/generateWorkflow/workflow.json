@@ -1,0 +1,25 @@
+{
+    "workflowName": "GenAI CAD STEP Agent - Generate",
+    "category": "GenAI",
+    "description": "Create a new CAD STEP file (.stp, .step) on the chosen output asset from a design description with a GenAI agent",
+    "specifiedPipelines": [
+        {
+            "pipelineDatabaseId": "GLOBAL",
+            "pipelineId": "genai-cad-step-agent",
+            "defaultTemplateId": "cad-step-agent-generate"
+        }
+    ],
+    "triggers": [],
+    "systemConfig": {
+        "inputFileArity": "none",
+        "inputFileFilters": {
+            "allow": [],
+            "exclude": []
+        },
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": true
+        },
+        "allowWorkflowTriggerChaining": false
+    }
+}

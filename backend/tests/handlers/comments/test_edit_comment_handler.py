@@ -1,5 +1,6 @@
 import pytest
 import datetime
+from common.timestamps import utc_now
 from backend.tests.conftest import TestComment
 
 
@@ -63,7 +64,7 @@ def test_edit_comment(comments_table, edit_event, monkeypatch):
 
     # compute the difference between the dateEdited attribute and the current time
     assert response["Item"]["commentBody"] == "new test comment body"
-    time_difference = datetime.datetime.utcnow() - datetime.datetime.strptime(
+    time_difference = utc_now() - datetime.datetime.strptime(
         response["Item"]["dateEdited"], "%Y-%m-%dT%H:%M:%S.%fZ"
     )
     # assert the difference between the two times is less than 100 seconds

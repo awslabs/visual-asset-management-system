@@ -108,6 +108,7 @@ if "common.workflows.stepfunctions_builder" not in sys.modules:
     sys.modules["common.workflows.stepfunctions_builder"] = _stub
 
 from backend.backend.handlers.workflows.sfn import workflowTriggerDispatch as wd
+from backend.backend.common.workflows import executionLocks as el  # noqa: E402
 
 DMOD = "backend.backend.handlers.workflows.sfn.workflowTriggerDispatch"
 
@@ -226,7 +227,7 @@ class TestDispatcher:
         trigger = {"triggerType": "fileUpload", "workflowDatabaseId": "GLOBAL", "workflowId": "wfNone",
                    "enabled": True, "triggerConfig": {"inputFileFilters": {"allow": []},
                                                       "defaultTemplateIds": {}}}
-        wd._workflow_system_config_cache.clear()
+        wd._workflow_row_cache.clear()
         with patch(f"{DMOD}._resolve_asset_relative_key", return_value=("db1", "a1", "/p.txt", "", "")), \
              patch.object(wd.workflow_storage_table_v2, "get_item",
                           return_value={"Item": {"systemConfig": {"inputFileArity": "none"}}}), \
@@ -238,7 +239,7 @@ class TestDispatcher:
 
     def test_systemconfig_read_is_memoized_per_invocation(self):
         # One SQS batch can carry many objects for the same workflow; the record is read once.
-        wd._workflow_system_config_cache.clear()
+        wd._workflow_row_cache.clear()
         with patch.object(wd.workflow_storage_table_v2, "get_item",
                           return_value={"Item": {"systemConfig": {"inputFileArity": "one",
                                                                   "allowWorkflowTriggerChaining": True}}}) as m_get:
@@ -248,11 +249,52 @@ class TestDispatcher:
         assert m_get.call_count == 1
 
     def test_unreadable_workflow_record_falls_back_to_conservative_defaults(self):
-        wd._workflow_system_config_cache.clear()
+        wd._workflow_row_cache.clear()
         with patch.object(wd.workflow_storage_table_v2, "get_item",
                           side_effect=RuntimeError("throttled")):
             assert wd._workflow_input_file_arity("GLOBAL", "wf1") == ""
             assert wd._workflow_allows_trigger_chaining("GLOBAL", "wf1") is False
+
+
+def _invoke_answering(status_code, message):
+    """A lambda_client whose Invoke answers like executeWorkflowV2 with this status and body message."""
+    payload = MagicMock()
+    payload.read.return_value = json.dumps(
+        {"statusCode": status_code, "body": json.dumps({"message": message})}).encode("utf-8")
+    client = MagicMock()
+    client.invoke.return_value = {"Payload": payload}
+    return client
+
+
+@pytest.mark.unit
+class TestLaunchRefusedByAnExecutionLock:
+    """A trigger whose launch is refused because a run already holds the asset, file or file version is
+    the concurrency restriction doing its job (a repeated delivery of one file version, a burst under
+    perAsset), so it is logged at INFO with the reason rather than as a failed launch."""
+
+    @pytest.mark.parametrize("message", sorted(
+        set(el.LOCK_CONFLICT_MESSAGE_BY_SCOPE.values()) | {el.LOCK_CONFLICT_MESSAGE}))
+    def test_a_lock_conflict_is_logged_as_skipped_at_info(self, message):
+        with patch(f"{DMOD}.lambda_client", _invoke_answering(400, message)), \
+             patch(f"{DMOD}.logger") as log:
+            assert wd._invoke_execute("db1", "wf1", {"triggerType": "fileUpload"}) is False
+        log.warning.assert_not_called()
+        logged = " ".join(str(c.args[0]) for c in log.info.call_args_list)
+        assert "skipped" in logged and message in logged
+
+    def test_any_other_400_is_still_a_warning(self):
+        with patch(f"{DMOD}.lambda_client", _invoke_answering(400, "Workflow is disabled.")), \
+             patch(f"{DMOD}.logger") as log:
+            assert wd._invoke_execute("db1", "wf1", {"triggerType": "fileUpload"}) is False
+        log.warning.assert_called_once()
+        assert "skipped" not in " ".join(str(c.args[0]) for c in log.info.call_args_list)
+
+    def test_a_lock_message_on_another_status_is_not_treated_as_a_conflict(self):
+        with patch(f"{DMOD}.lambda_client",
+                   _invoke_answering(500, el.LOCK_CONFLICT_MESSAGE)), \
+             patch(f"{DMOD}.logger") as log:
+            assert wd._invoke_execute("db1", "wf1", {"triggerType": "fileUpload"}) is False
+        log.warning.assert_called_once()
 
 
 @pytest.mark.unit
@@ -464,11 +506,12 @@ class TestUnstampedPinnedVersion:
         trigger = {"triggerType": "fileUpload", "workflowDatabaseId": "GLOBAL", "workflowId": "wfG",
                    "enabled": True, "triggerConfig": {"inputFileFilters": {"allow": [".e57"]},
                                                       "defaultTemplateIds": {}}}
-        wd._workflow_system_config_cache.clear()
+        wd._workflow_row_cache.clear()
         with patch.object(wd.s3_client, "head_object",
                           side_effect=[self.PINNED_UNSTAMPED, self.CURRENT_STAMPED]), \
              patch.object(wd.asset_storage_table, "get_item", return_value=self.ASSET), \
-             patch.object(wd.workflow_storage_table_v2, "get_item", return_value={}), \
+             patch.object(wd.workflow_storage_table_v2, "get_item",
+                          return_value={"Item": {"systemConfig": {"inputFileArity": "one"}}}), \
              patch(f"{DMOD}._invoke_execute", return_value=True) as m_invoke:
             launched = wd._dispatch_uploaded_file("b1", "prefix/a1/scan.e57", [trigger], "ver-1")
         assert launched == 1

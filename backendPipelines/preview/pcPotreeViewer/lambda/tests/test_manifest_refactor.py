@@ -37,6 +37,7 @@ for k, v in {
     "ORCHESTRATION_BUS_NAME": "vams-orchestration",
     "STATE_MACHINE_LOG_GROUP_NAME": "/aws/vendedlogs/PcPotree",
     "STATE_MACHINE_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:1:log-group:/aws/vendedlogs/PcPotree:*",
+    # pragma: allowlist nextline secret
     "PDAL_JOB_LOG_GROUP_NAME": "/aws/vendedlogs/Pipelines/PcPotreeViewerPDALabc1234567",
     "PDAL_JOB_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:123456789012:log-group:"
                               "/aws/vendedlogs/Pipelines/PcPotreeViewerPDALabc1234567:*",
@@ -270,6 +271,7 @@ class TestOpenPipeline:
         assert potree_log["stageName"] == "PotreeConverterBatchJob"
         assert potree_log["logStreamPrefix"] == "PcPotreePotreeJobDefabc1234567/default/"
         # Each stage registers the group ITS job definition writes to, not a shared Batch default.
+        # pragma: allowlist nextline secret
         assert pdal_log["logGroupName"] == "/aws/vendedlogs/Pipelines/PcPotreeViewerPDALabc1234567"
         assert potree_log["logGroupName"] == "/aws/vendedlogs/Pipelines/PcPotreeViewerPotreedef7654321"
         assert pdal_log["logGroupArn"] != potree_log["logGroupArn"]

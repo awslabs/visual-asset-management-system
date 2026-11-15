@@ -38,7 +38,7 @@ def _audit_source_ip(event):
     return event.get("requestContext", {}).get("http", {}).get("sourceIp", AUDIT_UNKNOWN)
 
 
-ORIGIN_VERIFY_TEST_VALUE = "originVerifyTestValue0123456789"
+ORIGIN_VERIFY_TEST_VALUE = "originVerifyTestValue0123456789"  # pragma: allowlist secret
 
 
 @pytest.fixture
@@ -81,7 +81,7 @@ class _AuditRecorder:
     def __init__(self):
         self.calls = []
 
-    def __call__(self, event, authorized, failure_reason=None):
+    def __call__(self, event, authorized, failure_reason=None, token_audience=None, verified_context=None):
         self.calls.append(
             {
                 "event": copy.deepcopy(event),

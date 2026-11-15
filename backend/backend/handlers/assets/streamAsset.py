@@ -16,8 +16,16 @@ from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_download_streamed
-from common.s3 import validateUnallowedFileExtensionAndContentType, region_routing_s3_client, bucket_region_fields
+from customLogging.auditLogging import log_file_download_streamed, audited_handler
+from common.s3 import (
+    validateUnallowedFileExtensionAndContentType,
+    region_routing_s3_client,
+    bucket_region_fields,
+    presigned_get_object_params,
+)
+from common.compliance.quarantineGuard import (
+    QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
+)
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from handlers.assets.assetVersions import (
     resolve_file_version_from_asset_version,
@@ -211,9 +219,9 @@ def handle_head_request(event, claims_and_roles):
         message = "Asset not distributable"
         logger.error(message)
         return authorization_error(body={'message': message})
-    
+
     asset_object.update({"object__type": "asset"})
-    
+
     # Check authorization
     operation_allowed_on_asset = False
     if len(claims_and_roles["tokens"]) > 0:
@@ -221,10 +229,14 @@ def handle_head_request(event, claims_and_roles):
         if casbin_enforcer.enforceAPI(event, "GET"):
             if casbin_enforcer.enforce(asset_object, "GET"):
                 operation_allowed_on_asset = True
-    
+
     if not operation_allowed_on_asset:
         return authorization_error()
-    
+
+    # The quarantine block is evaluated only for an authorized caller, so a denied caller
+    # cannot learn the asset's compliance state from the response.
+    check_quarantine_block(databaseId, assetId)
+
     # Get asset location
     asset_location = asset_object.get('assetLocation')
     if not asset_location:
@@ -288,6 +300,8 @@ def handle_head_request(event, claims_and_roles):
         response_headers = {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Headers': 'Range',
+            # Lets a cross-origin browser caller read the metadata headers below
+            'Access-Control-Expose-Headers': 'ETag, Last-Modified, Accept-Ranges, x-amz-version-id, x-amz-storage-class',
             'Cache-Control': 'no-cache, no-store',
             'Content-Type': content_type,
             'Content-Length': str(head_response.get('ContentLength', 0)),
@@ -323,6 +337,8 @@ def handle_head_request(event, claims_and_roles):
             logger.exception(f"S3 ClientError during HEAD request: {e}")
             return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset streaming APIs"""
     global claims_and_roles
@@ -468,6 +484,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     operation_allowed_on_asset = True
 
         if operation_allowed_on_asset:
+            # The quarantine block is evaluated only for an authorized caller, so a denied
+            # caller cannot learn the asset's compliance state from the response.
+            check_quarantine_block(databaseId, assetId)
+
             # Get asset location
             asset_location = asset_object.get('assetLocation')
             if not asset_location:
@@ -568,10 +588,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     # Range and 403ing otherwise. Signing without it (SignedHeaders=host) lets the
                     # client (and range-based octree / 3D tile streaming viewers) send any Range
                     # on the follow-up request to S3, which serves partial content natively.
+                    # SVG keys also get the image/svg+xml type and an attachment disposition.
                     presigned_params = {k: v for k, v in s3_params.items() if k != 'Range'}
                     presigned_url = s3_client.generate_presigned_url(
                         'get_object',
-                        Params=presigned_params,
+                        Params=presigned_get_object_params(presigned_params),
                         ExpiresIn=int(token_timeout)
                     )
                     
@@ -596,6 +617,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                             'Location': presigned_url,
                             'Access-Control-Allow-Headers': 'Range',
                             'Access-Control-Allow-Origin': '*',
+                            # Lets a cross-origin browser caller read the redirect target
+                            'Access-Control-Expose-Headers': 'Location',
                             'Cache-Control': 'no-cache, no-store',
                         },
                         'body': ''
@@ -626,6 +649,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     'headers': {
                             'Access-Control-Allow-Headers': 'Range',
                             'Access-Control-Allow-Origin': '*',
+                            # Lets a cross-origin browser caller read the range/encoding metadata below
+                            'Access-Control-Expose-Headers': 'Accept-Ranges, Content-Range, Content-Encoding',
                             'Cache-Control': 'no-cache, no-store',
                             'Accept-Ranges': s3_response['ResponseMetadata']['HTTPHeaders']['accept-ranges'],
                             'Content-Type': s3_response['ResponseMetadata']['HTTPHeaders']['content-type'],
@@ -686,6 +711,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except QuarantineBlockedResponse as refusal:
+        # An expected refusal: one INFO line, no traceback (D174).
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

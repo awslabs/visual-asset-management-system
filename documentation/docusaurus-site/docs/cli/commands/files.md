@@ -64,6 +64,10 @@ vamscli file upload -d my-db -a my-asset --asset-location /models/v2/ file.gltf
 vamscli file upload --json-input @upload-config.json --json-output
 ```
 
+:::note[Where a Directory Upload Lands]
+A directory upload stores the directory's contents under `--asset-location` (default `/`) and drops the directory's own name: `--directory ./pack` stores `/scene.usda` and `/props/pallet.usda`. This matches the web app's **Upload folder contents** option. To keep the folder name, as the web app's **Upload folder** option does, pass it as the location: `--asset-location /scene/pack/`. Without `--recursive`, only the directory's top-level files are uploaded and its subfolders are skipped, so pass `--recursive` for multi-file content such as USD scenes with sublayers in subfolders. A change to these defaults is tracked in [#1474](https://github.com/awslabs/visual-asset-management-system/issues/1474).
+:::
+
 :::note[Upload Limits]
 Files are split into parts and grouped into upload sequences. Each sequence is limited to 50 files, 1,000 total parts, and 3 GB; an individual file is limited to 1,000 parts with a 5 GB maximum part size. VamsCLI creates additional sequences automatically, so the total number of files is unbounded (for example, 200 files become 4 sequences of 50). The backend rate-limits upload initialization to 20 sequences per user per minute, which VamsCLI handles with exponential backoff. Files are chunked at 150 MB for files under 15 GB and at 1 GB for larger files. Zero-byte files are supported and created at completion.
 :::
@@ -90,20 +94,21 @@ List files in an asset with prefix filtering, archived inclusion, asset-version 
 vamscli file list [OPTIONS]
 ```
 
-| Option               | Type    | Required | Description                                                             |
-| -------------------- | ------- | -------- | ----------------------------------------------------------------------- |
-| `-d`, `--database`   | TEXT    | Yes      | Database ID                                                             |
-| `-a`, `--asset`      | TEXT    | Yes      | Asset ID                                                                |
-| `--prefix`           | TEXT    | No       | Filter files by prefix                                                  |
-| `--include-archived` | FLAG    | No       | Include archived files                                                  |
-| `--asset-version-id` | TEXT    | No       | Return the file list from a specific asset version snapshot             |
-| `--basic`            | FLAG    | No       | Skip expensive lookups for faster listing                               |
-| `--page-size`        | INTEGER | No       | Items per page (passed to the API)                                      |
-| `--starting-token`   | TEXT    | No       | Token for manual pagination (mutually exclusive with `--auto-paginate`) |
-| `--auto-paginate`    | FLAG    | No       | Automatically fetch all items (default limit: 10,000)                   |
-| `--max-items`        | INTEGER | No       | Maximum total items to fetch; applies only with `--auto-paginate`       |
-| `--json-input`       | TEXT    | No       | JSON parameters as a string or `@file` path                             |
-| `--json-output`      | FLAG    | No       | Output raw JSON response                                                |
+| Option               | Type    | Required | Description                                                               |
+| -------------------- | ------- | -------- | ------------------------------------------------------------------------- |
+| `-d`, `--database`   | TEXT    | Yes      | Database ID                                                               |
+| `-a`, `--asset`      | TEXT    | Yes      | Asset ID                                                                  |
+| `--prefix`           | TEXT    | No       | Filter files by prefix                                                    |
+| `--include-archived` | FLAG    | No       | Include archived files                                                    |
+| `--show-archived`    | FLAG    | No       | Also find an archived asset; its files are all archived and always listed |
+| `--asset-version-id` | TEXT    | No       | Return the file list from a specific asset version snapshot               |
+| `--basic`            | FLAG    | No       | Skip expensive lookups for faster listing                                 |
+| `--page-size`        | INTEGER | No       | Items per page (passed to the API)                                        |
+| `--starting-token`   | TEXT    | No       | Token for manual pagination (mutually exclusive with `--auto-paginate`)   |
+| `--auto-paginate`    | FLAG    | No       | Automatically fetch all items (default limit: 10,000)                     |
+| `--max-items`        | INTEGER | No       | Maximum total items to fetch; applies only with `--auto-paginate`         |
+| `--json-input`       | TEXT    | No       | JSON parameters as a string or `@file` path                               |
+| `--json-output`      | FLAG    | No       | Output raw JSON response                                                  |
 
 ```bash
 vamscli file list -d my-db -a my-asset
@@ -112,6 +117,7 @@ vamscli file list -d my-db -a my-asset --prefix "models/"
 vamscli file list -d my-db -a my-asset --asset-version-id ver-123 --basic
 vamscli file list -d my-db -a my-asset --auto-paginate --max-items 5000 --page-size 500
 vamscli file list -d my-db -a my-asset --starting-token "token123" --page-size 200
+vamscli file list -d my-db -a my-archived-asset --show-archived
 ```
 
 :::tip[Basic Mode Performance]
@@ -140,6 +146,7 @@ vamscli file info [OPTIONS]
 | `-a`, `--asset`      | TEXT | Yes      | Asset ID                                    |
 | `-p`, `--path`       | TEXT | Yes      | File path to inspect                        |
 | `--include-versions` | FLAG | No       | Include version history in the output       |
+| `--show-archived`    | FLAG | No       | Also find a file of an archived asset       |
 | `--json-input`       | TEXT | No       | JSON parameters as a string or `@file` path |
 | `--json-output`      | FLAG | No       | Output raw JSON response                    |
 

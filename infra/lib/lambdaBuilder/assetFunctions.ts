@@ -33,14 +33,6 @@ import {
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
-/**
- * Auxiliary-bucket prefix the asset export service stages an over-size export payload under
- * before handing back a presigned URL for it. Mirrors EXPORT_STAGING_PREFIX in
- * backend/backend/handlers/assets/assetExportService.py — the export function's S3 grant is
- * scoped to this prefix, so the two values move together.
- */
-export const ASSET_EXPORT_STAGING_PREFIX = "assetExports/";
-
 export function buildCreateAssetFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -302,12 +294,20 @@ export function buildStreamAuxiliaryPreviewAssetFunction(
         environment: {
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            // Compliance asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
         },
     });
     storageResources.s3.assetAuxiliaryBucket.grantRead(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     // The Region-routing S3 client resolves a bucket name's Region through the buckets table.
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+
+    if (config.app.compliance.quarantineBlocksDownload) {
+        storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
+    }
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
@@ -345,6 +345,10 @@ export function buildDownloadAssetFunction(
         environment: {
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            // Compliance asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
         },
     });
 
@@ -352,6 +356,10 @@ export function buildDownloadAssetFunction(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+
+    if (config.app.compliance.quarantineBlocksDownload) {
+        storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
+    }
 
     grantReadPermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -443,6 +451,10 @@ export function buildStreamAssetFunction(
         environment: {
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            // Compliance asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
         },
     });
 
@@ -450,6 +462,10 @@ export function buildStreamAssetFunction(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+
+    if (config.app.compliance.quarantineBlocksDownload) {
+        storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
+    }
 
     grantReadPermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -545,6 +561,16 @@ export function buildIngestAssetFunction(
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
+    // The complete stage reads one upload record by key (GetItem) before it creates a missing asset:
+    // exactly that action, on the table only (no index, no Scan or Query). The deployment key's
+    // decrypt permission comes from kmsKeyLambdaPermissionAddToResourcePolicy below.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem"],
+            resources: [storageResources.dynamo.assetUploadsStorageTable.tableArn],
+        })
+    );
     uploadFileLambdaFunction.grantInvoke(fun);
     createAssetLambdaFunction.grantInvoke(fun);
 
@@ -589,6 +615,10 @@ export function buildAssetExportService(
             ASSET_LINKS_FUNCTION_NAME: assetLinksFunction.functionName,
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            // Compliance asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
         },
     });
 
@@ -601,6 +631,10 @@ export function buildAssetExportService(
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+
+    if (config.app.compliance.quarantineBlocksDownload) {
+        storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
+    }
 
     // Grant invoke permission for asset links lambda
     assetLinksFunction.grantInvoke(fun);
@@ -617,7 +651,7 @@ export function buildAssetExportService(
         new iam.PolicyStatement({
             actions: ["s3:PutObject", "s3:GetObject"],
             resources: [
-                `${storageResources.s3.assetAuxiliaryBucket.bucketArn}/${ASSET_EXPORT_STAGING_PREFIX}*`,
+                `${storageResources.s3.assetAuxiliaryBucket.bucketArn}/${Config.ASSET_EXPORT_STAGING_PREFIX}*`,
             ],
         })
     );

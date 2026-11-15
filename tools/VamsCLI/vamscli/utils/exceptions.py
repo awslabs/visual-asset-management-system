@@ -59,8 +59,33 @@ class TokenExpiredError(GlobalInfrastructureError):
 
 
 class PermissionDeniedError(GlobalInfrastructureError):
-    """Raised when user lacks permissions for the requested action (legitimate 403)."""
-    pass
+    """Raised when user lacks permissions for the requested action (legitimate 403).
+
+    ``code`` is the machine-readable ``code`` a handler's 403 body carried, None when it carried none.
+    A subclass that sets ``forbidden_code`` is the error ``for_code`` picks for a 403 coded that way
+    (an add-on may define its own); it stays a permission denial, so every
+    guard that lets a global error through lets it through too.
+    """
+
+    # The handler 403 `code` a subclass stands for; None on this class, which stands for every other.
+    forbidden_code: Optional[str] = None
+
+    def __init__(self, message: str = "", code: Optional[str] = None):
+        super().__init__(message)
+        self.code = code
+
+    @classmethod
+    def for_code(cls, code: Optional[str]) -> type:
+        """The class a handler's 403 coded ``code`` is raised as: the subclass whose ``forbidden_code``
+        it is, else this class."""
+        if code:
+            pending = list(cls.__subclasses__())
+            while pending:
+                subclass = pending.pop(0)
+                if subclass.__dict__.get("forbidden_code") == code:
+                    return subclass
+                pending.extend(subclass.__subclasses__())
+        return cls
 
 
 class RequestBlockedError(GlobalInfrastructureError):
@@ -104,6 +129,12 @@ class BusinessLogicError(VamsCLIError):
 # General API and validation errors
 class APIError(BusinessLogicError):
     """Raised when API calls fail."""
+    pass
+
+
+class InvalidRequestPathError(APIError):
+    """Raised before any request when an endpoint path has an empty, '.' or '..' segment, a control
+    character, '?' or '#', which would address another route."""
     pass
 
 
@@ -736,6 +767,28 @@ class MetadataSchemaDeletionError(MetadataSchemaError):
 
 class InvalidMetadataSchemaDataError(MetadataSchemaError):
     """Raised when metadata schema data is invalid."""
+    pass
+
+
+# Compliance-related business logic exceptions
+class ComplianceError(BusinessLogicError):
+    """Base class for compliance errors."""
+    pass
+
+
+class ComplianceSchemaNotFoundError(ComplianceError):
+    """Raised when a compliance schema is not found."""
+    pass
+
+
+class ComplianceCascadeNotFoundError(ComplianceError):
+    """Raised when a compliance cascade is not found, or is no longer awaiting approval."""
+    pass
+
+
+class InvalidComplianceDataError(ComplianceError):
+    """Raised when a compliance request is rejected (invalid schema body, asset not quarantined,
+    schema not visible to the database, and the other handler-side validation failures)."""
     pass
 
 

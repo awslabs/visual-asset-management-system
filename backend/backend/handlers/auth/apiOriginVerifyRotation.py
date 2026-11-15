@@ -40,6 +40,7 @@ from common.auth.originVerify import (
     values_from_secret_string,
 )
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 
 logger = safeLogger(service_name="ApiOriginVerifyRotation")
 
@@ -307,6 +308,7 @@ _STEPS = {
 }
 
 
+@audited_handler
 def lambda_handler(event, context):
     secret_arn = event["SecretId"]
     token = event["ClientRequestToken"]
@@ -330,4 +332,9 @@ def lambda_handler(event, context):
     # The version id is not secret (DescribeSecret lists it), and naming it lets an operator match the
     # log lines of a failed rotation to the AWSPENDING version it left behind.
     logger.info(f"{step}: start (version {token})")
-    _STEPS[step](secrets, secret_arn, token)
+    try:
+        _STEPS[step](secrets, secret_arn, token)
+    except Exception:
+        log_action(event, "originVerifyRotate", outcome="failed", reason="internal", details={"step": step})
+        raise
+    log_action(event, "originVerifyRotate", details={"step": step})

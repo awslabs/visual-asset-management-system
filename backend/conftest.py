@@ -60,10 +60,24 @@ os.environ['WORKFLOW_TRIGGERS_STORAGE_TABLE_NAME'] = 'workflowTriggersStorageTab
 # default only when unset so workflowService can resolve it at import without overriding those.
 os.environ.setdefault('WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME', 'workflowExecutionsStorageTableV2')
 os.environ['S3_ASSET_BUCKETS_STORAGE_TABLE_NAME'] = 's3AssetBucketsStorageTable'
+# The workflow launch, end-state, error and execution-service handlers resolve the lock table at
+# import; setdefault so a test module that pins its own name keeps it.
+os.environ.setdefault('WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME', 'workflowExecutionLocksStorageTable')
+
+# Compliance tables (break-glass env overrides so the compliance handlers and the evaluation store
+# resolve test names without an SSM call at import). The other tables the evaluation store resolves
+# (database, asset file metadata, metadata schema V2, pipeline executions, output results) are NOT
+# seeded here: the handler suites for those domains setdefault their own values at import and assert
+# on them, so a root default would pre-empt theirs. The compliance test conftest seeds them.
+os.environ['COMPLIANCE_SCHEMA_STORAGE_TABLE_NAME'] = 'complianceSchemaStorageTable'
+os.environ['COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME'] = 'complianceAssetStateStorageTable'
+os.environ['COMPLIANCE_EVALUATION_STORAGE_TABLE_NAME'] = 'complianceEvaluationStorageTable'
+os.environ['COMPLIANCE_CASCADE_STORAGE_TABLE_NAME'] = 'complianceCascadeStorageTable'
+os.environ['COMPLIANCE_AUDIT_STORAGE_TABLE_NAME'] = 'complianceAuditStorageTable'
 
 # AWS credentials for testing
 os.environ['AWS_ACCESS_KEY_ID'] = 'test-access-key'
-os.environ['AWS_SECRET_ACCESS_KEY'] = 'test-secret-key'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'test-secret-key'  # pragma: allowlist secret
 os.environ['AWS_SESSION_TOKEN'] = 'test-session-token'
 import pytest
 
@@ -257,6 +271,13 @@ def setup_mock_imports():
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'tagScope.py')
     )
     sys.modules['common.tagScope'] = tag_scope_module
+
+    # snsTopicNames is pure naming logic with no AWS dependencies; load the real module
+    sns_topic_names_module = import_module_from_path(
+        'common.snsTopicNames',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'snsTopicNames.py')
+    )
+    sys.modules['common.snsTopicNames'] = sns_topic_names_module
 
     # common.auth modules are pure logic with no AWS state dependencies - load real modules
     auth_pkg_module = import_module_from_path(

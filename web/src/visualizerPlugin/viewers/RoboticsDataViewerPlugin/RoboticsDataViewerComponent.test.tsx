@@ -143,7 +143,7 @@ describe("RoboticsDataViewerComponent", () => {
         expect(parseDeepLink(src).urls).toEqual([signed("asset-1", "/a.mcap")]);
         const banner = await screen.findByTestId("robotics-viewer-file-errors");
         expect(banner.textContent).toContain("b.mcap");
-        expect(banner.textContent).toContain("not authorized");
+        expect(banner.textContent).toContain("do not have permission");
         expect(banner.textContent).toContain("c.mcap");
         expect(banner.textContent).toContain("archived");
         expect(banner.textContent).not.toContain("a.mcap");
@@ -161,8 +161,28 @@ describe("RoboticsDataViewerComponent", () => {
         const error = await screen.findByTestId("robotics-viewer-error");
         expect(error.textContent).toContain("None of the selected files");
         expect(error.textContent).toContain("could not be found");
-        expect(error.textContent).toContain("not authorized");
+        expect(error.textContent).toContain("do not have permission");
         expect(screen.queryByTestId("robotics-viewer-iframe")).toBeNull();
+    });
+
+    it("names a refused download in the shared wording: 403 permission, 401 sign in (#1211)", async () => {
+        mockDownloadAsset.mockImplementation(presignWith({ "/a.mcap": 403 }));
+        const { unmount } = render(
+            <RoboticsDataViewerComponent {...baseProps} assetKey="/a.mcap" />
+        );
+        const denied = await screen.findByTestId("robotics-viewer-error");
+        expect(denied.textContent).toContain(
+            "You do not have permission to view or download this file."
+        );
+        unmount();
+
+        mockDownloadAsset.mockImplementation(presignWith({ "/a.mcap": 401 }));
+        render(<RoboticsDataViewerComponent {...baseProps} assetKey="/a.mcap" />);
+        const signedOut = await screen.findByTestId("robotics-viewer-error");
+        expect(signedOut.textContent).toContain(
+            "Your session has expired. Sign in again to view this file."
+        );
+        expect(signedOut.textContent).not.toContain("permission");
     });
 
     it("shows a single file's failure as that file's state", async () => {

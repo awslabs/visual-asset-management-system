@@ -211,7 +211,7 @@ Unarchiving restores the asset record. By default the asset's files stay archive
 When the request sets `unarchiveFiles` to `true`, VAMS first removes the Amazon S3 delete markers that the asset archive created (matched by `assetArchive` provenance in the file version history), restoring access to those files' latest versions, and removes the preview file's delete marker. Files archived individually before the asset archive keep their delete markers and stay archived; restore them with [Unarchive File](../api/files.md#unarchive-file). An asset archived before provenance tracking has no restorable file set, so no files are restored for it. An asset whose database has been deleted cannot be unarchived until a database with the same ID is created again.
 
 :::note[Viewing archived assets]
-Use the `showArchived=true` query parameter when listing or getting assets to include archived assets in results.
+Use the `showArchived=true` query parameter when listing or getting assets to include archived assets in results. A role reaches an archived asset only when its constraints match both `{databaseId}#deleted` and `{databaseId}`; see [Permissions Model: Archived records](permissions-model.md#archived-records).
 :::
 
 ## Permanent deletion
@@ -234,7 +234,7 @@ When an asset is permanently deleted, the following are removed:
 | Amazon SNS topic         | The asset's subscription notification topic.                                          |
 | Subscription records     | Subscription records for this asset.                                                  |
 
-Auxiliary files are the previews and viewer data derived from the asset's files. Temporary working files that a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `assetExports/`, belong to the execution or the export request rather than the asset, and permanent deletion does not remove them.
+Auxiliary files are the previews and viewer data derived from the asset's files. Temporary working files that a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `vams.assetExports/`, belong to the execution or the export request rather than the asset, and permanent deletion does not remove them. Staged export payloads expire on their own 8 days after they are written.
 
 :::warning[Permanent deletion cannot be undone]
 Unlike archiving, permanent deletion removes all Amazon S3 object versions. The data cannot be recovered after this operation completes.

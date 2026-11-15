@@ -19,6 +19,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 const PIPELINES_DIR = path.join(__dirname, "..", "..", "lib", "nestedStacks", "pipelines");
+const ADDONS_DIR = path.join(__dirname, "..", "..", "lib", "nestedStacks", "addon");
 
 function typescriptFiles(dir: string): string[] {
     const out: string[] = [];
@@ -31,7 +32,7 @@ function typescriptFiles(dir: string): string[] {
 }
 
 describe("container images are pinned", () => {
-    const files = typescriptFiles(PIPELINES_DIR);
+    const files = [...typescriptFiles(PIPELINES_DIR), ...typescriptFiles(ADDONS_DIR)];
 
     it("finds the pipeline construct sources to scan", () => {
         // Control: an empty file list would make every assertion below pass vacuously.

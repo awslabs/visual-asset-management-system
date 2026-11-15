@@ -8,14 +8,15 @@ import json
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from common.resourceNames import get_table_name, ResourceKeys
-from common.validators import validate
+from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
-from common.dynamodb import get_asset_object_from_id
+from common.dynamodb import get_asset_object_from_id, asset_authorization_object
 from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.dynamodb import (
     validate_pagination_info,
     MAX_PAGINATION_MAX_ITEMS,
@@ -245,12 +246,13 @@ def delete_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, e
     return response
 
 
-def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> dict:
+def get_handler(response: dict, pathParameters: dict, queryParameters: dict, held: dict = None) -> dict:
     """
     Function to handle the get request and route it to the right function
     :param response: dictionary holding information about the response
     :param pathParameters: dictionary holding information about the path (like versionId and/or assetId)
     :param queryParameters: dictionary holding pagination information
+    :param held: filled with the asset's databaseId once the read is allowed, for its audit record
     :returns: Http response object (statusCode, headers, body) with comments stored in the body (if successful)
     """
     showDeleted = False
@@ -260,21 +262,53 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
 
     method_allowed_on_api = False
 
-    asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
-    if asset_object is None:
-        response["statusCode"] = 404
-        response["body"] = json.dumps({"message": "Asset not found"})
+    show_archived = parse_show_archived(queryParameters)
+    if show_archived is None:
+        response["statusCode"] = 400
+        response["body"] = json.dumps({"message": SHOW_ARCHIVED_INVALID_MESSAGE})
         return response
 
-    asset_object.update({"object__type": "asset"})
+    if show_archived:
+        # showArchived also resolves an archived asset; its comments stay keyed by assetId.
+        # Authorization is decided before existence, so a refused caller cannot tell an archived
+        # asset from a missing or ambiguous one.
+        lookup_error = None
+        try:
+            asset_object = get_asset_object_from_id(None, pathParameters["assetId"], include_archived=True)
+        except VAMSGeneralErrorResponse as error:
+            asset_object, lookup_error = None, error
+        authorization_object = asset_authorization_object(
+            asset_object, None, pathParameters["assetId"], include_archived=True)
+        if len(claims_and_roles["tokens"]) == 0 or \
+                not CasbinEnforcer(claims_and_roles).enforce(authorization_object, "GET"):
+            response["statusCode"] = 403
+            response["body"] = json.dumps({"message": "Action not allowed"})
+            return response
+        if lookup_error is not None:
+            raise lookup_error
+        if asset_object is None:
+            response["statusCode"] = 404
+            response["body"] = json.dumps({"message": "Asset not found"})
+            return response
+        method_allowed_on_api = True
+    else:
+        asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
+        if asset_object is None:
+            response["statusCode"] = 404
+            response["body"] = json.dumps({"message": "Asset not found"})
+            return response
 
-    # Add Casbin Enforcer to check if the current user has permissions to GET the Comment
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if casbin_enforcer.enforce(asset_object, "GET"):
-            method_allowed_on_api = True
+        asset_object.update({"object__type": "asset"})
+
+        # Add Casbin Enforcer to check if the current user has permissions to GET the Comment
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(asset_object, "GET"):
+                method_allowed_on_api = True
 
     if method_allowed_on_api:
+        if held is not None:
+            held["databaseId"] = asset_object.get("databaseId")
         if "assetVersionId:commentId" not in pathParameters:
             # if we have an assetVersionId and assetId, call get_comments_version
             if "assetVersionId" in pathParameters and "assetId" in pathParameters:
@@ -445,7 +479,10 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
         )
 
         result = delete_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], userId, event)
-        
+        if result["statusCode"] == 200:
+            log_action(event, "commentDelete", database_id=asset_object.get("databaseId"),
+                       asset_id=pathParameters["assetId"], **_comment_ids(pathParameters["assetVersionId:commentId"]))
+
         response["body"] = json.dumps({"message": result["message"]})
         response["statusCode"] = result["statusCode"]
         return response
@@ -455,6 +492,23 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
         return response
 
 
+def _comment_ids(asset_version_and_comment_id):
+    """The asset version id and comment id of an "<assetVersionId>:<commentId>" path value."""
+    version_id, _, comment_id = str(asset_version_and_comment_id or "").partition(":")
+    return {"assetVersionId": version_id or None, "commentId": comment_id or None}
+
+
+def _log_comment_read(event, path_parameters, query_parameters, database_id=None):
+    request_parameters = dict(query_parameters or {})
+    if "assetVersionId:commentId" in path_parameters:
+        log_action(event, "commentGet", database_id=database_id, asset_id=path_parameters.get("assetId"),
+                   **_comment_ids(path_parameters["assetVersionId:commentId"]), request_parameters=request_parameters)
+    else:
+        log_action(event, "commentList", database_id=database_id, asset_id=path_parameters.get("assetId"),
+                   assetVersionId=path_parameters.get("assetVersionId"), request_parameters=request_parameters)
+
+
+@audited_handler
 def lambda_handler(event: dict, context: dict) -> dict:
     """
     Lambda handler for the API calls directed to commentService
@@ -492,7 +546,10 @@ def lambda_handler(event: dict, context: dict) -> dict:
             return response
 
         if httpMethod == "GET":
-            result = get_handler(response, pathParameters, queryParameters)
+            held = {}
+            result = get_handler(response, pathParameters, queryParameters, held)
+            if result.get("statusCode") == 200:
+                _log_comment_read(event, pathParameters, queryParameters, held.get("databaseId"))
             return result
         if httpMethod == "DELETE":
             result = delete_handler(response, pathParameters, event)

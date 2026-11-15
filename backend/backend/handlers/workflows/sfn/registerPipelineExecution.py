@@ -48,6 +48,7 @@ import botocore
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 
@@ -427,6 +428,7 @@ def register(detail, source=""):
         return
 
 
+@audited_handler
 def lambda_handler(event, context):
     """EventBridge-invoked. The event is an EventBridge envelope; the registration payload is
     in event['detail']. Best-effort: logs and returns on any error (a registration failure must

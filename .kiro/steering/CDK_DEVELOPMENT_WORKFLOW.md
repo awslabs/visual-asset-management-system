@@ -4,6 +4,8 @@ This document provides comprehensive guidelines for developing and extending the
 
 > **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `infra/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its pipeline development sections are also the Kiro counterpart for `infra/lib/nestedStacks/pipelines/CLAUDE.md` and `backendPipelines/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
 
+> **Add-on steering:** an add-on's own steering lives in `.kiro/steering/ADDON_*.md` (`inclusion: fileMatch`), which loads when you edit that add-on's files; this document covers core and the lanes an add-on plugs into.
+
 ## 🏗️ **Architecture Overview**
 
 ### **CDK Project Structure Standards**
@@ -17,18 +19,20 @@ infra/
 │   ├── configFile.ts         # resolveConfigFilePath(): CDK context `configFile` names the file (default config.json;
 │   │                         #   a name or relative path resolves relative to config/, an absolute path is used as given;
 │   │                         #   config.<name>.json files other than config.template.*.json are gitignored)
-│   ├── config.json           # Deployment-specific configuration
+│   ├── config.json           # Deployment-specific configuration; the tracked copy equals
+│   │                         #   config.template.commercial.json (test/config/configJsonTemplateParity.test.ts)
 │   ├── saml-config.ts        # SAML authentication configuration
+│   ├── addon/                # Add-on config lane: addonConfig.ts (ConfigAddonLane) + one <addon>Config.ts module per add-on
 │   └── policy/               # IAM policy templates and configurations
 ├── common/
 │   ├── vamsAppFeatures.ts    # Feature switch constants and enums (core)
 │   ├── addonAppFeatures.ts   # Add-on feature switches (ADDON_APP_FEATURES)
-│   ├── addonResourceParamKeys.ts   # Add-on SSM resource-name keys (shipped empty)
+│   ├── addonResourceParamKeys.ts   # Add-on SSM resource-name keys (mirrored in backend/common/addonResourceNames.py)
 │   ├── customAppFeatures.ts  # FORK EXTENSION POINT: custom feature switches (shipped empty)
 │   └── customResourceParamKeys.ts  # FORK EXTENSION POINT: custom SSM resource-name keys (shipped empty)
 ├── lib/
 │   ├── core-stack.ts         # Main orchestration stack
-│   ├── cf-waf-stack.ts       # Web Application Firewall stack
+│   ├── cf-waf-stack.ts       # Web Application Firewall stack; buildWafStacks(app, config, apiOriginVerifyStack), called by bin/infra.ts
 │   ├── apiOriginVerify-stack.ts  # CloudFront deployments: API origin verification secret (deploys before the WAF and core stacks)
 │   ├── crossRegionBucketNotifications-stack.ts  # Per-Region S3 notification topics (+ regional CMK) for asset buckets outside the deployment Region
 │   ├── nestedStacks/         # Modular nested stack implementations
@@ -40,6 +44,10 @@ infra/
 │   │   ├── pipelines/        # Use-case specific processing pipelines
 │   │   ├── vpc/              # VPC, subnets, endpoints
 │   │   ├── locationService/  # AWS Location Services integration
+│   │   ├── addon/            # AddonBuilder, the add-on lane files (addonCsp, addonDefaultRoutes, addonDefaultConstraints,
+│   │   │                     #   addonVpcEndpoints, addonWafExclusions, addonStackHelpers) and one directory per add-on:
+│   │   │                     #   garnetFramework/, physna/, edhWorkstations/ (its own CLAUDE.md + ADDON_EDH_WORKSTATIONS.md)
+│   │   ├── custom/           # FORK EXTENSION POINT: CustomBuilder + customResources.ts (shipped empty)
 │   │   └── featureEnabled/   # Dynamic feature switch management
 │   ├── constructs/           # Reusable CDK constructs
 │   ├── helper/               # Service helpers and utility functions
@@ -64,16 +72,19 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 66 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 72 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
-  |     |    and the pipeline / pipeline template / workflow / workflow trigger / execution routes)
+  |     |    the pipeline / pipeline template / workflow / workflow trigger / execution routes,
+  |     |    and the compliance routes + trigger / workflow-callback Lambdas)
   |     |                                                    -> storage, resourceNames, ApiBuilder
   |     +-- SearchBuilder (OpenSearch)                       -> storage, resourceNames
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
   |     |    (its vamsSchema registration custom resources invoke an ApiBuilder2 Lambda)
-  |     +-- AddonBuilder (Garnet, Physna Sync)               -> storage, resourceNames
+  |     +-- AddonBuilder (one nested stack per enabled add-on) -> storage, resourceNames, ApiBuilder
+  |     |    (ApiBuilder only while an add-on that mints temporary session keys through
+  |     |     apiKeyServiceFunction is on: usesApiKeyService)
   |     +-- CustomBuilder (fork extension point)             -> storage, resourceNames
   |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)
   |     |                                                    -> storage, AuthBuilder, ApiBuilder,
@@ -90,9 +101,29 @@ CoreVAMSStack (root)
 
 ### **Fork Extension Points (core + add-on + custom)**
 
-An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream functionality goes in the add-on lane when it integrates an external solution, depends on an AWS service outside the tier-1 set, or implements a use-case lens for an industry; viewers and pipelines (with the pipeline system that runs them) keep their own lanes, and a fork uses the custom lane. The tier-1 AWS services are Amazon S3, DynamoDB, API Gateway, Lambda, IAM, Cognito, CloudFront, Application Load Balancer, Route 53, Amazon VPC and its endpoints, CloudFormation, AWS KMS, Step Functions, EventBridge, SQS, SNS, Secrets Manager, Systems Manager Parameter Store, CloudWatch, CloudTrail, AWS WAF and Certificate Manager. Search (Amazon OpenSearch Service) and the maps (Amazon Location Service) are core today and move to the add-on lane later, and the AWS Deadline Cloud pipeline execution type (`app.pipelines.deadlineCloudExecutionTypeEnabled`) stays core as part of the optional pipeline system; no new feature that needs one of those services joins them in core. Every add-on has an on/off toggle in configuration and is off by default. Definition, exemptions and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
-Every aggregated list is composed from a core part, an add-on part beside it (`lib/nestedStacks/addon/addonCsp.ts`, `addonDefaultRoutes.ts`, `addonStackHelpers.ts`; `common/addonAppFeatures.ts` (`ADDON_APP_FEATURES`, `PHYSNA_ADDON`, pushed by `AddonBuilderNestedStack.enabledFeatures`, which refuses a core value); `common/addonResourceParamKeys.ts`, mirrored in `backend/backend/common/addonResourceNames.py` and published with `publishAddonResourceName()`) and a fork-owned custom part shipped empty. Merge order is core, add-on, custom; `infra/test/addon/appFeatureLanes.test.ts` keeps the three feature enums disjoint. Core files name no add-on (`infra/test/addon/addonCoreSeparation.test.ts`). A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts` (`buildCustomResources(scope, props)`), called inside the `CustomBuilder` stack with `config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets` and the shared `registry`. Its Lambdas use the standard builder pattern and five security calls; its routes go through `attachFunctionToApi` and cannot be anonymous, nor make an earlier route anonymous (synth fails; `RouteRegistry` stores frozen descriptors); it publishes resource names with `publishCustomResourceName()` (a core key or an add-on key throws; both publish helpers share `nestedStacks/resourceNames/laneResourceNames.ts`), declared in `common/customResourceParamKeys.ts` and mirrored in `backend/backend/custom/customResourceNames.py`, and those parameters hold names only (a secret goes in a `secretsmanager.Secret` with the KMS key imported by ARN); it returns `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`; a `VAMS_APP_FEATURES` or `ADDON_APP_FEATURES` value fails synth); and it reads fork settings with `loadCustomConfig()` from `config/custom/customConfig.json`, which is outside `ConfigPublic`. `infra/test/api/apiRouteBackendCdkParity.test.ts` synthesizes with the committed `customConfig.json`, so every custom route must be registered under it. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+Every aggregated list is composed from a core part, an add-on part beside it (the add-on lanes in the table below; `ADDON_APP_FEATURES` is pushed by `AddonBuilderNestedStack.enabledFeatures`, which refuses a core value, and add-on resource-name keys are mirrored in `backend/backend/common/addonResourceNames.py` and published with `publishAddonResourceName()`) and a fork-owned custom part shipped empty. The WAF rule exclusions (`addonWafExclusions.ts`) are the exception and have no custom part: a fork changes its web ACLs in `config/policy/wafPolicyConfig.json`. Merge order is core, add-on, custom; `infra/test/addon/appFeatureLanes.test.ts` keeps the three feature enums disjoint. Core files name no add-on (`infra/test/addon/addonCoreSeparation.test.ts` scans each core aggregator beside its add-on lane file, the core files behind a generic add-on seam, and the few core files with no lane, which may hold only their allow-listed add-on lines, such as a Tailwind content glob). Permission object types for fork or add-on entities are backend constants, not CDK, and a fork type gets **no seeded constraint**: never extend `dynamodb-authdefaults-admin-construct.ts` or `dynamodb-authdefaults-ro-construct.ts` for one. The one exception is an add-on, which can seed default constraints for its own object types while it is enabled, through `lib/nestedStacks/addon/addonDefaultConstraints.ts`; the constructs append those after their core items, so the index-based ids of the core custom resources do not move. A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts` (`buildCustomResources(scope, props)`), called inside the `CustomBuilder` stack with `config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets` and the shared `registry`. Its Lambdas use the standard builder pattern and five security calls; its routes go through `attachFunctionToApi` and cannot be anonymous, nor make an earlier route anonymous (synth fails; `RouteRegistry` stores frozen descriptors); it publishes resource names with `publishCustomResourceName()` (a core key or an add-on key throws; both publish helpers share `nestedStacks/resourceNames/laneResourceNames.ts`), declared in `common/customResourceParamKeys.ts` and mirrored in `backend/backend/custom/customResourceNames.py`, and those parameters hold names only (a secret goes in a `secretsmanager.Secret` with the KMS key imported by ARN); it returns `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`; a `VAMS_APP_FEATURES` or `ADDON_APP_FEATURES` value fails synth); and it reads fork settings with `loadCustomConfig()` from `config/custom/customConfig.json`, which is outside `ConfigPublic`. `infra/test/api/apiRouteBackendCdkParity.test.ts` synthesizes with the committed `customConfig.json`, so every custom route must be registered under it. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
+**Add-on lanes.** Each core splice below calls one add-on function and names no add-on; an add-on adds its entries in the lane file, and its own stack and steering live under `lib/nestedStacks/addon/<addon>/` (its `CLAUDE.md`) and in `.kiro/steering/ADDON_<ADDON>.md`.
+
+| Lane                                        | Add-on file                                                                                                                 | Core side                                                                                                                                                                                                             |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Feature switches                            | `common/addonAppFeatures.ts` (`ADDON_APP_FEATURES`)                                                                         | `AddonBuilderNestedStack.enabledFeatures`, pushed by `core-stack.ts`, which also sets them, comma-separated, as `ADDON_FEATURES_ENABLED` on the route and constraint listing Lambdas (`addonFeatureListingFunctions`) |
+| Resource-name keys                          | `common/addonResourceParamKeys.ts`, published with `publishAddonResourceName()` (`addonStackHelpers.ts`)                    | `common/resourceParamKeys.ts`, through `nestedStacks/resourceNames/laneResourceNames.ts` (mirror test: `test/storage/resourceNamesMirror.test.ts`)                                                                    |
+| Configuration                               | `config/addon/addonConfig.ts` (`ConfigAddonLane`) + one module per add-on                                                   | `config.ts`: the `ConfigAddonLane` join and four calls in `getConfig()`                                                                                                                                               |
+| CSP origins                                 | `lib/nestedStacks/addon/addonCsp.ts` (`addonCspSources()`)                                                                  | `lib/helper/security.ts`                                                                                                                                                                                              |
+| Read-only role default routes               | `lib/nestedStacks/addon/addonDefaultRoutes.ts` (`addonReadOnlyApiRouteCriteria()`, `addonReadOnlyWebRouteCriteria()`)       | `dynamodb-authdefaults-ro-construct.ts`                                                                                                                                                                               |
+| Default constraints for add-on object types | `lib/nestedStacks/addon/addonDefaultConstraints.ts` (`addonAdminDefaultConstraints()`, `addonReadOnlyDefaultConstraints()`) | `dynamodb-authdefaults-admin-construct.ts`, `dynamodb-authdefaults-ro-construct.ts` (appended after the core items)                                                                                                   |
+| VPC interface endpoints and private subnets | `lib/nestedStacks/addon/addonVpcEndpoints.ts` (`addonInterfaceEndpoints()`, `addonNeedsPrivateSubnets()`)                   | `vpcBuilder-nestedStack.ts`: one loop after the core endpoint blocks, skipping an id a core block already created, and one term in the condition that adds the public and private subnet groups                       |
+| AWS WAF rule exclusions                     | `lib/nestedStacks/addon/addonWafExclusions.ts` (`addonWafRuleExclusions()`)                                                 | `buildWafStacks()` in `lib/cf-waf-stack.ts`, which applies them in both web ACLs                                                                                                                                      |
+| Artefacts bucket uploads                    | the add-on stack's own `BucketDeployment` under `addon/<addon>/` (`prune: false`)                                           | `storageBuilder-nestedStack.ts`: the core artefacts upload prunes everything but `vamsSchema/*` and `addon/*` (`test/storage/artefactsBucketPrune.test.ts`)                                                           |
+| Core-test hooks                             | `test/addon/support/addonTestHooks.ts` (`enableRouteContributingAddons()`)                                                  | `test/api/apiRouteBackendCdkParity.test.ts`                                                                                                                                                                           |
+| Cross-stack inputs                          | `AddonBuilderNestedStackProps` (`apiKeyServiceFunction`, `registry`, ...)                                                   | `core-stack.ts`, with `addStackDependency()` on each producing stack (Rule 9); on ApiBuilder only while an enabled add-on invokes `apiKeyServiceFunction` (`usesApiKeyService`)                                       |
+
+An add-on stack registers its routes with `attachFunctionToApi(this, fn, { routePath, method, registry: props.registry })`, the registry `AddonBuilder` passes it, only while its add-on is enabled.
+
+A new `ADDON_APP_FEATURES` value is mirrored in the backend (`backend/backend/common/addonFeatures.py`, held to the enum by `backend/tests/common/test_addon_features.py`), the CLI (`vamscli/addon_constants.py`, `tests/test_constants_contract.py`) and the web app (`web/src/addons/addonFeatures.ts`, `addonFeatures.test.ts`). `core-stack.ts` passes the enabled ones, comma-separated (empty with no add-on), as `ADDON_FEATURES_ENABLED` to the route and constraint listing Lambdas, so a disabled add-on's routes and object types are neither listed nor checked (`test/addon/addonFeatureListings.test.ts`).
 
 ### **Cross-Stack Shared Interfaces**
 
@@ -133,7 +164,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 48 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 54 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -185,11 +216,19 @@ interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table; // PK tagSchemaId, SK pipelineDatabaseId:pipelineId:templateId; GSI TagSchemaByTemplateGSI
         workflowStorageTableV2: dynamodb.Table; // PK databaseId, SK workflowId; GSIs WorkflowsByDatabaseGSI / WorkflowsByCategoryGSI / WorkflowsByDateGSI
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
+        workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; GSI WorkflowExecutionLocksByHolderGSI (PK workflowExecutionId, KEYS_ONLY); one row per concurrency lock (perAsset / perInputFile / perInputFileVersion) a running execution holds
+
+        // Compliance tables
+        complianceSchemaStorageTable: dynamodb.Table; // PK schemaName, SK internalVersion; GSI DatabaseIdIndex
+        complianceAssetStateStorageTable: dynamodb.Table; // PK databaseId, SK assetId; GSIs SchemaNameIndex, ComplianceStateIndex (PK complianceState, SK databaseId — paged quarantine list, overview state filter/counts), DatabaseAssetNameIndex (PK databaseId, SK assetNameSort — overview sort by name)
+        complianceEvaluationStorageTable: dynamodb.Table; // PK evaluationId; GSIs AssetIndex, ExecutionIdIndex (PK executionId — pipeline-rule workflow callback), PipelineRuleWaitIndex (PK waitingWorkflowKey, SK waitingSince; sparse — pipeline rules waiting for a running execution of their workflow)
+        complianceCascadeStorageTable: dynamodb.Table; // PK cascadeId (also per-parent pendingCascadeMarker:<db>:<asset> rows, no state); GSI StateIndex
+        complianceAuditStorageTable: dynamodb.Table; // PK entryId; GSIs AssetIndex, EventTypeIndex, AuditByDateGSI (PK allListPartition — unfiltered newest-first listing), DatabaseIndex (PK databaseId, SK timestamp — one database's entries; the listing by database and the merged listing of a caller who may read only some databases)
     };
 }
 ```
 
-The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists.
+The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables and on the compliance audit table are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists. For the audit table every row is built by `common/compliance/auditRecord.py::build_audit_item`, which sets it; a guard test fails any `put_item` into that table that bypasses the builder.
 
 **`authResources`** (defined in `authBuilder-nestedStack.ts`):
 
@@ -219,7 +258,7 @@ Workflow executions use a workflow-keyed data model spread across 11 DynamoDB ta
 -   `pipelineExecutionOutputMetadataStorageTable` — PK `pipelineExecutionId`, SK `targetFilePath:metadataKey`.
 -   `pipelineExecutionOutputResultsStorageTable` — PK `pipelineExecutionId`, SK `relativeFilePath`.
 -   `pipelineExecutionLogsStorageTable` — PK `pipelineExecutionId`, SK `logType`.
--   `workflowExecutionInputsStorageTable` — PK `workflowExecutionId`, SK `databaseId:assetId:inputAssetFileKey`; GSI `WorkflowExecInputsByAssetGSI` (PK `databaseId:assetId`, SK `executionStartDate`) backs the asset-scoped execution listing.
+-   `workflowExecutionInputsStorageTable` — PK `workflowExecutionId`, SK `databaseId:assetId:inputAssetFileKey` (plus `#versionId` when the run resolved a version, so each file version is its own row; older rows carry no suffix); GSI `WorkflowExecInputsByAssetGSI` (PK `databaseId:assetId`, SK `executionStartDate`) backs the asset-scoped execution listing.
 -   `workflowExecutionConfigurationStorageTable` — PK `workflowExecutionId`, SK `recordType`; GSI `WorkflowExecConfigByOutputAssetGSI` (PK `outputDatabaseId:outputAssetId`, SK `executionStartDate`; sparse — the partition attribute is written only for an asset-output run) backs the OUTPUT half of the asset-scoped execution listing. An asset's history is the union of this and `WorkflowExecInputsByAssetGSI`; every write path (including data migration) must set the attribute or those executions are absent from the index entirely.
 
 The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration read source.
@@ -334,7 +373,7 @@ Six rules for writing one:
    `Template.fromStack(root)` sees ~17 resources out of ~600.
 4. **Flatten `Fn::Join` before matching a property value.** A raw substring search finds the literal prefix
    and then a token boundary, so the assertion passes while checking nothing. Use `SynthResult.flatten()`.
-5. **Enabling `useSplatToolbox` requires `useCodeBuild: true`.** Splat is the only one of the sixteen
+5. **Enabling `useSplatToolbox` requires `useCodeBuild: true`.** Splat is the only one of the seventeen
    pipeline Dockerfiles that is **not in the repository** (recompute as
    `git ls-files backendPipelines | grep -c Dockerfile` tracked files plus the one gitignored splat file;
    an on-disk `find` over-counts whenever a sync has left the splat file behind) —
@@ -353,7 +392,7 @@ Six rules for writing one:
    alone, and only the image source moves.
 6. **The worker pool is bounded in `jest.config.js`** (`maxWorkers`, lower again under `CI`), with
    `workerIdleMemoryLimit` recycling a worker whose heap grew across files. Jest's default is one worker per
-   core minus one, and 44 files synthesize the whole app, so a 32-core host ran 31 concurrent full synths: one
+   core minus one, and 72 files synthesize the whole app, so a 32-core host ran 31 concurrent full synths: one
    file measured at 66 s alone took 768 s in such a run, and three full runs with no source change gave 14, 0
    and 1 failures. Pinned by `test/support/testAppAssetStaging.test.ts`. A red full run on a heavy suite that
    passes alone was this contention, not a regression -- re-run the named suite alone before attributing it.
@@ -362,6 +401,21 @@ The harness resets `s3AssetBucketRecords` between synths — it is a module-leve
 so a second synth in the same process otherwise fails with `There is already a Construct with name
 'bucketSyncCreated--<previous stack name>--...'`. **Any new module-level registry must be reset there too**,
 or the second template silently inherits the first one's state.
+
+**Each configuration is synthesized once per `jest` run** (`infra/test/support/synthCache.ts`): a per-run
+directory shared by all workers holds each result, keyed by a hash of the template name, the WAF ARNs and the
+full configuration after `mutate`. The key covers the configuration only. A file that mocks any `fs` function
+never shares (detected automatically); a file that mocks or spies on anything else the synth reads, or needs a
+fresh synth in its own process, passes `sharedCache: false`.
+`VAMS_SYNTH_CACHE=off` disables it; `VAMS_SYNTH_CACHE=verify` re-synthesizes on every hit and fails on a
+difference. A once-per-stack guard in `lib/` keys on the `Stack` object (a `WeakSet<Stack>`), never on
+`node.addr` or the stack name, which a second app in the same process repeats. A test that compares two
+synths resource by resource compares a nested stack resource's `Parameters` by name and value, not by key
+order: that order follows the process's CDK token counter, so it moves with the synths that ran before
+(`comparable()` in `infra/test/addon/edh/edhRootKeySync.test.ts`).
+
+**Jest compiles transpile-only** (`isolatedModules` in `infra/tsconfig.json`), so a type error does not fail
+`npm test`. Run `npm run typecheck` in `infra/` before pushing; the CI `infra-typecheck` job runs it.
 
 #### **Step 7: Documentation**
 
@@ -411,6 +465,9 @@ export interface ConfigPublic {
         // as the executionService log-read resources (trailing * = prefix); default
         // DEFAULT_EXECUTION_LOG_READ_PREFIXES; validateExecutionLogReadPrefixes() rejects *, / and
         // anything outside /aws/
+        // auditLogging.recordReads: boolean; absent block or key -> true (resolveAuditLoggingConfig),
+        // a non-boolean throws a Configuration Error; globalLambdaEnvironmentsAndPermissions passes it
+        // to every Lambda as AUDIT_RECORD_READS, and the backend records reads unless it is "false"
     };
 }
 
@@ -424,6 +481,8 @@ const featureEnabled = true; // BAD - should be configurable
 ```
 
 #### **Rule 2: Feature Switches Must Be Defined**
+
+New features get a switch in `vamsAppFeatures.ts` and are gated by config in the core stack. The one accepted carve-out (root `CLAUDE.md` Rule 6): a feature that is inert until an operator configures it at runtime — none of its behavior applies until a record is written through its own API (an event-driven Lambda of the feature may run per event and no-op without that record, or keep the feature's own change bookkeeping current at no more than one write per change, so that bookkeeping is already correct when the record is written), nothing beyond idle storage, those invocations and that bookkeeping is billed, the core requests the feature observes cost exactly what they cost without it, and access is governed by Casbin like every other route — may deploy without a switch. Compliance is the example: its tables, Lambdas, the trigger's queue and `/compliance/*` routes always deploy; the trigger consumes the indexer topics through its own queue, records each metadata or link change on the asset row (one conditional UpdateItem per change, in every database, bound or not), removes a permanently deleted asset's compliance record, registers a new asset of a bound database, and evaluates nothing without a binding; the workflow callback no-ops without one. The metadata and link requests themselves do no compliance work, so no compliance behavior applies until a schema is bound. A feature that does work on its own (a poller, a scheduled job, an event consumer that acts on every event) does not qualify.
 
 ```typescript
 // ✅ CORRECT - Add to vamsAppFeatures.ts
@@ -439,7 +498,7 @@ if (props.config.app.newFeature.enabled) {
 }
 ```
 
-In a fork, the switch goes in `infra/common/customAppFeatures.ts` (`CUSTOM_APP_FEATURES`) and is returned from `buildCustomResources()` (`lib/nestedStacks/custom/customResources.ts`), gated on the fork's settings in `infra/config/custom/customConfig.json`. `vamsAppFeatures.ts` stays core-owned and add-on switches go in `addonAppFeatures.ts`; a core or add-on value returned from the custom stack fails synth. Permission object types for fork or add-on entities are backend constants (`backend/backend/custom/customConstants.py`, `common/addonConstants.py`) with no seeded constraint: never extend the `dynamodb-authdefaults-*` constructs for one.
+In a fork, the switch goes in `infra/common/customAppFeatures.ts` (`CUSTOM_APP_FEATURES`) and is returned from `buildCustomResources()` (`lib/nestedStacks/custom/customResources.ts`), gated on the fork's settings in `infra/config/custom/customConfig.json`. `vamsAppFeatures.ts` stays core-owned and add-on switches go in `addonAppFeatures.ts`; a core or add-on value returned from the custom stack fails synth. Permission object types for fork or add-on entities are backend constants (`backend/backend/custom/customConstants.py`, `common/addonConstants.py`); a fork type gets no seeded constraint: never extend the `dynamodb-authdefaults-*` constructs for one. An add-on may seed constraints for its own types while it is enabled, through `lib/nestedStacks/addon/addonDefaultConstraints.ts` (see the add-on lanes table).
 
 ### **Nested Stack Implementation Standards**
 
@@ -511,6 +570,37 @@ const newFeatureArn = ServiceHelper.getNewFeatureArn();
 
 ### **Security and Compliance Standards**
 
+#### **IAM Role Aspects (Role Names and Permissions Boundary)**
+
+`IamRoleTransform` (`infra/lib/aspects/iam-role-transform.aspect.ts`, configured from `cdk.json` `environments.aws`) overrides `RoleName` on every core-stack role, nested stacks included; changing the name formula replaces every role. The REST API Deployment's logical id includes the authorizer invoke role's name (`addAuthorizerInvokeRoleToDeployment` in `rest-api-gateway-construct.ts`), so a rename also moves the stage to a new deployment that names the new role (#1210; tests: `infra/test/api/deploymentAuthorizerInvokeRole.test.ts`, `infra/test/api/t1RestApiDeploymentLogicalId.test.ts`). When `PermissionBoundaryArn` is non-empty, `IamRoleTransform.applyPermissionsBoundary(app, arn)` sets `PermissionsBoundary` on every role in the app without touching names, and a validation hook also bounds the roles CDK adds during prepare (cross-Region export reader/writer providers). An unbounded role left in a nested stack fails synth. An empty ARN leaves `PermissionsBoundary` untouched; never set it to `NO_VALUE`. `getConfig()` validates the ARN shape and partition (`validatePermissionBoundaryArn`). Tests: `infra/test/security/iamPermissionsBoundary.test.ts`.
+
+#### **CloudWatch Logs Resource Policies: Log-Group Scoped Only**
+
+An account holds at most 10 account-level CloudWatch Logs resource policies per Region (hard limit), so one per stack caps how many VAMS deployments fit in a Region (#1266). `aws-events-targets` `CloudWatchLogGroup`, `logs.LogGroup.addToResourcePolicy()`, `logs.ResourcePolicy` and a `putResourcePolicy` custom resource each create one; do not use them. Grant the service through the log group's own policy (mirrors `infra/CLAUDE.md` anti-pattern 14):
+
+```typescript
+// ✅ CORRECT - log-group-scoped policy; the log group name is a literal, not a Ref to itself (circular)
+(logGroup.node.defaultChild as logs.CfnLogGroup).resourcePolicyDocument = new iam.PolicyDocument({
+    statements: [
+        new iam.PolicyStatement({
+            principals: [Service("EVENTS").Principal],
+            actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+            resources: [`${logGroupArn}:*`],
+            conditions: {
+                StringEquals: { "aws:SourceAccount": stack.account },
+                ArnLike: { "aws:SourceArn": ruleArnPatternOnThisDeploymentsBus },
+            },
+        }),
+    ],
+});
+rule.addTarget({ bind: () => ({ arn: logGroupArn }) });
+
+// ❌ INCORRECT - adds a Custom::CloudwatchLogResourcePolicy (account-level) per stack
+rule.addTarget(new targets.CloudWatchLogGroup(logGroup));
+```
+
+The worked example is the orchestration bus audit rule in `storageBuilder-nestedStack.ts`, pinned by `infra/test/storage/orchestrationBusAuditLogPolicy.test.ts`. The CDK OpenSearch `Domain` still creates one account-level policy per provisioned domain for its logs.
+
 #### **Rule 6: CDK Nag Compliance Required**
 
 ```typescript
@@ -574,7 +664,7 @@ imported by ARN (Amazon ECR creates its own grants on it, so the build and pull 
 Given `KMS` and no key, CDK creates no key for a repository, which then uses the AWS managed `aws/ecr` key
 instead of the VAMS key. A repository's encryption is immutable, so changing it replaces the repository, and
 AWS CloudFormation cannot replace an explicitly named resource under the same name: a custom `repositoryName`
-must change with the encryption (the coordinate transform repository adds `-kms`), and a CodeBuild build
+must change with the encryption (the coordinate transform, Video SOP/BOM and CAD STEP agent repositories add `-kms`), and a CodeBuild build
 trigger that does not wait for the image carries the repository URI as a property, so the replacement re-fires
 the build into the new repository.
 
@@ -622,7 +712,7 @@ const secret = new secretsmanager.Secret(this, "MySecret", {
 });
 ```
 
-Three traps, each of which passes `cdk synth` and fails later:
+Four traps, each of which passes `cdk synth` and fails later:
 
 1. **`AWS::EFS::FileSystem` `KmsKeyId` requires REPLACEMENT.** Adding or changing it on an existing file system makes
    AWS CloudFormation create an empty replacement and delete the original, which VAMS declares
@@ -636,11 +726,24 @@ Three traps, each of which passes `cdk synth` and fails later:
    CloudTrail log group is the case in the tree and stays on the AWS-managed key, along with the VPC flow
    log group (its stack precedes storage) and the provisioned OpenSearch domain log groups (created by the
    service, not VAMS).
+4. **A policy attached to a role from outside it does not order a custom resource that runs as the role.** The
+   provider function depends only on the role and its default policy (where `addToRolePolicy` grants land), so a
+   separate `iam.Policy` attached with `role.attachInlinePolicy()` is created in parallel, and on the update that
+   turns the CMK on the custom resource fails with `kms:Decrypt` access denied. Keep a reference to the policy and
+   call `node.addDependency(policy)` on each custom resource (or the construct holding them), as the auth-defaults
+   and metadata-schema seeds do.
 
 Verify before deploying: a cycle is invisible to `cdk synth` and appears only at changeset creation. Synth
 and confirm the storage nested stack takes no parameter fed from another nested stack's output. Regression
-coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`, and `infra/test/pipelines/codeBuildEcrEncryption.test.ts`
-for the CodeBuild repositories and their CMK flip.
+coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`, `infra/test/pipelines/codeBuildEcrEncryption.test.ts`
+for the CodeBuild repositories and their CMK flip, and `infra/test/security/customResourceKmsGrantOrdering.test.ts`
+for the order of custom resources and their roles' KMS policies.
+
+A Lambda's DynamoDB grants follow the tables its handler (and the shared modules it imports) resolves through `ResourceKeys`; `infra/test/security/complianceLambdaTableGrants.test.ts` derives those needs from the compliance handler source and asserts the synthesized role policy covers each table (read, plus the single-item write actions the module's calls use, so the compliance trigger's change stamp is held to `UpdateItem` on the asset table), so a missing grant fails the suite instead of surfacing as an `AccessDeniedException` 500 in production. The three compliance Lambdas that run evaluations (`complianceEvaluateService`, `complianceTrigger`, `complianceCascadeExecutor`) share `grantEvaluationEngineReads` in `complianceFunctions.ts`: read on the asset, asset-links, asset-file-metadata, file-attribute, asset-links-metadata, asset-file-versions, metadata-schema, workflow, pipeline, pipeline-template and asset-buckets tables, plus every asset bucket. The metadata service and the two asset-link Lambdas (`createAssetLink`, `assetLinksService`) hold `dynamodb:UpdateItem` alone on the asset table (`table.grant(fun, "dynamodb:UpdateItem")`, not `grantWriteData`) for the change stamp a metadata write or link change records on the asset row; `infra/test/security/handlerGrantScopingWave.test.ts` pins that no other write action reaches the asset table from them. The test also pins the deleted-database move's grants (D115): `grantRetirementRecordRead` gives the audit, cascade, binding and schema services `GetItem` on the evaluation table only under `dynamodb:LeadingKeys` `databaseRetirement#*` (`RETIREMENT_RECORD_READERS`), plus `BatchGetItem` on the same keys for the audit, cascade and schema services, whose cross-database listings read a page's records together (`batchRead`, `RETIREMENT_RECORD_BATCH_READERS`, D133); `databaseService` (built in `databaseFunctions.ts`) and the trigger hold the move's writes (`RETIREMENT_MOVE_WRITES`) and `sqs:SendMessage` on the compliance trigger queue with `COMPLIANCE_TRIGGER_QUEUE_URL`; the binding service sends on the same queue (D118's queued evaluations, and the first message of a database binding change applied in the background, D161) and holds `GetItem`, `PutItem` and `UpdateItem` on the evaluation table only under `dynamodb:LeadingKeys` `bindingApply#*` for that change's apply record (`grantBindingApplyRecordWrite`, `BINDING_APPLY_RECORD_WRITERS`); and the schema service reads the workflow and pipeline V2 tables with `GetItem` only (`GET_ITEM_ONLY_READS`, the pipeline-rule save check). Because `databaseService` now references the trigger queue, the queue's URL and ARN cross from the compliance builder into the API stack that builds `databaseService`; keep that in mind for `apiStackCeilings.test.ts`. The compliance trigger opts out of Lambda recursive-loop detection in the partitions that have it (`complianceTriggerRecursiveLoop`: `RecursiveLoop: Allow` in `aws` and `aws-eusc`, omitted in GovCloud; `test/storage/bucketSyncRecursiveLoop.test.ts`), because a deleted database's compliance move and a database binding change applied in the background (D161) continue themselves on its own queue for as many runs as the database's size needs, more than the detection's chain limit of about 16, which would otherwise stop the invocation and dead-letter its whole batch.
+
+The compliance trigger consumes the asset and file indexer topics through its own SQS queue (`ComplianceTriggerQueue` + `ComplianceTriggerDLQ`, built with both topic subscriptions in the storage stack by `buildComplianceTriggerQueue` so they exist before the API stacks update, message-body filter policies on leaf paths evaluated over `test/platform/fixtures/indexerTopicMessages.json`, batch 10, `maxConcurrency` 5, `reportBatchItemFailures`), built in `complianceFunctions.ts` with the GovCloud mapping created directly without Tags; `infra/test/platform/complianceTriggerQueue.test.ts` pins its settings and grants, and `complianceTriggerQueueNoOpenSearch.test.ts` its event source and the stream relays in a deployment without OpenSearch. The metadata service and the asset-link Lambdas hold read access only on the asset table: the trigger records metadata and link changes from the indexer events.
+
+The compliance jobs that continue themselves (a deleted database's compliance move, a database binding change applied in the background) run in `complianceJobs` from `ComplianceJobQueue` + `ComplianceJobDLQ` (`buildComplianceJobQueue`, in the storage stack beside the trigger queue; batch 1, `maxConcurrency` 2, visibility 6 x the 5-minute timeout, 3 receives, no topic subscription). Only that Lambda sets `RecursiveLoop: Allow` (`complianceJobRecursiveLoop`, `aws` and `aws-eusc` only); each job stops itself at a run limit derived from its size instead, and the trigger keeps the detection on. Senders: the binding service, the database service and the job Lambda; the trigger sends nothing and drops a job message found on its own queue; `infra/test/platform/complianceJobQueue.test.ts` pins the queues, the event source and every role's SQS grants.
 
 ### **Dependency Management Standards**
 
@@ -841,8 +944,9 @@ A container job role usually reads every asset bucket, so a path written inside 
 
 -   Accept only relative paths that, normalised against the referring file's directory, stay inside the input's asset prefix (the key up to the `assetId` segment; the run's output files folder for a file an earlier step wrote; else the input's own directory — the case for an asset on a `bucketExistingKey` folder). Reject absolute paths, `..` escapes, any URI scheme, control characters and values over 1,024 characters. Percent-decode only formats whose references are URIs (glTF), and check the decoded value.
 -   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
--   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference.
+-   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference. Report what was skipped: one WARNING summary listing each skipped file with its reason (quoted with `repr`), grouped by what the loss costs (geometry layers from a USD layer's composition arcs to USD layer files, never from layer or prim metadata such as an `assetInfo` `identifier` or `customLayerData`, which stay unreported; data files, value clips included; textures and other files; read only `asset`-typed attributes to classify, never geometry samples), and a completion message that says the output is incomplete (`dependencies.IncompletePreview`). When the run has a results folder, also write one small, bounded result document there (`preview-incomplete.json`: the message, the counts by kind, at most 100 entries with a `truncated` flag, asset-relative paths, and for a reference refused as outside the asset only its reason and at most a sanitized base file name, never a bucket, host or folder), so the run's Output Results show it; a complete run writes none, and a failed write is a WARNING, never a failed run.
 -   When a third-party tool opens the referenced files itself (splat-transform reads an `.lcc2` scene's chunk files by the names its description lists), check every name the description lists before the tool starts, and refuse the conversion when one would leave the work directory or a needed file is missing. Do not rely on the fetch having skipped it: the tool would still open the path. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/format_handlers/splat_handler.prepare_lcc2` is the worked example.
+-   Ask only for the files the loader or tool reads, and report only what it uses: an `.lcc` scene's `shcoef.bin` only when splat-transform reads it (`format_handlers/lcc_meta.lcc_data_files`, the same test as its reader) and never its `environment.bin`; an FBX's texture names are fetched but never reported, since the FBX loader samples no textures (`dependencies.KIND_UNSAMPLED_TEXTURE`). Load the fetched files through a resolver confined to the same local root (`format_handlers/mesh_handler.asset_resolver` for glTF and OBJ), not one rooted at the input's folder: otherwise a `../` reference the fetch accepted is refused by the loader, while one outside the asset must still be refused.
 
 ### **Parsing XML From Uploaded Files**
 
@@ -850,11 +954,12 @@ An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expand
 
 ### **Sizing a Container's Work to Its Task**
 
-A Batch/Fargate container reads its limits from its own cgroup rather than from a tier name or a constant, so it stays inside whichever job size started it. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
+A Batch/Fargate container sizes its work to the limits of the task it runs in rather than to a tier name or a constant, so it stays inside whichever job size started it. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
 
--   Memory from `/sys/fs/cgroup/memory.max` (v1 `memory/memory.limit_in_bytes` fallback; "max" or a near-2^63 value means unlimited); CPUs from the scheduler affinity capped by `cpu.max` (v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`). `os.cpu_count()` alone reports the host's CPUs inside a quota.
+-   Memory is the smallest of three bounds, each read when it can be: the cgroup limit (`/sys/fs/cgroup/memory.max`, v1 `memory/memory.limit_in_bytes`; "max" or a near-2^63 value means unlimited), the task memory the orchestration passes, and physical memory. The cgroup alone is not enough: on AWS Fargate the container's cgroup sets no limit and physical memory is the micro-VM's, larger than the task (31 GiB read on a 16 GiB task), so every memory-derived budget comes out too large. The thumbnail state machine therefore passes each tier's memory override as `VAMS_TASK_MEMORY_MIB` beside `VAMS_COMPUTE_TIER` (`resources.task_memory_bytes`). CPUs come from the scheduler affinity capped by `cpu.max` (v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`). `os.cpu_count()` alone reports the host's CPUs inside a quota.
 -   Derive work budgets (points, triangles) from both, and set `LP_NUM_THREADS` (Mesa llvmpipe) to the CPU count before the first GL context exists.
 -   Bound what a library allocates for the work, not only what it returns. VTK's `vtkQuadricClustering` allocates its grid densely (88 bytes per bin, occupied or not) and counts the bins in a C `int`, so a grid sized from the triangle budget alone overflows at the shipping budgets and aborts the process with an uncaught `std::bad_alloc` that no `except MemoryError` sees. `geometry_budget.py` also bounds the grid by the task's memory (`cluster_bin_limit`) and keeps the grid arithmetic in pure functions a test checks at each tier's budget without allocating.
+-   Charge a path's own copies to that path. The renderer draws a mesh coloured per face from a copy with three corners per triangle, which measured up to 475 bytes per triangle at render against the 200 `BYTES_PER_TRIANGLE` charges. Measure such a cost on every task shape the configuration allows, not only the default: it was highest on 2 vCPU. `geometry_budget.apply_budgets` therefore holds such a mesh to `resources.cell_colour_triangle_limit` (the triangles that keep the measured peak within 60% of memory). Raising the shared constant instead would cut the budget of every mesh.
 -   Bound how far an instancing format expands before any budget applies. A 3MF component, a COLLADA `instance_node`, a STEP assembly component or an FBX model connected to several parents may place the same child several times per level, so a few-KB file describes 2^depth placements and a depth limit alone allows billions. Each walk counts its nodes and placed geometry against one `format_handlers/scene_limits.SceneLimit` (the triangle budget, three vertices per triangle of it, 1,000,000 nodes) and parses each object or geometry once (ARCC BSC1). Where a library expands the scene itself (OCCT's STEP transfer visits every placement; Assimp builds every FBX model placement and copies instanced geometry), count the placements from the file before handing it over (`cad_handler.assembly_occurrences`, `format_handlers/fbx_scene.scene_size`) and refuse a file over the bound. A recursive native parser can also be exhausted by nesting depth alone, independent of placement count: in the same pass `fbx_scene.scene_size` refuses an FBX whose scopes (ASCII) or node records (binary) nest past a fixed depth (`MAX_FBX_NESTING_DEPTH`), since the reader descends into each level as it opens.
 -   Check the input size plus output headroom against `shutil.disk_usage` before downloading, and fail with a message naming both sizes; do not keep a fixed maximum-size constant.
 -   Download with a `TransferConfig` (parallel ranged GETs); stream line-oriented inputs from S3 (`get_object` + `iter_chunks`, resuming with a `Range` header after a dropped stream) and sample as they are read (`format_handlers/point_streams.py`).
@@ -979,6 +1084,12 @@ four does not reach it.
 
 **Give every test module a suite-private basename.** `test_extension_gate.py`, `test_manifest_refactor.py`, `test_construct_pipeline_failure_reporting.py`, `test_open_pipeline_function_error.py`, `test_pipeline_end_token_routes.py`, `test_output_relative_subdir.py`, and both `pcPotreeViewer` `conftest.py` files each exist in two or more pipelines. No tests directory carries an `__init__.py`, so one pytest process collecting two same-named modules errors with `import file mismatch` — `pytest backendPipelines/` therefore cannot run as a single command, and under a different invocation order a suite can import another pipeline's same-named module and assert against the wrong file while passing. Prefix a new file with its pipeline (`test_splat_extension_gate.py`).
 
+**CI runs every tests directory, one process each.** The `pipelines-test` jobs in `.github/workflows/ci.yml` run `backendPipelines/ci/pipeline_tests.py`, which finds every directory named `tests` holding a `test_*.py` module and runs `python -m pytest tests -q` from its parent on Python 3.12, in a virtual environment built from `ci/requirements-common.txt` (pytest plus the common base layer packages), then the nearest `requirements.txt` above the tests directory (stopping below the use-case directory), then the directory's `extraRequirements` in `backendPipelines/ci/suite-settings.json` when present (test-only packages, or a pipeline Lambda layer via a repo-relative `-r backendPipelines/<use case>/<pipeline>/lambdaLayer/requirements.txt`, each with its reason). CI-only per-directory settings never go inside a pipeline folder: CDK packages those folders as Lambda code and container build contexts, so such a file changes the deployed asset. The directories are split into three groups, one job each; `pipeline_tests.py list` prints them and `run --group N --work-dir <dir>` runs one group as CI does (CI adds `--low-disk`: no pip cache, and each environment is removed after its last suite). A new tests directory runs without a workflow edit. One that cannot run on a CPU-only runner goes in `backendPipelines/ci/excluded-test-dirs.json` with its reason; a test needing an optional package the default image lacks skips with `pytest.importorskip` instead. A directory whose tests render (PyVista/VTK and the like) has a `headlessDisplay` entry in `suite-settings.json` stating why; the runner runs it under `xvfb-run -a` with the thumbnail image's rendering environment (`PYVISTA_OFF_SCREEN`, `MESA_GL_VERSION_OVERRIDE`, `VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN`), and the job installs the packages `pipeline_tests.py system-packages --group N` prints (Xvfb plus Mesa, only for a group holding a rendering suite). Without a display VTK segfaults on the first render. `backendPipelines/tests/test_ci_pipeline_suites.py` fails when a test module sits outside a `tests` directory, an exclusion or a suite-settings entry is stale or has no reason, a `requirements-test.txt` or `ci-headless-display.txt` sits under `backendPipelines/`, the workflow's group matrix and `GROUP_COUNT` differ, a suite whose pipeline code opens a render window declares no headless display, or the display environment drifts from the thumbnail Dockerfile.
+
+**Container-level smoke scripts live in `backendPipelines/ci/smoke/`, not in the pipeline folder.** They need Docker and built images, so CI does not run them; they are run by hand when a converter or its base image changes, and keeping them out of the pipeline folder keeps the deployed asset unchanged. `ci/smoke/pcPotreeViewer-formats.sh` fetches public E57/LAS/LAZ/PLY samples at pinned commits and runs them through the Potree preview's PDAL and PotreeConverter images with the stages' own commands, one TSV row per file (exit codes, input and output LAS format, point count, colour and intensity ranges, the route PotreeConverter's input took, octree points, attributes and RGB range); run it on the old and new PDAL image and diff the two (#1203). Its LAS/LAZ routing mirrors constructPipeline's header rule (point formats 0-7 direct, 8-10 through PDAL, #1215; an Extra Bytes descriptor with an unterminated name or description through PDAL, #783), reading each header with the pipeline's own `lasHeader.py`; `LAS_ROUTING=extension` reproduces the routing before both.
+
+**Route on what the file is, not what it is named.** The Potree preview's `openPipeline` reads a LAS/LAZ input's point data record format from a ranged GET of its header (`preview/pcPotreeViewer/lambda/lasHeader.py`) and `constructPipeline` sends a format the pinned PotreeConverter cannot read through the PDAL stage. For a format it reads, a second ranged GET walks the VLR block (to the point data offset, capped at 64 KiB) and an Extra Bytes descriptor whose 32-byte name or description has no NUL, which PotreeConverter reads past (#783), is routed the same way. The read is advisory: any failure leaves the field out and keeps the extension route, so an unreadable header or VLR block never fails a launch and an execution started before the field behaves as before.
+
 **A suite that reads configuration from the process environment must restore it.** `splatToolbox/lambda/tests/test_extension_gate.py` reads `ALLOWED_INPUT_FILEEXTENSIONS` from the process env at import, so another suite that sets it without restoring makes splat's tests fail on unrelated assertions. Pass the value explicitly on every load, or restore what you changed.
 
 ### **Pipeline Directory Structure (`/backendPipelines/`)**
@@ -987,12 +1098,19 @@ All pipeline backend code (including containers) should be organized in `/backen
 
 ```
 backendPipelines/
+├── ci/                          # CI runner for the pipeline suites (pipeline_tests.py, exclusions; smoke/ = manual container smokes)
+├── tests/                       # Rules that hold for every pipeline
 ├── conversion/                  # File conversion pipelines
 │   └── 3dBasic/                # 3D basic conversion
 │       ├── lambda/             # Lambda function code
 │       ├── container/          # Container code (if needed)
 │       └── README.md           # Pipeline documentation
 ├── genAi/                      # Generative AI pipelines
+│   ├── cadStepAgent/           # GenAI CAD STEP agent (Strands; AgentCore Runtime or Batch Fargate)
+│   │   ├── lambda/
+│   │   ├── container/
+│   │   ├── evaluation/         # Quality harness (corpus, goldens, LLM judge)
+│   │   └── vamsSchema/
 │   ├── metadata3dLabeling/     # 3D metadata labeling
 │   │   ├── lambda/
 │   │   ├── container/
@@ -1050,7 +1168,8 @@ not read). Two rules follow:
 -   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
     deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
     `vamsSchema/*` -- otherwise refreshing an unrelated artefact deletes every bundle while the
-    registration resources still expect to read them. Test: `infra/test/storage/artefactsBucketPrune.test.ts`.
+    registration resources still expect to read them. It excludes `addon/*` for the same reason: the
+    add-on stacks upload their own trees there. Test: `infra/test/storage/artefactsBucketPrune.test.ts`.
 
 Register it from the pipeline's nested stack with the `VamsSchemaRegistration` construct, passing the
 deploy-time resolved resource values:
@@ -1067,6 +1186,17 @@ new VamsSchemaRegistration(this, "MyPipelineSchema", {
 `executionConfig.executionType` (`lambda.resourceId`, `sqs.queueUrl`, `eventBridge.busArn`,
 `deadlineCloud.farmId`), so the same file works in every account and partition. Registration is
 idempotent: a redeploy overwrites the definition and clears the archived flag.
+
+**`metadataInputs`** names what the step's input metadata file carries: the four metadata types
+`assetMetadata`, `fileMetadata`, `fileAttributes`, `databaseMetadata` (each `true` when omitted) and
+two opt-in sections (each `false` when omitted). `assetFileMetadata: true` makes a whole-asset (`/`) or
+folder selection carry one record per current file under it (`"expanded": true`, at most 500 per
+selection, archived and `*.previewFile.*` files left out) with a `fileExpansion` block on the asset
+group; `metadataSchema: true` adds a top-level `metadataSchemas` list of each involved database's
+aggregated schema fields (its own and `GLOBAL`) plus `restrictMetadataOutsideSchemas`, a database
+whose schema the launching user may not read being absent. A step receives a section only when the
+workflow and its own pipeline (or template `overrides`) both turn it on (mirrors
+`backendPipelines/CLAUDE.md`).
 
 Several `systemConfig` conditions each produce a silently unusable pipeline or workflow when wrong:
 
@@ -1139,6 +1269,16 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
    quoting a typed tag would hand the container `"42"` where it expects `42`. Non-`json` formats
    (`yaml`, `xml`, `openjd`, `raw`) are stored verbatim and not shape-checked. A `tagKey` may not
    collide with a reserved system tag name or begin with the reserved `metadata_` prefix.
+   **Text the container renders itself — a GenAI prompt carried in a template body — places its
+   inputs as `[[TOKEN]]`, never `{{TOKEN}}`:** VAMS substitutes every declared and catalog `{{tag}}`
+   in the body before the pipeline sees it, so `{{…}}` stays the channel for operator values. **A
+   template never names a model:** a GenAI pipeline's model is one deployment setting whose IAM grant
+   is scoped to it at synth, so the pipeline refuses a body carrying a model key rather than widening
+   the grant (worked example: the Video SOP/BOM workload-profile templates, checked by
+   `genAi/videoSopBom/lambda/profileRules.py` before any AWS Batch job starts). A pipeline offering a
+   provider that needs no IAM grant may let a template name that provider's model: the CAD STEP
+   agent's `MODEL_ID` tag selects an OpenAI model, and its `constructPipeline` refuses a Bedrock model
+   id other than the deployment's before the run starts.
    **A workflow's `inputFileArity` is authored, not derived** — templates are chosen per execution, so
    set it to the MAXIMUM any pipeline/template combination in that workflow can require; a lower gate
    rejects a selection a template would have accepted.
@@ -1174,6 +1314,13 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
     task-level timeout to stop it (it matches the group of the cluster's running tasks to the execution
     name), so keep it unique per execution and within ECS's 255-character task group limit: pinned by
     `multi/rapidPipeline/lambda/tests/test_rapidpipeline_ecs_timeout_stop_route.py`.
+12. **`isSystem: true` in `pipeline.json` / `workflow.json` makes the record deployment-owned** (mirrors
+    `backendPipelines/CLAUDE.md` rule 12). The value must be a JSON boolean; any other value fails the
+    registration. Only the import function's marked cross-call can set it; the API then refuses every
+    change except the `enabled` switches and a template's `configBody` / `tagSchema` / `webFormJson`,
+    and each registration re-asserts the shipped values, so `enabled` is a pause switch. Any principal
+    allowed to invoke the import function can register system records. No built-in bundle sets the
+    flag yet.
 
 ```bash
 vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
@@ -1221,9 +1368,10 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
      "sourceType": "batch", "label": "<Batch state name> container"}
     ```
 
-    Which group that is depends on the compute family. The six **Fargate** job definitions (coordinate
-    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction) write through the
-    `awslogs` driver to a VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
+    Which group that is depends on the compute family. The seven **Fargate** job definitions (coordinate
+    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction, and the GenAI CAD
+    STEP agent on its `fargate` runtime) write through the `awslogs` driver to a VAMS-owned,
+    KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
     register **that** group;
     the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
     so theirs is AWS Batch's default `/aws/batch/job`. In both families the stream is
@@ -1519,13 +1667,30 @@ A pipeline whose image is built by AWS CodeBuild pushes and consumes ONE content
 construct supplies `IMAGE_TAG` to the project's `environmentVariables` from `sourceAsset.assetHash`,
 and the pull site names that same value; a shared compute construct takes it as one prop together with
 the repository (`ecrImage` on `batch-fargate-pipeline.ts`, `codeBuildImage` on
-`batch-gpu-pipeline.ts`) so the tag cannot be omitted while the repository is supplied. The buildspec
+`batch-gpu-pipeline.ts`) so the tag cannot be omitted while the repository is supplied. A construct
+that builds one source tree for more than one architecture (the CAD STEP agent: arm64 for the AgentCore
+Runtime, amd64 for Fargate) passes the build platform as `contentImageTag`'s second argument, so the tag
+carries the architecture (`<hash>-arm64`, `<hash>-amd64`) and a runtime switch cannot replace the digest
+behind a tag the previous consumer still names. The buildspec
 must not default `IMAGE_TAG` — it fails the build when the project supplied none, because a default
 pushes a tag the AWS Batch job definition does not name and the deploy still reports success, with
 every execution then failing `CannotPullContainerError`. `:latest` is pushed alongside solely as the
 `--cache-from` alias, since a content-addressed tag never pre-exists and a cold cache adds hours to a
 GPU image build. Coverage: `infra/test/pipelines/codeBuildImageTagCoordination.test.ts` and the
 immutable-tag block of `infra/test/pipelines/containerBuildSources.test.ts`.
+
+A consumer that validates the image when it is CREATED needs the build to be synchronous from
+CloudFormation's point of view. An AWS Batch job definition accepts a tag that does not exist yet (the
+job fails at start), so the Batch pipelines start the build from a fire-and-forget custom resource; an
+Amazon Bedrock AgentCore Runtime rejects `CreateAgentRuntime` for a missing tag, so a fresh deploy that
+creates it in parallel with the build always fails. The CAD STEP agent's
+`cadStepAgentCodeBuild-construct.ts` is the pattern: a `cr.Provider` whose `onEventHandler` is the shared
+build trigger (`code: codeBuildTriggerCode()`, which starts the build and returns `Data.BuildId`) and whose
+`isCompleteHandler` polls `codebuild:BatchGetBuilds` on the project until that build is terminal, raising
+on a failed or timed-out build. The waiter is `backendPipelines/genAi/cadStepAgent/lambda/imageBuildCustomResource.py`
+so the status mapping is unit-tested; it reads `Data.BuildId`, never the physical id, which the shared
+trigger leaves at an earlier deployment's value on an Update. Add `node.addDependency(<build custom
+resource>)` on every resource that names the tag.
 
 #### **Pinned Upstream Clones in a Container Build**
 
@@ -1536,9 +1701,9 @@ instruction is a different layer and pins nothing. The resolved id is written in
 echoed by the entrypoint, so a run's log names the code it ran. Without the verification step the
 pin is decorative: `--build-arg <NAME>_COMMIT=main` checks out a moving ref and the build still
 succeeds. The same holds for `COPY --from=<image>:<tag>` and for any installer URL that omits a
-version. Coverage: the NVIDIA block of `infra/test/pipelines/containerBuildSources.test.ts`, which
-names the Dockerfiles explicitly because a `**/Dockerfile` glob passes locally and fails in CI on
-the gitignored splat Dockerfile.
+version. Coverage: the `UPSTREAM_CLONE_DOCKERFILES` block of
+`infra/test/pipelines/containerBuildSources.test.ts`, which names the Dockerfiles explicitly because
+a `**/Dockerfile` glob passes locally and fails in CI on the gitignored splat Dockerfile.
 
 #### **Pinning a Container's Dependencies**
 
@@ -1561,8 +1726,9 @@ One `BatchFargatePipelineConstruct` job definition is registered at the standard
 `attemptDuration` = the longest tier's bound; each tier is its own `tasks.BatchSubmitJob` with fixed
 `containerOverrides.vcpus` / `memory` (aws-cdk-lib renders them as `ResourceRequirements` `VCPU` /
 `MEMORY` in MiB, the form AWS Batch accepts for Fargate — never the deprecated top-level
-`Vcpus`/`Memory`), a `VAMS_COMPUTE_TIER` env value and its own `taskTimeout`, behind a `sfn.Choice` on
-the tier the lambdas carry in the state. Ephemeral storage is a job-definition property and cannot be
+`Vcpus`/`Memory`), `VAMS_COMPUTE_TIER` and `VAMS_TASK_MEMORY_MIB` (the memory override in MiB, since a
+Fargate container cannot read its task's memory from its cgroup) env values and its own `taskTimeout`,
+behind a `sfn.Choice` on the tier the lambdas carry in the state. Ephemeral storage is a job-definition property and cannot be
 overridden per job, so size it for the largest tier. AWS Batch checks a vCPU/memory override against
 the Fargate task sizes only at submit, so every configurable tier size is validated in `getConfig()`
 with `isFargateCpuMemory` (`infra/config/config.ts`, mirrored in the ConfigBuilder
@@ -1596,6 +1762,24 @@ such a host. The Batch job definition sets no user override, so the image's `USE
 files. `COPY --chown=<user>` is NOT sufficient — it makes the file readable by that one owner while
 the mode stays restrictive. Worked examples: `backendPipelines/preview/3dThumbnail/container/Dockerfile`
 and `backendPipelines/conversion/coordinateTransform/container/Dockerfile`.
+
+#### **Write Ownership in a Non-Root Container**
+
+Before `USER`, the Dockerfile gives that user every folder the container writes at run time: the
+entrypoint's output folders and the working directory of every subprocess it starts, because
+upstream tools write relative to it, both into folders they create there and as plain files. `/tmp`
+(Ubuntu's `1777`) and the user's `$HOME` are fine; a folder the base image copied root-owned is not.
+A working directory that also holds upstream sources is not `chown`ed: it gets the user's group and
+mode `1775` (`chgrp <group> <dir> && chmod 1775 <dir>`, the `/tmp` model), so the user can create
+entries while the sticky bit stops it renaming or deleting the root-owned ones. The Isaac Lab image
+runs `train.py` and `play.py` in `/workspace/isaaclab` (#1312), where Hydra writes
+`outputs/<date>/<time>`, `train.py` writes `logs/<library>/...` and the AutoMate tasks download
+their asset files into `./`: the image creates `logs` and `outputs` for the user, makes
+`/workspace/isaaclab` group `vams` with mode `1775`, and downloads the evaluation policy below
+`logs` because `play.py` writes its video beside the `--checkpoint`. The guard is
+`backendPipelines/simulation/isaacLabTraining/container/tests/test_isaaclab_nonroot_write_paths.py`,
+which also pins the Isaac Lab release its write paths were read from.
+See `backendPipelines/CLAUDE.md`, "A Non-Root Container Owns Every Folder It Writes".
 
 #### **Container Lambda Handler Pattern**
 
@@ -1688,6 +1872,26 @@ def lambda_handler(event, context):
 
 The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, grants it `states:SendTaskFailure` and invoke on `openPipeline`, and sets `STATE_MACHINE_ARN` on `openPipeline`. A pipeline without an `openPipeline` Lambda starts the state machine from `vamsExecute` itself, as `simulation/isaacLabTraining/lambda/vamsExecuteIsaacLabPipeline.py` does.
 
+**Compliance output.** A pipeline that backs a compliance pipeline rule writes one `compliance-output.json` (`{"complianceOutput": true, "status": "success"|"error", "measurements": {...}, "errors": [], "pipelineMetadata": {}}`) under `outputS3AssetResultsPath`; the `measurements` keys are the `outputField` names of the rule's checks, and a written file replaces the derived `execution_success` / `processing_duration_seconds` measurements. The writer is `backendPipelines/common/compliance_output.py`, vendored like `manifestHelper.py`: copy it into the pipeline's own `lambda/` or `container/` directory and import `compliance_output`, since a deployed pipeline holds only that directory. Copies stay byte-identical to the canonical one (`backendPipelines/tests/test_compliance_output_helper.py`). A container pipeline forwards `outputS3AssetResultsPath` with the other output paths. Full rule in `backendPipelines/CLAUDE.md` "Compliance output"; author walkthrough in the user guide's "Building a pipeline for compliance checks".
+
+### **Running a Coding Agent as a Pipeline Stage**
+
+Image to 3D's Blender agent path runs OpenAI's Codex CLI, reasoning with a vision model on Amazon Bedrock, against a headless Blender (`backendPipelines/genAi/imageTo3d/container/models/blenderagent.py`). The full rationale is in `backendPipelines/CLAUDE.md` "Running a Coding Agent as a Pipeline Stage"; the rules that generalise to any agent stage:
+
+1. **Confinement is configuration, and each key is load-bearing.** Codex's `workspace-write` sandbox makes `/tmp` and `$TMPDIR` writable by default, so the workspace sits outside `/tmp` and `exclude_slash_tmp` / `exclude_tmpdir_env_var` are set. Commands get no network and no credentials. Test the configuration keys — a misconfigured sandbox does not fail, it widens.
+2. **Completion is a set of files, never the final message.** The adapter checks for `output/model.glb` plus `DONE.json` and loads the mesh. The same holds at the other end: read the input the stage edits before the agent starts, and fail the run when it does not load. The GenAI CAD STEP agent's `read_input` in `genAi/cadStepAgent/container/cad_step_agent/run.py` ends a modify run whose input STEP file is not a solid part before any model call.
+3. **Bridge the wire protocols locally on the task role.** Codex speaks only the Responses API; a loopback LiteLLM proxy calls Bedrock Converse with the default credential chain, so no API key exists. The prompt goes on stdin (`-`), because `--image` swallows a trailing positional prompt. `blenderagent_tools/bridge_image_hook.py` lifts images out of tool results, which the Bedrock OpenAI models refuse inside a tool result.
+4. **The model id is deployment configuration, never a constant or a template field.** `models.blenderagent.bedrockModelId`: the commercial template ships `global.openai.gpt-6-astra`, the GovCloud and EU Sovereign templates ship it empty, and `getConfig()` requires it whenever the agent is enabled and rejects a `global.`/`us.` prefix outside `aws`. The construct passes it as `BLENDERAGENT_BEDROCK_MODEL_ID` and names it in the job role's `bedrock:InvokeModel` grant. The sandbox mode is fixed in the adapter. Test: `infra/test/config/configPartitionValidation.test.ts`.
+5. **State the downstream acceptance criteria exactly, and give the agent a tool for any it cannot cheaply meet.** A softened criterion yields a model that looks right and fails the gate; fusing parts into one manifold body is a mandatory tool step (`bl_solidify.py`).
+6. **The agent's checks must measure what the gate measures.** Count bodies, not watertight shells; print render and reference colours as a hex value and a word the agent must copy. Judge the output with something that is not the agent.
+7. **Give the agent the judge, and the answers the input already holds.** `blenderagent_tools/agent_gate.py` runs the pipeline's print gate, shape descriptors and silhouette match inside the sandbox; `bl_silhouette_base.py` reads the front outline off the photograph.
+8. **A model id the bridge library does not know gets no tools, silently.** `bridge_image_hook.ensure_model_known` registers the configured id with its nearest known sibling's capabilities. Symptom: a run that ends in seconds, exit 0, zero commands.
+9. **Broker other models through files; do not open the sandbox.** `container/agent_broker.py` serves workspace request files with the task role, confines paths to the workspace and allows only listed operations.
+10. **Hand an image model a picture, not an atlas, and composite its edit under the mask.** `blenderagent_tools/bl_view_fill.py` (arithmetic in bpy-free `view_fill.py`).
+11. **Refuse a completed response that produced nothing.** Bedrock occasionally answers `ConverseStream` with HTTP 200 and zero output tokens; `bridge_image_hook.empty_completion` raises so Codex retries instead of ending its turn. Measure the fault in AWS CloudTrail, not the agent log.
+
+The agent's notes and self-assessment go on the execution through `GenerationResult.diagnostics`, not the asset; renders and the transcript go to the auxiliary prefix.
+
 ### **Pipeline Best Practices**
 
 #### **Pipeline Development Rules**
@@ -1696,7 +1900,7 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
 2. **Configuration Driven**: All pipelines must be configurable via `config.ts`
 3. **VPC Awareness**: Distinguish between VPC-required and optional pipelines
 4. **Container Separation**: Keep container code separate from Lambda orchestration
-5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through `lambdaContainer/common/logger.py` instead, and VAMS reads a Lambda step's log group only for lines that contain the workflow execution id: each handler puts the body's `workflowExecutionId` on every line with `logger.append_keys` after the task-token check and removes it with `remove_keys` first thing in each invocation, and a module that logs on the handler's behalf uses a Powertools child logger of the handler's service (`child=True`) so its lines carry the id too. Full rule: `backendPipelines/CLAUDE.md` "Files a Model Input References".
+5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through `lambdaContainer/common/logger.py` instead, and VAMS reads a Lambda step's log group only for lines that contain the workflow execution id: each handler puts the body's `workflowExecutionId` on every line with `logger.append_keys` after the task-token check and removes it with `remove_keys` first thing in each invocation, and a module that logs on the handler's behalf uses a Powertools child logger of the handler's service (`child=True`) so its lines carry the id too. trimesh decodes model text that is not UTF-8 only through `charset_normalizer`, which neither the 3D Basic Conversion nor the CAD/Mesh Metadata Extraction image installs, so both pipelines read the text as UTF-8 first (`check_input_text` in 3dBasic's `lambda.py`, and in meshCadMetadataExtraction's `lambdaContainer/input_text.py`) and fail with a message naming the file that could not be read (#910, #1044). Full rule: `backendPipelines/CLAUDE.md` "Files a Model Input References".
 6. **Error Handling**: Implement comprehensive error handling and logging
 7. **Resource Cleanup**: Ensure proper cleanup of temporary resources
 8. **VPC Builder Updates (CRITICAL)**: A pipeline using AWS Batch, ECS, or Fargate goes into some of the three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Determine that from what `pipelineBuilder-nestedStack.ts` passes as its `pipelineSubnets` (`pipelineNetwork.isolatedSubnets.pipeline` vs `pipelineNetwork.privateSubnets.pipeline`). Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
@@ -1705,23 +1909,43 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
     - **Pipeline-only endpoints** (~line 651): creates Batch, ECR API, ECR Docker endpoints in the isolated subnets. **Required for every pipeline, either placement** — without it Batch cannot pull the container image.
     - **ECS endpoint** (~line 736): the `needsEcsPrivate` variable. **Private-subnet pipelines only** — this is the ECS control-plane endpoint an EC2-launch-type container instance's agent needs; Fargate tasks do not use it. One ENI per AZ, ~$15/month.
 
-    Which blocks a flag belongs in is derived from the source, not from a list kept here. Read the placement off `pipelineBuilder-nestedStack.ts`: a stack given `pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline` is an isolated-subnet pipeline (endpoint block only); one given `privateSubnets.pipeline`, or both `pipelineSubnetsPrivate` and `pipelineSubnetsIsolated`, is a private-subnet pipeline (all three). A containerized Lambda pipeline (3dBasic, CAD/mesh metadata extraction) is placed in isolated subnets but runs no Batch job, so it appears in no block. A pipeline whose container calls a service that has no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime / Rekognition `if` — the Bedrock Runtime endpoint is created when `bedrockRuntimeFromLambda` (`useForAllLambdas && useGenAiMetadata3dLabeling.enabled`) **or** `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Isaac Lab training is the one placement the derivation does not predict: its EC2 Batch compute is placed in `privateSubnets.pipeline` (its EFS in isolated subnets) and the flag appears in the subnet-creation and endpoint blocks, while its ECS endpoint is gated separately by `needsEcsIsolated` rather than `needsEcsPrivate`. Recompute the membership with `grep -n "pipelineSubnets" infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` against `grep -n "subnetConfigurations.push(subnetPublicConfig)\|Pipeline-Only Required Endpoints\|const needsEcsPrivate\|bedrockRuntimeFromContainer" infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` (no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one) and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` (the service-endpoint gate widened for the container without widening the Lambda gate). `infra/test/security/vpcEndpointsAndAuthGrants.test.ts` asserts each flag's block membership from its `privateSubnetBatchFlags` / `isolatedSubnetBatchFlags` lists — add a new pipeline's flag to the matching list.
+    Which blocks a flag belongs in is derived from the source, not from a list kept here. Read the placement off `pipelineBuilder-nestedStack.ts`: a stack given `pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline` is an isolated-subnet pipeline (endpoint block only); one given `privateSubnets.pipeline`, or both `pipelineSubnetsPrivate` and `pipelineSubnetsIsolated`, is a private-subnet pipeline (all three). A containerized Lambda pipeline (3dBasic, CAD/mesh metadata extraction) is placed in isolated subnets but runs no Batch job, so it appears in no block. A pipeline whose container calls a service that has no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime / Rekognition `if` — the Bedrock Runtime endpoint is created when `bedrockRuntimeFromLambda` (`useForAllLambdas && useGenAiMetadata3dLabeling.enabled`) **or** `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Isaac Lab training is one of two placements the derivation does not predict: its EC2 Batch compute is placed in `privateSubnets.pipeline` (its EFS in isolated subnets) and the flag appears in the subnet-creation and endpoint blocks, while its ECS endpoint is gated separately by `needsEcsIsolated` rather than `needsEcsPrivate`. The other is the GenAI CAD STEP agent, whose placement follows its `runtime`: `pipelineBuilder-nestedStack.ts` gives it `privateSubnets.pipeline` on `fargate`, where its flag appears in all three blocks under a `runtime === "fargate"` condition, and `isolatedSubnets.pipeline` on `agentcore`, where only its Lambdas are in the VPC (the agent runs on Amazon Bedrock AgentCore outside it), so it appears in none of the three and instead gates the AgentCore interface endpoint (`BedrockAgentCoreEndpoint`, created with `useForAllLambdas` because its caller is the invoke Lambda) beside the Bedrock Runtime gate. Recompute the membership with `grep -n "pipelineSubnets" infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` against `grep -n "subnetConfigurations.push(subnetPublicConfig)\|Pipeline-Only Required Endpoints\|const needsEcsPrivate\|bedrockRuntimeFromContainer" infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` (no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one) and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` (the service-endpoint gate widened for the container without widening the Lambda gate). `infra/test/security/vpcEndpointsAndAuthGrants.test.ts` asserts each flag's block membership from its `privateSubnetBatchFlags` / `isolatedSubnetBatchFlags` lists — add a new pipeline's flag to the matching list.
 
     **Placement also decides how the pipeline treats an asset bucket in another Region.** The manifest names every input file's `bucketRegion` and the output bucket's; `vamsExecute` passes `inputBucketRegion` / `outputBucketRegion` to `openPipeline`, `constructPipeline` writes the definition's `bucketRegions` map, and the container signs each bucket's requests for its Region. An isolated-subnet pipeline additionally calls `manifestHelper.enforce_inputs_in_region(resolved)` right after `enforce_single_input_file` (a multi-file pipeline such as Video SOP/BOM calls it right after the manifest resolves, before its own count and HeadObject gates): its compute reaches Amazon S3 in the deployment Region and in the Regions the VPC builder created a cross-Region S3 interface endpoint for (`app.useGlobalVpc.addCrossRegionS3Endpoints`), so its lambda builder sets `CROSS_REGION_S3_ENDPOINT_REGIONS` on the `vamsExecute` function from `Config.crossRegionS3EndpointRegions(config)` — the helper the VPC builder iterates — and the gate rejects any other Region before the job is submitted. `infra/test/pipelines/isolatedPipelinesCrossRegionEndpointEnv.test.ts` holds the env value to the endpoint list. A pipeline that hands `s3://` locations to a third-party container image (ModelOps, RapidPipeline ECS/EKS) is same-Region only and calls `manifestHelper.enforce_same_region_io(resolved)` there instead, rejecting a cross-Region input or output bucket. `backendPipelines/tests/test_pipeline_cross_region_inputs.py` requires every `vamsExecute*.py` to be in exactly one class (isolated-subnet gate, Region-consuming, same-Region-only). Full rule: `backendPipelines/CLAUDE.md` step 2.
 
-9. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and copies every upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. An edit to one of those files survives until the next CDK invocation and is then gone, with `git status` clean afterwards because the restored copy matches `HEAD`.
+    **The pipeline reads its input at the launch version.** `vamsExecute` forwards `resolved['inputVersionId']` (the first manifest input file's `versionId`, `""` when there is none), `openPipeline` puts it on the state machine input, `constructPipeline` on the definition (only when there is one) or, for an image that parses its definition into plain dataclasses, in a second Batch command element `{"inputVersions": {<stage type>: <version id>}}` that the new image's `__main__` applies (`apply_input_versions`) and an image built before the field never reads, so a run reaching an old image mid-upgrade still starts (another launch value for such an image, such as 3dThumbnail's results folder `outputResults`, goes in that same element, which then always carries `inputVersions`, `{}` without a version, because an image built since the field refuses the element without it), and the container passes it as `VersionId` on every read of the input file — `aws s3api get-object --version-id` for an AWS CLI container — sending exactly today's call when it is `""`. A deleted version fails the run naming file and version. A state machine that maps an explicit payload into `constructPipeline` (RapidPipeline EKS) maps `inputVersionId` too, defaulting it to `""` first so an execution input without it does not fail the step. S3 authorizes a versioned read as `s3:GetObjectVersion`, so a container, job or pod role built from statements over `getS3AssetBucketRecords()` grants it beside `s3:GetObject` (`infra/test/pipelines/pipelineInputVersionGrants.test.ts`); a Lambda granted through `grantReadPermissionsToAllAssetBuckets` already has it. `backendPipelines/tests/test_pipeline_input_versions.py` checks the chain repo-wide. Full rule: `backendPipelines/CLAUDE.md` "Input Version Threading".
+
+9. **Batch Instance User Data (CRITICAL)**: A GPU pipeline's instance start-up script is a template string carrying CDK tokens (EFS file system id, bucket name, region). Three rules make it run, and each failure is silent — the deploy succeeds, the job succeeds, only the run time is wrong. All three were live in six pipelines at once. Test: `infra/test/launchTemplateUserDataTokens.test.ts`.
+
+    - **Encode with `cdk.Fn.base64(userData)`**, never `Buffer.from(userData).toString("base64")`. Encoding during synth freezes each token as its debug text, so the template reads `mount -t efs -o tls ${Token[TOKEN.6935]}:/ ...`. Bash reads `${Token[...]}` as an array subscript, reports `syntax error: invalid arithmetic operator`, and **aborts the whole `scripts-user` module** — every later line is skipped too.
+    - **Pin the compute environment to `launchTemplate.attrLatestVersionNumber`**, never `"$Latest"`. Batch merges the launch template with its own bootstrap into a Batch-managed copy (`Batch-lt-<hash>`) when the compute environment is created or updated. `"$Latest"` never changes, so a new template version is not a change to the compute environment and Batch keeps handing instances the stale merge — a correct fix can deploy, verify clean in the template, and reach no instance. Confirm a change by decoding the user data of the template the INSTANCE booted (`aws:ec2launchtemplate:id`), not the one the compute environment names.
+    - **Do not name a `serviceRole`.** Omitting it uses the Batch service-linked role (`AWSServiceRoleForBatch`), created on demand for a managed environment, and it is what makes the pin above deliverable: Batch permits `launchTemplate`, `instanceTypes`, `subnets`, `securityGroupIds`, `ec2Configuration` and `instanceRole` to be updated **"only for ... Compute Environment having a Batch Service Linked Role"**. With a named role the only delivery path is replacement, which fails on an environment carrying an explicit `computeEnvironmentName`, re-points job queues, and leaves `INVALID` environments behind. All three CloudFormation conditions are required for an in-place update: no `ServiceRole`, `BEST_FIT_PROGRESSIVE`, and `replaceComputeEnvironment: false`. AWS maintains the service-linked role's permissions as Batch gains features; a hand-rolled role does not track them.
+    - **An existing environment cannot be migrated to the service-linked role, only replaced.** Batch rejects it: `A CE using a user-provided role cannot be updated to use Batch Service Linked Role`. Removing `ServiceRole` from the template is a silent no-op on a live environment — CloudFormation sends `UpdateComputeEnvironment` with no `serviceRole` and Batch reads that as "no change" (measured: CloudFormation recorded none while all seven GPU environments still reported their named role). Omit it anyway: every NEW environment gets the service-linked role, and an existing one adopts it the next time it is replaced for another reason.
+    - **`replaceComputeEnvironment: false` ships with a CONSTRUCT ID change, in the same release.** The property forbids replacement, which is the one thing an environment still naming a service role needs (it can be neither updated in place nor migrated), so shipping it alone fails a v2.5 upgrade — measured: it rolled back nine pipeline stacks, twice. Changing the construct id makes the upgrade a CREATE plus DELETE rather than an update, so the property has no say in it and the new environment is born on the service-linked role with in-place updates enabled. One `cdk deploy`, no operator flags. Never express this migration as a property change on the existing resource.
+    - **One command per line.** A trailing backslash in a template literal is a JavaScript line continuation, removed before the string exists, so the shell never sees it; written `\n` it becomes a real newline and splits the command.
+    - **Leave evidence**: `mountpoint -q` rather than an assumed mount, a marker inside the mount, the log copied to a bucket, and the serial console (`ec2:GetConsoleOutput`) as the channel that needs no agent, no CLI, and no egress. Have the container compare the mount's **filesystem type** (`nfs`/`nfs4` vs `xfs`), since a host bind mount is indistinguishable from an empty local directory from inside a job.
+
+10. **Model Weight Caching on a Shared Filesystem (CRITICAL)**: Six GPU pipelines cache HuggingFace weights on EFS with an Amazon S3 backup, each through its own divergent copy of `model_manager.py`. All three defects below were live in every copy; none fails a run, so they read as a slow model. Full detail in `backendPipelines/CLAUDE.md`.
+
+    - **Key the cache directory by what the cache is FOR, in step with the S3 prefix.** All four Cosmos pipelines mount one filesystem at one path and set the same `HF_CACHE_BASE`, while each restores from a different S3 prefix — and the check only asks "any weights here?". The first pipeline to run populates the directory and every other one reads a false hit, skips its restore, and downloads its own weights during inference. **This lay dormant while the EFS mount was broken** (an unmounted path is an empty local directory, so the check was correctly a miss); fixing the mount activates it. Weights a library keeps outside the HuggingFace layout belong under the same directory: Image to 3D points rembg's `U2NET_HOME` at `hf_cache/{model_key}/rembg`, fetches the selected session's ONNX file in the cache stage (`fetch_rembg_session`, seeded from the image's baked copy for the default session, retried like `fetch_repo`) and declares it through `ensure_models_cached(..., required_files=...)`, so the S3 backup carries it and a cache holding the model's weights but not the session's is a miss.
+    - **Ask whether THIS RUN's weights are cached, and stop at the first file.** `list(hub_dir.rglob(f"*{ext}"))` walks the whole tree per extension to test emptiness — 477 s of a 606-second run on a network filesystem, against 0.0 s for a per-repository early-exit check. The repository name is also what distinguishes one model VARIANT from another (2B from 14B, Nano from Super) where they share a cache directory, so the caller passes the run's own repository via `ensure_models_cached(..., repos=(...))`. Naming only the primary repository is sufficient, because the S3 backup is written after a successful run. The per-repository check is byte-identical across every pipeline's copy — edit one, propagate to all; `backendPipelines/genAi/nvidia/tests/test_model_cache_check.py` asserts it has not diverged.
+    - **Verify the cache path is a network filesystem and log which.** A host bind mount is indistinguishable from an empty local directory from inside a job. Discriminate by filesystem TYPE from `/proc/mounts` (`nfs`/`nfs4` vs `xfs`), never by the presence of a mount point — a bind mount appears there regardless, so that check passes always.
+
+11. **Per-partition identifiers must not be inherited**: default a model, endpoint or entitlement-scoped identifier only in the partition where it is known to exist, and require it elsewhere. `app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId` is the worked example: which Bedrock foundation models an account may invoke differs by partition **and** account entitlement, and the value is both the `modelId` passed to the Converse API and the model named in the Lambda's `bedrock:InvokeModel` resource ARN — so a commercial default gives a GovCloud or EU Sovereign deployment that synthesizes and deploys cleanly then fails at first invoke. The sovereign templates ship it blank; `getConfig()` requires it when the pipeline is enabled outside `aws`. Test: `infra/test/bedrockModelPartition.test.ts`. The commercial default of this field and of `useGenAiCadStepAgent.bedrockModelId` is `GENAI_DEFAULT_BEDROCK_MODEL_ID` in `config.ts`, which the commercial template, `config.json` and the ConfigBuilder preset repeat; it names a model whose Amazon Bedrock lifecycle status is `ACTIVE`, because Bedrock refuses a `LEGACY` model to an account that has not called it for 30 days while its inference profile still lists as `ACTIVE`. Test: `infra/test/config/genAiDefaultBedrockModel.test.ts`. The Image to 3D Blender agent's `models.blenderagent.bedrockModelId` is stricter: the commercial template carries `global.openai.gpt-6-astra`, `getConfig()` requires it whenever the agent is enabled in any partition and rejects a `global.`/`us.` prefix outside `aws`, and `useStabilityImageEditing` (which grants `us.` inference profiles) defaults to, and is accepted only in, the commercial partition's US Regions. Test: `infra/test/config/configPartitionValidation.test.ts`. Related: build DNS names from `cdk.Aws.URL_SUFFIX` rather than a literal `amazonaws.com` (the EFS mount-target name in a GPU pipeline's user data needs `amazonaws.eu` in EU Sovereign), take service principals from `Service("...").Principal` rather than a literal `ec2.amazonaws.com`, and never fall back to a literal region such as `us-east-1` — `AWS_REGION` is always set in Lambda and Batch, so a fallback can only point somewhere that does not exist in a sovereign partition.
+
+12. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and copies every upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. An edit to one of those files survives until the next CDK invocation and is then gone, with `git status` clean afterwards because the restored copy matches `HEAD`.
 
     `.gitignore` does **not** identify them — it lists only `Dockerfile`, `/src/*`, `LOCAL_DEBUG_README.md` and `.synced-commit`, so a tracked file such as `build_models_tar.py` looks VAMS-owned and is not. The observable proxy is the mtime: after a sync, upstream's files carry the marker's timestamp while VAMS additions (`__main__.py`, `vams_utils/`, `vams_bake_models.py`) keep their own. To change behaviour in an upstream-owned file, use a **programmatic injection** after the copy — the pattern the sync already applies to the Dockerfile — anchored on a pattern that throws when the anchor is missing.
 
-10. **Adaptive Retry Configuration on Every Client**: every `boto3.client(...)` and `boto3.resource(...)` in `backendPipelines/` takes `config=Config(retries={'max_attempts': 5, 'mode': 'adaptive'})`. A pipeline Lambda or container calls Step Functions, Amazon S3, and EventBridge for the length of a job — hours on the GPU pipelines — so a bare client sits on botocore's default retry mode with no client-side rate limiting, and a sustained burst surfaces as a throttling error rather than being smoothed.
+13. **Adaptive Retry Configuration on Every Client**: every `boto3.client(...)` and `boto3.resource(...)` in `backendPipelines/` takes `config=Config(retries={'max_attempts': 5, 'mode': 'adaptive'})`. A pipeline Lambda or container calls Step Functions, Amazon S3, and EventBridge for the length of a job — hours on the GPU pipelines — so a bare client sits on botocore's default retry mode with no client-side rate limiting, and a sustained burst surfaces as a throttling error rather than being smoothed.
 
     Declare the constant **above the first client**, not merely after the imports: a few modules interleave imports with executable code (`multi/rapidPipelineEKS/lambda/consolidated_handler.py` builds a client and then keeps importing), and a constant placed after the last import lands below the client that uses it — `NameError` at module import, which in a Lambda is a cold-start 500 on every request. A deliberate departure (a non-idempotent call a retry would duplicate) needs a comment saying why, because the ratchet cannot tell it from an oversight. Coverage: `backend/tests/common/workflows/test_pipeline_boto_clients_configured.py`.
 
-11. **Sub-Process and Log Registration**: `openPipeline.py` (or `executeBatchJob.py` when that lambda submits the job itself) registers the state-machine log entry with `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix` `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a module-level `*_STATE_NAME` literal). The builder supplies `ORCHESTRATION_BUS_NAME` + `orchestrationBus.grantPutEventsTo(fun)`, `STATE_MACHINE_LOG_GROUP_NAME` / `_ARN`, `...vendedBatchJobLogGroupEnvironment(logGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and the job-definition-name env the producer reads (`BATCH_JOB_DEFINITION_NAME`). Add the construct to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` (or `containerLogRegistrationEnvEcs.test.ts` for an ECS task) and assert the emitted entries in `lambda/tests/test_manifest_refactor.py`. Without it, abort leaves the compute running and the execution shows no stages or container logs. See "Registering Sub-Processes and Logs" above.
+14. **Sub-Process and Log Registration**: `openPipeline.py` (or `executeBatchJob.py` when that lambda submits the job itself) registers the state-machine log entry with `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix` `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a module-level `*_STATE_NAME` literal). The builder supplies `ORCHESTRATION_BUS_NAME` + `orchestrationBus.grantPutEventsTo(fun)`, `STATE_MACHINE_LOG_GROUP_NAME` / `_ARN`, `...vendedBatchJobLogGroupEnvironment(logGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and the job-definition-name env the producer reads (`BATCH_JOB_DEFINITION_NAME`). Add the construct to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` (or `containerLogRegistrationEnvEcs.test.ts` for an ECS task) and assert the emitted entries in `lambda/tests/test_manifest_refactor.py`. Without it, abort leaves the compute running and the execution shows no stages or container logs. See "Registering Sub-Processes and Logs" above.
 
-12. **Non-Root Containers Normalize Read Bits After COPY**: a container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads. `COPY` preserves the build host's umask, so a hardened host (umask `077`/`027`) yields root-owned `600`/`640` files that raise `PermissionError: [Errno 13]` at import under the non-root user — invisible to the build, failing only at container runtime. `COPY --chown` alone is not sufficient. See "Read Bits on COPY'd Source in a Non-Root Container" above.
+15. **Non-Root Containers Normalize Read Bits After COPY**: a container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads. `COPY` preserves the build host's umask, so a hardened host (umask `077`/`027`) yields root-owned `600`/`640` files that raise `PermissionError: [Errno 13]` at import under the non-root user — invisible to the build, failing only at container runtime. `COPY --chown` alone is not sufficient. See "Read Bits on COPY'd Source in a Non-Root Container" above. Before `USER` it also gives that user every folder it writes at run time, including the working directory of each subprocess it starts; a working directory holding root-owned upstream sources gets the user's group and mode `1775` instead of a `chown` (see "Write Ownership in a Non-Root Container", #1312).
 
-13. **CodeBuild Build Triggers Use the Shared Handler**: every `*CodeBuild-construct.ts` gives its build-trigger function `code: codeBuildTriggerCode()` (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`), which inlines the single handler `constructs/codeBuildTrigger/index.py`. The handler returns its data, retries `start_build` on throttling and transient errors, and raises otherwise so `cr.Provider` reports `FAILED`; a Delete never raises. Never paste a handler that calls `cfnresponse.send(...)` — behind the provider framework that reports to nothing, and a caught exception then deploys as a success. Coverage: `infra/test/pipelines/codeBuildTriggerHandler.test.ts`, `backendPipelines/tests/test_codebuild_build_trigger_handler.py`.
+16. **CodeBuild Build Triggers Use the Shared Handler**: every `*CodeBuild-construct.ts` gives its build-trigger function `code: codeBuildTriggerCode()` (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`), which inlines the single handler `constructs/codeBuildTrigger/index.py`. The handler returns its data, retries `start_build` on throttling and transient errors, and raises otherwise so `cr.Provider` reports `FAILED`; a Delete never raises. Never paste a handler that calls `cfnresponse.send(...)` — behind the provider framework that reports to nothing, and a caught exception then deploys as a success. A construct whose consumer validates the image at create (the CAD STEP agent's AgentCore Runtime) keeps the shared handler as its provider's `onEventHandler` and adds an `isCompleteHandler` that waits on the returned `Data.BuildId`. Coverage: `infra/test/pipelines/codeBuildTriggerHandler.test.ts`, `backendPipelines/tests/test_codebuild_build_trigger_handler.py`.
 
 #### **Pipeline Configuration Rules**
 
@@ -1746,7 +1970,7 @@ A **private** OpenSearch Serverless collection (`app.openSearch.useServerless.al
 -   **NEXTGEN** (`nextGen = true`): hostname `{collection-id}.aoss.{region}.on.aws`, reached through a **standard EC2 interface endpoint** (`ec2.InterfaceVpcEndpoint`, service `com.amazonaws.{region}.aoss-data`, `privateDnsEnabled: true`), built via `new ec2.InterfaceVpcEndpointAwsService("aoss-data", "com.amazonaws", 443)`.
 -   **CLASSIC** (`nextGen = false`): hostname `{collection-id}.{region}.aoss.amazonaws.com`, reached through the OpenSearch Serverless-managed endpoint (`opensearchserverless.CfnVpcEndpoint`), which provisions its own Route 53 private hosted zone.
 
-The chosen endpoint's id populates the network policy `SourceVPCEs`. Only the OpenSearch-facing Lambdas (search, fileIndexer, assetIndexer, crOsReindexer, and the schema-deploy custom resource) run in the VPC — `useForAllLambdas` is not required for a private collection. The schema-deploy custom resource Lambda uses a long timeout (14 min) and a readiness poll because a freshly created collection/endpoint, plus a NEXTGEN scale-to-zero cold start (10–30s), can take minutes to become reachable. Backend Lambdas sign with SigV4 service name `aoss` when `OPENSEARCH_TYPE=serverless`.
+The chosen endpoint's id populates the network policy `SourceVPCEs`. Of the stock Lambdas, only the OpenSearch-facing ones (search, fileIndexer, assetIndexer, crOsReindexer, and the schema-deploy custom resource) run in the VPC — `useForAllLambdas` is not required for a private collection; an add-on whose Lambdas reach a resource inside the VPC places them there the same way, with its feature in `getConfig()`'s VPC-requiring features (`addonVpcRequiringFeatures()` in `config/addon/addonConfig.ts`). The schema-deploy custom resource Lambda uses a long timeout (14 min) and a readiness poll because a freshly created collection/endpoint, plus a NEXTGEN scale-to-zero cold start (10–30s), can take minutes to become reachable. Backend Lambdas sign with SigV4 service name `aoss` when `OPENSEARCH_TYPE=serverless`.
 
 **`addVpcEndpoints` gating (NEXTGEN only).** The NEXTGEN endpoint is a standard EC2 interface endpoint, so it follows `useGlobalVpc.addVpcEndpoints` like every other interface endpoint. The construct computes `createEndpointResources = useVPCEndpoint && (!nextGen || addVpcEndpoints)`:
 
@@ -1793,7 +2017,10 @@ export function build[FunctionName]Function(
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
 
-        // VPC Configuration Pattern
+        // VPC Configuration Pattern. A Lambda that exists to reach a resource inside the VPC (the
+        // OpenSearch-facing builders, an add-on's in-VPC builders) ORs its own feature flag into this
+        // condition, and its feature is listed in getConfig()'s vpcRequiringFeatures (an add-on's
+        // through addonVpcRequiringFeatures()), so useGlobalVpc.enabled=false fails synth
         vpc: config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
             ? vpc : undefined,
         vpcSubnets: config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
@@ -2038,9 +2265,15 @@ The shipped `wafPolicyConfig.json` overrides ten Common Rule Set rules to `count
 
 The shipped `VAMS-RateLimit` rate-based rule is built with `aggregateKeyType: IP`, the address AWS WAF observes on the connection, for both the CloudFront-scoped and regional web ACLs. A `FORWARDED_IP` key is accepted in the policy file but not emitted, and the construct raises a synth warning naming the rule when one is set: a header-derived address is supplied by the caller, so it can be rotated to evade the limit, and AWS WAF omits a request that carries no such header from the rule's evaluation entirely — which is every direct `execute-api` caller. The `fallbackBehavior` covers only a malformed address in a header that is present, not a missing header. The limit is set well above a single active user's request rate (VAMS polls execution status, does multi-part uploads, and streams large viewer files). Rate blocks return `429` (`blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`) registered on the ACL — distinct from the `403` used for auth denials, so the web `apiClient` and the VAMS CLI treat it as a retryable throttle (honor `Retry-After`) rather than an auth failure. The custom response carries static `responseHeaders` (`WAF_RATE_LIMIT_RESPONSE_HEADERS` in the construct): `Retry-After: 1` and `Access-Control-Expose-Headers: Retry-After`, and nothing else. The REGIONAL ACL is associated with the REST API stage, and API Gateway renders a WAF block — custom response included — through its `WAF_FILTERED` gateway response (`gatewayResponseDefinitions` in `rest-api-gateway-construct.ts`), which keeps the rule's `429` and adds `Access-Control-Allow-Origin` and `Access-Control-Allow-Headers`. The web app calls the stage cross-origin in every topology — it sends its API requests to the base URL `/api/amplify-config` returns (the execute-api invoke URL, or the API custom domain) — so those headers are what let a browser read the 429, and the WAF response must not repeat the CORS allow headers: API Gateway appends WAF's copy to its own and the browser rejects `Access-Control-Allow-Origin: *, *` outright. `Access-Control-Allow-Methods` is likewise left off — it matters only on a preflight, and a throttled `OPTIONS` is answered by WAF before the API's MOCK integration, so it can never be a successful preflight. What API Gateway does not add is `Retry-After`, which the web `apiClient` sleeps on before its single retry, and `Access-Control-Expose-Headers`, without which a cross-origin caller cannot read it (`Retry-After` is not CORS-safelisted). Header values are literal strings (WAF expands no variables) and `Content-Type` must not be listed (WAF sets it from the body's `contentType`). Managed-group blocks carry no custom body or headers of their own (a group-level `overrideAction` cannot carry a custom response, and a per-rule `block.customResponse` override for every rule in every group is not maintained). A managed-group block at the API stage is answered by the `WAF_FILTERED` gateway response (a `403` naming the web ACL and the request ID); on CloudFront and the ALB it keeps the WAF default 403. On a CloudFront deployment the REGIONAL ACL (only; the construct throws for the CLOUDFRONT scope) receives `originVerifySecretArn`: every rate-based rule gets the scope-down `NOT (OR (header x-vams-origin-verify == current, == current))`, two EXACTLY byte matches resolving the secret's `current` (a rotation sets them to new and previous in the live ACL; a later stack update resolves both to `current`), so CloudFront-forwarded requests are rate-limited only by the CLOUDFRONT ACL (viewer address) and direct execute-api and custom-domain requests by the regional one; its logging configuration redacts the header beside `authorization`. The 429, its body and headers and the `IP` key are unchanged. Unit tests: `infra/test/waf/wafRateLimit.test.ts` (rule, body, the exact two headers, a guard that the three CORS allow headers stay absent, and the scope-down), `infra/test/waf/wafCommonRuleSetOverrides.test.ts` (override set), `infra/test/waf/wafLogging.test.ts` (redaction).
 
+An add-on whose legitimate requests trip a managed rule contributes **scoped rule exclusions** through `infra/lib/nestedStacks/addon/addonWafExclusions.ts` (`addonWafRuleExclusions(config)`, which joins the exclusions each enabled add-on builds in its own module under `infra/lib/nestedStacks/addon/<addon>/` and returns none when no enabled add-on needs one), which `buildWafStacks()` in `infra/lib/cf-waf-stack.ts` passes to both web ACLs. Each exclusion (`WafScopedRuleExclusion`) sets the named managed rules to `count` and adds a re-block rule named `reapplyRuleName`, evaluated after every other rule in the ACL, that blocks on their labels unless both the URI path as received, which API Gateway routes on, and its URL-decoded, path-normalized form are at or below one of the `uriPathPrefixes` of an exclusion that relaxes that label: equal to the prefix (a trailing slash is ignored) or starting with it and a `/`, so `/api/x` does not cover `/api/xy`. Two exclusions relaxing the same rule therefore exempt its label on the prefixes of both, and each re-block rule holds one clause per set of prefixes that exempts its labels. A prefix is matched against the path the stage receives, which begins with `/${API_GATEWAY_STAGE_NAME}`, and costs about 48 WCU in each web ACL (an EXACTLY and a STARTS_WITH match in each form, 10 per text transformation), a label 1. The regional ACL is the one on the REST API stage, so it evaluates every request that reaches the stage on the path the stage receives, whether the request was made to the invoke URL or the API custom domain or was forwarded by CloudFront. The CloudFront ACL evaluates a request to `<distribution>/api/*` first, on the viewer's path, which CloudFront forwards to the stage with no origin path, so the same prefixes match there; without the exclusions it would block an exempted request before the regional ACL saw it. The ALB, which shares the regional ACL, only redirects API paths (test: `infra/test/waf/wafScopedRuleExclusions.test.ts`, with a fixture exclusion). In a block-mode group, a relaxed rule the policy overrides to `count` or `allow` keeps that action and is not re-blocked, one it overrides to `block` is relaxed and re-blocked like any other, and each exclusion's labels are deduplicated before the re-block rule is built. Synth fails (`validateScopedRuleExclusions()`) for a `reapplyRuleName` that is not a valid AWS WAF rule and metric name, repeats another exclusion's or names a policy rule; an exclusion relaxing no rule; a label other than the rule's documented label in `AWS_MANAGED_RULE_LABELS` (copied verbatim from the AWS WAF Developer Guide pages it cites, compared exactly, letter case included); a rule or group missing from that table (add the documented label there); and a prefix that is empty, covers the whole API or does not start with `/${API_GATEWAY_STAGE_NAME}/`. An exclusion's optional `unrelaxedRules` names the rules it does not relax that still match its requests; `warnUnrelaxedRules` raises a synth warning `VAMS:WafPolicy:<reapplyRuleName>:unrelaxed:<group>[:<rule>]` for each one the policy enforces (a named rule in a block-mode group that the policy does not count or allow, or a whole group in block mode). An add-on's steering names its exclusions and the tests that pin them. `infra/test/waf/wafTopology.test.ts` asserts every web ACL association, where each web ACL ARN goes and the fronting premises in full synths.
+
 #### **Seeded Default Metadata Schemas**
 
 `apiLambda/constructs/dynamodb-metadataschema-defaults-construct.ts` seeds the four GLOBAL default schemas (`app.metadataSchema.autoLoadDefault*`) with conditional `putItem` calls: create writes a default unless an edited row exists, update refreshes a row only while it exists and its `modifiedBy` is still `SYSTEM_USER` (or `SYSTEM`, matched read-only for rows the 2.4.0 to 2.5.3 seeds wrote), and both ignore `ConditionalCheckFailedException`. The items carry no synth-time timestamp. A release changes a shipped default only by adding optional fields, never by renaming, retyping or removing one, and its CHANGELOG entry names the schema ID and the field, because a deployment never rewrites a default a user has edited. Test: `infra/test/platform/metadataSchemaDefaultsSeed.test.ts`.
+
+A fifth GLOBAL default, `fileMetadata` (ID `default-file-metadata-schema`), comes from the deployment-time file `infra/config/metadataSchema/defaultFileMetadataSchema.json` (shape of a schema create request: `schemaName`, optional `fileKeyTypeRestriction`, `fields`), read by `loadDefaultFileMetadataSchema()` in the same construct and seeded with the same `seedCalls()` conditions. It ships with `fields: []` and has no config flag: the file's content is the switch. A missing, blank or `{}` file, or one with empty or absent `fields`, seeds nothing (no custom resource); a present file that the metadata schema API would refuse (bad JSON, unknown key, field rules from `backend/backend/models/metadataSchema.py`, duplicate names, more than 500 fields or 200 KB serialized) fails the synth naming the file. `geopoint`/`geojson` default values are refused in the file. Keep its rules in step with that model: the file may refuse more than the API, never less, and `infra/test/platform/fixtures/defaultMetadataValueCrossCheck.json` is checked against both sides (backend test `backend/tests/models/test_metadataSchema_default_value_crosscheck.py`). Its seed has a fixed logical id (no `schemaIndex`). Emptying the file later leaves an already seeded row. Test: `infra/test/platform/defaultFileMetadataSchemaSeed.test.ts`.
+
+Every deploy-time seed `AwsCustomResource` (the auth defaults, the system and admin users, the metadata schema defaults and the feature-switch rows) sets `serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT` (`infra/lib/helper/seedCustomResource.ts`, 10 minutes, above the provider function's own timeout), so a response CloudFormation does not register fails the stack operation within minutes instead of after its one-hour default. A new seed sets it too. Test: `infra/test/platform/seedCustomResourceServiceTimeout.test.ts`.
 
 ### **Security Helper Integration**
 
@@ -2053,6 +2286,8 @@ The shipped `VAMS-RateLimit` rate-based rule is built with `aggregateKeyType: IP
 -   **`suppressCdkNagLambda`**: Applies the standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS actions), scoped to the function instead of the whole stack
 -   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards
 -   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies the same IAM4/IAM5 suppressions only to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach
+
+**IAM inline policy budget** (mirrors `infra/CLAUDE.md`): IAM refuses a role whose inline policies exceed 10,240 characters, and deployed sizes grow with the stack name, the partition and Region names, a customer managed key and an enabled execution type, so a role that fits in a commercial synth can fail a GovCloud deploy. CDK's own overflow split estimates 150 characters per ARN (real table ARNs are about 200) and does not count a policy of its own, so it does not keep a role under the limit. Every role in `apiBuilder` and `apiBuilder2` stays at or under 9,216 (90%) in the commercial, CMK, GovCloud, EU Sovereign and worst-case cells (`infra/test/security/iamInlinePolicyBudget.test.ts`, estimator `infra/test/support/iamPolicySize.ts`; a role already above it is a named, shrink-only exception), and each customer managed policy on them at or under 5,530. On a large role, write DynamoDB grants as exact statements (each table once, only the actions the handler calls, only the indexes it queries), pinned by a backend test that records the handler's calls and a synth test of the same list; move a statement that cannot shrink into a customer managed policy attached with `role.addManagedPolicy()` (`attachManagedHandlerPolicy`); and split a route needing grants the rest do not onto its own function, as permanent delete runs the execution service handler on `executionPermanentDelete` with `EXECUTION_SERVICE_ROUTES` selecting the routes each function serves.
 
 **Workflow service internal-action invoke** (mirrors `infra/CLAUDE.md`): `grantWorkflowServiceInternalInvoke` (`lambdaBuilder/workflowFunctions.ts`) gives `pipelineService` and `executeWorkflow`, the callers of the workflow service's internal redeploy actions, `lambda:InvokeFunction` on the workflow service's exact `functionArn` in an explicit `PolicyStatement` (env `WORKFLOW_SERVICE_V2_FUNCTION_NAME`). It is written out instead of `grantInvoke()`, which adds `{functionArn}:*`, because the internal actions have no API Gateway authorizer: this grant and the handler's `SYSTEM_USER` cross-call check are their whole boundary. Neither caller gets a Step Functions or `iam:PassRole` grant; `test/security/workflowLambdaGrants.test.ts` pins it. Other Lambda-to-Lambda grants use `grantInvoke()`, as in the examples in this guide.
 
@@ -2324,6 +2559,12 @@ export function buildApiGatewayAuthorizerRestFunction(
     if (config.app.authProvider.useCognito.enabled) {
         environment.USER_POOL_ID = "${cognito_user_pool_id}"; // Replaced at runtime
         environment.APP_CLIENT_ID = "${cognito_app_client_id}"; // Replaced at runtime
+        // Extra accepted app clients (#1328): emitted ONLY when listed, so a deployment without
+        // the option synthesizes the same authorizer
+        const extraClients = config.app.authProvider.useCognito.additionalTokenAudiences;
+        if (extraClients && extraClients.length > 0) {
+            environment.ADDITIONAL_APP_CLIENT_IDS = JSON.stringify(extraClients);
+        }
     }
 
     if (config.app.authProvider.useExternalOAuthIdp.enabled) {
@@ -2337,6 +2578,11 @@ export function buildApiGatewayAuthorizerRestFunction(
         );
         environment.JWT_USER_ID_CLAIM =
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim;
+        // Extra accepted audiences (#1328), same rule
+        const extraAudiences = config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences;
+        if (extraAudiences && extraAudiences.length > 0) {
+            environment.JWT_ADDITIONAL_AUDIENCES = JSON.stringify(extraAudiences);
+        }
     }
 
     const authorizerFunc = new lambda.Function(scope, name, {
@@ -3001,14 +3247,15 @@ When making CDK infrastructure changes, update the corresponding documentation a
 #### **Docusaurus Documentation Updates:**
 
 -   **New config option** → Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
--   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm the `infra/test/config/configBuilderSync.test.ts` drift check passes. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it covers **neither** `validation.ts` nor `derived.ts`, so both are kept in sync by review, not by the test. New/changed `getConfig()` validation logic must be hand-ported into `validation.ts`: a missing rule leaves the ConfigBuilder approving a config that then fails `cdk synth`, which is worse than no validation because the operator was told it was valid. `getConfig()` auto-mutations — assignments that rewrite the operator's config — must be mirrored into `derived.ts` when added or changed, and **deleted** from it when removed from `getConfig()`; a leftover mutation makes the builder keep rewriting the downloaded `config.json` in a way the deployment does not. `getConfig()` performs no auto-mutation today, so `applyDerived()` is a pass-through. Where `getConfig()` rejects a feature combination instead of assigning, the mirror is an error rule in `validation.ts` — a feature added to a constraint list such as the VPC-requiring set goes into that file's `VPC_REQUIRING_FEATURES` table, not into `derived.ts`. Two exclusions: rules reading a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`. When checking the port, compare the config FIELD PATHS each rule references; the two files word the same rule differently, so matching on message text under-reports drift.
+-   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm the `infra/test/config/configBuilderSync.test.ts` drift check passes. An add-on field in the add-on config lane (`infra/config/addon/`) goes in its ConfigBuilder module `ConfigBuilder/addon/<addon>.ts` instead (fields, presets, rules, VPC-requiring features and normalizations, joined by `ConfigBuilder/addon/index.ts`), which the drift check covers with the files it splices into; its interface walker follows `config.ts`'s imports into `config/addon/`. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it covers **neither** `validation.ts` nor `derived.ts`, so both are kept in sync by review, not by the test. New/changed `getConfig()` validation logic must be hand-ported into `validation.ts` (an add-on module's rule into its ConfigBuilder module): a missing rule leaves the ConfigBuilder approving a config that then fails `cdk synth`, which is worse than no validation because the operator was told it was valid. `getConfig()` auto-mutations — assignments that rewrite the operator's config — must be mirrored into `derived.ts` when added or changed, and **deleted** from it when removed from `getConfig()`; a leftover mutation makes the builder keep rewriting the downloaded `config.json` in a way the deployment does not. Any `getConfig()` normalization is mirrored in `derived.ts`, or in the add-on's ConfigBuilder module for an add-on field (`applyDerived()` runs each one through `applyAddonDerived()`); nothing else may be. The core `getConfig()` performs no auto-mutation today, so the core part of `applyDerived()` is a pass-through; an add-on's steering names any normalization its module mirrors. Where `getConfig()` rejects a feature combination instead of assigning, the mirror is an error rule in `validation.ts` — a feature added to a constraint list such as the VPC-requiring set goes into that file's `VPC_REQUIRING_FEATURES` table (or the add-on module's list that `ADDON_VPC_REQUIRING_FEATURES` joins in), not into `derived.ts`. Two exclusions: rules reading a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`. When checking the port, compare the config FIELD PATHS each rule references; the two files word the same rule differently, so matching on message text under-reports drift.
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, `overview/features.md`, `sidebars.ts`
--   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`; add the resource-name constant to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve names from the published SSM parameters), then register the descriptor in `resourceNameRegistry` in `storageBuilder-nestedStack.ts`. Same three-way constants update for new audit CloudWatch log groups. Deprecated tables kept for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
+-   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`; add the resource-name constant to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve names from the published SSM parameters), then register the descriptor in `resourceNameRegistry` in `storageBuilder-nestedStack.ts`. Same three-way constants update for new audit CloudWatch log groups. Deprecated tables kept for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`). An add-on table is created in the add-on's own nested stack, spreading `addonDynamoDbTableDefaults(kmsKey)` (`infra/lib/nestedStacks/addon/addonStackHelpers.ts`, held to the core table properties by `infra/test/addon/addonDynamoDbTableDefaults.test.ts`) with the storage key imported by ARN, and its name goes in the add-on lane instead: a key in `infra/common/addonResourceParamKeys.ts`, mirrored in `AddonResourceKeys` (`backend/backend/common/addonResourceNames.py`), published by the add-on stack with `publishAddonResourceName()` under `resourceNames/addon/`; `ssm_resource_lookup.py` carries no add-on key, and the table is documented on the add-on's resources page.
 -   **New or changed S3 bucket** → Update the Amazon S3 Buckets table in `architecture/aws-resources.md` (including its removal policy and whether it has a custom/fixed name) and the bucket list in `deployment/uninstall.md`
 -   **New or changed CloudWatch log group** → Update the Amazon CloudWatch section in `architecture/aws-resources.md` and the log group cleanup in `deployment/uninstall.md`
 -   **New nested stack** → Update `architecture/details.md`
 -   **New feature switch** → Update `overview/features.md`
 -   **New external configuration/policy file** (e.g. `config/policy/iamRoleConfig.json`) → Add it to the "Additional configuration files" table in `deployment/configuration-reference.md`, document the `config.json` flag that enables it, and explain the file structure.
+-   **New or reclassified add-on** → The pages in the `DOCUMENTATION_WORKFLOW.md` "New or reclassified add-on" row: `developer/addons-overview.md`, the add-on's own pages under `developer/<addon>/`, and the core pages that point to them.
 
 :::note[Document two independent properties: removal policy and custom name]
 When adding or changing a storage resource (Amazon S3 bucket, Amazon DynamoDB table) or Amazon CloudWatch log group, document **both** of these properties in `architecture/aws-resources.md`, and reflect them in `deployment/uninstall.md`:
@@ -3019,6 +3266,10 @@ When adding or changing a storage resource (Amazon S3 bucket, Amazon DynamoDB ta
 These axes are independent. A resource that is **retained but auto-named** (for example, the VAMS asset, auxiliary, artefacts, and access logs buckets, and all DynamoDB tables) does **not** need to be deleted before redeploying with the same config — leave it unless you intend to remove the data. A resource with a **custom/fixed name** (for example, the ALB web app bucket and its access logs bucket, named for the domain host; and all `/aws/vendedlogs/...` log groups) **must** be flagged so operators delete any orphaned copy before redeploying.
 
 The **VAMS-generated KMS CMK** (`useKmsCmkEncryption.enabled` with no `optionalExternalCmkArn`) is `RemovalPolicy.RETAIN` — it must outlive the retained tables and buckets it encrypts, so deleting it is a deliberate operator step taken after that data is removed. It is **not** redeploy-collision relevant: it carries no `kms.Alias` and is addressed only by its generated key id, so a retained key never collides with the key a redeploy creates. Adding a `kms.Alias` would void that property.
+
+**Staged objects in the auxiliary bucket expire through a lifecycle rule on their prefix.** A handler that writes a short-lived object to the auxiliary bucket (a staged export payload, a pipeline scratch object, a marker) and cannot always delete it itself gets a prefix-scoped rule in `storageBuilder-nestedStack.ts`. The bucket is versioned, so each prefix carries two rules: `expiration` with `noncurrentVersionExpiration`, and `expiredObjectDeleteMarker`. The prefix is a `config.ts` constant that the handler's grant and the rule both read. **A VAMS-owned top-level prefix in the auxiliary bucket starts with `vams.`**: preview and viewer data is keyed under `{databaseId}/`, and a database ID (`^[-_a-zA-Z0-9]{3,63}$`) cannot contain a dot, so a `vams.` prefix and its lifecycle rules never reach a database's data. Prefixes in use: `{databaseId}/` (previews and viewer data), `pipelines/` (pipeline working files and markers), and `vams.assetExports/<databaseId>/<assetId>/<id>.json` (staged asset export payloads, read only through a presigned URL). An object handed out through a presigned URL expires after the URL can no longer work: `ASSET_EXPORT_STAGING_PREFIX` (`vams.assetExports/`) expires after `ASSET_EXPORT_STAGING_EXPIRATION_DAYS` (8), derived from `PRESIGNED_URL_MAX_TIMEOUT_SECONDS`, with its noncurrent versions and expired delete markers; the bucket-wide abort-multipart rule covers it too. Those rules are on in every deployment, and `infra/test/storage/assetExportStagingExpiry.test.ts` pins each of them across the shipped templates, plus a guard that the prefix cannot match the database ID pattern.
+
+**Add-on resources follow the same two properties** but are documented on the add-on's own pages: every resource an add-on creates — including anything it registers outside CloudFormation, recorded as "not a stack resource" with the step that removes it — goes on the add-on's resources page (`docs/developer/<addon>/resources.md`), and its teardown on the add-on's uninstall page. `aws-resources.md` ("Add-on Resources") and `uninstall.md` ("Pre-uninstall: add-ons") point to those pages and list no add-on resource. Each add-on's steering names the resources its pages carry.
 :::
 
 #### **Cross-Steering File Updates:**
@@ -3027,7 +3278,7 @@ When changes affect development standards, architecture patterns, or quality req
 
 1. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
 2. Update the `.kiro/steering/` version of affected workflow files
-3. Keep WEB_DEVELOPMENT_WORKFLOW.md, WEB_FRONTEND.md, BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, CLI_DEVELOPMENT_WORKFLOW.md, and DOCUMENTATION_WORKFLOW.md aligned when cross-component patterns change
+3. Keep `WEB_DEVELOPMENT_WORKFLOW.md`, `WEB_FRONTEND.md`, `BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`, `CDK_DEVELOPMENT_WORKFLOW.md`, `CLI_DEVELOPMENT_WORKFLOW.md`, and `DOCUMENTATION_WORKFLOW.md` aligned when cross-component patterns change, and each add-on's `ADDON_<ADDON>.md` file aligned with that add-on's own `CLAUDE.md` files
 4. Update any Claude Code skills in `.claude/commands/` that scaffold or reference the changed rule, pattern, checklist, or file path (see root `CLAUDE.md` Rule 12 for the skill-to-steering mapping) — a stale skill actively scaffolds outdated code
 
 ---
@@ -3047,9 +3298,26 @@ The helper **throws** on a Token, so a new site fails at synth with the argument
 `infra/test/security/hashedNamesAreDeterministic.test.ts` synthesizes the same template twice in one
 process -- the case where the token counter does not reset -- and requires identical ids and names.
 
+### **Rule 9: Data Migration Scripts MUST NOT Carry Committed Tests**
+
+`infra/deploymentDataMigration/` holds operator-run, one-shot scripts. Nothing matching `test_*.py`,
+`*_test.py`, `conftest.py`, a `tests/` directory, or a pytest configuration is committed under it. A
+transform is verified against a deployment -- `--dry-run`, then the real run, then the API and the tables
+the step reports on. Unit-style checks written while developing a transform (a `moto` seed per row shape,
+a Lambda fake) are run locally and left uncommitted: the scripts run once per upgrade against live data,
+where a `moto` table shape drifts from the real one without anything failing, and a test tree there is one
+pytest never collects (no configuration, no `__init__.py`), so it decays silently. The repository-level
+contract for the scripts -- wrapper exit-status propagation, the README's IAM policy, the step names the
+upgrade guide documents -- lives in `infra/test/platform/migrationTooling.test.ts`; a new cross-cutting
+migration guarantee goes there. Guard: `infra/test/platform/migrationNoCommittedTests.test.ts`.
+
 ## 📚 **Detailed Implementation Guide**
 
 ### **Adding New Configuration Options**
+
+Every module-level constant in `config.ts`, and in each add-on configuration module under `config/addon/`, is declared at the top of the file, after the imports and before the first function, in one of its two sections: **Constants that shape the deployment** (a value that reaches synthesized infrastructure — imported by `lib/` or `bin/`, or written into the config object by `getConfig()`), then **Constants used only to check configuration** (the patterns, limits and allowed-value lists `getConfig()` and its validators compare against). A new constant goes into the section that matches its use, never beside the function that reads it; `test/config/configConstantsLayout.test.ts` fails on a constant declared below the first function, interface or type, and on a constant `lib/` or `bin/` imports that is declared in the checks section.
+
+An add-on whose block lives in the add-on config lane takes Steps 1 and 2 in its own module under `config/addon/` (its interfaces, defaults and validation), which `config/addon/addonConfig.ts` joins into `ConfigPublic.app.addons` through `ConfigAddonLane`; `getConfig()` calls the lane's defaults, CodeBuild-partition warning, VPC-requiring-features and validation functions. Its switch goes in `common/addonAppFeatures.ts` (`ADDON_APP_FEATURES`), pushed by `AddonBuilderNestedStack.enabledFeatures`, rather than in Step 3's core enum.
 
 #### **Step 1: Define Configuration Interface**
 
@@ -3112,7 +3380,8 @@ The docs-site config generator is a hand-maintained mirror of `config.ts` — it
     - `schema.ts` — add a `FIELDS` entry (path + label + input kind + section).
     - `defaults.ts` — add the default (kept deep-equal to all three of `config.template.commercial.json` / `config.template.govcloud.json` / `config.template.eusovereign.json`).
     - `validation.ts` — add a `Rule` mirroring any new `throw new Error(...)` / `console.warn(...)` you added in `getConfig()`. Each rule section anchors to the `getConfig()` block it mirrors by quoting that block's leading comment or error-message text, not by line number.
-    - `derived.ts` — mirror any `getConfig()` auto-mutation you added or changed (an assignment that rewrites the operator's config), and **delete** any that `getConfig()` does not perform. It performs none today, so `applyDerived()` is a pass-through; a feature added to a `getConfig()` constraint list such as the VPC-requiring set belongs in `validation.ts`'s `VPC_REQUIRING_FEATURES` table instead.
+    - `derived.ts` — mirror any `getConfig()` auto-mutation you added or changed (an assignment that rewrites the operator's config), and **delete** any that `getConfig()` does not perform. The core `getConfig()` performs none today, so the core part of `applyDerived()` is a pass-through; a feature added to a `getConfig()` constraint list such as the VPC-requiring set belongs in `validation.ts`'s `VPC_REQUIRING_FEATURES` table instead.
+    - An add-on field in the add-on config lane goes in its module `ConfigBuilder/addon/<addon>.ts` instead of the four files above (fields, presets, rules, VPC-requiring features and normalizations, joined by `ConfigBuilder/addon/index.ts`); `applyDerived()` runs its normalizations through `applyAddonDerived()`.
 3. Run `cd infra && npm test` — the `configBuilderSync.test.ts` drift check deep-equals `defaults.ts` against the templates and asserts every `ConfigPublic` leaf has a form field. **Note:** the test covers only `schema.ts` (fields) and `defaults.ts` (presets); it validates neither `validation.ts` nor `derived.ts` against `getConfig()`. Keeping those two in step with `getConfig()`'s `throw`/`warn` logic and its auto-mutations is a manual, review-enforced task — a stale, missing, or leftover rule will not be caught by any test.
 
 ### **Creating New Nested Stacks**
@@ -3240,6 +3509,7 @@ dependentStack.addDependency(newFeatureStack);
 ### **Pre-Deployment**
 
 -   [ ] Configuration validated
+-   [ ] `npm run check.quotas [-- --config-file <name>]` (`infra/scripts/assertDeployQuotas.ts`) exits `0`: it checks the API Gateway `L-E5AE38E3` quota and, when `app.addStackCloudTrailLogs` is not `false`, the Region's CloudTrail trail count against the fixed 5-per-Region limit (`checkCloudTrailTrails`; a core stack that already holds a trail passes; fewer than 5 home-Region trails that reach 5 with shadow trails, i.e. multi-Region or organization trails homed elsewhere, is UNKNOWN, exit `2`, naming them). Exit `1` means the deploy would fail, `2` that a check could not run
 -   [ ] CDK synth successful
 -   [ ] CDK diff reviewed
 -   [ ] Security review completed

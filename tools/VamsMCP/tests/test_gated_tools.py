@@ -13,7 +13,8 @@ The other half of the gap was directional. `test_write_tools_gated_off_by_defaul
 `test_destructive_tools_gated_off_by_default` assert only ABSENCE, so a write tool accidentally placed
 under `if CONFIG.enable_destructive:` — or a misspelled env var — left the tool unreachable with
 writes on, and nothing failed. `test_every_gated_tool_is_registered_with_both_gates_on` below is the
-positive control that catches misplacement in that direction.
+positive control for a tool that no gate registers, and
+`test_writes_alone_register_every_write_tool_and_no_destructive_tool` for one under the other gate.
 
 The reload is the only way in: the gate decision happens at import, before any fixture runs. The
 fixture manages `os.environ` directly rather than through `monkeypatch`, because monkeypatch's undo
@@ -37,8 +38,18 @@ WRITE_TOOLS = (
     "create_asset",
     "update_asset",
     "set_asset_metadata",
+    "set_file_metadata",
+    "set_primary_file",
+    "revert_file_version",
     "create_folder",
     "create_asset_version",
+    "move_file",
+    "copy_file",
+    "create_asset_link",
+    "create_tag",
+    "update_tag",
+    "create_tag_type",
+    "update_tag_type",
     "create_pipeline",
     "update_pipeline",
     "create_pipeline_template",
@@ -60,6 +71,18 @@ WRITE_TOOLS = (
     "create_user_api_key",
     "update_api_key",
     "update_user_api_key",
+    "create_compliance_schema",
+    "update_compliance_schema",
+    "bind_compliance_schema",
+    "unbind_compliance_schema",
+    "evaluate_asset_compliance",
+    "sweep_compliance_schema",
+    "evaluate_database_compliance",
+    "release_quarantine",
+    "grant_quarantine_exception",
+    "create_compliance_cascade",
+    "approve_compliance_cascade",
+    "reject_compliance_cascade",
 )
 
 DESTRUCTIVE_TOOLS = (
@@ -67,6 +90,13 @@ DESTRUCTIVE_TOOLS = (
     "unarchive_asset",
     "delete_asset",
     "delete_database",
+    "archive_file",
+    "unarchive_file",
+    "delete_file",
+    "delete_asset_link",
+    "delete_asset_metadata",
+    "delete_tag",
+    "delete_tag_type",
     "archive_pipeline",
     "unarchive_pipeline",
     "archive_workflow",
@@ -80,6 +110,7 @@ DESTRUCTIVE_TOOLS = (
     "delete_metadata_schema",
     "delete_api_key",
     "delete_user_api_key",
+    "delete_compliance_schema",
 )
 
 GATE_VARS = ("VAMS_ENABLE_WRITES", "VAMS_ENABLE_DESTRUCTIVE")
@@ -122,13 +153,32 @@ def gated(enabled_server, monkeypatch):
 async def test_every_gated_tool_is_registered_with_both_gates_on(enabled_server):
     """The direction the gate-off tests cannot see.
 
-    A write tool that drifted one block down into the destructive section, or a `def` that landed
-    after the `if __name__` entrypoint, keeps all four registration tests in test_server_tools.py
-    green while making the tool unreachable with writes on.
+    A `def` that landed after the `if __name__` entrypoint keeps all four registration tests in
+    test_server_tools.py green while making the tool unreachable. A write tool that drifted one block
+    down into the destructive section is still registered here; the next test catches it.
     """
     names = {tool.name for tool in await enabled_server.mcp.list_tools()}
     missing = sorted(set(WRITE_TOOLS + DESTRUCTIVE_TOOLS) - names)
     assert not missing, f"tools are not registered with both gates on: {missing}"
+
+
+@pytest.mark.asyncio
+async def test_writes_alone_register_every_write_tool_and_no_destructive_tool():
+    """The split between the two tuples: a write tool filed under the destructive gate is absent here,
+    and a destructive tool filed under the writes gate is present."""
+    os.environ["VAMS_ENABLE_WRITES"] = "true"
+    importlib.reload(server_module)
+    try:
+        assert server_module.CONFIG.enable_writes is True
+        assert server_module.CONFIG.enable_destructive is False
+        names = {tool.name for tool in await server_module.mcp.list_tools()}
+    finally:
+        os.environ.pop("VAMS_ENABLE_WRITES", None)
+        importlib.reload(server_module)
+    missing = sorted(set(WRITE_TOOLS) - names)
+    leaked = sorted(set(DESTRUCTIVE_TOOLS) & names)
+    assert not missing, f"write tools not registered with writes alone on: {missing}"
+    assert not leaked, f"destructive tools registered with writes alone on: {leaked}"
 
 
 @pytest.mark.asyncio
@@ -624,6 +674,7 @@ def test_create_api_key_payload_keys_and_optional_expiry(gated):
     mod, client = gated
     mod.create_api_key("ci", "bot@example.com", "automation")
     client.api.create_api_key.assert_called_once_with(
+        # pragma: allowlist nextline secret
         {"apiKeyName": "ci", "userId": "bot@example.com", "description": "automation"}
     )
     client.api.create_api_key.reset_mock()
@@ -638,6 +689,7 @@ def test_create_user_api_key_sends_the_required_expiry_and_no_user_id(gated):
     mod, client = gated
     mod.create_user_api_key("ci", "automation", "2026-12-31T23:59:59Z")
     client.api.create_user_api_key.assert_called_once_with(
+        # pragma: allowlist nextline secret
         {"apiKeyName": "ci", "description": "automation", "expiresAt": "2026-12-31T23:59:59Z"}
     )
     assert "userId" not in client.api.create_user_api_key.call_args.args[0]
@@ -646,9 +698,10 @@ def test_create_user_api_key_sends_the_required_expiry_and_no_user_id(gated):
 def test_create_api_key_returns_the_one_time_key_unaltered(gated):
     """The value is shown once; the tool must not strip or rename it on the way through."""
     mod, client = gated
+    # pragma: allowlist nextline secret
     client.api.create_api_key.return_value = {"apiKeyId": "k1", "apiKey": "vams_secret_once"}
     result = mod.create_api_key("ci", "bot@example.com", "automation")
-    assert result["apiKey"] == "vams_secret_once"
+    assert result["apiKey"] == "vams_secret_once"  # pragma: allowlist secret
 
 
 @pytest.mark.parametrize("tool,method", [("update_api_key", "update_api_key"),

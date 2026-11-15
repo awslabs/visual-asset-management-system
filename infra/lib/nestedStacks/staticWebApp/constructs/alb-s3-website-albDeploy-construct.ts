@@ -81,6 +81,21 @@ const ALB_SECURITY_HEADERS: Record<string, string> = {
     "routing.http.response.x_frame_options.header_value": "SAMEORIGIN",
 };
 
+/** Elastic Load Balancing limit on a load balancer name. */
+const ALB_NAME_MAX_LENGTH = 32;
+
+/**
+ * The web ALB's name: `<name>-core-<baseStackName>-WebAppALB`, cut to the 32-character limit.
+ *
+ * A name must not end with a hyphen, and the cut can land on one (for example right after the
+ * `baseStackName`), so trailing hyphens left by the cut are dropped. Names that fit are unchanged.
+ */
+export function albLoadBalancerName(configName: string, baseStackName: string): string {
+    return `${configName}-core-${baseStackName}-WebAppALB`
+        .substring(0, ALB_NAME_MAX_LENGTH)
+        .replace(/-+$/, "");
+}
+
 export interface AlbS3WebsiteAlbDeployConstructProps extends cdk.StackProps {
     /**
      * The path to the build directory of the web site, relative to the project root
@@ -139,9 +154,10 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
 
         // Create an ALB
         const alb = new elbv2.ApplicationLoadBalancer(this, "WebAppDistroALB", {
-            loadBalancerName: `${
-                props.config.name + "-core-" + props.config.app.baseStackName
-            }-WebAppALB`.substring(0, 32),
+            loadBalancerName: albLoadBalancerName(
+                props.config.name,
+                props.config.app.baseStackName
+            ),
             internetFacing: props.config.app.useAlb.usePublicSubnet,
             vpc: props.vpc,
             vpcSubnets: { subnets: props.albSubnets },
@@ -207,13 +223,14 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
             //TODO: Figure out why this policy is not working and still letting requests through for other bucket names (use ALB dns name to test)
             //TODO?: Specifically add a deny policy for anything outside of bucket
             //Add policy to VPC endpoint to only allow access to the specific S3 Bucket
+            //Object reads only: serving the web app is a GET or HEAD of an object, both of which are
+            //s3:GetObject, so the anonymous grant names no bucket-level resource and no other action.
+            //Without s3:ListBucket, a request for a key that does not exist is answered 403, not 404.
+            //Kept in step with the web app bucket policy statement in staticWebBuilder-nestedStack.ts.
             s3VPCEndpoint.addToPolicy(
                 new iam.PolicyStatement({
-                    resources: [
-                        props.webAppBucket.arnForObjects("*"),
-                        props.webAppBucket.bucketArn,
-                    ],
-                    actions: ["s3:Get*", "s3:List*"],
+                    resources: [props.webAppBucket.arnForObjects("*")],
+                    actions: ["s3:GetObject"],
                     principals: [new iam.AnyPrincipal()],
                 })
             );

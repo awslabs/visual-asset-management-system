@@ -5,14 +5,17 @@ import pytest
 import os
 import tempfile
 from unittest.mock import Mock, patch, MagicMock
+import click
 from click.testing import CliRunner
 
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError,
-    FileDownloadError
+    FileDownloadError, AssetAlreadyExistsError, FileUploadError, PermissionDeniedError
 )
+from vamscli.utils.global_exceptions import _global_error_data
 from vamscli.utils.glb_combiner import GLBCombineError
+from vamscli.utils.json_output import output_error
 
 
 # File-level fixtures for spatial command testing
@@ -217,6 +220,38 @@ class TestSpatialGLBAssetCombineCommand:
             assert result.exit_code == 1
             assert 'Asset not found' in result.output
     
+    def test_glbassetcombine_asset_creation_succeeds_after_cleanup(
+            self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, monkeypatch):
+        """The default cleanup after the upload does not turn a successful run into exit 1 (#1356)."""
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+
+        def write_combined_glb(export_result, temp_dir, root_name, json_output, failed_operations):
+            path = os.path.join(temp_dir, f"{root_name}__COMBINED.glb")
+            with open(path, 'wb') as f:
+                f.write(b'0123456789')
+            return path, {'total_assets_processed': 2, 'total_glbs_combined': 1}
+
+        with spatial_command_mocks, \
+             patch('vamscli.commands.industry.spatial.glb.export_command', return_value=mock_export_result), \
+             patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs',
+                   side_effect=write_combined_glb), \
+             patch('vamscli.commands.industry.spatial.glb.create_command',
+                   return_value={'assetId': 'new-asset-id'}), \
+             patch('vamscli.commands.industry.spatial.glb.upload_command',
+                   return_value={'overall_success': True}) as mock_upload:
+            result = cli_runner.invoke(cli, [
+                'industry', 'spatial', 'glbassetcombine', '-d', 'test-db', '-a', 'root-asset',
+                '--asset-create-name', 'Combined Model', '--json-output'
+            ])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)
+        assert data['new_asset']['asset_id'] == 'new-asset-id'
+        assert data['combined_glb_size'] == 10
+        assert data['temporary_directory'] == 'deleted'
+        assert not os.path.exists(data['combined_glb_path'])
+        assert mock_upload.call_count == 2
+    
     @patch('vamscli.commands.industry.spatial.glb.export_command')
     @patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs')
     @patch('vamscli.commands.industry.spatial.glb.create_command')
@@ -236,7 +271,7 @@ class TestSpatialGLBAssetCombineCommand:
             )
             
             mock_create.return_value = {'assetId': 'new-asset-id'}
-            mock_upload.return_value = {'success': True}
+            mock_upload.return_value = {'overall_success': True}
             
             with patch('builtins.open', create=True):
                 with patch('os.path.getsize', return_value=1024000):
@@ -260,6 +295,154 @@ class TestSpatialGLBAssetCombineCommand:
             
             # Verify upload was called twice (GLB + JSON)
             assert mock_upload.call_count == 2
+
+
+def _fail_like_a_command(error):
+    """A nested command that fails the way a real command does in JSON mode."""
+    def command(**kwargs):
+        output_error(error, kwargs['json_output'])
+        raise click.ClickException(str(error))
+    return command
+
+
+class TestGLBAssetCombineNestedFailure:
+    """A failed nested export, asset creation or upload ends glbassetcombine with one error (#1349)."""
+
+    def _run(self, cli_runner, spatial_command_mocks, mock_export_result, extra_args,
+             export_side_effect=None, create_side_effect=None, upload_side_effect=None):
+        with spatial_command_mocks, \
+             patch('vamscli.commands.industry.spatial.glb.export_command',
+                   side_effect=export_side_effect, return_value=mock_export_result), \
+             patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs',
+                   return_value=('/tmp/test/root__COMBINED.glb', {'total_assets_processed': 2})), \
+             patch('vamscli.commands.industry.spatial.glb.create_command',
+                   side_effect=create_side_effect, return_value={'assetId': 'new-asset-id'}), \
+             patch('vamscli.commands.industry.spatial.glb.upload_command',
+                   side_effect=upload_side_effect, return_value={'overall_success': True}), \
+             patch('builtins.open', create=True), \
+             patch('os.path.getsize', return_value=1024000), \
+             patch('tempfile.mkdtemp', return_value='/tmp/test'), \
+             patch('os.makedirs'), \
+             patch('shutil.rmtree'):
+            return cli_runner.invoke(cli, [
+                'industry', 'spatial', 'glbassetcombine', '-d', 'test-db', '-a', 'root-asset',
+            ] + extra_args)
+
+    def test_json_output_writes_the_export_error_document(self, cli_runner, spatial_command_mocks,
+                                                          mock_export_result):
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result, ['--json-output'],
+                           export_side_effect=_fail_like_a_command(AssetNotFoundError("Asset not found")))
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout) == {'error': 'Asset not found', 'error_type': 'AssetNotFoundError'}
+
+    def test_json_output_writes_the_create_error_document(self, cli_runner, spatial_command_mocks,
+                                                          mock_export_result):
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           ['--asset-create-name', 'Combined Model', '--json-output'],
+                           create_side_effect=_fail_like_a_command(
+                               AssetAlreadyExistsError("Asset already exists")))
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout) == {
+            'error': 'Asset already exists', 'error_type': 'AssetAlreadyExistsError'}
+
+    def test_json_output_writes_an_error_document_for_a_create_exception(
+            self, cli_runner, spatial_command_mocks, mock_export_result):
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           ['--asset-create-name', 'Combined Model', '--json-output'],
+                           create_side_effect=KeyError('assetId'))
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout)['error_type'] == 'KeyError'
+
+    def test_json_output_names_the_created_asset_when_an_upload_fails(
+            self, cli_runner, spatial_command_mocks, mock_export_result):
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           ['--asset-create-name', 'Combined Model', '--json-output'],
+                           upload_side_effect=_fail_like_a_command(FileUploadError("Upload failed: timeout")))
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout) == {
+            'error': 'Upload failed: timeout', 'error_type': 'FileUploadError',
+            'createdAssetId': 'new-asset-id'}
+
+    def test_json_output_reports_an_upload_that_stored_nothing(
+            self, cli_runner, spatial_command_mocks, mock_export_result):
+        # Under another command, `file upload` returns overall_success: false instead of exiting 1
+        failed_upload = {'overall_success': False, 'failed_files': 1, 'sequence_results': [
+            {'sequence_number': 1, 'successful_files': 0, 'failed_files': ['root__COMBINED.glb']}]}
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           ['--asset-create-name', 'Combined Model', '--json-output'],
+                           upload_side_effect=lambda **kwargs: failed_upload)
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout) == {
+            'error': 'Upload failed for: root__COMBINED.glb', 'error_type': 'FileUploadError',
+            'createdAssetId': 'new-asset-id'}
+
+    def test_global_error_after_create_keeps_the_created_asset_id(
+            self, cli_runner, spatial_command_mocks, mock_export_result):
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           ['--asset-create-name', 'Combined Model', '--json-output'],
+                           upload_side_effect=PermissionDeniedError("Access forbidden"))
+
+        assert result.exit_code == 1
+        assert isinstance(result.exception, PermissionDeniedError)
+        document = _global_error_data("Permission Denied", str(result.exception),
+                                      exc=result.exception)
+        assert document['createdAssetId'] == 'new-asset-id'
+        assert document['error_type'] == 'PermissionDeniedError'
+
+    def test_text_mode_reports_the_create_error_on_stderr(self, cli_runner, spatial_command_mocks,
+                                                         mock_export_result):
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           ['--asset-create-name', 'Combined Model'],
+                           create_side_effect=_fail_like_a_command(
+                               AssetAlreadyExistsError("Asset already exists")))
+
+        assert result.exit_code == 1
+        assert '✗ AssetAlreadyExistsError: Asset already exists' in result.stderr
+        assert '"error"' not in result.stdout
+
+
+class TestGLBAssetCombineUploadRefused:
+    """A role that can create assets but not upload files: the real `file upload` runs (#1349)."""
+
+    def test_can_create_but_not_upload_exits_1_and_names_the_asset(
+            self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, monkeypatch):
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+
+        def write_combined_glb(export_result, temp_dir, root_name, json_output, failed_operations):
+            path = os.path.join(temp_dir, f"{root_name}__COMBINED.glb")
+            with open(path, 'wb') as f:
+                f.write(b'glb')
+            return path, {'total_assets_processed': 2, 'total_glbs_combined': 1}
+
+        with spatial_command_mocks as mocks, \
+             patch('vamscli.commands.file.APIClient', return_value=mocks['api_client']), \
+             patch('vamscli.commands.file.get_profile_manager_from_context',
+                   return_value=mocks['profile_manager']), \
+             patch('vamscli.commands.industry.spatial.glb.export_command',
+                   return_value=mock_export_result), \
+             patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs',
+                   side_effect=write_combined_glb), \
+             patch('vamscli.commands.industry.spatial.glb.create_command',
+                   return_value={'assetId': 'new-asset-id'}):
+            mocks['api_client'].get_database.return_value = {'databaseId': 'test-db'}
+            mocks['api_client'].initialize_upload.side_effect = PermissionDeniedError(
+                "Access forbidden. Not authorized to upload")
+            result = cli_runner.invoke(cli, [
+                'industry', 'spatial', 'glbassetcombine', '-d', 'test-db', '-a', 'root-asset',
+                '--asset-create-name', 'Combined Model', '--json-output'
+            ])
+
+        assert result.exit_code == 1, result.output
+        document = json.loads(result.stdout)
+        assert document['error_type'] == 'FileUploadError'
+        assert document['error'] == 'Upload failed for: /Root Asset__COMBINED.glb'
+        assert document['createdAssetId'] == 'new-asset-id'
+        mocks['api_client'].initialize_upload.assert_called()
 
 
 class TestGLBCombinerUtilities:
@@ -583,6 +766,140 @@ class TestSpatialCommandIntegration:
         result = cli_runner.invoke(cli, ['industry', 'spatial', '--help'])
         assert result.exit_code == 0
         assert 'glbassetcombine' in result.output
+
+
+class TestGLBAssetCombineDeleteTemporaryFiles:
+    """--delete-temporary-files is an on/off switch with --asset-create-name (#1350)."""
+
+    def _run(self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, *extra):
+        with spatial_command_mocks, \
+             patch('vamscli.commands.industry.spatial.glb.export_command', return_value=mock_export_result), \
+             patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs',
+                   return_value=(str(tmp_path / 'root__COMBINED.glb'), {'total_assets_processed': 2})), \
+             patch('vamscli.commands.industry.spatial.glb.create_command', return_value={'assetId': 'new-asset-id'}), \
+             patch('vamscli.commands.industry.spatial.glb.upload_command',
+                   return_value={'overall_success': True}), \
+             patch('builtins.open', create=True), \
+             patch('os.path.getsize', return_value=1024000), \
+             patch('tempfile.mkdtemp', return_value=str(tmp_path)), \
+             patch('shutil.rmtree') as rmtree:
+            result = cli_runner.invoke(cli, [
+                'industry', 'spatial', 'glbassetcombine', '-d', 'test-db', '-a', 'root-asset',
+                '--asset-create-name', 'Combined Model', '--json-output', *extra
+            ])
+        return result, rmtree
+
+    def test_no_delete_temporary_files_keeps_the_folder(self, cli_runner, spatial_command_mocks,
+                                                        mock_export_result, tmp_path):
+        result, rmtree = self._run(cli_runner, spatial_command_mocks, mock_export_result, tmp_path,
+                                   '--no-delete-temporary-files')
+
+        assert result.exit_code == 0, result.output
+        temp_dir = json.loads(result.stdout)['temporary_directory']
+        assert os.path.dirname(temp_dir) == str(tmp_path)
+        assert os.path.isdir(temp_dir)
+        rmtree.assert_not_called()
+
+    def test_delete_temporary_files_is_still_accepted(self, cli_runner, spatial_command_mocks,
+                                                      mock_export_result, tmp_path):
+        result, rmtree = self._run(cli_runner, spatial_command_mocks, mock_export_result, tmp_path,
+                                   '--delete-temporary-files')
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)['temporary_directory'] == 'deleted'
+        rmtree.assert_called_once()
+
+
+class TestGLBAssetCombineSystemTempFolder:
+    """What a run without --local-path leaves in the system temp directory (#1388, #1389)."""
+
+    @staticmethod
+    def _write_combined_glb(export_result, temp_dir, root_name, json_output, failed_operations):
+        path = os.path.join(temp_dir, f"{root_name}__COMBINED.glb")
+        with open(path, 'wb') as f:
+            f.write(b'0123456789')
+        return path, {'total_assets_processed': 2, 'total_glbs_combined': 1}
+
+    def _run(self, cli_runner, spatial_command_mocks, mock_export_result, *extra, upload=None,
+             export=None, json_output=True):
+        export_patch = ({'side_effect': export} if export is not None
+                        else {'return_value': mock_export_result})
+        upload_patch = ({'side_effect': upload} if upload is not None
+                        else {'return_value': {'overall_success': True}})
+        with spatial_command_mocks, \
+             patch('vamscli.commands.industry.spatial.glb.export_command', **export_patch), \
+             patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs',
+                   side_effect=self._write_combined_glb), \
+             patch('vamscli.commands.industry.spatial.glb.create_command',
+                   return_value={'assetId': 'new-asset-id'}), \
+             patch('vamscli.commands.industry.spatial.glb.upload_command', **upload_patch):
+            return cli_runner.invoke(cli, [
+                'industry', 'spatial', 'glbassetcombine', '-d', 'test-db', '-a', 'root-asset',
+                *(['--json-output'] if json_output else []), *extra
+            ])
+
+    def test_reported_paths_exist_without_asset_create_name(
+            self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, monkeypatch):
+        """Without an upload the temp folder holds the only copy of the output, so it stays (#1389)."""
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result)
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)
+        assert os.path.isdir(data['temporary_directory'])
+        assert os.path.isfile(data['combined_glb_path'])
+        assert os.path.isfile(data['export_json_path'])
+
+    def test_upload_cleanup_removes_the_whole_mkdtemp_folder(
+            self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, monkeypatch):
+        """The cleanup after an upload leaves no empty vams_glb_combine_* folder behind (#1388)."""
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           '--asset-create-name', 'Combined Model')
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)['temporary_directory'] == 'deleted'
+        assert os.listdir(tmp_path) == []
+
+    def test_failed_run_removes_the_whole_mkdtemp_folder(
+            self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, monkeypatch):
+        """A run that fails before it has a result leaves nothing in the system temp directory (#1388)."""
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           export=AssetNotFoundError("Asset not found"))
+
+        assert result.exit_code == 1
+        assert os.listdir(tmp_path) == []
+
+    def test_failed_upload_removes_the_whole_mkdtemp_folder(
+            self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, monkeypatch):
+        """A failed upload ends the run with an error (#1349) and leaves nothing behind (#1388)."""
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           '--asset-create-name', 'Combined Model',
+                           upload=RuntimeError("upload refused"), json_output=False)
+
+        assert result.exit_code == 1
+        assert '✗ Asset Creation Error: upload refused' in result.stderr
+        assert os.listdir(tmp_path) == []
+
+    def test_failed_upload_with_no_delete_temporary_files_keeps_the_folder(
+            self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, monkeypatch):
+        """--no-delete-temporary-files keeps the built files after a failed upload, as its help says."""
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           '--asset-create-name', 'Combined Model', '--no-delete-temporary-files',
+                           upload=RuntimeError("upload refused"), json_output=False)
+
+        assert result.exit_code == 1
+        assert '✗ Asset Creation Error: upload refused' in result.stderr
+        kept = sorted(name for _, _, names in os.walk(tmp_path) for name in names)
+        assert kept == ['Root Asset__COMBINED.glb', 'Root Asset_export.json']
 
 
 if __name__ == '__main__':

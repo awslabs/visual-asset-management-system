@@ -33,6 +33,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
@@ -466,6 +467,7 @@ def _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key
                    Body=rendered.encode("utf-8"), ContentType="application/json")
 
 
+@audited_handler
 def lambda_handler(event, context):
     """SFN-invoked interim tracking between pipeline N and N+1.
 

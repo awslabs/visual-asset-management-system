@@ -20,13 +20,19 @@ import {
 } from "@cloudscape-design/components";
 import { MetadataRowState, MetadataValueType } from "./types/metadata.types";
 import { isSchemaField, getValueTypeLabel } from "./utils/metadataHelpers";
-import { validateAllRows, validateMetadataValue } from "./utils/validationHelpers";
+import {
+    buildStoredMetadataValues,
+    isStoredValueUnchanged,
+    validateAllRows,
+    validateMetadataValue,
+} from "./utils/validationHelpers";
 import MetadataSchemaTooltip from "./MetadataSchemaTooltip";
 import { Popover } from "@cloudscape-design/components";
 import {
     exportToCSV,
     downloadCSV,
     importFromCSV,
+    IgnoredCSVRow,
     readFileAsText,
     validateCSVFile,
 } from "./utils/csvHelpers";
@@ -69,6 +75,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
     const [showImportModal, setShowImportModal] = useState(false);
     const [importFile, setImportFile] = useState<File[]>([]);
     const [importErrors, setImportErrors] = useState<string[]>([]);
+    const [ignoredImportRows, setIgnoredImportRows] = useState<IgnoredCSVRow[]>([]);
     const [rowValidationErrors, setRowValidationErrors] = useState<Map<number, string>>(new Map());
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -118,10 +125,21 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
         setEditedRows(bulkRows);
     }, [rows]);
 
+    // Values saved on the record when bulk edit opened; an offline draft has none saved yet
+    const storedValues = React.useMemo(
+        () => (mode === "online" ? buildStoredMetadataValues(rows) : undefined),
+        [mode, rows]
+    );
+
     // Validate a single row's value against its type
     const validateRowValue = (row: MetadataRowState): string | null => {
         if (!row.editValue || row.editValue.trim() === "") {
             return null; // Empty values are allowed (required check is separate)
+        }
+
+        // A saved value the user left alone is not checked, matching the API
+        if (isStoredValueUnchanged(row, storedValues)) {
+            return null;
         }
 
         // Validate type format
@@ -249,7 +267,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
     // Handle save
     const handleSave = () => {
         // Validate all rows
-        const validation = validateAllRows(editedRows);
+        const validation = validateAllRows(editedRows, storedValues);
         if (!validation.isValid) {
             setValidationError(validation.errors.join("\n"));
             return;
@@ -285,10 +303,20 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
 
         try {
             const content = await readFileAsText(file);
-            const { rows: importedRows, errors } = importFromCSV(
+            // Keys saved on the record when bulk edit opened; an offline draft has none saved yet
+            const storedKeys =
+                mode === "online"
+                    ? rows.filter((row) => !row.isNew).map((row) => row.metadataKey)
+                    : [];
+            const {
+                rows: importedRows,
+                errors,
+                ignoredSchemaRows,
+            } = importFromCSV(
                 content,
                 editedRows, // Pass existing rows for schema validation
-                restrictMetadata // Pass restriction flag
+                restrictMetadata, // Pass restriction flag
+                storedKeys
             );
 
             if (errors.length > 0) {
@@ -326,6 +354,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
 
             setEditedRows(mergedRows);
             setRowValidationErrors(newValidationErrors);
+            setIgnoredImportRows(ignoredSchemaRows);
             setShowImportModal(false);
             setImportFile([]);
             setImportErrors([]);
@@ -492,6 +521,33 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
                     <Alert type="info" header="Bulk Edit Mode">
                         You are in bulk edit mode. All values are shown as raw strings for quick
                         editing. Click "Back" when finished to return to normal mode.
+                    </Alert>
+                )}
+
+                {ignoredImportRows.length > 0 && (
+                    <Alert
+                        type="info"
+                        dismissible
+                        onDismiss={() => setIgnoredImportRows([])}
+                        dismissAriaLabel="Dismiss ignored rows notice"
+                        header={`${ignoredImportRows.length} imported ${
+                            ignoredImportRows.length === 1 ? "row was" : "rows were"
+                        } ignored`}
+                    >
+                        <SpaceBetween direction="vertical" size="xs">
+                            <div>
+                                {ignoredImportRows.length === 1
+                                    ? "This row sets a schema field, which CSV import does not overwrite. The field keeps its current value; edit it in the table to change it."
+                                    : "These rows set schema fields, which CSV import does not overwrite. The fields keep their current values; edit them in the table to change them."}
+                            </div>
+                            <ul style={{ margin: 0, paddingLeft: "20px" }}>
+                                {ignoredImportRows.map((row) => (
+                                    <li key={`${row.key}-${row.line}`}>
+                                        {row.key} (line {row.line})
+                                    </li>
+                                ))}
+                            </ul>
+                        </SpaceBetween>
                     </Alert>
                 )}
 
@@ -756,7 +812,10 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
                                         Metadata Value
                                     </li>
                                     <li>Each subsequent row represents one metadata record</li>
-                                    <li>Schema fields will be preserved (cannot be overwritten)</li>
+                                    <li>
+                                        Schema fields keep their current values; rows that set a
+                                        different value are listed after import
+                                    </li>
                                     <li>Maximum file size: 5MB</li>
                                 </ul>
                             </div>

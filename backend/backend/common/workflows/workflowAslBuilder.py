@@ -31,7 +31,7 @@ from common.s3PathPatterns import (
     PIPELINE_OUTPUT_RESULTS_PREFIX,
 )
 
-logger = safeLogger(service_name="WorkflowAslBuilder")
+logger = safeLogger()
 
 # ASL schema version stamped in the definition Comment field.
 ASL_SCHEMA_VERSION = 1

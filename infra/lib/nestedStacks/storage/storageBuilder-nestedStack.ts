@@ -12,7 +12,6 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3not from "aws-cdk-lib/aws-s3-notifications";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as events from "aws-cdk-lib/aws-events";
-import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as cdk from "aws-cdk-lib";
 import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
@@ -30,7 +29,12 @@ import * as s3AssetBuckets from "../../helper/s3AssetBuckets";
 import { createPopulateS3AssetBucketsTableCustomResource } from "./customResources/populateS3AssetBucketsTable";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
+import {
+    buildComplianceJobQueue,
+    buildComplianceTriggerQueue,
+} from "../../lambdaBuilder/complianceFunctions";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { Service, Partition } from "../../helper/service-helper";
@@ -42,6 +46,21 @@ import {
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
+
+/**
+ * KEYS_ONLY index of WorkflowExecutionLocksStorageTable on the holder (workflowExecutionId): the lock rows
+ * one execution holds, which a terminal release deletes along with the keys it rebuilds from the
+ * execution's input rows. Mirrored as HOLDER_INDEX_NAME in backend/backend/common/workflows/executionLocks.py.
+ */
+export const WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";
+
+/**
+ * Index of MetadataSchemaStorageTableV2 on "databaseId:metadataEntityType": the schemas of one database
+ * and entity type, which every schema read path queries. Named in
+ * backend/backend/common/metadataSchemaValidation.py (load_enabled_schemas) and granted by exact ARN
+ * where a handler only needs that query.
+ */
+export const METADATA_SCHEMA_DATABASE_ENTITY_TYPE_INDEX = "DatabaseIdMetadataEntityTypeIndex";
 
 export interface storageResources {
     encryption: {
@@ -59,6 +78,16 @@ export interface storageResources {
         fileIndexerSnsTopic: sns.Topic;
         assetIndexerSnsTopic: sns.Topic;
         databaseIndexerSnsTopic: sns.Topic;
+    };
+    sqs: {
+        // The compliance trigger's queue, subscribed to the asset and file indexer topics here so it
+        // exists before the stacks that change what the request Lambdas record (buildComplianceTriggerQueue).
+        complianceTriggerQueue: sqs.Queue;
+        // The compliance job queue and its dead-letter queue (buildComplianceJobQueue): the jobs
+        // that continue themselves (a deleted database's move, a database binding change applied
+        // in the background) run from it in the compliance job Lambda.
+        complianceJobQueue: sqs.Queue;
+        complianceJobDLQ: sqs.Queue;
     };
     cloudWatchAuditLogGroups: {
         authentication: logs.LogGroup;
@@ -126,6 +155,13 @@ export interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table;
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
+        workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock a running execution holds
+        // Compliance tables
+        complianceSchemaStorageTable: dynamodb.Table;
+        complianceAssetStateStorageTable: dynamodb.Table;
+        complianceEvaluationStorageTable: dynamodb.Table;
+        complianceCascadeStorageTable: dynamodb.Table;
+        complianceAuditStorageTable: dynamodb.Table;
     };
 }
 
@@ -665,6 +701,19 @@ export function storageResourcesBuilder(
         kmsEncryptionKey
     );
 
+    // The compliance trigger's queue and its two topic subscriptions live here, not with the trigger
+    // in ApiBuilder2: this stack updates before ApiBuilder (whose request Lambdas no longer record
+    // metadata and link changes) and ApiBuilder2 (whose event source starts the trigger reading), so
+    // the indexer messages of every change made while those stacks update wait in the queue.
+    const ComplianceTriggerQueue = buildComplianceTriggerQueue(
+        scope,
+        { assetIndexerSnsTopic: AssetIndexerSnsTopic, fileIndexerSnsTopic: FileIndexerSnsTopic },
+        kmsEncryptionKey
+    );
+    // The compliance job queue lives here too, so the database service (ApiBuilder) and the binding
+    // service, trigger and job Lambda (ApiBuilder2) reference it from the stack they already depend on.
+    const ComplianceJobQueues = buildComplianceJobQueue(scope, kmsEncryptionKey);
+
     /**
      * Create CloudWatch Log Groups for Audit Logging
      */
@@ -812,19 +861,21 @@ export function storageResourcesBuilder(
         cfnBus.kmsKeyIdentifier = kmsEncryptionKey.keyArn;
     }
 
-    // Audit log group for the orchestration bus
+    // Audit log group for the orchestration bus. The name is a synth-time literal so the log group's own
+    // resource policy below can name it without a Ref to itself.
+    const orchestrationBusAuditLogGroupName =
+        "/aws/vendedlogs/VAMSOrchestrationBusAudit-" +
+        generateUniqueNameHash(
+            config.env.coreStackName,
+            config.env.account,
+            "VAMSOrchestrationBusAudit",
+            10
+        );
     const orchestrationBusAuditLogGroup = new logs.LogGroup(
         scope,
         "OrchestrationBusAuditLogGroup",
         {
-            logGroupName:
-                "/aws/vendedlogs/VAMSOrchestrationBusAudit-" +
-                generateUniqueNameHash(
-                    config.env.coreStackName,
-                    config.env.account,
-                    "VAMSOrchestrationBusAudit",
-                    10
-                ),
+            logGroupName: orchestrationBusAuditLogGroupName,
             retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
@@ -839,9 +890,49 @@ export function storageResourcesBuilder(
         },
     });
 
-    orchestrationBusAuditRule.addTarget(
-        new targets.CloudWatchLogGroup(orchestrationBusAuditLogGroup)
-    );
+    // EventBridge needs a CloudWatch Logs resource policy to write to the audit log group. The CDK
+    // aws-events-targets CloudWatchLogGroup target creates an ACCOUNT-level policy per stack
+    // (Custom::CloudwatchLogResourcePolicy), and an account holds at most 10 of those per Region, which
+    // capped VAMS at 10 deployments per Region (#1266). Instead, the grant is the log group's own resource
+    // policy (AWS::Logs::LogGroup ResourcePolicyDocument): it does not count against the account-level
+    // limit and is created, updated and deleted with the log group, so one stack's uninstall never touches
+    // another stack's grant. The target is bound by ARN so no account-level policy is created. The source
+    // rule is matched by the deployment-unique bus name (rule/<bus>/*), not by the rule's own ARN, which
+    // would make the log group depend on the rule that already depends on it.
+    const auditStack = cdk.Stack.of(scope);
+    const orchestrationBusAuditLogGroupArn = auditStack.formatArn({
+        service: "logs",
+        resource: "log-group",
+        arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+        resourceName: orchestrationBusAuditLogGroupName,
+    });
+    const cfnOrchestrationBusAuditLogGroup = orchestrationBusAuditLogGroup.node
+        .defaultChild as logs.CfnLogGroup;
+    cfnOrchestrationBusAuditLogGroup.resourcePolicyDocument = new iam.PolicyDocument({
+        statements: [
+            new iam.PolicyStatement({
+                sid: "OrchestrationBusAuditRuleWrite",
+                effect: iam.Effect.ALLOW,
+                principals: [Service("EVENTS").Principal],
+                actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+                resources: [`${orchestrationBusAuditLogGroupArn}:*`],
+                conditions: {
+                    StringEquals: { "aws:SourceAccount": auditStack.account },
+                    ArnLike: {
+                        "aws:SourceArn": auditStack.formatArn({
+                            service: "events",
+                            resource: "rule",
+                            resourceName: `${orchestrationBusName}/*`,
+                        }),
+                    },
+                },
+            }),
+        ],
+    });
+
+    orchestrationBusAuditRule.addTarget({
+        bind: (): events.RuleTargetConfig => ({ arn: orchestrationBusAuditLogGroupArn }),
+    });
 
     // Externally owned pipeline bridges publish registration events onto this bus. IAM accepts no
     // wildcard in a Principal and binds an exact role principal to that role's unique id (a bridge role
@@ -893,6 +984,26 @@ export function storageResourcesBuilder(
             {
                 enabled: true,
                 abortIncompleteMultipartUploadAfter: Duration.days(14),
+            },
+            // The asset export service's staged payloads (vams.assetExports/<databaseId>/<assetId>/
+            // <id>.json), one per export response too large to return inline. The service never
+            // deletes one: the client reads it through a presigned URL, possibly more than once, until
+            // the URL expires. The expiry outlives the longest lifetime a presigned URL can have, so it
+            // never removes a payload a live URL still points at. The bucket is versioned, so the
+            // expiry only writes a delete marker: the noncurrent expiry reclaims the storage, and the
+            // expired delete markers go with it. The abort rule above covers the prefix too. The
+            // prefix carries a dot, which no database ID can, so these rules never reach the preview
+            // and viewer data keyed under {databaseId}/. Always on, because the export API always is.
+            {
+                enabled: true,
+                prefix: Config.ASSET_EXPORT_STAGING_PREFIX,
+                expiration: Duration.days(Config.ASSET_EXPORT_STAGING_EXPIRATION_DAYS),
+                noncurrentVersionExpiration: Duration.days(1),
+            },
+            {
+                enabled: true,
+                prefix: Config.ASSET_EXPORT_STAGING_PREFIX,
+                expiredObjectDeleteMarker: true,
             },
             // The video SOP/BOM pipeline's scratch objects (pipelines/<pipelineId>/<executionId>/...:
             // definition document, extracted audio, Transcribe output, analysis artefacts). A run deletes
@@ -951,6 +1062,26 @@ export function storageResourcesBuilder(
                       },
                   ]
                 : []),
+            // The ModelOps staged inputs: a copy of a non-current input version, which the
+            // third-party handler reads because it cannot take a version. The pipeline's
+            // pipelineEnd deletes every version of the copy when the run ends; a copy a crashed run
+            // leaves expires here. The handler reads it within the state machine's 5-hour timeout,
+            // so a day is ample. Noncurrent versions and expired delete markers go with it, as above.
+            ...(config.app.pipelines.useModelOps?.enabled
+                ? [
+                      {
+                          enabled: true,
+                          prefix: Config.MODELOPS_STAGED_INPUT_PREFIX,
+                          expiration: Duration.days(1),
+                          noncurrentVersionExpiration: Duration.days(1),
+                      },
+                      {
+                          enabled: true,
+                          prefix: Config.MODELOPS_STAGED_INPUT_PREFIX,
+                          expiredObjectDeleteMarker: true,
+                      },
+                  ]
+                : []),
         ],
         serverAccessLogsBucket: accessLogsBucket,
         serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",
@@ -975,7 +1106,9 @@ export function storageResourcesBuilder(
         // pipeline schema bundles live in the same bucket under vamsSchema/, uploaded by a separate
         // per-registration deployment, so they are excluded from the prune — otherwise refreshing an
         // artefact deletes every bundle while the registration resources still expect to read them.
-        exclude: ["vamsSchema/*"],
+        // addon/ is reserved for the trees the add-on stacks upload under addon/<addon>/, and is
+        // excluded for the same reason.
+        exclude: ["vamsSchema/*", "addon/*"],
     });
 
     //S3 Buckets handling for assets
@@ -1488,13 +1621,38 @@ export function storageResourcesBuilder(
         }
     );
 
+    // Workflow Execution Locks — one row per lock a running execution holds under its workflow's
+    // concurrencyRestriction: perAsset locks the input asset, perInputFile the input file, and
+    // perInputFileVersion the exact file version. PK lockKey (`{workflowDatabaseId}:{workflowId}|
+    // {scope}|{scopeKey}`); attributes workflowExecutionId, lockScope, acquiredAt, expiresAt. Acquire is a
+    // conditional put so two launches racing for one scope cannot both proceed; expiresAt is the TTL
+    // attribute (epoch seconds), so a lock whose release path never ran expires on its own. One KEYS_ONLY
+    // index on the holder lists the rows one execution holds for its release; no stream.
+    const workflowExecutionLocksStorageTable = new dynamodb.Table(
+        scope,
+        "WorkflowExecutionLocksStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "lockKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+            timeToLiveAttribute: "expiresAt",
+        }
+    );
+    workflowExecutionLocksStorageTable.addGlobalSecondaryIndex({
+        indexName: WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX,
+        partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.KEYS_ONLY,
+    });
+
     // Executions by OUTPUT asset. An asset's execution history is the union of runs that read it and
     // runs that wrote to it, and the latter cannot be found any other way: a results-only or
     // generate-from-nothing pipeline (inputFileArity 'none') has no input rows at all, so its output
     // target is its only asset association. The partition attribute is written only on configuration
     // rows whose outputLocationType is 'asset', which keeps the index off results-only executions.
     workflowExecutionConfigurationStorageTable.addGlobalSecondaryIndex({
-        indexName: "WorkflowExecConfigByOutputAssetGSI",
+        indexName: "WorkflowExecConfigByOutputAssetGSI", // pragma: allowlist secret
         partitionKey: {
             name: "outputDatabaseId:outputAssetId",
             type: dynamodb.AttributeType.STRING,
@@ -1561,7 +1719,11 @@ export function storageResourcesBuilder(
                 name: "databaseId:assetId:filePath",
                 type: dynamodb.AttributeType.STRING,
             },
-            stream: dynamodb.StreamViewType.NEW_IMAGE,
+            // The old image is what a REMOVE record carries: the compliance trigger reads the
+            // assets of a deleted row from it (and, for a metadata row, whether a workflow
+            // execution deleted it). The stream relay drops it from INSERT and MODIFY records,
+            // so their messages are no larger than before.
+            stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
         }
     );
 
@@ -1733,7 +1895,11 @@ export function storageResourcesBuilder(
             name: "databaseId:assetId:filePath",
             type: dynamodb.AttributeType.STRING,
         },
-        stream: dynamodb.StreamViewType.NEW_IMAGE,
+        // The old image is what a REMOVE record carries: the compliance trigger reads the
+        // assets of a deleted row from it (and, for a metadata row, whether a workflow
+        // execution deleted it). The stream relay drops it from INSERT and MODIFY records,
+        // so their messages are no larger than before.
+        stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
     });
 
     // GSI for querying by database/asset/file
@@ -1797,7 +1963,7 @@ export function storageResourcesBuilder(
 
     // GSI for querying by database/metadataEntityType
     metadataSchemaStorageTableV2.addGlobalSecondaryIndex({
-        indexName: "DatabaseIdMetadataEntityTypeIndex",
+        indexName: METADATA_SCHEMA_DATABASE_ENTITY_TYPE_INDEX,
         partitionKey: {
             name: "databaseId:metadataEntityType",
             type: dynamodb.AttributeType.STRING,
@@ -2008,7 +2174,11 @@ export function storageResourcesBuilder(
             name: "assetLinkId",
             type: dynamodb.AttributeType.STRING,
         },
-        stream: dynamodb.StreamViewType.NEW_IMAGE,
+        // The old image is what a REMOVE record carries: the compliance trigger reads the
+        // assets of a deleted row from it (and, for a metadata row, whether a workflow
+        // execution deleted it). The stream relay drops it from INSERT and MODIFY records,
+        // so their messages are no larger than before.
+        stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
     });
 
     assetLinksStorageTableV2.addGlobalSecondaryIndex({
@@ -2048,7 +2218,11 @@ export function storageResourcesBuilder(
                 name: "metadataKey",
                 type: dynamodb.AttributeType.STRING,
             },
-            stream: dynamodb.StreamViewType.NEW_IMAGE,
+            // The old image is what a REMOVE record carries: the compliance trigger reads the
+            // assets of a deleted row from it (and, for a metadata row, whether a workflow
+            // execution deleted it). The stream relay drops it from INSERT and MODIFY records,
+            // so their messages are no larger than before.
+            stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
         }
     );
 
@@ -2256,6 +2430,238 @@ export function storageResourcesBuilder(
         },
     });
 
+    /////////////////////////////////////////////////////////////////////////////
+    // Compliance Tables
+    /////////////////////////////////////////////////////////////////////////////
+
+    const complianceSchemaStorageTable = new dynamodb.Table(scope, "ComplianceSchemaStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "schemaName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "internalVersion",
+            type: dynamodb.AttributeType.NUMBER,
+        },
+    });
+
+    complianceSchemaStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "schemaName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const complianceAssetStateStorageTable = new dynamodb.Table(
+        scope,
+        "ComplianceAssetStateStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "databaseId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "assetId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    complianceAssetStateStorageTable.addGlobalSecondaryIndex({
+        indexName: "SchemaNameIndex",
+        partitionKey: {
+            name: "schemaName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "complianceState",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Cross-database listing of assets in one compliance state (the quarantine list) as a paged query.
+    complianceAssetStateStorageTable.addGlobalSecondaryIndex({
+        indexName: "ComplianceStateIndex",
+        partitionKey: {
+            name: "complianceState",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // A database's assets by name, for the database compliance overview's name sort. The sort key
+    // `assetNameSort` is the lowercased name (the asset id for an asset without one) with the id
+    // appended, written with the row and kept current by the trigger. The only new index of the
+    // asset-state table in its update: a table accepts one GSI creation per CloudFormation update.
+    complianceAssetStateStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseAssetNameIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "assetNameSort",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const complianceEvaluationStorageTable = new dynamodb.Table(
+        scope,
+        "ComplianceEvaluationStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "evaluationId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    complianceEvaluationStorageTable.addGlobalSecondaryIndex({
+        indexName: "AssetIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "evaluatedAt",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    complianceEvaluationStorageTable.addGlobalSecondaryIndex({
+        indexName: "ExecutionIdIndex",
+        partitionKey: {
+            name: "executionId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Sparse: only the tracking row of a pipeline rule waiting for a running execution of its
+    // workflow carries `waitingWorkflowKey` (`<workflowDatabaseId>:<workflowId>`), so the workflow
+    // callback finds a workflow's waiting rules, oldest first, when one of its executions ends.
+    complianceEvaluationStorageTable.addGlobalSecondaryIndex({
+        indexName: "PipelineRuleWaitIndex",
+        partitionKey: {
+            name: "waitingWorkflowKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "waitingSince",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const complianceCascadeStorageTable = new dynamodb.Table(
+        scope,
+        "ComplianceCascadeStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "cascadeId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    complianceCascadeStorageTable.addGlobalSecondaryIndex({
+        indexName: "StateIndex",
+        partitionKey: {
+            name: "state",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "createdAt",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const complianceAuditStorageTable = new dynamodb.Table(scope, "ComplianceAuditStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "entryId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    complianceAuditStorageTable.addGlobalSecondaryIndex({
+        indexName: "AssetIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "timestamp",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    complianceAuditStorageTable.addGlobalSecondaryIndex({
+        indexName: "EventTypeIndex",
+        partitionKey: {
+            name: "eventType",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "timestamp",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Global newest-first listing GSI. Every audit row carries a constant partition attribute
+    // (allListPartition = "audit") with timestamp as the sort key, so the unfiltered audit listing
+    // is a single QUERY (ScanIndexForward=false) bounded by an optional timestamp key-condition.
+    complianceAuditStorageTable.addGlobalSecondaryIndex({
+        indexName: "AuditByDateGSI",
+        partitionKey: {
+            name: "allListPartition",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "timestamp",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // One database's audit entries, newest first: the listing filtered by `databaseId`, and the
+    // listing of a caller who may read only some databases (one query per database, merged by
+    // time), so other databases' entries never take a page's place. Every audit row carries its
+    // `databaseId` (a deleted database's history `<databaseId>#deleted`, `*` on schema-level
+    // entries), so on an existing table DynamoDB backfills it in place; a row with none is left out.
+    complianceAuditStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "timestamp",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     ///DEPRECATED TABLES
 
     //Build storage resources object
@@ -2273,6 +2679,11 @@ export function storageResourcesBuilder(
             fileIndexerSnsTopic: FileIndexerSnsTopic,
             assetIndexerSnsTopic: AssetIndexerSnsTopic,
             databaseIndexerSnsTopic: DatabaseIndexerSnsTopic,
+        },
+        sqs: {
+            complianceTriggerQueue: ComplianceTriggerQueue,
+            complianceJobQueue: ComplianceJobQueues.queue,
+            complianceJobDLQ: ComplianceJobQueues.deadLetterQueue,
         },
         cloudWatchAuditLogGroups: auditLogGroups,
         eventBridge: {
@@ -2332,6 +2743,13 @@ export function storageResourcesBuilder(
             pipelineTemplateTagSchemaStorageTable: pipelineTemplateTagSchemaStorageTable,
             workflowStorageTableV2: workflowStorageTableV2,
             workflowTriggersStorageTable: workflowTriggersStorageTable,
+            workflowExecutionLocksStorageTable: workflowExecutionLocksStorageTable,
+            // Compliance tables
+            complianceSchemaStorageTable: complianceSchemaStorageTable,
+            complianceAssetStateStorageTable: complianceAssetStateStorageTable,
+            complianceEvaluationStorageTable: complianceEvaluationStorageTable,
+            complianceCascadeStorageTable: complianceCascadeStorageTable,
+            complianceAuditStorageTable: complianceAuditStorageTable,
         },
     };
 
@@ -2668,6 +3086,28 @@ export function storageResourcesBuilder(
         );
         bucketSyncDlqs.push(onS3ObjectCreatedDlq);
 
+        // A record in this DLQ is a file VAMS never processed: no search entry, no version-history row,
+        // no fileUpload trigger. Nothing self-heals, so the alarm is the signal to redrive the DLQ.
+        // No alarm action: VAMS has no notification topic, so operators attach their own.
+        new cloudwatch.Alarm(
+            scope,
+            "bucketSyncCreatedDLQAlarm--" + record.bucket + bucketSyncIdSuffix,
+            {
+                alarmName: `${config.name}-${config.app.baseStackName}-bucketSyncCreatedDLQ--${bucketSyncIndex}`,
+                alarmDescription:
+                    "S3 object-created events that the VAMS bucket-sync function could not process " +
+                    "are in this dead-letter queue. Redrive it to the source queue after fixing the cause.",
+                metric: onS3ObjectCreatedDlq.metricApproximateNumberOfMessagesVisible({
+                    period: Duration.minutes(5),
+                    statistic: cloudwatch.Stats.MAXIMUM,
+                }),
+                threshold: 0,
+                comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                evaluationPeriods: 1,
+                treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            }
+        );
+
         // Create SQS queue for S3 object created events
         const onS3ObjectCreatedQueue = new sqs.Queue(
             scope,
@@ -2756,6 +3196,27 @@ export function storageResourcesBuilder(
             }
         );
         bucketSyncDlqs.push(onS3ObjectDeletedDlq);
+
+        // A record in this DLQ is a delete VAMS never processed: the file's search entry and metadata
+        // stay behind for an object that no longer exists. Same alarm as the created side.
+        new cloudwatch.Alarm(
+            scope,
+            "bucketSyncDeletedDLQAlarm--" + record.bucket + bucketSyncIdSuffix,
+            {
+                alarmName: `${config.name}-${config.app.baseStackName}-bucketSyncDeletedDLQ--${bucketSyncIndex}`,
+                alarmDescription:
+                    "S3 object-deleted events that the VAMS bucket-sync function could not process " +
+                    "are in this dead-letter queue. Redrive it to the source queue after fixing the cause.",
+                metric: onS3ObjectDeletedDlq.metricApproximateNumberOfMessagesVisible({
+                    period: Duration.minutes(5),
+                    statistic: cloudwatch.Stats.MAXIMUM,
+                }),
+                threshold: 0,
+                comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                evaluationPeriods: 1,
+                treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            }
+        );
 
         // Create SQS queue for S3 object deleted events
         const onS3ObjectDeletedQueue = new sqs.Queue(
@@ -2929,6 +3390,19 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowStorageTableV2.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.workflowTriggersStorage]:
             storageResources.dynamo.workflowTriggersStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionLocksStorage]:
+            storageResources.dynamo.workflowExecutionLocksStorageTable.tableName,
+        // Compliance tables
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceSchemaStorage]:
+            storageResources.dynamo.complianceSchemaStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceAssetStateStorage]:
+            storageResources.dynamo.complianceAssetStateStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceEvaluationStorage]:
+            storageResources.dynamo.complianceEvaluationStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceCascadeStorage]:
+            storageResources.dynamo.complianceCascadeStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceAuditStorage]:
+            storageResources.dynamo.complianceAuditStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.s3Buckets.assetAuxiliary]:
             storageResources.s3.assetAuxiliaryBucket.bucketName,
         [RESOURCE_PARAM_KEYS.s3Buckets.artefacts]: storageResources.s3.artefactsBucket.bucketName,

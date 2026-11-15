@@ -430,8 +430,9 @@ Output includes total count, list of enabled feature names, and last updated tim
 | `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito user pool federated to a SAML identity provider                |
 | `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito user pool federated to an OIDC identity provider               |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                              |
-| `PHYSNA_ADDON`                  | Physna add-on frontend features                                               |
 | `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type                                    |
+
+An enabled add-on adds feature switches of its own, which `vamscli features list` also shows and which are listed on the add-on's pages. See [Add-ons Overview](../../developer/addons-overview.md).
 
 ---
 
@@ -469,7 +470,7 @@ vamscli features example-govcloud --json-output
 ```
 
 :::note[Feature-Gated]
-If `GOVCLOUD` is not enabled for the environment, the command exits with an error such as `GovCloud features are not enabled for this environment.`
+If `GOVCLOUD` is not enabled for the environment, the command exits with an error such as `GovCloud features are not enabled for this environment.` If the CLI could not read the environment's feature switches when you signed in, for example because your user has no VAMS role, the error says so instead and suggests signing in again or asking an administrator for a role.
 :::
 
 ---
@@ -492,7 +493,7 @@ vamscli features example-location --json-output
 ```
 
 :::note[Feature-Gated]
-If `LOCATIONSERVICES` is not enabled for the environment, the command exits with an error such as `Location services are not enabled for this environment.`
+If `LOCATIONSERVICES` is not enabled for the environment, the command exits with an error such as `Location services are not enabled for this environment.` If the CLI could not read the environment's feature switches when you signed in, for example because your user has no VAMS role, the error says so instead and suggests signing in again or asking an administrator for a role.
 :::
 
 ---

@@ -81,6 +81,7 @@ GET /database/{databaseId}/assets/{assetId}/asset-links
 | Parameter       | Type    | Required | Default | Description                                                 |
 | --------------- | ------- | -------- | ------- | ----------------------------------------------------------- |
 | `childTreeView` | boolean | No       | `false` | When `true`, returns children as a recursive tree structure |
+| `showArchived`  | boolean | No       | `false` | When `true`, also lists the links of an archived asset      |
 
 ### Response (flat view)
 

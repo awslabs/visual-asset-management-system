@@ -3,7 +3,7 @@
 
 import boto3
 import json
-import datetime
+from common.timestamps import utc_now
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -13,6 +13,7 @@ from common.apiRoutes import API_DATABASE
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.databases import CreateDatabaseRequestModel, CreateDatabaseResponseModel
 
@@ -43,7 +44,7 @@ def create_database(request_model: CreateDatabaseRequestModel):
     """
     try:
         table = dynamodb.Table(db_database)
-        dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
+        dtNow = utc_now().strftime('%B %d %Y - %H:%M:%S')
         
         # Validate bucket exists in S3_ASSET_BUCKETS_STORAGE_TABLE
         # Using query instead of get_item because the table has a sort key
@@ -70,6 +71,10 @@ def create_database(request_model: CreateDatabaseRequestModel):
             },
             ConditionExpression='attribute_not_exists(databaseId)'
         )
+
+        # Soft-delete keeps `<databaseId>#deleted`. Recreating the live id must
+        # drop that sibling so show-deleted listings no longer report the old record.
+        table.delete_item(Key={'databaseId': f"{request_model.databaseId}#deleted"})
         
         return CreateDatabaseResponseModel(
             databaseId=request_model.databaseId,
@@ -89,6 +94,8 @@ def create_database(request_model: CreateDatabaseRequestModel):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for database creation API"""
     claims_and_roles = request_to_claims(event)
@@ -147,6 +154,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
             # Process request
             response = create_database(request_model)
+            log_action(event, "databaseCreate", database_id=request_model.databaseId,
+                       changes=request_model.dict(exclude_none=True))
             return success(body=response.dict())
         else:
             # Not a route handled by this function

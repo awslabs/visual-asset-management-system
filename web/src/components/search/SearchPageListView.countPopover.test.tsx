@@ -4,10 +4,9 @@
  */
 
 /**
- * The "About this count" popover beside the search table's counter. The counter shows
- * aggregationTotal when the response carries one, and that total counts every matching record in the
- * caller's readable databases before each record is checked, so the popover says the table can list
- * fewer records than the count.
+ * The search table's counter and its "About this count" popover. Totals count only records the
+ * caller can open. When the backend can only give a minimum (hits.total.relation "gte") the counter
+ * ends in "+" and the popover says why; an exact count gets neither.
  */
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -31,13 +30,7 @@ jest.mock("../../visualizerPlugin/core/useViewerRegistryReady", () => ({
     useViewerRegistryReady: () => true,
 }));
 jest.mock("../../visualizerPlugin/core/PluginRegistry", () => ({}));
-// A renamed Database entity, so the popover is shown to read the deployment's own noun.
-jest.mock("../../synonyms", () => ({
-    __esModule: true,
-    default: { ...jest.requireActual("../../synonyms").default, databases: "libraries" },
-}));
-
-const state = {
+const exactState = {
     ...INITIAL_STATE,
     initialResult: true,
     recordType: "asset",
@@ -52,10 +45,31 @@ const state = {
             ],
             total: { value: 1, relation: "eq" },
         },
-        aggregationTotal: 3,
+        aggregationTotal: 1,
     },
     tablePreferences: { pageSize: 10, visibleContent: [] },
 };
+
+const lowerBoundState = {
+    ...exactState,
+    result: {
+        ...exactState.result,
+        hits: { ...exactState.result.hits, total: { value: 3, relation: "gte" } },
+        aggregationTotal: 2,
+    },
+};
+
+function counterText(container: HTMLElement): string | null | undefined {
+    return container.querySelector('[class*="counter"]')?.textContent?.trim();
+}
+
+function renderView(state: any) {
+    return render(
+        <MemoryRouter>
+            <SearchPageListView state={state} dispatch={jest.fn()} />
+        </MemoryRouter>
+    );
+}
 
 beforeEach(() => {
     jest.spyOn(console, "log").mockImplementation(() => undefined);
@@ -63,23 +77,21 @@ beforeEach(() => {
 
 afterEach(() => jest.restoreAllMocks());
 
-describe("Search list view count popover", () => {
-    it("says the count can be higher than the records the table lists", () => {
-        render(
-            <MemoryRouter>
-                <SearchPageListView state={state} dispatch={jest.fn()} />
-            </MemoryRouter>
-        );
+describe("Search list view count", () => {
+    it("shows a minimum with + and explains it", () => {
+        const { container } = renderView(lowerBoundState);
 
+        expect(counterText(container)).toBe("3+");
         fireEvent.click(screen.getByText("\u24D8"));
-
         expect(screen.getByText("About this count")).toBeInTheDocument();
-        expect(
-            screen.getByText(/every matching record in the libraries you can access/)
-        ).toBeInTheDocument();
-        expect(
-            screen.getByText(/counted before each record's own permissions are checked/)
-        ).toBeInTheDocument();
-        expect(screen.getByText(/can show fewer than this count/)).toBeInTheDocument();
+        expect(screen.getByText(/includes only records you can open/)).toBeInTheDocument();
+        expect(screen.getByText(/there may be more/)).toBeInTheDocument();
+    });
+
+    it("shows an exact count without + or a popover", () => {
+        const { container } = renderView(exactState);
+
+        expect(counterText(container)).toBe("1");
+        expect(screen.queryByText("\u24D8")).not.toBeInTheDocument();
     });
 });

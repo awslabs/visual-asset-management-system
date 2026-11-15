@@ -1,0 +1,288 @@
+{
+    "templateId": "image-to-3d-stable3dgen-photo-colour",
+    "templateName": "Stable3DGen (Stable-X): mesh, coloured from the photograph",
+    "description": "Stable3DGen's geometry, the cleanest measured and free of any NVIDIA component, coloured by sampling the input photograph onto the surface the camera saw, with the hidden side filled from the nearest visible colour. The pose the photograph was taken from is recovered from the outline.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL\": \"stable3dgen\", \"IMAGE_CLEANUP\": \"{{IMAGE_CLEANUP}}\", \"BACKGROUND_REMOVAL\": \"{{BACKGROUND_REMOVAL}}\", \"SAM_PROMPT\": \"{{SAM_PROMPT}}\", \"FRAMING_RATIO\": \"{{FRAMING_RATIO}}\", \"FRAMING_BACKGROUND\": \"{{FRAMING_BACKGROUND}}\", \"PROJECT_PHOTO_COLOUR\": \"{{PROJECT_PHOTO_COLOUR}}\", \"PROJECT_PHOTO_POSE\": \"{{PROJECT_PHOTO_POSE}}\", \"MESH_CLEANUP\": \"{{MESH_CLEANUP}}\", \"PRINT_GATE_POLICY\": \"{{PRINT_GATE_POLICY}}\", \"REPAIR_BACKENDS\": \"{{REPAIR_BACKENDS}}\", \"MIN_VOLUME_RETENTION\": \"{{MIN_VOLUME_RETENTION}}\", \"CLOSE_HOLE_MAX_EDGES\": \"{{CLOSE_HOLE_MAX_EDGES}}\", \"BENCHMARK_REPORT\": \"{{BENCHMARK_REPORT}}\", \"TARGET_FACE_COUNT\": {{TARGET_FACE_COUNT}}, \"TARGET_SIZE_MM\": {{TARGET_SIZE_MM}}, \"PRINT_FEATURES\": \"{{PRINT_FEATURES}}\", \"PRINT_FEATURE_JOIN\": \"{{PRINT_FEATURE_JOIN}}\", \"PRINT_FEATURE_COLOR\": \"{{PRINT_FEATURE_COLOR}}\", \"LOOP_DIAMETER_MM\": {{LOOP_DIAMETER_MM}}, \"LOOP_THICKNESS_MM\": {{LOOP_THICKNESS_MM}}, \"BASE_DIAMETER_MM\": {{BASE_DIAMETER_MM}}, \"BASE_HEIGHT_MM\": {{BASE_HEIGHT_MM}}, \"EXPORT_FORMATS\": \"{{EXPORT_FORMATS}}\", \"STABLE3DGEN_SEED\": {{STABLE3DGEN_SEED}}, \"STABLE3DGEN_SPARSE_STEPS\": {{STABLE3DGEN_SPARSE_STEPS}}, \"STABLE3DGEN_SPARSE_CFG_STRENGTH\": {{STABLE3DGEN_SPARSE_CFG_STRENGTH}}, \"STABLE3DGEN_SLAT_STEPS\": {{STABLE3DGEN_SLAT_STEPS}}, \"STABLE3DGEN_SLAT_CFG_STRENGTH\": {{STABLE3DGEN_SLAT_CFG_STRENGTH}}, \"STABLE3DGEN_PREPROCESS_RESOLUTION\": \"{{STABLE3DGEN_PREPROCESS_RESOLUTION}}\", \"STABLE3DGEN_NORMAL_RESOLUTION\": \"{{STABLE3DGEN_NORMAL_RESOLUTION}}\", \"PASS_THROUGH_INPUTS\": \"{{PASS_THROUGH_INPUTS}}\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Reconstructs a 3D mesh from one photo using Stable-X Stable3DGen (Hi3DGen). Licensed MIT, with MIT and Apache-2.0 weights that need no gated access. Hi3DGen predicts a normal map from the photograph and generates geometry from that bridge, which targets geometric fidelity rather than appearance.\n\nThis model GENERATES no colour -- it has no appearance decoder -- so its colour comes from the pipeline instead: Colour from the photograph samples the input photo onto the surface the camera could see and infers the rest from it. That is the intended path for this model, and it is what the stage list below describes. Left off, a GLB or OBJ from this model is untextured whatever Export formats requests. It measured the best geometry of the reconstruction models in the pipeline's benchmark, which is why it is the default; choose SAM 3D Objects, TRELLIS.2, TripoSR, Step1X-3D or Hunyuan3D-2 when colour generated WITH the geometry is what you need.\n\nStable3DGen fields: Structure sampling steps and Structure guidance strength control the stage that decides the overall shape; Detail sampling steps and Detail guidance strength control the stage that resolves surface detail. Normal map resolution is the main fidelity dial, since the normal map is what the geometry is generated from. Preprocess resolution sets how large the subject is before that prediction.\n\nAll options are set on this form; the values you choose are the only ones the run uses. Leaving a field alone applies the default shown beside it.\n\nStages this model runs: image cleanup prepares the photo, the generate stage predicts a normal map and decodes geometry from it, mesh cleanup repairs and rescales, and then the COLOUR FROM THE PHOTOGRAPH stage projects the input photo onto the finished surface. That projection is where this model's colour comes from -- it generates none itself -- so it runs after cleanup, on the mesh that will actually be exported.\n\nPrint readiness: with Mesh cleanup on, the generated mesh is decimated, repaired and rescaled, then checked for printability -- watertight, no non-manifold edges or vertices, positive volume, no broken faces. A repair step that would leave less than Minimum volume retained is discarded, because a step that removes the model satisfies every check without producing anything printable. failClosed rejects the run and writes no mesh when any check fails, and still writes the gate report so the failure is legible. bestEffort writes every output and records the check results.\n\nFORM. Each field is labelled with the stage that reads it, in the order a run executes them: [1 Input] prepares the photographs, [2 Generate] is this template's model, [3 Cleanup] repairs the mesh and brings it to the face count, [4 Colour] projects the photograph onto it, [5 Print] sizes it, adds print features and applies the print gate, and [6 Output] chooses the formats and reports. A template shows only the stages its model uses.",
+    "overrides": {
+        "inputFileFilters": {
+            "allow": ["*.png", "*.jpg", "*.jpeg"],
+            "exclude": []
+        }
+    },
+    "isDefault": false,
+    "tagSchema": [
+        {
+            "tagKey": "IMAGE_CLEANUP",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "skip"],
+            "label": "[1 Input] Image cleanup",
+            "description": "auto segments the subject from its background and frames it for the selected model. skip takes the image as already segmented and hands it to the model exactly as supplied, which removes that stage's time and cost -- choose it when the input is known to be a clean cutout. Skipping also bypasses framing, because without a mask there is no way to locate the subject."
+        },
+        {
+            "tagKey": "BACKGROUND_REMOVAL",
+            "type": "enum",
+            "required": false,
+            "default": "rembg",
+            "enumValues": ["none", "rembg", "birefnet", "rmbg2", "sam"],
+            "label": "[1 Input] Background removal",
+            "description": "Segmentation model used to isolate the subject before reconstruction. Choose none when the photo already has a clean background. rembg, birefnet and rmbg2 decide for themselves which object the photo is of, so on a frame holding several they pick one and there is no way to ask for another; sam segments whatever SAM prompt points at. sam returns a hard-edged mask with no soft alpha through hair, so it is the choice for selecting an object rather than for a difficult edge."
+        },
+        {
+            "tagKey": "SAM_PROMPT",
+            "type": "string",
+            "required": false,
+            "default": "centre",
+            "label": "[1 Input] SAM prompt",
+            "description": "Where to look, used only when Background removal is sam. centre takes the middle of the frame, which is where a framed subject sits. x,y names a point and x0,y0,x1,y1 a box, given as fractions of the image between 0 and 1 rather than as pixels so one value holds at any resolution. A point asks for the object there; a box also bounds the answer, which is the stronger prompt where objects overlap."
+        },
+        {
+            "tagKey": "FRAMING_RATIO",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "label": "[1 Input] Framing ratio",
+            "description": "Fraction of the frame the subject is scaled to fill before reconstruction. auto uses the framing the selected model expects and is the right choice unless you are comparing runs. A lower value leaves more margin around the subject; a higher value gives the model more pixels on it but crops closer to its edges.",
+            "enumValues": ["auto", "0.95", "0.90", "0.85", "0.80", "0.75", "0.70"]
+        },
+        {
+            "tagKey": "FRAMING_BACKGROUND",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "none", "gray", "black", "white"],
+            "label": "[1 Input] Framing background",
+            "description": "Flat colour composited behind the subject before reconstruction. The subject is always cropped and scaled to the framing ratio; this setting decides only what sits behind it. auto uses the background the selected model was trained against. none composites nothing and keeps the alpha channel, which a model that reads alpha as an object mask requires."
+        },
+        {
+            "tagKey": "STABLE3DGEN_SEED",
+            "type": "integer",
+            "required": false,
+            "default": 1,
+            "label": "[2 Generate] Seed",
+            "description": "Sampling seed. The same seed and settings reproduce the same mesh."
+        },
+        {
+            "tagKey": "STABLE3DGEN_SPARSE_STEPS",
+            "type": "integer",
+            "required": false,
+            "default": 50,
+            "label": "[2 Generate] Structure sampling steps",
+            "description": "Denoising steps for the sparse structure stage, which decides the overall shape. More steps recover more of the silhouette at a roughly linear cost in run time."
+        },
+        {
+            "tagKey": "STABLE3DGEN_SPARSE_CFG_STRENGTH",
+            "type": "number",
+            "required": false,
+            "default": 3.0,
+            "label": "[2 Generate] Structure guidance strength",
+            "description": "How strongly the structure stage follows the predicted normal map. Higher tracks the input more literally; lower lets the model smooth over noisy normals."
+        },
+        {
+            "tagKey": "STABLE3DGEN_SLAT_STEPS",
+            "type": "integer",
+            "required": false,
+            "default": 6,
+            "label": "[2 Generate] Detail sampling steps",
+            "description": "Denoising steps for the structured-latent stage, which resolves surface detail within the shape the structure stage produced."
+        },
+        {
+            "tagKey": "STABLE3DGEN_SLAT_CFG_STRENGTH",
+            "type": "number",
+            "required": false,
+            "default": 3.0,
+            "label": "[2 Generate] Detail guidance strength",
+            "description": "How strongly the detail stage follows the normal map."
+        },
+        {
+            "tagKey": "STABLE3DGEN_PREPROCESS_RESOLUTION",
+            "type": "enum",
+            "required": false,
+            "default": "1024",
+            "enumValues": ["1024", "768", "512"],
+            "label": "[2 Generate] Preprocess resolution",
+            "description": "Resolution the subject is resized to before the normal map is predicted. Higher preserves fine edges at more GPU memory."
+        },
+        {
+            "tagKey": "STABLE3DGEN_NORMAL_RESOLUTION",
+            "type": "enum",
+            "required": false,
+            "default": "768",
+            "enumValues": ["768", "512", "1024"],
+            "label": "[2 Generate] Normal map resolution",
+            "description": "Resolution the normal map is predicted at. This is the bridge the geometry is generated from, so it is the main fidelity dial for surface detail."
+        },
+        {
+            "tagKey": "MESH_CLEANUP",
+            "type": "enum",
+            "required": false,
+            "default": "true",
+            "enumValues": ["true", "false"],
+            "label": "[3 Cleanup] Mesh cleanup",
+            "description": "Run the print-readiness cleanup (decimate, repair, rescale, gate). Set false to return the mesh exactly as generated, which is not guaranteed to be printable."
+        },
+        {
+            "tagKey": "REPAIR_BACKENDS",
+            "type": "enum",
+            "required": false,
+            "default": "trimesh,manifold3d,pymeshfix,pymeshlab",
+            "label": "[3 Cleanup] Mesh repair ladder",
+            "description": "Which repair backends the print-readiness cleanup may walk, least to most invasive. The full ladder gives the best chance of a watertight, printable result; the permissive-only option limits the run to trimesh (MIT) and manifold3d (Apache-2.0) and excludes the GPL-3.0 backends. Applies only when Mesh cleanup is on.",
+            "enumValues": [
+                "trimesh,manifold3d,pymeshfix,pymeshlab",
+                "trimesh,manifold3d",
+                "trimesh"
+            ]
+        },
+        {
+            "tagKey": "MIN_VOLUME_RETENTION",
+            "type": "enum",
+            "required": false,
+            "default": "0.5",
+            "enumValues": ["0.5", "0.25", "0.75", "0.9", "0"],
+            "label": "[3 Cleanup] Minimum volume retained by a repair",
+            "description": "Fraction of the mesh's original volume a repair step must leave behind for its result to be kept. The print-readiness gate measures printability, not likeness, so a step that discards most of the model produces something trivially watertight and useless; a repair falling below this floor is discarded and the ladder continues without it. Lower the floor to allow more aggressive repair, or set 0 to accept any result."
+        },
+        {
+            "tagKey": "CLOSE_HOLE_MAX_EDGES",
+            "type": "enum",
+            "required": false,
+            "default": "10000",
+            "enumValues": ["10000", "1000", "100", "30", "0"],
+            "label": "[3 Cleanup] Largest hole the repair may close (edges)",
+            "description": "Boundary size, in edges, of the largest hole the pymeshlab repair rung will close. The library's own default is 30 and it leaves anything wider open without reporting it, which is why a run could finish with the rung applied and still fail the gate. Printing needs a closed surface, so the generous default is usually right; lower it when a hole is part of the subject -- the opening of a cup, say -- and you would rather keep the shape than close it. 0 closes nothing."
+        },
+        {
+            "tagKey": "TARGET_FACE_COUNT",
+            "type": "integer",
+            "required": false,
+            "default": 200000,
+            "label": "[3 Cleanup] Target face count",
+            "description": "Face budget the cleaned mesh is decimated to. 0 leaves the generated face count untouched."
+        },
+        {
+            "tagKey": "PROJECT_PHOTO_COLOUR",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["off", "auto"],
+            "label": "[4 Colour] Colour from the photograph",
+            "description": "This model produces geometry with no colour of its own. auto recovers the camera the photograph was taken from by matching the mesh's outline against the subject, then samples the photograph onto the surface that camera could see. The surface it could NOT see -- usually the back -- takes the colour of the nearest surface it could, so that half is inferred from the front rather than measured. The pose found, the confidence in it and the fraction of the mesh actually sampled are recorded in the run report. Has no effect on a model that produced its own colour, and is skipped rather than guessed when no pose matches the outline."
+        },
+        {
+            "tagKey": "PROJECT_PHOTO_POSE",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "0", "45", "90", "135", "180", "225", "270", "315"],
+            "label": "[4 Colour] View the photograph was taken from",
+            "description": "Only used when Colour from the photograph is on. auto uses the view this model reconstructs from, which is the right answer unless the photograph was taken from somewhere else. An angle states the view instead, in degrees around the subject, and the tilt is still worked out from the outline. State it when the run report says the pose was not decisive and the colour looks placed wrongly on the model: a subject whose outline looks much the same from several directions -- a figure, a plain cylinder -- cannot have its view worked out from that outline."
+        },
+        {
+            "tagKey": "TARGET_SIZE_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Target size (mm)",
+            "description": "Longest-edge size the mesh is rescaled to, in millimetres. 0 leaves the model's own scale untouched."
+        },
+        {
+            "tagKey": "PRINT_FEATURES",
+            "type": "enum",
+            "required": false,
+            "default": "none",
+            "enumValues": ["none", "loop", "base", "loop+base"],
+            "label": "[5 Print] Print features",
+            "description": "Parametric geometry added to the finished mesh for printing. loop adds a hanging ring at the top of the model,; base adds a flat-bottomed cylinder underneath, so the model stands and the slicer gets a stable first layer. The dimensions below are millimetres of the printed object and are applied after the rescale, so set Target size (mm) as well — with it left at 0 the model keeps its own arbitrary scale and a millimetre dimension has no fixed meaning."
+        },
+        {
+            "tagKey": "PRINT_FEATURE_JOIN",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "concat", "union"],
+            "label": "[5 Print] How the feature is attached",
+            "description": "A boolean union fuses the feature into one solid but discards the mesh's texture entirely, so it cannot be used on a colour print. concat keeps the texture and leaves the feature as a second closed shell overlapping the model, which slicers resolve when they fill. auto chooses per mesh — concat when the mesh carries a texture, union when it is geometry-only and so has no colour to lose — and is the right choice unless you are comparing runs. The join used and the resulting body count are recorded in the run report, because the print gate accepts both."
+        },
+        {
+            "tagKey": "PRINT_FEATURE_COLOR",
+            "type": "string",
+            "required": false,
+            "default": "#3C3C3C",
+            "label": "[5 Print] Print feature colour",
+            "description": "Flat colour the added geometry is given, as #RRGGBB, so a colour print shows a deliberate solid-coloured fitting. Without its own colour the feature samples whatever part of the model's texture its unwrap lands on and prints as a smear of the subject's colours. Has no effect when the join fuses to a single solid, which carries no texture."
+        },
+        {
+            "tagKey": "LOOP_DIAMETER_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Loop hole diameter (mm)",
+            "description": "Clear opening a ring has to pass through, in millimetres. 0 sizes the loop to the model's own height."
+        },
+        {
+            "tagKey": "LOOP_THICKNESS_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Loop thickness (mm)",
+            "description": "Thickness of the loop's tube, in millimetres. 0 uses a fraction of the hole diameter. Must stay below the hole diameter, or the opening closes and the loop cannot be threaded."
+        },
+        {
+            "tagKey": "BASE_DIAMETER_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Base diameter (mm)",
+            "description": "Diameter of the stand base, in millimetres. 0 sizes it slightly wider than the model's own footprint."
+        },
+        {
+            "tagKey": "BASE_HEIGHT_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Base height (mm)",
+            "description": "Height of the stand base, in millimetres. 0 uses a fraction of the model's own height."
+        },
+        {
+            "tagKey": "PRINT_GATE_POLICY",
+            "type": "enum",
+            "required": false,
+            "default": "failClosed",
+            "enumValues": ["failClosed", "bestEffort"],
+            "label": "[5 Print] Print gate policy",
+            "description": "What happens when a print-readiness check fails. failClosed writes no mesh, only the gate report; bestEffort writes the outputs and records the failures."
+        },
+        {
+            "tagKey": "EXPORT_FORMATS",
+            "type": "enum",
+            "required": false,
+            "default": "glb,obj,stl",
+            "label": "[6 Output] Export formats",
+            "description": "Which containers the finished mesh is written as. glb carries geometry and texture in one file and is what the VAMS viewer reads; obj writes the texture as a separate file set; stl is geometry only and is the 3D-printing format. Choose stl alone for a print-only run, or glb alone for a viewer-only preview.",
+            "enumValues": ["glb,obj,stl", "glb,stl", "glb,obj", "glb", "obj", "stl"]
+        },
+        {
+            "tagKey": "BENCHMARK_REPORT",
+            "type": "enum",
+            "required": false,
+            "default": "false",
+            "enumValues": ["false", "true"],
+            "label": "[6 Output] Benchmark report",
+            "description": "Records per-stage timings and the hardware the run landed on into the run report, so model, segmentation path and quality settings can be compared on speed and cost as well as on the mesh. Off by default; it adds no GPU work but does add detail to the report."
+        },
+        {
+            "tagKey": "PASS_THROUGH_INPUTS",
+            "type": "enum",
+            "required": false,
+            "default": "false",
+            "enumValues": ["false", "true"],
+            "label": "[6 Output] Pass the input photographs on",
+            "description": "true copies the input photograph(s) into this run's outputs beside the mesh, so a later pipeline in the same workflow receives them together with the mesh. A workflow's second step is handed only the first step's outputs, so a reconstruct-then-refine workflow needs this on its first step. false leaves the outputs as the mesh, its formats and the reports."
+        }
+    ]
+}

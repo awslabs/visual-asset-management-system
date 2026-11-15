@@ -3,14 +3,14 @@
 
 import boto3
 import uuid
-from datetime import datetime
+from common.timestamps import utc_now
 from botocore.config import Config
 from customLogging.logger import safeLogger
 from common.resourceNames import ResourceKeys, get_table_name
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-logger = safeLogger(service_name="SyncTracking")
+logger = safeLogger()
 
 # Outbound sync statuses. pending/skipped are reserved for future writers.
 SYNC_STATUS_PENDING = "pending"
@@ -81,7 +81,7 @@ def write_outbound_sync_record(object_type, database_id, system_type, system_uni
             file_path = "/" + file_path.lstrip("/")
             object_id = f"{database_id}:{asset_id}:{file_path}"
 
-        record_date = datetime.utcnow().isoformat() + "Z"
+        record_date = utc_now().isoformat() + "Z"
         item = {
             'objectId': object_id,
             'syncRecordId': f"{record_date}#{uuid.uuid4().hex[:8]}",

@@ -4,6 +4,8 @@ Tools reference the module-global CLIENT, so we patch it with a MagicMock.
 No live VAMS deployment or vamscli profile is required.
 """
 
+import dataclasses
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -292,6 +294,30 @@ def test_find_and_summarize_clamps_the_hit_count(mock_client):
     assert "note" in result, "a clamped size must be reported, or the count reads as the real total"
 
 
+@pytest.mark.parametrize("relation,lower_bound,display", [("gte", True, "40+"), ("eq", False, "40")])
+def test_search_tools_carry_the_lower_bound_marker(mock_client, relation, lower_bound, display):
+    """The API reports `hits.total.relation == "gte"` when the caller's total is a minimum. Every
+    search summary keeps the numeric `total` and adds the marker beside it, so an agent does not
+    report a minimum as an exact count."""
+    hits = [{"_id": "a1", "_score": 1.0, "_source": {"str_databaseid": "db1", "str_assetid": "a1"}}]
+    mock_client.api.search_query.return_value = {
+        "hits": {"total": {"value": 40, "relation": relation}, "hits": hits}
+    }
+    mock_client.trim_search_results.side_effect = (
+        lambda raw, max_hits=50: server.VamsClient.trim_search_results(raw, max_hits=max_hits)
+    )
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+
+    for result in (
+        server.search_assets(query="x"),
+        server.search_files(query="x"),
+        server.find_and_summarize("x"),
+    ):
+        assert result["total"] == 40
+        assert result["total_is_lower_bound"] is lower_bound
+        assert result["total_display"] == display
+
+
 def test_find_and_summarize_bounds_each_inner_version_walk_to_one_page(mock_client):
     """Only `count` is read off the version walk, so the extra pages were fetched and discarded."""
     hits = [{"_id": "a1", "_score": 1.0, "_source": {"str_databaseid": "db1", "str_assetid": "a1"}}]
@@ -338,7 +364,12 @@ def test_find_and_summarize_within_the_clamp_adds_no_note(mock_client):
         lambda: server.list_workflow_triggers("db1", "w1", starting_token="tok"),
         lambda: server.list_executions(starting_token="tok"),
         lambda: server.page_execution_detail_metadata("e1", starting_token="tok"),
+        lambda: server.page_execution_detail_files("e1", starting_token="tok"),
         lambda: server.list_subscriptions(starting_token="tok"),
+        lambda: server.list_compliance_evaluations("db1", "a1", starting_token="tok"),
+        lambda: server.list_quarantined_assets(starting_token="tok"),
+        lambda: server.query_compliance_audit(starting_token="tok"),
+        lambda: server.get_asset_compliance_audit("db1", "a1", starting_token="tok"),
     ],
 )
 def test_every_paginated_read_tool_forwards_starting_token(mock_client, call):
@@ -591,6 +622,10 @@ def test_no_read_tool_calls_a_mutating_apiclient_method():
         "create_", "update_", "delete_", "set_", "archive_", "unarchive_", "execute_", "rerun_",
         "abort_", "permanent_", "revert_", "move_", "copy_", "import_", "reset_", "initialize_",
         "complete_",
+        # The compliance write verbs: none deletes stored data, but every one of them changes state
+        # or starts compute, and a read-section placement would reach them with both gates off.
+        "bind_", "unbind_", "evaluate_", "sweep_", "release_", "grant_", "revoke_", "approve_",
+        "reject_",
     )
 
     offenders = []
@@ -683,6 +718,46 @@ def test_list_executions_surfaces_page_warnings_and_flags_truncated(real_paginat
     # Reported once even though both pages carried it.
     assert result["warnings"] == [_WITHHELD_WARNING]
     assert result["truncated"] is True
+
+
+def test_list_executions_returns_skipped_rows_with_their_fields(real_paginate_client):
+    # #998: a SKIPPED record arrives under the same Items key as a run, with its optional fields kept,
+    # and the status filter is passed through for equality.
+    skipped = {"workflowExecutionId": "s1", "executionStatus": "SKIPPED", "skippedLaunchCount": 49,
+               "skipScope": "asset", "skipReason": "busy"}
+    real_paginate_client.api.list_executions.side_effect = [{"message": {"Items": [skipped]}}]
+
+    result = server.list_executions(status="SKIPPED")
+
+    assert result["Items"] == [skipped]
+    params = real_paginate_client.api.list_executions.call_args.kwargs.get("params") or \
+        real_paginate_client.api.list_executions.call_args.args[-1]
+    assert params["status"] == "SKIPPED"
+
+
+@pytest.mark.parametrize("tool, api_name, args", [
+    ("list_executions", "list_executions", {}),
+    ("list_workflow_executions", "list_workflow_executions", {"database_id": "db1", "asset_id": "a1"}),
+])
+def test_the_list_tools_send_exclude_status(real_paginate_client, tool, api_name, args):
+    # #998: exclude_status rides as excludeStatus; absent, nothing is sent.
+    api = getattr(real_paginate_client.api, api_name)
+    api.side_effect = [{"message": {"Items": []}}, {"message": {"Items": []}}]
+
+    def _sent():
+        call = api.call_args
+        return call.kwargs.get("params") or call.args[-1]
+
+    getattr(server, tool)(exclude_status="SKIPPED", **args)
+    assert _sent()["excludeStatus"] == "SKIPPED"
+    getattr(server, tool)(**args)
+    assert "excludeStatus" not in _sent()
+
+
+def test_the_execution_tools_describe_skipped_records():
+    for tool in (server.list_executions, server.list_workflow_executions,
+                 server.get_execution_details):
+        assert "SKIPPED" in (tool.__doc__ or "")
 
 
 _WORK_BUDGET_WARNING = (
@@ -861,6 +936,7 @@ def test_get_execution_logs_forwards_log_id_and_stage_name_in_full_mode(mock_cli
 
     params = mock_client.api.get_execution_logs.call_args.kwargs["params"]
     assert params == {"mode": "full", "pipelineExecutionId": "pe1",
+                      # pragma: allowlist nextline secret
                       "logId": "3f9a0c1d2e4b5a67", "stageName": "PdalConverterBatchJob"}
 
 
@@ -1003,7 +1079,8 @@ def test_get_execution_details_docstring_describes_the_metadata_collections(frag
 @pytest.mark.parametrize(
     "fragment",
     # The collection names an agent must pass verbatim, and the two row shapes it renders.
-    ["inputDatabase", "truncatedCollections", "pipelineId", "targetFilePath", "metadataValue"],
+    ["inputDatabase", "truncatedCollections", "pipelineId", "targetFilePath", "metadataValue",
+     "metadataType"],
 )
 def test_page_execution_detail_metadata_docstring_describes_collections_and_rows(fragment):
     assert fragment in _docstring_of("page_execution_detail_metadata")
@@ -1025,12 +1102,46 @@ def test_config_tool_docstrings_list_every_metadata_input_key(tool):
     # A key missing here is a key an agent never sets; the backend rejects unknown ones,
     # so the list must match the model's exactly.
     docstring = _docstring_of(tool)
-    for key in ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata"):
+    for key in ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata",
+                "assetFileMetadata", "metadataSchema"):
         assert key in docstring, f"{tool} docstring omits metadataInputs.{key}"
+    # A four-key description would tell an agent the opt-in keys are rejected.
+    assert "four-key" not in docstring and "exactly four keys" not in docstring, tool
+
+
+@pytest.mark.parametrize("tool", ["get_execution_details", "page_execution_detail_metadata"])
+def test_execution_metadata_tools_explain_the_expanded_flag(tool):
+    # Without it an agent counts a whole-asset run's context records as the step's input files.
+    docstring = _docstring_of(tool)
+    assert "`expanded`" in docstring or "expanded}" in docstring, tool
+    assert "not one of its input files" in docstring or "not an input file" in docstring, tool
+
+
+@pytest.mark.parametrize("value", ["perAsset", "perInputFile", "perInputFileVersion"])
+def test_create_workflow_docstring_names_every_concurrency_restriction(value):
+    # The value set is closed on the backend; a value absent here is one no agent ever sets.
+    assert value in _docstring_of("create_workflow")
+
+
+@pytest.mark.parametrize("fragment", ["perInputFileVersion", "WorkflowAlreadyRunningError",
+                                      "Nothing started"])
+def test_execute_workflow_docstring_explains_a_concurrency_refusal(fragment):
+    # An agent reading the refusal must know nothing ran and that the remedy is to wait, not retry now.
+    assert fragment in _docstring_of("execute_workflow")
 
 
 def test_rerun_execution_docstring_mentions_warnings():
     assert "warnings" in _docstring_of("rerun_execution")
+
+
+def test_rerun_execution_docstring_states_the_input_version_rule():
+    """A re-run reads a file at the version the original launch pinned and otherwise takes the
+    current version. An agent that assumes a re-run reproduces the original bytes reports a
+    comparison that never held."""
+    docstring = _docstring_of("rerun_execution").lower()
+    assert "pinned" in docstring
+    assert "current version" in docstring
+    assert "before 2.7.0" in docstring
 
 
 def test_rerun_execution_docstring_says_the_group_id_assigns_rather_than_selects():
@@ -1153,6 +1264,7 @@ _PAGINATED_READ_TOOLS = (
     "list_subscriptions",
     "list_api_keys",
     "list_user_api_keys",
+    "list_compliance_evaluations",
 )
 
 
@@ -1387,7 +1499,13 @@ def test_non_pipeline_saves_stay_on_plain_unwrap(tool):
 # kill of running AWS compute. The classification is now stated in all three places, so the risk of
 # drift moves to keeping them in step — which is what this asserts.
 
-_COMPUTE_CAUTION_TOOLS = ("execute_workflow", "rerun_execution", "abort_execution")
+_COMPUTE_CAUTION_TOOLS = (
+    "execute_workflow", "rerun_execution", "abort_execution",
+    # A pipeline rule runs a workflow execution per evaluated asset, so these four start compute too:
+    # one asset, every bound asset, and the two ways a cascade's re-evaluation is set running.
+    "evaluate_asset_compliance", "sweep_compliance_schema", "create_compliance_cascade",
+    "approve_compliance_cascade",
+)
 
 
 def _sibling_doc(name):
@@ -1668,3 +1786,190 @@ def test_list_workflow_executions_docstring_states_the_id_identifies_the_workflo
     assert _CROSS_DATABASE_RULE in docstring
     assert "narrowing filter" in docstring
     assert _DATABASE_SCOPED_CLAIM not in docstring
+
+
+# ---------------------------------------------------------------------------
+# #858: page_execution_detail_files + get_execution_results
+# ---------------------------------------------------------------------------
+
+
+def test_page_execution_detail_files_forwards_collection_and_pipeline(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    result = server.page_execution_detail_files("e1", collection="output", pipeline_id="pA")
+    assert result["collection"] == "output"
+    # The collection + pipelineId ride on every page's request params (the token is pinned to them).
+    call = mock_client.paginate.call_args
+    # paginate is called with a _call closure; invoke it to see the params handed to the API.
+    inner = call.args[0]
+    mock_client.api.get_execution_details_files.return_value = {"Items": []}
+    inner({})
+    params = mock_client.api.get_execution_details_files.call_args.kwargs["params"]
+    assert params["collection"] == "output"
+    assert params["pipelineId"] == "pA"
+
+
+def test_page_execution_detail_files_rejects_inputdatabase(mock_client):
+    # Files have no inputDatabase collection (metadata-only split); it must be a clean ValueError.
+    result = server.page_execution_detail_files("e1", collection="inputDatabase")
+    assert result.get("error_type") == "ValueError"
+    assert not mock_client.paginate.called
+
+
+def test_page_execution_detail_files_defaults_to_input(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    result = server.page_execution_detail_files("e1")
+    assert result["collection"] == "input"
+
+
+def test_page_execution_detail_files_is_capped_at_the_page_size(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.page_execution_detail_files("e1", collection="output")
+    page_size = mock_client.paginate.call_args.kwargs["page_size"]
+    assert page_size <= server.EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE
+
+
+def test_get_execution_results_unwraps_the_message_envelope(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.return_value = {
+        "message": {"resultContent": "hello", "resultContentTruncated": False,
+                    "resultRowCount": 1, "resultContentBytes": 5}}
+    result = server.get_execution_results("e1")
+    assert result == {"resultContent": "hello", "resultContentTruncated": False,
+                      "resultRowCount": 1, "resultContentBytes": 5, "pageCount": 1}
+    mock_client.api.get_execution_results.assert_called_once_with("e1", params={})
+
+
+def _result_page(content, token=None, truncated=False):
+    page = {"resultContent": content, "resultContentTruncated": truncated,
+            "resultRowCount": 1, "resultContentBytes": len(content.encode("utf-8"))}
+    if token:
+        page["NextToken"] = token
+    return {"message": page}
+
+
+def test_get_execution_results_follows_pages_to_the_end(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page("a", "t2"), _result_page("b", "t3", truncated=True), _result_page("c")]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == "abc"
+    assert result["resultRowCount"] == 3
+    assert result["resultContentTruncated"] is True
+    assert result["pageCount"] == 3
+    assert "NextToken" not in result and "note" not in result
+    sent = [c.kwargs["params"] for c in mock_client.api.get_execution_results.call_args_list]
+    assert sent == [{}, {"startingToken": "t2"}, {"startingToken": "t3"}]
+
+
+def test_get_execution_results_stops_at_the_size_budget_and_says_so(mock_client, monkeypatch):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    monkeypatch.setattr(server, "EXECUTION_RESULT_MAX_BYTES", 4)
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page("aaa", "t2"), _result_page("bbb", "t3"), _result_page("ccc")]
+    result = server.get_execution_results("e1")
+    # The budget is checked before a page is added: "bbb" would carry the answer to 6 > 4, so it is
+    # left for the next call, which resumes from the token that fetched it.
+    assert result["resultContent"] == "aaa"
+    assert result["NextToken"] == "t2"
+    assert result["pageCount"] == 1
+    assert "5 MiB result budget" in result["note"]
+    assert mock_client.api.get_execution_results.call_count == 2
+
+
+def test_get_execution_results_counts_escaped_bytes(mock_client, monkeypatch):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    # Quotes cost their escape: '""' is 4 bytes sent, so two such pages pass a 6-byte budget raw
+    # (2 + 2) but not as sent (4 + 4).
+    monkeypatch.setattr(server, "EXECUTION_RESULT_MAX_BYTES", 6)
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page('""', "t2"), _result_page('""')]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == '""'
+    assert result["NextToken"] == "t2"
+
+
+def _sent(text):
+    """The tool answer's text as sent (UTF-8 inside a JSON string value), the measure under test."""
+    return len(json.dumps(text, ensure_ascii=False).encode("utf-8")) - 2
+
+
+def test_get_execution_results_large_ascii_result_stays_within_budget(mock_client):
+    # R1's shape: ~5.9 MB of plain ASCII the service serves as a full 5 MiB page plus the rest. The
+    # previous check-after-append returned both pages (~2x the budget) in one answer.
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    first = "x" * (server.EXECUTION_RESULT_MAX_BYTES - 64)
+    second = "y" * (6_062_048 - len(first))
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page(first, "t2"), _result_page(second)]
+    result = server.get_execution_results("e1")
+    assert _sent(result["resultContent"]) <= server.EXECUTION_RESULT_MAX_BYTES
+    assert result["resultContent"] == first
+    assert result["NextToken"] == "t2"
+    # The rest arrives on the resume call, also within budget, and the two answers rebuild the whole.
+    mock_client.api.get_execution_results.side_effect = [_result_page(second)]
+    rest = server.get_execution_results("e1", starting_token=result["NextToken"])
+    assert _sent(rest["resultContent"]) <= server.EXECUTION_RESULT_MAX_BYTES
+    assert "NextToken" not in rest
+    assert len((result["resultContent"] + rest["resultContent"]).encode("utf-8")) == 6_062_048
+
+
+def test_get_execution_results_large_cjk_result_stays_within_budget(mock_client):
+    # R3's shape: 4.4 MiB of CJK text with no line breaks, which the service pages by its own
+    # (doubly escaped) budget into three pages. Counted as sent, each answer stays within 5 MiB, and
+    # following NextToken rebuilds the whole text.
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    total_chars = (44 * 1024 * 1024 // 10) // 3  # 3 UTF-8 bytes per character
+    per_page = server.EXECUTION_RESULT_MAX_BYTES // 7  # the service's 7 wire bytes per character
+    text = "\u6f22" * total_chars
+    pages = [text[i:i + per_page] for i in range(0, total_chars, per_page)]
+    assert len(pages) == 3
+
+    def serve(start=None):
+        index = int(start[1:]) if start else 0
+        mock_client.api.get_execution_results.side_effect = [
+            _result_page(pages[i], f"t{i + 1}" if i + 1 < len(pages) else None)
+            for i in range(index, len(pages))]
+
+    serve()
+    gathered = []
+    token = None
+    while True:
+        result = server.get_execution_results("e1", starting_token=token)
+        assert _sent(result["resultContent"]) <= server.EXECUTION_RESULT_MAX_BYTES
+        gathered.append(result["resultContent"])
+        token = result.get("NextToken")
+        if not token:
+            break
+        assert "5 MiB result budget" in result["note"]
+        serve(token)
+    assert "".join(gathered) == text
+
+
+def test_get_execution_results_stops_at_max_pages_and_says_so(mock_client, monkeypatch):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    monkeypatch.setattr(server, "CONFIG", dataclasses.replace(server.CONFIG, max_pages=2))
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page("a", "t2"), _result_page("b", "t3"), _result_page("c")]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == "ab"
+    assert result["NextToken"] == "t3"
+    assert "VAMS_MAX_PAGES=2" in result["note"]
+
+
+def test_get_execution_results_resumes_from_a_starting_token(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.side_effect = [_result_page("c")]
+    result = server.get_execution_results("e1", starting_token="t3")
+    assert result["resultContent"] == "c"
+    mock_client.api.get_execution_results.assert_called_once_with(
+        "e1", params={"startingToken": "t3"})
+
+
+def test_get_execution_results_empty_shape(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.return_value = {
+        "message": {"resultContent": "", "resultContentTruncated": False,
+                    "resultRowCount": 0, "resultContentBytes": 0}}
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == ""
+    assert result["resultRowCount"] == 0

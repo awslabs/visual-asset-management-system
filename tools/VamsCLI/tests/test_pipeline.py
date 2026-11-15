@@ -437,3 +437,102 @@ class TestPipelineTemplateListPagination:
 
         assert [t['templateId'] for t in result['message']['Items']] == ['t1', 't2']
         assert mock_get.call_args_list[1].kwargs['params'] == {'startingToken': 'tok'}
+
+
+class TestSystemPipelineSurface:
+    """System pipelines are surfaced read-only: the formatter marks them and every write command's
+    help says the API refuses edits beyond the enabled flag."""
+
+    def test_get_and_list_show_the_system_marker_only_when_set(self):
+        from vamscli.commands.pipeline import format_pipeline
+
+        assert "System: True" in format_pipeline({'pipelineId': 'p', 'isSystem': True})
+        assert "System:" not in format_pipeline({'pipelineId': 'p'})
+        assert "System:" not in format_pipeline({'pipelineId': 'p', 'isSystem': False})
+
+    @pytest.mark.parametrize("argv", [
+        ['pipeline', 'update', '--help'], ['pipeline', 'delete', '--help'],
+        ['pipeline', 'unarchive', '--help'], ['pipeline', 'template', 'create', '--help'],
+        ['pipeline', 'template', 'update', '--help'], ['pipeline', 'template', 'delete', '--help'],
+    ])
+    def test_write_help_says_system_pipelines_are_read_only(self, cli_runner, argv):
+        result = cli_runner.invoke(cli, argv)
+        assert result.exit_code == 0, result.output
+        # Click rewraps help paragraphs, so compare on a whitespace-normalised view.
+        help_text = " ".join(result.output.split())
+        assert 'System pipelines' in help_text and 'read-only' in help_text
+
+    TEMPLATE_HINT = "Check the config body, tag schema, and config format."
+    CREATE_HINT = "Check the executionConfig/systemConfig JSON and required fields."
+
+    @pytest.mark.parametrize("message", [
+        "Templates of system pipelines cannot be added or deleted.",
+        'Templates of system pipelines are read-only except "configBody", "tagSchema" and '
+        '"webFormJson"; "templateName" differs from the stored value.',
+    ])
+    def test_template_create_shows_a_system_refusal_without_the_generic_hint(
+            self, cli_runner, generic_command_mocks, message):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].create_pipeline_template.side_effect = (
+                InvalidPipelineTemplateDataError(message))
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'template', 'create', '-d', 'GLOBAL', '-p', 'system-sample', '-n', 'X'])
+        assert result.exit_code != 0
+        assert message in result.output
+        assert self.TEMPLATE_HINT not in result.output
+
+    def test_template_create_keeps_the_hint_for_other_invalid_data(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].create_pipeline_template.side_effect = (
+                InvalidPipelineTemplateDataError("Invalid tag schema: field 'q' has no type."))
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'template', 'create', '-d', 'my-db', '-p', 'p1', '-n', 'X'])
+        assert result.exit_code != 0
+        assert self.TEMPLATE_HINT in result.output
+
+    def test_create_over_an_archived_system_id_shows_the_refusal_without_the_generic_hint(
+            self, cli_runner, generic_command_mocks):
+        message = ("System pipelines cannot be archived or restored through the API; the "
+                   "deployment owns them.")
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].create_pipeline.side_effect = InvalidPipelineDataError(message)
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'create', '-d', 'GLOBAL', '-n', 'X', '--pipeline-id', 'system-sample',
+                '--execution-config', '{"executionType": "Lambda"}'])
+        assert result.exit_code != 0
+        assert message in result.output
+        assert self.CREATE_HINT not in result.output
+
+    def test_create_keeps_the_hint_for_other_invalid_data(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].create_pipeline.side_effect = InvalidPipelineDataError("bad")
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'create', '-d', 'my-db', '-n', 'X',
+                '--execution-config', '{"executionType": "Lambda"}'])
+        assert result.exit_code != 0
+        assert self.CREATE_HINT in result.output
+
+
+class TestOptInMetadataInputsHelp:
+    """The pipeline, template and workflow create help names the two opt-in metadataInputs keys and
+    says they default off (#1010)."""
+
+    @pytest.mark.parametrize("argv", [
+        ['pipeline', 'create', '--help'],
+        ['pipeline', 'template', 'create', '--help'],
+        ['workflow', 'create', '--help'],
+    ])
+    def test_create_help_names_both_opt_in_keys(self, cli_runner, argv):
+        result = cli_runner.invoke(cli, argv)
+        assert result.exit_code == 0, result.output
+        # Click rewraps help paragraphs, so compare on a whitespace-normalised view.
+        help_text = " ".join(result.output.split())
+        assert 'assetFileMetadata' in help_text
+        assert 'metadataSchema' in help_text
+
+    @pytest.mark.parametrize("argv", [['pipeline', 'create', '--help'], ['workflow', 'create', '--help']])
+    def test_create_help_says_the_opt_in_keys_default_to_false(self, cli_runner, argv):
+        result = cli_runner.invoke(cli, argv)
+        help_text = " ".join(result.output.split())
+        assert 'defaulting to false' in help_text

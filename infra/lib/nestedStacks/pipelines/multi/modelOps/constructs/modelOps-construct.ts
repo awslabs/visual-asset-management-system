@@ -349,6 +349,9 @@ export class ModelOpsConstruct extends NestedStack {
             propagatedTagSource: ecs.PropagatedTagSource.TASK_DEFINITION,
             securityGroups: props.pipelineSecurityGroups,
             subnets: subnetSelection,
+            // Keeps constructPipeline's output as the state, so PipelineEndTask finds the staged
+            // input copy it deletes (stagedInputS3Uri) on the success route as on the error route.
+            resultPath: "$.ModelOpsTaskResult",
         })
             .addCatch(handleModelOpsError, {
                 resultPath: "$.error",

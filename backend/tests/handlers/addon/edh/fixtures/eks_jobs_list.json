@@ -1,0 +1,62 @@
+{
+  "name": "eks_jobs_list",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "GET",
+    "path": "/api/containers/eks/jobs",
+    "absolutePath": "/api/containers/eks/jobs",
+    "query": {
+      "cluster": "vams-spike-eks",
+      "namespace": "default"
+    },
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": {
+        "ab12cd34-ef56-4a78-9b0c-1d2e3f4a5b6c": {
+          "metadata": {
+            "name": "vams-spike-eks-job",
+            "namespace": "default",
+            "uid": "ab12cd34-ef56-4a78-9b0c-1d2e3f4a5b6c",
+            "labels": {
+              "edh_JobOwner": "vspikeaaaaaaaaaa",
+              "edh_ClusterId": "vams-edh-dev"
+            },
+            "creation_timestamp": "2026-09-10 12:00:00+00:00"
+          },
+          "status": {
+            "active": 1
+          },
+          "pod_ips": [
+            "10.0.0.1"
+          ],
+          "images": [
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/vams-spike-edh-probe:latest"
+          ],
+          "eks_cluster": "vams-spike-eks"
+        }
+      }
+    }
+  },
+  "expect": {
+    "count": 1,
+    "jobId": "ab12cd34-ef56-4a78-9b0c-1d2e3f4a5b6c"
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/containers/eks/jobs.py"
+    ]
+  }
+}

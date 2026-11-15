@@ -47,6 +47,12 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
      */
     logGroup?: logs.ILogGroup;
     /**
+     * Additional environment variables for the container, merged over the AWS_REGION / AWS_ACCOUNT
+     * pair every job receives. Configuration pointers only (a model id, a secret ARN), never a
+     * credential value.
+     */
+    environment?: { [key: string]: string };
+    /**
      * Hard limit on a single job attempt, after which AWS Batch terminates the job itself.
      *
      * Required rather than optional so a new pipeline has to state its own bound: with no attempt
@@ -79,6 +85,12 @@ const defaultProps: Partial<BatchFargatePipelineConstructProps> = {
 
 export class BatchFargatePipelineConstruct extends Construct {
     public readonly batchJobDefinition: batch.IJobDefinition;
+    /**
+     * The job definition's physical name (base name plus hash) as a literal string. A submit by this
+     * name, without a revision, runs the latest ACTIVE revision, so a run that spans a deploy which
+     * replaced the definition still submits its later jobs.
+     */
+    public readonly batchJobDefinitionPhysicalName: string;
     public readonly batchJobQueue: batch.JobQueue;
 
     constructor(parent: Construct, name: string, props: BatchFargatePipelineConstructProps) {
@@ -120,6 +132,7 @@ export class BatchFargatePipelineConstruct extends Construct {
                 props.batchJobDefinitionName,
                 10
             );
+        this.batchJobDefinitionPhysicalName = batchJobName;
 
         this.batchJobDefinition = new batch.EcsJobDefinition(this, "PipelineBatchJobDefinition", {
             jobDefinitionName: batchJobName,
@@ -133,6 +146,7 @@ export class BatchFargatePipelineConstruct extends Construct {
                 environment: {
                     AWS_REGION: region,
                     AWS_ACCOUNT: account,
+                    ...(props.environment ?? {}),
                 },
                 jobRole: props.jobRole,
                 executionRole: props.executionRole,

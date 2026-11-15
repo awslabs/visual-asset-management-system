@@ -263,3 +263,76 @@ test.describe("published bundle hygiene", () => {
         ).toBe(200);
     });
 });
+
+/**
+ * The API authorizer's answer to a credential it does not accept (#1212).
+ *
+ * From 2.7.0 an expired, invalid or missing token is a 401, which tells a client to sign in again,
+ * while a 403 means the credential was accepted and refused. The fetches run inside the page, from
+ * the web origin, so they also prove the 401 carries the CORS headers the browser needs to read it
+ * (the API's DEFAULT_4XX gateway response); a missing header would make the fetch reject instead.
+ */
+async function apiBase(page: Page): Promise<string> {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+        const base = await page.evaluate(() => localStorage.getItem("api_path"));
+        if (base) return base.endsWith("/") ? base : `${base}/`;
+        if (Date.now() > deadline) throw new Error("the app never stored its API base (api_path)");
+        await page.waitForTimeout(1000);
+    }
+}
+
+async function fetchFromPage(
+    page: Page,
+    url: string,
+    authorization?: string
+): Promise<{ status: number; body: string } | { error: string }> {
+    return page.evaluate(
+        async ([target, auth]) => {
+            try {
+                const headers: Record<string, string> = {};
+                if (auth) headers.Authorization = auth;
+                const response = await fetch(target, { headers });
+                return { status: response.status, body: await response.text() };
+            } catch (e) {
+                return { error: String(e) };
+            }
+        },
+        [url, authorization] as const
+    );
+}
+
+test.describe("API authorizer status codes (#1212)", () => {
+    test("an anonymous route answers from the web origin (control)", async ({ page }) => {
+        const base = await apiBase(page);
+        const result = await fetchFromPage(page, `${base}api/version`);
+        expect(result, `the version route could not be read: ${JSON.stringify(result)}`).toEqual(
+            expect.objectContaining({ status: 200 })
+        );
+    });
+
+    for (const [name, authorization] of [
+        [
+            "a tampered bearer token",
+            "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.invalid-signature",
+        ],
+        ["a value that is not a token", "Bearer not-a-token"],
+        ["an unknown API key", "vams_e2e_unknown_key_0000000000000000"],
+    ] as const) {
+        test(`${name} is a 401 the browser can read`, async ({ page }) => {
+            const base = await apiBase(page);
+            const result = await fetchFromPage(page, `${base}database`, authorization);
+            expect(
+                "error" in result ? null : result.status,
+                `expected 401 for ${name}; got ${JSON.stringify(
+                    result
+                )}. A fetch error means the ` +
+                    `response carried no CORS headers; a 403 means the deployment predates #1212`
+            ).toBe(401);
+            // Generic body only: nothing about why the credential was refused.
+            const body = "body" in result ? result.body : "";
+            expect(body).not.toMatch(/expired|signature|disabled|kid|issuer|audience/i);
+        });
+    }
+});

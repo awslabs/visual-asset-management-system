@@ -34,7 +34,7 @@ from common.workflows import pipelineRecords as pr
 from common.workflows import workflowRecords as wr
 from common.workflows.templateTagSchema import required_tags_without_default
 
-logger = safeLogger(service_name="TriggerTemplateValidation")
+logger = safeLogger()
 
 # Bounds on the workflows walk behind the pipeline-save trigger-template warning. The walk runs
 # synchronously on every save of a require-template pipeline, so the page cap keeps one save from

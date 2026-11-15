@@ -36,7 +36,7 @@ const version = (over: Record<string, any> = {}) => ({
     changeSource: "workflowExecution",
     changeUserId: "scheurik",
     changeWorkflowId: "conversion-3d-basic",
-    changeWorkflowExecutionId: "571a47bf03d645f08f9c11606f4f251e",
+    changeWorkflowExecutionId: "571a47bf03d645f08f9c11606f4f251e", // pragma: allowlist secret
     ...over,
 });
 
@@ -89,6 +89,7 @@ describe("FileVersionsTable — View execution link", () => {
 
         expect(onNavigateAway).toHaveBeenCalledTimes(1);
         const page = await screen.findByTestId("execution-page");
+        // pragma: allowlist nextline secret
         expect(page).toHaveTextContent("571a47bf03d645f08f9c11606f4f251e");
     });
 

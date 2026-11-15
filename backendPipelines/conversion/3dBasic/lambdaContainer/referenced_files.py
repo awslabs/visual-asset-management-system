@@ -207,9 +207,10 @@ def _glb_references(path: str) -> List[Reference]:
 # The OBJ and MTL collectors return exactly the names trimesh's OBJ loader asks its resolver for
 # (trimesh.exchange.obj ``load_obj`` and ``parse_mtl``, trimesh 4.8.3), so the fetch requests, and its
 # warnings name, only files the loader reads. Both read the text as the loader does: UTF-8, whole.
-# trimesh decodes other encodings only with charset_normalizer, which the image does not install, so
-# it reads no name from a file that is not UTF-8; here such a file raises, and nothing is fetched
-# for it.
+# An OBJ input whose text is not UTF-8 has already failed the run before this fetch
+# (``check_input_text`` in lambda.py). An MTL that is not UTF-8 raises here and nothing is fetched for
+# it; trimesh decodes other encodings only with charset_normalizer, which the image does not install,
+# so it reads no material from that MTL either and the model converts without one.
 # ``tests/test_3dbasic_real_conversions.py`` compares these names with the ones the installed trimesh
 # asks for.
 

@@ -32,7 +32,7 @@ from vamscli.utils.api_client import APIClient
 
 API_BASE = "https://abc123.execute-api.us-east-1.amazonaws.com/api"
 STAGED_PAYLOAD_URL = (
-    "https://aux-bucket.s3.us-east-1.amazonaws.com/assetExports/db1/asset1/deadbeef.json"
+    "https://aux-bucket.s3.us-east-1.amazonaws.com/vams.assetExports/db1/asset1/deadbeef.json"
     "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc123"
 )
 

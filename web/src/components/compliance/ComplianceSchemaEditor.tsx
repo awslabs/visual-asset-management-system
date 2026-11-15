@@ -1,0 +1,1777 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useRef, useEffect, useCallback, useId, useState } from "react";
+import Editor, { OnMount, OnValidate, loader } from "@monaco-editor/react";
+import * as monaco from "monaco-editor";
+import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
+import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+
+(self as any).MonacoEnvironment = {
+    getWorker(_: any, label: string) {
+        if (label === "json") {
+            return new jsonWorker();
+        }
+        return new editorWorker();
+    },
+};
+
+loader.config({ monaco });
+import Box from "@cloudscape-design/components/box";
+import Tabs from "@cloudscape-design/components/tabs";
+import FormField from "@cloudscape-design/components/form-field";
+import Input from "@cloudscape-design/components/input";
+import Select from "@cloudscape-design/components/select";
+import Toggle from "@cloudscape-design/components/toggle";
+import Button from "@cloudscape-design/components/button";
+import ColumnLayout from "@cloudscape-design/components/column-layout";
+import Header from "@cloudscape-design/components/header";
+import Alert from "@cloudscape-design/components/alert";
+import RadioGroup from "@cloudscape-design/components/radio-group";
+import AttributeEditor from "@cloudscape-design/components/attribute-editor";
+import ButtonDropdown from "@cloudscape-design/components/button-dropdown";
+import Textarea from "@cloudscape-design/components/textarea";
+import TokenGroup from "@cloudscape-design/components/token-group";
+import type { editor } from "monaco-editor";
+import Synonyms from "../../synonyms";
+import {
+    COMPLIANCE_METADATA_SCOPES,
+    COMPLIANCE_RULE_TYPES,
+    ComplianceAssetAttributeField,
+    ComplianceMetadataScope,
+    CompliancePipelineInputFilesMode,
+    CompliancePipelineRef,
+    ComplianceRuleType,
+    PIPELINE_INPUT_FILES_MODES,
+    VAMS_RULES_V1_FORMAT,
+} from "../../services/ComplianceService";
+import {
+    ASSET_ATTRIBUTE_FIELD_OPTIONS,
+    CHECK_EDITED_RULE_TYPES,
+    CHECK_VALIDATORS,
+    COMPLIANCE_ID_PATTERN,
+    ENFORCEMENT_OPTIONS,
+    INPUT_FILES_MAX_FILTERS,
+    INPUT_FILES_MAX_FILTER_LENGTH,
+    INPUT_FILES_MAX_KEYS,
+    INPUT_FILES_MODE_OPTIONS,
+    InputFilesDraft,
+    LINK_DIRECTION_OPTIONS,
+    LINK_RELATIONSHIP_TYPE_OPTIONS,
+    METADATA_FILE_SCOPES,
+    METADATA_SCOPE_OPTIONS,
+    PATH_PATTERNS_MAX,
+    PATTERN_MAX_LENGTH,
+    PIPELINE_REF_FIELDS,
+    RULE_MAX_CHECKS,
+    RULE_TYPE_OPTIONS,
+    RulesDraft,
+    TAGS_MAX,
+    TAG_MAX_LENGTH,
+    bodyFromRulesDraft,
+    checkList,
+    checksCountError,
+    checksOf,
+    isVamsRulesBody,
+    metadataScopeOf,
+    newCheck,
+    newRuleDraft,
+    numberFromInput,
+    patchCheck,
+    rulesDraftFromBody,
+    validateInputFiles,
+    validateMetadataScope,
+    validateMetadataSchemaRef,
+    metadataSchemaLocationOptions,
+    withMetadataSchemaRef,
+    ASSET_DATABASE_LOCATION,
+    validatePipelineRef,
+    ruleNamesError,
+    withMetadataScope,
+} from "./complianceSchemaRules";
+
+const ID_STRING = { type: "string", pattern: COMPLIANCE_ID_PATTERN.source };
+
+const PIPELINE_REF_META_SCHEMA = {
+    type: "object",
+    required: ["databaseId", "workflowId", "pipelineDatabaseId", "pipelineId"],
+    properties: {
+        databaseId: {
+            ...ID_STRING,
+            description: `Workflow ${Synonyms.database}: the ${Synonyms.database} the workflow belongs to, or GLOBAL.`,
+        },
+        workflowId: { ...ID_STRING, description: "Workflow ID: the workflow to run." },
+        pipelineDatabaseId: {
+            ...ID_STRING,
+            description: `Pipeline ${Synonyms.database}: the ${Synonyms.database} the pipeline belongs to, or GLOBAL.`,
+        },
+        pipelineId: {
+            ...ID_STRING,
+            description: "Pipeline ID: the pipeline in the workflow whose output is checked.",
+        },
+        templateId: {
+            ...ID_STRING,
+            description:
+                "Template ID (optional): pipeline template applied when the workflow runs.",
+        },
+    },
+    additionalProperties: false,
+};
+
+const INPUT_FILES_META_SCHEMA = {
+    type: "object",
+    required: ["mode"],
+    description: `Which of the ${Synonyms.asset}'s files the workflow receives when the rule runs. Absent means matching.`,
+    properties: {
+        mode: {
+            type: "string",
+            enum: PIPELINE_INPUT_FILES_MODES,
+            description: `matching: the ${Synonyms.asset}'s files passing the workflow's, the pipeline's and this rule's filters; wholeAsset: the ${Synonyms.asset} root, where the workflow allows it; explicit: exactly the listed keys.`,
+        },
+        filter: {
+            type: "array",
+            maxItems: INPUT_FILES_MAX_FILTERS,
+            items: { type: "string", minLength: 1, maxLength: INPUT_FILES_MAX_FILTER_LENGTH },
+            description:
+                "Glob allow list applied after the workflow's and pipeline's own input filters (matching only). A single-input workflow must end with exactly one file.",
+        },
+        keys: {
+            type: "array",
+            minItems: 1,
+            maxItems: INPUT_FILES_MAX_KEYS,
+            items: { type: "string", pattern: "^/.+" },
+            description: `${Synonyms.Asset}-relative file paths beginning with / (explicit only).`,
+        },
+    },
+    additionalProperties: false,
+    allOf: [
+        {
+            if: { required: ["mode"], properties: { mode: { const: "matching" } } },
+            then: { not: { required: ["keys"] } },
+        },
+        {
+            if: { required: ["mode"], properties: { mode: { const: "wholeAsset" } } },
+            then: { not: { anyOf: [{ required: ["keys"] }, { required: ["filter"] }] } },
+        },
+        {
+            if: { required: ["mode"], properties: { mode: { const: "explicit" } } },
+            then: { required: ["keys"], not: { required: ["filter"] } },
+        },
+    ],
+};
+
+const TOLERANCE_META_SCHEMA = {
+    type: "object",
+    required: ["operator"],
+    properties: {
+        operator: { type: "string", enum: ["lte", "gte", "eq", "between"] },
+        value: { type: "number", description: "Bound for lte, gte and eq." },
+        min: { type: "number", description: "Lower bound for between." },
+        max: { type: "number", description: "Upper bound for between." },
+        epsilon: { type: "number", description: "Allowed difference for eq." },
+    },
+};
+
+const PATTERN_LIST_META_SCHEMA = (description: string) => ({
+    type: "array",
+    maxItems: PATH_PATTERNS_MAX,
+    items: { type: "string", minLength: 1, maxLength: PATTERN_MAX_LENGTH },
+    description,
+});
+
+const TAG_LIST_META_SCHEMA = (description: string) => ({
+    type: "array",
+    maxItems: TAGS_MAX,
+    items: { type: "string", minLength: 1, maxLength: TAG_MAX_LENGTH },
+    description,
+});
+
+const RULE_META_SCHEMA = {
+    type: "object",
+    required: ["ruleType", "enforcement", "checks"],
+    properties: {
+        ruleType: {
+            type: "string",
+            enum: COMPLIANCE_RULE_TYPES,
+            description: `What the rule inspects: a workflow run, the metadata, the ${Synonyms.asset} links, the file paths, whether the files are captured in ${Synonyms.asset} versions, or the ${Synonyms.asset}'s name, description and tags.`,
+        },
+        enforcement: {
+            type: "string",
+            enum: ["quarantine", "warn", "inform"],
+            description: `What a failed check does to the ${Synonyms.asset}.`,
+        },
+        pipelineRef: PIPELINE_REF_META_SCHEMA,
+        inputFiles: INPUT_FILES_META_SCHEMA,
+        inputParameters: {
+            type: "object",
+            description: "Parameters handed to the workflow execution (pipeline rules).",
+        },
+        metadataSchemaRef: {
+            type: "object",
+            required: ["schemaName"],
+            description:
+                "The VAMS metadata schema the rule validates against. Without databaseId it is looked up in the evaluated asset's database, then GLOBAL; databaseId pins the lookup (GLOBAL, or this compliance schema's own database).",
+            properties: { databaseId: ID_STRING, schemaName: { type: "string", minLength: 1 } },
+        },
+        scope: {
+            type: "string",
+            enum: COMPLIANCE_METADATA_SCOPES,
+            description: `metadata: which metadata the rule validates — the ${Synonyms.asset}'s own (asset, the default), each current file's metadata (files) or attributes (fileAttributes), or each ${Synonyms.asset} link's metadata (links). The metadata schema must be of the matching entity type.`,
+        },
+        includePaths: PATTERN_LIST_META_SCHEMA(
+            "metadata (files, fileAttributes): when given, only files whose path matches one of these regular expressions are checked."
+        ),
+        excludePaths: PATTERN_LIST_META_SCHEMA(
+            "metadata (files, fileAttributes): files whose path matches one of these regular expressions are not checked."
+        ),
+        linkDirection: {
+            type: "string",
+            enum: ["parents", "children", "related"],
+            description: "metadata (links): the links checked; absent means both directions.",
+        },
+        relationshipType: {
+            type: "string",
+            enum: ["parentChild", "related"],
+            description: "metadata (links): the links checked; absent means either type.",
+        },
+        checks: {
+            type: "array",
+            minItems: 1,
+            description: `At most ${RULE_MAX_CHECKS} checks on a metadata, fileStructure, versionCoverage or assetAttributes rule.`,
+            items: {
+                type: "object",
+                required: ["name"],
+                properties: {
+                    name: { type: "string", minLength: 1 },
+                    description: { type: "string" },
+                    outputField: {
+                        type: "string",
+                        description: "Pipeline output field compared against the tolerance.",
+                    },
+                    tolerance: TOLERANCE_META_SCHEMA,
+                    validateRequired: { type: "boolean" },
+                    validateTypes: { type: "boolean" },
+                    additionalRequiredFields: { type: "array", items: { type: "string" } },
+                    direction: { type: "string", enum: ["parents", "children", "related"] },
+                    relationshipType: { type: "string", enum: ["parentChild", "related"] },
+                    minCount: { type: "integer", minimum: 0 },
+                    maxCount: { type: "integer", minimum: 0 },
+                    requiredPaths: PATTERN_LIST_META_SCHEMA(
+                        "fileStructure: regular expressions that must each match at least one file path (searched in the path without its leading /)."
+                    ),
+                    forbiddenPaths: PATTERN_LIST_META_SCHEMA(
+                        "fileStructure: regular expressions no file path may match."
+                    ),
+                    minFiles: { type: "integer", minimum: 0, description: "fileStructure." },
+                    maxFiles: { type: "integer", minimum: 0, description: "fileStructure." },
+                    excludePaths: PATTERN_LIST_META_SCHEMA(
+                        "versionCoverage: regular expressions of file paths the check ignores."
+                    ),
+                    field: {
+                        type: "string",
+                        enum: ["assetName", "description", "tags"],
+                        description: `assetAttributes: the ${Synonyms.asset} attribute the check reads.`,
+                    },
+                    matches: {
+                        type: "string",
+                        minLength: 1,
+                        maxLength: PATTERN_MAX_LENGTH,
+                        description: "assetAttributes (assetName, description): must match.",
+                    },
+                    notMatches: {
+                        type: "string",
+                        minLength: 1,
+                        maxLength: PATTERN_MAX_LENGTH,
+                        description: "assetAttributes (assetName, description): must not match.",
+                    },
+                    requiredTags: TAG_LIST_META_SCHEMA(
+                        "assetAttributes (tags): tags that must be present."
+                    ),
+                    forbiddenTags: TAG_LIST_META_SCHEMA(
+                        "assetAttributes (tags): tags that must be absent."
+                    ),
+                    minTags: {
+                        type: "integer",
+                        minimum: 0,
+                        description: "assetAttributes (tags).",
+                    },
+                },
+            },
+        },
+    },
+    allOf: [
+        {
+            if: { properties: { ruleType: { const: "pipeline" } } },
+            then: { required: ["pipelineRef"] },
+        },
+        {
+            if: { properties: { ruleType: { const: "metadata" } } },
+            then: { required: ["metadataSchemaRef"] },
+        },
+    ],
+};
+
+const VAMS_RULES_META_SCHEMA = {
+    type: "object",
+    required: ["schemaFormat", "rules"],
+    properties: {
+        schemaFormat: { type: "string", const: VAMS_RULES_V1_FORMAT },
+        extends: {
+            type: "string",
+            description: "Name of a parent schema whose rules this schema inherits.",
+        },
+        rules: {
+            type: "object",
+            minProperties: 1,
+            additionalProperties: RULE_META_SCHEMA,
+            description: "Named rules; a child rule replaces a parent rule of the same name.",
+        },
+    },
+    additionalProperties: false,
+};
+
+const JSON_SCHEMA_META_SCHEMA = {
+    type: "object",
+    required: ["type"],
+    properties: {
+        type: {
+            type: "string",
+            enum: ["object", "array", "string", "number", "integer", "boolean", "null"],
+            description: "The root type of the schema. Usually 'object' for compliance schemas.",
+        },
+        required: {
+            type: "array",
+            items: { type: "string" },
+            description: "List of property names that are required.",
+        },
+        properties: {
+            type: "object",
+            additionalProperties: {
+                type: "object",
+                properties: {
+                    type: {
+                        type: "string",
+                        enum: ["string", "number", "integer", "boolean", "array", "object", "null"],
+                    },
+                    description: { type: "string" },
+                    enum: { type: "array" },
+                    minimum: { type: "number" },
+                    maximum: { type: "number" },
+                    minLength: { type: "integer", minimum: 0 },
+                    maxLength: { type: "integer", minimum: 0 },
+                    pattern: { type: "string" },
+                    items: { type: "object" },
+                    default: {},
+                },
+            },
+            description: "Define the fields (properties) of the schema.",
+        },
+        additionalProperties: {
+            oneOf: [{ type: "boolean" }, { type: "object" }],
+            description: "Whether to allow properties not defined in 'properties'.",
+        },
+        description: { type: "string" },
+        title: { type: "string" },
+    },
+};
+
+/**
+ * Meta-schema Monaco validates the body against. A body carrying `schemaFormat` is a
+ * vams-rules-v1 rule set, the only format the API registers; the JSON Schema branch keeps
+ * an existing legacy body readable in the JSON view.
+ */
+const COMPLIANCE_META_SCHEMA = {
+    uri: "http://vams/compliance-schema",
+    fileMatch: ["*"],
+    schema: {
+        type: "object",
+        if: { required: ["schemaFormat"] },
+        then: VAMS_RULES_META_SCHEMA,
+        else: JSON_SCHEMA_META_SCHEMA,
+    },
+};
+
+interface PropertyDef {
+    name: string;
+    type: string;
+    description: string;
+    required: boolean;
+    enumValues: string;
+    minimum: string;
+    maximum: string;
+    minLength: string;
+    maxLength: string;
+}
+
+const EMPTY_PROPERTY: PropertyDef = {
+    name: "",
+    type: "string",
+    description: "",
+    required: false,
+    enumValues: "",
+    minimum: "",
+    maximum: "",
+    minLength: "",
+    maxLength: "",
+};
+
+const TYPE_OPTIONS = [
+    { value: "string", label: "String" },
+    { value: "number", label: "Number" },
+    { value: "integer", label: "Integer" },
+    { value: "boolean", label: "Boolean" },
+    { value: "array", label: "Array" },
+    { value: "object", label: "Object" },
+];
+
+const EMPTY_RULES_DRAFT: RulesDraft = { extends: "", rules: [] };
+
+const cardStyle: React.CSSProperties = {
+    padding: "12px",
+    border: "1px solid var(--color-border-divider-default, #eaeded)",
+    borderRadius: "8px",
+};
+
+interface StringListEditorProps {
+    items: string[];
+    onChange: (items: string[]) => void;
+    /** Label of every entry's field, e.g. "Glob pattern"; also names the entries to screen readers. */
+    itemLabel: string;
+    addButtonText: string;
+    placeholder: string;
+    empty: string;
+    max: number;
+    disabled?: boolean;
+}
+
+/** One text field per entry with add and remove controls, for a rule's globs or file paths. */
+function StringListEditor({
+    items,
+    onChange,
+    itemLabel,
+    addButtonText,
+    placeholder,
+    empty,
+    max,
+    disabled = false,
+}: StringListEditorProps) {
+    const lower = itemLabel.toLowerCase();
+    return (
+        <AttributeEditor<string>
+            items={items}
+            addButtonText={addButtonText}
+            addButtonVariant="inline-link"
+            removeButtonText="Remove"
+            removeButtonAriaLabel={(item) => `Remove ${lower} ${item || "(empty)"}`}
+            disableAddButton={disabled || items.length >= max}
+            isItemRemovable={() => !disabled}
+            empty={empty}
+            onAddButtonClick={() => onChange([...items, ""])}
+            onRemoveButtonClick={({ detail }) =>
+                onChange(items.filter((_, i) => i !== detail.itemIndex))
+            }
+            definition={[
+                {
+                    label: itemLabel,
+                    control: (item, index) => (
+                        <Input
+                            value={item}
+                            ariaLabel={`${itemLabel} ${index + 1}`}
+                            placeholder={placeholder}
+                            disabled={disabled}
+                            onChange={({ detail }) =>
+                                onChange(items.map((v, i) => (i === index ? detail.value : v)))
+                            }
+                        />
+                    ),
+                },
+            ]}
+        />
+    );
+}
+
+/** The non-blank lines of a multi-line pattern field, each kept exactly as typed. */
+const patternLines = (text: string): string[] =>
+    text.split(/\r?\n/).filter((line) => line.trim() !== "");
+
+const sameList = (a: string[], b: string[]) =>
+    a.length === b.length && a.every((value, index) => value === b[index]);
+
+interface PatternListFieldProps {
+    items: string[];
+    onChange: (items: string[]) => void;
+    ariaLabel: string;
+    placeholder: string;
+    disabled?: boolean;
+}
+
+/**
+ * One regular expression per line. The typed text is kept while it parses to the same list, so a
+ * trailing newline the user is about to type a pattern after is not taken away.
+ *
+ * Cloudscape's Textarea names itself after the enclosing FormField labels (`aria-labelledby`, which
+ * wins over `aria-label`), so every check's field would be announced alike ("Schema Body Required
+ * paths" in the schema modal). It is labelled by its own hidden element instead, which keeps the
+ * per-check `ariaLabel` ("Required paths, check 2") as its accessible name, the way an Input given an
+ * `ariaLabel` already does.
+ */
+function PatternListField({
+    items,
+    onChange,
+    ariaLabel,
+    placeholder,
+    disabled = false,
+}: PatternListFieldProps) {
+    const [text, setText] = useState(items.join("\n"));
+    const labelId = useId();
+    useEffect(() => {
+        setText((current) => (sameList(patternLines(current), items) ? current : items.join("\n")));
+    }, [items]);
+    return (
+        <>
+            <span id={labelId} hidden>
+                {ariaLabel}
+            </span>
+            <Textarea
+                value={text}
+                ariaLabel={ariaLabel}
+                ariaLabelledby={labelId}
+                placeholder={placeholder}
+                rows={3}
+                disabled={disabled}
+                onChange={({ detail }) => {
+                    setText(detail.value);
+                    onChange(patternLines(detail.value));
+                }}
+            />
+        </>
+    );
+}
+
+interface TagListFieldProps {
+    items: string[];
+    onChange: (items: string[]) => void;
+    /** Names the field to screen readers, e.g. "Required tag". */
+    itemLabel: string;
+    disabled?: boolean;
+}
+
+/** Tag values as dismissible tokens, with a field and button to add one. */
+function TagListField({ items, onChange, itemLabel, disabled = false }: TagListFieldProps) {
+    const [draft, setDraft] = useState("");
+    const add = () => {
+        const tag = draft.trim();
+        if (tag && !items.includes(tag)) {
+            onChange([...items, tag]);
+        }
+        setDraft("");
+    };
+    return (
+        <SpaceBetween size="xs">
+            <SpaceBetween direction="horizontal" size="xs">
+                <Input
+                    value={draft}
+                    ariaLabel={itemLabel}
+                    placeholder="tag value"
+                    disabled={disabled}
+                    onChange={({ detail }) => setDraft(detail.value)}
+                    onKeyDown={({ detail }) => {
+                        if (detail.key === "Enter") add();
+                    }}
+                />
+                <Button
+                    ariaLabel={`Add ${itemLabel.toLowerCase()}`}
+                    disabled={disabled || !draft.trim() || items.length >= TAGS_MAX}
+                    onClick={add}
+                >
+                    Add
+                </Button>
+            </SpaceBetween>
+            <TokenGroup
+                items={items.map((tag) => ({ label: tag, dismissLabel: `Remove ${tag}` }))}
+                readOnly={disabled}
+                onDismiss={({ detail }) =>
+                    onChange(items.filter((_, index) => index !== detail.itemIndex))
+                }
+            />
+        </SpaceBetween>
+    );
+}
+
+const CHECK_FIELD_DESCRIPTIONS = {
+    requiredPaths:
+        "Regular expressions, one per line; each must match at least one file path. Paths are matched without their leading /, so ^models/ means a top-level models folder.",
+    forbiddenPaths: "Regular expressions, one per line; no file path may match any of them.",
+    excludePaths:
+        "Regular expressions, one per line; files whose path matches are not checked (e.g. \\.previewFile\\. for preview images).",
+};
+
+const PATTERN_CONSTRAINT = `Up to ${PATH_PATTERNS_MAX} patterns of up to ${PATTERN_MAX_LENGTH} characters, checked as regular expressions when the schema is saved.`;
+
+interface ComplianceSchemaEditorProps {
+    value: string;
+    onChange: (value: string) => void;
+    readOnly?: boolean;
+    /**
+     * Told the rule-name problem the Visual Builder shows (a nameless or repeated rule name), or
+     * null; the page refuses to save while one is shown.
+     */
+    onRulesProblemChange?: (problem: string | null) => void;
+    /**
+     * The database the compliance schema is available to (GLOBAL, or one database id). It decides
+     * which metadata schema locations a metadata rule may name.
+     */
+    schemaDatabaseId?: string;
+}
+
+export default function ComplianceSchemaEditor({
+    value,
+    onChange,
+    readOnly = false,
+    onRulesProblemChange,
+    schemaDatabaseId = "GLOBAL",
+}: ComplianceSchemaEditorProps) {
+    const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+    const [markers, setMarkers] = useState<editor.IMarkerData[]>([]);
+    const [activeTab, setActiveTab] = useState("json");
+    // Which body format the Visual Builder is editing; decided from the JSON on each sync.
+    const [builderMode, setBuilderMode] = useState<"properties" | "rules">("properties");
+    const [properties, setProperties] = useState<PropertyDef[]>([]);
+    const [additionalProperties, setAdditionalProperties] = useState(true);
+    const [rulesDraft, setRulesDraft] = useState<RulesDraft>(EMPTY_RULES_DRAFT);
+    const rulesProblem = builderMode === "rules" ? ruleNamesError(rulesDraft) : null;
+    useEffect(() => {
+        onRulesProblemChange?.(rulesProblem);
+    }, [rulesProblem, onRulesProblemChange]);
+    // The JSON the builder last wrote. A value equal to it is the builder's own output, so
+    // re-deriving the builder state from it would only drop rows the user is still filling in.
+    const lastEmittedJson = useRef<string | null>(null);
+
+    const emit = useCallback(
+        (json: string) => {
+            lastEmittedJson.current = json;
+            onChange(json);
+        },
+        [onChange]
+    );
+
+    const syncWizardFromJson = useCallback((json: string) => {
+        try {
+            const parsed = JSON.parse(json);
+
+            if (isVamsRulesBody(parsed)) {
+                setRulesDraft(rulesDraftFromBody(parsed));
+                setBuilderMode("rules");
+                return;
+            }
+
+            // The API accepts only vams-rules-v1 bodies, so any other document opens as an empty rule set.
+            setRulesDraft(rulesDraftFromBody({ schemaFormat: VAMS_RULES_V1_FORMAT, rules: {} }));
+            setBuilderMode("rules");
+        } catch {
+            // Don't sync on invalid JSON
+        }
+    }, []);
+
+    const buildJsonFromWizard = useCallback(() => {
+        const schema: any = { type: "object" };
+        const required: string[] = [];
+        const props: any = {};
+
+        for (const p of properties) {
+            if (!p.name.trim()) continue;
+            const propDef: any = { type: p.type };
+            if (p.description) propDef.description = p.description;
+            if (p.enumValues.trim()) {
+                propDef.enum = p.enumValues
+                    .split(",")
+                    .map((v) => v.trim())
+                    .filter(Boolean);
+            }
+            if (p.minimum !== "") propDef.minimum = Number(p.minimum);
+            if (p.maximum !== "") propDef.maximum = Number(p.maximum);
+            if (p.minLength !== "") propDef.minLength = Number(p.minLength);
+            if (p.maxLength !== "") propDef.maxLength = Number(p.maxLength);
+            if (p.required) required.push(p.name.trim());
+            props[p.name.trim()] = propDef;
+        }
+
+        if (required.length > 0) schema.required = required;
+        schema.properties = props;
+        schema.additionalProperties = additionalProperties;
+
+        return JSON.stringify(schema, null, 2);
+    }, [properties, additionalProperties]);
+
+    useEffect(() => {
+        if (activeTab === "wizard" && value !== lastEmittedJson.current) {
+            syncWizardFromJson(value);
+        }
+    }, [activeTab, value, syncWizardFromJson]);
+
+    const handleEditorMount: OnMount = (editor, monaco) => {
+        editorRef.current = editor;
+
+        (monaco.languages.json as any).jsonDefaults.setDiagnosticsOptions({
+            validate: true,
+            schemas: [COMPLIANCE_META_SCHEMA],
+            enableSchemaRequest: false,
+            allowComments: false,
+            trailingCommas: "error",
+        });
+    };
+
+    const handleValidation: OnValidate = (newMarkers) => {
+        setMarkers(newMarkers);
+    };
+
+    const handleEditorChange = (newValue: string | undefined) => {
+        if (newValue !== undefined) {
+            onChange(newValue);
+        }
+    };
+
+    const handleWizardChange = () => {
+        emit(buildJsonFromWizard());
+    };
+
+    const updateProperty = (index: number, field: keyof PropertyDef, val: any) => {
+        const updated = [...properties];
+        updated[index] = { ...updated[index], [field]: val };
+        setProperties(updated);
+    };
+
+    const addProperty = () => {
+        setProperties([...properties, { ...EMPTY_PROPERTY }]);
+    };
+
+    const removeProperty = (index: number) => {
+        setProperties(properties.filter((_, i) => i !== index));
+    };
+
+    useEffect(() => {
+        if (activeTab === "wizard" && builderMode === "properties" && properties.length > 0) {
+            handleWizardChange();
+        }
+    }, [properties, additionalProperties]);
+
+    const applyRulesDraft = (next: RulesDraft) => {
+        setRulesDraft(next);
+        emit(JSON.stringify(bodyFromRulesDraft(next), null, 2));
+    };
+
+    const updateRule = (index: number, patch: Partial<RulesDraft["rules"][number]>) => {
+        const rules = [...rulesDraft.rules];
+        rules[index] = { ...rules[index], ...patch };
+        applyRulesDraft({ ...rulesDraft, rules });
+    };
+
+    const updatePipelineRef = (index: number, key: keyof CompliancePipelineRef, val: string) => {
+        const rule = rulesDraft.rules[index];
+        updateRule(index, { pipelineRef: { ...rule.pipelineRef, [key]: val } });
+    };
+
+    const updateInputFiles = (index: number, patch: Partial<InputFilesDraft>) => {
+        const rule = rulesDraft.rules[index];
+        updateRule(index, { inputFiles: { ...rule.inputFiles, ...patch } });
+    };
+
+    const addRule = (ruleType: ComplianceRuleType) => {
+        const names = rulesDraft.rules.map((r) => r.name);
+        applyRulesDraft({
+            ...rulesDraft,
+            rules: [...rulesDraft.rules, newRuleDraft(ruleType, names)],
+        });
+    };
+
+    const setChecks = (index: number, checks: Record<string, any>[]) => {
+        const rule = rulesDraft.rules[index];
+        updateRule(index, { rest: { ...rule.rest, checks } });
+    };
+
+    const updateCheck = (
+        index: number,
+        checkIndex: number,
+        patch: Record<string, any> | ((check: Record<string, any>) => Record<string, any>)
+    ) => {
+        const checks = checksOf(rulesDraft.rules[index]);
+        setChecks(
+            index,
+            checks.map((check, i) =>
+                i !== checkIndex
+                    ? check
+                    : typeof patch === "function"
+                    ? patch(check)
+                    : patchCheck(check, patch)
+            )
+        );
+    };
+
+    const addCheck = (index: number) => {
+        const rule = rulesDraft.rules[index];
+        const checks = checksOf(rule);
+        setChecks(index, [...checks, newCheck(rule.ruleType, checks.length)]);
+    };
+
+    const removeCheck = (index: number, checkIndex: number) => {
+        setChecks(
+            index,
+            checksOf(rulesDraft.rules[index]).filter((_, i) => i !== checkIndex)
+        );
+    };
+
+    const removeRule = (index: number) => {
+        applyRulesDraft({
+            ...rulesDraft,
+            rules: rulesDraft.rules.filter((_, i) => i !== index),
+        });
+    };
+
+    const formatDocument = () => {
+        if (editorRef.current) {
+            editorRef.current.getAction("editor.action.formatDocument")?.run();
+        }
+    };
+
+    const errorCount = markers.filter((m) => m.severity === 8).length;
+    const warningCount = markers.filter((m) => m.severity === 4).length;
+
+    const renderInputFiles = (idx: number, inputFiles: InputFilesDraft) => {
+        const errors = validateInputFiles(inputFiles);
+        return (
+            <SpaceBetween size="s">
+                <FormField
+                    label="Input files"
+                    description={`Which of the ${Synonyms.asset}'s files the workflow receives when the rule runs.`}
+                    errorText={errors.mode}
+                    stretch
+                >
+                    <RadioGroup
+                        value={inputFiles.mode}
+                        onChange={({ detail }) =>
+                            updateInputFiles(idx, {
+                                mode: detail.value as CompliancePipelineInputFilesMode,
+                            })
+                        }
+                        items={INPUT_FILES_MODE_OPTIONS.map((option) => ({
+                            value: option.value,
+                            label: option.label,
+                            description: option.description,
+                            disabled: readOnly,
+                        }))}
+                        ariaRequired
+                    />
+                </FormField>
+                {inputFiles.mode === "matching" && (
+                    <FormField
+                        label="File globs (optional)"
+                        description="Applied after the workflow's and the pipeline's own input filters. A single-input workflow must be left with exactly one matching file."
+                        constraintText={`Up to ${INPUT_FILES_MAX_FILTERS} globs.`}
+                        errorText={errors.filter}
+                        stretch
+                    >
+                        <StringListEditor
+                            items={inputFiles.filter}
+                            onChange={(filter) => updateInputFiles(idx, { filter })}
+                            itemLabel="Glob pattern"
+                            addButtonText="Add glob"
+                            placeholder="*.glb"
+                            empty="No globs: every file the workflow and pipeline filters accept is a candidate."
+                            max={INPUT_FILES_MAX_FILTERS}
+                            disabled={readOnly}
+                        />
+                    </FormField>
+                )}
+                {inputFiles.mode === "explicit" && (
+                    <FormField
+                        label="File paths"
+                        description={`${Synonyms.Asset}-relative paths beginning with /; each must exist on the ${Synonyms.asset} when the rule runs.`}
+                        constraintText={`At least one and up to ${INPUT_FILES_MAX_KEYS} paths.`}
+                        errorText={errors.keys}
+                        stretch
+                    >
+                        <StringListEditor
+                            items={inputFiles.keys}
+                            onChange={(keys) => updateInputFiles(idx, { keys })}
+                            itemLabel="File path"
+                            addButtonText="Add file path"
+                            placeholder="/models/part.stl"
+                            empty="No file paths listed."
+                            max={INPUT_FILES_MAX_KEYS}
+                            disabled={readOnly}
+                        />
+                    </FormField>
+                )}
+            </SpaceBetween>
+        );
+    };
+
+    const numberField = (
+        label: string,
+        value: any,
+        errorText: string | undefined,
+        onValue: (value: number | undefined) => void,
+        ariaLabel: string
+    ) => (
+        <FormField label={label} errorText={errorText}>
+            <Input
+                type="number"
+                value={value === undefined || value === null ? "" : String(value)}
+                ariaLabel={ariaLabel}
+                disabled={readOnly}
+                onChange={({ detail }) => onValue(numberFromInput(detail.value))}
+            />
+        </FormField>
+    );
+
+    const renderPatternField = (
+        idx: number,
+        checkIndex: number,
+        check: Record<string, any>,
+        key: "requiredPaths" | "forbiddenPaths" | "excludePaths",
+        label: string,
+        placeholder: string,
+        errorText: string | undefined
+    ) => (
+        <FormField
+            label={label}
+            description={CHECK_FIELD_DESCRIPTIONS[key]}
+            constraintText={PATTERN_CONSTRAINT}
+            errorText={errorText}
+            stretch
+        >
+            <PatternListField
+                items={checkList(check, key)}
+                ariaLabel={`${label}, check ${checkIndex + 1}`}
+                placeholder={placeholder}
+                disabled={readOnly}
+                onChange={(items) => updateCheck(idx, checkIndex, { [key]: items })}
+            />
+        </FormField>
+    );
+
+    const renderAssetAttributeFields = (
+        idx: number,
+        checkIndex: number,
+        check: Record<string, any>,
+        errors: Record<string, string | undefined>
+    ) => {
+        const field: ComplianceAssetAttributeField = check.field;
+        const condition = typeof check.notMatches === "string" ? "notMatches" : "matches";
+        const switchField = (next: ComplianceAssetAttributeField) =>
+            updateCheck(idx, checkIndex, (current) => {
+                if (next === "tags") {
+                    return patchCheck(current, {
+                        field: next,
+                        matches: undefined,
+                        notMatches: undefined,
+                    });
+                }
+                const pattern =
+                    typeof current.matches === "string"
+                        ? { matches: current.matches }
+                        : typeof current.notMatches === "string"
+                        ? { notMatches: current.notMatches }
+                        : { matches: "" };
+                return {
+                    ...patchCheck(current, {
+                        field: next,
+                        requiredTags: [],
+                        forbiddenTags: [],
+                        minTags: undefined,
+                    }),
+                    ...pattern,
+                };
+            });
+        const setPattern = (key: "matches" | "notMatches", value: string) =>
+            updateCheck(idx, checkIndex, (current) => {
+                const next = { ...current, [key]: value };
+                delete next[key === "matches" ? "notMatches" : "matches"];
+                return next;
+            });
+        return (
+            <SpaceBetween size="s">
+                <FormField label="Attribute" errorText={errors.field}>
+                    <Select
+                        ariaLabel={`Attribute, check ${checkIndex + 1}`}
+                        selectedOption={
+                            ASSET_ATTRIBUTE_FIELD_OPTIONS.find((o) => o.value === field) || null
+                        }
+                        options={ASSET_ATTRIBUTE_FIELD_OPTIONS}
+                        disabled={readOnly}
+                        onChange={({ detail }) =>
+                            switchField(
+                                detail.selectedOption.value as ComplianceAssetAttributeField
+                            )
+                        }
+                    />
+                </FormField>
+                {field === "tags" ? (
+                    <ColumnLayout columns={3}>
+                        <FormField
+                            label="Required tags"
+                            description="Every listed tag must be on the asset."
+                            constraintText={`Up to ${TAGS_MAX} tags, compared by exact value.`}
+                            errorText={errors.requiredTags}
+                        >
+                            <TagListField
+                                items={checkList(check, "requiredTags")}
+                                itemLabel={`Required tag, check ${checkIndex + 1}`}
+                                disabled={readOnly}
+                                onChange={(items) =>
+                                    updateCheck(idx, checkIndex, { requiredTags: items })
+                                }
+                            />
+                        </FormField>
+                        <FormField
+                            label="Forbidden tags"
+                            description="None of the listed tags may be on the asset."
+                            constraintText={`Up to ${TAGS_MAX} tags, compared by exact value.`}
+                            errorText={errors.forbiddenTags}
+                        >
+                            <TagListField
+                                items={checkList(check, "forbiddenTags")}
+                                itemLabel={`Forbidden tag, check ${checkIndex + 1}`}
+                                disabled={readOnly}
+                                onChange={(items) =>
+                                    updateCheck(idx, checkIndex, { forbiddenTags: items })
+                                }
+                            />
+                        </FormField>
+                        {numberField(
+                            "Minimum tags",
+                            check.minTags,
+                            errors.minTags,
+                            (minTags) => updateCheck(idx, checkIndex, { minTags }),
+                            `Minimum tags, check ${checkIndex + 1}`
+                        )}
+                    </ColumnLayout>
+                ) : (
+                    <ColumnLayout columns={2}>
+                        <FormField label="Condition">
+                            <RadioGroup
+                                value={condition}
+                                onChange={({ detail }) =>
+                                    setPattern(
+                                        detail.value as "matches" | "notMatches",
+                                        check[condition] ?? ""
+                                    )
+                                }
+                                items={[
+                                    {
+                                        value: "matches",
+                                        label: "Must match",
+                                        description: "An empty value fails.",
+                                        disabled: readOnly,
+                                    },
+                                    {
+                                        value: "notMatches",
+                                        label: "Must not match",
+                                        description: "An empty value passes.",
+                                        disabled: readOnly,
+                                    },
+                                ]}
+                            />
+                        </FormField>
+                        <FormField
+                            label="Pattern"
+                            description="A regular expression searched in the value; use ^ and $ to anchor it."
+                            constraintText={`Up to ${PATTERN_MAX_LENGTH} characters, checked as a regular expression when the schema is saved.`}
+                            errorText={errors.pattern}
+                        >
+                            <Input
+                                value={check[condition] ?? ""}
+                                ariaLabel={`Pattern, check ${checkIndex + 1}`}
+                                placeholder="^[A-Z]"
+                                disabled={readOnly}
+                                onChange={({ detail }) => setPattern(condition, detail.value)}
+                            />
+                        </FormField>
+                    </ColumnLayout>
+                )}
+            </SpaceBetween>
+        );
+    };
+
+    const renderMetadataScope = (idx: number, rule: RulesDraft["rules"][number]) => {
+        const scope = metadataScopeOf(rule.rest);
+        const errors = validateMetadataScope(rule.rest);
+        const ruleLabel = `rule ${idx + 1}`;
+        const patchRest = (patch: Record<string, any>) =>
+            updateRule(idx, { rest: patchCheck(rule.rest, patch) });
+        const selected = (options: { value: string; label: string }[], value: any) =>
+            options.find((o) => o.value === (value ?? "")) || options[0];
+        const refErrors = validateMetadataSchemaRef(rule.rest, schemaDatabaseId);
+        const ref =
+            rule.rest.metadataSchemaRef && typeof rule.rest.metadataSchemaRef === "object"
+                ? rule.rest.metadataSchemaRef
+                : {};
+        const locationOptions = metadataSchemaLocationOptions(schemaDatabaseId);
+        const location = locationOptions.find(
+            (o) => o.value === (ref.databaseId ?? ASSET_DATABASE_LOCATION)
+        );
+        return (
+            <SpaceBetween size="s">
+                <ColumnLayout columns={2}>
+                    <FormField
+                        label="Metadata schema"
+                        description="The name of the VAMS metadata schema the rule validates against."
+                        errorText={refErrors.schemaName}
+                    >
+                        <Input
+                            ariaLabel={`Metadata schema, ${ruleLabel}`}
+                            value={String(ref.schemaName ?? "")}
+                            disabled={readOnly}
+                            placeholder="defaultAsset"
+                            onChange={({ detail }) =>
+                                updateRule(idx, {
+                                    rest: withMetadataSchemaRef(rule.rest, {
+                                        schemaName: detail.value,
+                                    }),
+                                })
+                            }
+                        />
+                    </FormField>
+                    <FormField
+                        label="Metadata schema location"
+                        description="Where the metadata schema is looked up. The asset's database looks it up in the database of the asset being evaluated, then GLOBAL, so one compliance schema bound to several databases uses each database's own metadata schema. GLOBAL, or this database, pins the lookup."
+                        errorText={refErrors.databaseId}
+                    >
+                        <Select
+                            ariaLabel={`Metadata schema location, ${ruleLabel}`}
+                            selectedOption={
+                                location || {
+                                    value: String(ref.databaseId),
+                                    label: `${ref.databaseId} (not allowed here)`,
+                                }
+                            }
+                            options={locationOptions}
+                            disabled={readOnly}
+                            onChange={({ detail }) =>
+                                updateRule(idx, {
+                                    rest: withMetadataSchemaRef(rule.rest, {
+                                        databaseId: detail.selectedOption.value || "",
+                                    }),
+                                })
+                            }
+                        />
+                    </FormField>
+                </ColumnLayout>
+                <FormField
+                    label="Scope"
+                    description="Which metadata the rule validates. The referenced metadata schema must be of the matching type; a schema that is missing or of another type records the rule as an error."
+                    errorText={errors.scope}
+                    stretch
+                >
+                    <Select
+                        ariaLabel={`Scope, ${ruleLabel}`}
+                        selectedOption={
+                            METADATA_SCOPE_OPTIONS.find((o) => o.value === scope) ||
+                            METADATA_SCOPE_OPTIONS[0]
+                        }
+                        options={METADATA_SCOPE_OPTIONS}
+                        disabled={readOnly}
+                        onChange={({ detail }) =>
+                            updateRule(idx, {
+                                rest: withMetadataScope(
+                                    rule.rest,
+                                    detail.selectedOption.value as ComplianceMetadataScope
+                                ),
+                            })
+                        }
+                    />
+                </FormField>
+                {METADATA_FILE_SCOPES.includes(scope) && (
+                    <>
+                        <ColumnLayout columns={2}>
+                            <FormField
+                                label="Include paths (optional)"
+                                description="Regular expressions, one per line; when any is given, only files whose path matches one are checked. Paths are matched without their leading /."
+                                constraintText={PATTERN_CONSTRAINT}
+                                errorText={errors.includePaths}
+                                stretch
+                            >
+                                <PatternListField
+                                    items={checkList(rule.rest, "includePaths")}
+                                    ariaLabel={`Include paths, ${ruleLabel}`}
+                                    placeholder="^models/"
+                                    disabled={readOnly}
+                                    onChange={(items) => patchRest({ includePaths: items })}
+                                />
+                            </FormField>
+                            <FormField
+                                label="Exclude paths (optional)"
+                                description="Regular expressions, one per line; files whose path matches one are not checked (e.g. \.previewFile\. for preview images)."
+                                constraintText={PATTERN_CONSTRAINT}
+                                errorText={errors.excludePaths}
+                                stretch
+                            >
+                                <PatternListField
+                                    items={checkList(rule.rest, "excludePaths")}
+                                    ariaLabel={`Exclude paths, ${ruleLabel}`}
+                                    placeholder="\.previewFile\."
+                                    disabled={readOnly}
+                                    onChange={(items) => patchRest({ excludePaths: items })}
+                                />
+                            </FormField>
+                        </ColumnLayout>
+                        <Box color="text-body-secondary" fontSize="body-s">
+                            Checked: every current, non-archived file of the {Synonyms.asset} that
+                            the schema&apos;s file type restriction admits, narrowed by the include
+                            and then the exclude paths. A file without metadata fails a required
+                            field.
+                        </Box>
+                    </>
+                )}
+                {scope === "links" && (
+                    <ColumnLayout columns={2}>
+                        <FormField label="Link direction" errorText={errors.linkDirection}>
+                            <Select
+                                ariaLabel={`Link direction, ${ruleLabel}`}
+                                selectedOption={selected(
+                                    LINK_DIRECTION_OPTIONS,
+                                    rule.rest.linkDirection
+                                )}
+                                options={LINK_DIRECTION_OPTIONS}
+                                disabled={readOnly}
+                                onChange={({ detail }) =>
+                                    patchRest({ linkDirection: detail.selectedOption.value })
+                                }
+                            />
+                        </FormField>
+                        <FormField label="Relationship type" errorText={errors.relationshipType}>
+                            <Select
+                                ariaLabel={`Relationship type, ${ruleLabel}`}
+                                selectedOption={selected(
+                                    LINK_RELATIONSHIP_TYPE_OPTIONS,
+                                    rule.rest.relationshipType
+                                )}
+                                options={LINK_RELATIONSHIP_TYPE_OPTIONS}
+                                disabled={readOnly}
+                                onChange={({ detail }) =>
+                                    patchRest({ relationshipType: detail.selectedOption.value })
+                                }
+                            />
+                        </FormField>
+                    </ColumnLayout>
+                )}
+            </SpaceBetween>
+        );
+    };
+
+    const renderChecks = (idx: number, rule: RulesDraft["rules"][number]) => {
+        const checks = checksOf(rule);
+        const validate = CHECK_VALIDATORS[rule.ruleType];
+        const countError = checksCountError(checks);
+        return (
+            <SpaceBetween size="s">
+                <Header
+                    variant="h3"
+                    counter={`(${checks.length})`}
+                    actions={
+                        <Button
+                            onClick={() => addCheck(idx)}
+                            disabled={readOnly || checks.length >= RULE_MAX_CHECKS}
+                        >
+                            Add check
+                        </Button>
+                    }
+                >
+                    Checks
+                </Header>
+                {countError && <Alert type="error">{countError}</Alert>}
+                {checks.map((check, checkIndex) => {
+                    const errors: Record<string, string | undefined> = validate
+                        ? validate(check)
+                        : {};
+                    return (
+                        <div key={checkIndex} style={cardStyle}>
+                            <SpaceBetween size="s">
+                                <ColumnLayout columns={2}>
+                                    <FormField label="Check name" errorText={errors.name}>
+                                        <Input
+                                            value={check.name ?? ""}
+                                            ariaLabel={`Check name, check ${checkIndex + 1}`}
+                                            placeholder="check-name"
+                                            disabled={readOnly}
+                                            onChange={({ detail }) =>
+                                                updateCheck(idx, checkIndex, (current) => ({
+                                                    ...current,
+                                                    name: detail.value,
+                                                }))
+                                            }
+                                        />
+                                    </FormField>
+                                    <FormField label="Description (optional)">
+                                        <Input
+                                            value={check.description ?? ""}
+                                            ariaLabel={`Description, check ${checkIndex + 1}`}
+                                            disabled={readOnly}
+                                            onChange={({ detail }) =>
+                                                updateCheck(idx, checkIndex, {
+                                                    description: detail.value,
+                                                })
+                                            }
+                                        />
+                                    </FormField>
+                                </ColumnLayout>
+                                {errors.check && <Alert type="error">{errors.check}</Alert>}
+                                {rule.ruleType === "fileStructure" && (
+                                    <>
+                                        {renderPatternField(
+                                            idx,
+                                            checkIndex,
+                                            check,
+                                            "requiredPaths",
+                                            "Required paths",
+                                            "^models/\n\\.glb$",
+                                            errors.requiredPaths
+                                        )}
+                                        {renderPatternField(
+                                            idx,
+                                            checkIndex,
+                                            check,
+                                            "forbiddenPaths",
+                                            "Forbidden paths",
+                                            "\\.tmp$",
+                                            errors.forbiddenPaths
+                                        )}
+                                        <ColumnLayout columns={2}>
+                                            {numberField(
+                                                "Minimum files",
+                                                check.minFiles,
+                                                errors.minFiles,
+                                                (minFiles) =>
+                                                    updateCheck(idx, checkIndex, { minFiles }),
+                                                `Minimum files, check ${checkIndex + 1}`
+                                            )}
+                                            {numberField(
+                                                "Maximum files",
+                                                check.maxFiles,
+                                                errors.maxFiles,
+                                                (maxFiles) =>
+                                                    updateCheck(idx, checkIndex, { maxFiles }),
+                                                `Maximum files, check ${checkIndex + 1}`
+                                            )}
+                                        </ColumnLayout>
+                                    </>
+                                )}
+                                {rule.ruleType === "versionCoverage" &&
+                                    renderPatternField(
+                                        idx,
+                                        checkIndex,
+                                        check,
+                                        "excludePaths",
+                                        "Excluded paths (optional)",
+                                        "\\.previewFile\\.",
+                                        errors.excludePaths
+                                    )}
+                                {rule.ruleType === "assetAttributes" &&
+                                    renderAssetAttributeFields(idx, checkIndex, check, errors)}
+                                {!readOnly && (
+                                    <Box float="right">
+                                        <Button
+                                            variant="link"
+                                            ariaLabel={`Remove check ${checkIndex + 1}`}
+                                            onClick={() => removeCheck(idx, checkIndex)}
+                                        >
+                                            Remove check
+                                        </Button>
+                                    </Box>
+                                )}
+                            </SpaceBetween>
+                        </div>
+                    );
+                })}
+            </SpaceBetween>
+        );
+    };
+
+    const renderRulesBuilder = () => (
+        <SpaceBetween size="m">
+            <Header
+                variant="h3"
+                description="Rules of a vams-rules-v1 schema. The checks of file structure, version coverage and asset attributes rules are edited here. A pipeline rule's workflow, pipeline and input files are edited here and its checks and input parameters in the JSON Editor tab; a metadata rule's scope and its file or link filters are edited here and its schema reference and checks in the JSON Editor tab; relationship rules are edited in the JSON Editor tab. Properties the builder does not show are kept as they are."
+                actions={
+                    <ButtonDropdown
+                        disabled={readOnly}
+                        items={RULE_TYPE_OPTIONS.map((option) => ({
+                            id: option.value,
+                            text: option.label,
+                            description: option.description,
+                        }))}
+                        onItemClick={({ detail }) => addRule(detail.id as ComplianceRuleType)}
+                    >
+                        Add rule
+                    </ButtonDropdown>
+                }
+            >
+                Compliance Rules
+            </Header>
+
+            <FormField
+                label="Extends (optional)"
+                description="Parent schema whose rules this schema inherits."
+            >
+                <Input
+                    value={rulesDraft.extends}
+                    onChange={({ detail }) =>
+                        applyRulesDraft({ ...rulesDraft, extends: detail.value })
+                    }
+                    placeholder="parent-schema-name"
+                    disabled={readOnly}
+                />
+            </FormField>
+
+            {rulesDraft.rules.length === 0 && (
+                <Box textAlign="center" color="text-status-inactive" padding="l">
+                    No rules defined. Choose a rule type from "Add rule" to start.
+                </Box>
+            )}
+
+            {rulesDraft.rules.map((rule, idx) => {
+                const refErrors =
+                    rule.ruleType === "pipeline" ? validatePipelineRef(rule.pipelineRef) : {};
+                const duplicateName =
+                    rulesDraft.rules.filter((r) => r.name.trim() === rule.name.trim()).length > 1;
+                return (
+                    <div key={idx} style={cardStyle}>
+                        <SpaceBetween size="s">
+                            <ColumnLayout columns={3}>
+                                <FormField
+                                    label="Rule name"
+                                    errorText={
+                                        !rule.name.trim()
+                                            ? "Rule name is required"
+                                            : duplicateName
+                                            ? "Rule names must be unique"
+                                            : undefined
+                                    }
+                                >
+                                    <Input
+                                        value={rule.name}
+                                        onChange={({ detail }) =>
+                                            updateRule(idx, { name: detail.value })
+                                        }
+                                        placeholder="rule-name"
+                                        disabled={readOnly}
+                                    />
+                                </FormField>
+                                <FormField label="Rule type">
+                                    <Input value={rule.ruleType} readOnly disabled />
+                                </FormField>
+                                <FormField label="Enforcement">
+                                    <Select
+                                        selectedOption={
+                                            ENFORCEMENT_OPTIONS.find(
+                                                (o) => o.value === rule.enforcement
+                                            ) || ENFORCEMENT_OPTIONS[1]
+                                        }
+                                        onChange={({ detail }) =>
+                                            updateRule(idx, {
+                                                enforcement: detail.selectedOption.value as any,
+                                            })
+                                        }
+                                        options={ENFORCEMENT_OPTIONS}
+                                        disabled={readOnly}
+                                    />
+                                </FormField>
+                            </ColumnLayout>
+                            {rule.ruleType === "pipeline" && (
+                                <ColumnLayout columns={2}>
+                                    {PIPELINE_REF_FIELDS.map((field) => (
+                                        <FormField
+                                            key={field.key}
+                                            label={field.label}
+                                            errorText={refErrors[field.key]}
+                                        >
+                                            <Input
+                                                value={rule.pipelineRef[field.key] || ""}
+                                                onChange={({ detail }) =>
+                                                    updatePipelineRef(idx, field.key, detail.value)
+                                                }
+                                                placeholder={field.placeholder}
+                                                disabled={readOnly}
+                                            />
+                                        </FormField>
+                                    ))}
+                                </ColumnLayout>
+                            )}
+                            {rule.ruleType === "pipeline" && renderInputFiles(idx, rule.inputFiles)}
+                            {rule.ruleType === "metadata" && renderMetadataScope(idx, rule)}
+                            {CHECK_EDITED_RULE_TYPES.includes(rule.ruleType) &&
+                                renderChecks(idx, rule)}
+                            {rule.ruleType !== "pipeline" &&
+                                !CHECK_EDITED_RULE_TYPES.includes(rule.ruleType) && (
+                                    <Box color="text-body-secondary" fontSize="body-s">
+                                        {rule.ruleType === "metadata"
+                                            ? "The metadata schema reference and the checks of a metadata rule are edited in the JSON Editor tab."
+                                            : `The checks of a ${rule.ruleType} rule are edited in the JSON Editor tab.`}
+                                    </Box>
+                                )}
+                            {!readOnly && (
+                                <Box float="right">
+                                    <Button variant="link" onClick={() => removeRule(idx)}>
+                                        Remove
+                                    </Button>
+                                </Box>
+                            )}
+                        </SpaceBetween>
+                    </div>
+                );
+            })}
+        </SpaceBetween>
+    );
+
+    const renderPropertiesBuilder = () => (
+        <SpaceBetween size="m">
+            <Header
+                variant="h3"
+                actions={
+                    <Button onClick={addProperty} disabled={readOnly}>
+                        Add property
+                    </Button>
+                }
+            >
+                Schema Properties
+            </Header>
+
+            {properties.length === 0 && (
+                <Box textAlign="center" color="text-status-inactive" padding="l">
+                    No properties defined. Click "Add property" to start.
+                </Box>
+            )}
+
+            {properties.map((prop, idx) => (
+                <div key={idx} style={cardStyle}>
+                    <SpaceBetween size="s">
+                        <ColumnLayout columns={3}>
+                            <FormField label="Name">
+                                <Input
+                                    value={prop.name}
+                                    onChange={({ detail }) =>
+                                        updateProperty(idx, "name", detail.value)
+                                    }
+                                    placeholder="property_name"
+                                    disabled={readOnly}
+                                />
+                            </FormField>
+                            <FormField label="Type">
+                                <Select
+                                    selectedOption={
+                                        TYPE_OPTIONS.find((o) => o.value === prop.type) ||
+                                        TYPE_OPTIONS[0]
+                                    }
+                                    onChange={({ detail }) =>
+                                        updateProperty(idx, "type", detail.selectedOption.value)
+                                    }
+                                    options={TYPE_OPTIONS}
+                                    disabled={readOnly}
+                                />
+                            </FormField>
+                            <FormField label="Required">
+                                <Toggle
+                                    checked={prop.required}
+                                    onChange={({ detail }) =>
+                                        updateProperty(idx, "required", detail.checked)
+                                    }
+                                    disabled={readOnly}
+                                >
+                                    Required
+                                </Toggle>
+                            </FormField>
+                        </ColumnLayout>
+                        <FormField label="Description">
+                            <Input
+                                value={prop.description}
+                                onChange={({ detail }) =>
+                                    updateProperty(idx, "description", detail.value)
+                                }
+                                placeholder="What this property represents"
+                                disabled={readOnly}
+                            />
+                        </FormField>
+                        <ColumnLayout columns={2}>
+                            {prop.type === "string" && (
+                                <FormField label="Allowed values (comma-separated)">
+                                    <Input
+                                        value={prop.enumValues}
+                                        onChange={({ detail }) =>
+                                            updateProperty(idx, "enumValues", detail.value)
+                                        }
+                                        placeholder="value1, value2, value3"
+                                        disabled={readOnly}
+                                    />
+                                </FormField>
+                            )}
+                            {(prop.type === "number" || prop.type === "integer") && (
+                                <>
+                                    <FormField label="Minimum">
+                                        <Input
+                                            value={prop.minimum}
+                                            onChange={({ detail }) =>
+                                                updateProperty(idx, "minimum", detail.value)
+                                            }
+                                            type="number"
+                                            disabled={readOnly}
+                                        />
+                                    </FormField>
+                                    <FormField label="Maximum">
+                                        <Input
+                                            value={prop.maximum}
+                                            onChange={({ detail }) =>
+                                                updateProperty(idx, "maximum", detail.value)
+                                            }
+                                            type="number"
+                                            disabled={readOnly}
+                                        />
+                                    </FormField>
+                                </>
+                            )}
+                            {prop.type === "string" && (
+                                <>
+                                    <FormField label="Min length">
+                                        <Input
+                                            value={prop.minLength}
+                                            onChange={({ detail }) =>
+                                                updateProperty(idx, "minLength", detail.value)
+                                            }
+                                            type="number"
+                                            disabled={readOnly}
+                                        />
+                                    </FormField>
+                                    <FormField label="Max length">
+                                        <Input
+                                            value={prop.maxLength}
+                                            onChange={({ detail }) =>
+                                                updateProperty(idx, "maxLength", detail.value)
+                                            }
+                                            type="number"
+                                            disabled={readOnly}
+                                        />
+                                    </FormField>
+                                </>
+                            )}
+                        </ColumnLayout>
+                        {!readOnly && (
+                            <Box float="right">
+                                <Button variant="link" onClick={() => removeProperty(idx)}>
+                                    Remove
+                                </Button>
+                            </Box>
+                        )}
+                    </SpaceBetween>
+                </div>
+            ))}
+
+            <FormField label="Additional properties">
+                <Toggle
+                    checked={additionalProperties}
+                    onChange={({ detail }) => setAdditionalProperties(detail.checked)}
+                    disabled={readOnly}
+                >
+                    Allow properties not defined above
+                </Toggle>
+            </FormField>
+        </SpaceBetween>
+    );
+
+    return (
+        <SpaceBetween size="xs">
+            <Tabs
+                activeTabId={activeTab}
+                onChange={({ detail }) => setActiveTab(detail.activeTabId)}
+                tabs={[
+                    {
+                        id: "json",
+                        label: "JSON Editor",
+                        content: (
+                            <SpaceBetween size="xs">
+                                <Box float="right">
+                                    <SpaceBetween direction="horizontal" size="xs">
+                                        {errorCount > 0 && (
+                                            <Box color="text-status-error" fontSize="body-s">
+                                                {errorCount} error{errorCount > 1 ? "s" : ""}
+                                            </Box>
+                                        )}
+                                        {warningCount > 0 && (
+                                            <Box color="text-status-warning" fontSize="body-s">
+                                                {warningCount} warning{warningCount > 1 ? "s" : ""}
+                                            </Box>
+                                        )}
+                                        <Button
+                                            iconName="edit"
+                                            variant="icon"
+                                            onClick={formatDocument}
+                                            ariaLabel="Format JSON"
+                                        />
+                                    </SpaceBetween>
+                                </Box>
+                                <div
+                                    style={{
+                                        border: "1px solid var(--color-border-input-default, #aab7b8)",
+                                        borderRadius: "8px",
+                                        overflow: "hidden",
+                                    }}
+                                >
+                                    <Editor
+                                        height="400px"
+                                        language="json"
+                                        theme="vs-dark"
+                                        value={value}
+                                        onChange={handleEditorChange}
+                                        onMount={handleEditorMount}
+                                        onValidate={handleValidation}
+                                        options={{
+                                            readOnly,
+                                            minimap: { enabled: false },
+                                            scrollBeyondLastLine: false,
+                                            fontSize: 13,
+                                            tabSize: 2,
+                                            wordWrap: "on",
+                                            automaticLayout: true,
+                                            formatOnPaste: true,
+                                            formatOnType: true,
+                                            suggest: {
+                                                showKeywords: true,
+                                                showSnippets: true,
+                                            },
+                                            quickSuggestions: true,
+                                        }}
+                                    />
+                                </div>
+                                {markers.length > 0 && (
+                                    <Alert type={errorCount > 0 ? "error" : "warning"}>
+                                        <SpaceBetween size="xxs">
+                                            {markers.slice(0, 5).map((m, i) => (
+                                                <Box key={i} fontSize="body-s">
+                                                    Line {m.startLineNumber}: {m.message}
+                                                </Box>
+                                            ))}
+                                            {markers.length > 5 && (
+                                                <Box fontSize="body-s">
+                                                    ...and {markers.length - 5} more issues
+                                                </Box>
+                                            )}
+                                        </SpaceBetween>
+                                    </Alert>
+                                )}
+                            </SpaceBetween>
+                        ),
+                    },
+                    {
+                        id: "wizard",
+                        label: "Visual Builder",
+                        content:
+                            builderMode === "rules"
+                                ? renderRulesBuilder()
+                                : renderPropertiesBuilder(),
+                    },
+                ]}
+            />
+        </SpaceBetween>
+    );
+}

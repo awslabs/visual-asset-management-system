@@ -21,6 +21,9 @@ This module centralizes the parts those three lambdas must do identically:
   - The terminal-status write guard (`not_terminal_condition` / `is_conditional_check_failure`),
     which every writer of a terminal status on a main or pipeline row shares so the condition
     cannot drift between them. The abort path in handlers.workflows.executionService uses it too.
+  - The `workflow.execution.completed` announcement (`emit_workflow_execution_completed`) the
+    writer that won that guard publishes on the orchestration bus, so the end-state lambda, the
+    error handler and the execution service emit one event shape under one configuration guard.
 
 Callers inject their boto3 dynamo resource + s3 client and the resolved table names, so no AWS
 client is constructed here and no resource name is read from the environment (mirrors
@@ -36,11 +39,13 @@ from customLogging.logger import safeLogger
 from common.workflows import executionRecords as er
 from common.workflows import subExecutionStages as ses
 
-logger = safeLogger(service_name="ExecutionOutputs")
+logger = safeLogger()
 
 # Terminal statuses: a pipeline/main row already in one of these is finished and is not
-# re-stamped by the error handler (only in-flight rows are marked terminal).
-TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
+# re-stamped by the error handler (only in-flight rows are marked terminal). SKIPPED is the main row of a
+# fileUpload trigger launch a concurrency restriction refused (er.EXECUTION_STATUS_SKIPPED): terminal
+# from its first write, so no abort, reconcile or terminal writer ever overwrites it.
+TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", er.EXECUTION_STATUS_SKIPPED)
 
 # Sub-process resource types a registered locator can name (mirrors registerPipelineExecution).
 RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION = "stepFunctionsExecution"
@@ -243,9 +248,18 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
 
     resolved = []
     seen_rel = set()
+    seen_shadowed = set()
     for entry in original_inputs:
         rel = er.normalize_file_key(entry.get("relativePath", ""))
         seen_rel.add(rel)
+        # A path selected at two versions has two original entries; once an output shadows it they
+        # name the same object, so it is listed once per asset. Different assets sharing the path
+        # each keep their entry.
+        if rel in output_by_rel:
+            identity = (entry.get("databaseId", ""), entry.get("assetId", ""), rel)
+            if identity in seen_shadowed:
+                continue
+            seen_shadowed.add(identity)
         shadow = output_by_rel.get(rel)
         if shadow:
             # Shadowed in place: point at the output file's version but keep the original's
@@ -423,7 +437,11 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
     """Set terminal status + stop date (+ optional log/error) on the V2 main execution row, under the
     same terminal guard the pipeline rows use: a row another writer already finished keeps its status.
     Losing that race is the expected outcome for the second writer, not a failure, so the
-    ConditionalCheckFailed is logged and swallowed while any other write error surfaces."""
+    ConditionalCheckFailed is logged and swallowed while any other write error surfaces.
+
+    Returns True when this call wrote the terminal status and False when the guard rejected it. The
+    caller that announces the terminal status on the orchestration bus keys on that answer: only the
+    writer whose status landed announces, so a run finished by two writers is announced once."""
     table = dynamo.Table(main_table_name)
     expr = "SET executionStopDate = :s, executionStatus = :st, lastSfnSyncCheckDate = :s"
     values = {":s": stop_date, ":st": status}
@@ -447,6 +465,75 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
             raise
         logger.info(f"Main execution row {workflow_execution_id} already holds a terminal status; "
                     f"the {status} finalization write was skipped")
+        return False
+    return True
+
+
+def emit_workflow_execution_completed(events_client, event_bus_arn, event_source_prefix,
+                                      workflow_execution_id, workflow_database_id, workflow_id,
+                                      execution_status, started_at, completed_at,
+                                      execution_group_id=""):
+    """Best-effort `workflow.execution.completed` event on the orchestration bus, published by the
+    writer whose terminal-status write on the main execution row landed (the end-state lambda, the
+    error handler, the abort API, or a read-path reconcile that observed the completion first).
+
+    Skipped (logged) when no bus ARN or no event source prefix is configured: the standing rule on the
+    bus matches `Source` by that prefix, so an event published without it could never be delivered. A
+    publish failure is logged and never fails the terminal-status write that precedes it. Returns True
+    when an event was published.
+
+    `events_client` is injected like this module's other clients, so the three lambdas that emit share
+    one implementation while each keeps its own client and configuration."""
+    if not event_bus_arn or not event_source_prefix:
+        logger.info("No orchestration bus or event source prefix configured; "
+                    "workflow completion event skipped")
+        return False
+    try:
+        events_client.put_events(Entries=[er.workflow_execution_completed_event(
+            event_bus_arn=event_bus_arn,
+            event_source_prefix=event_source_prefix,
+            execution_id=workflow_execution_id,
+            workflow_database_id=workflow_database_id,
+            workflow_id=workflow_id,
+            status=execution_status,
+            started_at=started_at,
+            completed_at=completed_at,
+            execution_group_id=execution_group_id,
+        )])
+    except Exception as e:
+        logger.exception(f"Failed publishing workflow completion event for {workflow_execution_id}: {e}")
+        return False
+    return True
+
+
+def refresh_main_row_log(dynamo, main_table_name, workflow_execution_id, workflow_database_id,
+                         workflow_id, execution_log):
+    """Replace the main row's stored executionLog with a later, fuller read of the same log.
+
+    Written only when the row still exists (a permanent delete in between must not leave a partial
+    item behind) and its stored log is shorter than this one, so two writers refreshing one run keep
+    the longer read and a refresh never shortens what is stored. Returns True when it wrote. A
+    ConditionalCheckFailed is the expected outcome when either does not hold; any other write error
+    surfaces."""
+    if not execution_log:
+        return False
+    try:
+        dynamo.Table(main_table_name).update_item(
+            Key={"workflowExecutionId": workflow_execution_id,
+                 "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
+            UpdateExpression="SET executionLog = :lg",
+            ConditionExpression=("attribute_exists(workflowExecutionId) AND "
+                                 "(attribute_not_exists(executionLog) OR size(executionLog) < :n)"),
+            ExpressionAttributeValues={":lg": execution_log,
+                                       ":n": len(execution_log.encode("utf-8"))},
+        )
+        return True
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        logger.info(f"Main execution row {workflow_execution_id} is gone or already stores a log at "
+                    f"least as long; the log refresh was skipped")
+        return False
 
 
 def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadline_client=None,

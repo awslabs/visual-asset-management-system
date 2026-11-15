@@ -1201,6 +1201,7 @@ class TestBatchStageStreamResolution:
     SubmitJob result, as verified live on prod5 — so DescribeJobs on that id, memoised per request, is
     what fills batch.logStreamName."""
 
+    # pragma: allowlist nextline secret
     STREAM = "Preview3dThumbnailJobvams_prod5-us-west-21955306f5f/default/40199f4c0a1b4c2d9e8f7a6b5c4d3e2f"
     ERROR = "Pipeline Failure: Failed to load 3D file (.glb): incorrect header on GLB file"
     CAUSE = "See AWS cloudwatch logs for full error log and cause."

@@ -43,12 +43,16 @@ GET /database
             "bucketName": "vams-assets-abc123",
             "baseAssetsPrefix": "assets/",
             "restrictMetadataOutsideSchemas": false,
-            "restrictFileUploadsToExtensions": ""
+            "restrictFileUploadsToExtensions": "",
+            "complianceSchemaName": "survey-compliance",
+            "complianceAutoEval": true
         }
     ],
     "NextToken": null
 }
 ```
+
+`complianceSchemaName` and `complianceAutoEval` describe the database's compliance schema binding as written by `PUT /compliance/bind/{databaseId}` (see [Compliance API — Bind a schema to a database](compliance.md#bind-a-schema-to-a-database)); both are `null` on a database with no binding, so a client can tell "unbound" from "automatic evaluation off". They are read through the database routes only — the binding is changed through the compliance routes.
 
 `assetCount` counts the database's active (non-archived) assets and can exceed the assets the caller can list or open. Search totals likewise count assets the caller cannot open.
 
@@ -78,7 +82,7 @@ GET /database/{databaseId}
 
 ### Response
 
-Returns a single database object in the same format as the items in the list response. `assetCount` counts the database's active (non-archived) assets and can exceed the assets the caller can list or open. Search totals likewise count assets the caller cannot open.
+Returns a single database object in the same format as the items in the list response, including `complianceSchemaName` and `complianceAutoEval` (`null` when the database has no compliance schema binding). `assetCount` counts the database's active (non-archived) assets and can exceed the assets the caller can list or open. Search totals likewise count assets the caller cannot open.
 
 ### Error responses
 
@@ -175,7 +179,7 @@ POST /database
 | `databaseId`                      | string  | Yes      | Unique database identifier (4-63 chars, alphanumeric plus `-` and `_`). Cannot be `GLOBAL` or a reserved S3 keyword (`pipeline(s)`, `preview(s)`, `temp-upload(s)`, `workspace(s)`), matched case-insensitively. |
 | `description`                     | string  | Yes      | Description of the database (4-256 chars).                                                                                                                                                                       |
 | `defaultBucketId`                 | string  | Yes      | UUID of a pre-configured S3 bucket and prefix combination. Obtain it from [List bucket configurations](#list-bucket-configurations).                                                                             |
-| `restrictMetadataOutsideSchemas`  | boolean | No       | When `true`, metadata must conform to an applied metadata schema. Defaults to `false`.                                                                                                                           |
+| `restrictMetadataOutsideSchemas`  | boolean | No       | When `true`, user and API metadata writes may add only keys defined in applied schemas. Keys already stored on a record pass; pipeline write-backs are not restricted. Defaults to `false`.                      |
 | `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Use `.all` or leave blank to allow all. Defaults to empty.                                                                             |
 
 ### Request body example
@@ -227,12 +231,12 @@ At least one field must be provided. The `databaseId` cannot be changed after cr
 
 ### Request body
 
-| Field                             | Type    | Required | Description                                                                                                                                                   |
-| --------------------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `description`                     | string  | No       | Updated description (4-256 chars).                                                                                                                            |
-| `defaultBucketId`                 | string  | No       | UUID of a pre-configured S3 bucket and prefix combination, from [List bucket configurations](#list-bucket-configurations). Must reference an existing bucket. |
-| `restrictMetadataOutsideSchemas`  | boolean | No       | Toggle metadata schema enforcement.                                                                                                                           |
-| `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Use `.all` or leave blank to allow all.                                             |
+| Field                             | Type    | Required | Description                                                                                                                                                            |
+| --------------------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `description`                     | string  | No       | Updated description (4-256 chars).                                                                                                                                     |
+| `defaultBucketId`                 | string  | No       | UUID of a pre-configured S3 bucket and prefix combination, from [List bucket configurations](#list-bucket-configurations). Must reference an existing bucket.          |
+| `restrictMetadataOutsideSchemas`  | boolean | No       | When `true`, user and API metadata writes may add only keys defined in applied schemas. Keys already stored on a record pass; pipeline write-backs are not restricted. |
+| `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Use `.all` or leave blank to allow all.                                                      |
 
 ### Request body example
 
@@ -297,12 +301,15 @@ The dependency check runs after the database is found and the caller is authoriz
 
 ### Error responses
 
-| Status | Description                                         |
-| ------ | --------------------------------------------------- |
-| `400`  | Database has active assets, pipelines, or workflows |
-| `403`  | Not authorized                                      |
-| `404`  | Database not found                                  |
-| `500`  | Internal server error                               |
+| Status | Description                                                                       |
+| ------ | --------------------------------------------------------------------------------- |
+| `400`  | Database has active assets, pipelines, or workflows                               |
+| `403`  | Not authorized                                                                    |
+| `404`  | Database not found                                                                |
+| `500`  | Internal server error                                                             |
+| `503`  | Compliance is still building an index after an update; try again in a few minutes |
+
+The `503` occurs only right after an update that adds the compliance evaluation table's `PipelineRuleWaitIndex`, while Amazon DynamoDB still builds that index: the delete changes nothing and works once the index is active (see [v2.6 to v2.7](../deployment/update-the-solution.md#v26-to-v27)).
 
 ---
 

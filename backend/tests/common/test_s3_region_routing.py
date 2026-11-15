@@ -336,7 +336,8 @@ class TestMockParity:
                "s3_resource_for_bucket_name", "copy_s3_object", "RegionRoutingS3Client",
                "RegionRoutingS3Resource", "region_routing_s3_client", "region_routing_s3_resource",
                "s3_asset_client", "s3_asset_resource", "S3_ASSET_CLIENT_CONFIG", "MAX_PARALLEL_S3_WORKERS",
-               "S3_CLIENT_MAX_POOL_CONNECTIONS"]
+               "S3_CLIENT_MAX_POOL_CONNECTIONS", "presigned_get_object_params",
+               "SVG_RESPONSE_CONTENT_TYPE", "SVG_RESPONSE_CONTENT_DISPOSITION"]
 
     def test_the_mock_exposes_the_surface(self, mock_module):
         missing = [name for name in self.SURFACE if not hasattr(mock_module, name)]

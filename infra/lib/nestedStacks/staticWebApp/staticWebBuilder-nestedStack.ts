@@ -399,10 +399,12 @@ export class StaticWebBuilderNestedStack extends NestedStack {
             });
 
             //ALB Bucket Access
+            //Object reads only (GET and HEAD of an object), for the same reason as the S3 interface
+            //endpoint policy in alb-s3-website-albDeploy-construct.ts, which must stay in step with this.
             const webAppBucketPolicy = new iam.PolicyStatement({
-                actions: ["s3:Get*", "s3:List*"],
+                actions: ["s3:GetObject"],
                 principals: [new iam.AnyPrincipal()],
-                resources: [webAppBucket.arnForObjects("*"), webAppBucket.bucketArn],
+                resources: [webAppBucket.arnForObjects("*")],
             });
 
             //Restrict to just the VPCe (if enabled)

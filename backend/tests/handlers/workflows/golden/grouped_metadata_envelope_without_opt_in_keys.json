@@ -1,0 +1,43 @@
+{
+    "schemaVersion": 2,
+    "assets": [
+        {
+            "databaseId": "db1",
+            "assetId": "a1",
+            "assetData": { "assetName": "a1", "description": "", "tags": [] },
+            "files": [
+                { "fileKey": "/", "metadata": { "title": "A1" } },
+                {
+                    "fileKey": "/x.glb",
+                    "metadata": { "material": "steel" },
+                    "attributes": { "units": "mm" }
+                }
+            ]
+        },
+        {
+            "databaseId": "db1",
+            "assetId": "a2",
+            "assetData": { "assetName": "a2", "description": "", "tags": [] },
+            "files": [{ "fileKey": "/", "metadata": { "title": "A2" } }]
+        },
+        {
+            "databaseId": "db2",
+            "assetId": "a3",
+            "assetData": { "assetName": "a3", "description": "", "tags": [] },
+            "files": [
+                { "fileKey": "/", "metadata": { "title": "A3" } },
+                { "fileKey": "/folder/", "metadata": {}, "attributes": {} }
+            ]
+        },
+        {
+            "databaseId": "db2",
+            "assetId": "a9",
+            "assetData": { "assetName": "a9", "description": "", "tags": [] },
+            "files": [{ "fileKey": "/", "metadata": { "title": "A9" } }]
+        }
+    ],
+    "databases": [
+        { "databaseId": "db1", "metadata": { "region": "north" } },
+        { "databaseId": "db2", "metadata": { "region": "south" } }
+    ]
+}

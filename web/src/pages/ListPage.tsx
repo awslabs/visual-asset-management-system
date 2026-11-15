@@ -35,6 +35,7 @@ export default function ListPage(props: any) {
         editEnabled,
         hideDeleteButton = false,
         customFilterControls,
+        createDisabledReason,
     } = props;
     usePageTitle(databaseId || null, pluralNameTitleCase);
     const [reload, setReload] = useState(true);
@@ -150,7 +151,12 @@ export default function ListPage(props: any) {
                             (CreateNewElement || onCreateCallback) && (
                                 <div style={{ float: "right" }}>
                                     <SpaceBetween direction={"horizontal"} size={"m"}>
-                                        <Button onClick={handleOpenNewElement} variant="primary">
+                                        <Button
+                                            onClick={handleOpenNewElement}
+                                            variant="primary"
+                                            disabled={!!createDisabledReason}
+                                            disabledReason={createDisabledReason}
+                                        >
                                             Create {singularNameTitleCase}
                                         </Button>
                                     </SpaceBetween>
@@ -186,4 +192,5 @@ ListPage.propTypes = {
     editEnabled: PropTypes.bool,
     hideDeleteButton: PropTypes.bool,
     customFilterControls: PropTypes.element,
+    createDisabledReason: PropTypes.string,
 };

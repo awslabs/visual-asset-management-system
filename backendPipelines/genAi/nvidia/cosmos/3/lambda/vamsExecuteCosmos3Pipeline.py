@@ -174,6 +174,9 @@ def lambda_handler(event, context):
             # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
             # is in the deployment Region), so the Batch container addresses each bucket in its Region.
             "inputBucketRegion": resolved['inputBucketRegion'],
+            # The S3 version the run reads its input at, recorded at launch; "" reads the
+            # current object.
+            "inputVersionId": resolved['inputVersionId'],
             "outputBucketRegion": resolved['outputBucketRegion'],
             "cosmosPrompt": cosmos_prompt,
             "cosmosNegativePrompt": cosmos_negative_prompt,

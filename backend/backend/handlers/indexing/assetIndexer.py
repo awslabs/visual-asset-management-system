@@ -20,10 +20,13 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
+from common.batchItemFailures import failed_records_log_line
+from common.eventLogSummary import event_log_summary, exception_log_summary
 from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.indexing import AssetDocumentModel, AssetIndexRequest, IndexOperationResponse
 from common.indexing.geoLocation import build_geo_location
@@ -258,7 +261,7 @@ def normalize_metadata_value(value: str, value_type: Optional[str] = None) -> An
         base_datetime = match.group(1)
         timezone = match.group(3)
         normalized = f"{base_datetime}{timezone}"
-        logger.debug(f"Normalized datetime from '{value}' to '{normalized}'")
+        logger.debug("Normalized a datetime metadata value (fractional seconds removed)")
         return normalized
     
     # 2. Try boolean detection
@@ -608,6 +611,7 @@ def index_asset_document(document: AssetDocumentModel) -> bool:
     editor), we retry once without the geo field so the rest of the document --
     including MD_ metadata -- still lands in the index.
     """
+    doc_id = None
     try:
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
@@ -636,10 +640,10 @@ def index_asset_document(document: AssetDocumentModel) -> bool:
             )
         except Exception as e:
             if _is_invalid_geo_shape_error(e) and "geo_MD_location" in doc_dict:
-                bad_geo = doc_dict.pop("geo_MD_location", None)
+                doc_dict.pop("geo_MD_location", None)
                 logger.warning(
-                    f"OpenSearch rejected geo_MD_location for {doc_id}: {e}. "
-                    f"Retrying without the geo field. Bad shape: {bad_geo}"
+                    f"OpenSearch rejected geo_MD_location for {doc_id}: {exception_log_summary(e)}. "
+                    "Retrying without the geo field"
                 )
                 response = opensearch_operation_with_retry(
                     lambda: client.index(
@@ -656,7 +660,7 @@ def index_asset_document(document: AssetDocumentModel) -> bool:
         return response.get('result') in ['created', 'updated']
 
     except Exception as e:
-        logger.exception(f"Error indexing asset document: {e}")
+        logger.error(f"Error indexing asset document {doc_id}: {exception_log_summary(e)}")
         return False
 
 def delete_asset_document(database_id: str, asset_id: str) -> bool:
@@ -684,7 +688,7 @@ def delete_asset_document(database_id: str, asset_id: str) -> bool:
         return True
         
     except Exception as e:
-        logger.exception(f"Error deleting asset document: {e}")
+        logger.error(f"Error deleting asset document {database_id}#{asset_id}: {exception_log_summary(e)}")
         return False
 
 #######################
@@ -991,6 +995,8 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                 operation="skip"
             )
         
+        logger.info(f"Processing {event_name} metadata event for asset: {database_id}/{asset_id}")
+
         # Create asset index request
         request = AssetIndexRequest(
             databaseId=database_id,
@@ -1136,17 +1142,18 @@ def with_batch_item_failures(response, event, failures: List[Dict[str, str]]):
     """
     if isinstance(event, dict) and 'Records' in event:
         if failures:
-            logger.warning(f"Reporting {len(failures)} failed record(s) for redrive")
+            logger.warning(failed_records_log_line(failures))
         response['batchItemFailures'] = failures
     return response
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset indexing operations"""
     global claims_and_roles
 
     try:
-        logger.info(f"Processing asset indexing event: {json.dumps(event, default=str)}")
+        logger.info(f"Processing asset indexing event: {event_log_summary(event)}")
 
         results = []
         batch_item_failures: List[Dict[str, str]] = []

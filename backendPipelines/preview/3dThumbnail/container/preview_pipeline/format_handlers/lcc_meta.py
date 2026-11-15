@@ -113,6 +113,34 @@ def lcc_level_counts(meta: dict) -> List[int]:
     return counts
 
 
+# The data files splat-transform's LCC 1 reader opens beside ``meta.lcc``: the unit index and the
+# splat records always, the spherical-harmonic records only for a scene that carries them. It never
+# opens ``environment.bin``: the environment is only written for a level-of-detail output.
+LCC_DATA_FILES = ("data.bin", "index.bin")
+LCC_SH_FILE = "shcoef.bin"
+
+
+def lcc_has_sh(meta) -> bool:
+    """Whether splat-transform reads ``shcoef.bin`` for this LCC 1 scene, as its reader decides: a
+    ``fileType`` of ``Portable`` has none and ``Quality`` has them; a scene without a ``fileType`` (before
+    LCC 1 version 4) has them when its ``attributes`` name ``shcoef``."""
+    if not isinstance(meta, dict):
+        return False
+    file_type = meta.get("fileType")
+    if file_type == "Portable":
+        return False
+    if file_type == "Quality":
+        return True
+    attributes = meta.get("attributes")
+    return isinstance(attributes, list) and any(
+        isinstance(attribute, dict) and attribute.get("name") == "shcoef" for attribute in attributes)
+
+
+def lcc_data_files(meta) -> List[str]:
+    """The files beside ``meta.lcc`` that splat-transform reads for this scene."""
+    return list(LCC_DATA_FILES) + ([LCC_SH_FILE] if lcc_has_sh(meta) else [])
+
+
 # --------------------------------------------------------------------------------------------------
 # LCC 2
 # --------------------------------------------------------------------------------------------------

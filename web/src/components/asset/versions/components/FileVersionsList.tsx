@@ -28,11 +28,13 @@ import { downloadAsset } from "../../../../services/APIService";
 import Synonyms from "../../../../synonyms";
 import FileViewerModal from "../../../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../../../visualizerPlugin/core/types";
+import { isFilenameComparableAsVersions } from "../../../../visualizerPlugin/core/viewableExtensions";
 import {
-    extensionOfFilename,
-    isExtensionComparableAsVersions,
-} from "../../../../visualizerPlugin/core/viewableExtensions";
+    ARCHIVED_TRANSFER_REASON,
+    useAssetArchived,
+} from "../../../../context/ArchivedAssetContext";
 import { useViewerRegistryReady } from "../../../../visualizerPlugin/core/useViewerRegistryReady";
+import { downloadRefusalReason } from "../../../../visualizerPlugin/core/streamFailure";
 
 export const FileVersionsList: React.FC = () => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
@@ -40,6 +42,7 @@ export const FileVersionsList: React.FC = () => {
     // The per-row "Compare" action is offered only for a type some compare viewer diffs, which needs
     // the registry initialized — before that every lookup reports "no viewer" and the action is hidden.
     const viewerRegistryReady = useViewerRegistryReady();
+    const assetArchived = useAssetArchived();
 
     // Get context values
     const context = useContext(AssetVersionContext);
@@ -124,7 +127,7 @@ export const FileVersionsList: React.FC = () => {
     const canCompareFile = (file: FileVersion): boolean =>
         viewerRegistryReady &&
         !file.isPermanentlyDeleted &&
-        isExtensionComparableAsVersions(extensionOfFilename(file.relativeKey));
+        isFilenameComparableAsVersions(file.relativeKey);
 
     const handleCompareFile = (file: FileVersion) => {
         if (!canCompareFile(file)) {
@@ -272,7 +275,9 @@ export const FileVersionsList: React.FC = () => {
 
         const encodedPath = encodeURIComponent(file.relativeKey);
         const assetVersionId = selectedVersion?.Version;
-        let url = `/databases/${databaseId}/assets/${assetId}/file/${encodedPath}`;
+        let url = `/databases/${databaseId}/assets/${encodeURIComponent(
+            String(assetId)
+        )}/file/${encodedPath}`;
         if (assetVersionId) {
             url += `?assetVersion=${encodeURIComponent(assetVersionId)}`;
         } else if (file.versionId) {
@@ -384,7 +389,11 @@ export const FileVersionsList: React.FC = () => {
                     }, 1000);
                 }
             } else {
-                setDownloadError(`Failed to download file: ${file.relativeKey}`);
+                // A download the API refused shows the API's reason (D166).
+                setDownloadError(
+                    downloadRefusalReason(response) ??
+                        `Failed to download file: ${file.relativeKey}`
+                );
                 setDownloadStatus((prev) => ({ ...prev, [file.relativeKey]: "error" }));
                 console.error("Failed to download file");
                 setDownloadingFile(null);
@@ -506,6 +515,11 @@ export const FileVersionsList: React.FC = () => {
                 // Don't show actions for permanently deleted files
                 if (item.isPermanentlyDeleted) {
                     return <Box>File permanently deleted</Box>;
+                }
+
+                // An archived asset's files cannot be viewed or downloaded
+                if (assetArchived) {
+                    return <Box color="text-body-secondary">{ARCHIVED_TRANSFER_REASON}</Box>;
                 }
 
                 // Show download progress if file is being downloaded

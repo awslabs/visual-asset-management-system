@@ -40,6 +40,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from common.workflows.executionRecords import orchestration_event_prefix
 from common.workflows.stepfunctions_builder import (
     DEADLINE_TASK_TOKEN_PARAMETER,
@@ -215,6 +216,7 @@ def handle_job_event(detail):
     _resolve_task_token(task_token, status, farm_id, queue_id, job_id)
 
 
+@audited_handler
 def lambda_handler(event, context):
     """EventBridge-invoked. The event is an EventBridge envelope; the Deadline job status
     payload is in event['detail']. GetJob/SendTask* errors (other than token-gone) raise so

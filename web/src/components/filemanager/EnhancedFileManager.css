@@ -3,3 +3,10 @@
     border-top: 1px solid var(--vams-border-default);
     margin-top: 0;
 }
+
+/* The splitter stacks its panes at phone width (ResizableSplitter.css); let them set the height. */
+@media (max-width: 687px) {
+    .enhanced-file-manager {
+        height: auto;
+    }
+}

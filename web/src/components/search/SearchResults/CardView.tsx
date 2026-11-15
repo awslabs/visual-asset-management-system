@@ -358,7 +358,9 @@ const CardView: React.FC<CardViewProps> = ({
                     {isAsset && (
                         <Box>
                             <Link
-                                href={`#/databases/${source.str_databaseid}/assets/${source.str_assetid}`}
+                                href={`#/databases/${
+                                    source.str_databaseid
+                                }/assets/${encodeURIComponent(String(source.str_assetid))}`}
                                 fontSize="heading-s"
                             >
                                 {source.str_assetname || "Unnamed Asset"}
@@ -380,7 +382,9 @@ const CardView: React.FC<CardViewProps> = ({
                             {source.str_assetname && source.str_assetid && (
                                 <Box>
                                     <Link
-                                        href={`#/databases/${source.str_databaseid}/assets/${source.str_assetid}`}
+                                        href={`#/databases/${
+                                            source.str_databaseid
+                                        }/assets/${encodeURIComponent(source.str_assetid)}`}
                                         fontSize="body-m"
                                     >
                                         {source.str_assetname}

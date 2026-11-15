@@ -149,6 +149,10 @@ Only archived assets can be unarchived. Use `vamscli assets get <ASSET_ID> -d <D
 `--unarchive-files` restores only the files that were archived by the asset archive itself (tracked by `assetArchive` provenance in the file version history). Files archived individually beforehand always stay archived — restore those with `vamscli file unarchive`. Assets archived before provenance tracking have no restorable file set, so no files are restored for them.
 :::
 
+:::tip[Reading an archived asset]
+An archived asset stays readable. Pass `--show-archived` to `file list`, `file info`, `asset-version list` and `get`, `metadata asset list`, `metadata file list`, `metadata asset-link list`, `asset-links list`, and `comment list` to read its files, versions, metadata, relationships, and comments. Every write command refuses an archived asset until it is unarchived.
+:::
+
 ---
 
 ## assets delete
@@ -355,7 +359,7 @@ vamscli asset-version list [OPTIONS]
 | ------------------ | ---- | -------- | ---------------------------------------------------------------------------------- |
 | `-d`, `--database` | TEXT | Yes      | Database ID                                                                        |
 | `-a`, `--asset`    | TEXT | Yes      | Asset ID                                                                           |
-| `--show-archived`  | Flag | No       | Include archived versions                                                          |
+| `--show-archived`  | Flag | No       | Include archived versions, and also find an archived asset                         |
 | Pagination options |      | No       | `--page-size` (maximum 1000), `--max-items`, `--starting-token`, `--auto-paginate` |
 | `--json-output`    | Flag | No       | Output raw JSON response                                                           |
 
@@ -366,8 +370,10 @@ vamscli asset-version list [OPTIONS]
 Get details for a specific version, including versioned metadata and attributes.
 
 ```bash
-vamscli asset-version get -d <DB> -a <ASSET> -v <VERSION> [--json-output]
+vamscli asset-version get -d <DB> -a <ASSET> -v <VERSION> [--show-archived] [--json-output]
 ```
+
+`--show-archived` also finds a version of an archived asset.
 
 ---
 
@@ -447,7 +453,7 @@ The `--alias-id` option enables multiple parent-child relationships between the 
 ## asset-links list / get / update / delete
 
 ```bash
-vamscli asset-links list -d my-db --asset-id my-asset [--tree-view]
+vamscli asset-links list -d my-db --asset-id my-asset [--tree-view] [--show-archived]
 vamscli asset-links get --asset-link-id <UUID>
 vamscli asset-links update --asset-link-id <UUID> --tags new-tag
 vamscli asset-links delete --asset-link-id <UUID>

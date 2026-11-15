@@ -60,7 +60,7 @@ def _run(upload_response, complete=False):
     enforcer.return_value.enforceAPI.return_value = True
     with patch.object(ia, "request_to_claims", return_value={"tokens": ["u1"], "roles": []}), \
             patch.object(ia, "CasbinEnforcer", enforcer), \
-            patch.object(ia, "verify_database_exists", return_value=True), \
+            patch.object(ia, "verify_database_exists", return_value={}), \
             patch.object(ia, "verify_asset_exists", return_value=True), \
             patch.object(ia, "invoke_lambda", return_value=upload_response):
         return ia.lambda_handler(_event(complete), None)

@@ -517,14 +517,13 @@ def _invoke_with_real_tier2(enforcer, authorizer):
 class TestTier2StatusCodeThroughRoute:
     """FIX-004 status-code pin -- what a Tier-2 denial looks like to the caller.
 
-    The empty-token guard added to ``get_asset_with_permissions`` raises the same
-    ``VAMSGeneralErrorResponse`` the pre-existing Casbin denial raises, so a Tier-2
-    denial stays a 400 and no CLI/web consumer has to change. Pinning it here means
-    a later refactor to 403 cannot land silently.
+    A Tier-2 denial, from the empty-token guard or from Casbin, answers 403
+    ``{"message": "Not Authorized"}``, as the asset GET does (#959). Pinning it here means
+    a later refactor cannot move it back to 400 silently.
     """
 
-    def test_tier2_denial_is_400_and_does_not_mutate(self):
-        """A Tier-2 denial surfaces as 400 via general_error, with no write."""
+    def test_tier2_denial_is_403_and_does_not_mutate(self):
+        """A Tier-2 denial surfaces as 403 via authorization_error, with no write."""
         denying = MagicMock()
         denying.return_value.enforceAPI.return_value = True
         denying.return_value.enforce.return_value = False
@@ -532,10 +531,11 @@ class TestTier2StatusCodeThroughRoute:
         response, update_item = _invoke_with_real_tier2(
             denying, authorizer={"cognito:username": "alice"})
 
-        assert response["statusCode"] == 400, (
-            f"Tier-2 denial returned {response['statusCode']}; if this fix intentionally "
-            f"moved to 403, update the VamsCLI asset-version tests to match"
+        assert response["statusCode"] == 403, (
+            f"Tier-2 denial returned {response['statusCode']}; if this intentionally "
+            f"moved, update the VamsCLI asset-version tests to match"
         )
+        assert json.loads(response["body"]) == {"message": "Not Authorized"}
         update_item.assert_not_called()
 
     def test_permitted_caller_passes_through_real_tier2(self):

@@ -57,13 +57,16 @@ def workflow_execution_input_record_keys():
 
 
 def input_metadata_record_keys():
-    """Both scopes: an asset/file row and a metadata-source database row."""
+    """Both scopes: an asset/file row and a metadata-source database row, plus the row of a file a
+    whole-asset or folder expansion added, which alone carries `expanded`."""
     asset_row = er.build_input_metadata_record(
         "P1", "db1", "asset1", "/folder/scan.laz", {"k": "v"}, "s3/key.json",
         attributes={"a": "b"})
     database_row = er.build_input_metadata_record(
         "P1", "db1", "", "/", {"k": "v"}, "s3/key.json", scope="database")
-    return set(asset_row) | set(database_row), asset_row
+    expanded_row = er.build_input_metadata_record(
+        "P1", "db1", "asset1", "/folder/other.laz", {"k": "v"}, "s3/key.json", expanded=True)
+    return set(asset_row) | set(database_row) | set(expanded_row), asset_row
 
 
 def input_configuration_record_keys():

@@ -10,7 +10,7 @@ names, audit log group names, deprecated migration-only table names, and
 selected Lambda function names as SSM String parameters under a
 deployment-unique prefix. The prefix is exposed by the core stack output
 ``ResourceNamesSSMParamPrefixOutput`` (format:
-``/{configName}-{baseStackName}/resourceNames``).
+``/{configName}-{baseStackName}-{region}/resourceNames``).
 
 Migration scripts pass the prefix (plus optional profile/region) to
 ``SsmResourceLookup`` and resolve every table and function name they need,
@@ -67,7 +67,7 @@ class ResourceParamKeys:
     USER_ROLES_STORAGE_TABLE = "dynamoTables/userRolesStorage"
     USER_STORAGE_TABLE = "dynamoTables/userStorage"
     WORKFLOW_EXECUTIONS_STORAGE_TABLE = "dynamoTables/workflowExecutionsStorage"
-    API_KEY_STORAGE_TABLE = "dynamoTables/apiKeyStorage"
+    API_KEY_STORAGE_TABLE = "dynamoTables/apiKeyStorage"  # pragma: allowlist secret
     WORKFLOW_STORAGE_TABLE = "dynamoTables/workflowStorage"
     # Workflow-execution V2 data model tables
     WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2 = "dynamoTables/workflowExecutionsStorageV2"
@@ -87,6 +87,13 @@ class ResourceParamKeys:
     PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE = "dynamoTables/pipelineTemplateTagSchemaStorage"
     WORKFLOW_STORAGE_TABLE_V2 = "dynamoTables/workflowStorageV2"
     WORKFLOW_TRIGGERS_STORAGE_TABLE = "dynamoTables/workflowTriggersStorage"
+    WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE = "dynamoTables/workflowExecutionLocksStorage"
+    # Compliance tables
+    COMPLIANCE_SCHEMA_STORAGE_TABLE = "dynamoTables/complianceSchemaStorage"
+    COMPLIANCE_ASSET_STATE_STORAGE_TABLE = "dynamoTables/complianceAssetStateStorage"
+    COMPLIANCE_EVALUATION_STORAGE_TABLE = "dynamoTables/complianceEvaluationStorage"
+    COMPLIANCE_CASCADE_STORAGE_TABLE = "dynamoTables/complianceCascadeStorage"
+    COMPLIANCE_AUDIT_STORAGE_TABLE = "dynamoTables/complianceAuditStorage"
 
     # Deprecated tables retained for data migration only
     LEGACY_ASSET_VERSIONS_STORAGE_TABLE_V1 = "dynamoTables/legacy/assetVersionsStorageV1"

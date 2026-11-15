@@ -148,6 +148,8 @@ def lambda_handler(event, context):
         # hands them to the container, which signs each bucket's requests for its Region.
         "inputBucketRegion": event.get("inputBucketRegion", ""),
         "outputBucketRegion": event.get("outputBucketRegion", ""),
+        # The S3 version of the input the run reads (empty reads the current object).
+        "inputVersionId": event.get("inputVersionId", ""),
         "externalSfnTaskToken": external_sfn_task_token,
         # Carried through the state machine so executeBatchJob can register the Batch job itself as
         # abortable. Stopping this sub-state-machine does not stop the job — it is submitted from a

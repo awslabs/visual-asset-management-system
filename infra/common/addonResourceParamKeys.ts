@@ -11,4 +11,10 @@
  * (nestedStacks/addon/addonStackHelpers.ts). Key suffixes under `addon/` are recommended; a key
  * equal to a core or custom key fails at synth.
  */
-export const ADDON_RESOURCE_PARAM_KEYS: Record<string, Record<string, string>> = {};
+export const ADDON_RESOURCE_PARAM_KEYS: Record<string, Record<string, string>> = {
+    dynamoTables: {
+        // EDH Workstations session records and AMI recipes
+        edhSessionStorage: "addon/dynamoTables/edhSessionStorage",
+        edhAmiRecipeStorage: "addon/dynamoTables/edhAmiRecipeStorage",
+    },
+};

@@ -84,6 +84,10 @@ def mock_safe_logger(service=None, service_name=None):
 sys.modules['handlers'] = MagicMock()
 sys.modules['handlers.auth'] = MagicMock()
 sys.modules['handlers.auth'].request_to_claims = lambda event: {"tokens": ["test_token"]}
+# The authMethod values handlers compare a caller's claims with; tests/handlers/auth/
+# test_request_to_claims_authMethod.py pins the real module's values to these.
+sys.modules['handlers.auth'].AUTH_METHOD_JWT = "jwt"
+sys.modules['handlers.auth'].AUTH_METHOD_API_KEY = "apiKey"
 sys.modules['handlers.authz'] = MagicMock()
 sys.modules['handlers.authz'].CasbinEnforcer = MagicMock()
 sys.modules['common'] = MagicMock()
@@ -95,7 +99,7 @@ sys.modules['common'] = MagicMock()
 sys.modules['common.dynamodb'] = MagicMock()
 
 
-def _mock_get_asset_object_from_id(database_id=None, asset_id=None):
+def _mock_get_asset_object_from_id(database_id=None, asset_id=None, include_archived=False):
     """Stand-in for common.dynamodb.get_asset_object_from_id.
 
     Mirrors the real two-argument signature ``(database_id, asset_id)``. The stub
@@ -159,6 +163,16 @@ sys.modules['common.validators'] = _validators_module
 # `common` is a MagicMock package, so bind the real submodule as an attribute too so
 # `from common import validators` resolves the real module rather than a mock attribute.
 sys.modules['common'].validators = _validators_module
+# timestamps is the pure current-time helper (stdlib only), so load the REAL module by path and
+# bind it on the MagicMock package, so `from common.timestamps import utc_now` resolves real code.
+_ts_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.timestamps',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'timestamps.py')
+)
+_ts_module = _s3mk_importlib_util.module_from_spec(_ts_spec)
+_ts_spec.loader.exec_module(_ts_module)
+sys.modules['common.timestamps'] = _ts_module
+sys.modules['common'].timestamps = _ts_module
 # dynamoDbMetadataKeys is pure constants (no AWS deps), so load the REAL module
 # by path rather than a MagicMock (same approach as s3MetadataKeys above).
 _ddbmk_spec = _s3mk_importlib_util.spec_from_file_location(
@@ -181,6 +195,72 @@ _bif_module = _s3mk_importlib_util.module_from_spec(_bif_spec)
 _bif_spec.loader.exec_module(_bif_module)
 sys.modules['common.batchItemFailures'] = _bif_module
 sys.modules['common'].batchItemFailures = _bif_module
+# indexerEvents is pure JSON/dict walking over a file-indexer message (no AWS deps). The file indexer
+# and the compliance trigger both import it at module level, so it is registered here for the same
+# reason as batchItemFailures: a MagicMock `common` cannot resolve the submodule import.
+_ixe_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.indexerEvents',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'indexerEvents.py')
+)
+_ixe_module = _s3mk_importlib_util.module_from_spec(_ixe_spec)
+_ixe_spec.loader.exec_module(_ixe_module)
+sys.modules['common.indexerEvents'] = _ixe_module
+sys.modules['common'].indexerEvents = _ixe_module
+# eventLogSummary describes an event for a log line from its shape alone (stdlib only). The indexers,
+# the bucket sync and the Garnet add-on indexers import it at module level, so it is registered for
+# the same reason as indexerEvents.
+_els_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.eventLogSummary',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'eventLogSummary.py')
+)
+_els_module = _s3mk_importlib_util.module_from_spec(_els_spec)
+_els_spec.loader.exec_module(_els_module)
+sys.modules['common.eventLogSummary'] = _els_module
+sys.modules['common'].eventLogSummary = _els_module
+# assetProvenance builds the asset-row change-provenance attributes (stdlib + the s3MetadataKeys
+# constants). The upload and large-file completion handlers import it at module level.
+_apv_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.assetProvenance',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'assetProvenance.py')
+)
+_apv_module = _s3mk_importlib_util.module_from_spec(_apv_spec)
+_apv_spec.loader.exec_module(_apv_module)
+sys.modules['common.assetProvenance'] = _apv_module
+sys.modules['common'].assetProvenance = _apv_module
+# assetUploads holds the record-level upload completion checks (stdlib only). The upload completion
+# and the ingest-asset handler import it at module level.
+_aup_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.assetUploads',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'assetUploads.py')
+)
+_aup_module = _s3mk_importlib_util.module_from_spec(_aup_spec)
+_aup_spec.loader.exec_module(_aup_module)
+sys.modules['common.assetUploads'] = _aup_module
+sys.modules['common'].assetUploads = _aup_module
+# metadataSchemaValidation owns `extract_file_extension`, which the compliance evaluation engine
+# imports at module level to apply a metadata schema's fileKeyTypeRestriction exactly as the metadata
+# write path does. Registered for the same reason as indexerEvents. tests/handlers/metadata/conftest.py
+# loads its own copy over this one for that directory.
+_msv_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.metadataSchemaValidation',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common',
+                 'metadataSchemaValidation.py')
+)
+_msv_module = _s3mk_importlib_util.module_from_spec(_msv_spec)
+_msv_spec.loader.exec_module(_msv_module)
+sys.modules['common.metadataSchemaValidation'] = _msv_module
+sys.modules['common'].metadataSchemaValidation = _msv_module
+# searchAuthzFilter turns policy lines into OpenSearch clauses (pure dicts and `re`), so load the REAL
+# module for the same reason. It reads common.constants when it translates, not at import, so it sees
+# the real constants a directory conftest installs.
+_saf_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.searchAuthzFilter',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'searchAuthzFilter.py')
+)
+_saf_module = _s3mk_importlib_util.module_from_spec(_saf_spec)
+_saf_spec.loader.exec_module(_saf_module)
+sys.modules['common.searchAuthzFilter'] = _saf_module
+sys.modules['common'].searchAuthzFilter = _saf_module
 # `query_all_items` is the shared read-to-exhaustion helper (backend/CLAUDE.md Rule 14). Bind the
 # REAL one onto the MagicMock module, for the same reason `get_asset_object_from_id` is bound above:
 # a handler does `from common.dynamodb import query_all_items` at import time, so it captures
@@ -233,10 +313,20 @@ sys.modules['common.dynamodb'].BATCH_GET_CHUNK_SIZE = _real_ddb_module.BATCH_GET
 sys.modules['common.dynamodb'].BATCH_GET_MAX_RETRIES = _real_ddb_module.BATCH_GET_MAX_RETRIES
 sys.modules['common.dynamodb'].BATCH_GET_RETRY_BACKOFF_SECONDS = \
     _real_ddb_module.BATCH_GET_RETRY_BACKOFF_SECONDS
+# get_asset_record is the shared live-then-archived asset read. It takes the caller's table handle,
+# so binding the real one keeps each handler test reading through the table stub it patches; a
+# MagicMock stand-in would return a truthy mock record for every asset, archived or not.
+sys.modules['common.dynamodb'].get_asset_record = _real_ddb_module.get_asset_record
+# asset_authorization_object builds the record or stand-in Tier 2 decides; a MagicMock stand-in
+# would hand enforce() a mock instead of the identifiers a test asserts on.
+sys.modules['common.dynamodb'].asset_authorization_object = _real_ddb_module.asset_authorization_object
+sys.modules['common.dynamodb'].ARCHIVED_ASSET_DATABASE_SUFFIX = \
+    _real_ddb_module.ARCHIVED_ASSET_DATABASE_SUFFIX
 # apiRoutes is pure constants (no AWS deps), so load the REAL module by path
-# rather than a MagicMock (same approach as s3MetadataKeys above). The route type module and
-# the add-on route list it imports are loaded first, for the same reason.
-for _apir_dep in ('apiRouteTypes', 'addonApiRoutes'):
+# rather than a MagicMock (same approach as s3MetadataKeys above). The route type module, the add-on
+# feature switches (common/addonFeatures.py, which the add-on route list and apiRoutes import; it reads
+# its environment variable on each call) and the add-on route list are loaded first, for the same reason.
+for _apir_dep in ('apiRouteTypes', 'addonFeatures', 'addonApiRoutes'):
     _apir_dep_spec = _s3mk_importlib_util.spec_from_file_location(
         f'common.{_apir_dep}',
         os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', f'{_apir_dep}.py')
@@ -251,6 +341,17 @@ _apir_spec = _s3mk_importlib_util.spec_from_file_location(
 _apir_module = _s3mk_importlib_util.module_from_spec(_apir_spec)
 _apir_spec.loader.exec_module(_apir_module)
 sys.modules['common.apiRoutes'] = _apir_module
+# The audit action registry is pure constants over the route list, so load the REAL modules by path
+# for the same reason: the route type module first, then the add-on lane and the merged registry
+# (which imports the fork-owned custom/customAuditActions.py by name).
+for _audit_reg in ('auditActionTypes', 'addonAuditActions', 'auditActions'):
+    _audit_reg_spec = _s3mk_importlib_util.spec_from_file_location(
+        f'common.{_audit_reg}',
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', f'{_audit_reg}.py')
+    )
+    _audit_reg_module = _s3mk_importlib_util.module_from_spec(_audit_reg_spec)
+    sys.modules[f'common.{_audit_reg}'] = _audit_reg_module
+    _audit_reg_spec.loader.exec_module(_audit_reg_module)
 # common.constants is a MagicMock here, but the per-directory conftests and the tests that need the
 # real Casbin field list load constants.py by path, and it imports the add-on constants lane
 # (common/addonConstants.py, pure data). `common` is a MagicMock, not a package, so register the real
@@ -262,11 +363,38 @@ _addon_constants_spec = _s3mk_importlib_util.spec_from_file_location(
 _addon_constants_module = _s3mk_importlib_util.module_from_spec(_addon_constants_spec)
 _addon_constants_spec.loader.exec_module(_addon_constants_module)
 sys.modules['common.addonConstants'] = _addon_constants_module
+# The two log redactors (customLogging/logger.py, common/logRedaction.py) import their merged key
+# lists from common.constants at import. Under the MagicMock above that import reads a mock attribute,
+# which iterates as empty, so a test of the real redactor would redact nothing. Load constants.py
+# privately (it imports only the pure-data lane modules) and pin its merged log-key tuples on the mock.
+_log_keys_spec = _s3mk_importlib_util.spec_from_file_location(
+    '_real_common_constants_for_log_keys',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'constants.py')
+)
+_log_keys_module = _s3mk_importlib_util.module_from_spec(_log_keys_spec)
+_log_keys_spec.loader.exec_module(_log_keys_module)
+sys.modules['common.constants'].LOG_SENSITIVE_KEYS = _log_keys_module.LOG_SENSITIVE_KEYS
+sys.modules['common.constants'].LOG_TEXT_SENSITIVE_KEYS = _log_keys_module.LOG_TEXT_SENSITIVE_KEYS
 # The execution/pipeline/workflow helpers live in the common.workflows subpackage.
 # `common` is a MagicMock, so register a REAL package object for `common.workflows`
 # (and bind it as an attribute on the mock `common`) before loading its submodules,
 # so `from common.workflows import X` / `from common.workflows.X import Y` resolve the
 # real code rather than MagicMock attributes.
+# metadataSchemaValidation is pure helpers over an injected DynamoDB client (its imports are the
+# logger and the metadata models; no client is built at import), so load the REAL module by path for
+# the same reason as batchItemFailures above: the workflow execute handler imports it at module level,
+# and without this registration a run of the workflow tests alone fails collection with "'common' is
+# not a package". (tests/handlers/metadata/conftest.py loads its own copy, which replaces this one in a
+# run that collects that directory.)
+_msv_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.metadataSchemaValidation',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common',
+                 'metadataSchemaValidation.py')
+)
+_msv_module = _s3mk_importlib_util.module_from_spec(_msv_spec)
+_msv_spec.loader.exec_module(_msv_module)
+sys.modules['common.metadataSchemaValidation'] = _msv_module
+sys.modules['common'].metadataSchemaValidation = _msv_module
 _cw_pkg = __import__('types').ModuleType('common.workflows')
 _cw_pkg.__path__ = [os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'workflows')]
 sys.modules['common.workflows'] = _cw_pkg
@@ -328,6 +456,17 @@ _rn_spec = _s3mk_importlib_util.spec_from_file_location(
 _rn_module = _s3mk_importlib_util.module_from_spec(_rn_spec)
 _rn_spec.loader.exec_module(_rn_module)
 sys.modules['common.resourceNames'] = _rn_module
+
+# snsTopicNames is pure naming logic; register the real module so handlers that
+# import it at load time collect cleanly under the MagicMock `common` package.
+_sns_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.snsTopicNames',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'snsTopicNames.py')
+)
+_sns_module = _s3mk_importlib_util.module_from_spec(_sns_spec)
+_sns_spec.loader.exec_module(_sns_module)
+sys.modules['common.snsTopicNames'] = _sns_module
+sys.modules['common'].snsTopicNames = _sns_module
 # handlers.assets.assetVersions is imported by assetFiles and metadataService at module load.
 # Create a minimal mock package hierarchy: handlers → handlers.assets → handlers.assets.assetVersions
 if 'handlers' not in sys.modules:
@@ -454,6 +593,9 @@ os.environ["DATABASE_METADATA_STORAGE_TABLE_NAME"] = "databaseMetadataTable"
 os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"] = "assetFileMetadataTable"
 os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"] = "fileAttributeTable"
 os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"] = "metadataSchemaTableV2"
+
+# Workflow coordination tables
+os.environ["WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME"] = "workflowExecutionLocksStorageTable"
 
 
 @pytest.fixture(scope="function")

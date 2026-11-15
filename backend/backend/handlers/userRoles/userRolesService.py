@@ -3,7 +3,7 @@
 
 import boto3
 import json
-import datetime
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.config import Config
@@ -14,7 +14,7 @@ from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_auth_changes
+from customLogging.auditLogging import log_action, log_auth_changes, audited_handler
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2,
@@ -309,7 +309,7 @@ def create_user_roles(request_model: CreateUserRolesRequestModel, claims_and_rol
         {
             'userId': user_id,
             'roleName': role,
-            'createdOn': datetime.datetime.utcnow().isoformat()
+            'createdOn': utc_now().isoformat()
         }
         for role in role_names
     ]
@@ -320,7 +320,7 @@ def create_user_roles(request_model: CreateUserRolesRequestModel, claims_and_rol
             for item in items_to_insert:
                 batch.put_item(Item=item)
         
-        timestamp = datetime.datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return UserRoleOperationResponseModel(
             success=True,
             message="User roles created successfully",
@@ -408,7 +408,7 @@ def update_user_roles(request_model: UpdateUserRolesRequestModel, claims_and_rol
         if role in roles_to_create_set:
             user_roles_to_create.append(dict(
                 named_user_role,
-                createdOn=datetime.datetime.utcnow().isoformat()
+                createdOn=utc_now().isoformat()
             ))
 
     # Prepare roles to delete with authorization checks
@@ -442,7 +442,7 @@ def update_user_roles(request_model: UpdateUserRolesRequestModel, claims_and_rol
             message=USER_ROLE_UPDATE_NO_CHANGES_MESSAGE,
             userId=user_id,
             operation="update",
-            timestamp=datetime.datetime.utcnow().isoformat()
+            timestamp=utc_now().isoformat()
         )
 
     # Perform batch operations
@@ -453,7 +453,7 @@ def update_user_roles(request_model: UpdateUserRolesRequestModel, claims_and_rol
             for keys in user_roles_to_delete:
                 batch.delete_item(Key=keys)
 
-        timestamp = datetime.datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return UserRoleOperationResponseModel(
             success=True,
             message="User roles updated successfully",
@@ -517,7 +517,7 @@ def delete_user_roles(request_model: DeleteUserRolesRequestModel, claims_and_rol
             message=USER_ROLE_DELETE_NO_CHANGES_MESSAGE,
             userId=user_id,
             operation="delete",
-            timestamp=datetime.datetime.utcnow().isoformat()
+            timestamp=utc_now().isoformat()
         )
 
     # Delete all user roles
@@ -526,7 +526,7 @@ def delete_user_roles(request_model: DeleteUserRolesRequestModel, claims_and_rol
             for keys in items_to_delete:
                 batch.delete_item(Key=keys)
         
-        timestamp = datetime.datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return UserRoleOperationResponseModel(
             success=True,
             message="User roles deleted successfully",
@@ -671,6 +671,8 @@ def handle_get_request(event):
         
         # Get user roles
         user_roles_result = get_user_roles(query_params)
+        log_action(event, "userRoleList", item_count=len(user_roles_result.get("Items", [])),
+                   request_parameters=query_params)
         
         # Return success response
         return success(body={"message": user_roles_result})
@@ -719,7 +721,8 @@ def handle_post_request(event):
             "userId": result.userId,
             "operation": "create",
             "roleNames": request_model.roleName
-        })
+        }, entity_id=result.userId, ids={"targetUserId": result.userId},
+            changes={"roleNames": request_model.roleName})
         
         # Return success response
         return success(body=result.dict())
@@ -778,7 +781,8 @@ def handle_put_request(event):
             "operation": "update",
             "roleNames": request_model.roleName,
             "changed": result.message != USER_ROLE_UPDATE_NO_CHANGES_MESSAGE
-        })
+        }, entity_id=result.userId, ids={"targetUserId": result.userId},
+            changes={"roleNames": request_model.roleName})
         
         # Return success response
         return success(body=result.dict())
@@ -834,7 +838,7 @@ def handle_delete_request(event):
             "userId": result.userId,
             "operation": "delete",
             "changed": result.message != USER_ROLE_DELETE_NO_CHANGES_MESSAGE
-        })
+        }, entity_id=result.userId, ids={"targetUserId": result.userId})
         
         # Return success response
         return success(body=result.dict())
@@ -852,6 +856,7 @@ def handle_delete_request(event):
         return internal_error(event=event)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for user roles service APIs"""
     global claims_and_roles

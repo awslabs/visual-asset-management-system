@@ -231,7 +231,7 @@ class TestAssetListEndDateBound:
         assert values == ("2026-06-01T00:00:00Z",)
 
         operator, values = _date_bound(_key_condition(
-            executionService._test_cfg_table, "WorkflowExecConfigByOutputAssetGSI"))
+            executionService._test_cfg_table, "WorkflowExecConfigByOutputAssetGSI"))  # pragma: allowlist secret
         assert operator == ">="
         assert values == ("2026-06-01T00:00:00Z",)
 
@@ -260,7 +260,7 @@ class TestAssetListEndDateBound:
         assert response["statusCode"] == 200
 
         operator, values = _date_bound(_key_condition(
-            executionService._test_cfg_table, "WorkflowExecConfigByOutputAssetGSI"))
+            executionService._test_cfg_table, "WorkflowExecConfigByOutputAssetGSI"))  # pragma: allowlist secret
         assert operator == "BETWEEN"
         assert values == ("2026-06-01T00:00:00Z", "2026-06-15T23:59:59Z")
 

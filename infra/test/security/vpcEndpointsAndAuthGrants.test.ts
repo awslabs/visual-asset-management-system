@@ -231,6 +231,24 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
             "needsEcsIsolated = props.config.app.pipelines.useIsaacLabTraining"
         );
     });
+
+    // The GenAI CAD STEP agent's placement follows its runtime: on `fargate` its Batch compute is in
+    // the private subnets (all three blocks), on `agentcore` the container runs outside the VPC and only
+    // its Lambdas are in the isolated subnets (no block). So the flag is in each block only together
+    // with the fargate runtime, and the AgentCore data-plane endpoint is gated on the other runtime.
+    test("useGenAiCadStepAgent appears in all three blocks, each time only with the fargate runtime", () => {
+        const fargateGate =
+            /useGenAiCadStepAgent\?\.enabled &&\s+props\.config\.app\.pipelines\.useGenAiCadStepAgent\.runtime === "fargate"/;
+        for (const block of Object.values(blocks)) {
+            expect(block).toMatch(fargateGate);
+            expect(block.match(/useGenAiCadStepAgent\?\.enabled/g)).toHaveLength(1);
+        }
+        const agentCore = source.indexOf('"BedrockAgentCoreEndpoint"');
+        expect(agentCore).toBeGreaterThan(0);
+        expect(source.slice(source.lastIndexOf("if (", agentCore), agentCore)).toMatch(
+            /useForAllLambdas &&\s+props\.config\.app\.pipelines\.useGenAiCadStepAgent\?\.enabled &&\s+props\.config\.app\.pipelines\.useGenAiCadStepAgent\.runtime === "agentcore"/
+        );
+    });
 });
 
 describe("core stack nested-stack dependencies", () => {

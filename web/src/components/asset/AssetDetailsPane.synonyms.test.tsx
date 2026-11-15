@@ -34,6 +34,8 @@ jest.mock("../../services/APIService", () => ({
     createSubscription: jest.fn(),
     deleteSubscription: jest.fn(),
     fetchAssetVersions: jest.fn().mockResolvedValue([true, []]),
+    // The pane reads the allowed API routes before it fetches the compliance badge.
+    fetchAllowedApiRoutes: jest.fn().mockResolvedValue([true, { routes: [], userId: "u" }]),
 }));
 jest.mock("../common/StatusMessage", () => ({
     useStatusMessage: () => ({ showMessage: jest.fn() }),
@@ -51,6 +53,7 @@ describe("AssetDetailsPane synonyms", () => {
                     isDistributable: true,
                 }}
                 databaseId="db1"
+                assetId="a1"
                 onOpenUpdateAsset={jest.fn()}
                 onOpenDeleteModal={jest.fn()}
             />

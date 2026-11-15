@@ -1,0 +1,4 @@
+# STEP files are kept byte for byte: their SHA-256 is recorded in fixtures/SHA256SUMS.txt and goldens/GOLDENS.md,
+# and several NIST and Adafruit files use CRLF line ends that end-of-line normalization would rewrite.
+*.step -text
+*.stp -text

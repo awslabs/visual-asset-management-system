@@ -214,6 +214,14 @@ class TestConstraintCriteriaValue:
         ]), model=CreateConstraintRequestModel)
         assert model.criteriaOr[0].value == value
 
+    def test_accepts_list_values_rejected_by_str_list_repr(self):
+        """Elements that are valid alone must not fail because str(list) is validated (#838)."""
+        from models.roleConstraints import CreateConstraintRequestModel
+        model = parse(_constraint(criteriaOr=[
+            {"field": "databaseId", "operator": "is_one_of", "value": ["x-r.1", "p2.x"]}
+        ]), model=CreateConstraintRequestModel)
+        assert model.criteriaOr[0].value == ["x-r.1", "p2.x"]
+
 
 @pytest.mark.unit
 class TestConstraintCollectionBounds:
@@ -597,7 +605,7 @@ class TestApiKeyValidation:
         from models.apiKeys import CreateApiKeyRequestModel
         marker = "<img src=x onerror=alert(1)>"
         with pytest.raises(ValidationError) as excinfo:
-            parse({"apiKeyName": "my-key", "userId": "user@example.com",
+            parse({"apiKeyName": "my-key", "userId": "user@example.com",  # pragma: allowlist secret
                    "description": "d", "expiresAt": marker},
                   model=CreateApiKeyRequestModel)
         assert marker not in str(excinfo.value)
@@ -605,7 +613,7 @@ class TestApiKeyValidation:
     @pytest.mark.parametrize("expires_at", ["2027-12-31", "2027-12-31T23:59:59Z"])
     def test_accepts_iso8601_expirations(self, expires_at):
         from models.apiKeys import CreateApiKeyRequestModel
-        model = parse({"apiKeyName": "my-key", "userId": "user@example.com",
+        model = parse({"apiKeyName": "my-key", "userId": "user@example.com",  # pragma: allowlist secret
                        "description": "d", "expiresAt": expires_at},
                       model=CreateApiKeyRequestModel)
         assert model.expiresAt == expires_at

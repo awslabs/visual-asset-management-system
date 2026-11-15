@@ -15,6 +15,7 @@ const AssetLinksTab = React.lazy(() => import("./tabs/AssetLinksTab"));
 const AssetExecutionsTab = React.lazy(() => import("./tabs/AssetExecutionsTab"));
 const CommentsTab = React.lazy(() => import("./tabs/CommentsTab"));
 const VersionsTab = React.lazy(() => import("./tabs/VersionsTab"));
+const ComplianceTab = React.lazy(() => import("./tabs/ComplianceTab"));
 
 interface TabbedContainerProps {
     assetName: string;
@@ -24,6 +25,8 @@ interface TabbedContainerProps {
     assetVersionId?: string; // Optional version ID to filter files and metadata
     /** Bubbled-up notification when the user changes the file/folder selection. */
     onSelectedPathChange?: (path: string | null) => void;
+    /** Called after a version is created, reverted to, edited, archived or unarchived. */
+    onVersionsChanged?: () => void;
 }
 
 export const TabbedContainer: React.FC<TabbedContainerProps> = ({
@@ -33,6 +36,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     filePathToNavigate,
     assetVersionId,
     onSelectedPathChange,
+    onVersionsChanged,
 }) => {
     // Set File Manager tab as active by default, especially if we have a file path to navigate to
     const [activeTabId, setActiveTabId] = useState("file-manager");
@@ -126,6 +130,22 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                             databaseId={databaseId}
                                             assetId={assetId}
                                             isActive={activeTabId === "versions"}
+                                            onVersionsChanged={onVersionsChanged}
+                                        />
+                                    </Suspense>
+                                ),
+                            },
+                            {
+                                id: "compliance",
+                                label: "Compliance",
+                                content: (
+                                    <Suspense
+                                        fallback={<LoadingSpinner text="Loading Compliance..." />}
+                                    >
+                                        <ComplianceTab
+                                            databaseId={databaseId}
+                                            assetId={assetId}
+                                            isActive={activeTabId === "compliance"}
                                         />
                                     </Suspense>
                                 ),

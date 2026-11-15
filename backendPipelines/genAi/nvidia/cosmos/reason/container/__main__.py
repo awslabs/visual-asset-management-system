@@ -49,6 +49,20 @@ OUTPUT_DIR = Path("/tmp/output")
 HF_CACHE_BASE = f"/mnt/efs/cosmos-models/hf_cache/{S3_HF_CACHE_PREFIX.split('/')[0]}"
 
 
+def describe_definition_source(definition_source: str) -> str:
+    """How the pipeline definition was passed, for the job log: inline JSON or a file path, and its
+    length. The text itself is not logged."""
+    kind = "inline JSON" if definition_source.lstrip().startswith("{") else "file path"
+    return f"{kind}, {len(definition_source)} characters"
+
+
+def describe_definition(definition) -> str:
+    """The parsed pipeline definition as the job log shows it: its top-level keys, not their values."""
+    if isinstance(definition, dict):
+        return f"keys {list(definition)}"
+    return f"a JSON {type(definition).__name__}"
+
+
 def load_pipeline_definition() -> Dict:
     """
     Load pipeline definition from command line argument or environment variable.
@@ -74,7 +88,7 @@ def load_pipeline_definition() -> Dict:
     else:
         raise ValueError("No pipeline definition provided via command line or PIPELINE_DEFINITION env var")
 
-    logger.info(f"Loading pipeline definition from: {definition_source[:100]}...")
+    logger.info(f"Loading pipeline definition: {describe_definition_source(definition_source)}")
 
     # Try parsing as JSON string first
     try:
@@ -88,10 +102,15 @@ def load_pipeline_definition() -> Dict:
         if definition_path.exists():
             with open(definition_path, "r") as f:
                 return json.load(f)
+    except OSError as e:
+        # An OSError names the path it was given, which here can be the inline text.
+        logger.warning(f"Failed to load as file: {e.strerror or type(e).__name__}")
     except Exception as e:
         logger.warning(f"Failed to load as file: {e}")
 
-    raise ValueError(f"Could not parse pipeline definition as JSON or load from file: {definition_source}")
+    raise ValueError(
+        f"Could not parse pipeline definition as JSON or load from file "
+        f"({describe_definition_source(definition_source)})")
 
 
 def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
@@ -110,7 +129,24 @@ def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
     return bucket, key
 
 
-def download_from_s3(s3_uri: str, local_path: Path) -> None:
+# The error text the AWS CLI prints when the requested version no longer exists: NoSuchVersion on a
+# GET, 404/405 for a deleted key or a delete marker. Any other failure (a 400 such as a wrong Region
+# or a 403) is reported with the CLI's own message.
+_MISSING_VERSION_MARKERS = ("NoSuchVersion", "NoSuchKey", "(404)", "(405)", "MethodNotAllowed")
+
+
+def input_download_command(s3_uri: str, local_path: Path, version_id: str = "") -> list:
+    """The AWS CLI command that downloads the input file. With a version it reads that exact version
+    (`aws s3 cp` cannot take one); without one it is the plain copy of the current object. The key is
+    everything after the bucket, exactly as `aws s3 cp` reads it."""
+    if not version_id:
+        return ["aws", "s3", "cp", s3_uri, str(local_path), *manifest_io.s3_region_args(s3_uri)]
+    bucket, _, key = s3_uri[len("s3://"):].partition("/")
+    return ["aws", "s3api", "get-object", "--bucket", bucket, "--key", key, "--version-id", version_id,
+            str(local_path), *manifest_io.s3_region_args(s3_uri)]
+
+
+def download_from_s3(s3_uri: str, local_path: Path, version_id: str = "") -> None:
     """
     Download file from S3 using AWS CLI.
 
@@ -122,10 +158,14 @@ def download_from_s3(s3_uri: str, local_path: Path) -> None:
 
     logger.info(f"Downloading from S3: {s3_uri} -> {local_path}")
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "cp", s3_uri, str(local_path), *manifest_io.s3_region_args(s3_uri)],
+        input_download_command(s3_uri, local_path, version_id),
         capture_output=True, text=True
     )  # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
+        if version_id and any(marker in (result.stderr or "") for marker in _MISSING_VERSION_MARKERS):
+            raise RuntimeError(
+                f"The input file {s3_uri} at version {version_id} no longer exists; it was deleted "
+                f"after the run started.")
         raise RuntimeError(f"S3 download failed: {result.stderr}")
     logger.info(f"Downloaded {local_path.stat().st_size} bytes from S3")
 
@@ -201,7 +241,7 @@ def main():
         definition = load_pipeline_definition()
         # Each asset bucket's Region, so every S3 command below addresses the bucket where it is.
         manifest_io.register_bucket_regions(definition.get("bucketRegions"))
-        logger.info(f"Pipeline definition loaded: {json.dumps(definition, indent=2)}")
+        logger.info(f"Pipeline definition loaded: {describe_definition(definition)}")
 
         # Extract required fields. The model size is fixed per registered pipeline and supplied by
         # the job definition's MODEL_SIZE environment variable; a definition value overrides it.
@@ -209,6 +249,8 @@ def main():
         cosmos_prompt = definition.get("cosmosPrompt")
         input_parameters_prompt = definition.get("inputParametersPrompt")
         input_s3_asset_file_path = definition.get("inputS3AssetFilePath")
+        # The S3 version the input file is read at, recorded at launch; "" reads the current object.
+        input_version_id = definition.get("inputVersionId") or ""
         output_s3_asset_metadata_path = definition.get("outputS3AssetMetadataPath")
         output_s3_asset_files_path = definition.get("outputS3AssetFilesPath")
         asset_id = definition.get("assetId")
@@ -299,7 +341,7 @@ def main():
         input_filename = Path(parse_s3_uri(input_s3_asset_file_path)[1]).name
         input_file_path = INPUT_DIR / input_filename
 
-        download_from_s3(input_s3_asset_file_path, input_file_path)
+        download_from_s3(input_s3_asset_file_path, input_file_path, input_version_id)
 
         # Step 3: Run inference
         logger.info("=" * 80)

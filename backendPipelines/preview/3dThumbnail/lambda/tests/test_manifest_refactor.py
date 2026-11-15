@@ -44,6 +44,7 @@ os.environ.setdefault("STATE_MACHINE_LOG_GROUP_ARN",
 os.environ.setdefault("BATCH_JOB_LOG_GROUP_NAME", "/aws/batch/job")
 os.environ.setdefault("BATCH_JOB_LOG_GROUP_ARN",
                       "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job")
+# pragma: allowlist nextline secret
 os.environ.setdefault("BATCH_JOB_DEFINITION_NAME", "Preview3dThumbnailJobDefabc1234567")
 
 import manifestHelper as mh  # noqa: E402
@@ -540,6 +541,7 @@ class TestOpenPipelineRegistration:
             "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
             "logGroupName": "/aws/batch/job",
             "logStreamName": "",
+            # pragma: allowlist nextline secret
             "logStreamPrefix": "Preview3dThumbnailJobDefabc1234567/default/",
             "stageName": "Preview3dThumbnailBatchJob",
             "sourceType": "batch",

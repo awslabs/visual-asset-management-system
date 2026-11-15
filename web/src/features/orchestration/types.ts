@@ -6,7 +6,7 @@
 export type ExecutionType = "Lambda" | "SQS" | "EventBridge" | "DeadlineCloud";
 export type WaitForCallback = "Enabled" | "Disabled";
 export type InputFileArity = "none" | "one" | "multi";
-export type ConcurrencyRestriction = "none" | "perAsset" | "perInputFile";
+export type ConcurrencyRestriction = "none" | "perAsset" | "perInputFile" | "perInputFileVersion";
 export type OutputLocationType = "asset" | "none";
 export type ConfigFormat = "json" | "yaml" | "openjd" | "xml" | "raw";
 export type TagType = "string" | "integer" | "number" | "boolean" | "string-list" | "enum";
@@ -17,6 +17,10 @@ export type ExecutionStatus =
     | "FAILED"
     | "ABORTED"
     | "TIMED_OUT"
+    // A fileUpload trigger launch the workflow's concurrency restriction refused. One record per
+    // blocking run and lock counts every launch that run refused; it never ran, so it has no logs,
+    // no pipeline steps and nothing to abort.
+    | "SKIPPED"
     // Legacy terminal value. No row this module reads carries it — the v2.5 upgrade rewrites a stored
     // COMPLETE to SUCCEEDED before the row is written — so it is accepted and rendered as a success
     // only so an unmapped value from an older record cannot fall through as a blank status.
@@ -60,6 +64,8 @@ export interface Pipeline {
     description?: string;
     enabled?: boolean;
     archived?: boolean;
+    /** Shipped by a vamsSchema bundle; read-only through the API and UI except `enabled`. */
+    isSystem?: boolean;
     executionConfig: PipelineExecutionConfig;
     systemConfig?: PipelineSystemConfig;
     /** Count of saved templates for this pipeline (present on list + details responses). */
@@ -133,6 +139,8 @@ export interface Workflow {
     subDashboardUrl?: string;
     enabled?: boolean;
     archived?: boolean;
+    /** Shipped by a vamsSchema bundle; read-only through the API and UI except `enabled`. */
+    isSystem?: boolean;
     specifiedPipelines: SpecifiedPipelineRef[];
     systemConfig?: WorkflowSystemConfig;
     workflow_arn?: string;
@@ -241,6 +249,39 @@ export interface Execution {
     outputLocationType?: string;
     outputAssetId?: string;
     outputDatabaseId?: string;
+    // The output kinds the run produced, a subset of ["File","Metadata","Result"] (File->Metadata->
+    // Result order). Projected from the same configuration row; [] for a run that produced none and
+    // for a legacy run whose row predates the attribute. No output content is on the list.
+    outputTypes?: string[];
+    // Present only on a SKIPPED record: how many trigger launches the blocking run refused, the lock
+    // scope ("asset" | "assetFile" | "assetFileVersion") and the fixed reason the API returned.
+    skippedLaunchCount?: number;
+    skipScope?: string;
+    skipReason?: string;
+}
+
+/** One file a refused trigger launch named, in the details `skip` block. */
+export interface ExecutionSkipFile {
+    databaseId: string;
+    assetId: string;
+    inputAssetFileKey: string;
+    versionId?: string;
+}
+
+/**
+ * The details view's `skip` block, sent only for a SKIPPED execution. `blockingExecutionId` is set
+ * only when the API decided the caller may read that run; the page shows it as given and never infers
+ * it.
+ */
+export interface ExecutionSkip {
+    reason: string;
+    scope: string;
+    count: number;
+    firstSkippedDate: string;
+    lastSkippedDate: string;
+    files: ExecutionSkipFile[];
+    filesTruncated: boolean;
+    blockingExecutionId?: string;
 }
 
 /** Status of a registered sub-process or of one of its stages, as resolved by the details API. */
@@ -409,6 +450,8 @@ export interface ExecutionDetail extends Execution {
     truncatedCollections?: string[];
     // outputLocationType / outputAssetId / outputDatabaseId are inherited from Execution.
     outputFileBaseExecutionPathExtension?: string;
+    /** Why, how often and for which files a SKIPPED record's launches were refused. */
+    skip?: ExecutionSkip;
 }
 
 export interface ExecuteResponse {

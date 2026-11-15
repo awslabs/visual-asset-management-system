@@ -203,6 +203,7 @@ def _write_child_workspace(tmp_path, stand_in_main):
     (stub_aws / "__init__.py").write_text("", encoding="utf-8")
     (stub_aws / "s3.py").write_text(
         "def register_bucket_regions(bucket_regions):\n    pass\n\n\n"
+        "def register_input_version(bucket_name, object_key, version_id):\n    pass\n\n\n"
         "def client_for_bucket(bucket_name):\n    return None\n\n\n"
         "def region_routing_client():\n    return None\n",
         encoding="utf-8")

@@ -30,7 +30,6 @@ import {
     StatusIndicatorProps,
     Textarea,
     TextContent,
-    Toggle,
     Wizard,
     Multiselect,
     Form,
@@ -57,25 +56,40 @@ import { MetadataContainer } from "../../components/metadataV2";
 import Synonyms from "../../synonyms";
 import onSubmit, { onUploadRetry, UploadExecutionProps } from "./onSubmit";
 import DragDropFileUpload from "../../components/form/DragDropFileUpload";
+import UploadPreview, { blockingReason } from "../../components/form/UploadPreview";
+import {
+    FolderNameMode,
+    UploadRoot,
+    isSingleFolderSelection,
+    planUploadPaths,
+    removeFromRoots,
+} from "../../components/form/uploadPaths";
+import { plannedToUploadItems } from "./uploadSelection";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import { fetchDatabase, fetchTagsForAsset, fetchTagTypesForAsset } from "../../services/APIService";
 import { buildTagOptionGroups } from "../../common/utils/tagOptions";
-import { featuresEnabled } from "../../common/constants/featuresEnabled";
+import {
+    bindableSchemas,
+    fetchComplianceSchemas,
+    bindSchemaToAsset,
+} from "../../services/ComplianceService";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
+import type { SelectProps } from "@cloudscape-design/components";
 import { TagType } from "../Tag/TagType.interface";
 import { AssetLinksTab } from "../../components/asset/tabs/AssetLinksTab";
 import Alert from "@cloudscape-design/components/alert";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
-import { safeGetFile } from "../../utils/fileHandleCompat";
 import {
-    validateFiles,
-    formatValidationErrors,
     getPreviewFileExtension,
     isPreviewExtensionAllowed,
-    ValidationResult,
 } from "../../utils/fileExtensionValidation";
 import { usePageTitle } from "../../hooks/usePageTitle";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
+
+// Compliance routes behind the schema-binding field.
+const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
+const COMPLIANCE_BIND_ASSET_API_ROUTE = "/compliance/bind/{databaseId}/{assetId}";
 const assetOptions: { label: string; value: string }[] = [];
 let assetTags: string[] = [];
 
@@ -106,12 +120,16 @@ export class AssetDetail {
     };
     key?: string;
     isDistributable?: boolean;
+    complianceSchemaName?: string;
     specifiedPipelines?: string[];
     previewLocation?: {
         Key?: string;
     };
     Asset?: FileUploadTableItem[];
-    DirectoryHandle?: any;
+    /** Create Asset: what the user added; Asset holds the files derived from it (#1462). */
+    UploadRoots?: UploadRoot[];
+    /** Create Asset: the single-folder override ("auto" = the flow's default). */
+    folderNameMode?: FolderNameMode;
     Preview?: File | null;
 }
 
@@ -194,9 +212,9 @@ type UpdateAssetPreview = {
     payload: File | null;
 };
 
-type UpdateAssetDirectoryHandle = {
-    type: "UPDATE_ASSET_DIRECTORY_HANDLE";
-    payload: any;
+type UpdateAssetUploadSelection = {
+    type: "UPDATE_ASSET_UPLOAD_SELECTION";
+    payload: { roots: UploadRoot[]; folderNameMode: FolderNameMode };
 };
 
 type UpdateAssetFiles = {
@@ -219,6 +237,11 @@ type UpdateAssetIsMultiFile = {
     payload: boolean;
 };
 
+type UpdateAssetComplianceSchema = {
+    type: "UPDATE_ASSET_COMPLIANCE_SCHEMA";
+    payload: string | undefined;
+};
+
 type AssetDetailAction =
     | UpdateAssetIdAction
     | UpdateAssetDatabaseAction
@@ -233,13 +256,14 @@ type AssetDetailAction =
     | UpdateAssetPipelines
     | UpdateAssetPreviewLocation
     | UpdateAssetPreview
-    | UpdateAssetDirectoryHandle
+    | UpdateAssetUploadSelection
     | UpdateAssetFiles
     | UpdateAssetName
     | UpdateAssetKey
-    | UpdateAssetIsMultiFile;
+    | UpdateAssetIsMultiFile
+    | UpdateAssetComplianceSchema;
 
-const assetDetailReducer = (
+export const assetDetailReducer = (
     assetDetailState: AssetDetail,
     assetDetailAction: AssetDetailAction
 ): AssetDetail => {
@@ -311,10 +335,11 @@ const assetDetailReducer = (
                 Preview: assetDetailAction.payload,
             };
 
-        case "UPDATE_ASSET_DIRECTORY_HANDLE":
+        case "UPDATE_ASSET_UPLOAD_SELECTION":
             return {
                 ...assetDetailState,
-                DirectoryHandle: assetDetailAction.payload,
+                UploadRoots: assetDetailAction.payload.roots,
+                folderNameMode: assetDetailAction.payload.folderNameMode,
             };
 
         case "UPDATE_ASSET_FILES":
@@ -338,6 +363,11 @@ const assetDetailReducer = (
             return {
                 ...assetDetailState,
                 isMultiFile: assetDetailAction.payload,
+            };
+        case "UPDATE_ASSET_COMPLIANCE_SCHEMA":
+            return {
+                ...assetDetailState,
+                complianceSchemaName: assetDetailAction.payload,
             };
         default:
             return assetDetailState;
@@ -454,6 +484,37 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [routeDatabaseId]);
+
+    // Compliance schema binding: the field is shown only when the caller may list schemas and
+    // bind one to the new asset.
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canBindComplianceSchema =
+        canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
+        canCallRoute("PUT", COMPLIANCE_BIND_ASSET_API_ROUTE);
+    const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
+    const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
+    const [loadingSchemas, setLoadingSchemas] = useState(false);
+
+    useEffect(() => {
+        if (!canBindComplianceSchema) return;
+        const loadSchemas = async () => {
+            setLoadingSchemas(true);
+            const [success, result] = await fetchComplianceSchemas(
+                assetDetailState?.databaseId || undefined
+            );
+            if (success && Array.isArray(result)) {
+                setSchemaOptions(
+                    bindableSchemas(result).map((s) => ({
+                        label: s.schemaName,
+                        value: s.schemaName,
+                        description: s.description,
+                    }))
+                );
+            }
+            setLoadingSchemas(false);
+        };
+        loadSchemas();
+    }, [canBindComplianceSchema, assetDetailState?.databaseId]);
 
     useEffect(() => {
         if (!assetDetailState.tags) {
@@ -642,6 +703,31 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
                         data-testid="database-selector"
                     />
                 </FormField>
+
+                {canBindComplianceSchema && (
+                    <FormField
+                        label="Compliance Schema"
+                        description={`Override the ${Synonyms.database}-level compliance schema for this ${Synonyms.asset}. Leave empty to inherit from the ${Synonyms.database}. Offered: the GLOBAL schemas and those available to the chosen ${Synonyms.database} only.`}
+                        constraintText={`Optional. ${Synonyms.Asset}-level binding overrides ${Synonyms.database}-level.`}
+                    >
+                        <Select
+                            selectedOption={selectedSchema}
+                            onChange={({ detail }) => {
+                                setSelectedSchema(detail.selectedOption);
+                                assetDetailDispatch({
+                                    type: "UPDATE_ASSET_COMPLIANCE_SCHEMA",
+                                    payload: detail.selectedOption.value || undefined,
+                                });
+                            }}
+                            options={schemaOptions}
+                            placeholder={`Inherit from ${Synonyms.database}`}
+                            loadingText="Loading schemas"
+                            statusType={loadingSchemas ? "loading" : "finished"}
+                            filteringType="auto"
+                            data-testid="asset-compliance-schema"
+                        />
+                    </FormField>
+                )}
 
                 <FormField
                     label={
@@ -964,47 +1050,7 @@ const AssetMetadataInfo = ({
     );
 };
 
-const getFilesFromFileHandles = async (fileHandles: any[]) => {
-    const fileUploadTableItems: FileUploadTableItem[] = [];
-    for (let i = 0; i < fileHandles.length; i++) {
-        try {
-            // Use our safe utility to get the file regardless of handle type
-            const file = await safeGetFile(fileHandles[i].handle);
-            fileUploadTableItems.push({
-                handle: fileHandles[i].handle,
-                index: i,
-                name: fileHandles[i].handle.name || file.name,
-                size: file.size,
-                relativePath: fileHandles[i].path,
-                progress: 0,
-                status: "Queued",
-                loaded: 0,
-                total: file.size,
-            });
-        } catch (error) {
-            // Console logging only: a % specifier in the interpolated value can at most garble this
-            // one log line; nothing is executed, stored or returned from it.
-            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
-            console.error(`Error processing file at index ${i}:`, error);
-            // Add a placeholder entry with error status
-            fileUploadTableItems.push({
-                handle: fileHandles[i].handle,
-                index: i,
-                name: fileHandles[i].handle.name || `File ${i}`,
-                size: 0,
-                relativePath: fileHandles[i].path || "",
-                progress: 0,
-                status: "Failed",
-                loaded: 0,
-                total: 0,
-                error: "Browser compatibility issue: Cannot access file",
-            });
-        }
-    }
-    return fileUploadTableItems;
-};
-
-const AssetFileInfo = ({
+export const AssetFileInfo = ({
     setFileUploadTableItems,
     setValid,
     showErrors,
@@ -1015,11 +1061,45 @@ const AssetFileInfo = ({
 }) => {
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState, assetDetailDispatch } = assetDetailContext;
-    const [selectionMode, setSelectionMode] = useState<"folder" | "files" | "both">(
-        assetDetailState.isMultiFile ? "folder" : "files"
-    );
     const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
-    const [fileValidationResult, setFileValidationResult] = useState<ValidationResult | null>(null);
+    const restriction = assetDetailState.restrictFileUploadsToExtensions;
+
+    // The selection (what the user added) lives in the wizard state so it survives moving between
+    // steps; the final paths are always derived from the whole selection (uploadPaths.ts).
+    const roots = useMemo(() => assetDetailState.UploadRoots || [], [assetDetailState.UploadRoots]);
+    const folderNameMode = assetDetailState.folderNameMode || "auto";
+    const planned = useMemo(
+        () =>
+            planUploadPaths(roots, {
+                flow: "createAsset",
+                destination: "/",
+                folderNameMode,
+                restrictFileUploadsToExtensions: restriction,
+            }),
+        [roots, folderNameMode, restriction]
+    );
+
+    const applySelection = (nextRoots: UploadRoot[], nextMode: FolderNameMode) => {
+        // The override only applies to a single folder; reset it once the selection changes shape.
+        const mode = isSingleFolderSelection(nextRoots) ? nextMode : "auto";
+        const items = plannedToUploadItems(
+            planUploadPaths(nextRoots, {
+                flow: "createAsset",
+                destination: "/",
+                folderNameMode: mode,
+            })
+        );
+        assetDetailDispatch({
+            type: "UPDATE_ASSET_UPLOAD_SELECTION",
+            payload: { roots: nextRoots, folderNameMode: mode },
+        });
+        assetDetailDispatch({ type: "UPDATE_ASSET_FILES", payload: items });
+        assetDetailDispatch({
+            type: "UPDATE_ASSET_IS_MULTI_FILE",
+            payload: items.length > 1 || nextRoots.some((r) => r.kind === "folder"),
+        });
+        setFileUploadTableItems(items);
+    };
 
     // Check for preview files in the selected files
     const hasPreviewFiles = useMemo(() => {
@@ -1027,51 +1107,14 @@ const AssetFileInfo = ({
         return assetDetailState.Asset.some((item) => item.name.includes(PREVIEW_FILE_PATTERN));
     }, [assetDetailState.Asset]);
 
-    // Validate files whenever Asset files or restrictions change
+    const pathErrorReason = blockingReason(planned);
+
+    // Every row error blocks the step: duplicate and invalid paths, and files the database's
+    // extension restriction refuses (the planner applies the same rule as validateFiles).
     useEffect(() => {
-        if (assetDetailState.Asset && assetDetailState.Asset.length > 0) {
-            const validationResult = validateFiles(
-                assetDetailState.Asset,
-                assetDetailState.restrictFileUploadsToExtensions
-            );
-            setFileValidationResult(validationResult);
-            // Set valid to false if there are validation errors
-            setValid(validationResult.isValid);
-        } else {
-            // No files selected, clear validation and set as valid
-            setFileValidationResult(null);
-            setValid(true);
-        }
+        setValid(!pathErrorReason);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [assetDetailState.Asset, assetDetailState.restrictFileUploadsToExtensions]);
-
-    // Function to remove a file
-    const handleRemoveFile = (index: number) => {
-        if (assetDetailState.Asset) {
-            const updatedFiles = assetDetailState.Asset.filter((item) => item.index !== index);
-
-            // Update indices to be sequential
-            const reindexedFiles = updatedFiles.map((item, idx) => ({
-                ...item,
-                index: idx,
-            }));
-
-            setFileUploadTableItems(reindexedFiles);
-            assetDetailDispatch({
-                type: "UPDATE_ASSET_FILES",
-                payload: reindexedFiles,
-            });
-        }
-    };
-
-    // Function to remove all files
-    const handleRemoveAllFiles = () => {
-        setFileUploadTableItems([]);
-        assetDetailDispatch({
-            type: "UPDATE_ASSET_FILES",
-            payload: [],
-        });
-    };
+    }, [pathErrorReason]);
 
     // Function to handle preview file selection with size and extension validation
     const handlePreviewFileSelection = (file: File | null) => {
@@ -1130,30 +1173,6 @@ const AssetFileInfo = ({
                         </Alert>
                     )}
 
-                {/* Display file extension validation errors */}
-                {fileValidationResult && !fileValidationResult.isValid && (
-                    <Alert header="Invalid Files Selected" type="error">
-                        <SpaceBetween direction="vertical" size="xs">
-                            <div>The following files cannot be uploaded:</div>
-                            <ul style={{ marginTop: "8px", marginBottom: "8px" }}>
-                                {fileValidationResult.invalidFiles.map((file, index) => (
-                                    <li key={index}>
-                                        <strong>{file.fileName}</strong> -{" "}
-                                        {file.errorMessage ||
-                                            `Extension ${file.extension} not allowed`}
-                                    </li>
-                                ))}
-                            </ul>
-                            {fileValidationResult.allowedExtensions !== null && (
-                                <div>
-                                    <strong>Allowed extensions:</strong>{" "}
-                                    {fileValidationResult.allowedExtensions.join(", ")}
-                                </div>
-                            )}
-                        </SpaceBetween>
-                    </Alert>
-                )}
-
                 <Alert header="Preview File Information" type="info">
                     <p>
                         Files with <strong>{PREVIEW_FILE_PATTERN}</strong> in the filename will be
@@ -1192,94 +1211,15 @@ const AssetFileInfo = ({
                     <Grid
                         gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}
                     >
-                        <SpaceBetween direction="vertical" size="m">
-                            <FormField
-                                label={`${Synonyms.Asset} Files`}
-                                description={
-                                    assetDetailState.Asset
-                                        ? `Total Files to Upload: ${assetDetailState.Asset.length}`
-                                        : "Select a folder or multiple files (optional)"
-                                }
-                            >
-                                <SpaceBetween direction="vertical" size="xs">
-                                    <Toggle
-                                        onChange={({ detail }) => {
-                                            assetDetailDispatch({
-                                                type: "UPDATE_ASSET_IS_MULTI_FILE",
-                                                payload: detail.checked,
-                                            });
-                                            setSelectionMode(detail.checked ? "folder" : "files");
-                                        }}
-                                        checked={assetDetailState.isMultiFile}
-                                    >
-                                        {assetDetailState.isMultiFile
-                                            ? "Folder Upload"
-                                            : "File Upload"}
-                                    </Toggle>
-
-                                    <DragDropFileUpload
-                                        label=""
-                                        description=""
-                                        multiFile={true}
-                                        selectionMode={selectionMode}
-                                        onSelect={async (
-                                            directoryHandle: any,
-                                            fileHandles: any[]
-                                        ) => {
-                                            // Get new files from the file handles
-                                            const newFiles = await getFilesFromFileHandles(
-                                                fileHandles
-                                            );
-
-                                            // Combine with existing files if any exist
-                                            let combinedFiles = newFiles;
-                                            if (
-                                                assetDetailState.Asset &&
-                                                assetDetailState.Asset.length > 0
-                                            ) {
-                                                // Create a map of existing file paths to avoid duplicates
-                                                const existingFilePaths = new Map(
-                                                    assetDetailState.Asset.map((item) => [
-                                                        item.relativePath,
-                                                        item,
-                                                    ])
-                                                );
-
-                                                // Filter out any new files that would be duplicates
-                                                const uniqueNewFiles = newFiles.filter(
-                                                    (file) =>
-                                                        !existingFilePaths.has(file.relativePath)
-                                                );
-
-                                                // Combine existing files with unique new files
-                                                const existingFiles = [...assetDetailState.Asset];
-                                                combinedFiles = [
-                                                    ...existingFiles,
-                                                    ...uniqueNewFiles.map((file, idx) => ({
-                                                        ...file,
-                                                        index: existingFiles.length + idx,
-                                                    })),
-                                                ];
-                                            }
-
-                                            setFileUploadTableItems(combinedFiles);
-                                            assetDetailDispatch({
-                                                type: "UPDATE_ASSET_DIRECTORY_HANDLE",
-                                                payload: directoryHandle,
-                                            });
-                                            assetDetailDispatch({
-                                                type: "UPDATE_ASSET_FILES",
-                                                payload: combinedFiles,
-                                            });
-                                            assetDetailDispatch({
-                                                type: "UPDATE_ASSET_IS_MULTI_FILE",
-                                                payload: !!directoryHandle,
-                                            });
-                                        }}
-                                    />
-                                </SpaceBetween>
-                            </FormField>
-                        </SpaceBetween>
+                        <DragDropFileUpload
+                            label={`${Synonyms.Asset} Files`}
+                            description={
+                                planned.length > 0
+                                    ? `Total Files to Upload: ${planned.length}`
+                                    : "Add files, a folder, or drop several at once (optional). A single folder added on its own becomes the asset's contents."
+                            }
+                            onAdd={(added) => applySelection([...roots, ...added], folderNameMode)}
+                        />
 
                         <FileUpload
                             label={`${Synonyms.Asset} Overall Preview File (Optional)`}
@@ -1294,17 +1234,20 @@ const AssetFileInfo = ({
                     </Grid>
                 </Container>
 
-                {/* Display selected files with remove option */}
-                {assetDetailState.Asset && assetDetailState.Asset.length > 0 && (
+                {/* Every file's final asset path, before the upload starts */}
+                {planned.length > 0 && (
                     <Box padding={{ bottom: "l" }}>
-                        <FileUploadTable
-                            allItems={assetDetailState.Asset}
-                            resume={false}
-                            showCount={true}
-                            allowRemoval={true}
-                            onRemoveItem={handleRemoveFile}
-                            onRemoveAll={handleRemoveAllFiles}
-                            displayMode="selection"
+                        <UploadPreview
+                            flow="createAsset"
+                            destination="/"
+                            roots={roots}
+                            planned={planned}
+                            folderNameMode={folderNameMode}
+                            onFolderNameModeChange={(mode) => applySelection(roots, mode)}
+                            onRemove={(ids) =>
+                                applySelection(removeFromRoots(roots, ids), folderNameMode)
+                            }
+                            onRemoveAll={() => applySelection([], "auto")}
                         />
                     </Box>
                 )}
@@ -1598,8 +1541,19 @@ const UploadForm = () => {
                         assetDetail={assetDetailState}
                         metadata={metadata}
                         fileItems={fileUploadTableItems}
-                        onComplete={(response) => {
+                        onComplete={async (response) => {
                             console.log("Upload completed:", response);
+                            if (
+                                assetDetailState.complianceSchemaName &&
+                                assetDetailState.databaseId &&
+                                response.assetId
+                            ) {
+                                await bindSchemaToAsset(
+                                    assetDetailState.databaseId,
+                                    response.assetId,
+                                    assetDetailState.complianceSchemaName
+                                );
+                            }
                             // Remove window beforeunload handler
                             window.onbeforeunload = null;
                         }}

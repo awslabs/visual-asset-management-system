@@ -22,6 +22,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from common.batchItemFailures import (
     all_batch_item_failures,
     batch_item_identifier,
@@ -37,6 +38,7 @@ from common.syncTracking import (
     write_outbound_sync_record,
 )
 from common.validators import validate
+from common.eventLogSummary import event_log_summary
 from common.dynamodb import query_all_items
 from models.common import VAMSGeneralErrorResponse
 
@@ -73,8 +75,14 @@ def live_database_id(database_id: str) -> str:
 
 def _record_sync(object_type, action, success, database_id, asset_id=None,
                  file_path=None, s3_version_id=None, entity_id=None):
-    """Best-effort outbound sync tracking record. Success means the entity was
-    queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    """Best-effort outbound sync tracking record, and the audit record of this one entity. Success
+    means the entity was queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    ctx = current_audit_context()
+    if ctx is not None:
+        log_action(ctx.event, "garnetDatabaseSync", outcome="success" if success else "failed",
+                   reason=None if success else "internal", database_id=database_id, asset_id=asset_id,
+                   file_path=file_path, details={"operation": action, "objectType": object_type,
+                                                 "entityId": entity_id})
     write_outbound_sync_record(
         object_type,
         database_id,
@@ -440,8 +448,11 @@ def send_to_garnet_ingestion_queue(ngsi_ld_entity: Dict[str, Any]) -> bool:
         True if successful, False otherwise
     """
     try:
-        # Log the entity being sent (use decimal_to_number for logging)
-        logger.info(f"Sending NGSI-LD entity to Garnet ingestion queue: {json.dumps(ngsi_ld_entity, indent=2, default=decimal_to_number)}")
+        # Name the entity, never its attribute values: they are the asset's field and metadata values
+        logger.info(
+            f"Sending NGSI-LD entity {ngsi_ld_entity.get('id')} ({ngsi_ld_entity.get('type')}, "
+            f"{len(ngsi_ld_entity)} field(s)) to Garnet ingestion queue"
+        )
         
         # Send NGSI-LD entity directly to SQS queue (use decimal_to_number for serialization)
         response = sqs.send_message(
@@ -631,6 +642,8 @@ def handle_database_metadata_stream(event_record: Dict[str, Any]) -> bool:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     """
     Lambda handler for Garnet Framework database indexing.
@@ -639,7 +652,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     Processes SQS events containing SNS messages with DynamoDB stream records.
     """
     try:
-        logger.info(f"Processing database indexing event: {json.dumps(event, default=str)}")
+        logger.info(f"Processing database indexing event: {event_log_summary(event)}")
         
         successful_records = 0
         failed_records = 0

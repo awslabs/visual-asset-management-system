@@ -7,7 +7,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, normalize_userid, object_name_pattern, trim_name
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="RoleModels")
+logger = safeLogger()
 
 # Bounds on constraint collections. Each criterion becomes a clause in the Casbin
 # obj_rule expression evaluated on every authorization check, and each unique
@@ -90,6 +90,29 @@ def _reject_regex_operator_on_list_field(field, operator):
             f"compare. Use 'is_one_of' or 'is_not_one_of' instead.")
 
 
+def deployed_object_type_error(object_type):
+    """The message refusing a constraint ``objectType`` this deployment does not offer, or None.
+
+    The allowed values named are the ones ``GET /auth/constraints/permissionObjects`` lists: an add-on
+    type only when the deployment publishes the switch the type is offered under
+    (``common/addonFeatures.py``), the add-on's own or that of one of its optional features. A type
+    whose switch is not published is refused with a sentence saying so, covering both cases; its name
+    is echoed only after it matched a declared add-on type, so the message carries no caller text.
+    Constraints already stored with such a type are not touched: they still read, list and delete, and
+    apply again once the add-on or feature is enabled.
+    """
+    from common.addonFeatures import constraint_object_type_addon_feature, constraint_object_type_deployed
+    from common.constants import ALLOWED_CONSTRAINT_OBJECT_TYPES
+
+    if object_type in ALLOWED_CONSTRAINT_OBJECT_TYPES and constraint_object_type_deployed(object_type):
+        return None
+    if object_type in ALLOWED_CONSTRAINT_OBJECT_TYPES and constraint_object_type_addon_feature(object_type):
+        return (f"Invalid objectType. '{object_type}' belongs to an add-on, or an optional add-on feature, "
+                "that is not enabled on this deployment.")
+    offered = [name for name in ALLOWED_CONSTRAINT_OBJECT_TYPES if constraint_object_type_deployed(name)]
+    return f"Invalid objectType. Allowed values: {', '.join(offered)}"
+
+
 ######################## Constraint API Models ##########################
 
 class ConstraintCriteriaModel(BaseModel, extra='ignore'):
@@ -125,7 +148,7 @@ class ConstraintCriteriaModel(BaseModel, extra='ignore'):
                     "character")
         return value
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_criteria_value(cls, values):
         """Bound each criteria value and require it to be a usable regex.
 
@@ -197,6 +220,26 @@ class GetConstraintsRequestModel(BaseModel, extra='ignore'):
     startingToken: Optional[str] = Field(None, max_length=MAX_LIST_TOKEN_LENGTH)
 
 
+def _validate_constraint_criteria_value(field_name: str, value) -> None:
+    """Run REGEX validation on a constraint value.
+
+    List values must be checked element-wise: str(list) yields "['a', 'b']", which
+    fails REGEX even when every element is a valid OBJECT_NAME / ID string.
+    """
+    values = value if isinstance(value, list) else [value]
+    for item in values:
+        (valid, message) = validate({
+            field_name: {
+                'value': item if isinstance(item, str) else str(item),
+                'validator': 'REGEX',
+                'allowGlobalKeyword': True
+            }
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
+
 class CreateConstraintRequestModel(BaseModel, extra='ignore'):
     """Request model for creating/updating a constraint"""
     identifier: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
@@ -214,14 +257,13 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate constraint fields"""
         # Import here to avoid circular dependency
         from common.constants import (
             ALLOWED_CONSTRAINT_PERMISSIONS,
             ALLOWED_CONSTRAINT_PERMISSION_TYPES,
-            ALLOWED_CONSTRAINT_OBJECT_TYPES,
             ALLOWED_CONSTRAINT_OPERATORS,
             get_constraint_fields_for_object_type
         )
@@ -259,10 +301,11 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
             logger.error(message)
             raise ValueError(message)
         
-        # Validate objectType
+        # Validate objectType: a type this deployment offers (an add-on type only with its add-on or
+        # optional feature)
         object_type = values.get('objectType')
-        if object_type not in ALLOWED_CONSTRAINT_OBJECT_TYPES:
-            message = f"Invalid objectType. Allowed values: {', '.join(ALLOWED_CONSTRAINT_OBJECT_TYPES)}"
+        message = deployed_object_type_error(object_type)
+        if message:
             logger.error(message)
             raise ValueError(message)
 
@@ -297,17 +340,8 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
                 logger.error(message)
                 raise ValueError(message)
             
-            # Validate regex pattern in value
-            (valid, message) = validate({
-                'criteriaAndValue': {
-                    'value': criteria.value if isinstance(criteria.value, str) else str(criteria.value),
-                    'validator': 'REGEX',
-                    'allowGlobalKeyword': True
-                }
-            })
-            if not valid:
-                logger.error(message)
-                raise ValueError(message)
+            # Validate regex pattern in value (per list element — see #838)
+            _validate_constraint_criteria_value('criteriaAndValue', criteria.value)
         
         # Validate criteriaOr operators and values
         for criteria in criteria_or:
@@ -316,17 +350,8 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
                 logger.error(message)
                 raise ValueError(message)
             
-            # Validate regex pattern in value
-            (valid, message) = validate({
-                'criteriaOrValue': {
-                    'value': criteria.value if isinstance(criteria.value, str) else str(criteria.value),
-                    'validator': 'REGEX',
-                    'allowGlobalKeyword': True
-                }
-            })
-            if not valid:
-                logger.error(message)
-                raise ValueError(message)
+            # Validate regex pattern in value (per list element — see #838)
+            _validate_constraint_criteria_value('criteriaOrValue', criteria.value)
         
         # Validate groupPermissions
         for group_perm in values.get('groupPermissions', []):
@@ -517,13 +542,12 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
         """The template header, from ``metadata`` or ``template``."""
         return self.metadata or self.template
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_template_import(cls, values):
         """Validate template import request"""
         from common.constants import (
             ALLOWED_CONSTRAINT_PERMISSIONS,
             ALLOWED_CONSTRAINT_PERMISSION_TYPES,
-            ALLOWED_CONSTRAINT_OBJECT_TYPES,
             ALLOWED_CONSTRAINT_OPERATORS,
             get_constraint_fields_for_object_type
         )
@@ -586,11 +610,11 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
             raise ValueError("At least one constraint is required")
 
         for constraint in constraints:
-            # Validate objectType
-            if constraint.objectType not in ALLOWED_CONSTRAINT_OBJECT_TYPES:
-                raise ValueError(
-                    f"Invalid objectType. Allowed values: {', '.join(ALLOWED_CONSTRAINT_OBJECT_TYPES)}"
-                )
+            # Validate objectType: a type this deployment offers (an add-on type only with its add-on or
+            # optional feature)
+            message = deployed_object_type_error(constraint.objectType)
+            if message:
+                raise ValueError(message)
 
             # Validate each criterion's field is valid for the constraint's objectType
             valid_fields = get_constraint_fields_for_object_type(constraint.objectType)
@@ -659,7 +683,7 @@ class CreateRoleRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate role fields"""
         # Import here to avoid circular dependency
@@ -751,7 +775,7 @@ class UpdateRoleRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate role fields"""
         # Import here to avoid circular dependency
@@ -874,7 +898,7 @@ class CreateUserRolesRequestModel(BaseModel, extra='ignore'):
     _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
     _trim_role_names = validator('roleName', pre=True, each_item=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate user role fields"""
         # The user-role row keys on this id, so the normalized form is what is validated and stored
@@ -920,7 +944,7 @@ class UpdateUserRolesRequestModel(BaseModel, extra='ignore'):
     _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
     _trim_role_names = validator('roleName', pre=True, each_item=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate user role fields"""
         # The user-role row keys on this id, so the normalized form is what is validated and stored
@@ -964,7 +988,7 @@ class DeleteUserRolesRequestModel(BaseModel, extra='ignore'):
 
     _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate user role fields"""
         # The user-role row keys on this id, so the normalized form is what is validated and stored

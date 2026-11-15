@@ -15,8 +15,11 @@ that "value is data, not code" is actually enforced, and so the eval()'d matcher
 steered by constraint authors.
 """
 
+import ast
+import re
+
 import pytest
-from casbin import FastEnforcer, model
+from casbin import FastEnforcer, model, util
 from casbin.persist.adapters import string_adapter
 
 from backend.backend.handlers.authz import CasbinEnforcerService
@@ -112,8 +115,9 @@ class TestCasbinExpressionInjection:
         standalone expression terms (which previously forced a constant result)."""
         rule = _single_rule("databaseId", "is_not_one_of", "x' or True or 'x")
         # The generated rule must contain the escaped literal, not a bare `or True or`
-        # operating at expression scope.
-        assert "\\'" in rule, f"value was not escaped in rule: {rule!r}"
+        # operating at expression scope: each quote of the payload is one more source escape.
+        assert "\\x27" in rule, f"value was not escaped in rule: {rule!r}"
+        assert rule.count("'") == 2, f"a quote other than the literal's own reached the rule: {rule!r}"
 
     def test_equals_regex_breakout_is_neutralized(self):
         rule = _single_rule(
@@ -158,3 +162,122 @@ class TestLegitimateConstraintsStillWork:
         enforcer = _build_enforcer_from_obj_rule(rule)
         assert _enforce(enforcer, "public-data") is True
         assert _enforce(enforcer, "secret-data") is False
+
+
+# Values that try to end the literal, or to smuggle in text that would become source when the rule
+# is parsed: quotes of every kind, backslashes (trailing, doubled, before a quote), the TEXT of an
+# escape sequence, an apostrophe written as an escape the parser would decode, look-alike quote
+# characters, NUL / newline, an astral character and a lone surrogate beside a quote, and the 2.5.2
+# payloads.
+ENCODING_BREAKOUT_PAYLOADS = (
+    "' or True or '",
+    "''' or True or '''",
+    '" or True or "',
+    "') or True or ('",
+    "\\' or True or \\'",
+    "\\\\' or True or '",
+    "abc\\",
+    "\\",
+    "\\\\",
+    "\\x27) or True or (\\x27",
+    "\\x5c' or True or '",
+    "\\u0027 or True or \\u0027",
+    "\\U00000027 or True",
+    "\\N{APOSTROPHE} or True or \\N{APOSTROPHE}",
+    "\\'",
+    "%27) or True or (%27",
+    "x' + 'y",
+    "\u02bc or True or \u02bc",
+    "\uff07 or True or \uff07",
+    "x\x00' or True or 'x",
+    "'\n or True or '",
+    "\U0001d4b3' or True or '",
+    "\ud800' or True or '",
+    "x' or True or 'x",
+    ".') or True or regexMatch(r.obj.databaseId, '.",
+)
+
+ALL_OPERATORS = ("equals", "contains", "does_not_contain", "starts_with", "ends_with", "is_one_of",
+                 "is_not_one_of")
+REGEX_WRAPPERS = {
+    "equals": lambda v: "^" + v + r"\Z",
+    "contains": lambda v: "(?s:.*)" + v + "(?s:.*)",
+    "does_not_contain": lambda v: "(?s:.*)" + v + "(?s:.*)",
+    "starts_with": lambda v: "^" + v + ".*",
+    "ends_with": lambda v: "(?s:.*)" + v + r"\Z",
+}
+# The same wrappers as they appear in the rule SOURCE (the end anchor is written with two
+# backslashes).
+SOURCE_WRAPPERS = {
+    "equals": ("^", "\\\\Z"),
+    "contains": ("(?s:.*)", "(?s:.*)"),
+    "does_not_contain": ("(?s:.*)", "(?s:.*)"),
+    "starts_with": ("^", ".*"),
+    "ends_with": ("(?s:.*)", "\\\\Z"),
+    "is_one_of": ("", ""),
+    "is_not_one_of": ("", ""),
+}
+ESCAPES_ONLY = re.compile(r"(?:\\x[0-9a-f]{2}|\\u[0-9a-f]{4}|\\U[0-9a-f]{8})+")
+
+
+def _compiled_rule_tree(rule):
+    """The syntax tree Casbin evaluates for ``rule``: its text rewrites, then the parse."""
+    text = util.escape_assertion(rule)
+    text = text.replace("&&", "and").replace("||", "or").replace("!", "not")
+    return ast.parse(text.strip()).body[0].value
+
+
+@pytest.mark.unit
+class TestEscapedValueStaysOneLiteral:
+    """Every character of a value is written as a source escape. Nothing in a value -- including the
+    text of an escape sequence -- can end its literal, add expression syntax, or reach the compiled
+    rule as anything but the value itself."""
+
+    @pytest.mark.parametrize("operator", ALL_OPERATORS)
+    @pytest.mark.parametrize("payload", ENCODING_BREAKOUT_PAYLOADS)
+    def test_the_rule_holds_one_literal_that_is_exactly_the_value(self, operator, payload):
+        rule = _single_rule("databaseId", operator, payload)
+        assert rule.count("'") == 2, f"a quote other than the literal's own reached the rule: {rule!r}"
+        literal = rule[rule.index("'") + 1:rule.rindex("'")]
+        prefix, suffix = SOURCE_WRAPPERS[operator]
+        assert literal.startswith(prefix) and literal.endswith(suffix), rule
+        assert ESCAPES_ONLY.fullmatch(literal[len(prefix):len(literal) - len(suffix)]), rule
+
+        tree = _compiled_rule_tree(rule)
+        constants = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)]
+        expected = REGEX_WRAPPERS[operator](payload) if operator in REGEX_WRAPPERS else payload
+        assert constants == [expected], (rule, constants)
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        names = [node.id for node in ast.walk(tree) if isinstance(node, ast.Name)]
+        if operator in REGEX_WRAPPERS:
+            assert len(calls) == 1 and calls[0].func.id == "regexMatch", rule
+            assert names == ["regexMatch", "r_obj"], rule
+        else:
+            assert calls == [] and names == ["r_obj"], rule
+
+    @pytest.mark.parametrize("operator", ALL_OPERATORS)
+    @pytest.mark.parametrize("payload", ENCODING_BREAKOUT_PAYLOADS)
+    def test_the_decision_is_the_raw_value_decision(self, operator, payload):
+        rule = _single_rule("databaseId", operator, payload)
+        enforcer = _build_enforcer_from_obj_rule(rule)
+        for entity in ("some-unrelated-database", payload, "pre-" + payload + "-tail", ""):
+            try:
+                if operator in REGEX_WRAPPERS:
+                    hit = re.match(REGEX_WRAPPERS[operator](payload), entity) is not None
+                else:
+                    hit = payload in entity
+                expected = (not hit) if operator in ("does_not_contain", "is_not_one_of") else hit
+            except re.error:
+                expected = False  # an unusable pattern denies
+            assert _enforce(enforcer, entity) is expected, (operator, payload, entity, rule)
+
+    def test_an_unrelated_resource_is_granted_only_where_the_value_itself_matches_it(self):
+        granted = []
+        for payload in ENCODING_BREAKOUT_PAYLOADS:
+            for operator in ("equals", "contains", "starts_with", "ends_with", "is_one_of"):
+                enforcer = _build_enforcer_from_obj_rule(_single_rule("databaseId", operator, payload))
+                if _enforce(enforcer, "some-unrelated-database") is not False:
+                    granted.append((operator, payload))
+        # A lone backslash makes the starts_with pattern '^\.*' -- zero or more literal dots --
+        # which matches every string: the value's own regex meaning, not a way out of the literal.
+        assert granted == [("starts_with", "\\")]

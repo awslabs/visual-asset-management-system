@@ -7,7 +7,8 @@ import json
 import base64
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import timedelta
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
@@ -22,13 +23,15 @@ from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE
+from customLogging.auditLogging import audited_handler, log_action
+from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record, asset_authorization_object, ARCHIVED_ASSET_DATABASE_SUFFIX
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
     VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
     normalize_history_file_path,
 )
+from common.assetProvenance import asset_edit_provenance
 from common.assetHistory import (
     CHANGE_SOURCE_EDIT,
     CHANGE_SOURCE_ARCHIVE,
@@ -257,9 +260,16 @@ def send_subscription_email(database_id, asset_id):
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
 def _current_version_key(asset):
-    """Primary key of the asset's current-version row in the versions table"""
+    """Primary key of the asset's current-version row in the versions table.
+
+    An archived record is stored under "<databaseId>#deleted" while its versions stay keyed by
+    the original database id, so the suffix is removed from the key.
+    """
+    database_id = str(asset['databaseId'])
+    while database_id.endswith(ARCHIVED_ASSET_DATABASE_SUFFIX):
+        database_id = database_id[:-len(ARCHIVED_ASSET_DATABASE_SUFFIX)]
     return {
-        'databaseId:assetId': f"{asset['databaseId']}:{asset['assetId']}",
+        'databaseId:assetId': f"{database_id}:{asset['assetId']}",
         'assetVersionId': asset['currentVersionId']
     }
 
@@ -521,7 +531,7 @@ def build_asset_archive_history_record(database_id, asset_id, relative_file_path
         "filePath": relative_file_path,
         "changeSource": VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
         "changeUserId": user_id or "SYSTEM_USER",
-        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "recordCreated": utc_now().isoformat() + "Z",
         "s3LastModified": "",
     }
 
@@ -1042,28 +1052,13 @@ def get_asset_details(databaseId, assetId, showArchived=False):
         The asset details or None if not found
     """
     try:
-        # If showArchived is False, we only look in the active assets table
-        # If showArchived is True, we first look in the active table, then try the archived suffix
-        db_id = databaseId
-        response = asset_table.get_item(Key={'databaseId': db_id, 'assetId': assetId})
-        item = response.get('Item')
-        
-        # If not found and showArchived is True, try with the archived suffix
-        if not item and showArchived:
-            archived_db_id = f"{databaseId}#deleted"
-            response = asset_table.get_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
-            item = response.get('Item')
-            
-            # If found in archived, add status field if not present
-            if item and 'status' not in item:
-                item['status'] = 'archived'
-        
-        return item
+        # The live record first; with showArchived, the archived record when no live one exists
+        return get_asset_record(asset_table, databaseId, assetId, include_archived=showArchived)
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
-def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles):
+def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles, include_archived=False):
     """Tier-2 authorization for a single-asset operation, decided before existence and state.
 
     The verdict is reached before the caller learns anything about the asset, so a refusal
@@ -1080,6 +1075,8 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles)
         assetId: The asset ID from the request
         action: The Casbin action for the operation (GET / PUT / DELETE)
         claims_and_roles: User claims and roles for authorization
+        include_archived: The read also resolves archived assets, so a missing asset's stand-in
+            carries the archived database id
 
     Returns:
         True if the caller is authorized for the operation
@@ -1087,15 +1084,8 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles)
     if len(claims_and_roles["tokens"]) == 0:
         return False
 
-    if asset:
-        authorization_object = {**asset, 'object__type': 'asset'}
-    else:
-        authorization_object = {
-            'databaseId': databaseId,
-            'assetId': assetId,
-            'object__type': 'asset'
-        }
-
+    authorization_object = asset_authorization_object(asset, databaseId, assetId,
+                                                      include_archived=include_archived)
     return CasbinEnforcer(claims_and_roles).enforce(authorization_object, action)
 
 def get_assets(databaseId, query_params, showArchived=False):
@@ -1291,7 +1281,8 @@ def get_all_assets(query_params, showArchived=False):
         logger.exception(f"Error scanning all assets: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving all assets.")
 
-def update_asset(databaseId, assetId, update_data, claims_and_roles):
+
+def update_asset(databaseId, assetId, update_data, claims_and_roles, event=None):
     """Update an existing asset with new data
     
     Args:
@@ -1320,8 +1311,13 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
     # Update the fields
     logger.info(f"Updating asset {assetId} in database {databaseId}")
     
+    # The values the edit replaces, taken before the fields below are set on the read copy.
+    prior_values = {field: asset.get(field) for field in update_data if field in asset}
+
     # Update only the editable fields. `edited_attributes` accumulates exactly what this
-    # request changes, so the write below touches nothing else on the record.
+    # request changes, so the write below touches nothing else on the record but the change
+    # provenance. `stored_asset` is the row as read, before the edits below are applied to `asset`.
+    stored_asset = dict(asset)
     edited_attributes = {}
 
     if 'assetName' in update_data:
@@ -1393,11 +1389,19 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
 
     # Save the updated asset. Only the edited attributes are written, so a field another
     # writer changed between the read above and this write — an upload completion setting
-    # assetType or previewLocation, a version bump — is not reverted. Conditional on the
-    # record still existing so an asset archived mid-edit is not recreated.
+    # assetType or previewLocation, a version bump — is not reverted. An edit that changes the
+    # name, description or tags also records itself as the asset's latest change
+    # (`asset_edit_provenance`), which is what re-evaluates the asset's compliance. Conditional on
+    # the record still existing so an asset archived mid-edit is not recreated.
     try:
         if edited_attributes:
-            keys_map, values_map, expr = to_update_expr(edited_attributes)
+            provenance, removed_attributes = asset_edit_provenance(stored_asset, edited_attributes)
+            keys_map, values_map, expr = to_update_expr({**edited_attributes, **provenance})
+            if removed_attributes:
+                removed_names = {f"#r{index}": attribute
+                                 for index, attribute in enumerate(removed_attributes)}
+                keys_map.update(removed_names)
+                expr += " REMOVE " + ", ".join(removed_names)
             asset_table.update_item(
                 Key={'databaseId': databaseId, 'assetId': assetId},
                 UpdateExpression=expr,
@@ -1412,9 +1416,13 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
             claims_and_roles.get("tokens", ["SYSTEM_USER"])[0],
             build_asset_snapshot(asset)
         )
+        if event is not None:
+            log_action(event, "assetUpdate", database_id=databaseId, asset_id=assetId,
+                       changes=edited_attributes,
+                       previous={field: prior_values[field] for field in edited_attributes if field in prior_values})
 
         # Create response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
 
         #send email for asset file change
         send_subscription_email(databaseId, assetId)
@@ -1476,7 +1484,7 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
     
     try:
         # Update asset record with archived status
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
         # Archive asset files in S3, recording assetArchive provenance per file
@@ -1585,7 +1593,7 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     logger.info(f"Unarchiving asset {assetId} from database {archived_db_id}")
 
     try:
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         files_restored = 0
 
@@ -1672,6 +1680,10 @@ def _delete_asset_links_for_permanent_deletion(databaseId: str, assetId: str, de
     -- the asset row is already gone by this point -- but the lookup itself is not swallowed,
     since a failed lookup here would leave every link behind while the deletion reported
     success.
+
+    The compliance trigger records each removed link on the asset at its other end from the link
+    table's stream (the deleted asset's own row is already gone, so only the survivor is stamped);
+    nothing is written for it here.
     """
     asset_key = f"{databaseId}:{assetId}"
     link_ids = {}
@@ -1693,6 +1705,7 @@ def _delete_asset_links_for_permanent_deletion(databaseId: str, assetId: str, de
                 f"{asset_links_table_name} (assetLinkId={asset_link_id})")
         except Exception as e:
             logger.warning(f"Error deleting asset link {asset_link_id} for asset {assetId}: {e}")
+            continue
 
 def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles):
     """Permanently delete an asset from all systems
@@ -1768,9 +1781,9 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 # Log the error but continue with deletion process
                 logger.warning(f"Error deleting subscription record for asset {assetId}: {e}")
 
-        #send email for asset file change
-        send_subscription_email(databaseId, assetId)
-        
+        # Subscribers are notified when the asset is archived. A permanent delete sends no
+        # email: its topic and subscription record are already gone at this point.
+
         original_db_id = databaseId.replace("#deleted", "")
 
         # 1. Delete all S3 objects (assets files and preview)
@@ -1970,7 +1983,7 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         )
 
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return AssetOperationResponseModel(
             success=True,
             message=f"Asset {assetId} permanently deleted from all systems",
@@ -2044,7 +2057,8 @@ def handle_get_request(event):
             # Check authorization before existence, so a refused caller cannot use the
             # not-found response to learn which assets exist
             if not authorize_single_asset(asset, path_parameters['databaseId'],
-                                          path_parameters['assetId'], "GET", claims_and_roles):
+                                          path_parameters['assetId'], "GET", claims_and_roles,
+                                          include_archived=show_archived):
                 return authorization_error()
 
             if not asset:
@@ -2057,6 +2071,8 @@ def handle_get_request(event):
             bucketDetails = get_asset_bucket_details(asset)
             enhanced_asset["bucketName"] = bucketDetails['bucketName']
 
+            log_action(event, "assetGet", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], request_parameters={"showArchived": show_archived})
             # Convert to AssetResponseModel for consistent response format
             return success(body=format_asset_response(enhanced_asset))
 
@@ -2103,6 +2119,9 @@ def handle_get_request(event):
 
             # Get the assets
             assets_result = get_assets(path_parameters['databaseId'], query_params, show_archived)
+            log_action(event, "assetList", database_id=path_parameters['databaseId'],
+                       item_count=len(assets_result.get('Items', [])),
+                       request_parameters={**query_params, "showArchived": show_archived})
 
             # Enhance the page with version information and bucket details (batched reads)
             enhanced_items = enrich_asset_listing_page(assets_result.get('Items', []))
@@ -2153,6 +2172,8 @@ def handle_get_request(event):
 
             # Get all assets
             assets_result = get_all_assets(query_params, show_archived)
+            log_action(event, "assetList", item_count=len(assets_result.get('Items', [])),
+                       request_parameters={**query_params, "showArchived": show_archived})
 
             # Enhance the page with version information and bucket details (batched reads)
             enhanced_items = enrich_asset_listing_page(assets_result.get('Items', []))
@@ -2242,6 +2263,8 @@ def handle_put_request(event):
                 request_model,
                 claims_and_roles
             )
+            log_action(event, "assetUnarchive", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], changes=request_model.dict(exclude_none=True))
             return success(body=result.dict())
         
         # Otherwise, handle regular update
@@ -2253,7 +2276,8 @@ def handle_put_request(event):
             path_parameters['databaseId'], 
             path_parameters['assetId'], 
             update_model.dict(exclude_unset=True, exclude_none=True),
-            claims_and_roles
+            claims_and_roles,
+            event=event
         )
 
         # Return success response
@@ -2337,6 +2361,8 @@ def handle_delete_request(event):
                 request_model,
                 claims_and_roles
             )
+            log_action(event, "assetArchive", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], changes=request_model.dict(exclude_none=True))
             return success(body=result.dict())
             
         elif API_DELETE_ASSET.matches(path):
@@ -2348,6 +2374,8 @@ def handle_delete_request(event):
                 request_model,
                 claims_and_roles
             )
+            log_action(event, "assetDelete", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], changes=request_model.dict(exclude_none=True))
             return success(body=result.dict())
             
         else:
@@ -2359,6 +2387,8 @@ def handle_delete_request(event):
                 request_model,
                 claims_and_roles
             )
+            log_action(event, "assetArchive", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], changes=request_model.dict(exclude_none=True))
             return success(body=result.dict())
 
     except AuthorizationDenied:
@@ -2373,6 +2403,8 @@ def handle_delete_request(event):
         logger.exception(f"Error handling DELETE request: {e}")
         return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset service APIs"""
     global claims_and_roles

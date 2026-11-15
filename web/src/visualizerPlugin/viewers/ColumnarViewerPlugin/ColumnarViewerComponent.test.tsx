@@ -226,4 +226,17 @@ describe("ColumnarViewerComponent", () => {
             );
         });
     });
+
+    it("names the missing permission when the API refuses the download with 403 (#1211)", async () => {
+        mockDownloadAsset.mockResolvedValue([false, "Not Authorized", 403]);
+
+        render(<ColumnarViewerComponent {...props("tables/data.csv")} />);
+
+        await waitFor(() =>
+            expect(
+                screen.getByText(/You do not have permission to view or download this file\./)
+            ).toBeInTheDocument()
+        );
+        expect(mockReadRemoteFile).not.toHaveBeenCalled();
+    });
 });

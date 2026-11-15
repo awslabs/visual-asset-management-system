@@ -88,6 +88,14 @@
         },
         "pipelines": {
             "deadlineCloudExecutionTypeEnabled": false,
+            "externalPipelineBridges": [],
+            "executionLogReadPrefixes": [
+                "/aws/vendedlogs/VAMSStateMachine-*",
+                "/aws/vendedlogs/VAMSstateMachine-*",
+                "/aws/vendedlogs/Pipelines/*",
+                "/aws/batch/job",
+                "/aws/sagemaker/TrainingJobs"
+            ],
             "useConversion3dBasic": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true
@@ -95,7 +103,18 @@
             "usePreview3dThumbnail": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "computeTiers": {
+                    "standard": {
+                        "vcpu": 4,
+                        "memoryGiB": 16
+                    },
+                    "large": {
+                        "vcpu": 16,
+                        "memoryGiB": 120
+                    }
+                },
+                "largeTierThresholdGiB": 2
             },
             "useConversionCadMeshMetadataExtraction": {
                 "enabled": false,
@@ -108,6 +127,29 @@
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": false
             },
+            "useGenAiCadStepAgent": {
+                "enabled": false,
+                "runtime": "agentcore",
+                "useCodeBuild": true,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false,
+                "bedrockModelId": "global.anthropic.claude-sonnet-5-5",
+                "openAi": {
+                    "modelId": "",
+                    "apiKeySecretArn": ""
+                },
+                "allowInternetResearch": true,
+                "bedrockGuardrail": {
+                    "guardrailId": "",
+                    "guardrailVersion": ""
+                },
+                "agentCore": {
+                    "warmSessionSlots": 0,
+                    "idleRuntimeSessionTimeoutSeconds": 900,
+                    "maxLifetimeSeconds": 28800
+                },
+                "maxRunSeconds": 3600
+            },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
@@ -115,7 +157,7 @@
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false,
-                "bedrockModelId": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                "bedrockModelId": "global.anthropic.claude-sonnet-5-5",
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": false
             },
@@ -123,7 +165,7 @@
                 "enabled": false,
                 "useCodeBuild": false,
                 "autoRegisterWithVAMS": true,
-                "bedrockModelId": "global.anthropic.claude-sonnet-5",
+                "bedrockModelId": "global.anthropic.claude-sonnet-5-5",
                 "limits": {
                     "maxVideoFiles": 4,
                     "maxTotalDurationMinutes": 240
@@ -282,6 +324,50 @@
                         "maxVCpus": 192
                     }
                 }
+            },
+            "useImageTo3d": {
+                "enabled": false,
+                "huggingFaceToken": "",
+                "useCodeBuild": true,
+                "autoRegisterWithVAMS": true,
+                "autoTriggerOnFileExtensionsUpload": "",
+                "instanceTypes": [
+                    "g6e.xlarge",
+                    "g6e.2xlarge",
+                    "g6e.4xlarge",
+                    "g6.2xlarge",
+                    "g6.4xlarge",
+                    "g6.8xlarge",
+                    "g5.2xlarge",
+                    "g5.4xlarge",
+                    "g5.8xlarge"
+                ],
+                "maxVCpus": 48,
+                "models": {
+                    "sam3d": {
+                        "enabled": false
+                    },
+                    "stable3dgen": {
+                        "enabled": true
+                    },
+                    "trellis2": {
+                        "enabled": false
+                    },
+                    "triposr": {
+                        "enabled": false
+                    },
+                    "step1x3d": {
+                        "enabled": false
+                    },
+                    "hunyuan3d": {
+                        "enabled": false
+                    },
+                    "blenderagent": {
+                        "enabled": false,
+                        "bedrockModelId": "global.openai.gpt-6-astra",
+                        "useStabilityImageEditing": true
+                    }
+                }
             }
         },
         "addons": {
@@ -300,6 +386,56 @@
                 "credentialsSecretArn": "",
                 "clientId": "",
                 "clientSecret": ""
+            },
+            "useEdhWorkstations": {
+                "enabled": false,
+                "edhApiEndpoint": "",
+                "edhAdminApiKeySecretArn": "",
+                "edhApiCaBundleSecretArn": "",
+                "edhApiTlsServerName": "",
+                "edhClusterId": "",
+                "lambdaSubnets": "isolated",
+                "edhRootKeyAutoSync": true,
+                "autoProvisionUsers": true,
+                "edhAllowedInstanceTypes": [],
+                "vdi": {
+                    "defaultProject": "default",
+                    "virtualDesktopProfileId": 0,
+                    "lease": {
+                        "enabled": false,
+                        "leaseHours": 8,
+                        "forced": false,
+                        "graceHours": 24
+                    }
+                },
+                "sessionBootstrap": {
+                    "enabled": false,
+                    "sessionKeyTtlMinutes": 480,
+                    "secretNamePrefix": "vams/edh-session/",
+                    "workstationInstanceRoleArns": [],
+                    "launchManifest": false
+                },
+                "amiBuilds": {
+                    "enabled": false,
+                    "includeShippedRecipes": true,
+                    "buildSubnetId": "",
+                    "buildTimeoutMinutes": 180,
+                    "keepVersionsDefault": 3
+                },
+                "predefinedImages": {
+                    "vdi": [],
+                    "simulationAmis": [],
+                    "amiRecipes": [],
+                    "registrationRevision": 1
+                },
+                "containers": {
+                    "enabled": false,
+                    "buildAndPushImages": [],
+                    "existingEcrImages": [],
+                    "jobDefinitions": [],
+                    "eksEnabled": false,
+                    "imagePullRoleArns": []
+                }
             }
         },
         "authProvider": {
@@ -313,7 +449,9 @@
                 "useSaml": false,
                 "useOidc": false,
                 "useUserPasswordAuthFlow": false,
-                "credTokenTimeoutSeconds": 3600
+                "credTokenTimeoutSeconds": 3600,
+                "retainLegacyGroupsAttribute": false,
+                "additionalTokenAudiences": []
             },
             "useExternalOAuthIdp": {
                 "enabled": false,
@@ -327,8 +465,14 @@
                 "idpAuthProviderAuthorizationEndpoint": null,
                 "idpAuthProviderDiscoveryEndpoint": null,
                 "lambdaAuthorizorJWTIssuerUrl": null,
-                "lambdaAuthorizorJWTAudience": null
+                "lambdaAuthorizorJWTAudience": null,
+                "lambdaAuthorizorJWTAudienceClaims": ["aud"],
+                "lambdaAuthorizorJWTUserIdClaim": "",
+                "additionalTokenAudiences": []
             }
+        },
+        "auditLogging": {
+            "recordReads": true
         },
         "webUi": {
             "optionalBannerHtmlMessage": "",
@@ -356,6 +500,10 @@
             "autoLoadDefaultDatabaseSchema": true,
             "autoLoadDefaultAssetSchema": true,
             "autoLoadDefaultAssetFileSchema": true
+        },
+        "compliance": {
+            "autoLoadDefaultSchema": true,
+            "quarantineBlocksDownload": false
         }
     }
 }

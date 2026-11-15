@@ -33,6 +33,7 @@ from customLogging import auditLogging
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success,
@@ -130,22 +131,27 @@ class _DenialAuditBatch:
 
     def _denial_record(self, obj, act):
         """One denial record, in the format ``log_authorization`` writes plus the probe marker."""
-        return " ".join([
-            "[AUTHORIZATION][authorized: False]",
-            f"[probe: {self._probe_endpoint}]",
-            f"[user: {self._user}]",
-            f"[roles: {json.dumps(self._claims.get('roles', []))}]",
-            f"[mfaEnabled: {self._claims.get('mfaEnabled', False)}]",
-            json.dumps({"action": act, "obj": obj}),
-        ])
+        return auditLogging.format_authorization_denial_record(
+            self._claims, self._probe_endpoint, {"action": act, "obj": obj})
 
     def flush(self):
         """Write every kept denial, chunked to stay inside the PutLogEvents batch limits."""
         denials, self._denials = self._denials, []
         if not denials:
             return
+        # Records not yet handed to the writer; the writer reports the ones it cannot deliver.
+        pending = [None] * len(denials)
         try:
-            log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+            pending = [self._denial_record(obj, act) for obj, act in denials]
+            try:
+                log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+            except Exception as e:
+                logger.error(f"AUDIT_LOG_AUTHORIZATION resource name not resolved: {e}")
+                log_group_name = None
+            if not log_group_name:
+                auditLogging.report_undelivered_audit_records(
+                    ResourceKeys.AUDIT_LOG_AUTHORIZATION, "logGroupUnresolved", pending)
+                return
             audit_event = {
                 'requestContext': {'authorizer': {'jwt': {'claims': {'sub': self._user}}}}
             }
@@ -154,22 +160,27 @@ class _DenialAuditBatch:
             event_overhead = AUDIT_EVENT_OVERHEAD_BYTES + len(
                 f" --- [event: {json.dumps(audit_event)}]".encode('utf-8')
             )
+            batches = []
             batch = []
             batch_bytes = 0
-            for obj, act in denials:
-                record = self._denial_record(obj, act)
+            for record in pending:
                 record_bytes = len(record.encode('utf-8')) + event_overhead
                 if batch and (len(batch) >= AUDIT_BATCH_MAX_EVENTS
                               or batch_bytes + record_bytes > AUDIT_BATCH_MAX_BYTES):
-                    auditLogging._write_batch_to_cloudwatch(log_group_name, batch, audit_event)
+                    batches.append(batch)
                     batch = []
                     batch_bytes = 0
                 batch.append(record)
                 batch_bytes += record_bytes
             if batch:
+                batches.append(batch)
+            for batch in batches:
                 auditLogging._write_batch_to_cloudwatch(log_group_name, batch, audit_event)
+                pending = pending[len(batch):]
         except Exception as e:
             logger.exception(f"Failed to write authorization denial audit records: {e}")
+            auditLogging.report_undelivered_audit_records(
+                ResourceKeys.AUDIT_LOG_AUTHORIZATION, "unexpectedError", pending)
 
 
 def check_web_routes(event):
@@ -281,6 +292,7 @@ def get_allowed_api_routes(event):
     return success(body=response_model.dict())
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for auth routes APIs"""
     global claims_and_roles

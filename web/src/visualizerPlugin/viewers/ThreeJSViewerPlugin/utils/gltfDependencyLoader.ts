@@ -6,10 +6,11 @@
 /**
  * GLTF Dependency Loader
  * Pre-downloads all GLTF dependencies (textures, .bin files) with authentication
- * before passing to ThreeJS loader
+ * before passing to ThreeJS loader. Downloads go through the shared AssetDependencyResolver,
+ * which applies its path rules and limits.
  */
 
-import { getDualAuthorizationHeader } from "../../../../utils/authTokenUtils";
+import { AssetDependencyResolver } from "./assetDependencyResolver";
 
 interface DependencyLoaderConfig {
     assetId: string;
@@ -27,7 +28,7 @@ interface DependencyLoaderConfig {
 /**
  * Extract dependencies from GLTF JSON
  */
-function extractGLTFDependencies(gltfJson: any): string[] {
+export function extractGLTFDependencies(gltfJson: any): string[] {
     const dependencies: string[] = [];
 
     // Extract buffer URIs
@@ -52,76 +53,16 @@ function extractGLTFDependencies(gltfJson: any): string[] {
 }
 
 /**
- * Download a dependency file with authentication
+ * Downloads the files a .gltf names through `resolver` and returns the glTF with each resolved
+ * URI replaced by a blob URL. URIs that did not resolve are left as written; the loading
+ * manager's URL modifier answers them without a request.
  */
-async function downloadDependency(
-    relativePath: string,
-    config: DependencyLoaderConfig,
-    authHeader: string
-): Promise<ArrayBuffer> {
-    // Get base directory from main file
-    const baseDir = config.baseFileKey.substring(0, config.baseFileKey.lastIndexOf("/"));
-
-    // Resolve relative path
-    let fullPath: string;
-    if (relativePath.startsWith("./") || relativePath.startsWith("../")) {
-        const parts = baseDir.split("/");
-        const urlParts = relativePath.split("/");
-
-        for (const part of urlParts) {
-            if (part === "..") {
-                parts.pop();
-            } else if (part !== ".") {
-                parts.push(part);
-            }
-        }
-
-        fullPath = parts.join("/");
-    } else {
-        fullPath = `${baseDir}/${relativePath}`;
-    }
-
-    // Remove assetId from path if present (like Needle viewer)
-    const pathSegments = fullPath.split("/");
-    if (pathSegments.length > 0 && pathSegments[0] === config.assetId) {
-        pathSegments.shift();
-    }
-
-    // Construct streaming URL
-    const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
-    const encodedPath = encodedSegments.join("/");
-    let url = `${config.apiEndpoint}database/${config.databaseId}/assets/${config.assetId}/download/stream/${encodedPath}`;
-
-    // Note: versionId is intentionally NOT passed for dependencies.
-    // Dependencies are always loaded without versionId because they are
-    // part of the same asset version as the main file.
-    // However, assetVersionId IS appended so the server resolves from the correct asset version.
-    if (config.assetVersionId) {
-        url += `?assetVersionId=${encodeURIComponent(config.assetVersionId)}`;
-    }
-
-    console.log(`Downloading dependency: ${relativePath} -> ${url}`);
-
-    const response = await fetch(url, {
-        headers: { Authorization: authHeader },
-    });
-
-    if (!response.ok) {
-        throw new Error(`Failed to download ${relativePath}: ${response.status}`);
-    }
-
-    return await response.arrayBuffer();
-}
-
-/**
- * Pre-load all GLTF dependencies and return modified GLTF with blob URLs
- */
-export async function preloadGLTFDependencies(
+export async function resolveGLTFDependencies(
     gltfArrayBuffer: ArrayBuffer,
-    config: DependencyLoaderConfig,
+    baseFileKey: string,
+    resolver: AssetDependencyResolver,
     onProgress?: (current: number, total: number) => void
 ): Promise<{ gltfArrayBuffer: ArrayBuffer; blobUrls: string[] }> {
-    const authHeader = await getDualAuthorizationHeader();
     const blobUrls: string[] = [];
 
     try {
@@ -140,45 +81,17 @@ export async function preloadGLTFDependencies(
 
         console.log(`Found ${dependencies.length} dependencies in GLTF`);
 
-        // Download all dependencies in parallel (5 concurrent) and create blob URLs
+        const result = await resolver.resolveDependencies(baseFileKey, dependencies, {
+            depth: 1,
+            onProgress,
+        });
+
         const dependencyMap = new Map<string, string>();
-        const PARALLEL_LIMIT = 5;
-        let downloadedCount = 0;
-
-        for (let i = 0; i < dependencies.length; i += PARALLEL_LIMIT) {
-            const batch = dependencies.slice(i, i + PARALLEL_LIMIT);
-
-            const batchPromises = batch.map(async (dep) => {
-                try {
-                    const arrayBuffer = await downloadDependency(dep, config, authHeader);
-                    const blob = new Blob([arrayBuffer]);
-                    const blobUrl = URL.createObjectURL(blob);
-                    dependencyMap.set(dep, blobUrl);
-                    blobUrls.push(blobUrl);
-
-                    downloadedCount++;
-                    if (onProgress) {
-                        onProgress(downloadedCount, dependencies.length);
-                    }
-
-                    console.log(
-                        `Downloaded dependency ${downloadedCount}/${dependencies.length}: ${dep} (${arrayBuffer.byteLength} bytes)`
-                    );
-                } catch (error) {
-                    // Console logging only: a % specifier in the interpolated value can at most
-                    // garble this one log line; nothing is executed, stored or returned from it.
-                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
-                    console.warn(`Failed to download dependency ${dep}:`, error);
-                    // Continue with other dependencies
-                    downloadedCount++;
-                    if (onProgress) {
-                        onProgress(downloadedCount, dependencies.length);
-                    }
-                }
-            });
-
-            await Promise.all(batchPromises);
-        }
+        result.resolved.forEach((dependency, uri) => {
+            const blobUrl = resolver.blobUrlFor(dependency);
+            dependencyMap.set(uri, blobUrl);
+            blobUrls.push(blobUrl);
+        });
 
         // Replace URIs in GLTF JSON with blob URLs
         if (gltfJson.buffers) {
@@ -202,11 +115,31 @@ export async function preloadGLTFDependencies(
         const encoder = new TextEncoder();
         const modifiedArrayBuffer = encoder.encode(modifiedGltfText);
 
-        return { gltfArrayBuffer: modifiedArrayBuffer.buffer, blobUrls };
-    } catch (error) {
+        return { gltfArrayBuffer: modifiedArrayBuffer.buffer as ArrayBuffer, blobUrls };
+    } catch (error: any) {
+        if (error?.name === "AbortError") {
+            throw error;
+        }
         console.error("Error preloading GLTF dependencies:", error);
         return { gltfArrayBuffer, blobUrls };
     }
+}
+
+/**
+ * Pre-load all GLTF dependencies and return modified GLTF with blob URLs
+ */
+export async function preloadGLTFDependencies(
+    gltfArrayBuffer: ArrayBuffer,
+    config: DependencyLoaderConfig,
+    onProgress?: (current: number, total: number) => void
+): Promise<{ gltfArrayBuffer: ArrayBuffer; blobUrls: string[] }> {
+    const resolver = new AssetDependencyResolver({
+        assetId: config.assetId,
+        databaseId: config.databaseId,
+        apiEndpoint: config.apiEndpoint,
+        assetVersionId: config.assetVersionId,
+    });
+    return resolveGLTFDependencies(gltfArrayBuffer, config.baseFileKey, resolver, onProgress);
 }
 
 /**

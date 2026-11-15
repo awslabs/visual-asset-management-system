@@ -190,6 +190,10 @@ The endpoint runs in two stages against the same path, distinguished by the pres
 
 Both stages require `PUT` permission on the asset (`objectType: "asset"`) in addition to route access.
 
+When the complete stage finds no asset, it checks the upload before it creates the asset: an `uploadId` that is unknown, already completed, initialized for another asset or database, or expired is refused with `400` and nothing is created.
+
+Likewise, when the initialize stage finds no asset, it checks the file names first: a file with a blocked extension, an extension the database does not allow, or a `.previewFile.` file with a disallowed extension is refused with `400` and the asset is not created.
+
 #### Initialize request body
 
 | Field             | Type          | Required | Description                                                                                                          |
@@ -301,13 +305,13 @@ Repeat the asset fields from the initialize request, and add:
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                               |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, or a failure creating the asset or the upload. |
-| `403`  | Not authorized to write this asset, or the upload step refused the request.                                                                                               |
-| `404`  | The upload step reported its target as not found.                                                                                                                         |
-| `429`  | Rate limit exceeded: more than 20 upload initializations by the user in one minute. The response carries a `Retry-After` header (seconds).                                |
-| `500`  | Internal server error.                                                                                                                                                    |
+| Status | Description                                                                                                                                                                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, a file the upload step refuses for its name (initialize), an upload that cannot be completed (complete; no asset is created in either case), or a failure creating the asset or the upload. |
+| `403`  | Not authorized to write this asset, or the upload step refused the request.                                                                                                                                                                                                                                            |
+| `404`  | The upload step reported its target as not found.                                                                                                                                                                                                                                                                      |
+| `429`  | Rate limit exceeded: more than 20 upload initializations by the user in one minute. The response carries a `Retry-After` header (seconds).                                                                                                                                                                             |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                 |
 
 ---
 
@@ -513,11 +517,34 @@ Restores a previously archived asset record, making it active again. The asset's
 
 ---
 
+### Reading an archived asset
+
+An archived asset stays readable until it is unarchived or permanently deleted. Its versions, file versions, metadata, relationships, and comments are kept under the asset's original database ID, and each read route below finds the archived asset when the request carries `showArchived=true`:
+
+| Route                                                                                           | Reads                                                                                                                             |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /database/{databaseId}/assets/{assetId}`                                                   | The asset record, with `status: archived`, `archivedAt`, `archivedBy`, and `archivedReason`.                                      |
+| `GET /database/{databaseId}/assets/{assetId}/listFiles`                                         | The file list. Archiving the asset archives every file, so the list always includes archived files, each with `isArchived: true`. |
+| `GET /database/{databaseId}/assets/{assetId}/fileInfo`                                          | One file's details.                                                                                                               |
+| `GET /database/{databaseId}/assets/{assetId}/getVersions` and `.../getVersion/{assetVersionId}` | The asset's versions.                                                                                                             |
+| `GET /database/{databaseId}/assets/{assetId}/metadata` and `.../metadata/file`                  | Asset and file metadata.                                                                                                          |
+| `GET /database/{databaseId}/assets/{assetId}/asset-links`                                       | The asset's relationships.                                                                                                        |
+| `GET /asset-links/{assetLinkId}/metadata`                                                       | The metadata of a link whose linked asset is archived.                                                                            |
+| `GET /comments/assets/{assetId}` and `.../assetVersionId/{assetVersionId}`                      | The asset's comments.                                                                                                             |
+
+`showArchived` accepts `true`, `false`, `1`, `0`, `yes`, and `no`; any other value is rejected with `400`. Without it, each route answers for an archived asset as it does for an asset that does not exist.
+
+An archived asset is read-only. Write routes ignore `showArchived` and refuse every change to an archived asset, its files, versions, metadata, relationships, and comments, until it is restored with [Unarchive Asset](#unarchive-asset). Authorization evaluates the stored archived record, whose `databaseId` reads `{databaseId}#deleted`. A permission constraint on `databaseId` with the `equals` operator therefore does not match an archived asset, while a wildcard, `starts_with`, or `contains` constraint can. With `showArchived=true`, authorization is decided before the asset's existence, so a caller who may not read the database's archived assets is refused for an id that does not exist exactly as for an archived one.
+
+---
+
 ### Delete Asset
 
 `DELETE /database/{databaseId}/assets/{assetId}/deleteAsset`
 
-Permanently deletes an asset, including all associated files, metadata, versions, and every version of its auxiliary data. The temporary working files a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `assetExports/`, are not deleted.
+Permanently deletes an asset, including all associated files, metadata, versions, and every version of its auxiliary data. The temporary working files a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `vams.assetExports/`, are not deleted.
+
+Asset subscribers are notified by email when the asset is archived. A permanent delete removes the asset's subscriptions and notification topic and sends no email.
 
 :::danger[Irreversible Operation]
 This operation permanently removes the asset and all its data. It cannot be undone. Consider using [Archive Asset](#archive-asset) for soft-deletion instead.
@@ -666,13 +693,13 @@ Bulk requests return one entry per requested key. File paths that do not exist o
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                            |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, version parameters used with preview downloads, or asset is not distributable. |
-| `403`  | Not authorized to download this asset.                                                                                                                                                                 |
-| `404`  | Database, asset, version, or file not found.                                                                                                                                                           |
-| `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                 |
-| `500`  | Internal server error.                                                                                                                                                                                 |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                         |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, version parameters used with preview downloads, asset is not distributable, or the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). |
+| `403`  | Not authorized to download this asset.                                                                                                                                                                                                                                                                                                                                              |
+| `404`  | Database, asset, version, or file not found.                                                                                                                                                                                                                                                                                                                                        |
+| `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                                                                                                                                                                                              |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                              |
 
 ---
 
@@ -772,7 +799,7 @@ A serialized payload of 100KB or less is returned inline with status `200`, as s
 ```json
 {
     "message": "Export payload exceeds the inline response size and is available at the redirect target",
-    "presignedExportPayloadUrl": "https://<auxiliary-bucket>.s3.<region>.amazonaws.com/assetExports/...",
+    "presignedExportPayloadUrl": "https://<auxiliary-bucket>.s3.<region>.amazonaws.com/vams.assetExports/...",
     "presignedExportPayloadExpiresIn": 3600
 }
 ```
@@ -784,17 +811,17 @@ Two constraints apply to the redirect target:
 -   **Send no `Authorization` header to the presigned URL.** It carries its own authorization in the query string, and Amazon S3 rejects a request presenting two authorization mechanisms. Standard clients strip the header automatically on a cross-host redirect.
 -   **Issue a `GET`, not a `POST`.** The status is `303` rather than `307` precisely so that redirect-following clients switch the method; the URL is signed for a `GET` and rejects any other verb.
 
-`presignedExportPayloadExpiresIn` reports the longest the URL can remain valid, in seconds, taken from the deployment's presigned-URL timeout. The URL stops working earlier if the Lambda role credentials that signed it expire first, so request the payload promptly.
+`presignedExportPayloadExpiresIn` reports the longest the URL can remain valid, in seconds, taken from the deployment's presigned-URL timeout. The URL stops working earlier if the Lambda role credentials that signed it expire first, so request the payload promptly. The staged object is deleted automatically 8 days after it is written, by which time no presigned URL for it still works.
 :::
 
 **Error Responses:**
 
-| Status | Description                          |
-| ------ | ------------------------------------ |
-| `400`  | Invalid parameters.                  |
-| `403`  | Not authorized to export this asset. |
-| `404`  | Asset not found.                     |
-| `500`  | Internal server error.               |
+| Status | Description                                                                                                                                                                                                                                                   |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or `generatePresignedUrls` was requested for an asset on the page that is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). |
+| `403`  | Not authorized to export this asset.                                                                                                                                                                                                                          |
+| `404`  | Asset not found.                                                                                                                                                                                                                                              |
+| `500`  | Internal server error.                                                                                                                                                                                                                                        |
 
 ---
 

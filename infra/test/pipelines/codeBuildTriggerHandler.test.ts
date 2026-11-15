@@ -13,7 +13,10 @@
  * to AWS CloudFormation as a success. The handler now lives in one file
  * (`lib/nestedStacks/pipelines/constructs/codeBuildTrigger/index.py`), which raises on a failure; its
  * behaviour is exercised in `backendPipelines/tests/test_codebuild_build_trigger_handler.py`. This file
- * holds every construct to that one handler, so a copy cannot drift back in.
+ * holds every construct to that one handler, so a copy cannot drift back in. The GenAI CAD STEP agent's
+ * construct uses it as the onEvent of a provider that also has an isComplete waiter, because its Amazon
+ * Bedrock AgentCore Runtime validates the image when it is created; the waiter reads the `BuildId` the
+ * handler returns (`backendPipelines/genAi/cadStepAgent/lambda/imageBuildCustomResource.py`).
  */
 
 import * as fs from "fs";
@@ -43,9 +46,11 @@ const HANDLER_SOURCE = fs.readFileSync(CODEBUILD_TRIGGER_HANDLER_PATH, "utf8");
 describe("CodeBuild build triggers", () => {
     test("[control] the six CodeBuild constructs are found", () => {
         expect(CONSTRUCTS.map((f) => path.basename(f)).sort()).toEqual([
+            "cadStepAgentCodeBuild-construct.ts",
             "coordinateTransformCodeBuild-construct.ts",
             "cosmosCodeBuild-construct.ts",
             "gr00tCodeBuild-construct.ts",
+            "imageTo3dCodeBuild-construct.ts",
             "isaacLabCodeBuild-construct.ts",
             "splatToolboxCodeBuild-construct.ts",
             "videoSopBomCodeBuild-construct.ts",

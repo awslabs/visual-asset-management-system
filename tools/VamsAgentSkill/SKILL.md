@@ -23,6 +23,18 @@ truth. This keeps the skill correct without edits as VAMS changes.
 **Assumptions:** `vamscli` is already installed and configured on the machine.
 This skill is standalone and is not part of the vamscli package.
 
+**When the VAMS MCP server is connected, use its tools instead of this skill.**
+If your session lists tools of the `vams` MCP server (for example `vams_status`,
+`search_assets`, `get_asset`), answer questions and do the work through those
+tools: they act as the same signed-in user, return bounded and structured
+results, and are what the operator approved for this session. Do not run
+`vamscli` in a shell, and do not read the VAMS source code, to do something an
+MCP tool does. Use `vamscli` (this skill) only for what the server does not
+expose, such as file uploads, sync, and user, role and constraint
+administration, and say that you are switching. If an MCP tool answers
+`NotAuthenticated`, ask the user to sign in (its `user_action` names the
+command the user runs); do not sign in yourself.
+
 ## Instructions
 
 ### Step 1: Verify the environment and authenticate (per session)
@@ -41,7 +53,11 @@ Ensure the CLI is available and authenticated **for the current user/session**.
       (recommended). Ask the user to provide a scoped **user** API key.
     - **Interactive login** (Cognito username/password) as a fallback.
     - **Optional bootstrap**: on request, walk the user through creating a
-      profile and a new user API key, then registering it.
+      profile and a new user API key, then registering it. A profile signed in
+      with a temporary session key (an API key whose name starts with the
+      reserved prefix `temporary-session-`, minted by a VAMS component for one
+      session) cannot create or update API keys (`403`), and no key name may
+      start with that prefix (`400`); ask the user for a key instead.
 4. Never echo, log, or persist API keys or tokens — treat them as secrets. Your
    effective permissions are exactly the authenticated user's VAMS permissions.
 
@@ -103,6 +119,8 @@ query state. Do **not** run commands in any mutating category:
 -   **Delete** / **archive** / **unarchive**
 -   **Edit / modify / update** (assets, metadata, tags, roles, configuration)
 -   **Execute** (workflows, pipelines, jobs)
+-   **Start / stop / deactivate / kill / submit** (compute of any add-on, such as
+    desktops, instances and jobs)
 -   **Upload** or otherwise transfer data into VAMS
 
 When you discover commands via `--help`, classify each by intent using the verbs
@@ -182,6 +200,12 @@ the user's permissions. Do not retry it, do not re-authenticate, and do not reph
 or re-encode the request to get past the rule. Report the `requestId` to the
 administrator, who finds the matching rule in the web ACL's sampled requests or WAF
 log group. The tier rules below apply to every other `403`.
+
+**A `401` is not a refusal.** From v2.7.0 the API answers `401` when it does not
+accept the credential at all (an expired or invalid token, an unknown, disabled or
+expired API key); the CLI refreshes and resends, and one that persists is an
+`AuthenticationError`. Ask the user to sign in again (`vamscli auth login`) and
+report it as a sign-in problem, never as a missing permission.
 
 **Why this matters to you:** the allowed-routes listing from Step 1b is Tier 1
 **only**. A route appearing there means the user may call it — not that they may
@@ -395,6 +419,26 @@ Archiving also **disables** the entity. Clearing the archived flag alone therefo
 restores something that lists normally but silently will not run — re-enable it in
 the same operation unless the user asked for it to stay disabled.
 
+### System pipelines and workflows are read-only
+
+A pipeline or workflow whose `get` or `list` output shows `System: True`
+(`"isSystem": true` in JSON) belongs to the deployment. Its only mutations are the
+**enabled switches**: the pipeline's, the workflow's, and each trigger's. A system
+pipeline's templates may also change their config body, web form JSON, and tag
+schema. Everything else is refused with a `400` whose message names the refused
+field or action: renaming, re-describing, changing the steps or the config,
+archiving or unarchiving, adding or deleting a template or a trigger, and changing a
+trigger's filters or default templates.
+
+-   Check the flag **before** planning an edit, and tell the user the record is
+    deployment-owned instead of sending the change.
+-   Do not work around a refusal: do not retry with a smaller body, and do not
+    re-create the record under a new ID as a copy unless the user asks for an
+    ordinary copy of their own.
+-   A disable is a **pause**. The next deployment that registers the bundle
+    re-asserts the shipped values, so say so when you disable one.
+-   The flag cannot be set or cleared through the API or the CLI.
+
 ### Cost and confirmation
 
 Workflows run real AWS compute (GPU batch jobs and GenAI inference among them) and
@@ -416,6 +460,9 @@ errors, so plan around them rather than discovering them by failure.
     pair _(database ID, asset ID)_. Carry both together through every step.
 -   Search results are the fastest way to obtain both IDs at once; prefer search
     over listing every database when the user names an asset.
+-   Some resources are created under a caller-generated ID and receive their
+    service ID asynchronously. Never fabricate the service ID — read the created
+    resource back to learn it, and pass the ID each command's `--help` asks for.
 
 **Creation order**
 
@@ -427,6 +474,11 @@ errors, so plan around them rather than discovering them by failure.
    captures the files present at that moment.
 5. Metadata, tags, and asset links attach to entities that already exist; create
    the entities first.
+6. A resource created asynchronously is not ready when the create command
+   returns: poll its `get` until it reports ready before acting on it.
+   Connection URLs and passwords a command prints are credentials: request them
+   only when the user asks, treat them as secrets, and never repeat the value.
+   Creating or starting compute is billed (see _Cost and confirmation_).
 
 **Deletion / archive order**
 
@@ -435,6 +487,11 @@ errors, so plan around them rather than discovering them by failure.
 -   Archiving an asset archives its files. Unarchiving the asset does **not**
     automatically restore files unless you request it, and files archived
     individually beforehand stay archived.
+-   An archived asset stays readable but not writable. Pass `--show-archived`
+    to `assets get`, `file list`, `file info`, `asset-version list` / `get`,
+    `metadata asset|file|asset-link list`, `asset-links list` and `comment list`
+    (MCP: `include_archived`) to read it; every write is refused until the asset
+    is unarchived.
 -   A database cannot be deleted while it still holds active assets, workflows, or
     pipelines. Clear or relocate its contents first.
 

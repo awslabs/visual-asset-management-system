@@ -38,6 +38,7 @@ _SENSITIVE_KEY_FRAGMENTS = (
     'signature',
     'privatekey',
     'cookie',
+    'connectionurl',  # connectionUrl: a connection URL that embeds a session token
 )
 
 # Value-level backstop for credentials that arrive without a helpful key — for example when a

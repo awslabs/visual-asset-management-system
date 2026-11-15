@@ -131,6 +131,9 @@ class TestConstraintMatrixValuesUnchanged:
             'name',
             'metadataSchemaName',
             'metadataSchemaEntityType',
+            'complianceSchemaName',
+            'complianceState',
+            'cascadeId',
             'object__type',
             'route__path',
         ]

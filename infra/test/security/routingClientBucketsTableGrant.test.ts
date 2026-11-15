@@ -53,9 +53,11 @@ function routingHandlerModules(): string[] {
 
 /**
  * Modules in the list that are imported by other handlers rather than deployed as a Lambda of their
- * own: no `Handler` names them, so there is nothing to assert for them here.
+ * own: no `Handler` names them, so there is nothing to assert for them here. The compliance store's
+ * S3 calls run in the Lambdas that evaluate (evaluate service, trigger, cascade executor), whose
+ * shared `grantEvaluationEngineReads` grants read on the buckets table.
  */
-const LIBRARY_MODULES = new Set(["physnaCommon"]);
+const LIBRARY_MODULES = new Set(["physnaCommon", "complianceEvaluationStore"]);
 
 const synth = (): SynthResult =>
     synthTemplate("commercial", {
@@ -97,6 +99,19 @@ function statementsForRole(s: SynthResult, stack: string, roleLogicalId: string)
         if (r.type === "AWS::IAM::Role" && r.logicalId === roleLogicalId) {
             for (const p of r.properties.Policies ?? [])
                 out.push(...(p.PolicyDocument?.Statement ?? []));
+            // A customer managed policy the role names in ManagedPolicyArns carries no Roles.
+            const attached = new Set(
+                ((r.properties.ManagedPolicyArns ?? []) as any[]).map((arn) => arn?.Ref)
+            );
+            for (const managed of inStack) {
+                if (
+                    managed.type === "AWS::IAM::ManagedPolicy" &&
+                    attached.has(managed.logicalId) &&
+                    !JSON.stringify(managed.properties.Roles ?? []).includes(roleLogicalId)
+                ) {
+                    out.push(...(managed.properties.PolicyDocument?.Statement ?? []));
+                }
+            }
         }
     }
     return out;

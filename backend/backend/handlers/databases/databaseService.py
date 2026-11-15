@@ -18,6 +18,7 @@ from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, commonHeaders, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse, validation_error_message
 from models.databases import GetDatabaseResponseModel, GetDatabasesRequestModel, GetDatabasesResponseModel, DeleteDatabaseResponseModel, UpdateDatabaseRequestModel, UpdateDatabaseResponseModel, BucketModel, GetBucketsRequestModel, GetBucketsResponseModel
 
@@ -52,6 +53,36 @@ UPDATABLE_DATABASE_FIELDS = (
 # The DynamoDB page size the listing scans with when the caller asks for none. validate_pagination_info
 # seeds an absent pageSize from its max-items default, so the listing's own page size is supplied to it.
 BUCKETS_DEFAULT_PAGE_SIZE = 3000
+
+# The compliance tables a database delete moves rows of (`common.compliance.databaseRetirement`),
+# resolved on first use.
+_compliance_tables = None
+
+
+def compliance_tables():
+    global _compliance_tables
+    if _compliance_tables is None:
+        from common.compliance.databaseRetirement import Tables
+        _compliance_tables = Tables(dynamodb=dynamodb)
+    return _compliance_tables
+
+
+def hand_off_compliance_move(database_id):
+    """Queue the move of the deleted database's compliance data on the compliance job queue
+    (`databaseRetirement.move_message`), where the compliance job Lambda runs it. A failed send is
+    logged and the delete still succeeds: the database row has moved, and the record stays
+    `moving`, so the live id shows none of the deleted database's data until the message is sent
+    again."""
+    import os
+    from common.compliance import databaseRetirement
+    queue_url = os.environ.get('COMPLIANCE_JOB_QUEUE_URL', '')
+    try:
+        boto3.client('sqs', config=retry_config).send_message(
+            QueueUrl=queue_url, MessageBody=json.dumps(databaseRetirement.move_message(database_id)))
+        return True
+    except Exception as e:
+        logger.exception(f"Could not queue the compliance move of deleted database {database_id}: {e}")
+        return False
 
 #######################
 # Utility Functions
@@ -144,6 +175,8 @@ def get_database(database_id, show_deleted=False, claims_and_roles=None):
                     baseAssetsPrefix=base_assets_prefix,
                     restrictMetadataOutsideSchemas=database.get('restrictMetadataOutsideSchemas', False),
                     restrictFileUploadsToExtensions=database.get('restrictFileUploadsToExtensions', ''),
+                    complianceSchemaName=database.get('complianceSchemaName'),
+                    complianceAutoEval=database.get('complianceAutoEval'),
                 )
             
         return None
@@ -229,6 +262,8 @@ def get_databases(query_params, show_deleted=False, claims_and_roles=None):
                         baseAssetsPrefix=base_assets_prefix,
                         restrictMetadataOutsideSchemas=deserialized_document.get('restrictMetadataOutsideSchemas', False),
                         restrictFileUploadsToExtensions=deserialized_document.get('restrictFileUploadsToExtensions', ''),
+                        complianceSchemaName=deserialized_document.get('complianceSchemaName'),
+                        complianceAutoEval=deserialized_document.get('complianceAutoEval'),
                     )
                     items.append(database_model)
 
@@ -249,7 +284,7 @@ class DatabaseAccessDeniedError(VAMSGeneralErrorResponse):
     """An object-level authorization denial on a database, answered with 403 rather than 400."""
 
 
-def update_database(database_id, update_data, claims_and_roles=None):
+def update_database(database_id, update_data, claims_and_roles=None, event=None):
     """Update an existing database with new data
     
     Args:
@@ -314,10 +349,14 @@ def update_database(database_id, update_data, claims_and_roles=None):
                 logger.warning(f"Database {database_id} no longer exists, database record not updated")
                 raise VAMSGeneralErrorResponse("Database not found")
             raise
-        
+
+        if event is not None:
+            log_action(event, "databaseUpdate", database_id=database_id, changes=updates,
+                       previous={field: database.get(field) for field in updates})
+
         # Create response
-        from datetime import datetime
-        timestamp = datetime.utcnow().isoformat()
+        from common.timestamps import utc_now
+        timestamp = utc_now().isoformat()
         
         return UpdateDatabaseResponseModel(
             success=True,
@@ -394,11 +433,27 @@ def delete_database(database_id, claims_and_roles=None):
             )
 
         logger.info(f"Deleting database: {database_id}")
+        # The compliance data moves under `<databaseId>#deleted` with the row. The move starts
+        # before the row moves (its record keeps a re-created database from showing or changing
+        # the deleted one's data until it is done); a failure here fails the delete.
+        from common.compliance import databaseRetirement
+        try:
+            databaseRetirement.begin(compliance_tables(), database_id, claims_and_roles["tokens"][0])
+        except databaseRetirement.WaitIndexNotReady:
+            # Right after an update that adds the compliance wait index: nothing was changed, and
+            # the delete works once the index is active.
+            logger.warning(f"Delete of database {database_id} refused: the compliance wait index "
+                           "is still being built")
+            return DeleteDatabaseResponseModel(
+                message=databaseRetirement.WAIT_INDEX_NOT_READY_MESSAGE,
+                statusCode=databaseRetirement.WAIT_INDEX_NOT_READY_STATUS
+            )
         # The Casbin type marker is not part of the stored record
         database.pop("object__type", None)
         database['databaseId'] = database_id + "#deleted"
         table.put_item(Item=database)
         table.delete_item(Key={'databaseId': database_id})
+        hand_off_compliance_move(database_id)
         
         return DeleteDatabaseResponseModel(
             message="Database deleted",
@@ -435,6 +490,8 @@ def get_database_handler(event, path_parameters, query_parameters, claims_and_ro
         # Get database
         database = get_database(database_id, show_deleted, claims_and_roles)
         if database:
+            log_action(event, "databaseGet", database_id=database_id,
+                       request_parameters={"showDeleted": show_deleted})
             return success(body=database.dict())
         else:
             return validation_error(status_code=404, body={'message': 'Database not found'}, event=event)
@@ -456,6 +513,8 @@ def get_databases_handler(event, query_parameters, claims_and_roles):
         
         # Get databases
         databases = get_databases(query_parameters, show_deleted, claims_and_roles)
+        log_action(event, "databaseList", item_count=len(databases.Items),
+                   request_parameters={**query_parameters, "showDeleted": show_deleted})
         return success(body=databases.dict())
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
@@ -491,7 +550,8 @@ def update_database_handler(event, path_parameters, body, claims_and_roles):
             return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Update database
-        result = update_database(database_id, request_model.dict(exclude_unset=True), claims_and_roles)
+        result = update_database(database_id, request_model.dict(exclude_unset=True), claims_and_roles,
+                                 event=event)
         return success(body=result.dict())
 
     except DatabaseAccessDeniedError:
@@ -524,6 +584,8 @@ def delete_database_handler(event, path_parameters, claims_and_roles):
 
         # Delete database
         result = delete_database(database_id, claims_and_roles)
+        if result.statusCode == 200:
+            log_action(event, "databaseDelete", database_id=database_id)
         return APIGatewayProxyResponseV2(
             isBase64Encoded=False,
             statusCode=result.statusCode,
@@ -632,6 +694,8 @@ def get_buckets_handler(event, query_parameters, claims_and_roles):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for database service API"""
     normalize_event(event)

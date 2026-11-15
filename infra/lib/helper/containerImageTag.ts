@@ -42,7 +42,20 @@ export const MAX_IMAGE_REFERENCE_LENGTH = 255;
  *
  * Call this once per construct and pass the result to BOTH the build (as `IMAGE_TAG`) and the job
  * definition, so the tag pushed and the tag pulled cannot diverge.
+ *
+ * A construct whose deployment can build the same sources for more than one architecture passes the
+ * Docker `platform` it builds for, and the tag carries that architecture (`<hash>-arm64`,
+ * `<hash>-amd64`): the two images then never share a tag, so an in-place update from one runtime to
+ * the other cannot replace the digest behind the tag a running consumer still names. The suffix adds
+ * up to six characters, so a construct that uses it also names its repository explicitly and short.
  */
-export function contentImageTag(assetHash: string): string {
-    return assetHash.slice(0, IMAGE_TAG_LENGTH);
+export function contentImageTag(assetHash: string, platform?: string): string {
+    const hash = assetHash.slice(0, IMAGE_TAG_LENGTH);
+    return platform ? `${hash}-${platformTagSuffix(platform)}` : hash;
+}
+
+/** The architecture part of a Docker platform (`linux/arm64` -> `arm64`), as a tag-safe token. */
+export function platformTagSuffix(platform: string): string {
+    const architecture = platform.split("/").pop() ?? platform;
+    return architecture.toLowerCase().replace(/[^a-z0-9]/g, "");
 }

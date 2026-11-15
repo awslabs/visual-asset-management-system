@@ -88,7 +88,6 @@ def _launch(workflow, pipeline, redeploy=None, workflow_service="t-workflow-serv
             stack.enter_context(patch(f"{MOD}._pipeline_table", return_value=tables[1]))
         for name in ("get_asset", "default_bucket", "asset_bucket", "exists", "enforcer", "claims"):
             stack.enter_context(p[name])
-        stack.enter_context(patch(f"{MOD}._running_execution_exists", return_value=False))
         stack.enter_context(patch(f"{MOD}.workflow_service_function", workflow_service))
         m_lambda = stack.enter_context(patch(f"{MOD}.lambda_client"))
         stack.enter_context(patch(f"{MOD}.s3c"))

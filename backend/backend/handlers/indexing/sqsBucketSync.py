@@ -9,8 +9,9 @@ import boto3
 import time
 import hashlib
 import urllib.parse
-from datetime import datetime
+from common.timestamps import utc_now
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from common.resourceNames import get_table_name, ResourceKeys
 from handlers.assets.createAsset import create_asset
 from handlers.assets.assetCount import update_asset_count
@@ -22,6 +23,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config as BotoConfig
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
+from common.eventLogSummary import event_log_summary
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -128,6 +130,27 @@ class SimpleCache:
 s3_buckets_cache = SimpleCache()  # Cache for S3 asset buckets table
 database_cache = SimpleCache()    # Cache for database lookups
 asset_cache = SimpleCache()       # Cache for asset lookups
+
+
+def _sync_file_path(object_key: str, prefix: str, asset_id: str) -> str:
+    """The asset-relative file path in the form the API records name a file ('/dir/file.ext')."""
+    return "/" + extract_relative_file_path(object_key, prefix, asset_id).lstrip("/")
+
+
+def _written_by_vams(object_metadata) -> bool:
+    """Whether an object was written through VAMS (an upload, copy, move, revert, archive or pipeline
+    output), which stamps its change source on the object; those writes are recorded by the action
+    that made them. A direct write to the bucket carries no change source, or the direct one."""
+    source = (object_metadata or {}).get(VAMS_CHANGE_SOURCE_METADATA_KEY)
+    return bool(source) and source != VAMS_CHANGE_SOURCE_DIRECT
+
+
+def _log_sync(action: str, operation: str, **kwargs) -> None:
+    """Record a bucket sync action of the invocation being served (the actor is the system)."""
+    ctx = current_audit_context()
+    if ctx is not None:
+        log_action(ctx.event, action, details={"source": "bucketSync", "operation": operation}, **kwargs)
+
 
 def validate_asset_id(asset_id: str) -> bool:
     """
@@ -860,7 +883,7 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) 
         restored = {k: v for k, v in archived_asset.items()
                     if k not in ('status', 'archivedAt', 'archivedBy', 'archivedReason')}
         restored['databaseId'] = live_db_id
-        restored['unarchivedAt'] = datetime.utcnow().isoformat()
+        restored['unarchivedAt'] = utc_now().isoformat()
         restored['unarchivedBy'] = 'SYSTEM_USER'
         restored['unarchivedReason'] = 'Auto-restored by bucket sync: new file uploaded directly to S3 under archived asset prefix'
 
@@ -998,9 +1021,10 @@ def is_vams_metadata_stamp_echo(record: Dict) -> bool:
     upgrade this to "a duplicate version row" without re-measuring.
 
     Note this only arises for an object that arrives WITHOUT the stamp — a direct S3 write, a folder
-    marker, or a pipeline output landing on an asset path. A VAMS upload is already stamped by
-    ``uploadFile``, so ``update_s3_metadata`` takes its "metadata already matches" branch, makes no
-    copy, and raises no echo. Verified both ways live: a CLI upload produced one notification, a
+    marker written outside VAMS or before VAMS wrote markers stamped, or a pipeline output landing on
+    an asset path. A VAMS upload is already stamped by ``uploadFile``, and a VAMS folder marker by
+    ``folder_marker_metadata``, so ``update_s3_metadata`` takes its "metadata already matches"
+    branch, makes no copy, and raises no echo. Verified both ways live: a CLI upload produced one notification, a
     direct ``s3 cp`` of the same content produced two.
 
     The doubling on that path is what pushes a burst into AWS Lambda's
@@ -1119,6 +1143,15 @@ def update_s3_metadata(bucket_name: str, object_key: str, database_id: str, asse
         logger.exception(f"Error updating S3 metadata: {e}")
         return False
 
+def is_init_marker(object_key: str) -> bool:
+    """
+    Whether the key is an import marker: an object named exactly `init`, or a folder
+    marker named `init/`, at any depth. Matching is case-sensitive.
+    """
+    return (object_key in ('init', 'init/')
+            or object_key.endswith('/init')
+            or object_key.endswith('/init/'))
+
 def delete_s3_object(bucket_name: str, object_key: str, versioning_enabled: bool) -> bool:
     """
     Delete S3 object and all its versions if versioning is enabled
@@ -1133,26 +1166,28 @@ def delete_s3_object(bucket_name: str, object_key: str, versioning_enabled: bool
     """
     try:
         if versioning_enabled:
-            # List all versions of the object
-            versions = s3_client.list_object_versions(
-                Bucket=bucket_name,
-                Prefix=object_key
-            )
-            
-            # Delete all versions
-            for version in versions.get('Versions', []):
+            # The listing for Prefix=object_key also returns longer keys (`init.txt`, `init/...`).
+            # Keys come back in ascending order and the exact key sorts first, so the object's own
+            # versions and delete markers end at the first entry for another key. All of them are
+            # collected before any is deleted, so the continuation markers stay valid.
+            # Not common.s3.list_all_object_versions: it reads the whole prefix, folder contents
+            # included, and its cap counts entries, not keys.
+            own_version_ids = []
+            list_kwargs = {'Bucket': bucket_name, 'Prefix': object_key}
+            while True:
+                page = s3_client.list_object_versions(**list_kwargs)
+                entries = (page.get('Versions') or []) + (page.get('DeleteMarkers') or [])
+                own_version_ids.extend(e['VersionId'] for e in entries if e.get('Key') == object_key)
+                if any(e.get('Key') != object_key for e in entries) or page.get('IsTruncated') is not True:
+                    break
+                list_kwargs['KeyMarker'] = page.get('NextKeyMarker')
+                list_kwargs['VersionIdMarker'] = page.get('NextVersionIdMarker')
+
+            for version_id in own_version_ids:
                 s3_client.delete_object(
                     Bucket=bucket_name,
                     Key=object_key,
-                    VersionId=version['VersionId']
-                )
-                
-            # Delete any delete markers
-            for marker in versions.get('DeleteMarkers', []):
-                s3_client.delete_object(
-                    Bucket=bucket_name,
-                    Key=object_key,
-                    VersionId=marker['VersionId']
+                    VersionId=version_id
                 )
         else:
             # Delete the object
@@ -1579,7 +1614,7 @@ def build_history_record(database_id, asset_id, relative_file_path, version_id,
         "assetId": asset_id,
         "filePath": relative_file_path,
         "changeSource": change_source,
-        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "recordCreated": utc_now().isoformat() + "Z",
         "s3LastModified": s3_last_modified or "",
     }
     if change_source != VAMS_CHANGE_SOURCE_DIRECT:
@@ -1771,6 +1806,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                 if not restored_database_id:
                     logger.error(f"Failed to restore archived asset {asset_id}")
                     return False, True, f"Failed to restore archived asset {asset_id}"
+                _log_sync("assetSync", "restore", database_id=restored_database_id, asset_id=asset_id)
                 logger.info(
                     f"Restored archived asset {asset_id} to database {restored_database_id} "
                     f"after direct S3 upload of {object_key}"
@@ -1803,9 +1839,10 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                 if not created_asset_id:
                     logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
                     return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"
+                _log_sync("assetSync", "create", database_id=database_id_to_use, asset_id=asset_id)
         
-        # 3. Check if the object key ends with "init" - If so delete and skip indexing
-        if object_key.endswith('init') or object_key.endswith('init/'):
+        # 3. Check if the object is an "init" import marker - If so delete and skip indexing
+        if is_init_marker(object_key):
             # Check if versioning is enabled
             versioning_enabled = is_versioning_enabled(bucket_id)
             
@@ -1833,9 +1870,11 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         # Record file version change history (best-effort; never fails the sync).
         # Skip folder markers (no version/content). head_object returns 'null' for
         # VersionId on buckets without versioning enabled.
+        object_metadata = None
         if not object_key.endswith('/'):
             try:
                 head = s3_client.head_object(Bucket=bucket_name, Key=object_key)
+                object_metadata = head.get('Metadata', {}) or {}
                 last_modified = head.get('LastModified')
                 write_file_version_history(
                     database_id_to_use,
@@ -1852,7 +1891,11 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         if object_key.endswith('/'):
             logger.info(f"Folder marker detected: {object_key}, processing but skipping indexing")
             return True, False, f"Processed folder marker {object_key}"
-        
+
+        if not _written_by_vams(object_metadata):
+            _log_sync("fileSync", "created", database_id=database_id_to_use, asset_id=asset_id,
+                      file_path=_sync_file_path(object_key, prefix, asset_id),
+                      bytes=(record.get('s3', {}).get('object') or {}).get('size'))
         return True, True, f"Successfully processed {object_key}"
     except Exception as e:
         logger.exception(f"Error processing S3 record: {e}")
@@ -1881,7 +1924,7 @@ def on_storage_event_created(event):
                indicating if processing completed without hard errors, and successful_records
                is a list of records that were successfully processed
     """
-    logger.info(f"Processing storage event: {json.dumps(event)}")
+    logger.info(f"Processing storage event: {event_log_summary(event)}")
     
     success_count = 0
     error_count = 0
@@ -2029,7 +2072,9 @@ def parse_event(event):
                     if 'Records' in message:
                         s3_events.append(message)
                 except json.JSONDecodeError as e:
-                    logger.warning(f"SNS Message field is not valid JSON: {e}. Message content: {record['Sns']['Message']}")
+                    logger.warning(
+                        f"SNS Message field is not valid JSON ({len(record['Sns']['Message'])} characters): {e}"
+                    )
                     # If Message contains S3 event data in a non-standard format, try to extract it
                     if 's3' in record['Sns']['Message'] or 'bucket' in record['Sns']['Message']:
                         logger.info("Attempting to process SNS Message as raw S3 event data")
@@ -2058,6 +2103,8 @@ def parse_event(event):
     logger.warning("Could not parse event into a standard format, returning original event")
     return event
 
+
+@audited_handler
 def lambda_handler_created(event, context):
     """
     Handler for file creation events from SQS
@@ -2080,7 +2127,7 @@ def lambda_handler_created(event, context):
         reach the file indexer topic (every message when the invocation failed unexpectedly);
         an empty list when all of them did.
     """
-    logger.info(f"File creation event received: {json.dumps(event)}")
+    logger.info(f"File creation event received: {event_log_summary(event)}")
 
     failures = []
 
@@ -2128,6 +2175,8 @@ def lambda_handler_created(event, context):
 
     return with_batch_item_failures({}, event, failures)
 
+
+@audited_handler
 def lambda_handler_deleted(event, context):
     """
     Handler for file deleted events from SQS
@@ -2151,7 +2200,7 @@ def lambda_handler_deleted(event, context):
         reach the file indexer topic (every message when the invocation failed unexpectedly);
         an empty list when all of them did.
     """
-    logger.info(f"File deletion event received: {json.dumps(event)}")
+    logger.info(f"File deletion event received: {event_log_summary(event)}")
 
     failures = []
 
@@ -2179,8 +2228,8 @@ def lambda_handler_deleted(event, context):
                 raw_object_key = record['s3']['object']['key']
                 object_key = decode_s3_event_key(raw_object_key)
 
-                # Skip init files entirely (both processing and indexing)
-                if object_key.endswith('init') or object_key.endswith('init/'):
+                # Skip init import markers entirely (both processing and indexing)
+                if is_init_marker(object_key):
                     logger.info(f"Skipping init file: {object_key}")
                     continue
 

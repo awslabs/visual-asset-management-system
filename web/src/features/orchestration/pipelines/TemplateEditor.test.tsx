@@ -164,3 +164,93 @@ describe("TemplateEditor delete warnings", () => {
         expect(mockToast.warning).not.toHaveBeenCalled();
     });
 });
+
+/**
+ * Templates of a system pipeline can be edited (config body, tag schema) but neither added nor
+ * deleted — the backend refuses both with a 400, so the board lists those controls disabled with the
+ * reason.
+ */
+describe("TemplateEditor on a system pipeline", () => {
+    const CREATE_REASON = "Templates cannot be added to a system pipeline.";
+    const DELETE_REASON = "Templates of a system pipeline cannot be deleted.";
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useAllowedRoutes.mockImplementation(() => ({ loading: false, can: () => true }));
+    });
+
+    it("lists Create Template and Delete disabled with their reasons and keeps Edit", () => {
+        const { usePipeline } = require("../api/queries");
+        usePipeline.mockReturnValue({ data: { pipelineName: "P1", isSystem: true } });
+        setup([T_FREE]);
+        const create = screen.getByRole("button", { name: "Create Template" });
+        expect(create).toHaveAttribute("aria-disabled", "true");
+        expect(create).toHaveAttribute("aria-description", CREATE_REASON);
+        const del = screen.getByRole("button", { name: "Delete" });
+        expect(del).toHaveAttribute("aria-disabled", "true");
+        expect(del).toHaveAttribute("aria-description", DELETE_REASON);
+        expect(screen.getByRole("button", { name: "Edit" })).not.toHaveAttribute("aria-disabled");
+        expect(screen.getByText(/System pipeline/)).toBeInTheDocument();
+    });
+
+    it("reaches the disabled controls by keyboard, shows each reason and acts on neither", async () => {
+        const user = userEvent.setup();
+        const { usePipeline } = require("../api/queries");
+        usePipeline.mockReturnValue({ data: { pipelineName: "P1", isSystem: true } });
+        const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(true);
+        setup([T_FREE]);
+
+        // Create Template is the first control in the tab order (the breadcrumb links are stubbed).
+        await user.tab();
+        const create = screen.getByRole("button", { name: "Create Template" });
+        expect(create).toHaveFocus();
+        expect(await screen.findByRole("tooltip")).toHaveTextContent(CREATE_REASON);
+        await user.keyboard("{Enter}");
+
+        const del = screen.getByRole("button", { name: "Delete" });
+        await user.hover(del);
+        await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(DELETE_REASON));
+        await user.click(del);
+        expect(confirmSpy).not.toHaveBeenCalled();
+        expect(mockDelete).not.toHaveBeenCalled();
+        confirmSpy.mockRestore();
+    });
+
+    it("hides Create Template and Delete from a role that may not call them", () => {
+        // The route check comes first: a role refused the route is not told about the system rule.
+        const { usePipeline } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        usePipeline.mockReturnValue({ data: { pipelineName: "P1", isSystem: true } });
+        useAllowedRoutes.mockImplementation(() => ({
+            loading: false,
+            can: (method: string) => method === "PUT" || method === "GET",
+        }));
+        setup([T_FREE]);
+        expect(screen.queryByRole("button", { name: "Create Template" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+        expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    });
+
+    it("keeps every control enabled for an ordinary pipeline", () => {
+        const { usePipeline } = require("../api/queries");
+        usePipeline.mockReturnValue({ data: { pipelineName: "P1", isSystem: false } });
+        setup([T_FREE]);
+        for (const name of ["Create Template", "Delete", "Edit"]) {
+            const button = screen.getByRole("button", { name });
+            expect(button).not.toHaveAttribute("aria-disabled");
+            expect(button).not.toHaveAttribute("aria-description");
+        }
+        expect(screen.queryByText(/System pipeline/)).toBeNull();
+    });
+});
+
+describe("TemplateEditor search box", () => {
+    it("shows a placeholder", () => {
+        setup([T_FREE]);
+        expect(screen.getByRole("textbox", { name: "Search" })).toHaveAttribute(
+            "placeholder",
+            "Search templates"
+        );
+    });
+});

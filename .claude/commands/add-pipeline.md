@@ -8,7 +8,7 @@ You are scaffolding a new VAMS processing pipeline. Follow `backendPipelines/CLA
 
 ### Step 1: Gather Requirements
 
-**Which lane.** Pipelines are not add-ons: an upstream pipeline uses the core steps below. A pipeline that integrates an external solution, such as a vendor's processing service, is still added as a pipeline, gated by its own `app.pipelines.*` switch; the add-on lane (`documentation/docusaurus-site/docs/developer/addons-overview.md`) is for the integrations under `infra/lib/nestedStacks/addon/` and the add-on viewers. A fork follows fork mode.
+**Which lane.** Pipelines are not add-ons: an upstream pipeline uses the core steps below. A pipeline that integrates an external solution, such as a vendor's processing service, is still added as a pipeline, gated by its own `app.pipelines.*` switch; the add-on lane (root `CLAUDE.md` "Core, add-on and custom", `documentation/docusaurus-site/docs/developer/addons-overview.md`) is for the functionality that rule classifies as an add-on, built under `infra/lib/nestedStacks/addon/`, and the add-on viewers. A fork follows fork mode.
 
 **Fork mode.** Steps 5–8 below edit core files (`pipelineBuilder-nestedStack.ts`, `vpcBuilder-nestedStack.ts`, `config.ts` and the config templates), which conflict on every upstream merge. When the pipeline is being added in a **fork** of VAMS rather than contributed upstream, prefer an approach that edits none of them: deploy the pipeline as its own stack and register it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges` in `deployment/configuration-reference.md`), which resolves the orchestration bus, workflow role and `vamsSchema` import function from SSM at its own deploy time. The custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam: it does not depend on the stack that builds the `vamsSchema` import function, and a Batch/ECS/Fargate pipeline also needs the core VPC builder condition blocks (Step 7). See `documentation/docusaurus-site/docs/developer/customizing-vams.md`. The backend layout, `assetId` threading and output-path rules apply unchanged.
 
@@ -17,7 +17,7 @@ Ask the user for:
 -   **Pipeline name**: A descriptive name in camelCase (e.g., `meshOptimizer`, `imageClassifier`, `pointCloudProcessor`)
 -   **Pipeline category**: One of `conversion`, `preview`, `genAi`, `multi`, `3dRecon`, `simulation` (determines folder location)
 -   **Input file types**: Which file extensions the pipeline processes (e.g., `.obj, .fbx, .stl`)
--   **Processing type**: `lambdaContainer` (for short tasks < 15min) or `batchFargate`/`batchGpu` (for long-running tasks or GPU)
+-   **Processing type**: `lambdaContainer` (for short tasks < 15min) or `batchFargate`/`batchGpu` (for long-running tasks or GPU). An agentic pipeline may additionally offer Amazon Bedrock AgentCore Runtime behind a per-deployment `runtime` switch — the GenAI CAD STEP agent (`infra/lib/nestedStacks/pipelines/genAi/cadStepAgent/`) is the precedent: one container image serves both runtimes, CodeBuild builds `linux/arm64` for AgentCore and `linux/amd64` for Fargate, the AgentCore branch is commercial-partition-only and requires `useCodeBuild`, and the VPC builder blocks are gated on the Fargate runtime alone.
 -   **Description**: What the pipeline does
 -   **GPU required**: Whether the container needs GPU access (affects `batch-gpu-pipeline` vs `batch-fargate-pipeline` construct)
 -   **Output type**: File-level outputs (new files, `.previewFile.X` thumbnails), asset-level preview, metadata, or auxiliary/viewer data — this determines which output S3 path the pipeline writes to
@@ -43,12 +43,13 @@ All four Lambdas live in `backendPipelines/{category}/{pipelineName}/lambda/`.
 
 Each pipeline step reads these paths from its manifest (`manifestHelper.resolve_pipeline_inputs`), not from the Step Functions body. Use the correct one (see `backendPipelines/CLAUDE.md` "Pipeline S3 Output Paths" for the full rules, including the `constructPipeline` auxiliary-path fallback and the relative-path derivation):
 
-| Path                                   | Bucket    | Use For                                                                      |
-| -------------------------------------- | --------- | ---------------------------------------------------------------------------- |
-| `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned.  |
-| `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.     |
-| `outputS3AssetMetadataPath`            | Asset     | Metadata / attribute JSON. Versioned. Naming decides the target — see below. |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.           |
+| Path                                   | Bucket    | Use For                                                                                                                                                                         |
+| -------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned.                                                                                                     |
+| `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.                                                                                                        |
+| `outputS3AssetMetadataPath`            | Asset     | Metadata / attribute JSON. Versioned. Naming decides the target — see below.                                                                                                    |
+| `outputS3AssetResultsPath`             | Asset     | Result files recorded as the execution's output results (not on the asset); `execution.status.json` is reserved for a pipeline-reported outcome (`backendPipelines/CLAUDE.md`). |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.                                                                                                              |
 
 **Metadata / attribute output naming.** The process-output step decides what a JSON file under
 `outputS3AssetMetadataPath` means from its **file name**, matched on suffix anywhere under the path:
@@ -90,6 +91,8 @@ input_parts = stage_input.objectKey.split("/")
 relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
                    if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
 ```
+
+5. **Read the input at its launch version.** vamsExecute forwards `resolved['inputVersionId']` → openPipeline puts `"inputVersionId"` on the state machine input → constructPipeline puts it on the definition (only when non-empty, so an image built before the field still parses a no-version definition) → the container passes it as `VersionId` on every read of the input file (download, HEAD/size checks, streamed GETs; `aws s3api get-object --version-id` for an AWS CLI container), and sends exactly today's call when it is `""`. A version deleted after launch fails the run naming the file and version. Grant the container role `s3:GetObjectVersion` on the asset buckets. `backendPipelines/tests/test_pipeline_input_versions.py` and `infra/test/pipelines/pipelineInputVersionGrants.test.ts` fail on a pipeline that misses either; see `backendPipelines/CLAUDE.md` "Input Version Threading".
 
 ### Step 3: Create Backend Pipeline Files
 
@@ -403,6 +406,7 @@ After creating all files, verify:
 -   [ ] Step Functions state machine references correct Lambda ARNs
 -   [ ] Container Dockerfile builds successfully
 -   [ ] Container Dockerfile drops to a non-root `USER`, and every `COPY` of source that user reads is followed on the next line by `RUN chmod -R a+rX <path>` (`COPY --chown` alone is not sufficient)
+-   [ ] Before `USER`, the Dockerfile gives that user every folder the container writes at run time, including the working directory of each subprocess it starts (upstream tools write relative to it). A working directory that holds root-owned upstream sources gets the user's group and mode `1775` (`chgrp <group> <dir> && chmod 1775 <dir>`) rather than a `chown`; see `backendPipelines/CLAUDE.md`, "A Non-Root Container Owns Every Folder It Writes"
 -   [ ] Config flag name matches between config.json, config templates, config.ts interface, and the pipelineBuilder check
 -   [ ] Backward-compatibility defaults + validation in `getConfig()`
 -   [ ] Pipeline nested stack is imported and registered in pipelineBuilder-nestedStack.ts

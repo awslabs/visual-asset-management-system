@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-empty-function */
 /*
  * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -6,41 +5,53 @@
 
 import * as cdk from "aws-cdk-lib";
 import { IConstruct } from "constructs";
-import * as iam from "aws-cdk-lib/aws-iam";
-import { Aspects, Aws } from "aws-cdk-lib";
 
-export function RoleRename(stack: IConstruct) {
-    const rolePrefix = new cdk.CfnParameter(stack, "rolePrefix", {
-        type: "String",
-        description: "Role Prefix for stack IAM Roles",
-        default: "",
-    });
-    const permissionBoundaryArn = new cdk.CfnParameter(stack, "permissionBoundaryArn", {
-        type: "String",
-        description: "Boundary Arn for stack IAM Roles",
-        default: "",
-    });
-    Aspects.of(stack).add(
-        new IamRoleTransform(stack, rolePrefix.valueAsString, permissionBoundaryArn.valueAsString)
-    );
+export interface IamRoleTransformOptions {
+    /**
+     * Override `RoleName` on every visited role. Defaults to true. The core stack has always named its
+     * roles, so turning this off there would replace every role; it is off only for stacks whose roles
+     * never carried an explicit name.
+     */
+    readonly renameRoles?: boolean;
 }
 
+/**
+ * Applies the `cdk.json` `environments.aws` IAM settings to every `AWS::IAM::Role` it visits, nested
+ * stacks included: a deterministic `RoleName` carrying `IamRoleNamePrefix`, and `PermissionsBoundary`
+ * set to `PermissionBoundaryArn` when that is non-empty. An empty boundary leaves the property as the
+ * construct emitted it, so a boundary applied by any other mechanism is kept.
+ */
 export class IamRoleTransform implements cdk.IAspect {
+    /**
+     * Sets `permissionsBoundaryArn` on every `AWS::IAM::Role` under `scope` (the app, so the WAF, API
+     * origin verification and cross-Region notification stacks are covered as well as the core
+     * stack), including the roles CDK adds during prepare. Role names are left as they are. No-op
+     * when the ARN is empty.
+     */
+    public static applyPermissionsBoundary(
+        scope: IConstruct,
+        permissionsBoundaryArn: string | undefined
+    ): void {
+        if (!permissionsBoundaryArn) return;
+        const aspect = new IamRoleTransform("", permissionsBoundaryArn, { renameRoles: false });
+        cdk.Aspects.of(scope).add(aspect);
+        scope.node.addValidation({ validate: () => aspect.boundRolesAddedDuringPrepare(scope) });
+    }
+
     private readonly permissionsBoundaryArn: string;
+    private readonly renameRoles: boolean;
+    private readonly bounded = new WeakSet<cdk.CfnResource>();
     resource_types: string[];
     prefix: string;
-    conditionPrefix: cdk.CfnCondition;
-    conditionBoundary: cdk.CfnCondition;
-    constructor(stack: IConstruct, prefixParam: string, permissionBoundaryArn: string) {
-        this.permissionsBoundaryArn = permissionBoundaryArn;
+    constructor(
+        prefixParam: string,
+        permissionBoundaryArn: string | undefined,
+        options: IamRoleTransformOptions = {}
+    ) {
+        this.permissionsBoundaryArn = permissionBoundaryArn || "";
+        this.renameRoles = options.renameRoles ?? true;
         this.resource_types = ["AWS::IAM::Role"];
         this.prefix = prefixParam;
-        this.conditionPrefix = new cdk.CfnCondition(stack, "conditionPrefix", {
-            expression: cdk.Fn.conditionEquals(prefixParam, ""),
-        });
-        this.conditionBoundary = new cdk.CfnCondition(stack, "conditionBoundary", {
-            expression: cdk.Fn.conditionEquals(permissionBoundaryArn, ""),
-        });
     }
 
     public visit(node: IConstruct): void {
@@ -48,21 +59,46 @@ export class IamRoleTransform implements cdk.IAspect {
             cdk.CfnResource.isCfnResource(node) &&
             this.resource_types.includes(node.cfnResourceType)
         ) {
-            const resource_type = node.cfnResourceType;
-            if (resource_type.includes("IAM::Role")) {
-                // node.addPropertyOverride("RoleName",roleName);
-                cdk.Fn.conditionIf(
-                    this.conditionPrefix.logicalId,
-                    () => {},
-                    this.ApplyOverride(node, "RoleName", this.getRoleName(node))
-                );
-                cdk.Fn.conditionIf(
-                    this.conditionBoundary.logicalId,
-                    this.ApplyOverride(node, "PermissionsBoundary", Aws.NO_VALUE),
-                    this.ApplyOverride(node, "PermissionsBoundary", Aws.NO_VALUE)
-                );
+            if (this.renameRoles) {
+                this.ApplyOverride(node, "RoleName", this.getRoleName(node));
+            }
+            if (this.permissionsBoundaryArn !== "") {
+                this.ApplyOverride(node, "PermissionsBoundary", this.permissionsBoundaryArn);
+                this.bounded.add(node);
             }
         }
+    }
+
+    /**
+     * Bounds the roles CDK adds while preparing the app, after aspects have run: the cross-Region
+     * export reader and writer providers that `crossRegionReferences` creates in a top-level stack.
+     * A top-level template is rendered after this runs, so those roles are bounded here. A nested
+     * template is already rendered by then, so an unbounded role in a nested stack is returned as an
+     * error rather than deployed without the boundary.
+     */
+    public boundRolesAddedDuringPrepare(scope: IConstruct): string[] {
+        if (this.permissionsBoundaryArn === "") return [];
+        const errors: string[] = [];
+        for (const node of scope.node.findAll()) {
+            if (
+                !cdk.CfnResource.isCfnResource(node) ||
+                !this.resource_types.includes(node.cfnResourceType) ||
+                this.bounded.has(node)
+            ) {
+                continue;
+            }
+            if (cdk.Stack.of(node).nested) {
+                errors.push(
+                    `IAM role ${node.node.path} was added to a nested stack after the permissions ` +
+                        "boundary was applied, so its template cannot carry the boundary configured " +
+                        "in environments.aws.PermissionBoundaryArn."
+                );
+                continue;
+            }
+            this.ApplyOverride(node, "PermissionsBoundary", this.permissionsBoundaryArn);
+            this.bounded.add(node);
+        }
+        return errors;
     }
     public ApplyOverride(node: cdk.CfnResource, key: string, value: string) {
         node.addPropertyOverride(key, value);
@@ -71,8 +107,6 @@ export class IamRoleTransform implements cdk.IAspect {
         node.addDeletionOverride(property);
     }
     public getRoleName(resource: IConstruct): string {
-        const roleRef = resource as iam.Role;
-        const originalName = roleRef.roleName;
         const deploymentIdentifierId =
             // "-" +
             // cdk.Stack.of(resource).account.toString() +

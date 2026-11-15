@@ -70,7 +70,13 @@ def format_database_output(database_data: Dict[str, Any], json_output: bool = Fa
         output_lines.append(f"  Restrict File Uploads To Extensions: {file_extensions}")
     else:
         output_lines.append(f"  Restrict File Uploads To Extensions: (none)")
-    
+
+    # Compliance schema binding: both fields are absent (null) on a database with no binding.
+    if database_data.get('complianceSchemaName'):
+        output_lines.append(f"  Compliance Schema: {database_data['complianceSchemaName']}")
+    if database_data.get('complianceAutoEval') is not None:
+        output_lines.append(f"  Compliance Auto-Eval: {database_data['complianceAutoEval']}")
+
     return '\n'.join(output_lines)
 
 
@@ -216,6 +222,10 @@ def list(ctx: click.Context, show_deleted: bool, page_size: Optional[int], max_i
             
             # Aggregate items
             items = page_result.get('Items', [])
+            remaining_slots = max_total_items - total_fetched
+            page_had_more = len(items) > remaining_slots
+            if page_had_more:
+                items = items[:remaining_slots]
             all_items.extend(items)
             total_fetched += len(items)
             
@@ -225,6 +235,7 @@ def list(ctx: click.Context, show_deleted: bool, page_size: Optional[int], max_i
             
             # Check if we should continue
             next_token = page_result.get('NextToken')
+            has_more_items = page_had_more or bool(next_token)
             if not next_token or total_fetched >= max_total_items:
                 break
         
@@ -236,7 +247,7 @@ def list(ctx: click.Context, show_deleted: bool, page_size: Optional[int], max_i
             'pageCount': page_count
         }
         
-        if total_fetched >= max_total_items and next_token:
+        if total_fetched >= max_total_items and has_more_items:
             result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
         
     else:
@@ -780,6 +791,10 @@ def list_buckets(ctx: click.Context, page_size: Optional[int], max_items: Option
             
             # Aggregate items
             items = page_result.get('Items', [])
+            remaining_slots = max_total_items - total_fetched
+            page_had_more = len(items) > remaining_slots
+            if page_had_more:
+                items = items[:remaining_slots]
             all_items.extend(items)
             total_fetched += len(items)
             
@@ -789,6 +804,7 @@ def list_buckets(ctx: click.Context, page_size: Optional[int], max_items: Option
             
             # Check if we should continue
             next_token = page_result.get('NextToken')
+            has_more_items = page_had_more or bool(next_token)
             if not next_token or total_fetched >= max_total_items:
                 break
         
@@ -800,7 +816,7 @@ def list_buckets(ctx: click.Context, page_size: Optional[int], max_items: Option
             'pageCount': page_count
         }
         
-        if total_fetched >= max_total_items and next_token:
+        if total_fetched >= max_total_items and has_more_items:
             result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
         
     else:

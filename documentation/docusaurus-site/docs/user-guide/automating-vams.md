@@ -8,12 +8,12 @@ This page helps you choose a surface and points you at the reference material fo
 
 ## Choosing a surface
 
-| Surface             | Use it when                                                                                                             | Reference                                                              |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| **Web interface**   | You are working interactively -- browsing, viewing 3D files, reviewing results, or making one-off changes.              | The rest of this user guide                                            |
-| **VAMS CLI**        | You are scripting a repeatable task, operating on many assets at once, or running VAMS steps from a CI/CD pipeline.     | [CLI documentation](../cli/getting-started.md)                         |
-| **VAMS MCP server** | You want an AI agent to search, inspect, and report on a deployment in response to questions asked in natural language. | [VAMS MCP Server](../developer/agentic-development.md#vams-mcp-server) |
-| **REST API**        | You are building your own application, integration, or connector on top of VAMS.                                        | [API Overview](../api/overview.md)                                     |
+| Surface             | Use it when                                                                                                             | Reference                                      |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| **Web interface**   | You are working interactively -- browsing, viewing 3D files, reviewing results, or making one-off changes.              | The rest of this user guide                    |
+| **VAMS CLI**        | You are scripting a repeatable task, operating on many assets at once, or running VAMS steps from a CI/CD pipeline.     | [CLI documentation](../cli/getting-started.md) |
+| **VAMS MCP server** | You want an AI agent to search, inspect, and report on a deployment in response to questions asked in natural language. | [MCP Server](../mcp/mcp-server.md)             |
+| **REST API**        | You are building your own application, integration, or connector on top of VAMS.                                        | [API Overview](../api/overview.md)             |
 
 :::note[Your permissions apply everywhere]
 Every surface enforces the same two-tier authorization. Automating a task does not widen what you can reach -- if you cannot see an asset in the web interface, a script running as you cannot see it either. See [Permissions](permissions.md).
@@ -72,13 +72,13 @@ From here, [CLI Getting Started](../cli/getting-started.md) covers profiles for 
 
 The VAMS MCP server exposes the VAMS API to an AI agent as a set of tools, so you can ask questions about a deployment in natural language -- finding assets matching a description, summarizing what a workflow produced, or checking which assets lack required metadata -- and have the agent gather the answer.
 
-It stores no credentials of its own. It reuses the CLI's profile and sign-in, so set up and authenticate the CLI first.
+It stores no credentials of its own. It reuses the CLI's profile and sign-in, so set up and authenticate the CLI first. For MCP clients that connect only to remote servers, such as Amazon Quick, an operator can host the server remotely, where each user signs in with OAuth; see [Remote MCP Server](../mcp/remote-mcp-server.md).
 
 :::warning[Read-only until you enable more]
 The MCP server exposes only read tools by default. Write tools (create and update) require `VAMS_ENABLE_WRITES`, and destructive tools (archive and delete) additionally require `VAMS_ENABLE_DESTRUCTIVE`. Leave both off unless an agent genuinely needs to change data, and turn on destructive tools only against a deployment you can afford to have modified.
 :::
 
-For setup, the tool list, and the gating options, see [VAMS MCP Server](../developer/agentic-development.md#vams-mcp-server).
+For installation, client registration, configuration, upgrading and troubleshooting, see [MCP Server](../mcp/mcp-server.md).
 
 ---
 

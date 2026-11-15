@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Database User",
-        "description": "Standard user access for a specific database. Can view all data, create/update assets, archive (soft delete) assets, add, edit and remove the database's metadata, and execute workflows (execute, list, details, paged detail metadata, abort, re-run). Can create and execute workflows in the scoped database \u2014 the workflow POST action covers both. Cannot view, unarchive or permanently delete archived assets, permanently delete assets, view detailed execution logs, permanently delete executions, create/update/delete pipelines, delete workflows or schemas, create the database, edit its details, delete (archive) it, list the registered asset buckets, or use asset ingestion. Can view and execute global pipelines and workflows.",
+        "description": "Standard user access for a specific database. Can view all data, create/update assets, archive (soft delete) assets, add, edit and remove the database's metadata, and execute workflows (execute, list, details, paged detail metadata, abort, re-run). Can create and execute workflows in the scoped database \u2014 the workflow POST action covers both. Cannot view, unarchive or permanently delete archived assets, permanently delete assets, view detailed execution logs, permanently delete executions, create/update/delete pipelines, delete workflows or schemas, create the database, edit its details, delete (archive) it, list the registered asset buckets, or use asset ingestion. Can view and execute global pipelines and workflows. Read-only compliance for the database: its and GLOBAL schemas, compliance state, evaluation history, quarantine list, cascades and audit; no binding, evaluation or quarantine actions.",
         "version": "1.0"
     },
     "variables": [
@@ -98,6 +98,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/auth/api-keys"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/compliance"
                 }
             ],
             "groupPermissions": [
@@ -202,6 +207,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/addon/physna/viewer"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/compliance"
                 }
             ],
             "groupPermissions": [
@@ -635,6 +645,82 @@
                     "field": "tagTypeName",
                     "operator": "contains",
                     "value": ".*"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas-readonly",
+            "description": "Allow read of the database's compliance schemas",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas-global-readonly",
+            "description": "Allow read of GLOBAL compliance schemas",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "GLOBAL"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-evaluations-readonly",
+            "description": "Allow read of compliance state, history and audit for the database",
+            "objectType": "complianceEvaluation",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-cascades-readonly",
+            "description": "Allow read of the database's compliance cascades",
+            "objectType": "complianceCascade",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
                 }
             ],
             "criteriaOr": [],

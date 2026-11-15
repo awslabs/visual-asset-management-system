@@ -156,7 +156,7 @@ class TestManifestReadFailsLoudly:
             ' "key": "xd130a6d6/test/pump.stl", "assetRootS3Key": "xd130a6d6/"}],'
             ' "outputs": {"bucket": "obkt", "metadata": "' + _OUTPUT_METADATA_PREFIX + '"}}')
         with patch.object(mod, "s3_client", _s3_returning(payload)):
-            input_path, relative_path, output_path = mod.resolve_inputs_from_manifest(
+            input_path, relative_path, output_path, _ = mod.resolve_inputs_from_manifest(
                 {"inputManifestS3Location": _MANIFEST_LOCATION})
         assert input_path == "s3://abkt/xd130a6d6/test/pump.stl"
         assert relative_path == "test/pump.stl"
@@ -203,7 +203,10 @@ def _run_extraction(mod, extraction, metadata=None, extractor_error=None,
     extractor = MagicMock(side_effect=extractor_error) if extractor_error \
         else MagicMock(return_value=metadata if metadata is not None else {"volume": 1.5})
 
+    # Nothing is downloaded, so the input text check has no file to read
+    # (test_meshcad_input_text.py covers it).
     with patch.object(mod, "download", MagicMock(side_effect=_download)), \
+            patch.object(mod, "check_input_text", MagicMock()), \
             patch.object(mod, "upload", MagicMock(side_effect=_upload)), \
             patch.object(mod, "extract_mesh_metadata", extractor), \
             patch.object(mod, "get_handler_for_format", MagicMock(return_value="mesh")):

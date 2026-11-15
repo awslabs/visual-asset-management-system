@@ -28,7 +28,13 @@ import {
 import { appCache } from "../../services/appCache";
 import type { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
-import { SearchExplanation, getTotalResultCount, getPageCount } from "./types";
+import {
+    SearchExplanation,
+    formatTotalResultCount,
+    getPageCount,
+    getTotalResultCount,
+    isTotalLowerBound,
+} from "./types";
 import { extractLocationData } from "./utils/locationUtils";
 import { isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
@@ -522,10 +528,13 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     return (
         <SpaceBetween direction="vertical" size="m">
             {/* Header with result count */}
-            {state?.result?.hits?.total?.value ? (
+            {getTotalResultCount(state?.result) ? (
                 <Box variant="h2">
-                    {locationData.length} of {state.result.hits.total.value} result
-                    {state.result.hits.total.value !== 1 ? "s" : ""} with location data
+                    {locationData.length} of {formatTotalResultCount(state.result)} result
+                    {getTotalResultCount(state.result) !== 1 || isTotalLowerBound(state.result)
+                        ? "s"
+                        : ""}{" "}
+                    with location data
                 </Box>
             ) : (
                 <Box variant="h2">No search results with location data</Box>
@@ -764,7 +773,11 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                                 <Box>
                                                     <Box variant="awsui-key-label">Asset Name</Box>
                                                     <Link
-                                                        href={`#/databases/${selectedItem.databaseId}/assets/${selectedItem.assetId}`}
+                                                        href={`#/databases/${
+                                                            selectedItem.databaseId
+                                                        }/assets/${encodeURIComponent(
+                                                            selectedItem.assetId
+                                                        )}`}
                                                     >
                                                         {selectedItem.parentAssetName}
                                                     </Link>
@@ -852,11 +865,19 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                                     : "";
                                                 return (
                                                     <Link
-                                                        href={`#/databases/${selectedItem.databaseId}/assets/${selectedItem.assetId}${filePathQuery}`}
+                                                        href={`#/databases/${
+                                                            selectedItem.databaseId
+                                                        }/assets/${encodeURIComponent(
+                                                            selectedItem.assetId
+                                                        )}${filePathQuery}`}
                                                         onFollow={(event) => {
                                                             event.preventDefault();
                                                             navigate(
-                                                                `/databases/${selectedItem.databaseId}/assets/${selectedItem.assetId}${filePathQuery}`,
+                                                                `/databases/${
+                                                                    selectedItem.databaseId
+                                                                }/assets/${encodeURIComponent(
+                                                                    selectedItem.assetId
+                                                                )}${filePathQuery}`,
                                                                 {
                                                                     state: {
                                                                         filePathToNavigate:
@@ -874,7 +895,11 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                             })()
                                         ) : (
                                             <Link
-                                                href={`#/databases/${selectedItem.databaseId}/assets/${selectedItem.assetId}`}
+                                                href={`#/databases/${
+                                                    selectedItem.databaseId
+                                                }/assets/${encodeURIComponent(
+                                                    selectedItem.assetId
+                                                )}`}
                                             >
                                                 <Button variant="primary" fullWidth>
                                                     View Asset Details

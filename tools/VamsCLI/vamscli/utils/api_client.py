@@ -4,7 +4,7 @@ import json
 import threading
 import requests
 from typing import Dict, Any, List, Optional
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 # Single-flight token refresh: concurrent uploads share one APIClient (one requests.Session)
 # and run API calls on parallel executor threads. Without serialization, a 403/401 on several
@@ -64,6 +64,39 @@ _AUTHORIZER_DENIED_MESSAGE = (
     "deployment may restrict API access by source IP address, or this credential is not accepted. "
     "Contact your administrator."
 )
+# The version check carries no token, so an authorizer deny there is not about a credential.
+_VERSION_CHECK_DENIED_MESSAGE = (
+    "Access forbidden. The VAMS API is reachable, but its authorizer refused the version check (HTTP 403). "
+    "That request carries no sign-in, so the deployment most likely restricts API access by source IP "
+    "address and this machine's address is not in the allowed ranges. Contact your administrator."
+)
+# A per-call token handed to APIClient(bearer_token=...) is never refreshed, so its
+# rejection is reported at once, and in words that do not tell the caller to run a CLI login.
+_INJECTED_TOKEN_REJECTED_MESSAGE = (
+    "Authentication failed: the VAMS API did not accept the supplied token (HTTP 401). It may be "
+    "expired, or issued to a client this deployment does not accept. Sign in again to get a new token."
+)
+_INJECTED_TOKEN_DENIED_MESSAGE = (
+    "Access forbidden. The VAMS API authorizer refused the supplied token. The deployment may restrict "
+    "API access by source IP address, or this token is not accepted. Contact your administrator."
+)
+
+
+def _validated_bearer_token(token: Any) -> str:
+    """Return a per-call bearer token, refusing one that cannot be sent as a header value as is.
+
+    The value is the raw token (a JWT or a VAMS API key), without a "Bearer " prefix; whitespace or a
+    control character anywhere would split or corrupt the Authorization header. The token itself is
+    never echoed in the error.
+    """
+    if not isinstance(token, str) or not token:
+        raise ValueError("bearer_token must be a non-empty string")
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7f for ch in token):
+        raise ValueError(
+            "bearer_token must be the raw token without a 'Bearer ' prefix, whitespace or control characters")
+    return token
+
+
 _REDIRECT_TARGET_REFUSED_MESSAGE = (
     "The request was redirected to {host}, which refused it (HTTP 403). That host is not the VAMS API, so "
     "signing in again does not change the result: a presigned URL may have expired, or the network path "
@@ -81,6 +114,17 @@ def _is_cognito_unavailable(error_message: str) -> bool:
     """
     text = (error_message or "").lower()
     return "cognito user management is not available" in text or "cognito configuration error" in text
+
+
+def _api_error_code(response) -> Optional[str]:
+    """The machine-readable `code` an HTTP error body carries (a handler-defined string such as
+    `SOME_CODE`), or None. Never raises, for the reason `_api_error_message` gives."""
+    try:
+        data = response.json() if getattr(response, "content", None) else None
+    except Exception:
+        return None
+    code = data.get("code") if isinstance(data, dict) else None
+    return code if isinstance(code, str) and code else None
 
 
 def _api_error_message(response, fallback: str) -> str:
@@ -236,9 +280,19 @@ from ..constants import (
     API_WORKFLOW_TRIGGERS, API_WORKFLOW_TRIGGER,
     API_WORKFLOW_EXECUTIONS, API_EXECUTE_WORKFLOW, API_WORKFLOW_EXECUTIONS_GLOBAL,
     API_WORKFLOW_EXECUTION, API_WORKFLOW_EXECUTION_DETAILS,
-    API_WORKFLOW_EXECUTION_DETAILS_METADATA, API_WORKFLOW_EXECUTION_LOGS,
+    API_WORKFLOW_EXECUTION_DETAILS_METADATA, API_WORKFLOW_EXECUTION_DETAILS_FILES,
+    API_WORKFLOW_EXECUTION_DETAILS_RESULTS, API_WORKFLOW_EXECUTION_LOGS,
     API_WORKFLOW_EXECUTION_RERUN, API_WORKFLOW_EXECUTION_PERMANENT,
-    API_AUTH_API_KEYS, API_AUTH_API_KEY
+    API_AUTH_API_KEYS, API_AUTH_API_KEY,
+    API_COMPLIANCE_SCHEMAS, API_COMPLIANCE_SCHEMA_BY_NAME,
+    API_COMPLIANCE_BIND_DATABASE, API_COMPLIANCE_BIND_ASSET,
+    API_COMPLIANCE_EVALUATE_ASSET, API_COMPLIANCE_EVALUATE_DATABASE, API_COMPLIANCE_SWEEP_SCHEMA,
+    API_COMPLIANCE_EVALUATIONS_ASSET,
+    API_COMPLIANCE_STATE_ASSET, API_COMPLIANCE_STATE_DATABASE,
+    API_COMPLIANCE_QUARANTINE, API_COMPLIANCE_QUARANTINE_RELEASE, API_COMPLIANCE_QUARANTINE_EXCEPTION,
+    API_COMPLIANCE_CASCADES, API_COMPLIANCE_CASCADE_BY_ID,
+    API_COMPLIANCE_CASCADE_APPROVE, API_COMPLIANCE_CASCADE_REJECT,
+    API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
 )
 from ..version import get_version
 from .exceptions import (
@@ -259,12 +313,15 @@ from .exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError,
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
-    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError
+    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
+    ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError
 )
-from .exceptions import GlobalInfrastructureError
+from .exceptions import GlobalInfrastructureError, InvalidRequestPathError
 from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
+from .addon_api_client import AddonAPIClientMixin
 from .custom_api_client import CustomAPIClientMixin
+from .request_paths import _path_segment, route_path  # noqa: F401 - route_path is re-exported
 
 
 def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) -> str:
@@ -290,27 +347,78 @@ def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) ->
             )
 
     return API_COMMENTS_ASSET_VERSION_COMMENT.replace(
-        '{assetId}', str(asset_id)
+        '{assetId}', _path_segment(asset_id)
     ).replace(
-        '{assetVersionId:commentId}', f"{asset_version_id}:{comment_id}"
+        '{assetVersionId:commentId}', f"{_path_segment(asset_version_id)}:{_path_segment(comment_id)}"
     )
 
 
-class APIClient(CustomAPIClientMixin):
+def _has_control_character(text: str) -> bool:
+    return any(ord(char) < 0x20 or ord(char) == 0x7F for char in text)
+
+
+def _request_path(endpoint: str) -> str:
+    """The endpoint as it is joined onto the base URL, refused before any request when its path has an
+    empty, '.' or '..' segment, a control character, '?' or '#', raw or percent-encoded where
+    decoding applies: the join drops an empty segment, resolves a dot segment (requests decodes an
+    encoded dot first) and changes a path that contains a control character, and a '?' or '#' ends
+    the path, so a path value carrying one would address another route. Query parameters go in
+    `params`."""
+    path = endpoint.lstrip('/')
+    if '?' in path or '#' in path:
+        raise InvalidRequestPathError(
+            "A request path may not contain '?' or '#': it would address another route")
+    for segment in path.split('/'):
+        decoded = segment
+        while unquote(decoded) != decoded:
+            decoded = unquote(decoded)
+        if _has_control_character(segment) or _has_control_character(decoded):
+            raise InvalidRequestPathError(
+                "A request path may not contain a control character: it would address another route")
+        # A dot segment behind an encoded slash, or before a ';' parameter, is refused too.
+        if not segment or any(part.split(';', 1)[0] in ('.', '..') for part in decoded.split('/')):
+            raise InvalidRequestPathError(
+                "A request path may not have an empty, '.' or '..' segment: it would address another route")
+    return path
+
+
+class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     """HTTP client for VAMS API Gateway.
 
-    Inherits the methods a fork adds (``custom_api_client.CustomAPIClientMixin``, shipped empty).
+    Inherits the methods the optional add-ons add (``addon_api_client.AddonAPIClientMixin``) and
+    the methods a fork adds (``custom_api_client.CustomAPIClientMixin``, shipped empty).
     """
     
-    def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None):
+    def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None,
+                 bearer_token: Optional[str] = None):
+        """Create a client for one VAMS API.
+
+        ``bearer_token`` is for a process that serves several users, such as a remote
+        MCP server: it builds one client per request from the caller's own token. The token lives
+        on this instance only. It is sent as ``Authorization: Bearer <token>`` on every
+        authenticated request, never written to a profile file, never refreshed (the client holds
+        no refresh token), and a 401 or authorizer deny is reported at once rather than retried. In
+        that mode no profile is read or written: with no ``profile_manager`` given,
+        ``self.profile_manager`` is None and nothing reads the active profile. The CLI's own
+        commands keep passing a ``profile_manager`` and never set this.
+        """
         self.base_url = base_url.rstrip('/')
-        # A bare ProfileManager() targets the DEFAULT profile, not the active one, so a client
-        # constructed without one would read another deployment's credentials.
-        self.profile_manager = profile_manager or ProfileManager(read_active_profile_name())
+        self._bearer_token = _validated_bearer_token(bearer_token) if bearer_token is not None else None
+        if self._bearer_token is not None:
+            self.profile_manager = profile_manager
+        else:
+            # A bare ProfileManager() targets the DEFAULT profile, not the active one, so a client
+            # constructed without one would read another deployment's credentials.
+            self.profile_manager = profile_manager or ProfileManager(read_active_profile_name())
         self.session = requests.Session()
         # requests reads a timeout only from the per-request keyword, never from an attribute on the
         # Session, so the pair is applied in _make_request instead.
         self.request_timeout = (DEFAULT_TIMEOUT, DEFAULT_READ_TIMEOUT)
+
+    @property
+    def uses_injected_token(self) -> bool:
+        """True when this client authenticates with a per-instance ``bearer_token``."""
+        return self._bearer_token is not None
 
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
         """Get request headers."""
@@ -320,6 +428,9 @@ class APIClient(CustomAPIClientMixin):
         }
         
         if include_auth:
+            if self._bearer_token is not None:
+                headers['Authorization'] = f"Bearer {self._bearer_token}"
+                return headers
             auth_profile = self.profile_manager.load_auth_profile()
             if auth_profile and 'access_token' in auth_profile:
                 headers['Authorization'] = f"Bearer {auth_profile['access_token']}"
@@ -328,7 +439,9 @@ class APIClient(CustomAPIClientMixin):
         
     def _validate_token_before_request(self, include_auth: bool = True):
         """Validate token before making request (pre-flight check for override tokens)."""
-        if not include_auth:
+        if not include_auth or self._bearer_token is not None:
+            # An injected token is checked by the API's authorizer, which answers 401 for an
+            # expired one; there is no saved profile to read an expiry from.
             return
             
         # Check if we have an override token and validate it
@@ -348,13 +461,21 @@ class APIClient(CustomAPIClientMixin):
 
         `raise_http_errors` leaves a non-2xx as the original `requests.exceptions.HTTPError` instead
         of converting it to an `APIError` here, for callers that map the status code and the handler's
-        response body onto their own domain exception.
+        response body onto their own domain exception. An endpoint whose path has an empty, '.' or '..'
+        segment, a control character, '?' or '#' raises `InvalidRequestPathError` before anything is
+        sent (`_request_path`).
 
         A 403 is read first (`_classify_403`), whatever `raise_http_errors` says. After one send, a web
         ACL block (with auth, a bare "Forbidden" too) raises `RequestBlockedError`, a request outside
         every deployed route an `APIError`, and, with auth, a handler's or the resource policy's refusal
         `PermissionDeniedError`. Only the authorizer's deny, or a 403 of no known shape, is refreshed and
         resent.
+
+        A 401 means the credential did not authenticate (VAMS 2.7.0 and later answer an expired or
+        invalid token, and an unknown, disabled or expired API key, with 401; issue #1212). It is
+        refreshed and resent up to MAX_AUTH_RETRIES times, and one that persists raises
+        `AuthenticationError`. The authorizer-deny refresh above is kept for deployments older than
+        2.7.0, which answer the same credentials with a 403.
         """
         # Import logging utilities
         from .logging import log_api_request, log_api_response
@@ -363,7 +484,7 @@ class APIClient(CustomAPIClientMixin):
         # Pre-flight validation for override tokens
         self._validate_token_before_request(include_auth)
         
-        url = urljoin(self.base_url + '/', endpoint.lstrip('/'))
+        url = urljoin(self.base_url + '/', _request_path(endpoint))
         headers = self._get_headers(include_auth)
         retry_config = get_retry_config()
         # The bearer token this request carries — passed to _try_refresh_token so concurrent 401/403
@@ -440,6 +561,9 @@ class APIClient(CustomAPIClientMixin):
                     raise RetryExhaustedError(error_msg)
             
             # Handle 401 errors with retry logic
+            if response.status_code == 401 and include_auth and self._bearer_token is not None:
+                # An injected per-call token has no refresh token behind it, so nothing is retried.
+                raise AuthenticationError(_INJECTED_TOKEN_REJECTED_MESSAGE)
             if response.status_code == 401 and include_auth and retry_count < MAX_AUTH_RETRIES:
                 # For override tokens, don't retry - fail immediately with clear message
                 if self.profile_manager.is_override_token():
@@ -457,6 +581,16 @@ class APIClient(CustomAPIClientMixin):
                     )
                 else:
                     raise AuthenticationError("Authentication failed. Please run 'vamscli auth login' to re-authenticate.")
+
+            # A 401 that persists through every refresh: the API's authorizer answers a credential
+            # that does not authenticate (expired, invalid, or an unknown, disabled or expired API
+            # key) with 401. Reported as a sign-in problem, whatever raise_http_errors says, instead
+            # of falling through to a generic "API request failed (401)" APIError.
+            if response.status_code == 401 and include_auth:
+                raise AuthenticationError(
+                    "Authentication failed: the VAMS API did not accept the credential even after "
+                    "refreshing it (HTTP 401). Please run 'vamscli auth login' to re-authenticate."
+                )
             
             # A 403 is answered by one of several parties, told apart by the response, or by the host a
             # followed redirect reached. Only the authorizer's deny can be cured by a fresh token, so
@@ -481,8 +615,13 @@ class APIClient(CustomAPIClientMixin):
                 if include_auth and forbidden == FORBIDDEN_RESOURCE_POLICY:
                     raise PermissionDeniedError(_RESOURCE_POLICY_MESSAGE)
                 if include_auth and forbidden == FORBIDDEN_HANDLER:
-                    raise PermissionDeniedError(
-                        f"Access forbidden. {_api_error_message(response, _GATEWAY_UNKNOWN_ROUTE_MESSAGE)}")
+                    code = _api_error_code(response)
+                    raise PermissionDeniedError.for_code(code)(
+                        f"Access forbidden. {_api_error_message(response, _GATEWAY_UNKNOWN_ROUTE_MESSAGE)}",
+                        code=code)
+                if include_auth and self._bearer_token is not None:
+                    # The authorizer refused the injected token; there is no refresh to try.
+                    raise PermissionDeniedError(_INJECTED_TOKEN_DENIED_MESSAGE)
                 if include_auth and retry_count < MAX_AUTH_RETRIES:
                     # For override tokens, check if expired
                     if self.profile_manager.is_override_token():
@@ -580,6 +719,10 @@ class APIClient(CustomAPIClientMixin):
         see that the saved access token already changed from the one their request used
         (token_before) and reuse it instead of triggering another refresh + token rotation."""
         from .logging import log_auth_diagnostic, log_config_diagnostic
+
+        if self._bearer_token is not None:
+            # An injected token is never refreshed or replaced from a profile.
+            return False
 
         with _TOKEN_REFRESH_LOCK:
             # Another thread may have already refreshed while we waited for the lock. If the saved
@@ -871,6 +1014,9 @@ class APIClient(CustomAPIClientMixin):
                         "AWS WAF web ACL blocked the request, or the stored API Gateway URL names no deployed "
                         "stage (see 'vamscli profile info')."
                     )
+                if forbidden == FORBIDDEN_AUTHORIZER:
+                    # The API answered, so this is a refusal and not an outage.
+                    raise PermissionDeniedError(_VERSION_CHECK_DENIED_MESSAGE)
 
             response.raise_for_status()
             version_data = response.json()
@@ -913,7 +1059,7 @@ class APIClient(CustomAPIClientMixin):
     def call_login_profile(self, user_id: str) -> Dict[str, Any]:
         """Call login profile API to refresh user profile and validate authentication."""
         try:
-            endpoint = f"{API_LOGIN_PROFILE}/{user_id}"
+            endpoint = f"{API_LOGIN_PROFILE}/{_path_segment(user_id)}"
             response = self.get(endpoint, include_auth=True)
             
             # If we get here, the authentication was successful
@@ -925,8 +1071,9 @@ class APIClient(CustomAPIClientMixin):
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code in [401, 403]:
-                # Authentication failed - clear credentials
-                self.profile_manager.delete_auth_profile()
+                # Authentication failed - clear credentials (an injected token has none saved)
+                if self.profile_manager is not None and self._bearer_token is None:
+                    self.profile_manager.delete_auth_profile()
                 
                 if e.response.status_code == 401:
                     raise AuthenticationError(
@@ -1035,7 +1182,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_DATABASE_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DATABASE_ASSET, databaseId=database_id, assetId=asset_id)
             response = self.put(endpoint, data=update_data, include_auth=True)
             return response.json()
             
@@ -1081,7 +1228,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_DATABASE_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DATABASE_ASSET, databaseId=database_id, assetId=asset_id)
             params = {}
             if show_archived:
                 params['showArchived'] = 'true'
@@ -1152,7 +1299,7 @@ class APIClient(CustomAPIClientMixin):
         """
         from ..constants import API_UPLOADS_COMPLETE
         
-        endpoint = API_UPLOADS_COMPLETE.format(uploadId=upload_id)
+        endpoint = route_path(API_UPLOADS_COMPLETE, uploadId=upload_id)
         data = {
             "databaseId": database_id,
             "assetId": asset_id,
@@ -1208,7 +1355,7 @@ class APIClient(CustomAPIClientMixin):
     def create_folder(self, database_id: str, asset_id: str, folder_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a folder in an asset."""
         try:
-            endpoint = API_CREATE_FOLDER.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_CREATE_FOLDER, databaseId=database_id, assetId=asset_id)
             response = self.post(endpoint, data=folder_data, include_auth=True)
             return response.json()
             
@@ -1234,7 +1381,7 @@ class APIClient(CustomAPIClientMixin):
     def list_asset_files(self, database_id: str, asset_id: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """List files in an asset."""
         try:
-            endpoint = API_LIST_FILES.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_LIST_FILES, databaseId=database_id, assetId=asset_id)
             response = self.get(endpoint, include_auth=True, params=params or {})
             return response.json()
             
@@ -1256,7 +1403,7 @@ class APIClient(CustomAPIClientMixin):
     def get_file_info(self, database_id: str, asset_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get detailed information about a specific file."""
         try:
-            endpoint = API_FILE_INFO.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_FILE_INFO, databaseId=database_id, assetId=asset_id)
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
             
@@ -1282,7 +1429,7 @@ class APIClient(CustomAPIClientMixin):
     def move_file(self, database_id: str, asset_id: str, move_data: Dict[str, Any]) -> Dict[str, Any]:
         """Move a file within an asset."""
         try:
-            endpoint = API_MOVE_FILE.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_MOVE_FILE, databaseId=database_id, assetId=asset_id)
             response = self.post(endpoint, data=move_data, include_auth=True)
             return response.json()
             
@@ -1312,7 +1459,7 @@ class APIClient(CustomAPIClientMixin):
     def copy_file(self, database_id: str, asset_id: str, copy_data: Dict[str, Any]) -> Dict[str, Any]:
         """Copy a file within an asset or to another asset."""
         try:
-            endpoint = API_COPY_FILE.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_COPY_FILE, databaseId=database_id, assetId=asset_id)
             response = self.post(endpoint, data=copy_data, include_auth=True)
             return response.json()
             
@@ -1342,7 +1489,7 @@ class APIClient(CustomAPIClientMixin):
     def archive_file(self, database_id: str, asset_id: str, archive_data: Dict[str, Any]) -> Dict[str, Any]:
         """Archive a file (soft delete)."""
         try:
-            endpoint = API_ARCHIVE_FILE.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ARCHIVE_FILE, databaseId=database_id, assetId=asset_id)
             response = self.delete(endpoint, include_auth=True, json=archive_data)
             return response.json()
             
@@ -1372,7 +1519,7 @@ class APIClient(CustomAPIClientMixin):
     def unarchive_file(self, database_id: str, asset_id: str, unarchive_data: Dict[str, Any]) -> Dict[str, Any]:
         """Unarchive a previously archived file."""
         try:
-            endpoint = API_UNARCHIVE_FILE.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_UNARCHIVE_FILE, databaseId=database_id, assetId=asset_id)
             response = self.post(endpoint, data=unarchive_data, include_auth=True)
             return response.json()
             
@@ -1402,7 +1549,7 @@ class APIClient(CustomAPIClientMixin):
     def delete_asset_preview(self, database_id: str, asset_id: str) -> Dict[str, Any]:
         """Delete the asset preview file."""
         try:
-            endpoint = API_DELETE_ASSET_PREVIEW.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DELETE_ASSET_PREVIEW, databaseId=database_id, assetId=asset_id)
             response = self.delete(endpoint, include_auth=True)
             return response.json()
             
@@ -1428,7 +1575,7 @@ class APIClient(CustomAPIClientMixin):
     def delete_auxiliary_preview_files(self, database_id: str, asset_id: str, delete_data: Dict[str, Any]) -> Dict[str, Any]:
         """Delete auxiliary preview asset files."""
         try:
-            endpoint = API_DELETE_AUXILIARY_PREVIEW.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DELETE_AUXILIARY_PREVIEW, databaseId=database_id, assetId=asset_id)
             response = self.delete(endpoint, include_auth=True, json=delete_data)
             return response.json()
             
@@ -1458,7 +1605,7 @@ class APIClient(CustomAPIClientMixin):
     def delete_file(self, database_id: str, asset_id: str, delete_data: Dict[str, Any]) -> Dict[str, Any]:
         """Permanently delete a file or files under a prefix."""
         try:
-            endpoint = API_DELETE_FILE.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DELETE_FILE, databaseId=database_id, assetId=asset_id)
             response = self.delete(endpoint, include_auth=True, json=delete_data)
             return response.json()
             
@@ -1488,7 +1635,8 @@ class APIClient(CustomAPIClientMixin):
     def revert_file_version(self, database_id: str, asset_id: str, version_id: str, revert_data: Dict[str, Any]) -> Dict[str, Any]:
         """Revert a file to a previous version."""
         try:
-            endpoint = API_REVERT_FILE_VERSION.format(databaseId=database_id, assetId=asset_id, versionId=version_id)
+            endpoint = route_path(
+                API_REVERT_FILE_VERSION, databaseId=database_id, assetId=asset_id, versionId=version_id)
             response = self.post(endpoint, data=revert_data, include_auth=True)
             return response.json()
             
@@ -1518,7 +1666,7 @@ class APIClient(CustomAPIClientMixin):
     def set_primary_file(self, database_id: str, asset_id: str, primary_data: Dict[str, Any]) -> Dict[str, Any]:
         """Set or remove primary type metadata for a file."""
         try:
-            endpoint = API_SET_PRIMARY_FILE.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_SET_PRIMARY_FILE, databaseId=database_id, assetId=asset_id)
             response = self.put(endpoint, data=primary_data, include_auth=True)
             return response.json()
             
@@ -1566,7 +1714,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ARCHIVE_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ARCHIVE_ASSET, databaseId=database_id, assetId=asset_id)
             # Always send a body — the archive endpoint requires a non-empty request
             # body. confirmArchive signals intent; reason is optional.
             data = {'confirmArchive': True}
@@ -1631,7 +1779,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_UNARCHIVE_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_UNARCHIVE_ASSET, databaseId=database_id, assetId=asset_id)
             data = {'confirmUnarchive': True}
             if reason:
                 data['reason'] = reason
@@ -1689,7 +1837,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_DELETE_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DELETE_ASSET, databaseId=database_id, assetId=asset_id)
             data = {
                 'confirmPermanentDelete': confirm
             }
@@ -1797,7 +1945,7 @@ class APIClient(CustomAPIClientMixin):
             if not database_id:
                 raise InvalidDatabaseDataError("databaseId is required for update")
             
-            endpoint = API_DATABASE_BY_ID.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_BY_ID, databaseId=database_id)
             
             # Remove databaseId from data as it's in the path
             update_data = {k: v for k, v in database_data.items() if k != 'databaseId'}
@@ -1843,7 +1991,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_DATABASE_BY_ID.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_BY_ID, databaseId=database_id)
             params = {}
             if show_deleted:
                 params['showDeleted'] = 'true'
@@ -1915,7 +2063,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_DATABASE_BY_ID.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_BY_ID, databaseId=database_id)
             response = self.delete(endpoint, include_auth=True)
             return response.json()
             
@@ -2107,7 +2255,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_TAG_DELETE.format(tagId=tag_id)
+            endpoint = route_path(API_TAG_DELETE, tagId=tag_id)
             query_params = {}
             if database_id:
                 query_params['databaseId'] = database_id
@@ -2262,7 +2410,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_TAG_TYPE_DELETE.format(tagTypeId=tag_type_id)
+            endpoint = route_path(API_TAG_TYPE_DELETE, tagTypeId=tag_type_id)
             query_params = {}
             if database_id:
                 query_params['databaseId'] = database_id
@@ -2313,7 +2461,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_CREATE_ASSET_VERSION.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_CREATE_ASSET_VERSION, databaseId=database_id, assetId=asset_id)
             response = self.post(endpoint, data=request_data, include_auth=True)
             return response.json()
             
@@ -2363,7 +2511,8 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_REVERT_ASSET_VERSION.format(
+            endpoint = route_path(
+                API_REVERT_ASSET_VERSION,
                 databaseId=database_id, 
                 assetId=asset_id, 
                 assetVersionId=asset_version_id
@@ -2415,7 +2564,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_GET_ASSET_VERSIONS.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_GET_ASSET_VERSIONS, databaseId=database_id, assetId=asset_id)
             query_params = params or {}
             response = self.get(endpoint, include_auth=True, params=query_params)
             return response.json()
@@ -2458,7 +2607,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_GET_ASSET_HISTORY.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_GET_ASSET_HISTORY, databaseId=database_id, assetId=asset_id)
             query_params = params or {}
             response = self.get(endpoint, include_auth=True, params=query_params)
             return response.json()
@@ -2483,7 +2632,8 @@ class APIClient(CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to get asset history: {e}")
 
-    def get_asset_version(self, database_id: str, asset_id: str, asset_version_id: str) -> Dict[str, Any]:
+    def get_asset_version(self, database_id: str, asset_id: str, asset_version_id: str,
+                          show_archived: bool = False) -> Dict[str, Any]:
         """
         Get details for a specific asset version using the /database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId} GET endpoint.
         
@@ -2491,6 +2641,7 @@ class APIClient(CustomAPIClientMixin):
             database_id: Database ID
             asset_id: Asset ID
             asset_version_id: Asset version ID
+            show_archived: Also find an archived asset
         
         Returns:
             API response data with version details
@@ -2502,12 +2653,16 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_GET_ASSET_VERSION.format(
+            endpoint = route_path(
+                API_GET_ASSET_VERSION,
                 databaseId=database_id, 
                 assetId=asset_id, 
                 assetVersionId=asset_version_id
             )
-            response = self.get(endpoint, include_auth=True)
+            if show_archived:
+                response = self.get(endpoint, include_auth=True, params={'showArchived': 'true'})
+            else:
+                response = self.get(endpoint, include_auth=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -2554,7 +2709,8 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_VERSION_BY_ID.format(
+            endpoint = route_path(
+                API_ASSET_VERSION_BY_ID,
                 databaseId=database_id,
                 assetId=asset_id,
                 assetVersionId=asset_version_id
@@ -2608,7 +2764,8 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_VERSION_ARCHIVE.format(
+            endpoint = route_path(
+                API_ASSET_VERSION_ARCHIVE,
                 databaseId=database_id,
                 assetId=asset_id,
                 assetVersionId=asset_version_id
@@ -2662,7 +2819,8 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_VERSION_UNARCHIVE.format(
+            endpoint = route_path(
+                API_ASSET_VERSION_UNARCHIVE,
                 databaseId=database_id,
                 assetId=asset_id,
                 assetVersionId=asset_version_id
@@ -2761,7 +2919,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_LINKS_SINGLE.format(assetLinkId=asset_link_id)
+            endpoint = route_path(API_ASSET_LINKS_SINGLE, assetLinkId=asset_link_id)
             response = self.get(endpoint, include_auth=True)
             return response.json()
             
@@ -2798,7 +2956,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_LINKS_UPDATE.format(assetLinkId=asset_link_id)
+            endpoint = route_path(API_ASSET_LINKS_UPDATE, assetLinkId=asset_link_id)
             response = self.put(endpoint, data=update_data, include_auth=True)
             return response.json()
             
@@ -2837,7 +2995,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_LINKS_DELETE.format(assetLinkId=asset_link_id)
+            endpoint = route_path(API_ASSET_LINKS_DELETE, assetLinkId=asset_link_id)
             response = self.delete(endpoint, include_auth=True)
             return response.json()
             
@@ -2856,7 +3014,8 @@ class APIClient(CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to delete asset link: {e}")
 
-    def get_asset_links_for_asset(self, database_id: str, asset_id: str, child_tree_view: bool = False) -> Dict[str, Any]:
+    def get_asset_links_for_asset(self, database_id: str, asset_id: str, child_tree_view: bool = False,
+                                  show_archived: bool = False) -> Dict[str, Any]:
         """
         Get asset links for a specific asset using the /database/{databaseId}/assets/{assetId}/asset-links GET endpoint.
         
@@ -2864,6 +3023,7 @@ class APIClient(CustomAPIClientMixin):
             database_id: Database ID
             asset_id: Asset ID
             child_tree_view: Whether to return children as a tree structure
+            show_archived: Also find an archived asset
         
         Returns:
             API response data with asset links (related, parents, children)
@@ -2875,10 +3035,12 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_LINKS_FOR_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ASSET_LINKS_FOR_ASSET, databaseId=database_id, assetId=asset_id)
             params = {}
             if child_tree_view:
                 params['childTreeView'] = 'true'
+            if show_archived:
+                params['showArchived'] = 'true'
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -2910,7 +3072,8 @@ class APIClient(CustomAPIClientMixin):
 
     # Unified Metadata API Methods (v2.2+)
 
-    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 100, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
+    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 100, starting_token: str = None, asset_version_id: str = None,
+                              show_archived: bool = False) -> Dict[str, Any]:
         """
         Get metadata for an asset using the new unified API.
 
@@ -2920,6 +3083,7 @@ class APIClient(CustomAPIClientMixin):
             page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
             asset_version_id: Optional asset version ID to retrieve metadata snapshot
+            show_archived: Also find an archived asset
 
         Returns:
             API response with metadata list and optional NextToken
@@ -2931,12 +3095,14 @@ class APIClient(CustomAPIClientMixin):
         """
         try:
             from ..constants import API_ASSET_METADATA
-            endpoint = API_ASSET_METADATA.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ASSET_METADATA, databaseId=database_id, assetId=asset_id)
             params = {'pageSize': page_size}
             if starting_token:
                 params['startingToken'] = starting_token
             if asset_version_id:
                 params['assetVersionId'] = asset_version_id
+            if show_archived:
+                params['showArchived'] = 'true'
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -2982,7 +3148,7 @@ class APIClient(CustomAPIClientMixin):
         """
         try:
             from ..constants import API_ASSET_METADATA
-            endpoint = API_ASSET_METADATA.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ASSET_METADATA, databaseId=database_id, assetId=asset_id)
             data = {
                 'metadata': metadata_items,
                 'updateType': update_type
@@ -3034,7 +3200,7 @@ class APIClient(CustomAPIClientMixin):
         """
         try:
             from ..constants import API_ASSET_METADATA
-            endpoint = API_ASSET_METADATA.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ASSET_METADATA, databaseId=database_id, assetId=asset_id)
             data = {'metadataKeys': metadata_keys}
             
             response = self.delete(endpoint, include_auth=True, json=data)
@@ -3061,7 +3227,8 @@ class APIClient(CustomAPIClientMixin):
             raise APIError(f"Failed to delete asset metadata: {e}")
 
     def get_file_metadata_v2(self, database_id: str, asset_id: str, file_path: str, metadata_type: str = 'metadata',
-                            page_size: int = 100, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
+                            page_size: int = 100, starting_token: str = None, asset_version_id: str = None,
+                            show_archived: bool = False) -> Dict[str, Any]:
         """
         Get metadata or attributes for a file using the new unified API.
 
@@ -3073,6 +3240,7 @@ class APIClient(CustomAPIClientMixin):
             page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
             asset_version_id: Optional asset version ID to retrieve metadata snapshot
+            show_archived: Also find an archived asset
 
         Returns:
             API response with metadata list and optional NextToken
@@ -3084,7 +3252,7 @@ class APIClient(CustomAPIClientMixin):
         """
         try:
             from ..constants import API_FILE_METADATA
-            endpoint = API_FILE_METADATA.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_FILE_METADATA, databaseId=database_id, assetId=asset_id)
             params = {
                 'filePath': file_path,
                 'type': metadata_type,
@@ -3094,6 +3262,8 @@ class APIClient(CustomAPIClientMixin):
                 params['startingToken'] = starting_token
             if asset_version_id:
                 params['assetVersionId'] = asset_version_id
+            if show_archived:
+                params['showArchived'] = 'true'
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -3144,7 +3314,7 @@ class APIClient(CustomAPIClientMixin):
         """
         try:
             from ..constants import API_FILE_METADATA
-            endpoint = API_FILE_METADATA.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_FILE_METADATA, databaseId=database_id, assetId=asset_id)
             data = {
                 'filePath': file_path,
                 'type': metadata_type,
@@ -3202,7 +3372,7 @@ class APIClient(CustomAPIClientMixin):
         """
         try:
             from ..constants import API_FILE_METADATA
-            endpoint = API_FILE_METADATA.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_FILE_METADATA, databaseId=database_id, assetId=asset_id)
             data = {
                 'filePath': file_path,
                 'type': metadata_type,
@@ -3234,7 +3404,8 @@ class APIClient(CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to delete file metadata: {e}")
 
-    def get_asset_link_metadata_v2(self, asset_link_id: str, page_size: int = 100, starting_token: str = None) -> Dict[str, Any]:
+    def get_asset_link_metadata_v2(self, asset_link_id: str, page_size: int = 100, starting_token: str = None,
+                                   show_archived: bool = False) -> Dict[str, Any]:
         """
         Get metadata for an asset link using the new unified API.
         
@@ -3242,6 +3413,7 @@ class APIClient(CustomAPIClientMixin):
             asset_link_id: Asset link ID
             page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
+            show_archived: Also find a linked asset that is archived
         
         Returns:
             API response with metadata list and optional NextToken
@@ -3253,10 +3425,12 @@ class APIClient(CustomAPIClientMixin):
         """
         try:
             from ..constants import API_ASSET_LINK_METADATA
-            endpoint = API_ASSET_LINK_METADATA.format(assetLinkId=asset_link_id)
+            endpoint = route_path(API_ASSET_LINK_METADATA, assetLinkId=asset_link_id)
             params = {'pageSize': page_size}
             if starting_token:
                 params['startingToken'] = starting_token
+            if show_archived:
+                params['showArchived'] = 'true'
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -3296,7 +3470,7 @@ class APIClient(CustomAPIClientMixin):
         """
         try:
             from ..constants import API_ASSET_LINK_METADATA
-            endpoint = API_ASSET_LINK_METADATA.format(assetLinkId=asset_link_id)
+            endpoint = route_path(API_ASSET_LINK_METADATA, assetLinkId=asset_link_id)
             data = {
                 'metadata': metadata_items,
                 'updateType': update_type
@@ -3342,7 +3516,7 @@ class APIClient(CustomAPIClientMixin):
         """
         try:
             from ..constants import API_ASSET_LINK_METADATA
-            endpoint = API_ASSET_LINK_METADATA.format(assetLinkId=asset_link_id)
+            endpoint = route_path(API_ASSET_LINK_METADATA, assetLinkId=asset_link_id)
             data = {'metadataKeys': metadata_keys}
             
             response = self.delete(endpoint, include_auth=True, json=data)
@@ -3381,7 +3555,7 @@ class APIClient(CustomAPIClientMixin):
         """
         try:
             from ..constants import API_DATABASE_METADATA
-            endpoint = API_DATABASE_METADATA.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_METADATA, databaseId=database_id)
             params = {'pageSize': page_size}
             if starting_token:
                 params['startingToken'] = starting_token
@@ -3422,7 +3596,7 @@ class APIClient(CustomAPIClientMixin):
         """
         try:
             from ..constants import API_DATABASE_METADATA
-            endpoint = API_DATABASE_METADATA.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_METADATA, databaseId=database_id)
             data = {
                 'metadata': metadata_items,
                 'updateType': update_type
@@ -3466,7 +3640,7 @@ class APIClient(CustomAPIClientMixin):
         """
         try:
             from ..constants import API_DATABASE_METADATA
-            endpoint = API_DATABASE_METADATA.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_METADATA, databaseId=database_id)
             data = {'metadataKeys': metadata_keys}
             
             response = self.delete(endpoint, include_auth=True, json=data)
@@ -3626,7 +3800,8 @@ class APIClient(CustomAPIClientMixin):
             AuthenticationError: When authentication fails
         """
         try:
-            endpoint = API_METADATA_SCHEMA_BY_ID.format(
+            endpoint = route_path(
+                API_METADATA_SCHEMA_BY_ID,
                 databaseId=database_id,
                 metadataSchemaId=metadata_schema_id
             )
@@ -3781,7 +3956,8 @@ class APIClient(CustomAPIClientMixin):
         """
         from .exceptions import MetadataSchemaDeletionError, MetadataSchemaNotFoundError
 
-        endpoint = API_METADATA_SCHEMA_BY_ID.format(
+        endpoint = route_path(
+            API_METADATA_SCHEMA_BY_ID,
             databaseId=database_id,
             metadataSchemaId=metadata_schema_id
         )
@@ -3842,7 +4018,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails or asset not distributable
         """
         try:
-            endpoint = API_DOWNLOAD_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DOWNLOAD_ASSET, databaseId=database_id, assetId=asset_id)
             data = {
                 "downloadType": "assetFile"
             }
@@ -3922,7 +4098,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails or asset not distributable
         """
         try:
-            endpoint = API_DOWNLOAD_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DOWNLOAD_ASSET, databaseId=database_id, assetId=asset_id)
             data = {
                 "downloadType": "assetFile",
                 "keys": file_keys
@@ -3973,7 +4149,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails, asset not distributable, or preview not found
         """
         try:
-            endpoint = API_DOWNLOAD_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_DOWNLOAD_ASSET, databaseId=database_id, assetId=asset_id)
             data = {
                 "downloadType": "assetPreview"
             }
@@ -4115,7 +4291,7 @@ class APIClient(CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_EXPORT.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ASSET_EXPORT, databaseId=database_id, assetId=asset_id)
             # Backend expects POST with JSON body.
             response = self.post(endpoint, data=export_params, include_auth=True)
             return self._resolve_staged_export_payload(response)
@@ -4216,7 +4392,7 @@ class APIClient(CustomAPIClientMixin):
                        params: Dict[str, Any] = None) -> Dict[str, Any]:
         """List pipelines. GET /pipelines (all) or GET /database/{databaseId}/pipelines."""
         try:
-            endpoint = (API_DATABASE_PIPELINES.format(databaseId=database_id)
+            endpoint = (route_path(API_DATABASE_PIPELINES, databaseId=database_id)
                         if database_id else API_PIPELINES)
             query_params = dict(params or {})
             if include_archived:
@@ -4239,7 +4415,7 @@ class APIClient(CustomAPIClientMixin):
                      include_archived: bool = False) -> Dict[str, Any]:
         """Get a pipeline (+ its templates). GET /database/{databaseId}/pipelines/{pipelineId}."""
         try:
-            endpoint = API_DATABASE_PIPELINE.format(databaseId=database_id, pipelineId=pipeline_id)
+            endpoint = route_path(API_DATABASE_PIPELINE, databaseId=database_id, pipelineId=pipeline_id)
             query_params = {'includeArchived': 'true'} if include_archived else {}
             return self._pwe_request('GET', endpoint, params=query_params)
         except requests.exceptions.HTTPError as e:
@@ -4256,7 +4432,7 @@ class APIClient(CustomAPIClientMixin):
     def create_pipeline(self, database_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Create a pipeline. POST /database/{databaseId}/pipelines."""
         try:
-            endpoint = API_DATABASE_PIPELINES.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_PIPELINES, databaseId=database_id)
             return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
@@ -4277,7 +4453,7 @@ class APIClient(CustomAPIClientMixin):
     def update_pipeline(self, database_id: str, pipeline_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Update a pipeline. PUT /database/{databaseId}/pipelines/{pipelineId}."""
         try:
-            endpoint = API_DATABASE_PIPELINE.format(databaseId=database_id, pipelineId=pipeline_id)
+            endpoint = route_path(API_DATABASE_PIPELINE, databaseId=database_id, pipelineId=pipeline_id)
             return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4295,7 +4471,7 @@ class APIClient(CustomAPIClientMixin):
     def delete_pipeline(self, database_id: str, pipeline_id: str) -> Dict[str, Any]:
         """Archive (soft-delete) a pipeline. DELETE /database/{databaseId}/pipelines/{pipelineId}."""
         try:
-            endpoint = API_DATABASE_PIPELINE.format(databaseId=database_id, pipelineId=pipeline_id)
+            endpoint = route_path(API_DATABASE_PIPELINE, databaseId=database_id, pipelineId=pipeline_id)
             return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4316,7 +4492,7 @@ class APIClient(CustomAPIClientMixin):
         The handler returns one page plus a NextToken, so the pages are drained here and returned as
         a single Items list."""
         try:
-            endpoint = API_PIPELINE_TEMPLATES.format(databaseId=database_id, pipelineId=pipeline_id)
+            endpoint = route_path(API_PIPELINE_TEMPLATES, databaseId=database_id, pipelineId=pipeline_id)
             body = self._pwe_request('GET', endpoint)
             message = body.get('message') if isinstance(body, dict) else None
             if not isinstance(message, dict):
@@ -4346,7 +4522,8 @@ class APIClient(CustomAPIClientMixin):
     def get_pipeline_template(self, database_id: str, pipeline_id: str, template_id: str) -> Dict[str, Any]:
         """Get a template (config body rehydrated). GET .../templates/{templateId}."""
         try:
-            endpoint = API_PIPELINE_TEMPLATE.format(
+            endpoint = route_path(
+                API_PIPELINE_TEMPLATE,
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
@@ -4364,7 +4541,7 @@ class APIClient(CustomAPIClientMixin):
                                  body: Dict[str, Any]) -> Dict[str, Any]:
         """Create a template. POST .../pipelines/{pipelineId}/templates."""
         try:
-            endpoint = API_PIPELINE_TEMPLATES.format(databaseId=database_id, pipelineId=pipeline_id)
+            endpoint = route_path(API_PIPELINE_TEMPLATES, databaseId=database_id, pipelineId=pipeline_id)
             return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
@@ -4386,7 +4563,8 @@ class APIClient(CustomAPIClientMixin):
                                  body: Dict[str, Any]) -> Dict[str, Any]:
         """Update a template. PUT .../templates/{templateId}."""
         try:
-            endpoint = API_PIPELINE_TEMPLATE.format(
+            endpoint = route_path(
+                API_PIPELINE_TEMPLATE,
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
@@ -4405,7 +4583,8 @@ class APIClient(CustomAPIClientMixin):
     def delete_pipeline_template(self, database_id: str, pipeline_id: str, template_id: str) -> Dict[str, Any]:
         """Delete a template. DELETE .../templates/{templateId}."""
         try:
-            endpoint = API_PIPELINE_TEMPLATE.format(
+            endpoint = route_path(
+                API_PIPELINE_TEMPLATE,
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
@@ -4425,7 +4604,8 @@ class APIClient(CustomAPIClientMixin):
                                          template_id: str) -> Dict[str, Any]:
         """Get a template's tag schema. GET .../templates/{templateId}/tagSchema."""
         try:
-            endpoint = API_PIPELINE_TEMPLATE_TAG_SCHEMA.format(
+            endpoint = route_path(
+                API_PIPELINE_TEMPLATE_TAG_SCHEMA,
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
@@ -4443,7 +4623,8 @@ class APIClient(CustomAPIClientMixin):
                                          fields: list) -> Dict[str, Any]:
         """Set (replace) a template's tag schema. PUT .../templates/{templateId}/tagSchema."""
         try:
-            endpoint = API_PIPELINE_TEMPLATE_TAG_SCHEMA.format(
+            endpoint = route_path(
+                API_PIPELINE_TEMPLATE_TAG_SCHEMA,
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('PUT', endpoint, data={'fields': fields})
         except requests.exceptions.HTTPError as e:
@@ -4465,7 +4646,7 @@ class APIClient(CustomAPIClientMixin):
                        params: Dict[str, Any] = None) -> Dict[str, Any]:
         """List workflows. GET /workflows (all) or GET /database/{databaseId}/workflows."""
         try:
-            endpoint = (API_DATABASE_WORKFLOWS.format(databaseId=database_id)
+            endpoint = (route_path(API_DATABASE_WORKFLOWS, databaseId=database_id)
                         if database_id else API_WORKFLOWS)
             query_params = dict(params or {})
             if include_archived:
@@ -4486,7 +4667,7 @@ class APIClient(CustomAPIClientMixin):
                      include_archived: bool = False) -> Dict[str, Any]:
         """Get a workflow (+ its triggers). GET /database/{databaseId}/workflows/{workflowId}."""
         try:
-            endpoint = API_DATABASE_WORKFLOW.format(databaseId=database_id, workflowId=workflow_id)
+            endpoint = route_path(API_DATABASE_WORKFLOW, databaseId=database_id, workflowId=workflow_id)
             query_params = {'includeArchived': 'true'} if include_archived else {}
             return self._pwe_request('GET', endpoint, params=query_params)
         except requests.exceptions.HTTPError as e:
@@ -4503,7 +4684,7 @@ class APIClient(CustomAPIClientMixin):
     def create_workflow(self, database_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Create a workflow. POST /database/{databaseId}/workflows."""
         try:
-            endpoint = API_DATABASE_WORKFLOWS.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_WORKFLOWS, databaseId=database_id)
             return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
@@ -4521,7 +4702,7 @@ class APIClient(CustomAPIClientMixin):
     def update_workflow(self, database_id: str, workflow_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Update a workflow. PUT /database/{databaseId}/workflows/{workflowId}."""
         try:
-            endpoint = API_DATABASE_WORKFLOW.format(databaseId=database_id, workflowId=workflow_id)
+            endpoint = route_path(API_DATABASE_WORKFLOW, databaseId=database_id, workflowId=workflow_id)
             return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4539,7 +4720,7 @@ class APIClient(CustomAPIClientMixin):
     def delete_workflow(self, database_id: str, workflow_id: str) -> Dict[str, Any]:
         """Archive (soft-delete) a workflow. DELETE /database/{databaseId}/workflows/{workflowId}."""
         try:
-            endpoint = API_DATABASE_WORKFLOW.format(databaseId=database_id, workflowId=workflow_id)
+            endpoint = route_path(API_DATABASE_WORKFLOW, databaseId=database_id, workflowId=workflow_id)
             return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4562,7 +4743,7 @@ class APIClient(CustomAPIClientMixin):
         `NextToken` set while more triggers remain. `params` carries maxItems/pageSize/startingToken.
         """
         try:
-            endpoint = API_WORKFLOW_TRIGGERS.format(databaseId=database_id, workflowId=workflow_id)
+            endpoint = route_path(API_WORKFLOW_TRIGGERS, databaseId=database_id, workflowId=workflow_id)
             return self._pwe_request('GET', endpoint, params=dict(params or {}))
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4584,9 +4765,10 @@ class APIClient(CustomAPIClientMixin):
         trigger.
         """
         try:
-            endpoint = API_WORKFLOW_TRIGGER.format(
+            endpoint = route_path(
+                API_WORKFLOW_TRIGGER,
                 databaseId=database_id, workflowId=workflow_id,
-                triggerType=quote(trigger_type, safe=''))
+                triggerType=trigger_type)
             return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4603,9 +4785,10 @@ class APIClient(CustomAPIClientMixin):
                              body: Dict[str, Any]) -> Dict[str, Any]:
         """Set (create/replace) a workflow trigger. PUT .../triggers/{triggerType}."""
         try:
-            endpoint = API_WORKFLOW_TRIGGER.format(
+            endpoint = route_path(
+                API_WORKFLOW_TRIGGER,
                 databaseId=database_id, workflowId=workflow_id,
-                triggerType=quote(trigger_type, safe=''))
+                triggerType=trigger_type)
             return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4623,9 +4806,10 @@ class APIClient(CustomAPIClientMixin):
     def delete_workflow_trigger(self, database_id: str, workflow_id: str, trigger_type: str) -> Dict[str, Any]:
         """Delete a workflow trigger. DELETE .../triggers/{triggerType}."""
         try:
-            endpoint = API_WORKFLOW_TRIGGER.format(
+            endpoint = route_path(
+                API_WORKFLOW_TRIGGER,
                 databaseId=database_id, workflowId=workflow_id,
-                triggerType=quote(trigger_type, safe=''))
+                triggerType=trigger_type)
             return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4644,7 +4828,8 @@ class APIClient(CustomAPIClientMixin):
                          body: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a workflow (asset-less, multi-file). POST /workflows/{workflowDatabaseId}/{workflowId}/execute."""
         try:
-            endpoint = API_EXECUTE_WORKFLOW.format(
+            endpoint = route_path(
+                API_EXECUTE_WORKFLOW,
                 workflowDatabaseId=workflow_database_id, workflowId=workflow_id)
             return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
@@ -4679,7 +4864,7 @@ class APIClient(CustomAPIClientMixin):
         empty list — indistinguishable from an asset with no matching history.
         """
         try:
-            endpoint = API_WORKFLOW_EXECUTIONS.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTIONS, databaseId=database_id, assetId=asset_id)
             query_params = dict(params or {})
             if workflow_id:
                 query_params['workflowId'] = workflow_id
@@ -4734,7 +4919,7 @@ class APIClient(CustomAPIClientMixin):
         while the inline renderedConfig is pre-system-tag. renderedConfigTruncated reports only
         whether the inline copy was shortened."""
         try:
-            endpoint = API_WORKFLOW_EXECUTION_DETAILS.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION_DETAILS, executionId=execution_id)
             return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4758,7 +4943,7 @@ class APIClient(CustomAPIClientMixin):
         more rows exist. A token is only valid alongside the same collection and pipelineId it was
         issued with."""
         try:
-            endpoint = API_WORKFLOW_EXECUTION_DETAILS_METADATA.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION_DETAILS_METADATA, executionId=execution_id)
             return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4772,6 +4957,58 @@ class APIClient(CustomAPIClientMixin):
             raise
         except Exception as e:
             raise APIError(f"Failed to get execution detail metadata: {e}")
+
+    def get_execution_details_files(self, execution_id: str,
+                                    params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Get one page of an execution's detail FILES.
+        GET /workflows/executions/{executionId}/details/files.
+
+        params may include: collection (input | output — no inputDatabase), pageSize, startingToken,
+        pipelineId. Rows carry the same scrubbed file shape the details view returns; output rows also
+        carry the producing pipelineId. NextToken is absent on the last page, so its presence is the
+        only signal that more rows exist. A token is only valid alongside the same collection and
+        pipelineId it was issued with."""
+        try:
+            endpoint = route_path(API_WORKFLOW_EXECUTION_DETAILS_FILES, executionId=execution_id)
+            return self._pwe_request('GET', endpoint, params=params or {})
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidExecutionDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get execution detail files: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to get execution detail files: {e}")
+
+    def get_execution_results(self, execution_id: str,
+                              params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Get one page of an execution's concatenated result text.
+        GET /workflows/executions/{executionId}/details/results.
+
+        Output-only; no collection parameter. Returns one page: {resultContent, resultContentTruncated,
+        resultRowCount, resultContentBytes} for the rows that fit the service's 5 MiB response budget,
+        plus NextToken while more remain (pass it back as params['startingToken']). Concatenating every
+        page's resultContent yields the whole result. An empty/legacy run returns the empty shape
+        (resultContent '', counts zero, no NextToken), never an error."""
+        try:
+            endpoint = route_path(API_WORKFLOW_EXECUTION_DETAILS_RESULTS, executionId=execution_id)
+            return self._pwe_request('GET', endpoint, params=params or {})
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidExecutionDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get execution results: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to get execution results: {e}")
 
     def get_execution_logs(self, execution_id: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Get an execution's logs. GET /workflows/executions/{executionId}/logs.
@@ -4788,7 +5025,7 @@ class APIClient(CustomAPIClientMixin):
         message is raised as ExecutionNotFoundError text.
         """
         try:
-            endpoint = API_WORKFLOW_EXECUTION_LOGS.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION_LOGS, executionId=execution_id)
             return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -4815,7 +5052,7 @@ class APIClient(CustomAPIClientMixin):
         """Abort a running execution, or (with group_id) abort every active execution in the group.
         DELETE /workflows/executions/{executionId}[?groupId=...]."""
         try:
-            endpoint = API_WORKFLOW_EXECUTION.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION, executionId=execution_id)
             params = {'groupId': group_id} if group_id else {}
             return self._pwe_request('DELETE', endpoint, params=params)
         except requests.exceptions.HTTPError as e:
@@ -4834,7 +5071,7 @@ class APIClient(CustomAPIClientMixin):
     def rerun_execution(self, execution_id: str, execution_group_id: Optional[str] = None) -> Dict[str, Any]:
         """Re-run an execution (reconstructed from stored records). POST /workflows/executions/{executionId}/rerun."""
         try:
-            endpoint = API_WORKFLOW_EXECUTION_RERUN.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION_RERUN, executionId=execution_id)
             body = {}
             if execution_group_id:
                 body['executionGroupId'] = execution_group_id
@@ -4855,7 +5092,7 @@ class APIClient(CustomAPIClientMixin):
     def permanent_delete_execution(self, execution_id: str) -> Dict[str, Any]:
         """Permanently delete an execution's DynamoDB records (admin). DELETE .../{executionId}/permanent."""
         try:
-            endpoint = API_WORKFLOW_EXECUTION_PERMANENT.format(executionId=execution_id)
+            endpoint = route_path(API_WORKFLOW_EXECUTION_PERMANENT, executionId=execution_id)
             return self._pwe_request('DELETE', endpoint, json={'confirmDelete': True})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -5174,7 +5411,7 @@ class APIClient(CustomAPIClientMixin):
         from .exceptions import RoleNotFoundError, RoleDeletionError
         
         try:
-            endpoint = API_ROLE_BY_ID.format(roleId=role_name)
+            endpoint = route_path(API_ROLE_BY_ID, roleId=role_name)
             response = self.delete(endpoint, include_auth=True)
             return response.json()
             
@@ -5318,7 +5555,7 @@ class APIClient(CustomAPIClientMixin):
         )
         
         try:
-            endpoint = API_COGNITO_USER_BY_ID.format(userId=user_id)
+            endpoint = route_path(API_COGNITO_USER_BY_ID, userId=user_id)
             response = self.put(endpoint, data=update_data, include_auth=True, raise_http_errors=True)
             return response.json()
             
@@ -5365,7 +5602,7 @@ class APIClient(CustomAPIClientMixin):
         from .exceptions import CognitoUserNotFoundError, CognitoUserOperationError
         
         try:
-            endpoint = API_COGNITO_USER_BY_ID.format(userId=user_id)
+            endpoint = route_path(API_COGNITO_USER_BY_ID, userId=user_id)
             response = self.delete(endpoint, include_auth=True, raise_http_errors=True)
             return response.json()
             
@@ -5417,7 +5654,7 @@ class APIClient(CustomAPIClientMixin):
         )
         
         try:
-            endpoint = API_COGNITO_USER_RESET_PASSWORD.format(userId=user_id)
+            endpoint = route_path(API_COGNITO_USER_RESET_PASSWORD, userId=user_id)
             data = {'confirmReset': confirm_reset}
             response = self.post(endpoint, data=data, include_auth=True, raise_http_errors=True)
             return response.json()
@@ -5611,7 +5848,7 @@ class APIClient(CustomAPIClientMixin):
         from .exceptions import ConstraintNotFoundError
         
         try:
-            endpoint = API_CONSTRAINT_BY_ID.format(constraintId=constraint_id)
+            endpoint = route_path(API_CONSTRAINT_BY_ID, constraintId=constraint_id)
             response = self.get(endpoint, include_auth=True)
             result = response.json()
             
@@ -5666,7 +5903,7 @@ class APIClient(CustomAPIClientMixin):
             if not constraint_id:
                 raise InvalidConstraintDataError("Constraint identifier is required")
             
-            endpoint = API_CONSTRAINT_BY_ID.format(constraintId=constraint_id)
+            endpoint = route_path(API_CONSTRAINT_BY_ID, constraintId=constraint_id)
             response = self.post(endpoint, data=constraint_data, include_auth=True)
             return response.json()
             
@@ -5715,7 +5952,7 @@ class APIClient(CustomAPIClientMixin):
             # Ensure identifier matches the path parameter
             constraint_data['identifier'] = constraint_id
             
-            endpoint = API_CONSTRAINT_BY_ID.format(constraintId=constraint_id)
+            endpoint = route_path(API_CONSTRAINT_BY_ID, constraintId=constraint_id)
             response = self.post(endpoint, data=constraint_data, include_auth=True)
             return response.json()
             
@@ -5761,7 +5998,7 @@ class APIClient(CustomAPIClientMixin):
         from .exceptions import ConstraintNotFoundError, ConstraintDeletionError
         
         try:
-            endpoint = API_CONSTRAINT_BY_ID.format(constraintId=constraint_id)
+            endpoint = route_path(API_CONSTRAINT_BY_ID, constraintId=constraint_id)
             response = self.delete(endpoint, include_auth=True)
             return response.json()
             
@@ -6080,7 +6317,7 @@ class APIClient(CustomAPIClientMixin):
         """
         from .exceptions import ApiKeyNotFoundError
 
-        endpoint = API_AUTH_API_KEY.format(apiKeyId=api_key_id)
+        endpoint = route_path(API_AUTH_API_KEY, apiKeyId=api_key_id)
 
         try:
             response = self.get(endpoint, include_auth=True, raise_http_errors=True)
@@ -6171,7 +6408,7 @@ class APIClient(CustomAPIClientMixin):
         """
         from .exceptions import ApiKeyNotFoundError, ApiKeyUpdateError
 
-        endpoint = API_AUTH_API_KEY.format(apiKeyId=api_key_id)
+        endpoint = route_path(API_AUTH_API_KEY, apiKeyId=api_key_id)
 
         try:
             response = self.put(endpoint, data=data, include_auth=True)
@@ -6214,7 +6451,7 @@ class APIClient(CustomAPIClientMixin):
         """
         from .exceptions import ApiKeyNotFoundError, ApiKeyDeletionError
 
-        endpoint = API_AUTH_API_KEY.format(apiKeyId=api_key_id)
+        endpoint = route_path(API_AUTH_API_KEY, apiKeyId=api_key_id)
 
         try:
             response = self.delete(endpoint, include_auth=True)
@@ -6301,7 +6538,7 @@ class APIClient(CustomAPIClientMixin):
         from ..constants import API_AUTH_USER_API_KEY
         from .exceptions import ApiKeyNotFoundError
 
-        endpoint = API_AUTH_USER_API_KEY.format(apiKeyId=api_key_id)
+        endpoint = route_path(API_AUTH_USER_API_KEY, apiKeyId=api_key_id)
 
         try:
             response = self.get(endpoint, include_auth=True, raise_http_errors=True)
@@ -6397,7 +6634,7 @@ class APIClient(CustomAPIClientMixin):
         from ..constants import API_AUTH_USER_API_KEY
         from .exceptions import ApiKeyNotFoundError, ApiKeyUpdateError
 
-        endpoint = API_AUTH_USER_API_KEY.format(apiKeyId=api_key_id)
+        endpoint = route_path(API_AUTH_USER_API_KEY, apiKeyId=api_key_id)
 
         try:
             response = self.put(endpoint, data=data, include_auth=True)
@@ -6442,7 +6679,7 @@ class APIClient(CustomAPIClientMixin):
         from ..constants import API_AUTH_USER_API_KEY
         from .exceptions import ApiKeyNotFoundError, ApiKeyDeletionError
 
-        endpoint = API_AUTH_USER_API_KEY.format(apiKeyId=api_key_id)
+        endpoint = route_path(API_AUTH_USER_API_KEY, apiKeyId=api_key_id)
 
         try:
             response = self.delete(endpoint, include_auth=True)
@@ -6495,7 +6732,8 @@ class APIClient(CustomAPIClientMixin):
 
     def list_asset_comments(self, asset_id: str, max_items: Optional[int] = None,
                             page_size: Optional[int] = None,
-                            starting_token: Optional[str] = None) -> Dict[str, Any]:
+                            starting_token: Optional[str] = None,
+                            show_archived: bool = False) -> Dict[str, Any]:
         """
         List every comment on an asset using the /comments/assets/{assetId} GET endpoint.
 
@@ -6514,12 +6752,15 @@ class APIClient(CustomAPIClientMixin):
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_COMMENTS_ASSET.format(assetId=asset_id)
+        endpoint = route_path(API_COMMENTS_ASSET, assetId=asset_id)
+        params = self._comment_pagination_params(max_items, page_size, starting_token)
+        if show_archived:
+            # Also find an archived asset
+            params['showArchived'] = 'true'
 
         try:
             response = self.get(
-                endpoint, include_auth=True, raise_http_errors=True,
-                params=self._comment_pagination_params(max_items, page_size, starting_token))
+                endpoint, include_auth=True, raise_http_errors=True, params=params)
             return response.json()
 
         except requests.exceptions.HTTPError as e:
@@ -6539,7 +6780,8 @@ class APIClient(CustomAPIClientMixin):
     def list_asset_version_comments(self, asset_id: str, asset_version_id: str,
                                     max_items: Optional[int] = None,
                                     page_size: Optional[int] = None,
-                                    starting_token: Optional[str] = None) -> Dict[str, Any]:
+                                    starting_token: Optional[str] = None,
+                                    show_archived: bool = False) -> Dict[str, Any]:
         """
         List the comments on one version of an asset using the
         /comments/assets/{assetId}/assetVersionId/{assetVersionId} GET endpoint.
@@ -6559,13 +6801,17 @@ class APIClient(CustomAPIClientMixin):
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_COMMENTS_ASSET_VERSION.format(
+        endpoint = route_path(
+            API_COMMENTS_ASSET_VERSION,
             assetId=asset_id, assetVersionId=asset_version_id)
+        params = self._comment_pagination_params(max_items, page_size, starting_token)
+        if show_archived:
+            # Also find an archived asset
+            params['showArchived'] = 'true'
 
         try:
             response = self.get(
-                endpoint, include_auth=True, raise_http_errors=True,
-                params=self._comment_pagination_params(max_items, page_size, starting_token))
+                endpoint, include_auth=True, raise_http_errors=True, params=params)
             return response.json()
 
         except requests.exceptions.HTTPError as e:
@@ -7102,3 +7348,728 @@ class APIClient(CustomAPIClientMixin):
 
         except Exception as e:
             raise APIError(f"Failed to check subscription: {e}")
+
+    # Compliance API Methods
+
+    # Every compliance handler answers a rejected request with a 400 whose `message` names the cause,
+    # and reserves 404 for a schema or cascade that does not exist. One mapper classifies the message
+    # so each method stays a single call; `action` is the verb phrase the surfaced error begins with.
+
+    @staticmethod
+    def _compliance_not_found_error(message: str):
+        """The domain exception for a "not found" message, chosen by the entity it names.
+
+        Every handler message leads with the entity word ("Schema 'x' not found", "Asset db:a not
+        found", "Database 'x' not found", "Cascade not found or not in pending_approval state"), so
+        the leading word is tried first; the contains pass is the fallback for any other wording.
+        Asset is tried before database in that pass because an asset message quotes
+        `databaseId:assetId`.
+        """
+        lowered = message.lower()
+        by_entity = (
+            ('schema', ComplianceSchemaNotFoundError),
+            ('cascade', ComplianceCascadeNotFoundError),
+            ('asset', AssetNotFoundError),
+            ('database', DatabaseNotFoundError),
+        )
+        for entity, exception_class in by_entity:
+            if lowered.startswith(entity):
+                return exception_class(message)
+        for entity, exception_class in by_entity:
+            if entity in lowered:
+                return exception_class(message)
+        return InvalidComplianceDataError(message)
+
+    def _compliance_request(self, method: str, endpoint: str, action: str,
+                            body: Optional[Dict[str, Any]] = None,
+                            params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Call a compliance route and map its errors onto the compliance exception family.
+
+        A POST or PUT always carries a JSON body, an empty object when the route takes no fields:
+        the handlers parse `event["body"]` unconditionally, so a request without one fails inside
+        the handler rather than being rejected with a message.
+
+        Raises:
+            ComplianceSchemaNotFoundError / ComplianceCascadeNotFoundError / AssetNotFoundError /
+                DatabaseNotFoundError: When the handler reports the named entity as not found
+            InvalidComplianceDataError: When the handler rejects the request (400)
+            AuthenticationError: When authentication fails
+            APIError: When the API call fails for any other reason
+        """
+        verb = {'GET': self.get, 'POST': self.post, 'PUT': self.put, 'DELETE': self.delete}[method]
+        kwargs: Dict[str, Any] = {}
+        if method in ('POST', 'PUT'):
+            kwargs['json'] = body if body is not None else {}
+        if params:
+            kwargs['params'] = params
+        # The ids in the path are sent as typed: a `#` (a deleted database's `<id>#deleted`) or a
+        # space would otherwise end or break the URL path, and `<id>#deleted` would read the live
+        # id. An id typed already encoded (`%23`) passes as it is; the route templates hold no
+        # character this changes.
+        endpoint = quote(endpoint, safe='/%')
+
+        try:
+            response = verb(endpoint, include_auth=True, raise_http_errors=True, **kwargs)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            error_message = _api_error_message(e.response, str(e))
+            if status in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {error_message}")
+            if status == 404 or (status == 400 and 'not found' in error_message.lower()):
+                raise self._compliance_not_found_error(error_message)
+            if status == 400:
+                raise InvalidComplianceDataError(f"{action} failed: {error_message}")
+            raise APIError(f"{action} failed: {error_message}")
+
+        except GlobalInfrastructureError:
+            raise
+        except Exception as e:
+            raise APIError(f"{action} failed: {e}")
+
+    # ---- Schemas ------------------------------------------------------
+
+    def list_compliance_schemas(self, database_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List compliance schemas using the /compliance/schemas GET endpoint.
+
+        Args:
+            database_id: When given, only schemas scoped to this database plus GLOBAL schemas are
+                returned; otherwise every schema the caller may read.
+
+        Returns:
+            API response data: {"schemas": [...]} — the latest version of each schema. The route
+            returns the whole list in one response and takes no paging parameters.
+        """
+        params = {'databaseId': database_id} if database_id else None
+        return self._compliance_request(
+            'GET', API_COMPLIANCE_SCHEMAS, "Listing compliance schemas", params=params)
+
+    def get_compliance_schema(self, schema_name: str) -> Dict[str, Any]:
+        """
+        Get the latest version of a compliance schema using the
+        /compliance/schemas/{schemaName} GET endpoint.
+
+        Returns:
+            API response data: {schemaName, databaseId, description, schemaBody, version, createdAt}
+
+        Raises:
+            ComplianceSchemaNotFoundError: When the schema does not exist
+        """
+        endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
+        return self._compliance_request(
+            'GET', endpoint, f"Getting compliance schema '{schema_name}'")
+
+    def create_compliance_schema(self, schema_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Register a compliance schema using the /compliance/schemas POST endpoint.
+
+        Args:
+            schema_data: Schema definition:
+                - schemaName: Schema name (required; ID-pattern, 3-63 characters)
+                - schemaBody: The schema document (required) — a vams-rules-v1 document
+                  ({"schemaFormat": "vams-rules-v1", "rules": {...}}); any other body is
+                  rejected. A pipeline rule's `inputFiles` selects which of the asset's files the
+                  workflow receives (mode matching, wholeAsset or explicit)
+                - databaseId: Database the schema is scoped to, or 'GLOBAL' (defaults to GLOBAL)
+                - description: Free text
+
+        Returns:
+            API response data: {message, schemaName, databaseId, internalVersion, warnings}.
+            `warnings` (a list, empty when nothing applies) names pipeline rules of the body that
+            share a workflow: they run one after another on an asset when the workflow restricts
+            concurrency. The save succeeded whatever it holds.
+
+        Raises:
+            DatabaseNotFoundError: When the scoping database does not exist
+            InvalidComplianceDataError: When the schema body or fields are rejected
+        """
+        return self._compliance_request(
+            'POST', API_COMPLIANCE_SCHEMAS, "Compliance schema registration", body=schema_data)
+
+    def update_compliance_schema(self, schema_name: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Write a new version of a compliance schema using the /compliance/schemas/{schemaName}
+        PUT endpoint.
+
+        Args:
+            schema_name: Schema to update
+            update_data: Fields to change; any of schemaBody, description, databaseId. An omitted
+                databaseId keeps the schema's current scope.
+
+        Returns:
+            API response data: {message, schemaName, databaseId, internalVersion, warnings}
+            (`warnings` as for create_compliance_schema)
+
+        Raises:
+            ComplianceSchemaNotFoundError: When the schema does not exist
+            InvalidComplianceDataError: When the new body is rejected, or the schema is a system
+                schema that cannot be modified
+        """
+        endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
+        return self._compliance_request(
+            'PUT', endpoint, f"Compliance schema '{schema_name}' update", body=dict(update_data))
+
+    def delete_compliance_schema(self, schema_name: str) -> Dict[str, Any]:
+        """
+        Remove an unbound compliance schema using the /compliance/schemas/{schemaName} DELETE
+        endpoint. Every version of the schema is removed.
+
+        Returns:
+            API response data: the standard success envelope
+
+        Raises:
+            ComplianceSchemaNotFoundError: When the schema does not exist
+            InvalidComplianceDataError: When the schema is still bound to a database or an asset
+        """
+        endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
+        return self._compliance_request(
+            'DELETE', endpoint, f"Compliance schema '{schema_name}' deletion")
+
+    @staticmethod
+    def _compliance_page_params(max_items: Optional[int],
+                                starting_token: Optional[str]) -> Optional[Dict[str, Any]]:
+        """`maxItems` / `startingToken` query parameters, or None when neither is set."""
+        params: Dict[str, Any] = {}
+        if max_items is not None:
+            params['maxItems'] = max_items
+        if starting_token:
+            params['startingToken'] = starting_token
+        return params or None
+
+    # ---- Bindings -----------------------------------------------------
+
+    def get_compliance_bindings(self, database_id: str, max_items: Optional[int] = None,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read a database's compliance schema binding and one page of its asset-level overrides
+        using the /compliance/bind/{databaseId} GET endpoint.
+
+        Args:
+            max_items: Overrides per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE
+                when omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {databaseId, databaseSchema, complianceAutoEval,
+            assetOverrides: [{assetId, schemaName, complianceState}] (one page),
+            assetOverrideCount (the total across every page), "NextToken"?: str,
+            applyStatus, apply: the last binding change applied in the background (status,
+            operation, counts, startedAt, lastProgressAt, finishedAt) or None}
+
+        Raises:
+            DatabaseNotFoundError: When the database does not exist
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Getting compliance bindings for '{database_id}'",
+            params=self._compliance_page_params(max_items, starting_token))
+
+    def bind_compliance_schema(self, database_id: str, schema_name: str,
+                               asset_id: Optional[str] = None,
+                               auto_eval: Optional[bool] = None) -> Dict[str, Any]:
+        """
+        Bind a compliance schema to a database (PUT /compliance/bind/{databaseId}) or, when
+        `asset_id` is given, to one asset as an override of the database binding
+        (PUT /compliance/bind/{databaseId}/{assetId}).
+
+        Args:
+            database_id: Database to bind, or the asset's database
+            schema_name: A GLOBAL schema or one scoped to this database
+            asset_id: Bind this asset instead of the database
+            auto_eval: Whether assets in the database are re-evaluated automatically
+                (database binding only; the asset route does not read it)
+
+        Returns:
+            API response data — database (HTTP 202, applied in the background): {message,
+            schemaName, databaseId, complianceAutoEval, changed, applyStatus, applyId, assetCount,
+            apply}; the schema already bound: {message, changed: False, ...counts 0}; asset:
+            {message, databaseId, assetId, schemaName, schemaSource}
+
+        Raises:
+            ComplianceSchemaNotFoundError: When the schema does not exist
+            DatabaseNotFoundError: When the database does not exist
+            InvalidComplianceDataError: When the schema is not visible to the database
+        """
+        body: Dict[str, Any] = {'schemaName': schema_name}
+        if asset_id:
+            endpoint = API_COMPLIANCE_BIND_ASSET.format(databaseId=database_id, assetId=asset_id)
+            action = f"Binding schema '{schema_name}' to asset '{asset_id}'"
+        else:
+            endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
+            action = f"Binding schema '{schema_name}' to database '{database_id}'"
+            if auto_eval is not None:
+                body['complianceAutoEval'] = auto_eval
+        return self._compliance_request('PUT', endpoint, action, body=body)
+
+    def unbind_compliance_schema(self, database_id: str,
+                                 asset_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Remove a database's compliance schema binding (DELETE /compliance/bind/{databaseId}) or,
+        when `asset_id` is given, an asset's override so it falls back to the database binding
+        (DELETE /compliance/bind/{databaseId}/{assetId}).
+
+        Returns:
+            API response data — database (HTTP 202, applied in the background): {message,
+            databaseId, previousSchema, changed, applyStatus, applyId, assetCount, apply}; asset:
+            {message, databaseId, assetId, fallbackSchema, schemaSource}. Both routes answer 200
+            when there was nothing to remove.
+
+        Raises:
+            DatabaseNotFoundError: When the database does not exist
+        """
+        if asset_id:
+            endpoint = API_COMPLIANCE_BIND_ASSET.format(databaseId=database_id, assetId=asset_id)
+            action = f"Removing the schema override from asset '{asset_id}'"
+        else:
+            endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
+            action = f"Removing the schema binding from database '{database_id}'"
+        return self._compliance_request('DELETE', endpoint, action)
+
+    # ---- Evaluation and state -----------------------------------------
+
+    def evaluate_asset_compliance(self, database_id: str, asset_id: str,
+                                  schema_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Evaluate an asset using the /compliance/evaluate/{databaseId}/{assetId} POST endpoint.
+
+        Args:
+            schema_name: Schema to evaluate against; defaults to the asset's bound schema
+
+        Returns:
+            API response data: {message, evaluationId, schemaName, verdict, complianceState,
+            ruleResults, pipelineRulesPending, pipelineRulesWaiting}. The metadata and
+            relationship rules run synchronously; each pipeline rule launches a workflow execution
+            and is counted in pipelineRulesPending. A pipeline rule whose workflow's concurrency
+            lock another execution holds waits for it to end and then launches; it is counted in
+            pipelineRulesWaiting as well. While the asset holds an active exception against the schema
+            evaluated, a failing verdict leaves complianceState `exception` rather than
+            quarantining the asset. Naming a schema evaluates against it without changing the
+            asset's binding.
+
+        Raises:
+            AssetNotFoundError: When the asset does not exist
+            InvalidComplianceDataError: When no schema is given and the asset has none bound
+        """
+        endpoint = API_COMPLIANCE_EVALUATE_ASSET.format(databaseId=database_id, assetId=asset_id)
+        body = {'schemaName': schema_name} if schema_name else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Evaluating asset '{asset_id}'", body=body)
+
+    def sweep_compliance_schema(self, schema_name: str,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Re-evaluate every asset bound to a schema using the /compliance/sweep/{schemaName} POST
+        endpoint (one call of the sweep).
+
+        Args:
+            starting_token: The previous call's NextToken, to continue that sweep; omit to start one.
+
+        Returns:
+            API response data: {message, schemaName, assetsTriggered: [{databaseId, assetId, ...}],
+            skipped, skippedNotAuthorized, skippedArchived, superseded, assetsRemaining,
+            NextToken?}. `skipped` counts the bound assets not evaluated: `skippedNotAuthorized`
+            those the caller is not authorized to evaluate or may not read (never listed) and
+            `skippedArchived` the archived ones the caller may see (their records are left as they
+            are; an archived asset the caller may not see is counted nowhere). `assetsRemaining`
+            counts the bound assets still to evaluate; while it is above 0 the response carries
+            `NextToken`, which the next call passes back to continue.
+        """
+        endpoint = API_COMPLIANCE_SWEEP_SCHEMA.format(schemaName=schema_name)
+        body = {'startingToken': starting_token} if starting_token else {}
+        return self._compliance_request('POST', endpoint, f"Sweeping schema '{schema_name}'",
+                                        body=body)
+
+    def evaluate_database_compliance(self, database_id: str,
+                                     starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Evaluate every tracked asset of one database, each against its own bound schema (the
+        database binding or the asset's override), using the /compliance/evaluate/{databaseId}
+        POST endpoint (one call of the evaluation). No other database is evaluated.
+
+        Args:
+            starting_token: The previous call's NextToken, to continue that evaluation; omit to
+                start one.
+
+        Returns:
+            API response data: {message, databaseId, assetsTriggered: [{databaseId, assetId,
+            schemaName, evaluationId, verdict, superseded?}], assetsRemaining, superseded,
+            registered, withoutSchema, skipped, skippedNotAuthorized, skippedArchived,
+            NextToken?}. `skippedArchived` counts the archived assets the caller may see, which
+            are not evaluated (their records are left as they are; 0 for a caller who may not see
+            the database's archive), `skippedNotAuthorized` the assets the caller may not read
+            (not evaluated, never listed), and `skipped` the two. While `assetsRemaining` is above
+            0 the response
+            carries `NextToken`: pass it back to continue. `registered` counts assets of a bound
+            database registered under the binding by this call; `withoutSchema` counts tracked
+            assets whose record names no schema (not evaluated).
+        """
+        endpoint = API_COMPLIANCE_EVALUATE_DATABASE.format(databaseId=database_id)
+        body = {'startingToken': starting_token} if starting_token else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Evaluating the assets of database '{database_id}'", body=body)
+
+    def list_compliance_evaluations(self, database_id: str, asset_id: str,
+                                    max_items: Optional[int] = None,
+                                    starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read an asset's evaluation history using the /compliance/evaluations/{databaseId}/{assetId}
+        GET endpoint.
+
+        Args:
+            max_items: Page size; the handler applies DEFAULT_COMPLIANCE_EVALUATIONS_PAGE_SIZE when
+                omitted and clamps larger values to MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"evaluations": [...], "NextToken"?: str}, most recent first.
+        """
+        endpoint = API_COMPLIANCE_EVALUATIONS_ASSET.format(databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Listing evaluations for asset '{asset_id}'",
+            params=self._compliance_page_params(max_items, starting_token))
+
+    def get_compliance_state(self, database_id: str, asset_id: str) -> Dict[str, Any]:
+        """
+        Read one asset's compliance record using the /compliance/state/{databaseId}/{assetId} GET
+        endpoint.
+
+        Returns:
+            API response data: the compliance record (databaseId, assetId, complianceState,
+            schemaName, schemaSource, lastEvaluationId, ...). complianceState is one of compliant,
+            non_compliant, quarantined, exception, pending_evaluation or unknown; an asset in the
+            `exception` state carries the exception fields (exceptionGranted, exceptionReason,
+            exceptionGrantedBy, exceptionGrantedAt, exceptionSchemaName, exceptionSchemaVersion).
+            An asset that is not tracked answers complianceState "unknown" with a null schemaName
+            rather than a 404.
+        """
+        endpoint = API_COMPLIANCE_STATE_ASSET.format(databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Getting compliance state for asset '{asset_id}'")
+
+    def get_database_compliance_state(self, database_id: str, max_items: Optional[int] = None,
+                                      starting_token: Optional[str] = None,
+                                      filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Read a database's compliance overview using the /compliance/state/{databaseId} GET
+        endpoint.
+
+        Args:
+            max_items: Asset records per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE
+                when omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+            filters: Server-side filters, sent as query parameters: `state`, `schemaName`,
+                `schemaSource` (database | asset), `evaluationError` ("true" | "false"), `text`
+                (case-insensitive contains on the asset name or id) and `sort` (assetId | name)
+
+        Returns:
+            API response data: {databaseId, totalAssets, summary: {compliant, non_compliant,
+            pending_evaluation, quarantined, exception, unknown, error}, assets: [records with
+            assetName], "NextToken"?: str}. `totalAssets` and `summary` cover every tracked asset,
+            whatever the filters; `assets` is one page of the filtered rows.
+
+        Raises:
+            DatabaseNotFoundError: When the database id names no database (the route answers 400
+                "Database not found" rather than an empty overview)
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        endpoint = API_COMPLIANCE_STATE_DATABASE.format(databaseId=database_id)
+        params = dict(self._compliance_page_params(max_items, starting_token) or {})
+        params.update({key: value for key, value in (filters or {}).items() if value})
+        return self._compliance_request(
+            'GET', endpoint, f"Getting compliance state for database '{database_id}'",
+            params=params or None)
+
+    # ---- Quarantine ---------------------------------------------------
+
+    def list_quarantined_assets(self, max_items: Optional[int] = None,
+                                starting_token: Optional[str] = None,
+                                database_id: Optional[str] = None,
+                                text: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List quarantined assets using the /compliance/quarantine GET endpoint.
+
+        Args:
+            max_items: Records per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE when
+                omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"quarantinedAssets": [compliance records with assetName],
+            "NextToken"?: str}. The page is filtered to the databases the caller may read after it
+            is fetched, so a page can be empty while a NextToken is present.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        params = dict(self._compliance_page_params(max_items, starting_token) or {})
+        if database_id:
+            params['databaseId'] = database_id
+        if text:
+            params['text'] = text
+        return self._compliance_request(
+            'GET', API_COMPLIANCE_QUARANTINE, "Listing quarantined assets",
+            params=params or None)
+
+    def release_quarantine(self, database_id: str, asset_id: str,
+                           reason: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Release an asset from quarantine using the
+        /compliance/quarantine/{databaseId}/{assetId}/release POST endpoint.
+
+        Args:
+            reason: Recorded in the audit trail; the handler supplies a default when omitted
+
+        Returns:
+            API response data: {message}
+
+        Raises:
+            AssetNotFoundError: When the asset is not tracked for compliance
+            InvalidComplianceDataError: When the asset is not quarantined
+        """
+        endpoint = API_COMPLIANCE_QUARANTINE_RELEASE.format(databaseId=database_id, assetId=asset_id)
+        body = {'reason': reason} if reason else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Releasing asset '{asset_id}' from quarantine", body=body)
+
+    def grant_quarantine_exception(self, database_id: str, asset_id: str,
+                                   reason: str) -> Dict[str, Any]:
+        """
+        Grant a quarantined asset an exception using the
+        /compliance/quarantine/{databaseId}/{assetId}/exception POST endpoint.
+
+        The asset moves to the `exception` state. The exception is scoped to the asset's bound
+        schema at its current version and holds until it is revoked or an evaluation against a
+        different schema or a newer version supersedes it.
+
+        Args:
+            reason: Required justification, recorded on the asset and in the audit trail
+
+        Returns:
+            API response data: {message, reason, grantedBy, complianceState}
+
+        Raises:
+            AssetNotFoundError: When the asset is not tracked for compliance
+            InvalidComplianceDataError: When the asset is not quarantined or the reason is missing
+        """
+        endpoint = API_COMPLIANCE_QUARANTINE_EXCEPTION.format(
+            databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'POST', endpoint, f"Granting an exception for asset '{asset_id}'",
+            body={'reason': reason})
+
+    def revoke_quarantine_exception(self, database_id: str, asset_id: str) -> Dict[str, Any]:
+        """
+        Revoke an asset's active exception using the
+        /compliance/quarantine/{databaseId}/{assetId}/exception DELETE endpoint.
+
+        The exception fields are cleared and the asset returns to the state its last evaluation's
+        verdict maps to — quarantined again when that verdict was quarantined — or to
+        `pending_evaluation` when it has no recorded evaluation.
+
+        Returns:
+            API response data: {message, databaseId, assetId, complianceState}
+
+        Raises:
+            AssetNotFoundError: When the asset is not tracked for compliance
+            InvalidComplianceDataError: When the asset has no active exception
+        """
+        endpoint = API_COMPLIANCE_QUARANTINE_EXCEPTION.format(
+            databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'DELETE', endpoint, f"Revoking the exception of asset '{asset_id}'")
+
+    # ---- Cascades -----------------------------------------------------
+
+    def list_compliance_cascades(self, state: Optional[str] = None,
+                                 database_id: Optional[str] = None, text: Optional[str] = None,
+                                 max_items: Optional[int] = None,
+                                 starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List cascades using the /compliance/cascades GET endpoint.
+
+        Args:
+            state: pending_approval (the default), executing, completed or aborted
+            database_id: Only cascades whose trigger asset is in this database
+            text: Case-insensitive contains on the trigger asset's name or id
+            max_items / starting_token: Paging (at most 200 per page; the previous NextToken)
+
+        Returns:
+            API response data: {"cascades": [...], "NextToken"?: str}, newest first, each row
+            carrying `databaseId` / `assetId` / `assetName` (the trigger asset) beside
+            `triggeredByDatabaseId` / `triggeredByAssetId`; a row is listed only when the caller
+            may read the trigger asset's database.
+        """
+        params = dict(self._compliance_page_params(max_items, starting_token) or {})
+        for key, value in (('state', state), ('databaseId', database_id), ('text', text)):
+            if value:
+                params[key] = value
+        return self._compliance_request(
+            'GET', API_COMPLIANCE_CASCADES, "Listing compliance cascades", params=params or None)
+
+    def get_compliance_cascade(self, cascade_id: str) -> Dict[str, Any]:
+        """
+        Read a cascade using the /compliance/cascades/{cascadeId} GET endpoint.
+
+        Returns:
+            API response data: the cascade record (cascadeId, state, triggeredByDatabaseId,
+            triggeredByAssetId, triggerReason, createdAt, approvalTimeoutAt, ...)
+
+        Raises:
+            ComplianceCascadeNotFoundError: When the cascade does not exist
+        """
+        endpoint = API_COMPLIANCE_CASCADE_BY_ID.format(cascadeId=cascade_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Getting compliance cascade '{cascade_id}'")
+
+    def create_compliance_cascade(self, database_id: str, asset_id: str,
+                                  reason: Optional[str] = None,
+                                  require_approval: bool = True) -> Dict[str, Any]:
+        """
+        Create a cascade for an asset's dependents using the /compliance/cascades POST endpoint.
+
+        Args:
+            database_id: Database of the asset whose change triggers the cascade
+            asset_id: The triggering asset
+            reason: Recorded as the trigger reason; the handler supplies a default when omitted
+            require_approval: When true the cascade waits in pending_approval for approve/reject;
+                when false it starts executing at once
+
+        Returns:
+            API response data: {message, cascadeId, state}. With `require_approval` the handler
+            answers 200 and `state` is pending_approval. Without it the handler writes the cascade
+            in state executing, starts the executor asynchronously and answers 202; the request
+            does not wait for the evaluations. Poll `get_compliance_cascade` until `state` is
+            completed or aborted (a rejected cascade carries `rejectionReason`, any other aborted
+            cascade `abortReason`).
+
+        Raises:
+            InvalidComplianceDataError: When the request is rejected, or the executor could not be
+                started (the cascade is then recorded as aborted)
+        """
+        body: Dict[str, Any] = {
+            'databaseId': database_id,
+            'assetId': asset_id,
+            'requireApproval': require_approval,
+        }
+        if reason:
+            body['reason'] = reason
+        return self._compliance_request(
+            'POST', API_COMPLIANCE_CASCADES, "Compliance cascade creation", body=body)
+
+    def approve_compliance_cascade(self, cascade_id: str,
+                                   reason: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Approve a pending cascade using the /compliance/cascades/{cascadeId}/approve POST
+        endpoint. The handler moves the cascade to executing, starts the executor asynchronously
+        and answers 202; the request does not wait for the evaluations.
+
+        Returns:
+            API response data: {message, cascadeId, state} with `state` executing. Poll
+            `get_compliance_cascade` until `state` is completed or aborted.
+
+        Raises:
+            ComplianceCascadeNotFoundError: When the cascade does not exist or is not pending
+            InvalidComplianceDataError: When the executor could not be started (the cascade is then
+                recorded as aborted)
+        """
+        endpoint = API_COMPLIANCE_CASCADE_APPROVE.format(cascadeId=cascade_id)
+        body = {'reason': reason} if reason else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Approving cascade '{cascade_id}'", body=body)
+
+    def reject_compliance_cascade(self, cascade_id: str,
+                                  reason: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Reject a pending cascade using the /compliance/cascades/{cascadeId}/reject POST endpoint.
+
+        Returns:
+            API response data: {message, cascadeId}
+
+        Raises:
+            ComplianceCascadeNotFoundError: When the cascade does not exist or is not pending
+        """
+        endpoint = API_COMPLIANCE_CASCADE_REJECT.format(cascadeId=cascade_id)
+        body = {'reason': reason} if reason else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Rejecting cascade '{cascade_id}'", body=body)
+
+    # ---- Audit --------------------------------------------------------
+
+    def _compliance_audit_params(self, start_date: Optional[str], end_date: Optional[str],
+                                 max_items: Optional[int],
+                                 starting_token: Optional[str]) -> Dict[str, Any]:
+        params: Dict[str, Any] = {}
+        if start_date:
+            params['startDate'] = start_date
+        if end_date:
+            params['endDate'] = end_date
+        params.update(self._compliance_page_params(max_items, starting_token) or {})
+        return params
+
+    def query_compliance_audit(self, event_type: Optional[str] = None,
+                               start_date: Optional[str] = None, end_date: Optional[str] = None,
+                               max_items: Optional[int] = None,
+                               starting_token: Optional[str] = None,
+                               database_id: Optional[str] = None, asset_id: Optional[str] = None,
+                               text: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Query the compliance audit trail using the /compliance/audit GET endpoint.
+
+        Args:
+            event_type: Only entries of this type (schema_bound_to_database, compliance_check,
+                quarantine_released, exception_granted, exception_revoked, exception_superseded,
+                cascade_triggered, ...). Without it the handler reads the whole trail in
+                timestamp order. Entries are filtered to the databases the caller may read.
+            start_date / end_date: ISO 8601 bounds on the entry timestamp
+            max_items: Entries per page; the handler applies COMPLIANCE_AUDIT_DEFAULT_LIMIT when
+                omitted and clamps larger values to MAX_COMPLIANCE_AUDIT_PAGE_SIZE. Sent as
+                `maxItems`, which the route reads ahead of its `limit` alias.
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"entries": [...], "NextToken"?: str}, most recent first.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        params = self._compliance_audit_params(start_date, end_date, max_items, starting_token)
+        # databaseId narrows the trail to one database (with assetId, to one asset); text is a
+        # case-insensitive contains on the asset name at the time, the asset id or the actor.
+        for key, value in (('eventType', event_type), ('databaseId', database_id),
+                           ('assetId', asset_id), ('text', text)):
+            if value:
+                params[key] = value
+        return self._compliance_request(
+            'GET', API_COMPLIANCE_AUDIT, "Querying the compliance audit trail",
+            params=params or None)
+
+    def get_asset_compliance_audit(self, database_id: str, asset_id: str,
+                                   start_date: Optional[str] = None,
+                                   end_date: Optional[str] = None,
+                                   max_items: Optional[int] = None,
+                                   starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read one asset's compliance audit history using the
+        /compliance/audit/{databaseId}/{assetId} GET endpoint.
+
+        Args:
+            start_date / end_date: ISO 8601 bounds on the entry timestamp
+            max_items: Entries per page; the handler applies COMPLIANCE_AUDIT_DEFAULT_LIMIT when
+                omitted and clamps larger values to MAX_COMPLIANCE_AUDIT_PAGE_SIZE. This route has
+                no eventType filter.
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"entries": [...], "NextToken"?: str}, most recent first.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        endpoint = API_COMPLIANCE_AUDIT_ASSET.format(databaseId=database_id, assetId=asset_id)
+        params = self._compliance_audit_params(start_date, end_date, max_items, starting_token)
+        return self._compliance_request(
+            'GET', endpoint, f"Reading the audit history for asset '{asset_id}'",
+            params=params or None)

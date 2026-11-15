@@ -24,10 +24,10 @@ VamsCLI is a Python command-line interface built with the **Click** framework fo
 ```
 tools/VamsCLI/
   vamscli/
-    main.py                  # CLI entry point, @click.group, command registration (+ CUSTOM_COMMANDS)
+    main.py                  # CLI entry point, @click.group, command registration (+ ADDON_COMMANDS, CUSTOM_COMMANDS)
     version.py               # __version__ and CLI_VERSION
     constants.py             # All API endpoints, limits, config constants (re-exports addon_constants)
-    addon_constants.py       # Add-on FEATURE_* names (FEATURE_PHYSNA_ADDON), mirrors infra/common/addonAppFeatures.ts
+    addon_constants.py       # Add-on API_* paths, FEATURE_* names (mirror infra/common/addonAppFeatures.ts) and shared messages
     custom_constants.py      # FORK EXTENSION POINT: a fork's API_* paths + FEATURE_CUSTOM_* (shipped empty)
     auth/
       base.py                # BaseAuthenticator abstract class
@@ -54,9 +54,13 @@ tools/VamsCLI/
       sync.py                # Directory sync (sync file push/pull)
       pipeline.py            # Pipeline CRUD + template + tag-schema sub-groups
       workflow.py            # Workflow CRUD + trigger sub-group + asset-less execute + per-asset execution list
-      execution.py           # Execution ops: list (global), details, details-metadata (paged), logs, abort, rerun, permanent-delete
+      execution.py           # Execution ops: list (global), details (nested group: whole view + metadata|files|results subcommands, each paged), logs, abort, rerun, permanent-delete
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
+      compliance.py          # Compliance: schema sub-group, bind/unbind/bindings, evaluate/sweep/state/evaluations, quarantine + cascade sub-groups, audit
+      addon/
+        __init__.py          # Add-on lane: ADDON_COMMANDS, registered by main.py after the core commands
+        edh.py               # EDH Workstations add-on: workstation, catalog, admin (images, ami-recipe, instances, settings, capacity-reservation), container (job) sub-groups
       custom/__init__.py     # FORK EXTENSION POINT: CUSTOM_COMMANDS, registered on the root group by main.py
       industry/
         industry.py          # Industry command group
@@ -67,13 +71,19 @@ tools/VamsCLI/
         spatial/
           glb.py             # GLB file combination operations
     utils/
-      api_client.py          # APIClient class (HTTP, retries, error mapping); inherits CustomAPIClientMixin
+      api_client.py          # APIClient class (HTTP, retries, error mapping); inherits AddonAPIClientMixin, CustomAPIClientMixin
+      addon_api_client.py    # Add-on lane: AddonAPIClientMixin, aggregating one mixin per add-on
+      addon/
+        edh_api_client.py    # EdhAPIClientMixin (EDH Workstations add-on methods)
+        edh_exceptions.py    # EdhError family
       custom_api_client.py   # FORK EXTENSION POINT: CustomAPIClientMixin (shipped empty)
+      request_paths.py       # route_path(): one path segment per value; imports nothing from the package
       profile.py             # ProfileManager (multi-profile, config dirs)
       exceptions.py          # Two-tier exception hierarchy (~140 classes)
       global_exceptions.py   # @handle_global_exceptions() decorator
       decorators.py          # @requires_setup_and_auth, @requires_feature
       json_output.py         # output_result(), output_error(), output_status()
+      system_records.py      # is_system_record_refusal(): exact match of the API's system-record 400s
       confirmation.py        # confirm_destructive_action(): extra prompt only on an interactive terminal
       logging.py             # Rotating file logger, verbose mode
       retry_config.py        # Retry settings with env var overrides
@@ -88,17 +98,21 @@ tools/VamsCLI/
     conftest.py              # Shared fixtures (mock_logging, cli_runner, generic_command_mocks)
     test_*.py                # One file per command group or behavior area
     industry/                # Engineering BOM and PLM command tests (engineering/bom/, engineering/plm/)
+    addon/                   # Add-on command and client tests (test_edh.py, test_edh_client.py, test_edh_capacity_reservations.py, test_edh_start_status.py, test_edh_workstation_image.py)
 ```
 
-### Command Groups (24 top-level)
+### Command Groups (25 core + add-on groups)
 
-All registered in `main.py` via `cli.add_command()`:
+The core groups are registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
 tag, tag-type, metadata, metadata-schema, comment, subscription, features,
-search, sync, workflow, pipeline, execution, industry, user, role, api-key
+search, sync, workflow, pipeline, execution, industry, user, role, api-key,
+compliance
 ```
+
+The add-on groups are registered from `commands/addon/` (`ADDON_COMMANDS`): `edh` (EDH Workstations). See [Add-on Commands](#add-on-commands).
 
 Sync has a nested sub-command group:
 
@@ -108,12 +122,27 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 
 -   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
 -   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
--   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`; `--json-output` carries every top-level sibling of the handler's `message` — `warnings`, `notAbortable` — through `_payload_with_warnings`, so a field added upstream reaches scripts, the MCP server and the connectors without a CLI change), `execution rerun`, `execution permanent-delete`
+-   `execution list` (global, permission-filtered, filterable; each row carries `outputTypes`, the File/Metadata/Result subset the run produced), `execution details` (a nested group via `DetailsGroup`: `execution details <id>` is the whole detail view unchanged, and `execution details metadata|files|results <id>` page one part of it past the bound the whole view applies — `metadata` renamed from the shipped flat `details-metadata`, a BREAKING change; `files` pages the input/output file collections; `results` pages the concatenated result text (`--auto-paginate`, the default with `--output/-o FILE`, concatenates every page; `--starting-token` resumes)), `execution logs`, `execution abort` (single or `--group-id`; `--json-output` carries every top-level sibling of the handler's `message` — `warnings`, `notAbortable` — through `_payload_with_warnings`, so a field added upstream reaches scripts, the MCP server and the connectors without a CLI change), `execution rerun`, `execution permanent-delete`
 
 Comment and subscription cover the comments and subscriptions APIs:
 
 -   `comment list|get|add|update|delete` -- `list` takes `-v/--asset-version-id` to switch from the asset-wide route to the version-scoped one; `get`, `add`, `update` and `delete` address a comment by asset, asset version and comment ID
 -   `subscription list|create|update|delete|unsubscribe|check` -- `delete` removes the whole subscription (and, for an asset, its notification topic); `unsubscribe` removes one subscriber and is a different route
+
+Compliance covers the schema registry, bindings, evaluation, quarantine, cascades and the audit trail:
+
+-   `compliance schema list|get|create|update|delete` -- `create`/`update` take `--schema-file` (a JSON file path or the body inline); `delete` requires `--confirm` and the API refuses a schema that is still bound
+-   `compliance bind|unbind|bindings` -- `-d` binds a database, `-d -a` binds one asset as an override; `--auto-eval/--no-auto-eval` (omitted: the API keeps an existing binding's setting, a new binding turns it on) is rejected with `-a` because the asset route does not read it. A database bind or unbind answers 202 and is applied in the background: the command prints the change's `apply` (`format_binding_change`), `--wait` follows it with the binding read (`COMPLIANCE_BINDING_APPLY_POLL_DELAYS`, `--wait-timeout`, default `DEFAULT_COMPLIANCE_BINDING_WAIT_TIMEOUT`) and exits 1 unless it was applied (a binding read that answers the database not found after the change was accepted is the change failing, reported with `COMPLIANCE_BINDING_APPLY_DATABASE_DELETED_REASON`, D171); `--wait` is rejected with `-a`; `compliance bindings` prints the last change
+-   `compliance bind` prints `✓ Nothing changed.` when the API answers `changed: false` (the schema already bound with the same automatic-evaluation setting); `compliance state` prints an `Awaiting Re-evaluation:` line for a quarantined record a binding change reached (`awaitingReevaluationSince` / `awaitingReevaluationSchema`), or whose evaluation waits for its pipeline rules (`awaitingReevaluationReason` `evaluationPending`, its own wording). `compliance schema create|update` surfaces the pipeline-rule run-rights refusal as the existing `PermissionDeniedError` (`Access forbidden. Not authorized to run the workflow of pipeline rule '<name>'`): `_make_request` raises on 403 before any command-level mapping, so do not add one. A deleted database's history is read by passing `<databaseId>%23deleted`; the client does not encode `#` in a path.
+-   `compliance evaluate|sweep|state|evaluations` -- `sweep -n` sweeps a schema, `sweep -d` evaluates one database's tracked assets (`POST /compliance/evaluate/{databaseId}`), exactly one of the two; `state -d` is the database overview (paged on `--max-items`/`--starting-token`; `summary`/`totalAssets` cover the full set, `assets` is one page; the options are rejected with `-a`), `state -d -a` one asset's record; `evaluations` pages on `--max-items`/`--starting-token` (the route reads its page size from `maxItems`); `sweep` reports `skipped` (bound assets the caller may not evaluate), `superseded` (assets whose evaluation a newer one had already started; marked in the list, not an error) and `assetsRemaining`
+-   `compliance schema list|get` print `Format:` from the record's top-level `schemaFormat` (`legacy` rows cannot be bound, updated or evaluated); `compliance evaluate` prints `schemaVersion`, `exceptionApplied`, `hasRuleErrors` and marks `status: error` rule results with `!`; `compliance evaluate` prints `pipelineRulesWaiting` and `compliance evaluations` a `Waiting: <rule>` line for each pipeline rule of a pending evaluation whose `pipelineExecutions` entry is `waiting`/`launching` (it waits for a running execution of its workflow; no execution is named); `compliance schema create|update` print each entry of the answer's `warnings` (pipeline rules sharing a workflow) as `Warning:`; `compliance state` prints `lastEvaluationStatus` and the overview's `error` overlay bucket
+-   `compliance quarantine list|release|exception|revoke-exception` -- `list` pages on `--max-items`/`--starting-token` (an authorization-filtered page may be empty while a token remains); `exception` moves the asset to the `exception` state (scoped to the bound schema's name + version); `revoke-exception` (DELETE on the exception route, no reason) returns it to its last verdict's state
+-   `compliance cascade list|get|create|approve|reject` -- `create --no-approval` and `approve` return 202 with `state` `executing` and no result; the CLI prints a hint to poll `cascade get` until `completed` or `aborted` (`abortReason`)
+-   `compliance audit [-d -a] [--event-type] [--start-date] [--end-date] [--max-items|--limit] [--starting-token]` -- pages on `--max-items` (`--limit` is an alias; `click.IntRange(1, 500)`) and `--starting-token`, printing the `NextToken` hint; `--event-type` is rejected with `-d -a` because the per-asset route has no such filter
+
+Every compliance call goes through `APIClient._compliance_request`, which percent-encodes the request path (`quote(endpoint, safe='/%')`): an id with `#` (a deleted database's `<id>#deleted`) is sent as typed, and an id typed encoded (`%23`) is left as it is. A new compliance client method calls `_compliance_request`, not `get`/`post` directly (D134). The MCP compliance tools reach the API only through these methods.
+
+The compliance `schemas` and pending `cascades` listings return their whole list in one response and take no paging parameters, so `schema list` and `cascade list` have none — a `--starting-token` there would be a knob the route ignores (`tools/VamsMCP/CLAUDE.md` Rule 9). `bindings` (`assetOverrides`), `state -d` (`assets`), `quarantine list` (`quarantinedAssets`), `evaluations` and `audit` (`entries`) all page on `maxItems` + `startingToken` with a `NextToken`; the CLI exposes them as `--max-items` (IntRange to the route cap) and `--starting-token`.
 
 Industry has nested sub-command groups:
 
@@ -146,7 +175,7 @@ VamsCLIError (base)
     RetryExhaustedError
     RateLimitExceededError
   BusinessLogicError           --> handled by individual commands
-    APIError
+    APIError (+ InvalidRequestPathError)
     AssetError (+ 5 subclasses)
     DatabaseError (+ 5 subclasses)
     FileError (+ 14 subclasses)
@@ -163,6 +192,8 @@ VamsCLIError (base)
     RoleError (+ 4 subclasses)
     ConstraintError (+ 5 subclasses)
     UserRoleError (+ 4 subclasses)
+    ComplianceError (+ 3 subclasses: ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError)
+    EdhError (+ 17 subclasses; add-on, in utils/addon/edh_exceptions.py)
     ProfileAlreadyExistsError
 ```
 
@@ -207,6 +238,7 @@ def list(ctx: click.Context, json_output: bool):
 6. Comment `# Setup/auth already validated by decorator` at top of command body
 7. Catch only `BusinessLogicError` subclasses in commands; never catch `GlobalInfrastructureError`
 8. A destructive command refuses to run without `--confirm`. Its extra "Are you sure you want to proceed?" question (text mode only; `--json-output` never asks) goes through `confirm_destructive_action()` in `utils/confirmation.py`, which asks only when stdin is an interactive terminal and otherwise treats the required `--confirm` as the confirmation. Never call `click.confirm` after a `--confirm` gate: with no terminal on stdin (a script, a pipe, CI, a connector) it reads end of input and aborts with `Operation cancelled by user.`, so `--confirm` alone could never complete the command. `CliRunner`'s stdin is not a terminal, so a test of the prompt itself takes the `interactive_stdin` fixture; `tests/test_destructive_confirmation.py` covers every site.
+9. A `helpful_message` must fit every error its `except` clause catches. Where the API can also answer with a system-record refusal (a 400 on a system pipeline or workflow, which names what stays editable), pass `None` when `is_system_record_refusal(e)` (`utils/system_records.py`) is true, as `pipeline create` and `pipeline template create` do. Where a hint fits only one of the API's 400s, show it only for that 400 and pass `None` otherwise, as `workflow trigger set` does for its trigger-type hint (only after the API's `Unsupported trigger type` 400).
 
 ### 3. API Client Patterns
 
@@ -222,9 +254,11 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 -   Sets headers: `Content-Type: application/json`, `User-Agent: vamscli/{version}`
 -   Bearer token from `ProfileManager.load_auth_profile()`
 -   Pre-flight token validation for override tokens (checks expiry before request)
+-   Refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded), a control character (raw or percent-encoded), or a raw `?` or `#` with `InvalidRequestPathError` before anything is sent: the URL join drops or resolves such a segment and changes a path that contains a control character, and a `?` or `#` ends the path, so a path value carrying one would address another route. Query parameters go in `params=` (`tests/test_api_request_path.py`)
+-   Endpoints are built with `route_path(API_X, name=value)`, never `API_X.format(...)`: it percent-encodes a `/`, `?`, `#` or `%` in each value so the value stays in its own segment and the API, which decodes each path value once, reads it as given; every other character is left to requests. It lives in `utils/request_paths.py`, which imports nothing from the package, so the add-on and fork mixins import it at module level (`api_client` re-exports it). A ratchet test fails on a new `API_*.format(` call outside the EDH client, which encodes each value with `_edh_path_value`, and outside the compliance methods that send their path through `_compliance_request`, which encodes it; VamsMCP's `tests/test_path_value_encoding.py` holds `vams_mcp` to the same rule
 -   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header
--   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens
--   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent
+-   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens (`OverrideTokenError`); a 401 that persists through `MAX_AUTH_RETRIES` refreshes raises `AuthenticationError`, also with `raise_http_errors=True`. From v2.7.0 the authorizer answers a credential it does not accept (expired or invalid token; unknown, disabled or expired API key) with 401 (#1212)
+-   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent (kept for APIs older than v2.7.0, which answered a rejected token with the authorizer's 403)
 -   HTTP status to exception mapping in response handlers:
     -   `404` --> `NotFoundError` variants
     -   `409` --> `AlreadyExistsError` variants
@@ -233,23 +267,25 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 
 **HTTP 403 classification.** `_classify_403(response)` (module level in `api_client.py`, never raises) names the party that answered from the response alone, and `_make_request` raises before the `raise_http_errors` re-raise. A 403 from another host that a followed redirect reached (`_redirected_host`: a non-empty `response.history` and a final host other than the request's, such as the presigned Amazon S3 URL of a staged `assets export` payload) is not classified: it is `APIError` (`_REDIRECT_TARGET_REFUSED_MESSAGE`) naming that host, never the URL, after one send. Only the authorizer's deny can be cured by a fresh token, so only it and an unclassified (`unknown`) 403, which may be one, are refreshed and resent:
 
-| Kind (first match)                                                       | Raised                                                                                                                                                                                                                                             |
-| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `waf`: JSON `blockedBy == "waf"`, or CloudFront's "request blocked" text | `RequestBlockedError(confirmed=True)`, with or without auth; one send                                                                                                                                                                              |
-| `waf_or_stage`: the body is exactly `{"message": "Forbidden"}`           | With auth, `RequestBlockedError(confirmed=False)`, one send; without auth, `APIError` + `_STAGE_HINT` naming both causes (the original `HTTPError` with `raise_http_errors=True`)                                                                  |
-| `no_route`: `Missing Authentication Token`, or its `x-amzn-ErrorType`    | `APIError` naming the method and URL path, never the body; one send                                                                                                                                                                                |
-| `resource_policy`: `execute-api:invoke` in `Message` or `message`, auth  | `PermissionDeniedError(_RESOURCE_POLICY_MESSAGE)`; one send                                                                                                                                                                                        |
-| `handler`: any other lowercase `message`, with auth                      | `PermissionDeniedError("Access forbidden. " + message)`; one send                                                                                                                                                                                  |
-| `authorizer`, `unknown`, with auth                                       | The override-token checks, then a Cognito refresh up to `MAX_AUTH_RETRIES`; a failed refresh is `TokenExpiredError` or `PermissionDeniedError` as before, and a deny that outlasts the retries `PermissionDeniedError(_AUTHORIZER_DENIED_MESSAGE)` |
+| Kind (first match)                                                       | Raised                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `waf`: JSON `blockedBy == "waf"`, or CloudFront's "request blocked" text | `RequestBlockedError(confirmed=True)`, with or without auth; one send                                                                                                                                                                                                                  |
+| `waf_or_stage`: the body is exactly `{"message": "Forbidden"}`           | With auth, `RequestBlockedError(confirmed=False)`, one send; without auth, `APIError` + `_STAGE_HINT` naming both causes (the original `HTTPError` with `raise_http_errors=True`)                                                                                                      |
+| `no_route`: `Missing Authentication Token`, or its `x-amzn-ErrorType`    | `APIError` naming the method and URL path, never the body; one send                                                                                                                                                                                                                    |
+| `resource_policy`: `execute-api:invoke` in `Message` or `message`, auth  | `PermissionDeniedError(_RESOURCE_POLICY_MESSAGE)`; one send                                                                                                                                                                                                                            |
+| `handler`: any other lowercase `message`, with auth                      | `PermissionDeniedError.for_code(code)("Access forbidden. " + message, code=code)`: the subclass whose `forbidden_code` is the body's `code` (an add-on may define one in its exceptions module; it stays a permission denial), else `PermissionDeniedError`, with `code` set; one send |
+| `authorizer`, `unknown`, with auth                                       | The override-token checks, then a Cognito refresh up to `MAX_AUTH_RETRIES`; a failed refresh is `TokenExpiredError` or `PermissionDeniedError` as before, and a deny that outlasts the retries `PermissionDeniedError(_AUTHORIZER_DENIED_MESSAGE)`                                     |
 
-`RequestBlockedError` carries `json_fields` `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` (the marker body's request ID, else the first non-blank `x-amz-apigw-id`, `x-amz-cf-id` or `x-amzn-RequestId` header: the IDs the regional web ACL log, the CloudFront web ACL log and the API Gateway access log record), never clears stored credentials (`call_login_profile` re-raises global errors), and is printed under `Request Blocked`, ahead of the `AuthenticationError` branch, with `WAF_ADMIN_HINT` (`WAF_OR_STAGE_ADMIN_HINT`, which also names the stage-path check, when `confirmed` is false) and the request ID. Its texts carry no sign-in wording (`auth login`, `401`, `token has expired`, `Authentication failed`), which the IsaacSim connector would class as a credential failure; `tests/test_api_403_classification.py::TestBlockWording` holds them to that. `check_api_availability` raises `RequestBlockedError` for the marker and `APIUnavailableError` naming both causes for a bare `Forbidden`, and `requires_api_access` re-raises both, so a blocked version check stops `auth login`, `auth change-password` and `auth forgot-password` before any Cognito call; `setup` refuses a URL whose stage probe the web ACL blocked.
+`RequestBlockedError` carries `json_fields` `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` (the marker body's request ID, else the first non-blank `x-amz-apigw-id`, `x-amz-cf-id` or `x-amzn-RequestId` header: the IDs the regional web ACL log, the CloudFront web ACL log and the API Gateway access log record), never clears stored credentials (`call_login_profile` re-raises global errors), and is printed under `Request Blocked`, ahead of the `AuthenticationError` branch, with `WAF_ADMIN_HINT` (`WAF_OR_STAGE_ADMIN_HINT`, which also names the stage-path check, when `confirmed` is false) and the request ID. Its texts carry no sign-in wording (`auth login`, `401`, `token has expired`, `Authentication failed`), which the IsaacSim connector would class as a credential failure; `tests/test_api_403_classification.py::TestBlockWording` holds them to that. `check_api_availability` raises `RequestBlockedError` for the marker, `APIUnavailableError` naming both causes for a bare `Forbidden`, and `PermissionDeniedError(_VERSION_CHECK_DENIED_MESSAGE)` for an authorizer deny (the request carries no token, so the message names the source IP restriction). `requires_api_access` re-raises all three, so a blocked or refused version check stops `auth login`, `auth change-password` and `auth forgot-password` before any Cognito call; `setup` refuses a URL whose stage probe the web ACL blocked.
+
+**Injected per-call token (#1338).** `APIClient(base_url, bearer_token=token)` is for a process that serves several users (a remote MCP server builds one client per request from the caller's token). The token is held on that instance only and sent as `Authorization: Bearer <token>`; with no `profile_manager` given, `profile_manager` is `None` and no profile (not even the active-profile file) is read or written. A 401 raises `AuthenticationError(_INJECTED_TOKEN_REJECTED_MESSAGE)` and an authorizer deny `PermissionDeniedError(_INJECTED_TOKEN_DENIED_MESSAGE)` after one send, without a refresh (`_try_refresh_token` returns `False`); handler, resource-policy and web ACL 403s are classified as usual; `call_login_profile` deletes nothing. A token with whitespace (including a `Bearer ` prefix) or a control character raises `ValueError` without echoing it. The request log still records the call with the `Authorization` header redacted. Tests: `tests/test_api_client_injected_token.py`. No CLI flag sets it; `auth login --token-override-stdin` is unchanged.
 
 **Rules**:
 
-1. Always pass `profile_manager` to `APIClient` constructor
+1. Always pass `profile_manager` to `APIClient` constructor (a CLI command never passes `bearer_token`; see below)
 2. Never make raw `requests` calls -- always go through `APIClient`
 3. API endpoint constants are in `constants.py` as format strings (e.g., `API_DATABASE_ASSETS = "/database/{databaseId}/assets"`)
-4. New API methods go in `api_client.py`, not in command files
+4. New API methods go in `api_client.py` (an add-on's in its mixin under `utils/addon/`), not in command files
 5. In an `APIClient` method, every broad handler that raises -- a bare `except`, or one naming `Exception`, `BaseException` or `VamsCLIError` -- is preceded by `except GlobalInfrastructureError: raise` in the same `try`, and a handler naming `GlobalInfrastructureError` or a subclass re-raises with a bare `raise`; a handler that swallows the error or returns a value is exempt. The ratchet `tests/test_api_client_global_error_guards.py` fails otherwise. This keeps a web ACL block, a permission denial or an expired token typed through every `APIClient` method; `utils/upload_manager.py`, `utils/download_manager.py` and a few command wrappers still record one per file, upload sequence or item, with its message but without its heading or `json_fields`
 
 ### 4. JSON Output Contract
@@ -271,7 +307,9 @@ output_info("Hint text", json_output)          # Suppressed in JSON mode
 2. Never use `click.echo()` directly in commands that support `--json-output` -- it would pollute JSON output
 3. Status/warning/info messages are suppressed when `json_output=True`
 4. CLI mode uses colored output via `click.secho()` with `fg='green'`, `fg='red'`, etc.
-5. The JSON error object is `{"error", "error_type"}` plus the exception's `json_fields`, merged without replacing those two and only when it is a dict, whether it is set on the class or on the instance (any other value is left out) -- `RequestBlockedError` carries `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` on the instance; `tests/test_json_output_error_fields.py` holds `output_error` to that. A global error's document (`_global_error_data` in `utils/global_exceptions.py`) is `{"error": "<Heading>: <message>", "error_type", ...json_fields, "additional_info"?}`, also on stdout; in text mode its `✗ <Heading>: <message>` line goes to stderr and its `additional_info` lines to stdout. Both exit 1
+5. The JSON error object is `{"error", "error_type"}` plus the exception's `json_fields`, merged without replacing those two and only when it is a dict, whether it is set on the class or on the instance (any other value is left out) -- `RequestBlockedError` carries `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` on the instance, and an add-on's exceptions set theirs on the class ([Add-on Commands](#add-on-commands)); `tests/test_json_output_error_fields.py` holds `output_error` to that. A global error's document (`_global_error_data` in `utils/global_exceptions.py`) is `{"error": "<Heading>: <message>", "error_type", ...json_fields, "additional_info"?}`, also on stdout; in text mode its `✗ <Heading>: <message>` line goes to stderr and its `additional_info` lines to stdout. Both exit 1
+6. A command that runs another command (`industry spatial glbassetcombine` runs `assets export`, `assets create` and `file upload`; `industry engineering bom bomassemble` runs `glbassetcombine`, `assets create` and `file upload`) calls it through `invoke_nested_command(ctx, json_output, command, **params)`, never by swapping `sys.stdout` by hand. It runs the command with `json_output=True` and its stdout captured, restores stdout on every path, and passes a nested `output_error()` failure on as one error document (JSON mode) or a `✗` line on stderr (CLI mode) with the nested exit code. Its keyword-only `error_fields` adds fields to that document: once `--asset-create-name` has created the asset, both commands add `createdAssetId` to any later error, so a caller does not retry and create a second asset. A nested `file upload` returns its result with `overall_success: false` instead of exiting 1 (`invoked_from_another_command`), so both commands pass each upload's result to `raise_if_upload_failed()` (`commands/industry/spatial/glb.py`), which raises `FileUploadError` naming the files that were not stored (#1349, #1359)
+7. **A command that ends non-zero without raising exits with `sys.exit(n)`, never `ctx.exit(n)`.** `main()` runs the CLI with `standalone_mode=False`, under which Click turns `ctx.exit(n)` into a return value that the entry point drops, so the installed CLI exits 0 while `CliRunner` (standalone) sees `n`. `compliance bind|unbind --wait` exited 0 on a timeout, failure or stop this way (D167, #335). Test such an exit through `main()`, as `TestTheWaitsExitStatusThroughTheEntryPoint` in `tests/test_compliance_commands.py` does.
 
 ### 5. Decorator Usage
 
@@ -372,7 +410,7 @@ API_ASSET_VERSION_UNARCHIVE = "/database/{databaseId}/assets/{assetId}/assetvers
 
 **Rules**:
 
-1. New endpoints go in `constants.py` (in a fork: `custom_constants.py`), never hardcoded in commands or api_client
+1. New endpoints go in `constants.py` (an add-on's in `addon_constants.py`; in a fork: `custom_constants.py`), never hardcoded in commands or api_client
 2. Upload/download limits are constants, not magic numbers
 3. Feature switch names are constants (e.g., `FEATURE_GOVCLOUD = "GOVCLOUD"`; in a fork, `FEATURE_CUSTOM_*` in `custom_constants.py`)
 4. Retry config defaults are constants, overridable via env vars
@@ -381,7 +419,8 @@ API_ASSET_VERSION_UNARCHIVE = "/database/{databaseId}/assets/{assetId}/assetvers
    only at runtime against a live deployment — API Gateway rejects an unmatched path before any
    handler runs, and neither import nor build catches it. `tests/test_constants_contract.py`
    cross-checks every constant against the `ApiRoute` declarations in
-   `backend/backend/common/apiRoutes.py`. Two such constants shipped in this release: one formatted
+   `backend/backend/common/apiRoutes.py` (and `common/addonApiRoutes.py` and `custom/customApiRoutes.py`
+   for the lane constants). Two such constants shipped in this release: one formatted
    by a live `APIClient` method, and one imported but never formatted, which read like working code.
    A constant used as a path **prefix** (concatenated at the call site rather than formatted) needs
    an entry in `_PREFIX_ONLY_CONSTANTS` naming why; prefer a format-string constant matching a
@@ -497,8 +536,8 @@ rather than at an audit. Redaction runs before truncation, so the length cut can
 **How the redactor decides:**
 
 -   **By key name** — a key whose normalized form (separators stripped, lowercased) contains `password`,
-    `passwd`, `secret`, `token`, `credential`, `apikey`, `authorization`, `signature`, `privatekey`, or
-    `cookie` is replaced. Applied recursively through dicts and sequences.
+    `passwd`, `secret`, `token`, `credential`, `apikey`, `authorization`, `signature`, `privatekey`,
+    `cookie`, or `connectionurl` is replaced. Applied recursively through dicts and sequences.
 -   **By descriptive suffix (an exception)** — a key that also _ends_ in `id`, `name`, `arn`, `type`,
     `count`, `expiry`, `expiration`, `enabled`, or `status` is treated as naming a credential rather than
     carrying one, so `apiKeyId`, `tokenType`, and `credentialsSecretArn` survive. `apiKeyHash` and
@@ -593,7 +632,7 @@ Treat a command whose output includes another command's output as this bug until
 ### Framework and Configuration
 
 -   **Framework**: pytest with Click's `CliRunner`
--   **Test files**: `tests/test_*.py`, one per command group or behavior area; the `industry engineering` (BOM, PLM) command tests are under `tests/industry/engineering/`
+-   **Test files**: `tests/test_*.py`, one per command group or behavior area; the `industry engineering` (BOM, PLM) command tests are under `tests/industry/engineering/`, and the add-on command and client tests under `tests/addon/`
 -   **Shared fixtures**: `tests/conftest.py`
 
 ### Key Fixtures (conftest.py)
@@ -644,7 +683,7 @@ The `generic_command_mocks(command_module)` context manager patches:
 **Rules**:
 
 1. Always use `generic_command_mocks` for command tests -- do not manually patch these 5 points
-2. The `command_module` parameter must match the filename in `commands/` (e.g., `'database'`, `'assets'`, `'tag_type'`)
+2. The `command_module` parameter must match the filename in `commands/` (e.g., `'database'`, `'assets'`, `'tag_type'`); an add-on module is named with its package (`'addon.edh'`)
 3. For nested modules like `roleUserConstraints`, use the actual module name: `'roleUserConstraints'`
 4. Use `no_setup_command_mocks` for testing setup-required error paths
 5. To disable the autouse `mock_logging`, mark the test: `@pytest.mark.no_mock_logging`
@@ -773,7 +812,7 @@ Follow this checklist:
 
     def get_my_resource(self, resource_id):
         """Get a specific resource."""
-        endpoint = API_MY_RESOURCE_BY_ID.format(resourceId=resource_id)
+        endpoint = route_path(API_MY_RESOURCE_BY_ID, resourceId=resource_id)
         response = self._make_request('GET', endpoint)
         return self._handle_response(response)
     ```
@@ -808,10 +847,12 @@ Follow this checklist:
 9. **Propagate to the VAMS MCP server** (`tools/VamsMCP/`). The MCP server imports this package's `APIClient` and `ProfileManager` directly, so it is downstream of every change here. A renamed method, a new required parameter, or a changed response shape breaks its tools silently — the failure only appears at agent runtime.
 
     - Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed, and update the call site
-    - Add an `@mcp.tool()` + `@tool_result` function for a new method agents should be able to use, in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`)
-    - Confirm the pagination `items_key` still matches the endpoint's list field. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions` and `metadata`. `VamsClient.paginate()` also unwraps the legacy `message` envelope
+    - Add an `@mcp.tool(title="...", annotations=<CONST>)` + `@tool_result` function for a new method agents should be able to use, in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`), with that tier's annotation constant and an agent-facing description within the budget (`tools/VamsMCP/CLAUDE.md` Rules 11-14)
+    - Confirm the pagination `items_key` still matches the endpoint's list field. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions`, `metadata`, and the compliance fields `evaluations`, `entries`, `quarantinedAssets`. `VamsClient.paginate()` also unwraps the legacy `message` envelope
     - Verify the new `def` is unique and correctly positioned. The tools are module-level functions, so a duplicate name silently shadows the earlier one and a `def` placed after the `if __name__` entrypoint or outside its gate block never executes — the tool goes missing with no import error. `tests/test_server_tools.py` asserts the source layout for this
     - Add the tool to the `tools/VamsMCP/README.md` tool list (and the `autoApprove` sample if it is a safe read)
+    - Place the tool in a tool set in `tools/VamsMCP/vams_mcp/toolsets.py` (`tools/VamsMCP/CLAUDE.md` Rule 17): `tests/test_toolsets.py` fails on a tool in no set and on a set past 100 tools
+    - Record every new public `APIClient` method in `tools/VamsMCP/tests/api_coverage.py`, with the tool that calls it, an exclusion with its reason, or as not yet exposed (`tools/VamsMCP/CLAUDE.md` Rule 15); the MCP suite fails on a method with no entry
     - Run `cd tools/VamsMCP && pytest` in that server's own virtual environment — tests mock the client, so no live deployment is needed, but the `mcp` SDK needs Pydantic v2 and installing it into a shared environment breaks the Pydantic-v1 backend suite
     - Review `tools/VamsAgentSkill/SKILL.md` only if a **structural** rule changed (entity creation/deletion ordering, identifier semantics, permission scoping, or a new mutating command category); the skill self-discovers commands via `vamscli --help`, so ordinary additions need no edit
 
@@ -833,7 +874,7 @@ Follow this checklist:
 
 ### Adding Commands in a Fork
 
-An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream functionality goes in the add-on lane when it integrates an external solution, depends on an AWS service outside the tier-1 set, or implements a use-case lens for an industry; viewers and pipelines keep their own lanes, and a fork uses the custom lane. The tier-1 services, the exemptions and the toggle rule: root `CLAUDE.md` "Core, add-on and custom". Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
 A fork adds commands without editing `main.py`, `constants.py` or `utils/api_client.py`; each splices in a fork-owned file that upstream ships empty and never edits:
 
@@ -844,11 +885,39 @@ A fork adds commands without editing `main.py`, `constants.py` or `utils/api_cli
 | Command groups           | `vamscli/commands/custom/<group>.py`, listed in `commands/custom/__init__.py` (`CUSTOM_COMMANDS`) | `main.py` registers every entry on the root `cli` group                                                                       |
 
 -   Command files follow the same patterns as core ones (`roleUserConstraints.py`: decorators, `--json-output`, typed errors).
--   `custom_constants.py` imports nothing from `vamscli`, and `custom_api_client.py` must not import from `vamscli.commands` (which imports `APIClient`): either would create an import cycle.
+-   `custom_constants.py` imports nothing from `vamscli`, and `custom_api_client.py` must not import from `vamscli.commands` (which imports `APIClient`): either would create an import cycle. Build a path with `route_path` from `utils/request_paths.py`; importing it from `api_client` is a cycle too, because `api_client` imports the mixin at its top.
 -   `tests/test_constants_contract.py` checks every custom `API_*` path against the backend route lists (including `backend/backend/custom/customApiRoutes.py`) and every `FEATURE_*` in `custom_constants.py` against `infra/common/customAppFeatures.ts`.
 -   A custom command never replaces a core one: `main.py` registers `CUSTOM_COMMANDS` after every core command and raises at import on a name that is already registered (`tests/test_custom_commands.py`).
 -   A `CustomAPIClientMixin` method with the name of an `APIClient` method is never called, because `APIClient` comes first in the MRO; `tests/test_custom_api_client.py` fails on such a name.
 -   Command names prefixed `custom-` are recommended, not enforced. Pattern 7 still applies: a custom command an agent should reach gets an MCP tool in `tools/VamsMCP/vams_mcp/custom_tools.py`.
+
+### Add-on Commands
+
+An add-on's commands use an add-on lane that mirrors the fork lane above. Upstream edits these files when it ships an add-on with commands; a fork does not:
+
+| What                                      | Add-on file                                                                                                                                    | Spliced in by                                                                                                                             |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Endpoint paths, switches, shared messages | `vamscli/addon_constants.py` (`API_*`, `FEATURE_*`, the messages the commands and MCP tools share)                                             | `constants.py` re-exports every name                                                                                                      |
+| API client methods                        | one mixin per add-on in `vamscli/utils/addon/<addon>_api_client.py`, aggregated by `vamscli/utils/addon_api_client.py` (`AddonAPIClientMixin`) | `class APIClient(AddonAPIClientMixin, CustomAPIClientMixin)`: a name resolves to the core method, then an add-on's, then a fork's         |
+| Exceptions                                | `vamscli/utils/addon/<addon>_exceptions.py`, `BusinessLogicError` subclasses                                                                   | imported by the add-on's commands and client mixin                                                                                        |
+| Command groups                            | `vamscli/commands/addon/<group>.py`, listed in `commands/addon/__init__.py` (`ADDON_COMMANDS`)                                                 | `main.py` registers them after every core command and before `CUSTOM_COMMANDS`, and raises at import on a name that is already registered |
+
+-   `commands/addon/__init__.py` imports each module whole (`from . import edh`), so `vamscli.commands.addon.edh` names the module that `generic_command_mocks('addon.edh')` patches rather than its command group.
+-   A client mixin imports from `..exceptions` and `...addon_constants`, never from `vamscli.commands`; a helper that needs a function of `api_client.py` imports it inside the function, since `api_client.py` imports the mixin.
+-   An add-on's top-level group is a `vamscli.utils.addon_group.AddonGroup` (`@click.group(cls=AddonGroup, feature_switch=FEATURE_<ADDON>)`): `vamscli --help` lists it only when the feature-switch snapshot of the invocation's profile (`--profile`, read off argv because Click handles `--help` first, else the active profile) carries the switch, a local read with no request. The group stays registered, so `vamscli <group> ...` runs and each command refuses with `@requires_feature`. A command of an optional add-on feature checks the add-on's switch first (`requires_edh_feature` in `edh.py`), so with the whole add-on off it names the add-on (`tests/addon/test_edh_help_listing.py`).
+-   Guards: `tests/test_addon_commands.py` (registration; a core name refused; a custom command named like an add-on command refused), `tests/test_addon_api_client.py` (MRO order; no add-on method shadowed by a core one or shared with another add-on mixin or `CustomAPIClientMixin`), `tests/test_constants_contract.py` (add-on paths against `backend/backend/common/addonApiRoutes.py`, switches against `infra/common/addonAppFeatures.ts`), and `tests/test_api_client_global_error_guards.py`, which parses every class in `APIClient.__mro__`.
+
+#### EDH Workstations
+
+-   `edh` (`commands/addon/edh.py`) has the `workstation`, `catalog`, `admin` (`images`, `ami-recipe`, `instances`, `capacity`, `health`, `settings`, `capacity-reservation`) and `container` sub-groups. Every command stacks `@requires_feature(FEATURE_EDH_WORKSTATIONS, ...)` after `@requires_setup_and_auth` (`container` uses `FEATURE_EDH_CONTAINERS`, `admin ami-recipe` uses `FEATURE_EDH_AMI_RECIPES`); the switch is a login-time snapshot. The three refusal sentences (`EDH_*_DISABLED_MESSAGE` in `addon_constants.py`) are the ones the MCP server's EDH pre-flight reports.
+-   `EdhAPIClientMixin` (`utils/addon/edh_api_client.py`): every method passes `raise_http_errors=True`, because with the default `_make_request` converts a 404/400/5xx into a generic `APIError` before the method's own handler runs. `_edh_error` maps a 403 the methods read themselves to `PermissionDeniedError("Access forbidden. " + message)` and a 401 to `AuthenticationError`, and `_edh_session_id` checks a workstation id (one path segment, the service's `id_pattern`) before any request, as `_edh_capacity_reservation_id` checks a capacity reservation id (`cr-` and 17 hex digits). A 409 whose body carries `"code": "RESERVATION_FULL"` raises `EdhReservationFullError` (a launch's; a start answers 202 and the worker records a full reservation on the row). A launch's 403 coded `RESERVATION_NOT_PERMITTED` (the role may see the reservation but not launch into it) raises `EdhReservationNotPermittedError`, a `PermissionDeniedError` and an `EdhError` both: `_make_request` reads a handler's 403 itself and raises `PermissionDeniedError.for_code(code)` (the subclass whose `forbidden_code` is the body's `code`, read by `_api_error_code`, else `PermissionDeniedError`) with `.code` set, so the global-error guards (`tests/test_api_client_global_error_guards.py`) still see a bare re-raise; `_edh_error` does the same for a 403 it reads. A 403 without a known code stays `PermissionDeniedError`. The list routes return every row in one `{"Items": [...]}` page, so the commands take no paging options.
+-   `utils/addon/edh_exceptions.py` holds the `EdhError` family; the class names are the `error_type` that `--json-output` and the MCP tools report. `EdhOutcomeUnknownError` carries `json_fields` `{"outcomeUnknown": True}`, `EdhStartInProgressError` `{"startInProgress": True}`, `EdhReservationFullError` `{"code": "RESERVATION_FULL"}` and `EdhReservationNotPermittedError` `{"code": "RESERVATION_NOT_PERMITTED"}` and `EdhDisplaySessionEndedError` `{"code": "DISPLAY_SESSION_ENDED"}` (a `409` connect or desktop sign-in of a running desktop whose remote display session has ended; `get` prints the sentence as `Connection:`) on the class, the fields the API's own error body sets. `EdhStartFailedError` (`{"waitOutcome": "failed"}`), `EdhStartStalledError` (`{"waitOutcome": "stalled"}`, not a subclass of the failed error) and `EdhStartWaitTimeoutError` (`{"waitOutcome": "timedOut"}`) are raised by `start --wait` alone, and an instance adds the record's `state`, `activity`, `lastError` and `startFailure` to its `json_fields`.
+-   Start status: a start answers 202 and runs in the background. `state_label` gives the `list` State column (`STARTING`/`STOPPING` from the record's `activity`, `STALLED` for a start the sweep found stalled (`is_start_stalled`: CREATING, no activity, `lastError` `START_STALLED`), else `state`), `format_workstation` prints the same `state_label` on its `State:` line (`--json-output` keeps the record's `state`), then `Activity:` and, for a STOPPED record whose start failed or a stalled start, `Start Failure:` with the sentence and the `AWS: <code> in <AZ>` line (none for a stall) from `describe_start_failure`, and `start --wait` polls through `wait_for_start` every `START_WAIT_POLL_SECONDS` (10) for up to `START_WAIT_TIMEOUT_SECONDS` (600), exiting 0 only on ACTIVE with no activity and 1 with `EdhStartStalledError` as soon as it reads a stall; the tests replace the module's `_sleep` and `_monotonic`. The words match the web's badge and start-failure lines: `tests/addon/test_edh_start_status.py` reads the web's fixture `web/src/addons/edh/workstationStatusCases.json`, as the web test does.
+-   Image name: `workstation_image_name` gives the name both clients show (`<recipeDisplayName> v<recipeVersion>` when both are present, else `imageName`, else `imageId`; the web alone falls back to its catalog before the id). `format_workstation_list` prints it in the `Image` column, sized to its longest value, and `newer_image_suffix` appends ` (v<latestRecipeVersion> available)` only for `imageLatest` `False` on ACTIVE, STOPPED or CREATING (`NEWER_IMAGE_STATES`), where the web shows its `Newer image` badge. `format_workstation` prints `Image:` above `Image ID:`, then `Recipe:` (`describe_recipe`: display name and id) and `Recipe version:` (`describe_recipe_version`: `<n> (latest)`, `<n> (latest <m>)`, or `<n>` when the latest is unknown) when the record carries them. `--json-output` passes every field through, and the admin session listing (JSON blocks, no image column) carries them as they come. `tests/addon/test_edh_workstation_image.py` reads the web's fixture `web/src/addons/edh/workstationImageCases.json`, as the web's `WorkstationImageCell.cases.test.tsx` does.
+-   Capacity reservations: `describe_capacity` gives the `get` record's `Capacity:` line (`<label> (<id>)`, the id alone once unregistered, `On-demand (reservation full)` for a fallback whose `capacityReservationFallbackReason` is `full` or absent, `On-demand (reservation <label or id> ended)` for reason `ended`). `format_capacity_reservations` prints the web table's columns for `edh catalog capacity-reservations` and `edh admin capacity-reservation list`; its STATE cell appends ` (No EDH subnet in <az>)` (`edh_subnet_note`) for `edhSubnetAvailable` `False`, and the catalog alone (`format_catalog_capacity_reservations`) adds a last `LAUNCH` column (`yes`, `view only` for `launchAllowed` `False`, `-` when absent). `RESERVATION_ENDED` is a start-failure code with its sentence (`RESERVATION_ENDED_START_MESSAGE`). `tests/addon/test_edh_capacity_display.py` reads the web's fixture `web/src/addons/edh/capacityDisplayCases.json`, as the web's `capacityDisplayCases.test.tsx` does.
+-   `edh workstation connect` prints only the DCV host in CLI mode; the `connectionUrl`, which carries a session auth token, is returned only with `--json-output`. `--show-sign-in` adds the desktop sign-in under `signIn` (`username`, `credential`, `password`): a Windows workstation's user name and password, a directory account's user name, or for Linux that Amazon DCV signs the session in and no password is needed. No MCP tool reads it.
+-   `tests/addon/test_edh_client.py` holds the client to the backend: the route constants, the copied fields of `ami-recipe duplicate` (`_EDH_AMI_RECIPE_COPIED_FIELDS` against `AmiRecipeRequestModel`) and the 404 messages that tell a missing recipe from a missing build.
+-   Option semantics, output and error texts: `documentation/docusaurus-site/docs/developer/edh-workstations/cli-commands.md` and `cli-troubleshooting.md`.
 
 ### Adding a New Exception Class
 
@@ -1088,20 +1157,23 @@ publishes through `/secure-config`, and each lane must equal its enum in both di
 constant is a gate no command can name, and an extra one names a gate no deployment publishes.
 `tests/test_constants_contract.py` parses the three enums and fails on either drift.
 
-| Constant                                      | Value                             | Meaning                  |
-| --------------------------------------------- | --------------------------------- | ------------------------ |
-| `FEATURE_GOVCLOUD`                            | `"GOVCLOUD"`                      | Restricted partition     |
-| `FEATURE_ALLOWUNSAFEEVAL`                     | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
-| `FEATURE_LOCATIONSERVICES`                    | `"LOCATIONSERVICES"`              | Location Service enabled |
-| `FEATURE_ALBDEPLOY`                           | `"ALBDEPLOY"`                     | ALB deployment mode      |
-| `FEATURE_CLOUDFRONTDEPLOY`                    | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
-| `FEATURE_NOOPENSEARCH`                        | `"NOOPENSEARCH"`                  | OpenSearch disabled      |
-| `FEATURE_AUTHPROVIDER_COGNITO`                | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled     |
-| `FEATURE_AUTHPROVIDER_COGNITO_SAML`           | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth        |
-| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`           | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth        |
-| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP`       | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
-| `FEATURE_PHYSNA_ADDON` (`addon_constants.py`) | `"PHYSNA_ADDON"`                  | Physna add-on features   |
-| `FEATURE_DEADLINECLOUD_PIPELINES`             | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
+| Constant                                          | Value                             | Meaning                  |
+| ------------------------------------------------- | --------------------------------- | ------------------------ |
+| `FEATURE_GOVCLOUD`                                | `"GOVCLOUD"`                      | Restricted partition     |
+| `FEATURE_ALLOWUNSAFEEVAL`                         | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
+| `FEATURE_LOCATIONSERVICES`                        | `"LOCATIONSERVICES"`              | Location Service enabled |
+| `FEATURE_ALBDEPLOY`                               | `"ALBDEPLOY"`                     | ALB deployment mode      |
+| `FEATURE_CLOUDFRONTDEPLOY`                        | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
+| `FEATURE_NOOPENSEARCH`                            | `"NOOPENSEARCH"`                  | OpenSearch disabled      |
+| `FEATURE_AUTHPROVIDER_COGNITO`                    | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled     |
+| `FEATURE_AUTHPROVIDER_COGNITO_SAML`               | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth        |
+| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`               | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth        |
+| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP`           | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
+| `FEATURE_PHYSNA_ADDON` (`addon_constants.py`)     | `"PHYSNA_ADDON"`                  | Physna add-on features   |
+| `FEATURE_DEADLINECLOUD_PIPELINES`                 | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
+| `FEATURE_EDH_WORKSTATIONS` (`addon_constants.py`) | `"EDH_WORKSTATIONS"`              | EDH Workstations add-on  |
+| `FEATURE_EDH_CONTAINERS` (`addon_constants.py`)   | `"EDH_CONTAINERS"`                | EDH container jobs       |
+| `FEATURE_EDH_AMI_RECIPES` (`addon_constants.py`)  | `"EDH_AMI_RECIPES"`               | EDH AMI recipe builds    |
 
 ---
 
@@ -1120,6 +1192,7 @@ constant is a gate no command can name, and an extra one names a gate no deploym
 | `vamscli/utils/global_exceptions.py` | `@handle_global_exceptions()` decorator                |
 | `vamscli/utils/decorators.py`        | `@requires_setup_and_auth`, `@requires_feature`        |
 | `vamscli/utils/json_output.py`       | `output_result()`, `output_error()`, `output_status()` |
+| `vamscli/utils/system_records.py`    | Recognises the API's system-record refusals exactly    |
 | `vamscli/utils/confirmation.py`      | `confirm_destructive_action()` (Command rule 8)        |
 | `vamscli/utils/logging.py`           | Rotating file logger, verbose mode support             |
 | `vamscli/utils/retry_config.py`      | Retry config with env var overrides                    |

@@ -320,9 +320,12 @@ def failure_cause(error) -> str:
 # The definition's bucket name -> Region map, handed to main.py's process through its environment
 # (the launcher runs it in a fresh interpreter, so the registration here does not carry over).
 BUCKET_REGIONS_ENV = 'VAMS_BUCKET_REGIONS'
+# The input object and the version the run reads it at ({"bucket", "key", "versionId"}), handed to
+# main.py's process the same way.
+INPUT_VERSION_ENV = 'VAMS_INPUT_VERSION'
 
 
-def install_region_routing_s3_clients(bucket_regions_json: str) -> dict:
+def install_region_routing_s3_clients(bucket_regions_json: str, input_version_json: str = '') -> dict:
     """Route the upstream `main.py`'s bare `boto3.client('s3')` through vams_utils' per-bucket clients.
 
     `main.py` downloads S3_INPUT and uploads to S3_OUTPUT with `boto3.client('s3')` -- a client for
@@ -331,12 +334,16 @@ def install_region_routing_s3_clients(bucket_regions_json: str) -> dict:
     through botocore's redirect-on-error, one failed round trip per bucket per process. `main.py` is
     upstream-synced, so the fix lives here: the launcher calls this in main.py's process before it
     runs, and from then on a `boto3.client('s3')` call that pins neither a Region nor an endpoint
-    returns a client whose every call runs on the client for the Region of the bucket it names. Any
-    other client (another service, an explicit Region) is built exactly as asked. Returns the
-    registered map."""
+    returns a client whose every call runs on the client for the Region of the bucket it names. The
+    same client reads the input at the version the run was launched on (``input_version_json``), so
+    main.py's `download_file` of S3_INPUT reads that version. Any other client (another service, an
+    explicit Region) is built exactly as asked. Returns the registered map."""
     bucket_regions = json.loads(bucket_regions_json) if bucket_regions_json else {}
     vams_s3.register_bucket_regions(bucket_regions)
-    if bucket_regions:
+    input_version = json.loads(input_version_json) if input_version_json else {}
+    vams_s3.register_input_version(input_version.get('bucket'), input_version.get('key'),
+                                   input_version.get('versionId'))
+    if bucket_regions or input_version.get('versionId'):
         original_client = boto3.client
 
         def routing_client(service_name, *args, **kwargs):
@@ -346,7 +353,8 @@ def install_region_routing_s3_clients(bucket_regions_json: str) -> dict:
             return original_client(service_name, *args, **kwargs)
 
         boto3.client = routing_client
-        print(f"S3 requests signed per bucket Region: {bucket_regions}")
+        print(f"S3 requests signed per bucket Region: {bucket_regions}; "
+              f"input version: {input_version.get('versionId') or 'current'}")
     return bucket_regions
 
 
@@ -368,7 +376,8 @@ def _limited_extractall(self, *args, **kwargs):
 
 
 zipfile.ZipFile.extractall = _limited_extractall
-_entry.install_region_routing_s3_clients(os.environ.get(_entry.BUCKET_REGIONS_ENV, ''))
+_entry.install_region_routing_s3_clients(os.environ.get(_entry.BUCKET_REGIONS_ENV, ''),
+                                         os.environ.get(_entry.INPUT_VERSION_ENV, ''))
 print('Archive extraction limits active: %d extracted bytes / %d entries'
       % (_entry.MAX_ARCHIVE_EXTRACTED_BYTES, _entry.MAX_ARCHIVE_ENTRY_COUNT))
 runpy.run_path({script_path!r}, run_name='__main__')
@@ -440,14 +449,55 @@ def set_config_parameters(params: dict, metadata: dict):
         else:
             print(f"Skipping {key}={value} (not in config.json)")
 
+
+# Environment variable prefixes the launch summary lists, and the variables under them whose values it
+# prints. Every other listed variable is printed by name alone.
+LAUNCH_ENV_PREFIXES = ('INPUT_', 'VAMS_', 'AWS_', 'TASK_')
+LAUNCH_ENV_VALUES_PRINTED = frozenset({
+    'AWS_REGION',
+    'AWS_DEFAULT_REGION',
+    'AWS_BATCH_JOB_ID',
+    'AWS_BATCH_JOB_ATTEMPT',
+})
+
+
+def definition_argument_summary(argument: str) -> str:
+    """How the pipeline definition argument was passed: a file path, or inline JSON and its top-level keys."""
+    argument = argument.strip()
+    if argument.startswith('/') and argument.endswith('.json'):
+        return f"file path {argument}"
+    try:
+        parsed = json.loads(argument)
+    except ValueError:
+        return f"inline text of {len(argument)} characters that is not valid JSON"
+    if isinstance(parsed, dict):
+        return f"inline JSON with keys {list(parsed)}"
+    return f"inline JSON {type(parsed).__name__}"
+
+
+def print_launch_inputs(argv, environ):
+    """Print the shape of the launch inputs rather than their contents.
+
+    The argument count, how the pipeline definition argument was passed (an inline definition by its
+    top-level keys), and the names of the environment variables under LAUNCH_ENV_PREFIXES, with a value
+    only for the variables LAUNCH_ENV_VALUES_PRINTED names.
+    """
+    print(f"Command line arguments: {len(argv)}")
+    if len(argv) >= 2 and argv[1].strip():
+        print(f"Pipeline definition argument: {definition_argument_summary(argv[1])}")
+    print("Environment variables:")
+    for key in sorted(environ):
+        if not key.startswith(LAUNCH_ENV_PREFIXES):
+            continue
+        if key in LAUNCH_ENV_VALUES_PRINTED:
+            print(f"  {key}={environ[key]}")
+        else:
+            print(f"  {key}")
+
+
 def main():
-    # Debug: Print all available inputs
-    print(f"Command line arguments: {sys.argv}")
-    print(f"Environment variables:")
-    for key, value in os.environ.items():
-        if key.startswith(('INPUT_', 'VAMS_', 'AWS_', 'TASK_')):
-            print(f"  {key}={value}")
-    
+    print_launch_inputs(sys.argv, os.environ)
+
     # Try to get pipeline definition from command line or environment
     pipeline_json = None
     if len(sys.argv) >= 2 and sys.argv[1].strip():
@@ -479,7 +529,7 @@ def main():
         print(f"Successfully parsed pipeline definition")
     except json.JSONDecodeError as e:
         print(f"Failed to parse pipeline definition as JSON: {e}")
-        print(f"Raw content (first 200 chars): '{pipeline_json[:200]}'")
+        print(f"Pipeline definition length: {len(pipeline_json)} characters")
         sys.exit(1)
     
     # The pipeline definition carries the metadata + input-configuration S3 locations; read each from S3
@@ -523,6 +573,23 @@ def main():
         print("Error: Missing inputFile or outputFiles in stage")
         sys.exit(1)
     
+    # The input is read at the version the run was launched on. A version deleted since fails the run
+    # here, naming it, rather than inside main.py with a generic startup error.
+    input_version_id = input_file.get('versionId') or ''
+    os.environ[INPUT_VERSION_ENV] = json.dumps({'bucket': input_file['bucketName'], 'key': input_file['objectKey'],
+                                                'versionId': input_version_id})
+    missing_version_cause = vams_s3.input_version_missing_cause(
+        input_file['bucketName'], input_file['objectKey'], input_version_id)
+    if missing_version_cause:
+        print(missing_version_cause)
+        if pipeline_def.get('externalSfnTaskToken'):
+            sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'),
+                                      config=retry_config)
+            sfn_client.send_task_failure(taskToken=pipeline_def['externalSfnTaskToken'],
+                                         error='Pipeline Failure',
+                                         cause=missing_version_cause[:FAILURE_CAUSE_MAX_LENGTH])
+        sys.exit(1)
+
     # Set environment variables that main.py expects
     os.environ['S3_INPUT'] = f"s3://{input_file['bucketName']}/{input_file['objectKey']}"
     os.environ['FILENAME'] = input_file['objectKey'].split('/')[-1]

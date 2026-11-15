@@ -13,6 +13,7 @@ outliers) are framed tightly around the dense content.
 
 import numpy as np
 import pyvista as pv
+from . import scene_parts
 from .utils.logging import get_logger
 
 logger = get_logger()
@@ -30,6 +31,16 @@ _BG_COLOR = (128, 128, 128)
 # Percentile range for camera focus region (crops outliers)
 _FOCUS_PERCENTILE_LO = 2
 _FOCUS_PERCENTILE_HI = 98
+
+# A mesh whose full bounds are at least this many times its percentile bounds may be framed on the
+# percentile bounds (``_percentile_bounds_if_sparse``); vertices sampled for that check.
+SPARSE_FRAMING_SCALE = 25.0
+_SPARSE_SAMPLE = 1_000_000
+# ... and only when, framed on its full bounds, its dense region would project under this many pixels
+# and a small still at SPARSE_CHECK_RESOLUTION would cover under SPARSE_COVERAGE of its pixels.
+SPARSE_CORE_PIXELS = 4.0
+SPARSE_CHECK_RESOLUTION = (160, 120)
+SPARSE_COVERAGE = 0.001
 
 # Camera elevation angle in degrees above the orbit plane.
 # 25 degrees is the industry standard for 3D product thumbnails.
@@ -145,6 +156,7 @@ def generate_static_frame(
     pv_data: pv.PolyData,
     resolution: tuple = DEFAULT_RESOLUTION,
     use_full_bounds=None,
+    _check_sparse: bool = True,
 ) -> np.ndarray:
     """
     Render a single static frame of the given PyVista data from the front three-quarter view
@@ -161,7 +173,8 @@ def generate_static_frame(
         _add_mesh(plotter, pv_data)
 
     focal_point, radius, elevation = _compute_camera_framing(
-        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution
+        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution,
+        check_sparse=_check_sparse,
     )
 
     max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
@@ -188,10 +201,59 @@ def generate_static_frame(
     return img
 
 
+# vtkPolyData orders its cells, and so its cell data: vertices, lines, polygons, then strips.
+_CELL_KINDS = (("verts", "GetVerts"), ("lines", "GetLines"), ("faces", "GetPolys"), ("strips", "GetStrips"))
+
+
+def cell_colours_on_corners(pv_data: pv.PolyData) -> pv.PolyData:
+    """The mesh to draw for ``pv_data`` coloured by cell ``RGB``: the same cells, sharing no points, each
+    cell's colour on its own corners as point ``RGB``.
+
+    VTK draws cell scalars from a buffer texture read per primitive, and Mesa 26 draws such a mesh as
+    an empty frame without an error; point colours draw on every Mesa. Each corner keeps the point
+    normal of the shared mesh, computed as ``add_mesh``'s smooth shading computes it, so shading is
+    unchanged and no colour blends across a cell edge. The copy holds one point per cell corner: three
+    per triangle.
+    """
+    shaded = pv_data
+    if pv_data.point_data.active_normals is None and pv_data.n_verts + pv_data.n_lines < pv_data.n_cells:
+        shaded = pv_data.compute_normals(cell_normals=False)
+    rgb = np.asarray(shaded.cell_data["RGB"])
+    normals = shaded.point_data.active_normals
+    cell_arrays = [(keyword, getattr(shaded, getter)()) for keyword, getter in _CELL_KINDS]
+    # 32-bit cell indices when the corners fit (pyvista keeps them 32-bit), half the memory of 64-bit.
+    n_corners = sum(cell_array.GetNumberOfConnectivityIds() for _, cell_array in cell_arrays)
+    index_type = np.int32 if n_corners < 2 ** 31 else np.int64
+    corners, colours, cells = [], [], {}
+    first_cell = first_corner = 0
+    for keyword, cell_array in cell_arrays:
+        n_cells = cell_array.GetNumberOfCells()
+        if not n_cells:
+            continue
+        connectivity = pv.convert_array(cell_array.GetConnectivityArray())
+        offsets = pv.convert_array(cell_array.GetOffsetsArray())
+        corners.append(connectivity)
+        colours.append(np.repeat(rgb[first_cell:first_cell + n_cells], np.diff(offsets), axis=0))
+        cells[keyword] = pv.CellArray.from_arrays(
+            offsets.astype(index_type),
+            np.arange(first_corner, first_corner + len(connectivity), dtype=index_type))
+        first_cell += n_cells
+        first_corner += len(connectivity)
+    corners = np.concatenate(corners)
+    unshared = pv.PolyData(np.asarray(shaded.points)[corners], **cells)
+    unshared.point_data["RGB"] = np.concatenate(colours)
+    if normals is not None:
+        unshared.point_data["Normals"] = np.asarray(normals)[corners]
+        unshared.point_data.active_normals_name = "Normals"
+    logger.info(f"Drawing per-cell colours on cell corners: {first_cell:,} cells, {first_corner:,} corners")
+    return unshared
+
+
 def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
     """Add a mesh to the plotter with appropriate styling."""
     texture = getattr(pv_data, '_preview_texture', None)
-    # Per-point colours, or per-cell colours on a mesh decimated to the triangle budget.
+    # Per-point colours, or per-cell colours (STEP and 3MF/COLLADA faces, and a mesh decimated to the
+    # triangle budget), which are drawn on the cells' own corners.
     has_colors = "RGB" in pv_data.point_data or "RGB" in pv_data.cell_data
 
     if texture is not None:
@@ -206,7 +268,7 @@ def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
         )
     elif has_colors:
         plotter.add_mesh(
-            pv_data,
+            pv_data if "RGB" in pv_data.point_data else cell_colours_on_corners(pv_data),
             scalars="RGB",
             rgb=True,
             smooth_shading=True,
@@ -279,7 +341,53 @@ def _capture_rgba(plotter) -> np.ndarray:
     return np.ascontiguousarray(img, dtype=np.uint8)
 
 
-def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_RESOLUTION):
+def _percentile_bounds_if_sparse(points, lo, hi, pv_data=None, resolution=DEFAULT_RESOLUTION):
+    """The percentile bounds of a mesh that would vanish when framed on its full bounds, else None.
+
+    A mesh is framed on its full bounds, but one stray piece far away inside the same mesh (a part the
+    scene's parts do not tell apart) can make those bounds so large that the model is a dot. Framing
+    the percentile bounds instead would crop a model whose vertices crowd into one detailed region (a
+    long low-poly mast with a dense antenna), so it is done only when full-bounds framing provably
+    loses the model, by two tests:
+
+    * the 2nd-98th percentile bounds (where nearly all vertices lie) are at least
+      ``SPARSE_FRAMING_SCALE`` times smaller than the full bounds, and would project under
+      ``SPARSE_CORE_PIXELS`` pixels framed on the full bounds (cheap; read from at most
+      ``_SPARSE_SAMPLE`` evenly spaced vertices);
+    * a small still render on the full bounds (``SPARSE_CHECK_RESOLUTION``) covers less than
+      ``SPARSE_COVERAGE`` of its pixels: the whole mesh, not only its dense region, draws as nothing.
+
+    A mast is long enough to draw even when its antenna is a dot, so it keeps full-bounds framing; a
+    6 cm model with a stray piece 50 m away covers a pixel or two."""
+    full = float(np.max(hi - lo))
+    if full <= 0:
+        return None
+    step = max(1, len(points) // _SPARSE_SAMPLE)
+    sample = np.asarray(points[::step])
+    p_lo = np.percentile(sample, _FOCUS_PERCENTILE_LO, axis=0)
+    p_hi = np.percentile(sample, _FOCUS_PERCENTILE_HI, axis=0)
+    core = float(np.max(p_hi - p_lo))
+    if core <= 0 or full < SPARSE_FRAMING_SCALE * core:
+        return None
+    _, radius, _ = _framing_for_bounds(lo, hi, True, resolution)
+    visible = 2.0 * radius * np.tan(np.radians(15.0))  # frame height at the focal distance
+    core_pixels = core / visible * resolution[1]
+    if core_pixels >= SPARSE_CORE_PIXELS or pv_data is None:
+        return None
+    frame = generate_static_frame(pv_data, resolution=SPARSE_CHECK_RESOLUTION, use_full_bounds=True,
+                                  _check_sparse=False)
+    coverage = float((frame[..., 3] > 0).mean())
+    if coverage >= SPARSE_COVERAGE:
+        return None
+    if step > 1:
+        p_lo = np.percentile(points, _FOCUS_PERCENTILE_LO, axis=0)
+        p_hi = np.percentile(points, _FOCUS_PERCENTILE_HI, axis=0)
+    logger.info(f"Camera framing: on its full bounds the mesh would cover {coverage:.3%} of the frame "
+                f"(its dense region {core_pixels:.1f} px); framing the 2nd-98th percentile bounds")
+    return p_lo, p_hi
+
+
+def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_RESOLUTION, check_sparse=True):
     """
     Compute camera framing parameters for orbit-style camera positioning.
 
@@ -291,17 +399,32 @@ def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_R
     crop outliers from sparse scenes (point clouds with distant noise).
 
     For full-bounds mode (USD/CAD): uses complete bounding box since
-    all geometry in engineered models is intentional.
+    all geometry in engineered models is intentional. A part the scene's
+    parts mark as a backdrop or a stray is left out of the framing bounds
+    (``scene_parts.framing_bounds``; a loader has already dropped its
+    backdrops from the data, a stray is still drawn), and a mesh whose full
+    bounds would leave its content covering almost nothing is framed on its
+    percentile bounds (``_percentile_bounds_if_sparse``).
     """
     points = pv_data.points
 
-    if use_full_bounds:
+    backdrop_free = scene_parts.framing_bounds(pv_data) if use_full_bounds else None
+    if backdrop_free is not None:
+        lo, hi = backdrop_free
+    elif use_full_bounds:
         lo = points.min(axis=0)
         hi = points.max(axis=0)
+        sparse = _percentile_bounds_if_sparse(points, lo, hi, pv_data, resolution) if check_sparse else None
+        if sparse is not None:
+            lo, hi = sparse
     else:
         lo = np.percentile(points, _FOCUS_PERCENTILE_LO, axis=0)
         hi = np.percentile(points, _FOCUS_PERCENTILE_HI, axis=0)
+    return _framing_for_bounds(lo, hi, use_full_bounds, resolution, log=True)
 
+
+def _framing_for_bounds(lo, hi, use_full_bounds, resolution, log=False):
+    """(focal point, radius, elevation) of the orbit that frames the box (lo, hi)."""
     focal_point = (lo + hi) / 2.0
 
     dx = hi[0] - lo[0]
@@ -333,11 +456,12 @@ def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_R
 
     elevation = radius * np.tan(np.radians(_CAMERA_ELEVATION_DEG))
 
-    logger.info(
-        f"Camera framing: focal={focal_point}, radius={radius:.2f}, "
-        f"elevation={elevation:.2f}, focus_extents=({dx:.2f}, {dy:.2f}, {dz:.2f}), "
-        f"xz_diagonal={xz_diagonal:.2f}, dist_h={dist_for_height:.2f}, "
-        f"dist_w={dist_for_width:.2f}, use_full_bounds={use_full_bounds}"
-    )
+    if log:
+        logger.info(
+            f"Camera framing: focal={focal_point}, radius={radius:.2f}, "
+            f"elevation={elevation:.2f}, focus_extents=({dx:.2f}, {dy:.2f}, {dz:.2f}), "
+            f"xz_diagonal={xz_diagonal:.2f}, dist_h={dist_for_height:.2f}, "
+            f"dist_w={dist_for_width:.2f}, use_full_bounds={use_full_bounds}"
+        )
 
     return focal_point, radius, elevation

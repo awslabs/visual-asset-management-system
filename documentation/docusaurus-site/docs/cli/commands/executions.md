@@ -38,6 +38,12 @@ bounds from every page it walked. A listing filtered to one workflow (`--workflo
 is not expected to fire there.
 :::
 
+Each execution reports the kinds of output it produced as `Output Types` (`File`, `Metadata`, `Result`,
+in that order; `outputTypes` under `--json-output`). The line is omitted for a run that produced none,
+and for a run recorded before output types were captured, which reports `outputTypes: []`. Read a
+run's files with [`execution details files`](#execution-details-files) and its result text with
+[`execution details results`](#execution-details-results).
+
 Each execution reports its output target — `Output Type` (`asset`, or `none` for a results-only run)
 and `Output Asset` as `databaseId:assetId`. Both lines are omitted for a results-only execution, which
 writes no files and therefore has no destination asset.
@@ -54,7 +60,8 @@ vamscli execution list --triggered-by user@example.com --json-output
 | --------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `-w, --workflow-id`               | Filter by workflow ID                                                                                  |
 | `--workflow-database-id`          | Filter by workflow database ID                                                                         |
-| `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`)                                     |
+| `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`, `SKIPPED`)                          |
+| `--exclude-status`                | Leave out these statuses, one or comma-separated (e.g. `SKIPPED`); applied by the service              |
 | `--trigger-type`                  | Filter by trigger type (`Manual` / `File-Upload`)                                                      |
 | `--group-id`                      | Filter by `executionGroupId`                                                                           |
 | `--triggered-by`                  | Filter by the user ID that triggered the execution                                                     |
@@ -90,6 +97,13 @@ marker says. A number with no marker means the workflow no longer records a curr
 example, the workflow was deleted), and a run started before versions were recorded shows
 `not recorded`.
 
+A `SKIPPED` execution records file-upload trigger launches the workflow's concurrency restriction
+refused. `execution list` and `workflow list-executions` print its `Skipped launches` count and
+`Skip reason`, and `execution details` prints a `Skipped launches` section with the reason, the
+first and last refusal, the first files and, only when you may read it, `Blocked by` with the
+blocking execution's id. `--json-output` carries the API fields unchanged (`skippedLaunchCount`,
+`skipScope`, `skipReason`, and the `skip` block).
+
 Asset and file metadata and database metadata are reported as separate row counts, each marked
 independently when the response returned only part of that collection, and the metadata sources the run
 read are named. The metadata rows themselves, and the full list of collections the response trimmed,
@@ -113,11 +127,22 @@ occurs.
 | `--json-output`            | Raw JSON response                                                      |
 
 To read the metadata rows themselves in the formatted output — or to read a collection this command
-reports as partial in full — use [`execution details-metadata`](#execution-details-metadata).
+reports as partial in full — use [`execution details metadata`](#execution-details-metadata). A
+partial file collection is read in full with [`execution details files`](#execution-details-files), and
+the run's full result text with [`execution details results`](#execution-details-results).
+
+`execution details` is a command group: with only an execution ID it prints the whole detail view
+described above, and its `metadata`, `files` and `results` subcommands each read one part of that view
+in full.
+
+:::warning[Renamed in 2.7.0]
+`vamscli execution details-metadata` is now `vamscli execution details metadata`, with the same
+options. The flat form is no longer accepted, so update any script that calls it.
+:::
 
 ---
 
-## execution details-metadata
+## execution details metadata
 
 Page one metadata collection of an execution's detail view. `execution details` bounds its metadata
 collections and reports each as a row count; this command reads a named collection a page at a time,
@@ -125,9 +150,9 @@ one row per line, until every row has been returned. Rows carry the same shape t
 plus the pipeline that produced or read them.
 
 ```bash
-vamscli execution details-metadata my-execution-id
-vamscli execution details-metadata my-execution-id --collection output --auto-paginate
-vamscli execution details-metadata my-execution-id --pipeline-id my-pipeline --page-size 500
+vamscli execution details metadata my-execution-id
+vamscli execution details metadata my-execution-id --collection output --auto-paginate
+vamscli execution details metadata my-execution-id --pipeline-id my-pipeline --page-size 500
 ```
 
 | Option             | Description                                                                       |
@@ -156,12 +181,24 @@ Found 2 row(s):
   my-database:-/  scope=database  2 entries  [convert-to-glb]
 ```
 
-An `output` row prints the output file the metadata applies to and the key/value written against it:
+An `input` row marked `(expanded)` (`"expanded": true` with `--json-output`) is a file record that
+`metadataInputs.assetFileMetadata` added by expanding a whole-asset or folder selection. The step
+received it as context, and the file is not one of its input files:
+
+```text
+  my-database:a1b2c3/models/part.glb  scope=asset  3 entries  (expanded)  [describe-asset]
+```
+
+An `output` row prints the output file the metadata applies to, whether it was written as file metadata
+or as a file attribute (`type=`), and the key/value written against it. A step that writes one key to a
+file as both prints two rows:
 
 ```text
 Collection: output
-Found 1 row(s):
-  /models/building.gltf  triangleCount=18204  [3d-conversion-pipeline]
+Found 3 row(s):
+  /models/building.gltf  type=metadata  triangleCount=18204  [3d-conversion-pipeline]
+  /models/building.gltf  type=metadata  units=mm  [3d-conversion-pipeline]
+  /models/building.gltf  type=attribute  units=m  [3d-conversion-pipeline]
 ```
 
 The metadata key/value pairs of an input row are reported as an entry count rather than printed; use
@@ -177,6 +214,70 @@ rows still available it says so, and reports the token to resume from.
 
 ---
 
+## execution details files
+
+Page one file collection of an execution's detail view. `execution details` bounds its file lists and
+marks a partial one; this command reads a named collection a page at a time until every row has been
+returned. Rows carry the same shape the details view returns; output rows also name the pipeline that
+produced them. No Amazon S3 bucket or key is returned.
+
+```bash
+vamscli execution details files my-execution-id
+vamscli execution details files my-execution-id --collection output --auto-paginate
+vamscli execution details files my-execution-id --collection output --pipeline-id my-pipeline
+```
+
+| Option             | Description                                                                       |
+| ------------------ | --------------------------------------------------------------------------------- |
+| `--collection`     | `input` (default) or `output` — case-sensitive                                    |
+| `--pipeline-id`    | Only output rows produced by this pipeline (one workflow step)                    |
+| `--page-size`      | Rows per page (max 500; a larger value is clamped with a warning)                 |
+| `--max-items`      | Maximum total rows to fetch — applies only with `--auto-paginate` (default 10000) |
+| `--starting-token` | Continuation token for manual pagination                                          |
+| `--auto-paginate`  | Fetch every page up to `--max-items`                                              |
+| `--json-output`    | Output the raw JSON response                                                      |
+
+`input` reads the workflow-level input files, each printed as `databaseId:assetId` and the
+asset-relative path with the S3 version the run read. `output` reads the files the pipelines wrote,
+each printed with its type, size and producing pipeline. There is no `inputDatabase` collection for
+files. `--pipeline-id` applies to the `output` collection only.
+
+Paging behaves as in [`execution details metadata`](#execution-details-metadata): a token is only valid
+alongside the `--collection` and `--pipeline-id` it was issued with, and auto-pagination stops at
+`--max-items` or after 200 pages, reporting the token to resume from.
+
+---
+
+## execution details results
+
+Print an execution's result text — the concatenated result files its pipelines produced — followed by
+a caption with the row count and byte size. A run that produced no result prints `(no result content)`
+and reports 0 rows.
+
+```bash
+vamscli execution details results my-execution-id
+vamscli execution details results my-execution-id -o result.txt
+vamscli execution details results my-execution-id --auto-paginate --json-output
+vamscli execution details results my-execution-id --starting-token <token>
+```
+
+| Option                                 | Description                                                               |
+| -------------------------------------- | ------------------------------------------------------------------------- |
+| `-o, --output`                         | Write the result text to this file; the caption still prints the size     |
+| `--auto-paginate / --no-auto-paginate` | Read every page and concatenate them (default: on with `-o`, off without) |
+| `--starting-token`                     | Read from this page (`NextToken` of a previous call)                      |
+| `--json-output`                        | Output the raw JSON response                                              |
+
+The service returns the result a page at a time, each page holding as many result rows as fit its
+5 MiB response limit, with a `NextToken` while more remain. Without `--auto-paginate` one page is
+printed and its token is shown (and carried in `--json-output`) for `--starting-token`; with it every
+page is read and concatenated, stopping after 200 pages and reporting the token to resume from.
+`TRUNCATED` in the caption (`resultContentTruncated: true` under `--json-output`) means a result row
+was stored cut or a single row exceeded the response limit; that text is not retrievable. `-o` writes
+the returned text in both output modes; with `--json-output` the JSON response is still printed.
+
+---
+
 ## execution logs
 
 Retrieve an execution's logs. `truncated` mode returns the stored log text, and — because the stored
@@ -187,7 +288,9 @@ reports `Source: stored` or `Source: live` so you can tell which was returned.
 
 Returned log text is redacted: credential-bearing values — authorization headers, bearer tokens, AWS
 access-key IDs, JSON web tokens, and labelled secret fields such as `SecretAccessKey` and
-`SessionToken` — are replaced with `<redacted>` before the logs are stored or returned.
+`SessionToken` — are replaced with `<redacted>` before the logs are stored or returned. So are the
+client details of the request that launched the execution: its source IP address, user agent, API key
+ID, IAM or Amazon Cognito caller identity, and the AWS account ID and API Gateway API ID it called.
 
 ```bash
 vamscli execution logs my-execution-id
@@ -310,6 +413,16 @@ execution ID); optionally reuse or assign an execution group.
 vamscli execution rerun my-execution-id
 vamscli execution rerun my-execution-id --execution-group-id batch-2026-02
 ```
+
+A re-run reads an input file at the version the original execution named (`versionId` in the
+`--input-files` selection), and takes the file's current version when the original selected it
+without one. A version is pinned only when someone chose it: a `versionId` given to
+`vamscli workflow execute` or the API, or a version picked in the web: an older version chosen in
+the execute wizard, or a file run from the file manager while an asset version is browsed, even
+when that version is still the current one. A web launch from the current asset view and a
+`fileUpload` trigger launch are not pinned, so their re-runs take the current version. An execution recorded before v2.7.0 re-runs every file on its current version. If a
+named version has since been deleted, the re-run is refused the way an execute naming that version
+is.
 
 A re-run reconstructs the original run's metadata sources along with its input files, so it reads the
 same metadata the first run did. It reports the same warnings an execute does — a database whose

@@ -14,7 +14,14 @@ The ThreeJS viewer provides support for viewing 3D models in various formats inc
 -   COLLADA (.dae)
 -   3DS (3D Studio)
 -   3MF (3D Manufacturing Format)
+-   USD (.usd, .usda, .usdc, .usdz), ASCII or binary, with three.js's `USDLoader`; no `unsafe-eval` needed
 -   **CAD Formats** (optional, requires OCCT): STEP (.stp, .step), IGES (.iges), BREP (.brep)
+
+The viewer loads the files a model references (textures, `.mtl` libraries, USD layers) from the same asset; see "Three.js Referenced Files" in `web/src/visualizerPlugin/CLAUDE.md`.
+
+## Version and install
+
+`package.json` pins `three` to an exact version (0.187.0), and `package-lock.json` is generated with npm 11. This directory carries its own `.npmrc` with `min-release-age = 7`, because the nested `npm install` that `install.js` runs here does not read `web/.npmrc`. The bundle (`threejsInstall.js`) exports the core, the loaders (glTF, OBJ, MTL, FBX, STL, PLY, COLLADA, 3DS, 3MF, USD), `USDCParser`, `fflate` (`zipSync`, `unzipSync`) and the controls on `window.THREEBundle`.
 
 ## ⚠️ Browser Requirements for CAD Files
 
@@ -33,6 +40,22 @@ These headers enable the `SharedArrayBuffer` API which is required by the OCCT W
 
 **Note**: These headers are only required if you enable OCCT support. Standard 3D formats (GLTF, OBJ, FBX, etc.) work without these headers.
 
+### Required Deployment Setting (CAD Files Only)
+
+The OCCT module's JavaScript glue compiles functions at runtime (`new Function`), which the default Content Security Policy refuses. Set `app.webUi.allowUnsafeEvalFeatures` to `true` in `infra/config/config.json` and redeploy:
+
+```json
+"app": {
+    "webUi": {
+        "allowUnsafeEvalFeatures": true
+    }
+}
+```
+
+This adds `'unsafe-eval'` to the Content Security Policy `script-src` directive for the whole web application, not only this viewer. Consult your security team before enabling it.
+
+**Note**: This setting is only required for CAD formats. Standard 3D formats (GLTF, OBJ, FBX, etc.) work without it.
+
 ### Browser Compatibility (CAD Files)
 
 | Browser | CAD Support      | Notes                                    |
@@ -49,7 +72,7 @@ These headers enable the `SharedArrayBuffer` API which is required by the OCCT W
 If a user tries to view a CAD file without proper browser support, they will see:
 
 ```
-CAD Format Support Not Available
+CAD Format Support Not Available.
 
 This CAD file format requires WebAssembly with SharedArrayBuffer support,
 which is not currently available. This may be due to:
@@ -59,6 +82,18 @@ which is not currently available. This may be due to:
 • Safari browser limitations
 
 Please contact your system administrator to enable WASM support for CAD files.
+```
+
+If the deployment has not set `app.webUi.allowUnsafeEvalFeatures`, they will see:
+
+```
+CAD Format Support Not Available.
+
+CAD format viewing is blocked by the Content Security Policy. The OpenCascade
+loader used for STEP, IGES and BREP files needs app.webUi.allowUnsafeEvalFeatures
+set to true in the deployment configuration.
+
+Please contact your administrator to enable CAD format support for this viewer.
 ```
 
 ## Installation
@@ -93,6 +128,10 @@ OCCT support **requires special headers** and will **not work with if not being 
 
 **Before enabling OCCT, verify your deployment has these headers set properly during web page load.**
 
+**⚠️ DEPLOYMENT REQUIREMENT: `app.webUi.allowUnsafeEvalFeatures`**
+
+OCCT support also requires `app.webUi.allowUnsafeEvalFeatures: true` in the deployment configuration (see [Required Deployment Setting](#required-deployment-setting-cad-files-only)). It adds `'unsafe-eval'` to the whole web application's `script-src`; consult your security team before enabling it.
+
 ### Steps to Enable OCCT Support
 
 1. **Edit package.json** in this directory:
@@ -122,7 +161,9 @@ OCCT support **requires special headers** and will **not work with if not being 
     node customInstalls/threejs/install.js
     ```
 
-5. **Verify**: The bundle will now include OCCT support with local WASM files:
+5. **Enable `unsafe-eval` in the deployment configuration**: set `app.webUi.allowUnsafeEvalFeatures` to `true` in `infra/config/config.json` before you deploy. This adds `'unsafe-eval'` to the Content Security Policy `script-src` directive for the whole web application; consult your security team before enabling it.
+
+6. **Verify**: The bundle will now include OCCT support with local WASM files:
     - OCCT library bundled in `threejs.min.js`
     - WASM file copied to `public/viewers/threejs/occt-import-js.wasm`
     - Supports: .stp, .step (STEP), .iges (IGES), .brep (BREP)
@@ -165,6 +206,7 @@ threejs/
 -   Verify occt-import-js is installed: `npm list occt-import-js`
 -   Check browser console for OCCT-related errors
 -   Ensure the bundle was rebuilt after enabling OCCT
+-   Ensure `app.webUi.allowUnsafeEvalFeatures` is `true` in the deployment configuration; a Content Security Policy `unsafe-eval` violation in the browser console means it is not
 
 ## Development
 

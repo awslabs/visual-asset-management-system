@@ -8,7 +8,7 @@ from common.validators import validate, trim_name, id_pattern, object_name_patte
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="DatabaseModels")
+logger = safeLogger()
 
 # Maximum length of a caller-supplied pagination token. Tokens this service issues
 # are a base64-encoded DynamoDB LastEvaluatedKey, well under this bound.
@@ -115,6 +115,10 @@ class GetDatabaseResponseModel(BaseModel, extra='ignore'):
     baseAssetsPrefix: Optional[str] = None  # Base prefix from S3 asset buckets table
     restrictMetadataOutsideSchemas: Optional[bool] = False
     restrictFileUploadsToExtensions: Optional[str] = ""
+    # The database's compliance schema binding (written by the compliance binding service); both
+    # are absent on a database with no binding.
+    complianceSchemaName: Optional[str] = None
+    complianceAutoEval: Optional[bool] = None
 
 class GetDatabasesRequestModel(BaseModel, extra='ignore'):
     """Request model for listing databases"""

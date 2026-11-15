@@ -43,6 +43,7 @@ from common.apiRouteTypes import DELETE, GET, HEAD, POST, PUT, ApiRoute, _route_
 # Add-on routes are declared in common/addonApiRoutes.py; every name there is re-exported here.
 from common.addonApiRoutes import *  # noqa: F401,F403
 from common.addonApiRoutes import ADDON_ROUTES
+from common.addonFeatures import addon_feature_deployed
 
 # Routes a fork adds are declared in custom/customApiRoutes.py (fork-owned, shipped empty).
 from custom.customApiRoutes import CUSTOM_ROUTES
@@ -369,6 +370,18 @@ API_WORKFLOW_EXECUTION_LOGS = ApiRoute(
 API_WORKFLOW_EXECUTION_DETAILS_METADATA = ApiRoute(
     "/workflows/executions/{executionId}/details/metadata", (GET,), "workflows"
 )
+# Paged read of ONE of the detail view's FILE collections (input / output). Mirrors the metadata
+# route's token-paged contract so a client can walk a file collection the detail view reported
+# truncated. Same Tier-2 rule as details.
+API_WORKFLOW_EXECUTION_DETAILS_FILES = ApiRoute(
+    "/workflows/executions/{executionId}/details/files", (GET,), "workflows"
+)
+# Full concatenated result text of a run (output-only; no collection param). Returns the whole
+# result, cut server-side only at the 5 MiB payload-safety budget with a truncation flag. Same
+# Tier-2 rule as details.
+API_WORKFLOW_EXECUTION_DETAILS_RESULTS = ApiRoute(
+    "/workflows/executions/{executionId}/details/results", (GET,), "workflows"
+)
 # Re-run: reconstruct the execute request from the stored execution records and launch a new
 # execution (new executionId; optionally the same executionGroupId).
 API_WORKFLOW_EXECUTION_RERUN = ApiRoute(
@@ -393,6 +406,8 @@ WORKFLOW_ROUTES: Tuple[ApiRoute, ...] = (
     API_WORKFLOW_EXECUTION,
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
+    API_WORKFLOW_EXECUTION_DETAILS_FILES,
+    API_WORKFLOW_EXECUTION_DETAILS_RESULTS,
     API_WORKFLOW_EXECUTION_LOGS,
     API_WORKFLOW_EXECUTION_RERUN,
     API_WORKFLOW_EXECUTION_PERMANENT,
@@ -507,6 +522,86 @@ API_SEARCH_SIMPLE = ApiRoute("/search/simple", (POST,), "search")
 SEARCH_ROUTES: Tuple[ApiRoute, ...] = (API_SEARCH, API_SEARCH_SIMPLE)
 
 # ---------------------------------------------------------------------------
+# Compliance (schemas, bindings, evaluation, quarantine, cascades, audit)
+# ---------------------------------------------------------------------------
+# Schema registry: collection GET (list) + POST (register); single schema GET + PUT (new version)
+# + DELETE (remove an unbound schema).
+API_COMPLIANCE_SCHEMAS = ApiRoute("/compliance/schemas", (GET, POST), "compliance")
+API_COMPLIANCE_SCHEMA_BY_NAME = ApiRoute(
+    "/compliance/schemas/{schemaName}", (GET, PUT, DELETE), "compliance"
+)
+# Schema bindings: database-scoped GET (list bound assets) + PUT (bind) + DELETE (unbind);
+# asset-scoped PUT (bind) + DELETE (unbind).
+API_COMPLIANCE_BIND_DATABASE = ApiRoute(
+    "/compliance/bind/{databaseId}", (GET, PUT, DELETE), "compliance"
+)
+API_COMPLIANCE_BIND_ASSET = ApiRoute(
+    "/compliance/bind/{databaseId}/{assetId}", (PUT, DELETE), "compliance"
+)
+# Evaluation: on-demand evaluate for one asset, or for every tracked asset of a database (each
+# against its own bound schema); sweep re-evaluates every asset bound to a schema.
+API_COMPLIANCE_EVALUATE_ASSET = ApiRoute(
+    "/compliance/evaluate/{databaseId}/{assetId}", (POST,), "compliance"
+)
+API_COMPLIANCE_EVALUATE_DATABASE = ApiRoute(
+    "/compliance/evaluate/{databaseId}", (POST,), "compliance"
+)
+API_COMPLIANCE_SWEEP_SCHEMA = ApiRoute("/compliance/sweep/{schemaName}", (POST,), "compliance")
+API_COMPLIANCE_EVALUATIONS_ASSET = ApiRoute(
+    "/compliance/evaluations/{databaseId}/{assetId}", (GET,), "compliance"
+)
+# Compliance state: per asset, and the per-database summary listing.
+API_COMPLIANCE_STATE_ASSET = ApiRoute(
+    "/compliance/state/{databaseId}/{assetId}", (GET,), "compliance"
+)
+API_COMPLIANCE_STATE_DATABASE = ApiRoute("/compliance/state/{databaseId}", (GET,), "compliance")
+# Quarantine: listing plus the release action on one quarantined asset, and the exception on one
+# asset: POST grants it (the asset must be quarantined), DELETE revokes an active exception.
+API_COMPLIANCE_QUARANTINE = ApiRoute("/compliance/quarantine", (GET,), "compliance")
+API_COMPLIANCE_QUARANTINE_RELEASE = ApiRoute(
+    "/compliance/quarantine/{databaseId}/{assetId}/release", (POST,), "compliance"
+)
+API_COMPLIANCE_QUARANTINE_EXCEPTION = ApiRoute(
+    "/compliance/quarantine/{databaseId}/{assetId}/exception", (POST, DELETE), "compliance"
+)
+# Cascades: collection GET (list) + POST (create); single cascade GET; approve / reject actions.
+API_COMPLIANCE_CASCADES = ApiRoute("/compliance/cascades", (GET, POST), "compliance")
+API_COMPLIANCE_CASCADE_BY_ID = ApiRoute("/compliance/cascades/{cascadeId}", (GET,), "compliance")
+API_COMPLIANCE_CASCADE_APPROVE = ApiRoute(
+    "/compliance/cascades/{cascadeId}/approve", (POST,), "compliance"
+)
+API_COMPLIANCE_CASCADE_REJECT = ApiRoute(
+    "/compliance/cascades/{cascadeId}/reject", (POST,), "compliance"
+)
+# Audit trail: global listing (filterable by event type) and the per-asset history.
+API_COMPLIANCE_AUDIT = ApiRoute("/compliance/audit", (GET,), "compliance")
+API_COMPLIANCE_AUDIT_ASSET = ApiRoute(
+    "/compliance/audit/{databaseId}/{assetId}", (GET,), "compliance"
+)
+
+COMPLIANCE_ROUTES: Tuple[ApiRoute, ...] = (
+    API_COMPLIANCE_SCHEMAS,
+    API_COMPLIANCE_SCHEMA_BY_NAME,
+    API_COMPLIANCE_BIND_DATABASE,
+    API_COMPLIANCE_BIND_ASSET,
+    API_COMPLIANCE_EVALUATE_ASSET,
+    API_COMPLIANCE_EVALUATE_DATABASE,
+    API_COMPLIANCE_SWEEP_SCHEMA,
+    API_COMPLIANCE_EVALUATIONS_ASSET,
+    API_COMPLIANCE_STATE_ASSET,
+    API_COMPLIANCE_STATE_DATABASE,
+    API_COMPLIANCE_QUARANTINE,
+    API_COMPLIANCE_QUARANTINE_RELEASE,
+    API_COMPLIANCE_QUARANTINE_EXCEPTION,
+    API_COMPLIANCE_CASCADES,
+    API_COMPLIANCE_CASCADE_BY_ID,
+    API_COMPLIANCE_CASCADE_APPROVE,
+    API_COMPLIANCE_CASCADE_REJECT,
+    API_COMPLIANCE_AUDIT,
+    API_COMPLIANCE_AUDIT_ASSET,
+)
+
+# ---------------------------------------------------------------------------
 # Master list and lookups
 # ---------------------------------------------------------------------------
 ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
@@ -531,11 +626,21 @@ ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
     + API_KEY_ROUTES
     + USER_ROUTES
     + SEARCH_ROUTES
+    + COMPLIANCE_ROUTES
     + ADDON_ROUTES
     + CUSTOM_ROUTES
 )
 
 
 def get_public_api_routes() -> Tuple[ApiRoute, ...]:
-    """Return all externally reachable API routes (excludes internal cross-call routes)."""
-    return tuple(route for route in ALL_API_ROUTES if not route.internal)
+    """Return the API routes a client can reach on this deployment.
+
+    Internal cross-call routes are left out, and so is an add-on route whose add-on (or optional
+    add-on feature) the deployment did not enable (``ApiRoute.addon_feature``,
+    ``common/addonFeatures.py``): API Gateway serves no such route, so neither the route listing nor
+    the allowed-route check offers or evaluates it.
+    """
+    return tuple(
+        route for route in ALL_API_ROUTES
+        if not route.internal and addon_feature_deployed(route.addon_feature)
+    )

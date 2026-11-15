@@ -492,7 +492,7 @@ class TestAssetLinksListCommand:
             assert 'Children: 2' in result.output
             
             # Verify API call
-            mocks['api_client'].get_asset_links_for_asset.assert_called_once_with('test-database', 'test-asset', False)
+            mocks['api_client'].get_asset_links_for_asset.assert_called_once_with('test-database', 'test-asset', False, show_archived=False)
     
     def test_list_tree_view(self, cli_runner, asset_links_command_mocks):
         """Test list command with tree view."""
@@ -539,7 +539,7 @@ class TestAssetLinksListCommand:
             assert 'Grandchild 1 (db1)' in result.output
             
             # Verify API call with tree view flag
-            mocks['api_client'].get_asset_links_for_asset.assert_called_once_with('test-database', 'test-asset', True)
+            mocks['api_client'].get_asset_links_for_asset.assert_called_once_with('test-database', 'test-asset', True, show_archived=False)
     
     def test_list_asset_not_found(self, cli_runner, asset_links_command_mocks):
         """Test list command with asset not found."""

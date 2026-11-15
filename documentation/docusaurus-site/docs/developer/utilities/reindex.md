@@ -92,7 +92,7 @@ Direct mode (`--mode direct`) imports the backend reindexer handler and runs it 
 
 -   AWS credentials with the same permissions the reindexer Lambda role has: read on the asset, S3-asset-bucket, and asset-file-metadata Amazon DynamoDB tables; write on the asset-file-metadata table; `s3:ListBucket` and `s3:GetObject` on the asset buckets (the file reindex lists each bucket and reads object metadata); `ssm:GetParameter` on the index-name and endpoint parameters; and Amazon OpenSearch access (only for `--clear-indexes`).
 
-**Direct-mode inputs** (the utility injects the table-name values as environment variables before importing the handler; the backend's resource-name resolver honors these environment-variable overrides ahead of its AWS Systems Manager Parameter Store lookup, so direct mode works without the deployment's resource-name parameters). Find the table-name values under the deployment's `/<name>-<baseStackName>/resourceNames/dynamoTables/` SSM parameters or in the Amazon DynamoDB console. All are required **except** `--backend-path`, `--opensearch-type`, and `--region`, which default as noted:
+**Direct-mode inputs** (the utility injects the table-name values as environment variables before importing the handler; the backend's resource-name resolver honors these environment-variable overrides ahead of its AWS Systems Manager Parameter Store lookup, so direct mode works without the deployment's resource-name parameters). Find the table-name values under the deployment's `/<name>-<baseStackName>-<region>/resourceNames/dynamoTables/` SSM parameters or in the Amazon DynamoDB console. All are required **except** `--backend-path`, `--opensearch-type`, and `--region`, which default as noted:
 
 | Argument                                   | Lambda environment variable              | Description                                                                                                     |
 | :----------------------------------------- | :--------------------------------------- | :-------------------------------------------------------------------------------------------------------------- |
@@ -266,6 +266,16 @@ File Reindexing Results:
   Success: 8500
   Failed: 0
 ```
+
+### Exit codes
+
+The exit code tells a script or CI job whether the reindex completed.
+
+| Exit code | Meaning                                                                                                                                                                                                                                                                                                             |
+| :-------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `0`       | The run completed with nothing failed, or an `--async` invocation was submitted.                                                                                                                                                                                                                                    |
+| `1`       | The run failed: the invocation failed, the Lambda function raised an error or reached its own time limit, the reindexer answered with an error, or it reported records that failed, errors, or an index clear that did not finish. The utility logs the error, or each reason under `Reindexing did not complete:`. |
+| `2`       | The synchronous invocation timed out on the client. The Lambda function keeps running and its outcome is unverified; check Amazon CloudWatch Logs for the reindexer Lambda function to confirm it completed. A usage error, such as a mistyped option, also exits `2` (from argparse); nothing is invoked then.     |
 
 ## Post-Migration Usage
 

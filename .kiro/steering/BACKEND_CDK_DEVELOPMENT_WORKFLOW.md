@@ -4,6 +4,8 @@ This document provides comprehensive guidelines for developing and extending VAM
 
 > **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `backend/CLAUDE.md` and `infra/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its testing sections are also the Kiro counterpart for `backend/tests/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
 
+> **Add-on steering:** an add-on's own steering lives in `.kiro/steering/ADDON_*.md` (`inclusion: fileMatch`), which loads when you edit that add-on's files; this document covers core and the lanes an add-on plugs into.
+
 ## 🏗️ **Architecture Overview**
 
 ### **File Structure Standards**
@@ -21,16 +23,17 @@ backend/
 │   ├── models/                 # Pydantic request/response models
 │   │   ├── assetsV3.py        # Asset API models (GOLD STANDARD)
 │   │   ├── common.py          # Common response models
-│   │   ├── addon/             # Add-on models (physnaViewer.py)
+│   │   ├── addon/             # Add-on models (physnaViewer.py, edh.py)
 │   │   ├── custom/            # FORK EXTENSION POINT: fork models (shipped empty)
 │   │   └── [domain].py        # Domain-specific models
 │   ├── common/                # Shared utilities
 │   │   ├── constants.py       # Constants and configuration (object types, fields, blocklists: core + add-on + custom)
-│   │   ├── addonConstants.py  # Add-on object types, constraint fields, blocklist entries (shipped empty)
-│   │   ├── addonResourceNames.py  # Add-on resource-name keys (AddonResourceKeys, shipped empty)
+│   │   ├── addonConstants.py  # Add-on object types, constraint fields, blocklist entries, log keys
+│   │   ├── addonResourceNames.py  # Add-on resource-name keys (AddonResourceKeys)
 │   │   ├── validators.py      # Input validation functions
 │   │   └── dynamodb.py        # DynamoDB utilities (query_all_items, query_has_match, batch_get_items, …)
-│   ├── custom/                # FORK EXTENSION POINT: customApiRoutes.py, customResourceNames.py, customConstants.py
+│   ├── custom/                # FORK EXTENSION POINT: customApiRoutes.py, customAuditActions.py, customResourceNames.py, customConstants.py
+│   ├── customResources/       # CloudFormation custom-resource handlers (getVpcEndpointIps.py)
 │   └── customLogging/         # Logging utilities
 ├── tests/                     # Test files (mirror handler structure)
 │   ├── handlers/              # Handler tests
@@ -62,6 +65,7 @@ One folder per domain. The current domains:
 -   `authz/` — Casbin ABAC/RBAC enforcer (`CasbinEnforcer` proxy)
 -   `assetLinks/` — Asset relationship management
 -   `comments/` — Comment CRUD
+-   `compliance/` — Compliance (schemas, bindings, evaluation, quarantine, cascades, audit). API handlers `complianceSchemaService`, `complianceSchemaBindingService`, `complianceEvaluateService`, `complianceQuarantineService`, `complianceCascadeService`, `complianceAuditService`; event-driven `complianceTrigger` (its own SQS queue subscribed to the asset and file indexer topics), `complianceWorkflowCallback` (EventBridge `workflow.execution.completed`; then launches the pipeline rules waiting for that workflow from `PipelineRuleWaitIndex` through the execute Lambda) and `complianceCascadeExecutor` (async Lambda invoke from `complianceCascadeService`, event `{"cascadeId"}`); shared `complianceEvaluationStore` (all AWS access + `run_evaluation`; it reads the asset row, the asset's current-file listing (one `list_object_versions` walk through the Region-routing S3 client) and the asset file-versions table only when a rule of a type that uses them is present, and the file-metadata, file-attribute and asset-links-metadata tables only for a metadata rule of the `files`, `fileAttributes` or `links` scope), `complianceNotifications`. Pure rule logic for the six `vams-rules-v1` rule types (`pipeline`, `metadata`, `relationship`, `fileStructure`, `versionCoverage`, `assetAttributes`) lives in `common/compliance/evaluationEngine.py`; creating or reverting to an asset version stamps `lastChangeSource: assetVersion` on the asset row (`common/assetProvenance.py`), an asset edit that changes its name, description or tags stamps `assetEdit`, a metadata write and an asset-link create or delete are stamped `metadataEdit` / `linkChange` by the trigger itself from the metadata, file-attribute, asset-link and asset-link-metadata stream records (`record_indexed_change`, one conditional UpdateItem with the change's own instant, in every database), so those requests carry no compliance work and the stamp's MODIFY re-evaluates the asset (a workflow execution's metadata write-back marks the rows it writes or deletes with its execution id, which the trigger stamps `workflowExecution` and skips), the quarantine-blocks-download guard shared by `downloadAsset`, `streamAsset`, `assetExportService` and `streamAuxiliaryPreviewAsset` in `common/compliance/quarantineGuard.py` (called after Tier-1 + Tier-2 authorization), the one audit-row builder `build_audit_item` (sets the constant `allListPartition` that `AuditByDateGSI` is partitioned on; every audit `put_item` goes through it, guard-tested) in `common/compliance/auditRecord.py`, models in `models/compliance.py`. A failed pipeline rule records its execution's failure reason (`executionFailureReason`, and `quarantineExecutionFailures` on the asset-state row) beside the generic message; every compliance read that returns one passes it through `common/compliance/executionFailureAccess.py`, which keeps it only for a caller the execution details route would serve — that route's Tier-1 check plus the shared execution read rule in `common/workflows/executionAccess.py`, which the execution routes also decide through. Casbin object types `complianceSchema` (`databaseId` = the schema's scope or `GLOBAL`, `complianceSchemaName`), `complianceEvaluation` (`databaseId`, `complianceState`), `complianceCascade` (`databaseId` = the parent asset's database, `cascadeId`), `complianceBinding` (`databaseId`); every check passes `databaseId`. Tests in `tests/handlers/compliance/`
 -   `config/` — System configuration
 -   `databases/` — Database CRUD
 -   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
@@ -76,32 +80,40 @@ One folder per domain. The current domains:
 -   `tagTypes/` — Tag type management
 -   `userRoles/` — User-role assignment
 -   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation: Lambda/SQS/EventBridge/DeadlineCloud task states; `sfn/deadlineCloudJobCallback` resolves Deadline Cloud job task tokens from default-bus events)
--   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer; physnaCommon.py holds shared client/auth helpers)
+-   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer; physnaCommon.py holds shared client/auth helpers; `edh/` EDH Workstations add-on Lambdas, shared modules in `edh/common/`, steered by `backend/backend/handlers/addon/edh/CLAUDE.md` and `.kiro/steering/ADDON_EDH_WORKSTATIONS.md`)
 -   `custom/` — Fork extension point: handlers a fork adds (`handlers.custom.<name>.lambda_handler`); shipped empty
 
 #### **Fork Extension Points (backend + CDK)**
 
-An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream functionality goes in the add-on lane when it integrates an external solution, depends on an AWS service outside the tier-1 set, or implements a use-case lens for an industry; viewers and pipelines (with the pipeline system that runs them) keep their own lanes, and a fork uses the custom lane. The tier-1 AWS services are Amazon S3, DynamoDB, API Gateway, Lambda, IAM, Cognito, CloudFront, Application Load Balancer, Route 53, Amazon VPC and its endpoints, CloudFormation, AWS KMS, Step Functions, EventBridge, SQS, SNS, Secrets Manager, Systems Manager Parameter Store, CloudWatch, CloudTrail, AWS WAF and Certificate Manager. Search (Amazon OpenSearch Service) and the maps (Amazon Location Service) are core today and move to the add-on lane later, and the AWS Deadline Cloud pipeline execution type (`app.pipelines.deadlineCloudExecutionTypeEnabled`) stays core as part of the optional pipeline system; no new feature that needs one of those services joins them in core. Every add-on has an on/off toggle in configuration and is off by default. Definition, exemptions and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
 Every list VAMS aggregates is `core + add-on + custom`. The custom part is fork-owned: upstream ships it empty and never edits it, so a fork adds net-new endpoints and resources without conflicting on upgrade. Each such file opens with the "Fork extension point" header. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
-| Layer                                       | Add-on file (upstream-owned)                                                              | Custom file (fork-owned, shipped empty)                                                     |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| API routes                                  | `backend/backend/common/addonApiRoutes.py` (`ADDON_ROUTES`)                               | `backend/backend/custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                               |
-| Handlers                                    | `backend/backend/handlers/addon/`                                                         | `backend/backend/handlers/custom/`                                                          |
-| Models                                      | `backend/backend/models/addon/`                                                           | `backend/backend/models/custom/`                                                            |
-| Object types, constraint fields, deny lists | `backend/backend/common/addonConstants.py`                                                | `backend/backend/custom/customConstants.py`, merged by `common/constants.py`                |
-| Resource names                              | `backend/backend/common/addonResourceNames.py` ↔ `infra/common/addonResourceParamKeys.ts` | `backend/backend/custom/customResourceNames.py` ↔ `infra/common/customResourceParamKeys.ts` |
-| CDK resources                               | `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts`                                | `infra/lib/nestedStacks/custom/customResources.ts` (built inside the `CustomBuilder` stack) |
-| Feature switches                            | `infra/common/addonAppFeatures.ts`, pushed by `AddonBuilderNestedStack.enabledFeatures`   | `infra/common/customAppFeatures.ts`, returned by `buildCustomResources()`                   |
-| CSP / default routes                        | `addon/addonCsp.ts`, `addon/addonDefaultRoutes.ts`                                        | CSP: the existing `infra/config/csp/cspAdditionalConfig.json`                               |
-| Fork settings                               | `app.addons.*` in `config.json`                                                           | `infra/config/custom/customConfig.json`, read with `loadCustomConfig()`                     |
+| Layer                                       | Add-on file (upstream-owned)                                                                              | Custom file (fork-owned, shipped empty)                                                                     |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| API routes                                  | `backend/backend/common/addonApiRoutes.py` (`ADDON_ROUTES`)                                               | `backend/backend/custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                                               |
+| Audit actions                               | `backend/backend/common/addonAuditActions.py` (`ADDON_AUDIT_ROUTE_ACTIONS`)                               | `backend/backend/custom/customAuditActions.py` (`CUSTOM_AUDIT_ROUTE_ACTIONS`)                               |
+| Handlers                                    | `backend/backend/handlers/addon/`                                                                         | `backend/backend/handlers/custom/`                                                                          |
+| Models                                      | `backend/backend/models/addon/`                                                                           | `backend/backend/models/custom/`                                                                            |
+| Object types, constraint fields, deny lists | `backend/backend/common/addonConstants.py`                                                                | `backend/backend/custom/customConstants.py`, merged by `common/constants.py`                                |
+| Log redaction keys                          | `backend/backend/common/addonConstants.py` (`ADDON_LOG_SENSITIVE_KEYS`)                                   | `backend/backend/custom/customConstants.py` (`CUSTOM_LOG_SENSITIVE_KEYS`), merged by `common/constants.py`  |
+| Resource names                              | `backend/backend/common/addonResourceNames.py` ↔ `infra/common/addonResourceParamKeys.ts`                 | `backend/backend/custom/customResourceNames.py` ↔ `infra/common/customResourceParamKeys.ts`                 |
+| CDK resources                               | `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts`                                                | `infra/lib/nestedStacks/custom/customResources.ts` (built inside the `CustomBuilder` stack)                 |
+| Feature switches                            | `infra/common/addonAppFeatures.ts`, pushed by `AddonBuilderNestedStack.enabledFeatures`                   | `infra/common/customAppFeatures.ts`, returned by `buildCustomResources()`                                   |
+| CSP / default routes                        | `addon/addonCsp.ts`, `addon/addonDefaultRoutes.ts`                                                        | CSP: the existing `infra/config/csp/cspAdditionalConfig.json`                                               |
+| Default constraints, VPC endpoints          | `addon/addonDefaultConstraints.ts`, `addon/addonVpcEndpoints.ts`                                          | no lane: a fork type gets no seeded constraint, and a fork builds its own resources in `customResources.ts` |
+| WAF rule exclusions                         | `addon/addonWafExclusions.ts`, passed by `buildWafStacks()` (`infra/lib/cf-waf-stack.ts`)                 | none; a fork edits `infra/config/policy/wafPolicyConfig.json`                                               |
+| Fork settings                               | `app.addons.*` in `config.json`, declared through `infra/config/addon/addonConfig.ts` (`ConfigAddonLane`) | `infra/config/custom/customConfig.json`, read with `loadCustomConfig()`                                     |
 
-Custom routes go through `attachFunctionToApi` with the shared `RouteRegistry` (so they get the `VamsAuthorizer` scheme) and cannot be anonymous: `CustomBuilderNestedStack` fails synth on an `allowAnonymous` custom route and on an earlier route made anonymous, and `RouteRegistry` stores frozen descriptors. It also fails synth when `buildCustomResources()` returns a core `VAMS_APP_FEATURES` or add-on `ADDON_APP_FEATURES` value. `publishCustomResourceName()` (`custom/customStackHelpers.ts`) and `publishAddonResourceName()` (`addon/addonStackHelpers.ts`) fail synth on a key equal to a core key or one the other lane declares; the parameters hold names only, never a secret. The backend constants lanes are merged by `common/constants.py` at import and fail closed on a broken rule (names `^[A-Za-z][A-Za-z0-9]{1,63}$`, no reserved key, no field named as a Python keyword or an `EVALUATOR_RESERVED_ATTRIBUTES` name, no redefinition, fields that exist, samples `""`/`[]` with list-valued fields taking only `is_one_of` / `is_not_one_of`, append-only lower-case deny entries). Type and field names are compared ignoring letter case when checking for a repeat, so `Asset` repeats `asset` and `DatabaseId` repeats `databaseId`; authorization still matches a name exactly. An extension object type gets no seeded constraint, so even admin is denied on it until the fork adds one, and the `dynamodb-authdefaults-*` constructs are never extended for it. Naming conventions (`/custom/` routes, `custom/` keys, `CUSTOM_*` switches) are recommended, not enforced. `customConfigCommon/` is the separate place for overriding **existing** behaviour (authorizer MFA check, login profile).
+An add-on route (`ApiRoute.addon_feature`) and an add-on object type (`ADDON_CONSTRAINT_OBJECT_TYPE_FEATURES`) name the feature switch they are deployed under (`backend/backend/common/addonFeatures.py`, mirroring `ADDON_APP_FEATURES`). The core stack sets `ADDON_FEATURES_ENABLED` (the enabled add-on switches) on the routes, constraints and constraint-template Lambdas, so a disabled add-on's routes and object types are not listed or probed, and a new constraint or template naming its types is refused; stored ones still read. The web route table filters add-on routes by their `featuresEnabledRestriction`.
+
+Custom routes go through `attachFunctionToApi` with the shared `RouteRegistry` (so they get the `VamsAuthorizer` scheme) and cannot be anonymous: `CustomBuilderNestedStack` fails synth on an `allowAnonymous` custom route and on an earlier route made anonymous, and `RouteRegistry` stores frozen descriptors. It also fails synth when `buildCustomResources()` returns a core `VAMS_APP_FEATURES` or add-on `ADDON_APP_FEATURES` value. `publishCustomResourceName()` (`custom/customStackHelpers.ts`) and `publishAddonResourceName()` (`addon/addonStackHelpers.ts`) fail synth on a key equal to a core key or one the other lane declares; the parameters hold names only, never a secret. The backend constants lanes are merged by `common/constants.py` at import and fail closed on a broken rule (names `^[A-Za-z][A-Za-z0-9]{1,63}$`, no reserved key, no field named as a Python keyword or an `EVALUATOR_RESERVED_ATTRIBUTES` name, no redefinition, fields that exist, samples `""`/`[]` with list-valued fields taking only `is_one_of` / `is_not_one_of`, append-only lower-case deny entries). Type and field names are compared ignoring letter case when checking for a repeat, so `Asset` repeats `asset` and `DatabaseId` repeats `databaseId`; authorization still matches a name exactly. The log-key lists follow the same shape: `CORE_LOG_SENSITIVE_KEYS` (the structured logger) and `CORE_LOG_TEXT_SENSITIVE_KEYS` (the free-text redactor) become `LOG_SENSITIVE_KEYS` and `LOG_TEXT_SENSITIVE_KEYS`, both extended by the one lane list `ADDON_LOG_SENSITIVE_KEYS` / `CUSTOM_LOG_SENSITIVE_KEYS`, append-only; a log key matches `^[A-Za-z][A-Za-z0-9_-]{1,63}$` and repeats no core or other-lane key in any letter case, because both redactors match keys case-insensitively. An extension object type gets no seeded constraint, so even admin is denied on it until the fork adds one, and the `dynamodb-authdefaults-*` constructs are never extended for it. The one exception is an add-on, which may seed constraints for its own object types while it is enabled, through `infra/lib/nestedStacks/addon/addonDefaultConstraints.ts`; the constructs append those after their core items, so the index-based ids of the core custom resources do not move. Naming conventions (`/custom/` routes, `custom/` keys, `CUSTOM_*` switches) are recommended, not enforced. `customConfigCommon/` is the separate place for overriding **existing** behaviour (authorizer MFA check, login profile).
 
 #### **Workflow Execution Storage**
 
 Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed as the Step Functions execution name, so `$$.Execution.Name == executionId`. Asset/database linkage is not on the main row — it lives in `WorkflowExecutionInputsStorageTable`, queried via the `WorkflowExecInputsByAssetGSI` GSI for the asset-scoped execution listing. `executeWorkflow` writes the V2 main execution row plus the workflow inputs/configuration rows, one `PipelineExecutions` row per pipeline in the workflow, and the first-pipeline input rows (files/metadata/configuration). `processWorkflowExecutionOutput` writes the end-state pipeline's output/metadata/log rows and the completion status back to the main row. The pure record-building logic (key construction, S3 prefix derivation, record-dict builders, text truncation) lives in `common/workflows/executionRecords.py` and is unit-tested in isolation. The execution details/logs read side keeps its pure logic in the same package: `common/workflows/subExecutionStages.py` folds a sub-state-machine's ASL definition and execution history into per-stage status, and `common/workflows/availableLogs.py` identifies a pipeline execution's log sources by location (`logId`), plans each read and classifies its outcome; `executionService.py` holds only the memoised `DescribeStateMachine`, `DescribeExecution`/`DescribeJobs`/SageMaker `Describe*`, paged `GetExecutionHistory` and `FilterLogEvents` calls around them. The sub-process stop helper and `ABORTABLE_RESOURCE_TYPES` (Step Functions executions, Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions) live in `common/workflows/executionOutputs.py` and are shared by the abort API and the failure path (`sfn/handleExecutionError.py`); a registered type outside the set is displayed with `abortable: false` and listed under `notAbortable` on the abort response rather than stopped.
+
+A workflow's `perAsset`, `perInputFile` and `perInputFileVersion` concurrency restrictions are lock rows in `WorkflowExecutionLocksStorageTable` (`common/workflows/executionLocks.py`; mirrors `backend/CLAUDE.md` "Workflow Execution Locks"). `executeWorkflow` alone acquires them: conditional `PutItem`s in sorted key order, all or none, immediately before the launch's first side effect, answering `400` on a conflict and taking over a row whose holder has no main execution row once it is older than `EXECUTE_WORKFLOW_TIMEOUT_SECONDS` plus `LOCK_TAKEOVER_MARGIN_SECONDS`. The end-state step, the error handler, the abort route and the executions read path release them through `release_locks_for_execution` (the keys rebuilt from the input rows plus those the `WorkflowExecutionLocksByHolderGSI` holder index lists, each delete conditional on the holder); a launch that fails after acquiring releases from memory. The abort and a failed launch release only when `StopExecution` succeeded or `sfn_execution_has_ended` shows the execution ended. Each lock handler's grants sit in its own `ExecutionLockPolicy` (`attachExecutionLockPolicy`), never its role's default policy. Skip records (mirrors `backend/CLAUDE.md` "Workflow Execution Locks"): A conflict on a `fileUpload` trigger launch (`triggerType` File-Upload, executing user `SYSTEM_USER`) also writes a `SKIPPED` execution (`executeWorkflow._record_skipped_launch`), best-effort and with the same `400`; a manual or API launch writes nothing. The id is `er.skip_record_execution_id(lockKey, holder)` (uuid5), so every refusal by one holder on one key lands on one record. Rows are written in this order, so the main row (which lists and details read) exists only once its authorization rows do: (1) the configuration row (`build_workflow_configuration_record` with the trigger's output target and `pipelineExecutionParameters`, the trigger's template parameters a re-run replays), a put conditional on `attribute_not_exists`, whose existing item supplies the first-skip date to later refusals; (2) the workflow-input rows (`er.build_workflow_execution_input_record`, never pinned, dated with that first-skip date) while the main row's `skippedLaunchCount` is below `MAX_SKIP_RECORD_INPUT_ROWS` (100); (3) the main row, `er.build_skip_record_update`: one `UpdateItem` that sets the identity fields `if_not_exists`, overwrites `lastSkippedDate` and `ADD`s one to `skippedLaunchCount`. A failure in (1) or (2) writes no main row. No pipeline or lock row is written, and a conflict with no known holder records nothing. `SKIPPED` is in both `TERMINAL_STATUSES` tuples, so no reconcile or terminal writer rewrites it. Reads: the lists add `er.skip_list_fields` (count, scope, reason; never the holder) to SKIPPED rows only; the details view adds `skip` (`skip_details_block`), whose `blockingExecutionId` is set only when `_caller_may_read_execution` passes the same Tier-2 GET check on the holder (missing and denied look the same); the logs route answers `SKIPPED_EXECUTION_LOG_MESSAGE` without reading CloudWatch; a single abort answers `400` `SKIPPED_EXECUTION_ABORT_MESSAGE` after authorization and writes nothing, and a group abort reports the member as `skipped-terminal`; re-run uses the configuration row's `pipelineExecutionParameters` when the record has no pipeline rows. Both list routes take `excludeStatus` (`models.executions.parse_list_status_filter`: known statuses only, no conflict with `status`, fixed 400s): the global list adds it to the FilterExpression (no signal beyond the `status` filter); the asset list drops a candidate only after it has passed the per-execution read check (`_authorize_candidate`, memoized and shared with the authorization pass), so a candidate the caller may not read is handled exactly as without the parameter; at most `MAX_EXECUTIONS_INSPECTED` drops per page (a spent budget stops with a cursor and a warning), re-applied after reconcile. The execute role's main-table `GetItem`/`UpdateItem` and configuration/input `PutItem` cover the writer (`test_execute_workflow_dynamodb_calls.py`).
 
 #### **Workflow State Machine Deployment**
 
@@ -113,6 +125,7 @@ A workflow's Step Functions definition encodes each referenced pipeline's execut
 -   **The redeploy path reads strongly consistent.** `workflowService.redeploy_workflow` (behind both internal actions) reads the workflow and each pipeline with `ConsistentRead=True` via the `consistent_read` parameter of `get_workflow_item`, `_get_pipeline_record` and `_resolve_snapshot_pipeline_records`: the refresh runs right after the pipeline write, and the re-read after a lost conditional write must see the other writer's deployment. API reads keep the default.
 -   **A launch never runs a stale definition.** `executeWorkflow._ensure_current_deployment` compares stored and live fingerprints, invokes `redeployWorkflow` synchronously on a mismatch, starts on `workflowVersionArn`, and returns `409` without starting when the deployment cannot be made current.
 -   **Internal actions are not API-reachable.** They dispatch on a top-level `vamsInternalAction` key only for a `SYSTEM_USER` `lambdaCrossCall` with no `requestContext`; callers hold `lambda:InvokeFunction` on the workflow service ARN only (`grantWorkflowServiceInternalInvoke`).
+-   **System records rest on the same envelope.** `common/workflows/systemRecords.is_schema_import_call` is true only for a `lambdaCrossCall` with `userName` `SYSTEM_USER` **and** `source` `vamsSchemaImport`, which only `importGlobalPipelineWorkflow` sends; that caller alone may set `isSystem` (a JSON boolean, read from the raw body) or change a system record. `pipelineService`, `pipelineTemplateService`, `workflowService` and `workflowTriggerService` run the guard after Tier-2 and before any write, refuse with a `400` naming the field or action, and refuse a mixed allowed-and-refused request as a whole. A new `lambda:InvokeFunction` grant on any of the four, or on the import function, widens who can register or change system records.
 
 ## 📋 **Development Workflow Checklist**
 
@@ -144,7 +157,7 @@ A workflow's Step Functions definition encodes each referenced pipeline's execut
 -   [ ] **Normalize the REST event**: Call `request_to_claims(event)` as the first event access (it normalizes internally). Only if the handler reads `requestContext['http']` _before_ claims, `import normalize_event` from `common.auth.apiEvent` and call it as the first statement of `lambda_handler` (see Rule 1)
 -   [ ] **Implement Error Handling**: Use comprehensive try/catch with proper exceptions
 -   [ ] **Add Authorization**: Include Casbin enforcement with object-type checking
--   [ ] **Add Logging**: Use `safeLogger` for structured logging. It redacts credential keys (`authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`, `apiKey`, `apiKeySecret`, `rawKey`) and caller-authored content keys (`configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions`), at every nesting level in dicts, lists, and tuples, and inside a request `body` that arrives as a JSON string. Redaction is key-driven, so an f-string interpolating a payload value bypasses it — log identifiers and counts, never rendered template bodies or tag values
+-   [ ] **Add Logging**: Use `safeLogger` for structured logging. It redacts credential keys (`authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`, `apiKey`, `apiKeySecret`, `rawKey`, the credential headers `x-vams-origin-verify`, `cookie`, `set-cookie`, `x-api-key`, `proxy-authorization`, `x-amz-security-token`, the authorizer context key `vams:originVerifyDigest`, plus the keys the add-on and fork constants lanes register in `ADDON_LOG_SENSITIVE_KEYS` and `CUSTOM_LOG_SENSITIVE_KEYS`) and caller-authored content keys (`configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions`), at every nesting level in dicts, lists, and tuples, and inside a request `body` that arrives as a JSON string. `common/logRedaction.py`, which redacts the free-text log lines returned to callers, reads `LOG_TEXT_SENSITIVE_KEYS`: its own core keys plus the same lane keys. Redaction is key-driven, so an f-string interpolating a payload value bypasses it — log identifiers and counts, never rendered template bodies or tag values. An event-source handler logs `event_log_summary(event)` (`common/eventLogSummary.py`) at entry and the record's ids where it handles it, never the whole event, stream record or DynamoDB image (a metadata row's field name is a value, so even a structured dict escapes redaction); a search-service exception quotes the rejected field value, so an indexing path logs `exception_log_summary(e)` with `logger.error`, not the exception text or `logger.exception`
 -   [ ] **Resolve Resource Names**: Use `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)` from `common.resourceNames` at module level in try/except
 -   [ ] **Add AWS Clients**: Configure AWS clients with retry configuration
 -   [ ] **Implement Business Logic**: Separate business logic from request handling
@@ -153,7 +166,7 @@ A workflow's Step Functions definition encodes each referenced pipeline's execut
 #### **Step 3: CDK Infrastructure**
 
 -   [ ] **Update Storage Resources**: Add new DynamoDB tables/S3 buckets in `storageBuilder-nestedStack.ts`
--   [ ] **Register Resource Names**: Add constants to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve table/log-group names from these SSM parameters); register descriptor in `resourceNameRegistry`
+-   [ ] **Register Resource Names**: Add constants to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve table/log-group names from these SSM parameters); register descriptor in `resourceNameRegistry`. An add-on table is created in the add-on's own nested stack with `addonDynamoDbTableDefaults()` (`infra/lib/nestedStacks/addon/addonStackHelpers.ts`), and its key goes in the add-on lane instead: `infra/common/addonResourceParamKeys.ts`, mirrored by `AddonResourceKeys` in `backend/backend/common/addonResourceNames.py` and published by the add-on stack with `publishAddonResourceName()`; `ssm_resource_lookup.py` carries no add-on key
 -   [ ] **Create Lambda Builder**: Add lambda function builder in `lambdaBuilder/[domain]Functions.ts`
 -   [ ] **Configure Environment Variables**: Add handler-specific env vars only (resource names resolved from SSM via `globalLambdaEnvironmentsAndPermissions`)
 -   [ ] **Configure Permissions**: Grant appropriate DynamoDB/S3/SNS permissions
@@ -181,7 +194,9 @@ A workflow's Step Functions definition encodes each referenced pipeline's execut
 -   [ ] **Mock AWS Services**: Use proper mocking for DynamoDB, S3, SNS
 -   [ ] **Run All Tests**: Ensure `pytest` passes with coverage
 
-The add-on and custom lane modules (`common/addonConstants.py`, `common/addonResourceNames.py`, `custom/`) are pure data and need no mock under `tests/mocks/`. `common` is a `MagicMock` in `tests/conftest.py`, so the conftests register `common.addonConstants` in `sys.modules` by path before `constants.py` loads. A test that needs populated lanes loads a private copy of `constants.py` with stand-in lane modules (`tests/common/test_constants_extension_lanes.py`). Tests that pin the constraint lists pin the `CORE_*` lists, so they hold in a fork that fills the lanes.
+The add-on and custom lane modules (`common/addonConstants.py`, `common/addonResourceNames.py`, `custom/`) are pure data and need no mock under `tests/mocks/`. `common` is a `MagicMock` in `tests/conftest.py`, so the conftests register `common.addonConstants` in `sys.modules` by path before `constants.py` loads, as they do for `common.apiRouteTypes` and `common.addonApiRoutes`; `tests/conftest.py` also registers `common.addonFeatures`, which both route modules import. `common/addonFeatures.py` reads `ADDON_FEATURES_ENABLED` on every call, and with the variable unset the route and object-type listings include every add-on entry, so a test of a listing that leaves a disabled add-on out sets or deletes the variable with `monkeypatch` (`tests/handlers/auth/test_addon_listings_follow_deployment.py`). The `handlers.auth` mock carries `AUTH_METHOD_JWT` and `AUTH_METHOD_API_KEY`, pinned to the real module's values by `tests/handlers/auth/test_request_to_claims_authMethod.py`. A test that needs populated lanes loads a private copy of `constants.py` with stand-in lane modules (`tests/common/test_constants_extension_lanes.py`). Tests that pin the constraint lists pin the `CORE_*` lists, so they hold in a fork that fills the lanes. `customLogging/logger.py` and `common/logRedaction.py` import their merged key lists from `common.constants`, so `tests/conftest.py` also loads the real `constants.py` once by path and pins `LOG_SENSITIVE_KEYS` and `LOG_TEXT_SENSITIVE_KEYS` on the mock `common.constants`; a redactor imported under the mock then redacts the real keys.
+
+An add-on's tests sit under `tests/handlers/addon/<add-on>/`, and its own test-suite rules (harness modules, captured fixtures) live in that add-on's `CLAUDE.md` and Kiro `ADDON_*.md` file. An add-on that ships routes records, per shipped permission template, the methods each template allows on them as `ROUTE_GRANTS` in `tests/handlers/addon/<add-on>/addonRouteGrants.py`: `tests/handlers/auth/test_permission_templates_addon_routes.py` merges every such file, refuses a route two sources decide, and evaluates each decision through the real policy generation and Casbin evaluation.
 
 #### **Step 6: Frontend Integration**
 
@@ -598,7 +613,13 @@ group that itself repeats or alternates (`(a+)+`, `(a|a)*`), a backreference, an
 ambiguity than one evaluation can afford — the estimated worst-case backtracking search space against a
 256-character subject must stay under `MAX_REGEX_SEARCH_SPACE`, which admits at most three unbounded
 quantifiers (`.*`, `+`, `{n,}`). The budget is calibrated by measurement: three unbounded quantifiers
-separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. This matters because
+separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. A value that runs
+against longer subjects is checked at its own length: `validate_regex(subject_length=...)`, or
+`subjectLength` in the `REGEX` spec (`models/compliance.py` checks path patterns at
+`MAX_S3_OBJECT_KEY_BYTES`, 1024, which admits two). A value evaluated with `re.search` passes
+`searched` (`searched: True` in the spec): unless it begins with `^` (`_anchored_at_start`), the
+start positions the search tries count as one more unbounded quantifier; every compliance rule
+pattern is searched. This matters because
 a constraint criterion value becomes a Casbin `regexMatch(...)` pattern re-evaluated for every policy line
 on every authorization decision. General regex stays accepted (literals, character classes, anchors, `.*`, `|`,
 un-quantified groups). The check runs on the **save** paths — `ConstraintCriteriaModel`, plus
@@ -606,6 +627,13 @@ un-quantified groups). The check runs on the **save** paths — `ConstraintCrite
 by variable substitution because that is what gets stored — and deliberately not on read, where
 `ConstraintResponseModel` uses the rule-free `ConstraintCriteriaResponseModel` so a constraint stored
 by an earlier release keeps reading back as stored.
+
+The policy builder writes each criterion value into its line's `obj_rule` as source escapes, one
+`\xNN` / `\uNNNN` / `\UNNNNNNNN` per character (`CasbinEnforcerService._escape_rule_value`), never as
+plain text: Casbin's policy reader splits lines on commas outside brackets, and pycasbin rewrites `p.` /
+`r.` and `&&` / `||` / `!` throughout the rule text, string literals included, before compiling it. Only
+the object-type check every line opens with, `regexMatch(r.obj.object__type, '^<type>\Z')`, carries a
+registered type name as plain text (`_object_type_rule`).
 
 #### **Example: Secure Model with Validator Integration**
 
@@ -770,6 +798,43 @@ is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-
     effect without re-issuing a token. The value is informational for handlers and audit logs:
     `CasbinEnforcer` re-reads a user's roles from DynamoDB when it builds policy, so
     authorization does not depend on it. Do not reintroduce a role lookup in `preTokenGen`.
+-   **The authorizer owns the `vams:` context namespace**: `authenticate_request` copies a
+    verified token's claims into the context except every key under the reserved `vams:` prefix
+    (`RESERVED_CONTEXT_KEY_PREFIX`, matched without regard to case), then sets `vams:tokens` to
+    `[username]` (the one id `resolve_user_id` returns: `cognito:username`, then `username`, then `sub`,
+    or in external mode the configured `JWT_USER_ID_CLAIM` -- the value roles, MFA and audit use), `vams:roles`, `vams:mfaEnabled` and `vams:externalAttributes` (`[]`). A
+    verified token with no username is unauthenticated (401). A new value the authorizer passes
+    to handlers takes the `vams:` prefix and is written after the claim copy; never treat a token
+    claim as identity, role, MFA or credential-type input.
+-   **Accepted token audiences (#1337)**: the authorizer accepts a Cognito token issued to
+    `APP_CLIENT_ID` or to one of `ADDITIONAL_APP_CLIENT_IDS`, and an external IdP token whose
+    audience (read through `JWT_AUDIENCE_CLAIMS`: `aud` and/or `client_id`, default `aud`, the first listed
+    claim present decides) is `JWT_AUDIENCE` or one of `JWT_ADDITIONAL_AUDIENCES` (JSON arrays CDK sets only when
+    `app.authProvider.<provider>.additionalTokenAudiences` is non-empty; parsed fail-closed,
+    matched exactly). Signature, issuer, expiry and `token_use` checks never depend on the
+    audience, and the user's roles still decide. A token that names no user (a Cognito access
+    token without `username`, or an external token accepted only through an additional audience
+    whose identity is missing or equals its client id, or that carries a machine-token marker:
+    `gty` = `client-credentials`, `idtyp` = `app`, `preferred_username` starting `service-account-`)
+    is rejected. Primary-audience tokens are not checked, and the markers do not cover every IdP,
+    so only user sign-in clients may be listed. The accepted audience reaches the authorization
+    audit record as `tokenAudience`; it is not put in the authorizer context.
+-   **`claims_and_roles["authMethod"]`** is `"apiKey"` when the authorizer context carries
+    `vams:authMethod = apiKey` and `"jwt"` otherwise (JWT callers and Lambda cross-calls alike).
+    Handlers that mint or seed a credential refuse `"apiKey"` with 403 so one key cannot be chained
+    into another; compare against `handlers.auth.AUTH_METHOD_API_KEY`, never a bare string.
+    `claims_and_roles["apiKeyId"]` is the id of the key an API-key caller authenticated with (the
+    authorizer's `vams:apiKeyId`), for a handler that decides by the key itself, and `None` for every
+    other caller.
+-   **A temporary session key cannot mint or extend a key.** A temporary session key is an API key
+    named with `TEMPORARY_SESSION_KEY_NAME_PREFIX` (`temporary-session-`, `common/constants.py`) that
+    a backend component mints for one session through a Lambda cross-call. API-key create and update
+    read the caller's key record through `apiKeyId` and answer `403` in every scope to a caller
+    authenticated with one; the refusal runs in addition to Tier 1, after `enforceAPI` has allowed
+    the route, and a caller whose own key record cannot be read is answered the generic `500`, not
+    that refusal. The prefix is reserved: an API-key create that names a key under it is answered
+    `400` unless it arrives as a Lambda cross-call
+    (`tests/handlers/auth/test_apiKeyService_temporary_session_key_callers.py`).
 
 ### **Rule 2: Pydantic Models MUST Follow assetsV3.py Patterns**
 
@@ -976,6 +1041,22 @@ def handle_get_request(event):
         return internal_error(event=event)
 ```
 
+**A check walks only the policy lines that can match its object type.**
+`ObjectTypeRoutingEnforcer` (`handlers/authz/__init__.py`, the enforcer
+`_create_casbin_enforcer_helper` builds) reads each line's compiled matcher expression when the
+policy loads and lists the line under the one object type its
+`regexMatch(r.obj.object__type, '^<type>\\Z')` gate names. A line that is not provably gated on one
+literal type (regex syntax in the type name, a gate that is not the first conjunct, a top-level
+`||`, an unparsable rule, a wrong field count, the deny-all line) is shared by every type in its
+original position. A request of type T walks T's lines plus the shared ones in policy order; a type
+no line names is denied without a walk. A skipped line would have evaluated `g()` and a false gate
+and added only `INDETERMINATE`, so no decision changes.
+`tests/handlers/authz/test_casbin_object_type_routing.py` compares it with the all-lines
+`ExpressionCachingEnforcer` over every shipped permission template, the seeded roles and synthetic
+and hand-written policy sets, and fails when a deny line is dropped or a type misrouted. Keep the
+object-type gate as the first criterion of every generated line; a line built otherwise is still
+correct but is walked for every type.
+
 **An archived record must pass on its stored id and on its database id.** Archiving an asset and deleting a
 database rewrite the record under the partition key `<databaseId>#deleted`; `CasbinEnforcerService.enforce`
 allows such a record only when both the stored `databaseId` and the id with the suffix removed pass. A deny on
@@ -985,14 +1066,14 @@ not reach them; to grant archived records, a rule must also name `<databaseId>#d
 strip or add the suffix in a handler for authorization.
 
 **Compiled matcher expressions are cached per user enforcer, never decisions.**
-`ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the `FastEnforcer` subclass that
-`_create_casbin_enforcer_helper` builds) keeps an **instance-level** dict of compiled `SimpleEval`
-expressions keyed on the full inlined rule string, so each distinct policy line is parsed once per
-enforcer while every `enforce()` still evaluates every line. The enforcer is owned by one
-`CasbinEnforcerService`, so the cache is per user and is discarded with the service on the
-60-second TTL / MFA invalidation. Never move the cache to class or module level: the compiled
-expression holds the enforcer's function map whose `g` is bound to that user's role manager, so a
-shared cache would evaluate one user's role links for another.
+`ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the parent of
+`ObjectTypeRoutingEnforcer`) keeps an **instance-level** dict of compiled `SimpleEval` expressions
+keyed on the full inlined rule string, so each distinct policy line is parsed once per enforcer
+while every `enforce()` still evaluates every line it walks. The enforcer is owned by one
+`CasbinEnforcerService`, so the cache and the routes are per user and are discarded with the
+service on the 60-second TTL / MFA invalidation. Never move the cache to class or module level: the
+compiled expression holds the enforcer's function map whose `g` is bound to that user's role
+manager, so a shared cache would evaluate one user's role links for another.
 `tests/handlers/authz/test_casbin_expression_cache.py` pins the instance-level shape, decision
 parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA freshness.
 
@@ -1006,6 +1087,28 @@ parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA fresh
 -   **Identity comparisons**: e.g. `skip_schema_validation = (username == "SYSTEM_USER")` in `metadataService.py`, and the pipeline-execution bypass in `processWorkflowExecutionOutput.py`
 
 Because handlers compare against this exact string, a mismatched variant silently fails the comparison (or attributes records to a user ID that has no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
+
+#### **Authorization Decisions and Permission-Check Endpoints**
+
+Every allow-or-deny decision is made in the API, by the authorizer and `CasbinEnforcer`. The web app may only show or hide a control based on a decision the API returned, such as the route listing from `GET /auth/routes/api/allowed`. The API still enforces each call. Never derive a permission in the client: no capability flag computed from roles, no constraint matching in the browser, and no trust in a role, database or attribute the client sends.
+
+An endpoint that answers "may this user do X" (a permission check, as opposed to the operation itself) follows these practices, from the [OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html) plus the VAMS rules:
+
+-   **Deny by default.** An unknown object type, an unknown route or a failed lookup returns "not allowed", never an error that hints why.
+-   **No existence leaks.** "Doesn't exist" and "not allowed" give the same answer, so the endpoint can't be used to enumerate assets or databases.
+-   **Generic reasons only.** The UI may get a reason code for its tooltip ("not permitted"). The response never includes policy details or the constraint that matched.
+-   **The result is advisory.** The real call is still enforced on the server, so a stale answer can't grant anything. Cache the answer only briefly in the page, never across users.
+-   **Bounded cost.** Use a single-item read per object (no scan or query fan-out; the paging rules, `backend/CLAUDE.md` Rules 14-15), validate the ids with the existing validators, and rely on API Gateway throttling.
+-   **Audit.** Record denials through the existing batched probe audit (`_DenialAuditBatch` in `handlers/auth/routes.py`, with its probe marker).
+-   **Reachability.** Put the endpoint under `/auth/routes/...` (for example `POST /auth/routes/api/evaluate`), behind the custom authorizer. Every shipped template, `database-readonly` included, already grants `POST` on `/auth/routes`, so no template changes are needed.
+
+The check identifies the user from the token, loads the object itself from the identifiers it is given, and evaluates the same Tier 1 and Tier 2 checks as the endpoint it answers for.
+
+**A stored reference that the system later acts on is authorized when it is saved.** A compliance pipeline rule names a workflow that every evaluation launches as the system user, so `complianceSchemaService.pipeline_rules_refused` decides each new or changed `pipelineRef` on schema create and update the way the execute route decides a run (`may_run_workflow`: Tier 1 `POST` on `/workflows/{databaseId}/{workflowId}/execute` through `enforcer.enforce` on an `api` object, Tier 2 `GET` on the workflow, its pipelines and the rule's own pipeline, each row read with one `GetItem`). It is deny by default: a missing workflow or pipeline answers the same `403` (`Not authorized to run the workflow of pipeline rule '<name>'`, `ruleName`) as a refused one and is logged through `log_authorization`. Unchanged rules are not re-checked and `SYSTEM_USER` is not checked. Follow the same shape for any new field that makes the system act later on an object the saver names.
+
+#### **Single-asset routes: Tier 2 before existence**
+
+`models/common.py` defines two `VAMSGeneralErrorResponse` subclasses for single-asset routes that decide Tier 2 before existence (the assetFiles, assetVersions and assetExportService `get_asset_with_permissions` helpers): `VAMSAuthorizationDeniedResponse` (refused) and `VAMSAssetNotFoundResponse` (authorized, asset missing). A read route answers them with `authorization_error()` (403) and `general_error(status_code=404, body={'message': 'Asset not found'})`, as the asset GET does, by catching them ahead of `VAMSGeneralErrorResponse`. Every assetFiles and assetVersions route answers `VAMSAuthorizationDeniedResponse` with 403; the write routes catch only it and keep their 400 for a missing asset. A route that does not catch them keeps its 400 with the same message. The assetFiles and assetVersions helpers take `include_archived` (set only by read routes called with `showArchived`): the record comes from `common.dynamodb.get_asset_record` and the Tier 2 object from `asset_authorization_object`, whose stand-in for a missing id carries the archived `<databaseId>#deleted` id, so a caller refused that database's archived records gets the same 403 for an archived asset as for a missing one. Write routes never pass it.
 
 ### **Rule 5: Storage Resources MUST Be Added to storageBuilder-nestedStack.ts**
 
@@ -1059,7 +1162,7 @@ return {
 
 Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. A fork registers its routes from `infra/lib/nestedStacks/custom/customResources.ts`, built inside the `CustomBuilder` nested stack, which the REST API stack depends on. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 73 in ~0.30 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 132 in ~0.59 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 122 nodes from 100 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
@@ -1167,7 +1270,7 @@ def [operation_name](self, [params]) -> Dict[str, Any]:
         APIError: When API call fails
     """
     try:
-        endpoint = API_[DOMAIN].format([param]=[param])
+        endpoint = route_path(API_[DOMAIN], [param]=[param])
         response = self.[method](endpoint, data=[data], include_auth=True)
         return response.json()
 
@@ -1310,7 +1413,7 @@ When making backend or CDK changes, update the corresponding Docusaurus document
 
 -   **New or changed API endpoint (incl. path renames)** → Update **both** the OpenAPI spec `VAMS_API.yaml` **and** the matching Docusaurus reference page under `api/` (e.g. `api/auth.md`) — two separate sources of truth that must stay in sync — plus the CLI command reference if applicable
 -   **New config option** → Update `deployment/configuration-reference.md`
--   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm the `infra/test/config/configBuilderSync.test.ts` drift check passes. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it covers **neither** `validation.ts` nor `derived.ts`, so both are kept in sync by review, not by the test. New/changed `getConfig()` validation logic must be hand-ported into `validation.ts`: a missing rule leaves the ConfigBuilder approving a config that then fails `cdk synth`, which is worse than no validation because the operator was told it was valid. `getConfig()` auto-mutations — assignments that rewrite the operator's config — must be mirrored into `derived.ts` when added or changed, and **deleted** from it when removed from `getConfig()`; a leftover mutation makes the builder keep rewriting the downloaded `config.json` in a way the deployment does not. `getConfig()` performs no auto-mutation today, so `applyDerived()` is a pass-through. Where `getConfig()` rejects a feature combination instead of assigning, the mirror is an error rule in `validation.ts` — a feature added to a constraint list such as the VPC-requiring set goes into that file's `VPC_REQUIRING_FEATURES` table, not into `derived.ts`. Two exclusions: rules reading a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`. When checking the port, compare the config FIELD PATHS each rule references; the two files word the same rule differently, so matching on message text under-reports drift.
+-   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm the `infra/test/config/configBuilderSync.test.ts` drift check passes. An add-on field in the add-on config lane (`infra/config/addon/`) goes in its ConfigBuilder module `ConfigBuilder/addon/<addon>.ts` instead (fields, presets, rules, VPC-requiring features and normalizations, joined by `ConfigBuilder/addon/index.ts`), which the drift check covers with the files it splices into. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it covers **neither** `validation.ts` nor `derived.ts`, so both are kept in sync by review, not by the test. New/changed `getConfig()` validation logic must be hand-ported into `validation.ts` (an add-on module's rule into its ConfigBuilder module): a missing rule leaves the ConfigBuilder approving a config that then fails `cdk synth`, which is worse than no validation because the operator was told it was valid. `getConfig()` auto-mutations — assignments that rewrite the operator's config — must be mirrored into `derived.ts` when added or changed, and **deleted** from it when removed from `getConfig()`; a leftover mutation makes the builder keep rewriting the downloaded `config.json` in a way the deployment does not. Any `getConfig()` normalization is mirrored in `derived.ts`, or in the add-on's ConfigBuilder module for an add-on field (`applyDerived()` runs each one through `applyAddonDerived()`); nothing else may be. The core `getConfig()` performs no auto-mutation today, so the core part of `applyDerived()` is a pass-through; an add-on's steering names any normalization its module mirrors. Where `getConfig()` rejects a feature combination instead of assigning, the mirror is an error rule in `validation.ts` — a feature added to a constraint list such as the VPC-requiring set goes into that file's `VPC_REQUIRING_FEATURES` table (or the add-on module's list that `ADDON_VPC_REQUIRING_FEATURES` joins in), not into `derived.ts`. Two exclusions: rules reading a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`. When checking the port, compare the config FIELD PATHS each rule references; the two files word the same rule differently, so matching on message text under-reports drift.
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, update `overview/features.md`, update `sidebars.ts`
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`
 -   **Permission changes** → Update `concepts/permissions-model.md`, `user-guide/permissions.md`
@@ -1569,7 +1672,7 @@ def create_[domain]([domain]_data, claims_and_roles):
         logger.info(f"Creating [domain] {[domain]_data['[domain]Id']}")
 
         # Add metadata
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()  # from common.timestamps import utc_now
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         [domain]_data['dateCreated'] = now
         [domain]_data['createdBy'] = username
@@ -1816,7 +1919,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, id_pattern, object_name_pattern
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="[Domain]Models")
+logger = safeLogger()  # shared module: logs under the calling handler's service name
 
 ######################## [Domain] API Models ##########################
 
@@ -2434,6 +2537,8 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 
 **Every path that hands out asset file content applies three controls on top of Casbin.** A presigned GET URL or a streamed body — in `downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, and `assetExportService` — is refused (or, for the export's per-asset entries, withheld) when the asset's `isDistributable` is false; is refused (export: withheld, the file stays in the listing) when `validateUnallowedFileExtensionAndContentType` rejects the file's key or the `ContentType` a `head_object` of the version about to be served reports, or when that head fails; and every URL or body actually issued is written to the file-download audit log (`log_file_download` / `log_file_download_bulk` / `log_file_download_streamed` in `customLogging/auditLogging.py`). A new download surface gets all three; `downloadAsset.py`'s `lambda_handler` is the reference call shape, and `assetExportService.py` `file_type_allowed_for_download` is the withhold-not-refuse form. A surface that checks many files in one request runs the heads through a bounded pool (`downloadAsset.py`'s bulk branch, `assetExportService.py` `mark_files_allowed_for_download`): serial per-file heads over an asset of thousands of files exceed the API Gateway integration timeout.
 
+**Presigned GETs pass through `presigned_get_object_params()`.** Every presigned `get_object` URL those four surfaces mint passes its `Params` through `common.s3` `presigned_get_object_params()`. For a key ending in `.svg` (any case) it signs `ResponseContentType=image/svg+xml` and `ResponseContentDisposition=attachment`; every other key is signed unchanged. An SVG is stored as `application/octet-stream`, a browser `<img>` renders it only as `image/svg+xml`, and the attachment disposition keeps a directly opened link a download so no SVG script runs at the bucket origin (#1201). Never sign an SVG inline. `tests/handlers/assets/test_presigned_svg_response_overrides.py` pins each path.
+
 **Every path that writes an object under a new name checks that name first.** Upload initialize and completion (`uploadFile.py`) and the move, rename and copy destination (`assetFiles.py` `move_file` / `copy_file`) call `validateUnallowedFileExtensionAndContentType` on the key before any S3 write. A new write path gets the same check.
 
 **A multipart file completed with no parts is cancelled.** `complete_upload` (`uploadFile.py`) aborts that file's multipart upload, stores nothing and reports the file with `success=False`; `sqsUploadFileLarge.py` `complete_multipart_upload_for_large_file` does the same and returns `False`. Only a file initialized as `zero-byte` completes with an empty `parts` list.
@@ -2473,6 +2578,19 @@ if resource:
     if not casbin_enforcer.enforce(resource, "[ACTION]"):
         return authorization_error()
 ```
+
+### **Audit Logging Pattern**
+
+Write audit records only through the `log_*` functions in `customLogging/auditLogging.py`; never build a record string in a handler. A record is one line: the bracketed prefix (`[ACTIONS][type: <secondary type>] [user: <id>] [roles: [...]] [mfaEnabled: <bool>]`), the JSON payload, then the ` --- [event: <masked request echo>]` suffix.
+
+-   **Prefix values are encoded.** Every value placed inside a `[...]` segment passes through `_encode_prefix_value` (the roles list through `_encode_roles`, the leading segments through `_event_type`): `[`, `]`, `\`, CR, LF, every other C0/C1 control and the bidirectional and zero-width characters are written as `\uXXXX`. A value made of the characters `userid_pattern` admits is written unchanged. A record that needs an extra segment (the permission-check probe marker) gets a formatter in `auditLogging.py` (`format_authorization_denial_record`) rather than an f-string at the call site.
+-   **Payload and echo are single-line ASCII JSON** (`json.dumps(..., ensure_ascii=True, default=str)`), so a value JSON cannot encode is written as its string form instead of dropping the record.
+-   **The echo is masked by key name.** `mask_sensitive_data` redacts `CORE_LOG_SENSITIVE_KEYS` (`common/constants.py`) plus the add-on and fork lanes, whole-name and case-insensitive, in `headers` and `multiValueHeaders` alike: `authorization`, `cookie`, `set-cookie`, `x-api-key`, `proxy-authorization`, `x-amz-security-token`, `x-vams-origin-verify`, `vams:originVerifyDigest`, the token/credential fields and the credential field names `password`, `secret`, `clientSecret`, `client_secret`, `accessToken`, `access_token`, `refreshToken`, `refresh_token`, `privateKey`, `private_key` (`passwordPolicy`, `secretArn` and other names that merely contain the word stay readable). A new header or field that carries a credential is added there in the same change.
+-   **An entry is never silently dropped.** A write path that cannot deliver an entry calls `report_undelivered_audit_records(log_type, reason, records)`, which writes each entry to the function's own log as an `auditFallback` JSON line and emits the `VAMS/Audit` `AuditWriteFailures` embedded metric (dimension `AuditLogType`). It never raises, adds nothing to the success path and needs no new IAM.
+-   **Every route-method is in the audit action registry.** `common/auditActions.py` (core; add-on lane `common/addonAuditActions.py`, fork lane `custom/customAuditActions.py`, merged core, add-on, custom) maps each route-method of `ALL_API_ROUTES` to an `AuditSpec` (action, group, entity type, kind, legacy type) or names why it records none in `AUDIT_EXEMPT`. A new route gets its entry in the same change; `tests/common/test_audit_registry.py` fails on a route-method that has neither, on a literal type a handler passes to `log_actions`/`log_auth_changes`/`log_auth_other`/`log_action` that the registry does not know, and on a registered action that no handler records.
+-   **Record an action with `log_action` after the write succeeds** (`workflowService.py` is the reference placement): `log_action(event, "assetUpdate", database_id=..., asset_id=..., changes={field: new value}, previous={field: prior value})`. A write records what it wrote or changed (`changes`, plus `previous` only when the handler already loaded the record: never read a record only to fill it); a read, search or download records what was asked (`request_parameters`: ids, filters, page size), never what was returned; `log_action` enforces this from the registry kind by dropping `changes` and `previous` for those kinds. A read or search may pass `item_count` (the number returned, never the items), which the single switch `AUDIT_READ_ITEM_COUNT` controls. A deployment turns successful read and search records off with `app.auditLogging.recordReads: false` (env `AUDIT_RECORD_READS`, absent = on); `log_action` applies it, so call sites never check it. Sizes and counts (`bytes`, `file_count`, `item_count`) come only from data the handler already holds. `outcome="failed"` with a generic `reason` (`notFound`, `validation`, `conflict`, `internal`) records an authorized attempt that failed; `outcome="denied"` goes to the authorization group. Never pass file content. Redaction (`SENSITIVE_KEYS`, `CONTENT_KEYS`) applies to every value section; a value over 2 KB is cut to its SHA-256 and a preview, and a whole record (prefix, payload and echo) is bounded to 32 KB, the echo cut first.
+-   **The compliance handlers record every call.** The six compliance API handlers open the request audit context in `lambda_handler` and record their route's action in each dispatch branch once the service function answered: `log_action(event, "complianceSchemaCreate", **audit_outcome(response), ...)` from `common/compliance/routeAudit.py` (a 2xx is a success, a 403 a denial written to the authorization group, anything else a failure with a generic reason). A call the API-level check refuses, or that raises, records the route's own action (`log_action(event, **failure_outcome(status))`). A compliance write never records a schema body, and a write that creates something names it from the service's answer (`created_value`). A compliance request that works across databases records a denial for each database the caller may not act on, as the core listings do. The four compliance Lambdas that serve no API route (trigger, workflow callback, cascade executor, jobs) carry `@audited_handler` and record their system actions (`CORE_AUDIT_SYSTEM_ACTIONS` in `common/auditActions.py`) through a module `_record(action, ...)` helper. The default-schema seed (a CloudFormation custom resource) lives with them in `handlers/compliance/` and records `complianceSchemaSeed`. Claude Code counterpart: `backend/CLAUDE.md` "Action records and the registry".
+-   **Enter the request audit context in every entrypoint**: decorate it with `@audited_handler` (or `with audit_request(event, context):`); `tests/common/test_audit_registry.py` fails on an entrypoint that does neither and is not in `AUDIT_ENTRYPOINT_EXEMPT`. The decorator records the route's action as failed (generic reason from the status code) for an error response the handler did not record, and nothing for a 401 or 403, so a handler records only its successes. Pass `log_action` the entrypoint's own event object and the action as a string literal (or through a helper that forwards it), and capture `previous` before setting the new values on the record you read. It resolves the actor (auth method, API key id, cross-call, on-behalf-of) and the request facts once, buffers successful action, auth change and auth other records and allowed authorization records (the route check from `enforceAPI`; inside a context authorization and auth records gain the request's contract keys, and authorization, error and auth records echo the short request) and writes them when the handler returns, one parallel write per group under a 1.5 s deadline with a pre-timeout flush; denials (authorization denials included), failures and errors are written at once. Outside a context every `log_*` function writes exactly as before. A record written from a worker thread is written at once, since the context belongs to the thread that opened it.
 
 ### **Response Model Conversion Pattern**
 
@@ -2720,6 +2838,7 @@ black backend/                    # Format code
 flake8 backend/                   # Lint code
 mypy backend/                     # Type checking
 pytest                            # Run tests
+pytest -n auto --dist loadfile    # Run tests in parallel, one test file per worker (what CI runs)
 pytest --cov=backend             # Run tests with coverage
 
 # Run specific test files
@@ -2729,6 +2848,13 @@ pytest -v tests/handlers/[domain]/test_[handler].py  # Test specific handler
 # List tests that pin one past change rather than a durable rule (root CLAUDE.md Rule 13)
 pytest -m temporary --collect-only
 ```
+
+**Parallel runs (`pytest-xdist`).** CI runs the backend suite with `-n auto --dist loadfile`: each test file
+runs whole, in order, in one worker, and only the order of files changes. A backend test must pass whichever
+files ran before it in the same process: set env vars with `monkeypatch.setenv`, patch globals and
+`sys.modules` entries so they are restored, reset module-level caches in the fixture that fills them, and
+write files only under `tmp_path`. Fix an order-dependent test rather than skipping it. Details:
+`backend/tests/CLAUDE.md`, "Running in parallel".
 
 #### **Mark a Temporary Test with `@pytest.mark.temporary`**
 
@@ -2801,7 +2927,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, id_pattern, object_name_pattern
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="[Domain]Models")
+logger = safeLogger()  # shared module: logs under the calling handler's service name
 
 # Add all request/response models following assetsV3.py patterns
 ```

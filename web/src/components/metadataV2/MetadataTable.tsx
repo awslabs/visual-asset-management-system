@@ -21,6 +21,12 @@ import MetadataSearchFilter from "./MetadataSearchFilter";
 import { getChangesCount } from "./utils/metadataHelpers";
 import Synonyms from "../../synonyms";
 
+/**
+ * The narrowest the table is drawn. Its key, type and actions columns take 380px between them, so
+ * this leaves the value column 180px; a narrower container scrolls the table sideways.
+ */
+const TABLE_MIN_WIDTH = "560px";
+
 interface MetadataTableProps {
     rows: MetadataRowState[];
     loading: boolean;
@@ -376,91 +382,96 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                             </SpaceBetween>
                         </Box>
                     ) : (
-                        <table
-                            style={{
-                                width: "100%",
-                                borderCollapse: "collapse",
-                                tableLayout: "fixed",
-                            }}
-                        >
-                            <colgroup>
-                                <col style={{ width: "14%", minWidth: "180px" }} />
-                                <col style={{ width: "120px" }} />
-                                <col />
-                                <col style={{ width: "80px" }} />
-                            </colgroup>
-                            <thead>
-                                <tr>
-                                    <th
-                                        style={{
-                                            padding: "8px 12px",
-                                            textAlign: "left",
-                                            borderBottom: "2px solid #e9ebed",
-                                        }}
-                                    >
-                                        {terminology} Key
-                                    </th>
-                                    <th
-                                        style={{
-                                            padding: "8px 12px",
-                                            textAlign: "left",
-                                            borderBottom: "2px solid #e9ebed",
-                                        }}
-                                    >
-                                        Value Type
-                                    </th>
-                                    <th
-                                        style={{
-                                            padding: "8px 12px",
-                                            textAlign: "left",
-                                            borderBottom: "2px solid #e9ebed",
-                                        }}
-                                    >
-                                        {terminology} Value
-                                    </th>
-                                    <th
-                                        style={{
-                                            padding: "8px 12px",
-                                            textAlign: "center",
-                                            borderBottom: "2px solid #e9ebed",
-                                        }}
-                                    >
-                                        Actions
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {paginatedRows.map((row, displayIndex) => {
-                                    // Calculate the actual index in the full rows array
-                                    const actualIndex = rows.findIndex((r) => r === row);
-                                    return (
-                                        <MetadataRow
-                                            key={`${row.metadataKey}-${actualIndex}`}
-                                            row={row}
-                                            index={actualIndex}
-                                            rows={rows}
-                                            onEdit={() => {}} // No-op, rows are always editable
-                                            onCancel={() => onCancelEdit(actualIndex)}
-                                            onSave={() => {}} // No-op, changes are auto-saved
-                                            onDelete={() => onDeleteRow(actualIndex)}
-                                            onKeyChange={(key) => onKeyChange(actualIndex, key)}
-                                            onTypeChange={(type) => onTypeChange(actualIndex, type)}
-                                            onValueChange={(value) =>
-                                                onValueChange(actualIndex, value)
-                                            }
-                                            onValidationError={
-                                                onValidationError
-                                                    ? (error) =>
-                                                          onValidationError(actualIndex, error)
-                                                    : undefined
-                                            }
-                                            readOnly={readOnly}
-                                            isFileAttribute={isFileAttribute}
-                                        />
-                                    );
-                                })}
-                            </tbody>
-                        </table>
+                        <div style={{ overflowX: "auto" }}>
+                            <table
+                                style={{
+                                    width: "100%",
+                                    borderCollapse: "collapse",
+                                    minWidth: TABLE_MIN_WIDTH,
+                                    tableLayout: "fixed",
+                                }}
+                            >
+                                <colgroup>
+                                    <col style={{ width: "14%", minWidth: "180px" }} />
+                                    <col style={{ width: "120px" }} />
+                                    <col />
+                                    <col style={{ width: "80px" }} />
+                                </colgroup>
+                                <thead>
+                                    <tr>
+                                        <th
+                                            style={{
+                                                padding: "8px 12px",
+                                                textAlign: "left",
+                                                borderBottom: "2px solid #e9ebed",
+                                            }}
+                                        >
+                                            {terminology} Key
+                                        </th>
+                                        <th
+                                            style={{
+                                                padding: "8px 12px",
+                                                textAlign: "left",
+                                                borderBottom: "2px solid #e9ebed",
+                                            }}
+                                        >
+                                            Value Type
+                                        </th>
+                                        <th
+                                            style={{
+                                                padding: "8px 12px",
+                                                textAlign: "left",
+                                                borderBottom: "2px solid #e9ebed",
+                                            }}
+                                        >
+                                            {terminology} Value
+                                        </th>
+                                        <th
+                                            style={{
+                                                padding: "8px 12px",
+                                                textAlign: "center",
+                                                borderBottom: "2px solid #e9ebed",
+                                            }}
+                                        >
+                                            Actions
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {paginatedRows.map((row, displayIndex) => {
+                                        // Calculate the actual index in the full rows array
+                                        const actualIndex = rows.findIndex((r) => r === row);
+                                        return (
+                                            <MetadataRow
+                                                key={`${row.metadataKey}-${actualIndex}`}
+                                                row={row}
+                                                index={actualIndex}
+                                                rows={rows}
+                                                onEdit={() => {}} // No-op, rows are always editable
+                                                onCancel={() => onCancelEdit(actualIndex)}
+                                                onSave={() => {}} // No-op, changes are auto-saved
+                                                onDelete={() => onDeleteRow(actualIndex)}
+                                                onKeyChange={(key) => onKeyChange(actualIndex, key)}
+                                                onTypeChange={(type) =>
+                                                    onTypeChange(actualIndex, type)
+                                                }
+                                                onValueChange={(value) =>
+                                                    onValueChange(actualIndex, value)
+                                                }
+                                                onValidationError={
+                                                    onValidationError
+                                                        ? (error) =>
+                                                              onValidationError(actualIndex, error)
+                                                        : undefined
+                                                }
+                                                readOnly={readOnly}
+                                                isFileAttribute={isFileAttribute}
+                                            />
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
                     )}
 
                     {/* Pagination - show when there are multiple pages */}

@@ -4,6 +4,8 @@ This document provides comprehensive guidelines for developing and extending the
 
 > **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its testing sections are also the Kiro counterpart for `web/e2e/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
 
+> **Add-on steering:** an add-on's own steering lives in `.kiro/steering/ADDON_*.md` (`inclusion: fileMatch`), which loads when you edit that add-on's files; this document covers core and the lanes an add-on plugs into.
+
 ## 🏗️ **Architecture Overview**
 
 ### **Technology Stack**
@@ -12,7 +14,7 @@ This document provides comprehensive guidelines for developing and extending the
 | ---------------- | -------------------------------------------------------------- |
 | React            | 18.3 (upgraded from 17.0.2)                                    |
 | TypeScript       | ^5.0.0 (upgraded from 4.4.4)                                   |
-| Vite             | ^8.0.0 (upgraded from ^6.0.0)                                  |
+| Vite             | ^8.0.16 (upgraded from ^6.0.0)                                 |
 | UI Library       | AWS Cloudscape Design System (`@cloudscape-design/components`) |
 | Auth             | AWS Amplify v6 + `@badgateway/oauth2-client` (dual-mode)       |
 | Routing          | React Router v7 with HashRouter                                |
@@ -29,7 +31,7 @@ web/
   customInstalls/           # Viewer plugin custom install scripts
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table (core + add-on + custom), React.lazy, permission filtering
+    routes.tsx              # Centralized route table (core + add-on + custom), lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
@@ -38,9 +40,11 @@ web/
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
                             #   triggerCache.ts
-      permissions/          # useAllowedRoutes.ts (Tier-1 gating)
+      permissions/          # useAllowedRoutes.ts (Tier-1 gating), routeDisabledReason.ts (disabledReason text),
+                            #   systemRecordReasons.ts (disabledReason text for system records)
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
-                            #   Stepper, Breadcrumb, ConfigEditor, Dialog, Callout, ToastProvider, ...)
+                            #   Stepper, Breadcrumb, ConfigEditor, Dialog, Callout, ToastProvider,
+                            #   DisabledReason (tooltip + button for a disabled control's reason), ...)
       pipelines/            # PipelinesPage, PipelineForm (wizard), TemplateEditor, TemplateForm,
                             #   TagSchemaBuilder, TemplateOverridesEditor, pipelineValidation
       workflows/            # WorkflowsPage, WorkflowBuilder, PipelineOrderList, TriggersEditor (live),
@@ -61,8 +65,9 @@ web/
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
       oauthSignInState.ts   # External OAuth: opaque state, same-origin return page, one-time values
 
-    services/               # API and data services (with features/orchestration/api/ and, in a
-                            #   fork, custom/services/, the ONLY places apiClient is imported)
+    services/               # API and data services (with features/orchestration/api/, an add-on
+                            #   module's own api/ directory and, in a fork, custom/services/, the
+                            #   ONLY places apiClient is imported)
       APIService.ts         # Main API service (~3,500 lines, 110+ exports)
       apiClient.ts          # Custom fetch wrapper (internal, never import from components)
       appCache.ts           # localStorage cache (replaces Amplify Cache)
@@ -72,26 +77,45 @@ web/
       FileOperationsService.ts
       MetadataService.ts
       MetadataSchemaService.ts
+      ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
       addons/               # Add-on API calls (physnaAPIService.ts)
 
-    addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
-                            #   — see WEB_FRONTEND.md 7.5
+    addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts
+                            #   (add-on feature-switch names) — see WEB_FRONTEND.md 7.5
+      edh/                  #   EDH Workstations add-on module (Tailwind + Radix, pages/ route shells)
+                            #   — see .kiro/steering/ADDON_EDH_WORKSTATIONS.md
     custom/                 # FORK EXTENSION POINT (shipped empty): customRoutes.tsx, customNavigation.ts,
                             #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
+      RuntimeConfigContext.ts # Live runtime config from Auth (useFeaturesEnabled); falls back to appCache outside the provider
 
     components/             # Domain/feature components
       asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions, Compliance tabs
         versions/           # Asset version management
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
+      compliance/           # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1 rules:
+                            #   "Add rule" for all six types, the pipeline-rule input-file selector,
+                            #   the metadata-rule scope form (scope, include/exclude paths, link
+                            #   direction + type), typed fileStructure / versionCoverage /
+                            #   assetAttributes checks)
+                            #   + complianceSchemaRules.ts;
+                            #   ReasonModal.tsx (Cloudscape reason dialog); complianceStateBadge.tsx
+                            #   (shared state -> StatusIndicator map, `exception` = info);
+                            #   EvaluationHistoryModal.tsx; ExecutionFailureReasons.tsx (a failed
+                            #   pipeline rule's execution failure reason, when the API returns it);
+                            #   RevokeExceptionModal.tsx; rowActions.ts; bindingConfirmations.ts
+                            #   (the Bind/Change/Remove confirmation text); cascadeNodes.tsx (node
+                            #   outcomes, paged and sorted in the browser)
       createupdate/         # CreateDatabase, UpdateAsset + form definitions
       filemanager/          # File tree and file operations
-      form/
-      list/
+      form/                 # Shared upload control + uploadPaths.ts (the one upload path rule)
+      list/                 # TableList.tsx (standard list page); ListToolbar.tsx (search + refresh
+                            #   left, filters right, for a page with its own Table); tableSorting.ts
+                            #   (column comparators, useSortedItems, useBrowserPagedItems)
       loading/
       metadata/
       metadataSchema/
@@ -112,6 +136,10 @@ web/
       ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/
       Subscription/ Tag/
+      # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
+      # flag); each deploys unconditionally and the nav/routes filter hides them without access.
+      ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
+      ComplianceAuditLog.tsx DatabaseCompliance.tsx
       # Orchestration route shells rendering the matching features/orchestration component
       PipelinesPage2.tsx PipelineBuilderPage.tsx
       TemplateListPage.tsx TemplateBuilderPage.tsx
@@ -121,6 +149,7 @@ web/
     visualizerPlugin/       # 3D/media viewer plugin system
       core/
         PluginRegistry.ts   # Singleton registry
+        streamFailure.ts    # Names why a streamed file failed to load
         types.ts
       config/
         viewerConfig.json   # Plugin configuration
@@ -129,7 +158,8 @@ web/
 
     common/                 # Shared utilities, helpers, and feature-switch constants
     constants/uploadLimits.ts
-    hooks/                  # usePageTitle.ts, useThemeSettings.ts
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts,
+                            #   useAssetPageAccess.ts (may the caller open an assets/asset page)
     layout/
       Navigation.tsx        # Left sidebar navigation
     utils/
@@ -175,11 +205,12 @@ web/
 -   [ ] **Import from service layer**: Never import `apiClient` directly
 -   [ ] **Use Context for shared state**: Follow `AssetDetailContext.ts` patterns
 -   [ ] **Handle API responses**: Check boolean flag before using data
+-   [ ] **List toolbar and sorting**: A list page puts the search and the refresh button on the left and the filter drop-downs on the right (`TableList.tsx`, or `components/list/ListToolbar.tsx`), and every column that offers sorting sorts (`components/list/tableSorting.ts`; see `WEB_FRONTEND.md` section 7.6)
 
 #### **Step 3: Page and Route Setup**
 
 -   [ ] **Create thin page wrapper**: In `src/pages/`
--   [ ] **Add lazy import**: `React.lazy(() => import("./pages/MyPage"))` in `routes.tsx`
+-   [ ] **Add lazy import**: `lazyWithRetry(() => import("./pages/MyPage"))` in `routes.tsx`
 -   [ ] **Add to routeTable**: With `path`, `Page`, and `active` properties
 -   [ ] **Add navigation item**: In `src/layout/Navigation.tsx` if needed
 
@@ -209,7 +240,7 @@ web/
 
 ### **Rule 1: All API Calls Go Through Service Layer Files**
 
-Components and pages MUST NEVER import `apiClient` directly. Only service files in `src/services/` (including `src/services/addons/` for add-on calls), `src/features/orchestration/api/` and, in a fork, `src/custom/services/` may import `apiClient`.
+Components and pages MUST NEVER import `apiClient` directly. Only service files in `src/services/` (including `src/services/addons/` for add-on calls), `src/features/orchestration/api/`, an add-on module's own `api/` directory under `src/addons/<addon>/` and, in a fork, `src/custom/services/` may import `apiClient`.
 
 ```typescript
 // CORRECT -- import from a service file
@@ -222,7 +253,7 @@ import { apiClient } from "../../services/apiClient";
 const response = await fetch("/api/databases");
 ```
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern.
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. An add-on's calls go in `services/addons/`, or in its module's `api/` directory when it ships a module of its own, never in `APIService.ts`.
 
 ### **Rule 2: Use Cloudscape Components (with orchestration exception)**
 
@@ -230,7 +261,7 @@ The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module
 
 -   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
 -   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
--   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind scoped to `src/features/orchestration/**` content glob).
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**`, each Tailwind add-on module under `src/addons/<addon>/**`, and the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**` or `src/addons/**`). A new orchestration shell or Tailwind add-on module must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added.
 -   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page. A Cloudscape page that happens to use a class named like a Tailwind utility therefore picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (verified present in the built CSS; the emitted set depends on what the orchestration module uses, so treat this as examples rather than a closed list). Outside the orchestration module use a VAMS-defined class or no class at all.
 
     Real instance: `<div className="container">` wrapped the asset-view comment editor. VAMS defines no `.container` rule, so the only match was Tailwind's `.container` utility and its responsive max-widths (640/768/1024/1280/1536px), which capped the comment box on any wide viewport. The component's own styles gave no hint — the editor filled its parent correctly and the parent was the clamped element — so it was only findable by measuring the rendered DOM. When a width or spacing problem has no explanation in the component's own styles, walk the ancestors' computed `max-width` in the browser before changing the component.
@@ -267,11 +298,11 @@ window.location.href = "/databases/mydb/assets";
 
 ### **Rule 4: Lazy Load All Pages in routes.tsx**
 
-Every page component in `routes.tsx` MUST be lazy-loaded with `React.lazy`:
+Every page component in `routes.tsx` MUST be lazy-loaded with `lazyWithRetry` (`src/utils/chunkLoadRecovery.ts`), which retries a chunk that failed to download and then reloads the page once:
 
 ```typescript
 // CORRECT
-const MyPage = React.lazy(() => import("./pages/MyPage"));
+const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 // INCORRECT -- defeats code splitting
 import MyPage from "./pages/MyPage";
@@ -279,7 +310,7 @@ import MyPage from "./pages/MyPage";
 
 ### **Rule 5: No Global State Libraries (TanStack Query for orchestration server state)**
 
-This codebase uses NO global state library (no Redux, Zustand, MobX, Recoil, Jotai). Use React Context API + `useReducer` for shared state. The orchestration module (`features/orchestration/`) uses **TanStack Query v5** for server-state management (caching, background refetch, smart polling via `computeRefetchInterval` that keeps polling active only while non-terminal executions are visible).
+This codebase uses NO global state library (no Redux, Zustand, MobX, Recoil, Jotai). Use React Context API + `useReducer` for shared state. The Tailwind modules (`features/orchestration/` and the add-on modules under `addons/`) use **TanStack Query v5** for server-state management (caching, background refetch, smart polling via `computeRefetchInterval` that keeps polling active only while non-terminal executions are visible); each module has its own `qk` key factory.
 
 ```typescript
 // CORRECT
@@ -344,6 +375,8 @@ npm run build
 yarn install
 ```
 
+The viewer installs the `postinstall` chain runs under `web/customInstalls/*` do not inherit `web/.npmrc`, because npm reads a project `.npmrc` only from the directory of the `package.json` it installs. Each viewer package directory therefore carries its own `.npmrc` (a copy of `web/.npmrc`), and an install inside a cloned upstream repository (SuperSplat, Potree, Needle USD) passes `--min-release-age=7` on the command line. `src/visualizerPlugin/config/customInstallsNpmIntake.test.ts` fails when a new viewer directory or clone install is not covered (#334).
+
 #### Keep the platform-specific native bindings in `optionalDependencies`
 
 `vite build` needs three compiled binaries for the machine running it: **rolldown's** binding (the bundler), **esbuild** (imported directly by the `jsxInJs` plugin in `vite.config.ts`), and **lightningcss** (the CSS minifier used by `vite:css-post`). npm records only the binaries matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)), and a later `npm install` on Linux does **not** add the missing one — so a lockfile written on Windows breaks the Linux CI build with one of:
@@ -393,13 +426,17 @@ Cache.setItem("config", data);
 
 ### **Rule 12: Permission Graying (Orchestration Module)**
 
-The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. Navigational surfaces are the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer — removing a tab makes the capability undiscoverable, while an absent menu entry simply narrows a list of actions. Gate the panel's contents, not the tab. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
+The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. The trigger list (`TriggersEditor`, on the Triggers page and the builder's Triggers step) offers Add, Edit and Retry only to a role that may call the trigger `PUT` route and Delete only to one that may call its `DELETE`; the create flow's Triggers step is gated on the `PUT` as a whole. Navigational surfaces are the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer — removing a tab makes the capability undiscoverable, while an absent menu entry simply narrows a list of actions. Gate the panel's contents, not the tab. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
+
+The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the asset search list (Create Asset, Delete Selected). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`features/orchestration/permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `features/orchestration/permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
 
 ```typescript
 const { can } = useAllowedRoutes();
 const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent");
 <Button disabled={!canDelete}>Permanent Delete</Button>;
 ```
+
+System records (`isSystem: true` on a pipeline or workflow) are graded from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu. Every other action the API would refuse stays listed, disabled with its reason from `features/orchestration/permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which opens above the control, stays inside the viewport at any width, and Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` enforce it (mirrors `web/CLAUDE.md` 6.4).
 
 ### **Rule 13: Toast Notifications (Orchestration Module)**
 
@@ -456,6 +493,8 @@ When system-wide frontend standards change (new rules, new patterns, new convent
 1. `web/CLAUDE.md` -- frontend steering document
 2. `.kiro/steering/WEB_FRONTEND.md` -- Kiro mirror of `web/CLAUDE.md`
 3. `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` -- this file
+
+A change to an add-on module's own conventions goes in that module's `CLAUDE.md` (`src/addons/<addon>/CLAUDE.md`) and its `.kiro/steering/ADDON_*.md` file instead.
 
 ### **Rule 18: Regenerate the CSP Hashes After Editing an Inline Script in `index.html`**
 
@@ -525,6 +564,8 @@ const data = result[1];
 ```
 
 A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message.
+
+A request whose response the browser never saw rejects with a `TypeError` ("Failed to fetch"). `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `apiClient.ts`) in its place, with no status, so the page says the service could not be reached and can offer Retry instead of a "not found" or permission message.
 
 ### **Authentication: Dual-Mode System**
 
@@ -597,6 +638,10 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 }
 ```
 
+A surface that stays mounted across a login (the side navigation) or that gates whole pages reads the flags through `useFeaturesEnabled()` from `context/RuntimeConfigContext.ts` instead: the cached config carries no `featuresEnabled` until the secure config lands after the first login, and only the context re-renders a mounted consumer when it does.
+
+Any side-navigation entry (a section, link or group in the core, add-on or custom lists) may carry `featuresEnabledRestriction: string[]`, the field name and all-of meaning the viewer config uses: `layout/Navigation.tsx` drops the entry until every listed switch is enabled, re-runs the web-route check when the switches arrive, and strips the field before the items reach `SideNavigation`. An add-on's switch names live in `addons/addonFeatures.ts` (`addonFeaturesEnabled`), each one declared in `infra/common/addonAppFeatures.ts` (`addons/addonFeatures.test.ts`); a fork's live in `custom/customFeatures.ts`.
+
 ---
 
 ## 📐 **Gold Standard Reference Files**
@@ -644,7 +689,7 @@ export default MyPage;
 Then in `routes.tsx`:
 
 ```typescript
-const MyPage = React.lazy(() => import("./pages/MyPage"));
+const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 // In routeTable array:
 {
@@ -829,6 +874,8 @@ Do **not** label a test whose forbidden construct is still writable: a CSP that 
 a Tailwind utility. Those must keep holding. Full criterion: root `CLAUDE.md` Rule 13; Claude Code
 counterpart: `web/CLAUDE.md` section 11.4.1.
 
+**End-to-end specs** (`web/e2e/`, Playwright against a deployed stack; full guide: `web/e2e/CLAUDE.md`). A core spec gives a page or shared component permanent smoke coverage, must not require specific data, and is named `orchestration.{page}.spec.ts`, `viewers.spec.ts`, or `{addon}.{page}.spec.ts` for an add-on page. Import locators from `support/fixtures.ts` rather than rewriting them: `cachedFeaturesEnabled(page)` reads the deployment's feature flags from the app's own cache, so a spec can `test.skip` on an absent flag, and `expectTableRendered(page, emptyState?)` takes the page's own empty-state regex when its copy does not read "No … found". An add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
+
 **Lint and format (from project root):**
 
 ```bash
@@ -858,6 +905,7 @@ npm run prettier-fix
 -   [ ] npm used (no yarn)
 -   [ ] Relative imports used (no path aliases)
 -   [ ] Theme-aware styles (Cloudscape design tokens or theme.css custom properties)
+-   [ ] List pages use the standard toolbar (search and refresh left, filters right) and every sortable column sorts (`WEB_FRONTEND.md` section 7.6)
 
 ### **Documentation Checks**
 
@@ -873,9 +921,10 @@ npm run prettier-fix
 
 1. Create component in `src/components/myfeature/MyFeatureTable.tsx`
 2. Use `@cloudscape-design/collection-hooks` for filtering/sorting
-3. Create page wrapper in `src/pages/MyFeaturePage.tsx`
-4. Add lazy import + route in `src/routes.tsx`
-5. Add navigation item in `src/layout/Navigation.tsx`
+3. Lay out the toolbar and wire the column sorting per `WEB_FRONTEND.md` section 7.6 (search and refresh on the left, filters on the right; every sortable column sorts)
+4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
+5. Add lazy import + route in `src/routes.tsx`
+6. Add navigation item in `src/layout/Navigation.tsx`
 
 ### **Adding a new API call**
 
@@ -913,7 +962,7 @@ npm run prettier-fix
 1. **Importing apiClient in components/pages** -- use service layer files
 2. **Importing Cloudscape from barrel export** -- use individual subpaths (new imports; see Rule 2)
 3. **Using BrowserRouter** -- must use HashRouter
-4. **Eagerly importing pages** -- must use React.lazy
+4. **Eagerly importing pages** -- must use lazyWithRetry
 5. **Adding Redux/Zustand/MobX** -- use Context + useReducer
 6. **Using Amplify Cache** -- use appCache
 7. **Manually getting auth tokens** -- use getDualValidAccessToken

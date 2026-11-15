@@ -41,11 +41,13 @@ For the runtime versions and build tooling VAMS deploys with, and the versions y
 VAMS delivers the following core capabilities:
 
 -   **Asset Management** -- Organize visual assets across databases with metadata, tagging, versioning, and relationship linking
--   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, robotics logs, and media files directly in the browser through 21 built-in viewer plugins
+-   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, robotics logs, and media files directly in the browser through 22 built-in viewer plugins
 -   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation, and AI-powered labeling
 -   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service across assets and files
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement
+-   **Compliance Enforcement** -- Bind versioned compliance schemas to databases or assets, evaluate assets automatically, on demand, or in sweeps, and quarantine assets that fail `quarantine`-level rules, with approval-gated cascades and an audit trail
 -   **Multi-Region Deployment** -- Deploy to AWS commercial regions, AWS GovCloud (US), or the AWS European Sovereign Cloud with full partition awareness
+-   **Optional Add-ons** -- Synchronize data to Garnet Framework or Physna, or launch Amazon DCV desktops through the EDH Workstations add-on ([Add-ons Overview](../developer/addons-overview.md))
 
 ---
 
@@ -56,9 +58,9 @@ VAMS provides three primary methods for interacting with your visual asset manag
 | Feature               | Web Interface                        | Command Line Interface (CLI)                | Direct API Access                  |
 | --------------------- | ------------------------------------ | ------------------------------------------- | ---------------------------------- |
 | **Best for**          | Interactive use, visualization       | Automation, scripting, bulk operations      | Custom integrations, applications  |
-| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 23 command groups | Full programmatic control via REST |
+| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 25 command groups | Full programmatic control via REST |
 | **File Upload**       | Drag-and-drop with progress tracking | Advanced chunking and retry logic           | Custom upload with presigned URLs  |
-| **3D Viewing**        | 20 interactive viewer plugins        | Not applicable                              | Not applicable                     |
+| **3D Viewing**        | 22 interactive viewer plugins        | Not applicable                              | Not applicable                     |
 | **Automation**        | Manual operations                    | Full automation with profile support        | Complete automation control        |
 | **Bulk Operations**   | Limited                              | Optimized for bulk tasks                    | Custom bulk implementations        |
 | **CI/CD Integration** | Not suitable                         | Designed for pipeline integration           | Full integration flexibility       |
@@ -71,7 +73,7 @@ The web-based interface provides an intuitive, browser-based experience for visu
 
 ### Command Line Interface (VamsCLI)
 
-The VamsCLI offers powerful automation capabilities through 23 command groups covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
+The VamsCLI offers powerful automation capabilities through 25 command groups covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, compliance, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
 
 ### Direct API Access
 
@@ -121,7 +123,7 @@ graph TB
 
     subgraph "Storage"
         S3["Amazon S3<br/>(Asset Buckets)"]
-        DDB["Amazon DynamoDB<br/>(20+ Tables)"]
+        DDB["Amazon DynamoDB<br/>(40+ Tables)"]
         OS["Amazon OpenSearch<br/>(Search Index)"]
     end
 
@@ -129,6 +131,11 @@ graph TB
         COG["Amazon Cognito<br/>/ External OAuth"]
         KMS["AWS KMS<br/>(Encryption)"]
         WAF["AWS WAF<br/>(Optional)"]
+    end
+
+    subgraph "Optional Add-ons"
+        ADDONAPI["Add-on API Functions"]
+        ADDONSYNC["Add-on Sync Functions<br/>via Amazon SQS"]
     end
 
     User --> CF
@@ -148,6 +155,9 @@ graph TB
     KMS --> DDB
     WAF --> CF
     WAF --> ALB
+    AUTH --> ADDONAPI
+    DDB --> ADDONSYNC
+    S3 --> ADDONSYNC
 ```
 
 The request flow follows this path: users authenticate through Amazon Cognito or an external OAuth provider, then access the application through Amazon CloudFront (commercial) or an Application Load Balancer (GovCloud and European Sovereign Cloud). All API requests pass through the REST API, which invokes a custom Lambda authorizer for JWT validation and IP-based access control before routing to the appropriate Lambda handler.
@@ -173,10 +183,12 @@ VAMS integrates with a range of AWS partner solutions and open-source projects f
 | [Three.js](https://threejs.org/)                                                                                                                            | Viewer            | Primary viewer for GLTF, GLB, OBJ, FBX, STL, STEP, IGES, and more                             |
 | [Trimesh](https://trimesh.org/)                                                                                                                             | Pipeline          | 3D mesh conversion and metadata extraction                                                    |
 | [CADQuery](https://github.com/CadQuery/cadquery)                                                                                                            | Pipeline          | Open-standard CAD conversion and metadata extraction                                          |
+| [Strands Agents](https://strandsagents.com)                                                                                                                 | Pipeline          | Agent framework for the GenAI CAD STEP agent pipeline                                         |
 | [Blender](https://www.blender.org/)                                                                                                                         | Pipeline          | Preview file generation and metadata extraction                                               |
 | [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | Pipeline          | Gaussian splat generation from media files                                                    |
 | [Garnet Framework](https://garnet-framework.tech/)                                                                                                          | Addon             | Data synchronization to external NGSI-LD knowledge graphs                                     |
 | [Physna](https://physna.com/)                                                                                                                               | Addon             | One-way sync to Physna of supported 3D/CAD files and metadata for geometric 3D search         |
+| [EDH](https://github.com/awslabs/engineering-development-hub)                                                                                               | Addon             | Amazon DCV desktops, desktop AMIs and container jobs on an EDH cluster                        |
 | [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Pipeline          | Reinforcement learning training and evaluation                                                |
 | [FFmpeg](https://ffmpeg.org/)                                                                                                                               | Pipeline          | Audio extraction, FLAC encoding, and key-frame extraction from teardown videos (GPL-licensed) |
 

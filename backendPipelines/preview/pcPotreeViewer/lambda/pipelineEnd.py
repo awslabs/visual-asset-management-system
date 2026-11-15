@@ -21,6 +21,39 @@ sfn = boto3.client(
     config=retry_config
 )
 
+# SendTaskFailure caps `error` at 256 characters and `cause` at 32,768. A longer value is rejected, the
+# calling workflow's task is never told and waits out its timeout, so both are cut to fit.
+TASK_FAILURE_ERROR_MAX_CHARS = 256
+TASK_FAILURE_CAUSE_MAX_CHARS = 32768
+TASK_FAILURE_CAUSE_DEFAULT = 'See AWS cloudwatch logs for error cause.'
+TASK_FAILURE_ERROR_PREFIX = 'Pipeline Failure: '
+
+
+def _bounded(text, limit):
+    return text if len(text) <= limit else text[:limit - 3] + '...'
+
+
+def external_task_failure(error):
+    """The `error` and `cause` reported to the calling workflow for this run's caught error.
+
+    A failure the pipeline container reported itself already has its `error` prefixed with
+    "Pipeline Failure: ", so the prefix is added only to an error that lacks it (#1217). Only such a
+    container failure has its cause passed on: that cause is the container's own (the log pointer,
+    or its full message when the error had to be cut), and it never repeats the error. Any other
+    caught error (a Lambda or Batch fault, a timeout) keeps the generic cause, as its Step Functions
+    cause can carry stack traces and resource names."""
+    error_text = str(error.get("Error") or "")
+    from_container = error_text.startswith(TASK_FAILURE_ERROR_PREFIX.strip())
+    cause_text = str(error.get("Cause") or "") if from_container else ""
+    cause_text = cause_text or TASK_FAILURE_CAUSE_DEFAULT
+    if not from_container:
+        error_text = TASK_FAILURE_ERROR_PREFIX + error_text
+    return {
+        "error": _bounded(error_text, TASK_FAILURE_ERROR_MAX_CHARS),
+        "cause": _bounded(cause_text, TASK_FAILURE_CAUSE_MAX_CHARS),
+    }
+
+
 def lambda_handler(event, context):
     """
     ClosePipeline
@@ -49,8 +82,7 @@ def lambda_handler(event, context):
             try:
                 sfn.send_task_failure(
                     taskToken=event['externalSfnTaskToken'],
-                    error='Pipeline Failure: ' + event["error"]["Error"],
-                    cause='See AWS cloudwatch logs for error cause.'
+                    **external_task_failure(event["error"])
                 )
                 logger.info("Sent external task token: error")
             except Exception as e:

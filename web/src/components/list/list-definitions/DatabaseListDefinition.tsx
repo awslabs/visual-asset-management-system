@@ -5,7 +5,7 @@
 
 import React from "react";
 import ListDefinition from "./types/ListDefinition";
-import { Link } from "@cloudscape-design/components";
+import { Box, Link } from "@cloudscape-design/components";
 import ColumnDefinition from "./types/ColumnDefinition";
 import Synonyms from "../../../synonyms";
 
@@ -16,9 +16,28 @@ import Synonyms from "../../../synonyms";
  * @param {boolean} options.showMapThumbnails - Whether to show the map thumbnail column
  * @param {React.ComponentType} options.MapThumbnailComponent - Component to render map thumbnails
  * @param {string} options.mapStyleUrl - Map style URL for thumbnails
+ * @param {boolean} options.showCompliance - Whether to show the compliance page link, beneath the
+ *   database name
+ * @param {boolean} options.showMetadata - Whether to show the metadata link column (the default)
+ * @param {"assets" | "compliance" | "none"} options.nameLinkTarget - Page the database name links
+ *   to: the database's assets (the default), its compliance page, or no link
  */
+// Bucket names, prefixes and extension lists are long single tokens; wrapping alone cannot break
+// them, so the table would still be wider than a laptop-width page.
+const BreakAnywhere = (props: any) => (
+    <span style={{ overflowWrap: "anywhere" }}>{props.children}</span>
+);
+
 export const createDatabaseListDefinition = (options: any = {}) => {
-    const { onMetadataClick, showMapThumbnails, MapThumbnailComponent, mapStyleUrl } = options;
+    const {
+        onMetadataClick,
+        showMapThumbnails,
+        MapThumbnailComponent,
+        mapStyleUrl,
+        showCompliance,
+        showMetadata = true,
+        nameLinkTarget = "assets",
+    } = options;
 
     const columnDefinitions = [
         new ColumnDefinition({
@@ -26,8 +45,40 @@ export const createDatabaseListDefinition = (options: any = {}) => {
             header: "Name",
             cellWrapper: (props: any) => {
                 const { item } = props;
+                let name;
+                if (nameLinkTarget === "compliance") {
+                    name = (
+                        <Link href={`#/databases/${item.databaseId}/compliance`}>
+                            {props.children}
+                        </Link>
+                    );
+                } else if (nameLinkTarget === "none") {
+                    name = <>{props.children}</>;
+                } else {
+                    name = (
+                        <Link href={`#/databases/${item.databaseId}/assets/`}>
+                            {props.children}
+                        </Link>
+                    );
+                }
+                if (!showCompliance) {
+                    return name;
+                }
+                // The compliance page link sits beneath the name rather than in a column of its
+                // own, so it adds no width to a list that already has many columns.
                 return (
-                    <Link href={`#/databases/${item.databaseId}/assets/`}>{props.children}</Link>
+                    <>
+                        {name}
+                        <Box variant="small" display="block">
+                            <Link
+                                variant="secondary"
+                                fontSize="body-s"
+                                href={`#/databases/${item.databaseId}/compliance`}
+                            >
+                                Compliance
+                            </Link>
+                        </Box>
+                    </>
                 );
             },
             sortingField: "databaseId",
@@ -109,20 +160,24 @@ export const createDatabaseListDefinition = (options: any = {}) => {
             header: "Restrict File Upload Extensions",
             cellWrapper: (props: any) => {
                 const value = props.item?.restrictFileUploadsToExtensions;
-                return <>{value && value.trim() !== "" ? value : "No Restrictions"}</>;
+                return (
+                    <BreakAnywhere>
+                        {value && value.trim() !== "" ? value : "No Restrictions"}
+                    </BreakAnywhere>
+                );
             },
             sortingField: "restrictFileUploadsToExtensions",
         }),
         new ColumnDefinition({
             id: "bucketName",
             header: "Bucket Name",
-            cellWrapper: (props: any) => <>{props.children}</>,
+            cellWrapper: BreakAnywhere,
             sortingField: "bucketName",
         }),
         new ColumnDefinition({
             id: "baseAssetsPrefix",
             header: "Base Bucket Prefix",
-            cellWrapper: (props: any) => <>{props.children}</>,
+            cellWrapper: BreakAnywhere,
             sortingField: "baseAssetsPrefix",
         })
     );
@@ -132,7 +187,7 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         "databaseId",
         "description",
         "assetCount",
-        "metadata",
+        ...(showMetadata ? ["metadata"] : []),
         "restrictMetadataOutsideSchemas",
         "restrictFileUploadsToExtensions",
         "bucketName",
@@ -152,6 +207,10 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         elementId: "databaseId",
         deleteRoute: "database/{databaseId}",
         columnDefinitions,
+        wrapLines: true,
+        // Eight columns do not fit a 1280 px page beside the navigation. The prefix is set once at
+        // create time and the bucket name already says where files live, so it starts hidden.
+        hiddenColumns: ["baseAssetsPrefix"],
     });
 };
 

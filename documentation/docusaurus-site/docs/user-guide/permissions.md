@@ -24,7 +24,7 @@ Both tiers must allow access for a request to succeed. A user with Tier 1 API ac
 For the complete technical reference of all object types, constraint fields, operators, web routes, and API routes, see [Permissions Model](../concepts/permissions-model.md).
 
 :::note[Extension object types]
-A deployment that adds its own features can register object types of its own, which then appear in the constraint editor's **Object Type** list. No role has access to such a type until a constraint on it allows that access, the `admin` role included, because the default constraints cover only the built-in types. See [Extension object types](../concepts/permissions-model.md#extension-object-types).
+A deployment that adds its own features can register object types of its own, which then appear in the constraint editor's **Object Type** list. No role has access to such a type until a constraint on it allows that access, the `admin` role included, because the default constraints cover only the built-in types and the types an enabled add-on seeds constraints for. An add-on's object types appear only while the deployment enables the add-on, and a type of an optional add-on feature only while that feature is enabled too. A constraint stored earlier with a type the deployment no longer offers opens with the notice **This object type is not offered on this deployment**: it is kept as stored, applies again once the add-on or feature is enabled, and can be deleted, but saving changes to it is refused. See [Extension object types](../concepts/permissions-model.md#extension-object-types).
 :::
 
 ## Roles
@@ -44,13 +44,16 @@ The deployment assigns the administrator account named by `app.adminUserId` to `
 `SYSTEM_USER` identity is also assigned to `admin` so system processes pass both authorization tiers.
 
 `basicReadOnly` reads assets, files, metadata, databases, pipelines, workflows, executions, tags,
-comments, subscriptions, and metadata schemas, opens files in the viewers and downloads them, and it
-may manage its own API keys. It cannot reach the
+comments, subscriptions, and metadata schemas, opens files in the viewers and downloads them, exports
+assets (`vamscli assets export`), and it may manage its own API keys. It cannot reach the
 administrative routes that `admin` holds: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
 (`DELETE /workflows/executions/{executionId}/permanent`). Because read access is granted through
 broad path prefixes such as `/workflows`, those two routes are withheld by explicit `deny` constraints,
-which override a matching `allow`.
+which override a matching `allow`. It holds no compliance constraint, so its users see no Compliance
+section in the navigation; grant compliance access with the `compliance-readonly`,
+`compliance-admin` or `compliance-global-admin` template. The Database Admin and Database User templates include compliance
+for their database (administration and read-only respectively).
 
 In the web interface a user without execution-log access still sees the **Logs** tab on an execution,
 and the tab reports that the logs are not viewable.
@@ -154,6 +157,8 @@ Roles can be configured to require multi-factor authentication (MFA). When a rol
 -   The role's constraints are only active when the user has authenticated with MFA in their current session.
 -   If the user has not completed MFA, the role is effectively ignored during authorization.
 -   This is useful for elevating privileges that should only be available during high-assurance sessions.
+-   The requirement is evaluated only for sessions signed in through Amazon Cognito. It has no effect — the role is ignored — for a deployment that uses an external OAuth identity provider, for a deployment with `useGlobalVpc.useForAllLambdas` enabled, for a user who signs in through Amazon Cognito SAML or OIDC federation (Amazon Cognito does not manage a federated user's MFA), and for any request authenticated with a VAMS API key, such as a CLI or MCP session that uses an API key through `vamscli auth set-override` or `--token-override`. A CLI or MCP session signed in with `vamscli auth login` sends the user's Amazon Cognito token and carries the same MFA state as the web interface. See [MFA-Aware Roles](../architecture/security.md#mfa-aware-roles) for how the check works.
+-   The Amazon Cognito user pool offers MFA as optional, and VAMS has no page or command that registers a factor, so a factor is registered for the user in the user pool (see [TOTP software token MFA](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-mfa-totp.html) in the Amazon Cognito Developer Guide). From the user's next sign-in, the VAMS sign-in page and `vamscli auth login` ask for the code. A user whose only role requires MFA has no access until they sign in with it.
 
 ## Web route permissions
 
@@ -165,7 +170,18 @@ For the complete list of web routes, see [Permissions Model: Web Route Reference
 
 ## Permission templates
 
-VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny Tagged Assets. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, Deny Tagged Asset Editing, Compliance Admin, and Compliance Readonly. Add-ons can ship templates of their own; see each add-on's page. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+
+### Compliance permission templates
+
+Two templates set up compliance roles:
+
+| Template                | Description                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compliance Admin**    | Full compliance management scoped to a database: create, update and delete schemas, bind and unbind schemas on the database and its assets, trigger evaluations, release quarantines, approve cascades, plus read-only access to the database and its assets and the database list on the **Databases** page. |
+| **Compliance Readonly** | View-only compliance access scoped to a database: view schemas, evaluation results, quarantine list, and audit logs. Cannot modify compliance state.                                                                                                                                                          |
+
+Both templates require `DATABASE_ID` and `ROLE_NAME` variables. For details on compliance permissions including the four compliance object types (`complianceSchema`, `complianceBinding`, `complianceEvaluation`, `complianceCascade`), see [User Guide: Compliance > Permissions](compliance.md#permissions).
 
 For template details, JSON format, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 

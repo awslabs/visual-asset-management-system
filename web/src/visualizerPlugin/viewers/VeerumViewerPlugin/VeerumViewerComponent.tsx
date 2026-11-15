@@ -8,7 +8,34 @@ import { appCache } from "../../../services/appCache";
 import { VeerumDependencyManager } from "./dependencies";
 import { VeerumViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
+import {
+    apiRefusalMessage,
+    describeStreamFailure,
+    probeStreamFailure,
+} from "../../core/streamFailure";
+
+/** A file request the API refused with a reason of its own (D166), shown as the API gave it. */
+class ApiRefusal extends Error {}
+
+/**
+ * Why a streamed file the viewer library could not load was refused, when the API refused it with
+ * a reason of its own (for example a quarantined asset while the download block is on): the
+ * request is made again for its status and body (`probeStreamFailure`), as the Potree viewer does.
+ * null when the API gave no such reason, and the viewer keeps its own message.
+ */
+const refusedBecause = async (
+    url: string,
+    headers: HeadersInit,
+    subject: string
+): Promise<string | null> => {
+    const failure = await probeStreamFailure(url, headers);
+    return apiRefusalMessage(failure.status, failure.body?.message)
+        ? describeStreamFailure(subject, failure)
+        : null;
+};
 
 // Lazy load unified panel to avoid circular dependency issues
 const VeerumPanel = lazy(() => import("./VeerumPanel"));
@@ -34,6 +61,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
     const [loadedModels, setLoadedModels] = useState<any[]>([]);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
 
     useEffect(() => {
         // Check if we have any files to load
@@ -179,7 +207,11 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                                 encodeURIComponent(segment)
                             );
                             const encodedFileKey = encodedSegments.join("/");
-                            let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                            let assetUrl = `${
+                                config.api
+                            }database/${databaseId}/assets/${encodeURIComponent(
+                                assetId
+                            )}/download/stream/${encodedFileKey}`;
 
                             // assetVersionId takes precedence (used for all files including deps)
                             // versionId is S3 file version, only for the primary file
@@ -204,12 +236,18 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
 
                             // Wrap add() call with explicit promise handling to catch all errors
                             await Promise.resolve(viewerControllerRef.current.add(tileModel)).catch(
-                                (addError) => {
+                                async (addError) => {
                                     console.error(
                                         `VEERUM Viewer: Error adding tileset to viewer:`,
                                         addError
                                     );
-                                    throw addError;
+                                    // A tileset the API refused names the API's reason (D166).
+                                    const refusal = await refusedBecause(
+                                        assetUrl,
+                                        headers,
+                                        `the tileset "${tileModel.name}"`
+                                    );
+                                    throw refusal ? new ApiRefusal(refusal) : addError;
                                 }
                             );
 
@@ -229,7 +267,11 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             }
                             const potreeFileKey =
                                 relativeFileKey + "/preview/PotreeViewer/metadata.json";
-                            const assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${potreeFileKey}`;
+                            const assetUrl = `${
+                                config.api
+                            }database/${databaseId}/assets/${encodeURIComponent(
+                                assetId
+                            )}/auxiliaryPreviewAssets/stream/${potreeFileKey}`;
 
                             console.log(`VEERUM Viewer: Validating point cloud URL ${assetUrl}`);
 
@@ -244,6 +286,14 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
 
                                 // Check for successful response (2xx) or redirect (3xx)
                                 if (!response.ok && response.status >= 400) {
+                                    // A HEAD answer has no body: a refusal's own reason is read
+                                    // from a GET of the same URL (D166).
+                                    const refusal = await refusedBecause(
+                                        assetUrl,
+                                        headers,
+                                        "the point cloud preview"
+                                    );
+                                    if (refusal) throw new ApiRefusal(refusal);
                                     throw new Error(
                                         `HTTP ${response.status}: ${
                                             response.statusText || "Request failed"
@@ -255,6 +305,9 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                                     `VEERUM Viewer: Point cloud URL validation successful (${response.status})`
                                 );
                             } catch (fetchError: any) {
+                                // The API's own refusal is shown as it is: running the Potree
+                                // pipeline would not change it.
+                                if (fetchError instanceof ApiRefusal) throw fetchError;
                                 // Handle all fetch errors: CORS, network failures, HTTP errors
                                 const errorDetail =
                                     fetchError?.message ||
@@ -414,7 +467,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         borderRadius: "4px",
                         padding: "12px 16px",
                         margin: "8px",
-                        zIndex: 1001,
+                        zIndex: VIEWER_LAYER.notice,
                         fontSize: "0.9em",
                     }}
                 >
@@ -463,7 +516,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         borderRadius: "4px",
                         padding: "12px 16px",
                         margin: "8px",
-                        zIndex: 1001,
+                        zIndex: VIEWER_LAYER.notice,
                         fontSize: "0.85em",
                         maxHeight: "150px",
                         overflowY: "auto",
@@ -530,7 +583,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         borderRadius: "4px",
                         padding: "8px 12px",
                         margin: "8px",
-                        zIndex: 1001,
+                        zIndex: VIEWER_LAYER.notice,
                         fontSize: "0.85em",
                         color: "#0972d3",
                         display: "flex",
@@ -580,7 +633,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         borderRadius: "8px",
                         textAlign: "center",
                         maxWidth: "80%",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.cover,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "10px" }}>
@@ -597,6 +650,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
             {viewerControllerRef.current && loadedModels.length > 0 && showPanel && (
                 <Suspense fallback={<div />}>
                     <VeerumPanel
+                        panelRef={panelRef}
                         viewerController={viewerControllerRef.current}
                         loadedModels={loadedModels}
                         initError={initError}
@@ -620,7 +674,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         borderRadius: "4px",
                         cursor: "pointer",
                         fontSize: "0.8em",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.panel,
                     }}
                     title="Show controls panel"
                 >
@@ -631,6 +685,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
             {/* Info Panel */}
             {!isLoading && !error && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: initError || fileErrors.length > 0 ? "auto" : "10px",
@@ -641,7 +696,8 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "8px",
                         borderRadius: "4px",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>VEERUM 3D Viewer</div>

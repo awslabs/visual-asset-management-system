@@ -162,6 +162,14 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         rule.NoncurrentVersionExpiration !== undefined ||
         rule.ExpiredObjectDeleteMarker !== undefined;
 
+    /**
+     * True for a rule that expires something and is not one of the bucket's always-on rules. The asset
+     * export staging prefix expires in every deployment (test/storage/assetExportStagingExpiry.test.ts),
+     * so it is not this pipeline's rule and does not count against it.
+     */
+    const pipelineExpiry = (rule: any): boolean =>
+        expiresSomething(rule) && rule.Prefix !== Config.ASSET_EXPORT_STAGING_PREFIX;
+
     test("[control] the pre-existing incomplete-multipart abort rule is still there", () => {
         // Without this, a change that dropped `lifecycleRules` entirely would make "no rule expires
         // outside the prefix" pass over an empty list.
@@ -207,7 +215,7 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         // other prefixes and are not this pipeline's to expire — current versions, noncurrent versions
         // or delete markers alike.
         const unscoped = auxBucketRules(synth).filter(
-            (rule) => expiresSomething(rule) && rule.Prefix !== VIDEO_SOP_BOM_AUX_PREFIX
+            (rule) => pipelineExpiry(rule) && rule.Prefix !== VIDEO_SOP_BOM_AUX_PREFIX
         );
         expect(unscoped).toEqual([]);
     });
@@ -254,8 +262,12 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         });
 
         test("no expiration rule is added", () => {
-            const expirations = auxBucketRules(disabledSynth).filter(expiresSomething);
+            const expirations = auxBucketRules(disabledSynth).filter(pipelineExpiry);
             expect(expirations).toEqual([]);
+            // Control: the always-on rules are there, so the filter above is what excludes them.
+            expect(auxBucketRules(disabledSynth).filter(expiresSomething).length).toBeGreaterThan(
+                0
+            );
         });
     });
 });

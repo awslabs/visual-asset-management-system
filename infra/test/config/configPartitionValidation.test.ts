@@ -865,3 +865,135 @@ describe("ConfigBuilder mirror of the cross-Region S3 endpoint rules", () => {
         expect(ruleIds(cfg)).toEqual([]);
     });
 });
+
+/**
+ * **The Blender agent's Bedrock model.** The Image to 3D Blender agent reasons with a Bedrock model, and
+ * which models an account may invoke differs by partition and by entitlement, so the model id follows the
+ * labeling pipeline's rule: the commercial template carries one, the restricted-partition templates ship it
+ * empty, `getConfig()` rejects an enabled agent with no model id in every partition, and rejects a
+ * commercial-only `global.` or `us.` inference-profile prefix outside the `aws` partition. The model id is
+ * deployment configuration only; no template offers it per run. The ConfigBuilder's hand-ported rules are
+ * asserted from the same arms.
+ */
+const AGENT_MODEL_REQUIRED_MESSAGE =
+    /useImageTo3d\.models\.blenderagent\.bedrockModelId must be set when the Blender agent is enabled/;
+const AGENT_MODEL_PREFIX_MESSAGE =
+    /useImageTo3d\.models\.blenderagent\.bedrockModelId is "[^"]+", whose "(global|us)\." cross-Region inference-profile prefix exists only in the commercial partition/;
+const AGENT_MODEL_RULE_ID = "imageto3d-blenderagent-model-id";
+const AGENT_MODEL_PREFIX_RULE_ID = "imageto3d-blenderagent-model-id-commercial-only-prefix";
+
+/** Enable the Blender agent; `modelId` replaces the template's value when given. */
+const enableBlenderAgent = (modelId?: string) => (c: any) => {
+    const imageTo3d = c.app.pipelines.useImageTo3d;
+    c.app.useGlobalVpc.enabled = true;
+    imageTo3d.enabled = true;
+    imageTo3d.huggingFaceToken = "hf_test_token";
+    imageTo3d.models.blenderagent.enabled = true;
+    if (modelId !== undefined) {
+        imageTo3d.models.blenderagent.bedrockModelId = modelId;
+    }
+};
+
+describe("the Blender agent's Bedrock model id", () => {
+    afterEach(() => {
+        (fs.readFileSync as unknown as jest.Mock).mockReset();
+    });
+
+    test("accepts the commercial template's model id in the commercial partition", () => {
+        // The whole call must pass, so the shipped value is a deployable one.
+        const run = loadConfig(commercialTemplate, "us-west-2", enableBlenderAgent());
+        expect(run).not.toThrow();
+    });
+
+    test("ships a model id in the commercial template and none in the restricted ones", () => {
+        const agentModel = (t: any) =>
+            t.app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId;
+        expect(agentModel(commercialTemplate)).toMatch(/^global\./);
+        expect(agentModel(govcloudTemplate)).toBe("");
+        expect(agentModel(eusovereignTemplate)).toBe("");
+    });
+
+    test("rejects an enabled agent with no model id in the commercial partition", () => {
+        // No default is assigned: the operator sees the field rather than inheriting a model.
+        const run = loadConfig(commercialTemplate, "us-west-2", enableBlenderAgent(""));
+        expect(run).toThrow(AGENT_MODEL_REQUIRED_MESSAGE);
+    });
+
+    test.each([
+        [govcloudTemplate, "us-gov-west-1"],
+        [eusovereignTemplate, "eusc-de-east-1"],
+    ])(
+        "rejects an enabled agent with the restricted template's blank model id (%#)",
+        (base, region) => {
+            const run = loadConfig(base, region, enableBlenderAgent());
+            expect(run).toThrow(AGENT_MODEL_REQUIRED_MESSAGE);
+        }
+    );
+
+    test("treats the UNDEFINED placeholder as no model id", () => {
+        const run = loadConfig(govcloudTemplate, "us-gov-west-1", enableBlenderAgent("UNDEFINED"));
+        expect(run).toThrow(AGENT_MODEL_REQUIRED_MESSAGE);
+    });
+
+    test.each(["global.openai.gpt-6-astra", "us.openai.gpt-6-astra"])(
+        "rejects the commercial-only profile %s in GovCloud",
+        (modelId) => {
+            const run = loadConfig(govcloudTemplate, "us-gov-west-1", enableBlenderAgent(modelId));
+            expect(run).toThrow(AGENT_MODEL_PREFIX_MESSAGE);
+        }
+    );
+
+    test("accepts a model id offered in the partition", () => {
+        const run = loadConfig(
+            govcloudTemplate,
+            "us-gov-west-1",
+            enableBlenderAgent("us-gov.example.model-v1")
+        );
+        expect(run).not.toThrow(AGENT_MODEL_REQUIRED_MESSAGE);
+        expect(run).not.toThrow(AGENT_MODEL_PREFIX_MESSAGE);
+    });
+
+    test("stays silent while the agent is disabled", () => {
+        const run = loadConfig(govcloudTemplate, "us-gov-west-1", (c) => {
+            enableBlenderAgent()(c);
+            c.app.pipelines.useImageTo3d.models.blenderagent.enabled = false;
+        });
+        expect(run).not.toThrow(AGENT_MODEL_REQUIRED_MESSAGE);
+    });
+});
+
+describe("ConfigBuilder mirror of the Blender agent model id rules", () => {
+    /** The agent model-id rules the ConfigBuilder reports for a preset in `region`. */
+    const agentModelRuleIds = (
+        profile: "commercial" | "govcloud" | "eusovereign",
+        region: string,
+        modelId?: string,
+        enabled = true
+    ) => {
+        const cfg = makeDefaultConfig(profile);
+        cfg.env.region = region;
+        enableBlenderAgent(modelId)(cfg);
+        cfg.app.pipelines.useImageTo3d.models.blenderagent.enabled = enabled;
+        return evaluateRules(cfg)
+            .map((rule) => rule.id)
+            .filter((id) => id === AGENT_MODEL_RULE_ID || id === AGENT_MODEL_PREFIX_RULE_ID);
+    };
+
+    test.each([
+        ["commercial", "us-west-2", undefined, []],
+        ["commercial", "us-west-2", "", [AGENT_MODEL_RULE_ID]],
+        ["govcloud", "us-gov-west-1", undefined, [AGENT_MODEL_RULE_ID]],
+        ["eusovereign", "eusc-de-east-1", undefined, [AGENT_MODEL_RULE_ID]],
+        ["govcloud", "us-gov-west-1", "global.openai.gpt-6-astra", [AGENT_MODEL_PREFIX_RULE_ID]],
+        ["govcloud", "us-gov-west-1", "us-gov.example.model-v1", []],
+    ] as const)(
+        "%s preset in %s with model id %j reports %j",
+        (profile, region, modelId, expected) => {
+            expect(agentModelRuleIds(profile, region, modelId)).toEqual(expected);
+        }
+    );
+
+    test("stays silent while the agent is disabled", () => {
+        expect(agentModelRuleIds("govcloud", "us-gov-west-1", undefined, false)).toEqual([]);
+    });
+});

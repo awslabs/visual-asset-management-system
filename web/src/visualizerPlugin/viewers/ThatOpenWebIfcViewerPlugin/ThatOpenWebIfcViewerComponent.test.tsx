@@ -14,6 +14,12 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import ThatOpenWebIfcViewerComponent from "./ThatOpenWebIfcViewerComponent";
+import {
+    QUARANTINE_REFUSAL_MESSAGE,
+    quarantineRefusalResponse,
+} from "../../core/quarantineRefusal.testdata";
+
+const IFC_FORMAT_HINT = /Please ensure the file is a supported IFC/;
 
 // --- The That Open bundle, reduced to what the load effect touches ------------
 const token = (name: string) => ({ token: name });
@@ -184,6 +190,29 @@ describe("ThatOpenWebIfcViewerComponent", () => {
 
         await waitFor(() => expect(screen.getByText("ifc-panel")).toBeInTheDocument());
         expect(screen.queryByText(/Failed to load: first\.ifc/)).toBeNull();
+    });
+
+    it("shows the API's refusal alone, with no format hint under it (D170)", async () => {
+        ((global as any).fetch as jest.Mock).mockResolvedValueOnce(quarantineRefusalResponse());
+
+        render(<ThatOpenWebIfcViewerComponent {...props} />);
+
+        expect(await screen.findByText(QUARANTINE_REFUSAL_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByText(IFC_FORMAT_HINT)).not.toBeInTheDocument();
+        expect(mockLoadIfcModel).not.toHaveBeenCalled();
+    });
+
+    it("[control] keeps the format hint under any other failure", async () => {
+        ((global as any).fetch as jest.Mock).mockResolvedValueOnce({
+            ok: false,
+            status: 415,
+            headers: { get: () => null },
+        });
+
+        render(<ThatOpenWebIfcViewerComponent {...props} />);
+
+        expect(await screen.findByText(/Failed to load: first\.ifc \(415\)/)).toBeInTheDocument();
+        expect(screen.getByText(IFC_FORMAT_HINT)).toBeInTheDocument();
     });
 
     it("aborts the first load before starting the second", async () => {

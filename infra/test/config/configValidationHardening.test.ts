@@ -234,7 +234,7 @@ describe("Bedrock model id validation (S1-INFRA-035)", () => {
                 enableGenAi(c);
                 c.env.partition = "aws";
                 c.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId =
-                    "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
+                    Config.GENAI_DEFAULT_BEDROCK_MODEL_ID;
             })
         ).not.toThrow(/bedrockModelId/);
     });

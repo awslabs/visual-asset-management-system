@@ -348,3 +348,18 @@ def list_all_objects(bucket, prefix, client=None, max_objects=None):
         if max_objects is not None and len(objects) >= max_objects:
             return objects[:max_objects]
     return objects
+
+
+# Same rule as the real module: presigned asset/preview downloads of an SVG key carry the SVG
+# response type and an attachment disposition; every other key is unchanged.
+SVG_RESPONSE_CONTENT_TYPE = 'image/svg+xml'
+SVG_RESPONSE_CONTENT_DISPOSITION = 'attachment'
+
+
+def presigned_get_object_params(params):
+    """Mirror of the real helper (pure function, no AWS calls)."""
+    signed = dict(params)
+    if str(signed.get('Key') or '').lower().endswith('.svg'):
+        signed['ResponseContentType'] = SVG_RESPONSE_CONTENT_TYPE
+        signed['ResponseContentDisposition'] = SVG_RESPONSE_CONTENT_DISPOSITION
+    return signed

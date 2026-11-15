@@ -216,7 +216,7 @@ class TestRealScanPaginator:
             "dynamodb",
             region_name="us-east-1",
             aws_access_key_id="testing",
-            aws_secret_access_key="testing",
+            aws_secret_access_key="testing",  # pragma: allowlist secret
         )
 
     @staticmethod

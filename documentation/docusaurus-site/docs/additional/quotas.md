@@ -1,6 +1,6 @@
 # Service Quotas and Limits
 
-This page documents the service quotas, default limits, and configurable thresholds for the Visual Asset Management System (VAMS). Some limits are inherent to AWS services, while others are configurable through the VAMS deployment configuration.
+This page documents the service quotas, default limits, and configurable thresholds for the Visual Asset Management System (VAMS). Some limits are inherent to AWS services, while others are configurable through the VAMS deployment configuration. An enabled add-on has limits of its own, listed on the add-on's page (see [Add-ons Overview](../developer/addons-overview.md)).
 
 ---
 
@@ -59,7 +59,7 @@ All VAMS DynamoDB tables use on-demand (pay-per-request) billing mode, which aut
 | Billing mode                | On-demand (PAY_PER_REQUEST)               |
 | Maximum item size           | 400 KB (DynamoDB service limit)           |
 | Metadata records per entity | 500                                       |
-| Table count                 | 46 tables (plus 7 retained for migration) |
+| Table count                 | 52 tables (plus 7 retained for migration) |
 
 :::info
 On-demand mode has no provisioned throughput to configure. Amazon DynamoDB automatically allocates capacity based on traffic patterns. For sustained high-throughput workloads, monitor your account-level DynamoDB service quotas.
@@ -88,6 +88,10 @@ On-demand mode has no provisioned throughput to configure. Amazon DynamoDB autom
 | Data nodes                | N/A                | One per Availability Zone (2 or 3)                                                                  |
 | Master nodes              | N/A                | 3                                                                                                   |
 | Engine version            | Managed by AWS     | OpenSearch 3.x (OpenSearch 2.x in the AWS European Sovereign Cloud, which does not yet support 3.x) |
+
+### Amazon CloudWatch Logs Resource Policies
+
+An account holds at most 10 account-level CloudWatch Logs resource policies per Region (not adjustable). A deployment with OpenSearch Serverless adds none. A deployment with a provisioned OpenSearch domain adds one for the domain's logs, so at most 10 such deployments, fewer if other workloads in the account use these policies, fit in one Region. The orchestration bus audit log group uses a resource policy of its own, which does not count against this limit. List the account-level policies in a Region with `aws logs describe-resource-policies`.
 
 ---
 
@@ -128,6 +132,10 @@ The AWS Deadline Cloud execution type is available when the deployment sets
 | 3D Preview Thumbnail     | Job run time                             | 1 hour (standard tier), 3 hours (large tier)                 |
 | All ECS pipelines        | Metadata JSON input                      | 8,000 characters                                             |
 | Gaussian Splat Toolbox   | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                 |
+| GenAI CAD STEP agent     | Script attempts per run (`MAX_ATTEMPTS`) | 1-10, default 4; a value outside the range is clamped        |
+| GenAI CAD STEP agent     | Run time bound (`maxRunSeconds`)         | 300-6,000 seconds, default 3,600                             |
+| GenAI CAD STEP agent     | Warm sessions (`warmSessionSlots`)       | 0-20 on the `agentcore` runtime, default 0                   |
+| GenAI CAD STEP agent     | AgentCore Runtime container image size   | 2 GB (Amazon Bedrock AgentCore quota, not adjustable)        |
 | Isaac Lab Training       | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                 |
 | RapidPipeline (ECS)      | Fargate task run time                    | 4 hours 44 minutes (`config.ts` constant)                    |
 | RapidPipeline (ECS)      | Running tasks checked at a task timeout  | 100 (one `ListTasks` page; `config.ts` constant)             |
@@ -306,11 +314,11 @@ Amazon Cognito service quotas can be increased through the AWS Service Quotas co
 
 ## Network and VPC Limits
 
-| Parameter                                            | Value                      |
-| ---------------------------------------------------- | -------------------------- |
-| VPC endpoints per configuration                      | 1-11 per Availability Zone |
-| Availability Zones required (ALB)                    | 2 minimum                  |
-| Availability Zones required (OpenSearch Provisioned) | 2 or 3 (default 2)         |
-| Availability Zones required (Lambda in VPC)          | 1 minimum                  |
+| Parameter                                            | Value                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| VPC interface endpoints per configuration            | 9-24 created by the VPC stack (up to 22 in GovCloud), each in every Availability Zone the VPC uses; a private Amazon OpenSearch Serverless collection and the ALB web distribution add one each, and each other Region that holds an external asset bucket adds a cross-Region Amazon S3 endpoint when `addCrossRegionS3Endpoints` is enabled |
+| Availability Zones required (ALB)                    | 2 minimum                                                                                                                                                                                                                                                                                                                                     |
+| Availability Zones required (OpenSearch Provisioned) | 2 or 3 (default 2)                                                                                                                                                                                                                                                                                                                            |
+| Availability Zones required (Lambda in VPC)          | 1 minimum                                                                                                                                                                                                                                                                                                                                     |
 
 For detailed cost implications of VPC endpoint configurations, see the [cost estimates](../overview/costs.md).

@@ -1,0 +1,23 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * The VNTANA stylesheet pins its bottom-right control rows at `bottom: 20px` (the exploded-view
+ * slider and center button) and `bottom: 70px` (zoom), which puts the first row under the
+ * visualizer's wide and fullscreen buttons (`.visualizer-footer` in styles/index.scss: 15px from the
+ * bottom, 34px high plus 5px padding above and below, so its top edge is 59px up). The footer has
+ * that geometry in the normal, wide and fullscreen modes alike, so one lift clears it in all three.
+ * Scoped to the plugin's root, and more specific than the library's selectors, so it wins whatever
+ * order the two stylesheets load in. The library itself is not patched.
+ */
+.vntana-viewer-root .general-buttons {
+    /* footer top (59px) + 10px gap */
+    bottom: 69px;
+}
+
+.vntana-viewer-root .zoom-buttons {
+    /* the library's 50px step above the row below it: 69px + 40px row + 10px gap */
+    bottom: 119px;
+}

@@ -303,7 +303,8 @@ class TestOutputBuilders:
             pipeline_execution_id="P1", target_file_path="/x.glb", metadata_key="color",
             metadata_value="red", source_metadata_file_relative_path="x.glb.metadata.json",
         )
-        assert rec["targetFilePath:metadataKey"] == "/x.glb:color"
+        assert rec["targetFilePath:metadataKey"] == "/x.glb:metadata:color"
+        assert rec["metadataType"] == "metadata"
         assert rec["metadataValue"] == "red"
 
     def test_output_result_record_truncates(self):

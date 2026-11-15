@@ -410,7 +410,7 @@ def create(ctx: click.Context, database_id: str, entity_type: str, schema_name: 
 
     Each field definition takes metadataFieldKeyName and metadataFieldValueType, plus optional
     required, sequence, dependsOnFieldKeyName, controlledListKeys and defaultMetadataFieldValue.
-    A field of type inlineControlledList must declare controlledListKeys; no other type may.
+    A field of type inline_controlled_list must declare controlledListKeys; no other type may.
     A fileAttribute schema supports only the string value type.
 
     Examples:

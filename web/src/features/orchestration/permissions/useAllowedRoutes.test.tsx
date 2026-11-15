@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import * as APIService from "../../../services/APIService";
 import { useAllowedRoutes, __resetCache } from "./useAllowedRoutes";
 
@@ -12,8 +12,14 @@ jest.mock("../../../services/APIService");
 describe("useAllowedRoutes", () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        // A case that fails early leaves queued answers behind; drop them so it cannot fail others.
+        (APIService.fetchAllowedApiRoutes as jest.Mock).mockReset();
         // Reset the module-level cache between tests
         __resetCache();
+    });
+
+    afterEach(() => {
+        document.body.innerHTML = "";
     });
 
     it("can() is true for an allowed method+path template and false otherwise", async () => {
@@ -140,6 +146,124 @@ describe("useAllowedRoutes", () => {
         const second = renderHook(() => useAllowedRoutes());
         await waitFor(() => expect(second.result.current.loading).toBe(false));
         expect(second.result.current.can("GET", "/workflows")).toBe(true);
+    });
+
+    it("reports a failed fetch and refetches on retry() in the same mount", async () => {
+        (APIService.fetchAllowedApiRoutes as jest.Mock)
+            .mockResolvedValueOnce([false, "Network error"])
+            .mockResolvedValueOnce([
+                true,
+                {
+                    routes: [{ path: "/buckets", methods: ["GET"], category: "database" }],
+                    userId: "u",
+                },
+            ]);
+
+        const { result } = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        expect(result.current.failed).toBe(true);
+        expect(result.current.can("GET", "/buckets")).toBe(false);
+
+        act(() => result.current.retry());
+        await waitFor(() => expect(result.current.can("GET", "/buckets")).toBe(true));
+        expect(result.current.failed).toBe(false);
+        expect(APIService.fetchAllowedApiRoutes).toHaveBeenCalledTimes(2);
+    });
+
+    const allowsBuckets = [
+        true,
+        {
+            routes: [{ path: "/buckets", methods: ["GET"], category: "database" }],
+            userId: "u",
+        },
+    ];
+
+    it("retries a failed fetch when the page regains focus", async () => {
+        (APIService.fetchAllowedApiRoutes as jest.Mock)
+            .mockResolvedValueOnce([false, "Network error"])
+            .mockResolvedValueOnce(allowsBuckets);
+
+        const { result } = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(result.current.failed).toBe(true));
+
+        act(() => {
+            window.dispatchEvent(new Event("focus"));
+        });
+        await waitFor(() => expect(result.current.can("GET", "/buckets")).toBe(true));
+        expect(result.current.failed).toBe(false);
+        expect(APIService.fetchAllowedApiRoutes).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries a failed fetch when the page becomes visible again", async () => {
+        (APIService.fetchAllowedApiRoutes as jest.Mock)
+            .mockResolvedValueOnce([false, "Network error"])
+            .mockResolvedValueOnce(allowsBuckets);
+
+        const { result } = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(result.current.failed).toBe(true));
+
+        act(() => {
+            document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await waitFor(() => expect(result.current.can("GET", "/buckets")).toBe(true));
+        expect(APIService.fetchAllowedApiRoutes).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries a failed fetch when a disabled control is pressed", async () => {
+        (APIService.fetchAllowedApiRoutes as jest.Mock)
+            .mockResolvedValueOnce([false, "Network error"])
+            .mockResolvedValueOnce(allowsBuckets);
+        const disabled = document.createElement("button");
+        disabled.setAttribute("aria-disabled", "true");
+        const icon = document.createElement("span");
+        disabled.appendChild(icon);
+        document.body.appendChild(disabled);
+
+        const { result } = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(result.current.failed).toBe(true));
+
+        act(() => {
+            icon.click();
+        });
+        await waitFor(() => expect(result.current.can("GET", "/buckets")).toBe(true));
+        expect(APIService.fetchAllowedApiRoutes).toHaveBeenCalledTimes(2);
+        disabled.remove();
+    });
+
+    it("fetches once for several mounted callers when a failed check is retried", async () => {
+        (APIService.fetchAllowedApiRoutes as jest.Mock)
+            .mockResolvedValueOnce([false, "Network error"])
+            .mockResolvedValueOnce(allowsBuckets);
+
+        const first = renderHook(() => useAllowedRoutes());
+        const second = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(first.result.current.failed).toBe(true));
+        await waitFor(() => expect(second.result.current.failed).toBe(true));
+
+        act(() => {
+            window.dispatchEvent(new Event("focus"));
+        });
+        await waitFor(() => expect(first.result.current.can("GET", "/buckets")).toBe(true));
+        await waitFor(() => expect(second.result.current.can("GET", "/buckets")).toBe(true));
+        expect(APIService.fetchAllowedApiRoutes).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not refetch on focus or a press once the check succeeded", async () => {
+        (APIService.fetchAllowedApiRoutes as jest.Mock).mockResolvedValue(allowsBuckets);
+        const disabled = document.createElement("button");
+        disabled.setAttribute("aria-disabled", "true");
+        document.body.appendChild(disabled);
+
+        const { result } = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(result.current.can("GET", "/buckets")).toBe(true));
+
+        act(() => {
+            window.dispatchEvent(new Event("focus"));
+            disabled.click();
+        });
+        expect(result.current.loading).toBe(false);
+        expect(APIService.fetchAllowedApiRoutes).toHaveBeenCalledTimes(1);
+        disabled.remove();
     });
 
     it("caches a successful fetch across mounts", async () => {

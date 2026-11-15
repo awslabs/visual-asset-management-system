@@ -39,6 +39,12 @@ The required headers are configured in your VAMS deployment:
 
 **Verify your deployment includes proper header configuration before enabling OCCT.**
 
+#### Required Setting: `app.webUi.allowUnsafeEvalFeatures`
+
+The OCCT module's JavaScript glue compiles functions at runtime (`new Function`), which the default Content Security Policy refuses. Set `app.webUi.allowUnsafeEvalFeatures` to `true` in `infra/config/config.json` before you deploy. This adds `'unsafe-eval'` to the Content Security Policy `script-src` directive for the whole web application, not only this viewer; consult your security team before enabling it.
+
+**Without this setting, CAD file viewing will not work.** Standard 3D formats (GLTF, OBJ, FBX, etc.) do not need it.
+
 ### 3. License Considerations
 
 OCCT uses the **LGPL (Lesser General Public License)**, which is more restrictive than VAMS's Apache-2.0 license. Consult your legal team before enabling OCCT support in production deployments.
@@ -94,11 +100,13 @@ OCCT (Open CASCADE Technology) support for CAD file formats (STEP, IGES, BREP) i
 **Before Enabling OCCT:**
 
 1. Verify your VAMS deployment is setting the web headers
+2. Set `app.webUi.allowUnsafeEvalFeatures` to `true` in the deployment configuration (see [Required Setting](#required-setting-appwebuiallowunsafeevalfeatures))
 
 **Deployment Check:**
 
 -   ✅ Web headers found: OCCT will work
 -   ❌ Headers not found: OCCT will fail to load WASM
+-   ❌ `allowUnsafeEvalFeatures` not enabled: the Content Security Policy blocks the OCCT loader
 
 -   Headers to check: "Cross-Origin-Embedder-Policy: credentialless" and "Cross-Origin-Opener-Policy: same-origin"
 
@@ -224,6 +232,20 @@ CAD format support not enabled. The [FORMAT] format requires the OCCT library.
 Please contact your administrator to enable CAD format support for this viewer.
 ```
 
+**User-Facing Error (when `app.webUi.allowUnsafeEvalFeatures` is not enabled):**
+
+```
+CAD Format Support Not Available.
+
+CAD format viewing is blocked by the Content Security Policy. The OpenCascade
+loader used for STEP, IGES and BREP files needs app.webUi.allowUnsafeEvalFeatures
+set to true in the deployment configuration.
+
+Please contact your administrator to enable CAD format support for this viewer.
+```
+
+`loadFile()` shows this message when the OCCT loader fails with an `EvalError` or with the browser's Content Security Policy violation text, in place of that text; every other OCCT failure is reported as `Failed to load CAD file: <message>`.
+
 **Console Logs:**
 
 -   Build time: "OCCT not installed - CAD format support will be unavailable"
@@ -272,8 +294,9 @@ Please contact your administrator to enable CAD format support for this viewer.
 2. Run `npm install` and `npm run build` in web directory
 3. Run install script
 4. Verify WASM file exists in public/viewers/threejs/
-5. Try to load .stp file
-6. Should load successfully
+5. Deploy with `app.webUi.allowUnsafeEvalFeatures` set to `true`
+6. Try to load .stp file
+7. Should load successfully
 
 ## Maintenance
 

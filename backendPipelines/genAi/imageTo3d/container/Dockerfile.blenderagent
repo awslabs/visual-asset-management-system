@@ -1,0 +1,179 @@
+# VAMS Image to 3D Pipeline Container -- Blender agent (Codex CLI on Amazon Bedrock)
+# Blender: https://www.blender.org (GPL-2.0-or-later)
+# Codex CLI: https://github.com/openai/codex (Apache-2.0)
+# LiteLLM: https://github.com/BerriAI/litellm (MIT)
+# MoGe-2: https://github.com/microsoft/MoGe (MIT; weights Ruicheng/moge-2-vitl-normal, MIT)
+# utils3d: https://github.com/EasternJournalist/utils3d (MIT)
+# PyTorch: https://pytorch.org (BSD-3-Clause)
+
+# This image carries no neural reconstruction model. It carries a coding agent, a bridge from the agent's
+# API to Amazon Bedrock, and a headless Blender the agent drives: the agent reads the reference photographs,
+# writes Blender Python, renders, compares, and iterates until the model matches or the budget ends. Its one
+# neural model is MoGe-2, a monocular depth estimator the scripted refit reads the photograph's relief from.
+#
+# LICENSING: Blender is GPL-2.0-or-later. It is a TOOL in this image -- the agent runs it as a separate
+# process -- and the models it writes out are the agent's output, not derivatives of Blender, so the GPL
+# attaches to redistributing this image and not to the meshes. Codex CLI is Apache-2.0 and LiteLLM is MIT.
+# The foundation model's terms are Amazon Bedrock's for the model the deployment selects. MoGe-2 is MIT in
+# code and weights, with a vendored DINOv2 under Apache-2.0; utils3d is MIT and PyTorch BSD-3-Clause. No
+# nvdiffrast and no other NVIDIA-licensed source is built here.
+
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# Pinned so the image is reproducible and so the agent's instructions match the Blender API they were
+# written against. 4.5 is the LTS series; the tools use bpy.ops.wm.obj_import / stl_import and the glTF
+# exporter's export_image_format, which are the 4.x names.
+ARG BLENDER_VERSION="4.5.13"
+ARG BLENDER_SERIES="4.5"
+# The Codex CLI release, as a static musl binary. bwrap ships in the same release and backs the sandbox on
+# a kernel where Landlock is not available.
+ARG CODEX_RELEASE="rust-v0.153.4"
+# The bridge that turns the Responses API Codex speaks into Bedrock Converse calls on the task role.
+ARG LITELLM_VERSION="1.100.0"
+# The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects which
+# rungs it walks through the template's REPAIR_BACKENDS setting.
+ARG ENABLE_GPL_MESH_REPAIR=true
+
+# System dependencies. The X/GL libraries are what Blender's binary links against even in background mode;
+# without them it fails to start rather than to render.
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    git \
+    libegl1 \
+    libgl1 \
+    libglu1-mesa \
+    libgomp1 \
+    libice6 \
+    libsm6 \
+    libx11-6 \
+    libxext6 \
+    libxfixes3 \
+    libxi6 \
+    libxkbcommon0 \
+    libxrender1 \
+    libxxf86vm1 \
+    python3 \
+    python3-dev \
+    python3-venv \
+    ripgrep \
+    unzip \
+    xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+# ripgrep is what Codex reaches for to list and search files; without it the agent's first look at its
+# workspace ends in "rg: command not found".
+
+# Install AWS CLI v2. The installer URL carries the version, so a rebuild installs the CLI this image
+# was built with rather than whatever is current. Override with --build-arg to move it.
+ARG AWS_CLI_VERSION=2.36.39
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    rm -rf aws awscliv2.zip
+
+# Ubuntu 24.04 marks its system python as externally managed, so the pipeline shares one virtualenv that
+# fronts PATH. Blender carries its OWN Python and is not affected by this one.
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV VIRTUAL_ENV=/opt/venv
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Shared pipeline dependencies (trimesh, the repair ladder, background removal, boto3).
+COPY requirements.txt /opt/ml/code/requirements.txt
+RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt
+
+# Blender, unpacked to /opt/blender and put on PATH. The primary download host is tried first and a
+# public mirror second, because the primary has refused automated clients before. The version in the
+# tarball's own name is asserted so a mirror serving a different build cannot pass silently.
+RUN set -eux; \
+    TARBALL="blender-${BLENDER_VERSION}-linux-x64.tar.xz"; \
+    for base in "https://download.blender.org/release/Blender${BLENDER_SERIES}" \
+                "https://ftp.nluug.nl/pub/graphics/blender/release/Blender${BLENDER_SERIES}" \
+                "https://mirrors.dotsrc.org/blender/blender-release/Blender${BLENDER_SERIES}"; do \
+        if curl -fsSL -A "Mozilla/5.0" -o "/tmp/${TARBALL}" "${base}/${TARBALL}"; then break; fi; \
+    done; \
+    test -s "/tmp/${TARBALL}"; \
+    mkdir -p /opt/blender; \
+    tar -xJf "/tmp/${TARBALL}" -C /opt/blender --strip-components=1; \
+    rm -f "/tmp/${TARBALL}"; \
+    ln -sf /opt/blender/blender /usr/local/bin/blender; \
+    blender --version | head -1 | grep -F "Blender ${BLENDER_VERSION}"
+
+# Codex CLI and bwrap, from the pinned GitHub release. Static binaries; nothing to compile.
+RUN set -eux; \
+    BASE="https://github.com/openai/codex/releases/download/${CODEX_RELEASE}"; \
+    curl -fsSL -o /tmp/codex.tar.gz "${BASE}/codex-x86_64-unknown-linux-musl.tar.gz"; \
+    curl -fsSL -o /tmp/bwrap.tar.gz "${BASE}/bwrap-x86_64-unknown-linux-musl.tar.gz"; \
+    mkdir -p /tmp/codex /tmp/bwrap; \
+    tar -xzf /tmp/codex.tar.gz -C /tmp/codex; \
+    tar -xzf /tmp/bwrap.tar.gz -C /tmp/bwrap; \
+    install -m 0755 "$(find /tmp/codex -type f -name 'codex*' | head -1)" /usr/local/bin/codex; \
+    install -m 0755 "$(find /tmp/bwrap -type f -name 'bwrap*' | head -1)" /usr/local/bin/bwrap; \
+    rm -rf /tmp/codex /tmp/bwrap /tmp/codex.tar.gz /tmp/bwrap.tar.gz; \
+    codex --version
+
+# The Responses-to-Converse bridge, and the OpenAI client the adapter uses to check it.
+RUN pip install --no-cache-dir "litellm[proxy]==${LITELLM_VERSION}" openai boto3 && \
+    litellm --version
+
+# The scripted refit's depth model, MoGe-2, and the CUDA 12.8 torch it runs on. MoGe is cloned at a
+# reviewed commit and installed without its declared dependencies: its model code imports torch, utils3d,
+# huggingface_hub, OpenCV, SciPy and NumPy, and the rest of its list (torchvision, gradio and the demo
+# apps' packages) serves its own apps. utils3d is installed from a commit for the same reason the clone
+# is pinned. The weights are fetched into the model cache at run time, like every other model's.
+ARG TORCH_VERSION=2.7.1
+ARG MOGE_REPO_URL="https://github.com/microsoft/MoGe.git"
+ARG MOGE_COMMIT=07444410f1e33f402353b99d6ccd26bd31e469e8
+ARG UTILS3D_COMMIT=3fab839f0be9931dac7c8488eb0e1600c236e183
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 "torch==${TORCH_VERSION}" && \
+    python -c "import torch; assert torch.version.cuda.startswith('12.8'), torch.version.cuda"
+RUN git clone "$MOGE_REPO_URL" /opt/moge && \
+    cd /opt/moge && \
+    git checkout --detach ${MOGE_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${MOGE_COMMIT}" && \
+    git rev-parse HEAD > /opt/moge/VAMS_UPSTREAM_COMMIT && \
+    pip install --no-cache-dir --no-deps /opt/moge
+RUN pip install --no-cache-dir "utils3d @ git+https://github.com/EasternJournalist/utils3d.git@${UTILS3D_COMMIT}" \
+        opencv-python-headless huggingface_hub && \
+    python -c "from moge.model.v2 import MoGeModel; import utils3d, cv2, huggingface_hub" && \
+    echo "MoGe $(cat /opt/moge/VAMS_UPSTREAM_COMMIT)"
+
+# GPL-3.0 mesh-repair rungs, installed only when the operator opts in
+RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
+        echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
+        pip install --no-cache-dir pymeshfix pymeshlab; \
+    else \
+        echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
+    fi
+
+# rembg resolves its segmentation weights under U2NET_HOME and downloads them on first use, defaulting to a
+# home directory nothing carries between jobs. Pointing the variable at a baked-in copy removes the
+# download entirely.
+ENV U2NET_HOME=/opt/rembg
+RUN mkdir -p /opt/rembg && \
+    curl -fsSL -o /opt/rembg/u2net.onnx \
+    https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx && \
+    python -c "import os; p='/opt/rembg/u2net.onnx'; size=os.path.getsize(p); \
+assert size > 150_000_000, f'the u2net weights are only {size} bytes'; print('u2net', size, 'bytes')"
+
+# The agent's workspace root. Outside /tmp deliberately: the sandbox carves /tmp out as writable by default
+# and the pipeline's own directories live there, so the root sits elsewhere and the carve-outs are switched
+# off in the agent's configuration. Recreated empty on every run.
+RUN mkdir -p /var/agent
+ENV BLENDERAGENT_ROOT=/var/agent
+
+# VAMS container code
+COPY __init__.py __main__.py model_manager.py preprocess.py framing.py generate.py benchmark.py meshcleanup.py printfeatures.py texturing.py export.py agent_broker.py config.json entrypoint.sh /opt/ml/code/
+COPY models /opt/ml/code/models
+COPY vams_utils /opt/ml/code/vams_utils
+# The Blender-side tools and the agent's instructions, copied into every workspace at run time.
+COPY blenderagent_tools /opt/ml/code/blenderagent_tools
+# Strip CRLF line endings from entrypoint.sh in case the source was bundled from a Windows working tree;
+# otherwise the shebang becomes `/bin/bash\r` and the kernel returns ENOENT on exec.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+
+WORKDIR /opt/ml/code
+ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

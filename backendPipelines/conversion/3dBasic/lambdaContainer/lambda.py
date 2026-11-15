@@ -1,10 +1,12 @@
 # Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import codecs
 import json
 import boto3
 import os
 import shutil
+import struct
 import tempfile
 import threading
 import trimesh
@@ -52,19 +54,41 @@ def _s3_client_for_bucket(bucket_name):
     return client
 
 
-def download(bucket_name, object_key, file_path):
+def download(bucket_name, object_key, file_path, version_id=""):
+    """Download the input to ``file_path``; ``version_id`` reads that version, empty the current one."""
     logger.info(
-        "Downloading Object from S3 Bucket. Bucket: {}, Object: {}, File Path: {}".format(
-            bucket_name, object_key, file_path
+        "Downloading Object from S3 Bucket. Bucket: {}, Object: {}, Version: {}, File Path: {}".format(
+            bucket_name, object_key, version_id or "current", file_path
         )
     )
+    kwargs = {"ExtraArgs": {"VersionId": version_id}} if version_id else {}
     try:
         with open(file_path, "wb") as data:
-            _s3_client_for_bucket(bucket_name).download_fileobj(bucket_name, object_key, data)
+            _s3_client_for_bucket(bucket_name).download_fileobj(bucket_name, object_key, data, **kwargs)
     except ClientError as e:
         logger.exception(e)
+        if version_id and str(e.response.get("Error", {}).get("Code", "")) in _MISSING_VERSION_CODES:
+            raise Exception(f"The input file {object_key} at version {version_id} no longer exists; "
+                            f"it was deleted after the run started.")
         raise Exception("Could not download input file from S3 bucket")
     return file_path
+
+
+# Error codes Amazon S3 answers a read of a version that no longer exists with: NoSuchVersion or
+# NoSuchKey (GET), 404 (HEAD of a deleted version), 405 / MethodNotAllowed (a delete marker).
+_MISSING_VERSION_CODES = ("NoSuchVersion", "NoSuchKey", "404", "405", "MethodNotAllowed")
+
+
+def input_version_id(entry):
+    """The S3 version id a manifest input file is read at, or "" to read the current object.
+
+    Mirrors ``manifestHelper.input_version_id``: the workflow records the version a run reads on each
+    input file. "null" is the version S3 reports for an object written while the bucket's versioning was
+    off and is passed through; "" (a file in an unversioned bucket) reads the current object."""
+    value = (entry or {}).get("versionId")
+    if not isinstance(value, str):
+        return ""
+    return value
 
 
 def uploadV2(bucket_name, object_key, file_path):
@@ -226,6 +250,118 @@ def check_exportable(loaded, output_filetype, input_name):
             f"triangle meshes only. Convert it to .ply, .obj, .glb or .gltf, which store points.")
 
 
+class InputTextError(ValueError):
+    """The text a model input is read from is not UTF-8, so the loader cannot read it."""
+
+
+# trimesh reads the text of an OBJ, ASCII STL, XYZ or glTF file, and a GLB's JSON chunk, as UTF-8. When
+# that fails it guesses another encoding with charset_normalizer, which this image does not install, so
+# the run would end with a raw "No module named 'charset_normalizer'" (or, for a .gltf, a message about
+# a file named model.gltf). That text is therefore read as UTF-8 here first, before any referenced file
+# is fetched or the model is loaded, and a file whose text is not UTF-8 fails with a message saying it
+# could not be read. A text file saved in another encoding fails the same way rather than being guessed
+# at: with no detector installed there is no reliable way to tell its encoding, and a wrong guess would
+# change the names it carries (objects, groups, materials) in the converted model while the run reported
+# success. ASCII is UTF-8, so a file without accented or other non-ASCII characters is unaffected.
+_NOT_UTF8 = "byte 0x{byte:02X} at offset {offset} is not UTF-8"
+INPUT_TEXT_ERRORS = {
+    '.obj': ("{name} could not be read as OBJ text: " + _NOT_UTF8 + ". The file is binary data or text "
+             "saved in another encoding. Save it as UTF-8 OBJ text and run the conversion again."),
+    '.xyz': ("{name} could not be read as XYZ text: " + _NOT_UTF8 + ". The file is binary data or text "
+             "saved in another encoding. Save it as UTF-8 text and run the conversion again."),
+    '.gltf': ("{name} could not be read as glTF JSON: " + _NOT_UTF8 + ". glTF JSON must be UTF-8 text. "
+              "Export the model again and run the conversion again."),
+    '.stl': ("{name} could not be read as STL: it is not a binary STL (its size does not match the "
+             "triangle count in its header), and as ASCII STL text, " + _NOT_UTF8 + ". Export it as "
+             "binary STL or as UTF-8 ASCII STL and run the conversion again."),
+    '.glb': ("{name} could not be read as GLB: in its JSON chunk, " + _NOT_UTF8 + ". glTF JSON must be "
+             "UTF-8 text. Export the model again and run the conversion again."),
+}
+
+# Bytes read per step while checking text, so a large input is checked without a second copy of it
+# in memory.
+_TEXT_CHECK_CHUNK = 1024 ** 2
+# A binary STL: an 80-byte header, a little-endian 32-bit triangle count, then 50 bytes per triangle.
+_STL_HEADER_BYTES = 84
+_STL_TRIANGLE_BYTES = 50
+# A GLB starts with a 12-byte header (magic, version, length) and the 8-byte header of its first chunk.
+_GLB_HEAD = struct.Struct("<4sIII4s")
+
+
+def first_non_utf8_byte(handle, length=None, chunk_size=_TEXT_CHECK_CHUNK):
+    """``(offset, byte)`` of the first byte that is not valid UTF-8 in the next ``length`` bytes of
+    ``handle`` (to its end when ``length`` is None), the offset counted from where the read starts; or
+    None when all of them are UTF-8. A character split across two reads is decoded whole."""
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    consumed = 0
+    while True:
+        size = chunk_size if length is None else min(chunk_size, length - consumed)
+        chunk = handle.read(size) if size > 0 else b""
+        final = not chunk
+        # The decoder keeps the start of a character that the previous read cut off, and reports an
+        # error's position within those bytes plus this read.
+        held = len(decoder.getstate()[0])
+        try:
+            decoder.decode(chunk, final=final)
+        except UnicodeDecodeError as e:
+            return consumed - held + e.start, e.object[e.start]
+        consumed += len(chunk)
+        if final:
+            return None
+
+
+def _is_binary_stl(path):
+    """True when the file is laid out as a binary STL, the test trimesh applies: its size is the
+    header plus 50 bytes for each triangle the header counts. trimesh reads any other STL as ASCII
+    text. A binary STL's header is decoded only as metadata, and one that is not UTF-8 is dropped, so
+    the header is not checked."""
+    size = os.path.getsize(path)
+    if size < _STL_HEADER_BYTES:
+        return False
+    with open(path, "rb") as handle:
+        handle.seek(_STL_HEADER_BYTES - 4)
+        (triangles,) = struct.unpack("<I", handle.read(4))
+    return size - _STL_HEADER_BYTES == triangles * _STL_TRIANGLE_BYTES
+
+
+def _glb_json_chunk(path):
+    """``(offset, length)`` of a GLB's JSON chunk, or None when the file does not start with a glTF 2
+    header and a JSON chunk; the loader rejects such a file with its own message."""
+    with open(path, "rb") as handle:
+        head = handle.read(_GLB_HEAD.size)
+    if len(head) < _GLB_HEAD.size:
+        return None
+    magic, version, _, chunk_length, chunk_type = _GLB_HEAD.unpack(head)
+    if magic != b"glTF" or version != 2 or chunk_type != b"JSON":
+        return None
+    return _GLB_HEAD.size, chunk_length
+
+
+def check_input_text(local_path, input_extension, input_name):
+    """Raise ``InputTextError`` when the text trimesh would decode from this input is not UTF-8: the
+    whole of an OBJ, XYZ or glTF file, an STL that is not laid out as binary, and a GLB's JSON chunk.
+    Any other input is left to the loader."""
+    start, length = 0, None
+    if input_extension == '.stl':
+        if _is_binary_stl(local_path):
+            return
+    elif input_extension == '.glb':
+        chunk = _glb_json_chunk(local_path)
+        if chunk is None:
+            return
+        start, length = chunk
+    elif input_extension not in INPUT_TEXT_ERRORS:
+        return
+    with open(local_path, "rb") as handle:
+        handle.seek(start)
+        found = first_non_utf8_byte(handle, length)
+    if found is None:
+        return
+    offset, byte = found
+    raise InputTextError(INPUT_TEXT_ERRORS[input_extension].format(
+        name=input_name, byte=byte, offset=start + offset))
+
+
 # The folder a converted file is written under when the conversion does not change the file
 # extension, so a same-format re-export is a sibling of its source rather than a new version of it.
 # The name matches rapidPipeline's, so every conversion pipeline places a same-format output alike.
@@ -268,7 +404,8 @@ def resolve_inputs_from_manifest(data):
     from the workflow manifest (inputManifestS3Location), falling back to the legacy top-level body
     fields for direct/local invocations. Locations are carried as bucket + relative keys, so s3://
     URIs are reconstructed here. Returns (input_s3_asset_file_path, output_s3_asset_files_path,
-    relative_subdir).
+    relative_subdir, input_version_id), the last being the S3 version the run reads the input at
+    ("" reads the current object).
 
     Mirrors ``manifestHelper.resolve_inputs`` + ``enforce_single_input_file``, which the pipelines
     with a ``lambda/`` code asset vendor; this pipeline is a container image, so it reads the same
@@ -285,11 +422,13 @@ def resolve_inputs_from_manifest(data):
         )
     input_path = ""
     relative_subdir = ""
+    version_id = ""
     if input_files:
         first = input_files[0]
         if first.get("bucket") and first.get("key"):
             input_path = f"s3://{first['bucket']}/{first['key']}"
             _record_bucket_region(first["bucket"], first.get("bucketRegion", ""))
+            version_id = input_version_id(first)
         relative_subdir = relative_subdir_from_manifest_path(first.get("relativePath"))
     input_path = input_path or data.get("inputS3AssetFilePath", "")
     # Output-files path reconstructed from the outputs bucket + bucket-relative files prefix.
@@ -299,7 +438,7 @@ def resolve_inputs_from_manifest(data):
         output_path = f"s3://{outputs['bucket']}/{outputs['files']}"
         _record_bucket_region(outputs["bucket"], outputs.get("bucketRegion", ""))
     output_path = output_path or data.get("outputS3AssetFilesPath", "")
-    return input_path, output_path, relative_subdir
+    return input_path, output_path, relative_subdir, version_id
 
 
 def exported_files(export_dir):
@@ -320,7 +459,7 @@ def exported_files(export_dir):
     return sorted(found)
 
 
-def convert_input_output(input_path, output_path, output_filetype, relative_subdir=""):
+def convert_input_output(input_path, output_path, output_filetype, relative_subdir="", input_version=""):
     input_bucket, input_key = input_path.replace("s3://", "").split("/", 1)
     output_bucket, output_key = output_path.replace("s3://", "").split("/", 1)
     logger.info(f"Converting s3://{input_bucket}/{input_key} to {output_filetype}")
@@ -367,7 +506,10 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         if temp_file is None:
             raise ValueError(f"Input S3 key {input_key} cannot be staged locally")
         os.makedirs(os.path.dirname(temp_file), exist_ok=True)
-        download(input_bucket, input_key, temp_file)
+        # The input is read at the run's launch version; the files it references as they are now.
+        download(input_bucket, input_key, temp_file, **({"version_id": input_version} if input_version else {}))
+        # An input whose text is not UTF-8 fails here, before its references are read or fetched.
+        check_input_text(temp_file, input_s3_asset_extension, os.path.basename(input_key))
         fetched = referenced_files.fetch_referenced_files(
             _s3_client_for_bucket(input_bucket), input_bucket, root_key, input_relative_path,
             temp_file, input_dir, logger=logger)
@@ -477,9 +619,9 @@ def lambda_handler(event, context):
 
     # Resolve the input file + output-files paths and the input's asset-relative subdirectory from
     # the workflow manifest (legacy body fields are the fallback for direct/local invocations).
-    input_path, output_path, relative_subdir = resolve_inputs_from_manifest(data)
+    input_path, output_path, relative_subdir, version_id = resolve_inputs_from_manifest(data)
 
-    convert_input_output(input_path, output_path, output_filetype, relative_subdir)
+    convert_input_output(input_path, output_path, output_filetype, relative_subdir, version_id)
 
     return {
         'statusCode': 200, 

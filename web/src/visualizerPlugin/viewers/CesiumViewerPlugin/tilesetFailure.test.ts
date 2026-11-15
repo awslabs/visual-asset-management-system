@@ -10,7 +10,16 @@
  * a tileset that did load, and tilesets that failed beside others that loaded, are counted rather
  * than left as silent holes.
  */
-import { describeTilesetFailure, partialTilesetsNotice, tileFailureNotice } from "./tilesetFailure";
+import {
+    describeTilesetFailure,
+    isTilesetRefusal,
+    partialTilesetsNotice,
+    tileFailureNotice,
+} from "./tilesetFailure";
+import {
+    QUARANTINE_REFUSAL_BODY,
+    QUARANTINE_REFUSAL_STATUS,
+} from "../../core/quarantineRefusal.testdata";
 
 const KEY = "city/tileset.json";
 const WAF_BODY = {
@@ -88,5 +97,26 @@ describe("partialTilesetsNotice", () => {
         ).toBe(
             '1 of 3 tilesets failed to load. Unable to load the tileset "b.json": it was not found.'
         );
+    });
+});
+
+describe("isTilesetRefusal", () => {
+    it("is true for the API's refusal with its own reason (D170)", () => {
+        expect(
+            isTilesetRefusal({
+                statusCode: QUARANTINE_REFUSAL_STATUS,
+                response: JSON.stringify(QUARANTINE_REFUSAL_BODY),
+            })
+        ).toBe(true);
+    });
+
+    it("is false for any other failure", () => {
+        expect(
+            isTilesetRefusal({ statusCode: 403, response: '{"message":"Not Authorized"}' })
+        ).toBe(false);
+        expect(isTilesetRefusal({ statusCode: 404 })).toBe(false);
+        expect(isTilesetRefusal({ statusCode: 500, response: '{"message":"boom"}' })).toBe(false);
+        expect(isTilesetRefusal(new Error("Unexpected token"))).toBe(false);
+        expect(isTilesetRefusal(undefined)).toBe(false);
     });
 });

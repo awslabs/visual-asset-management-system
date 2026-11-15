@@ -73,7 +73,7 @@ class TestListingDateBoundsAreValidated:
 
     def test_the_error_does_not_echo_the_rejected_value(self):
         """Backend Rule 11: a client error carries no request input."""
-        secret = "zzz-caller-supplied-zzz"
+        secret = "zzz-caller-supplied-zzz"  # pragma: allowlist secret
         with pytest.raises(VAMSGeneralErrorResponse) as excinfo:
             le._resolve_filter_start_date({"filterStartDate": secret})
         assert secret not in str(excinfo.value)

@@ -242,6 +242,8 @@ def lambda_handler(event, context):
         "databaseId": database_id,
         # The asset buckets' Regions, from vamsExecute; empty for a bucket in the deployment Region.
         "inputBucketRegion": event.get("inputBucketRegion", ""),
+        # The S3 version the run reads its input at; "" reads the current object.
+        "inputVersionId": event.get("inputVersionId", ""),
         "outputBucketRegion": event.get("outputBucketRegion", ""),
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,

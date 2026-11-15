@@ -77,6 +77,8 @@ def lambda_handler(event, context):
         "assetId": asset_id,
         "databaseId": database_id,
         "bucketRegions": bucket_regions(event),
+        # The S3 version the container reads the input file at; "" reads the current object.
+        "inputVersionId": event.get("inputVersionId") or "",
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token,

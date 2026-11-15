@@ -1,0 +1,41 @@
+# Shared runtime dependencies for every imageTo3d model image. Permissive licences only.
+# The GPL-3.0 mesh repair backends (pymeshfix, pymeshlab) complete the repair ladder; the Dockerfiles
+# install them so a run can select them through REPAIR_BACKENDS.
+boto3
+botocore
+numpy
+pillow
+# trimesh reaches manifold3d through an API that moved at manifold3d 3.0: releases before
+# trimesh 4.1 call Manifold.from_mesh, which 3.x does not expose, so the manifold repair rung cannot
+# run. A model repo's own requirements are installed after these and can pull trimesh BACKWARDS --
+# TripoSR pins 4.0.5 -- so the floor is stated here and each Dockerfile reasserts it after the
+# upstream install. The rung also tolerates a mismatch rather than ending a run.
+trimesh>=4.11,<5
+manifold3d>=3.0,<4
+# trimesh.repair.fill_holes reaches trimesh.graph, which needs networkx; it is an optional trimesh
+# extra that otherwise only arrives transitively through torch, so the first repair rung depends on
+# a model image's own dependency tree unless it is named here.
+networkx
+fast-simplification
+rembg
+# transformers is deliberately NOT here, though the rmbg2 and sam background-removal backends both load
+# their weights through it. Adding it broke TripoSR: its checkpoint carries the older transformers ViT
+# module naming, and a recent release renames it, so `TSR.from_pretrained` fails with
+# `Error(s) in loading state_dict for TSR` -- missing `image_tokenizer.model.layers.0.attention.q_proj.*`
+# against unexpected `image_tokenizer.model.encoder.layer.0.attention.attention.query.*`. The shared layer
+# installs BEFORE each model's own requirements, so a floor stated here wins wherever the model does not
+# pin it, and TripoSR does not. Every TripoSR run failed until it came back out.
+#
+# So the two transformers-based backends depend on whichever version their image already carries: TRELLIS.2
+# and Stable3DGen pin one, SAM 3D and Step1X-3D get one transitively, and TripoSR's is too old for
+# `SamModel`. Selecting sam or rmbg2 there raises a legible unavailable error rather than a silent
+# fallback -- see preprocess._remove_background_sam.
+# The GPU build must match the image's CUDA major version. The 1.23 line links against CUDA 13's
+# libcublasLt.so.13, which a CUDA 12.8 base image does not carry, so the CUDA execution provider
+# fails to load and background removal silently falls back to the CPU.
+onnxruntime-gpu==1.22.0
+scipy
+# Pinned because an unpinned build charted one agent model fully on a workstation and left 99.95% of the
+# same geometry at the uv origin in the container, silently; texturing.py checks every layout it gets
+# back, and a known version keeps the check's baseline meaningful.
+xatlas==0.0.11

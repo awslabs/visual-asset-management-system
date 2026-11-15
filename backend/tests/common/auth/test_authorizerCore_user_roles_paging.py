@@ -121,7 +121,7 @@ class TestRoleLookupPagesToExhaustion:
 
 def _api_key_record(user_id="u1"):
     """A live API key record, so the branch reaches its role read."""
-    return {"apiKeyId": "k1", "isActive": "true", "userId": user_id, "expiresAt": ""}
+    return {"apiKeyId": "k1", "isActive": "true", "userId": user_id, "expiresAt": ""}  # pragma: allowlist secret
 
 
 def _verify_api_key_against(table):

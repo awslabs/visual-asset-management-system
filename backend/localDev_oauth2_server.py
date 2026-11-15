@@ -7,7 +7,7 @@ import jwt as pyjwt
 
 oauth2_routes = Blueprint('oauth', __name__)
 
-jwt_secret = 'secret'
+jwt_secret = 'secret'  # pragma: allowlist secret
 
 @oauth2_routes.after_request
 def after_request(response):
@@ -165,7 +165,7 @@ def wellKnown():
 
 if __name__ == '__main__':
   app = Flask(__name__, template_folder='localDev_oauth2_templates')
-  app.secret_key = 'development'
+  app.secret_key = 'development'  # pragma: allowlist secret
   app.register_blueprint(oauth2_routes)
   # Local-development server only: run by hand under __main__, never packaged or deployed; 0.0.0.0
   # and debug=True are intentional for the dev loop (bandit B201 already annotated).

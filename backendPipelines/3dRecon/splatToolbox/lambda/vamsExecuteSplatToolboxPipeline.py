@@ -29,7 +29,7 @@ OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
                                         , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
                                         , executing_userName, executing_requestContext, orchestration_event_prefix="",
-                     input_bucket_region="", output_bucket_region=""):
+                     input_bucket_region="", output_bucket_region="", input_version_id=""):
 
     # Create the object message to be sent
     messagePayload = {
@@ -44,6 +44,8 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         # is in the deployment Region), so the Batch container signs its requests for each bucket
         # with a client for that bucket's Region.
         "inputBucketRegion": input_bucket_region,
+        # The S3 version of the input file the run reads, from the manifest (empty reads the current object).
+        "inputVersionId": input_version_id,
         "outputBucketRegion": output_bucket_region,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
@@ -141,6 +143,7 @@ def lambda_handler(event, context):
             executing_requestContext,
             resolved['orchestrationEventPrefix'],
             input_bucket_region=resolved['inputBucketRegion'],
+            input_version_id=resolved['inputVersionId'],
             output_bucket_region=resolved['outputBucketRegion']
         )
 

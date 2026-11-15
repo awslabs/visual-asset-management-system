@@ -32,5 +32,71 @@ export function addonReadOnlyApiRouteCriteria(config: Config.Config, roleIdClean
                   },
               ]
             : []),
+        ...(config.app.addons?.useEdhWorkstations?.enabled
+            ? [
+                  {
+                      M: {
+                          field: {
+                              S: "route__path",
+                          },
+                          id: {
+                              S: `17_${roleIdClean}_api_paths`,
+                          },
+                          operator: {
+                              S: "starts_with",
+                          },
+                          value: {
+                              S: "/addon/edh/workstations",
+                          },
+                      },
+                  },
+                  {
+                      M: {
+                          field: {
+                              S: "route__path",
+                          },
+                          id: {
+                              S: `18_${roleIdClean}_api_paths`,
+                          },
+                          operator: {
+                              S: "starts_with",
+                          },
+                          value: {
+                              S: "/addon/edh/catalog",
+                          },
+                      },
+                  },
+              ]
+            : []),
+    ];
+}
+
+/**
+ * `route__path` criteria the enabled add-ons add to the basic read-only role's
+ * "Allow GET on Web Paths" constraint (`dynamodb-authdefaults-ro-construct.ts`),
+ * in that constraint's DynamoDB attribute-value shape.
+ */
+export function addonReadOnlyWebRouteCriteria(config: Config.Config, roleIdClean: string): any[] {
+    return [
+        ...(config.app.addons?.useEdhWorkstations?.enabled
+            ? [
+                  {
+                      M: {
+                          field: {
+                              S: "route__path",
+                          },
+                          id: {
+                              S: `9_${roleIdClean}_web_paths`,
+                          },
+                          operator: {
+                              S: "starts_with",
+                          },
+                          value: {
+                              S: "/edh/workstations",
+                          },
+                      },
+                  },
+              ]
+            : []),
     ];
 }

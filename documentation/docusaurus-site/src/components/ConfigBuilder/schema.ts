@@ -16,6 +16,7 @@
 
 import type { ConfigShape, FieldMeta, Section } from "./types";
 import { getByPath } from "./pathUtils";
+import { ADDON_FIELDS } from "./addon";
 
 export const SECTIONS: Section[] = [
     {
@@ -34,7 +35,7 @@ export const SECTIONS: Section[] = [
         id: "networking",
         label: "Networking (VPC)",
         description:
-            "VPC creation or import. Required by ALB, provisioned OpenSearch, a private OpenSearch Serverless collection, and the container pipelines.",
+            "VPC creation or import. Required by ALB, provisioned OpenSearch, a private OpenSearch Serverless collection, the container pipelines, and the add-ons that run in the VPC.",
         order: 3,
     },
     {
@@ -66,7 +67,7 @@ export const SECTIONS: Section[] = [
         id: "pipelines-gpu",
         label: "Pipelines — NVIDIA / GPU & third-party",
         description:
-            "GPU-backed pipelines: Cosmos, Gr00t, Isaac Lab, Gaussian Splatting, RapidPipeline, ModelOps.",
+            "GPU-backed pipelines: Cosmos, Gr00t, Image to 3D, Isaac Lab, Gaussian Splatting, RapidPipeline, ModelOps.",
         advanced: true,
         order: 8,
     },
@@ -87,6 +88,14 @@ export const SECTIONS: Section[] = [
         label: "Metadata schema auto-load",
         advanced: true,
         order: 11,
+    },
+    {
+        id: "compliance",
+        label: "Compliance",
+        description:
+            "Default compliance schema seeding and whether quarantine blocks downloads. Compliance itself always deploys.",
+        advanced: true,
+        order: 12,
     },
 ];
 
@@ -165,6 +174,7 @@ function makeModelFields(
 const COSMOS = "app.pipelines.useNvidiaCosmos";
 const COSMOS3 = "app.pipelines.useNvidiaCosmos3";
 const GR00T = "app.pipelines.useNvidiaGr00t";
+const IMAGETO3D = "app.pipelines.useImageTo3d";
 
 const cosmosModelFields: FieldMeta[] = [
     ...makeModelFields(`${COSMOS}.modelsPredict.text2world2B_v2`, "Cosmos Text2World 2B", {
@@ -213,7 +223,61 @@ const cosmos3ModelFields: FieldMeta[] = [
     ),
 ];
 
-export const FIELDS: FieldMeta[] = [
+/**
+ * Image to 3D selects a model per run rather than provisioning per-model
+ * compute, so each model contributes a single enable toggle. The licence note
+ * mirrors the model's upstream terms.
+ */
+function makeImageTo3dModelField(modelKey: string, label: string, licence: string): FieldMeta {
+    return {
+        path: `${IMAGETO3D}.models.${modelKey}.enabled`,
+        label: `Image to 3D — ${label}`,
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: `${licence}. At least one model must be enabled.`,
+    };
+}
+
+const imageTo3dModelFields: FieldMeta[] = [
+    makeImageTo3dModelField("sam3d", "Meta SAM 3D Objects", "Meta SAM License"),
+    makeImageTo3dModelField("stable3dgen", "Stable-X Stable3DGen / Hi3DGen (geometry only)", "MIT"),
+    makeImageTo3dModelField("trellis2", "Microsoft TRELLIS.2 (4B)", "MIT"),
+    makeImageTo3dModelField("triposr", "VAST-AI TripoSR", "MIT"),
+    makeImageTo3dModelField("step1x3d", "StepFun Step1X-3D", "Apache-2.0"),
+    makeImageTo3dModelField(
+        "hunyuan3d",
+        "Tencent Hunyuan3D-2",
+        "Tencent Hunyuan 3D 2.0 Community License Agreement — no licence in the European Union, the United Kingdom or South Korea, and a separate Tencent licence above one million monthly active users"
+    ),
+    makeImageTo3dModelField(
+        "blenderagent",
+        "Blender agent (Codex CLI on Amazon Bedrock)",
+        "Blender GPL-2.0-or-later as tooling, Codex CLI Apache-2.0, LiteLLM MIT; the foundation model terms are Amazon Bedrock's. Needs Bedrock model access in the deployment account"
+    ),
+];
+
+/** The Bedrock model the Blender agent reasons with; per-partition and per-account like the labeling model. */
+const imageTo3dAgentModelField: FieldMeta = {
+    path: `${IMAGETO3D}.models.blenderagent.bedrockModelId`,
+    label: "Image to 3D — Blender agent Bedrock model id",
+    input: "text",
+    section: "pipelines-gpu",
+    advanced: true,
+    help: "Foundation model id or inference-profile id the agent reasons with (needs image input). Required when the agent is enabled; the commercial preset carries global.openai.gpt-6-astra and the restricted-partition presets leave it empty.",
+};
+
+/** Whether the agent may edit texture images with the Stability AI models on Amazon Bedrock. */
+const imageTo3dAgentImageEditingField: FieldMeta = {
+    path: `${IMAGETO3D}.models.blenderagent.useStabilityImageEditing`,
+    label: "Image to 3D — Blender agent Stability AI image editing",
+    input: "boolean",
+    section: "pipelines-gpu",
+    advanced: true,
+    help: "Lets the agent inpaint and restyle texture views with the Stability AI image models on Amazon Bedrock, through their us. inference profiles. Commercial partition, US Regions only; off elsewhere, where the agent textures from the photographs alone.",
+};
+
+const CORE_FIELDS: FieldMeta[] = [
     // ===== Deployment basics =====
     {
         path: "name",
@@ -321,7 +385,15 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "security",
         advanced: true,
-        help: "Create a dedicated CloudWatch Logs group and CloudTrail trail for this stack.",
+        help: "Create a dedicated CloudWatch Logs group and CloudTrail trail for this stack. CloudTrail allows five trails per Region; turn this off in a Region that already has five.",
+    },
+    {
+        path: "app.auditLogging.recordReads",
+        label: "Record reads in the audit log",
+        input: "boolean",
+        section: "security",
+        advanced: true,
+        help: "Write an audit record for every read (gets, lists and searches): the request and the number of items returned, never the content. On by default, and when the setting is absent. Turning it off cuts audit log volume; writes, denials, failures, downloads and exports are recorded either way.",
     },
     {
         path: "app.useKmsCmkEncryption.enabled",
@@ -748,6 +820,24 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
     },
     {
+        path: "app.authProvider.useCognito.retainLegacyGroupsAttribute",
+        label: "Retain legacy custom:groups user pool attribute",
+        input: "boolean",
+        section: "auth",
+        advanced: true,
+        help: "Keep true for an existing deployment, whose user pool already declares custom:groups (Amazon Cognito keeps a custom attribute for the life of the pool). Set false for a new deployment: Amazon Cognito rejects that attribute name when it creates a user pool. When the key is absent it resolves to true.",
+        visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
+    },
+    {
+        path: "app.authProvider.useCognito.additionalTokenAudiences",
+        label: "Additional accepted app clients",
+        input: "string-array",
+        section: "auth",
+        advanced: true,
+        help: "App client ids of other clients in the VAMS user pool (for example one registered for a remote MCP server) whose ID and access tokens the API accepts, alongside the web app client. Exact ids, at most 10, no wildcards. Empty accepts the web app client only.",
+        visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
+    },
+    {
         path: "app.authProvider.useExternalOAuthIdp.enabled",
         label: "External OAuth IdP",
         input: "boolean",
@@ -854,7 +944,7 @@ export const FIELDS: FieldMeta[] = [
         input: "string-array",
         section: "auth",
         advanced: true,
-        help: 'Access-token claims compared with the JWT audience, in order; the first one present must equal it. "aud" (default) and/or "client_id" (an Amazon Cognito user pool access token carries client_id and no aud).',
+        help: 'Access-token claims compared with the JWT audience, in order; the first one present must name the JWT audience or one of the additional audiences below. "aud" (default) and/or "client_id" (an Amazon Cognito user pool access token carries client_id and no aud).',
         visibleWhen: oauthEnabled,
     },
     {
@@ -865,6 +955,15 @@ export const FIELDS: FieldMeta[] = [
         advanced: true,
         placeholder: "username",
         help: "Access-token claim whose value is the VAMS user ID, for the API and the web application. Empty (default): cognito:username, then username, then sub.",
+        visibleWhen: oauthEnabled,
+    },
+    {
+        path: "app.authProvider.useExternalOAuthIdp.additionalTokenAudiences",
+        label: "Additional accepted JWT audiences",
+        input: "string-array",
+        section: "auth",
+        advanced: true,
+        help: "Other aud values (for example of a client registered with your IdP for a remote MCP server) the API accepts alongside the JWT audience above. Exact values, at most 10, no wildcards. Empty accepts that audience only.",
         visibleWhen: oauthEnabled,
     },
     {
@@ -969,6 +1068,152 @@ export const FIELDS: FieldMeta[] = [
         advanced: true,
         visibleWhen: (c) =>
             !!getByPath(c, "app.pipelines.useConversionCoordinateTransform.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.enabled",
+        label: "GenAI CAD STEP agent",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Create or modify a CAD STEP file from a prompt with a Strands agent (Amazon Bedrock by default). Requires VPC.",
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.runtime",
+        label: "CAD STEP agent — runtime",
+        input: "select",
+        section: "pipelines-standard",
+        advanced: true,
+        options: [
+            { value: "agentcore", label: "Amazon Bedrock AgentCore Runtime (commercial only)" },
+            { value: "fargate", label: "AWS Batch on Fargate" },
+        ],
+        help: "AgentCore requires the commercial partition and CodeBuild; Fargate runs in the private pipeline subnets.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.useCodeBuild",
+        label: "CAD STEP agent — build via CodeBuild",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Required for the agentcore runtime (arm64 image in Amazon ECR).",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.autoRegisterWithVAMS",
+        label: "CAD STEP agent — auto-register",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.autoRegisterAutoTriggerOnFileUpload",
+        label: "CAD STEP agent — auto-trigger on upload",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.bedrockModelId",
+        label: "CAD STEP agent — Bedrock model ID",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Default model provider. Required when enabled (commercial default global.anthropic.claude-sonnet-5-5).",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.openAi.modelId",
+        label: "CAD STEP agent — OpenAI model ID",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: 'Optional. Enables the per-run "openai" provider together with the API key secret ARN.',
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn",
+        label: "CAD STEP agent — OpenAI API key secret ARN",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "AWS Secrets Manager secret holding the OpenAI API key. Never put the key itself in config.json.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.allowInternetResearch",
+        label: "CAD STEP agent — allow internet research",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Deployment master switch for the agent's web search and page fetch tools.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId",
+        label: "CAD STEP agent — Bedrock guardrail id",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Id of an existing Amazon Bedrock guardrail (with a PROMPT_ATTACK input filter) that every model invocation and fetched page runs through. Leave empty with the version empty to have the deployment create one.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion",
+        label: "CAD STEP agent — Bedrock guardrail version",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Numbered version (or DRAFT) of the guardrail named above; set together with the id.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.agentCore.warmSessionSlots",
+        label: "CAD STEP agent — AgentCore warm session slots",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0,
+        help: "0–20 fixed runtime session ids reused across runs so sessions stay warm; 0 uses a fresh session per run.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            getByPath(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore",
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.agentCore.idleRuntimeSessionTimeoutSeconds",
+        label: "CAD STEP agent — AgentCore idle session timeout (s)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 60,
+        help: "60–28800; cannot exceed the max lifetime.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            getByPath(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore",
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds",
+        label: "CAD STEP agent — AgentCore session max lifetime (s)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 60,
+        help: "60–28800.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            getByPath(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore",
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.maxRunSeconds",
+        label: "CAD STEP agent — max run seconds",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 300,
+        help: "300–6000 wall-clock bound for one agent run; the run must report before the workflow task's 6600 s wait ends.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
     },
     {
         path: "app.pipelines.usePreview3dThumbnail.enabled",
@@ -1081,7 +1326,10 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "pipelines-standard",
         advanced: true,
-        help: "Required when enabled (e.g. global.anthropic.claude-sonnet-4-5-20250929-v1:0).",
+        help:
+            "Required when enabled outside the commercial partition, where VAMS supplies no default: " +
+            "model availability differs by partition and account entitlement. Commercial defaults to " +
+            "global.anthropic.claude-sonnet-5-5. Accepts a model id or an inference-profile ARN.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
     },
     {
@@ -1576,6 +1824,82 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c: ConfigShape) => !!getByPath(c, `${COSMOS3}.enabled`),
     })),
 
+    // Image to 3D shared settings + models
+    {
+        path: `${IMAGETO3D}.enabled`,
+        label: "Image to 3D",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Single-photo to 3D mesh with optional print-readiness cleanup. Requires VPC + GPU + internet.",
+    },
+    {
+        path: `${IMAGETO3D}.huggingFaceToken`,
+        label: "Image to 3D — HuggingFace token",
+        input: "text",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Required when Image to 3D is enabled. Stored in Secrets Manager at deploy.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.useCodeBuild`,
+        label: "Image to 3D — build with CodeBuild",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Build via AWS CodeBuild + ECR. Recommended for large GPU images.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.autoRegisterWithVAMS`,
+        label: "Image to 3D — auto-register with VAMS",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.autoTriggerOnFileExtensionsUpload`,
+        label: "Image to 3D — auto-trigger file extensions",
+        input: "text",
+        section: "pipelines-gpu",
+        advanced: true,
+        placeholder: ".png,.jpg,.jpeg",
+        help: "Any non-empty value enables the file-upload trigger; the workflow input filters select the matching files.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.instanceTypes`,
+        label: "Image to 3D — instance types",
+        input: "string-array",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Must be non-empty when Image to 3D is enabled (BEST_FIT_PROGRESSIVE order).",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.maxVCpus`,
+        label: "Image to 3D — max vCPUs",
+        input: "number",
+        section: "pipelines-gpu",
+        advanced: true,
+        min: 1,
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    ...imageTo3dModelFields.map((f) => ({
+        ...f,
+        visibleWhen: (c: ConfigShape) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    })),
+    {
+        ...imageTo3dAgentModelField,
+        visibleWhen: (c: ConfigShape) => !!getByPath(c, `${IMAGETO3D}.models.blenderagent.enabled`),
+    },
+    {
+        ...imageTo3dAgentImageEditingField,
+        visibleWhen: (c: ConfigShape) => !!getByPath(c, `${IMAGETO3D}.models.blenderagent.enabled`),
+    },
+
     // ===== Add-ons =====
     {
         path: "app.addons.useGarnetFramework.enabled",
@@ -1834,7 +2158,27 @@ export const FIELDS: FieldMeta[] = [
         section: "metadata",
         advanced: true,
     },
+
+    // ===== Compliance =====
+    {
+        path: "app.compliance.autoLoadDefaultSchema",
+        label: "Auto-load default compliance schema",
+        input: "boolean",
+        section: "compliance",
+        advanced: true,
+        help: "Seeds the GLOBAL default-compliance-schema (a warn-level metadata rule against the default asset metadata schema) at deploy.",
+    },
+    {
+        path: "app.compliance.quarantineBlocksDownload",
+        label: "Quarantine blocks download",
+        input: "boolean",
+        section: "compliance",
+        advanced: true,
+        help: "When on, a quarantined asset cannot be downloaded unless it holds an active exception. When off, quarantine is informational only.",
+    },
 ];
+
+export const FIELDS: FieldMeta[] = [...CORE_FIELDS, ...ADDON_FIELDS];
 
 /** Fields belonging to a section, in declaration order. */
 export function fieldsForSection(sectionId: string): FieldMeta[] {

@@ -31,11 +31,12 @@ from botocore.config import Config as BotoConfig
 
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="OriginVerify")
+logger = safeLogger()
 
 ORIGIN_VERIFY_HEADER_NAME = "x-vams-origin-verify"
 CURRENT_KEY = "current"
 PREVIOUS_KEY = "previous"
+# pragma: allowlist nextline secret
 SECRET_ARN_ENV = "ORIGIN_VERIFY_SECRET_ARN"  # nosec B105 - environment variable name, not a secret
 
 CACHE_TTL_SECONDS = 300

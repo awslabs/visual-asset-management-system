@@ -5,6 +5,7 @@
 
 import { ViewerPluginConfig, ViewerConfig, ViewerPluginProps } from "./types";
 import { CompareContext } from "./compareShape";
+import { extensionToken, filenameExtension } from "./extensionMatching";
 import {
     admitsCompareSelection,
     admitsVisualizeSelection,
@@ -569,29 +570,34 @@ export class PluginRegistry {
     }
 }
 
-// Utility function to get file extension from filename
+/**
+ * Lowercase extension of a filename, or "" when it has none. Leading dots do not start an extension
+ * (`.gitignore` has none, `.eslintrc.json` has `.json`) and a trailing dot leaves none: the shared
+ * rule in `filenameExtension`.
+ */
 export function getFileExtension(filename: string): string {
-    const lastDotIndex = filename.lastIndexOf(".");
-    if (lastDotIndex === -1) return "";
-    return filename.substring(lastDotIndex).toLowerCase();
+    return filenameExtension(filename).toLowerCase();
 }
 
-// Utility function to get all unique file extensions from multiple files
+/**
+ * The unique matching tokens of a selection: each file's lowercase extension, or `NO_EXTENSION` for
+ * a file that has none, so a viewer that lists that token (the text viewers) can match an
+ * extensionless file. Directories are skipped.
+ */
 export function getFileExtensions(
     files: Array<{ filename: string; isDirectory: boolean }>
 ): string[] {
     if (files.length === 0) return [];
 
-    // Filter out directories and get unique extensions
-    const actualFiles = files.filter((f) => !f.isDirectory);
     const extensions = new Set<string>();
-
-    actualFiles.forEach((file) => {
-        const ext = getFileExtension(file.filename);
-        if (ext) {
-            extensions.add(ext);
-        }
-    });
+    files
+        .filter((f) => !f.isDirectory)
+        .forEach((file) => {
+            const matchToken = extensionToken(file.filename);
+            if (matchToken) {
+                extensions.add(matchToken);
+            }
+        });
 
     return Array.from(extensions);
 }

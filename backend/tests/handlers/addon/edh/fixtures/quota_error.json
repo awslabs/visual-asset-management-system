@@ -1,0 +1,44 @@
+{
+  "name": "quota_error",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "POST",
+    "path": "/api/dcv/virtual_desktops/create",
+    "absolutePath": "/api/dcv/virtual_desktops/create",
+    "query": {},
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "session_name": "3f2c9d4e8a1b4c6d9e0f1a2b3c4d5e6f",
+      "instance_type": "m5.xlarge",
+      "software_stack_id": "1",
+      "disk_size": "50",
+      "project": "default",
+      "subnet_id": "auto",
+      "session_type": "virtual",
+      "hibernate": "false"
+    }
+  },
+  "response": {
+    "status": 500,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": false,
+      "message": "Unable to Launch Desktop 3f2c9d4e8a1b4c6d9e0f1a2b3c4d5e6f (owner: vspikeaaaaaaaaaa):  Max number of Linux or Windows session already reached for this user (Linux: Max 4, Windows: max 4)  (Request ID: 7b418bfc-dd00-4d13-ac11-e31b8a7f0e8c)"
+    }
+  },
+  "expect": {},
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/dcv/create_virtual_desktop.py",
+      "source/soca/cluster_manager/web_interface/config.py",
+      "source/soca/cluster_manager/utils/errors/virtual_desktops.py"
+    ]
+  }
+}

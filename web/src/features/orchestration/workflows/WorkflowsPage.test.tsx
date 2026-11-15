@@ -210,7 +210,7 @@ describe("WorkflowsPage", () => {
             </QueryClientProvider>
         );
 
-        // Open the first workflow card's actions menu via its kebab (⋮) button.
+        // Open the first workflow card's actions menu via its three-dot button.
         const actionsButton = screen.getByRole("button", { name: "Actions for Workflow Alpha" });
         await userEvent.click(actionsButton);
 
@@ -256,6 +256,152 @@ describe("WorkflowsPage", () => {
             expect(screen.getByText("Edit")).toBeInTheDocument();
         });
         expect(screen.queryByText("View Executions")).not.toBeInTheDocument();
+    });
+
+    const WORKFLOW_ARCHIVE_REASON =
+        "System workflows are managed by the deployment and cannot be archived.";
+
+    const renderSystemWorkflow = (can: (method: string, route: string) => boolean) => {
+        const { useWorkflows, useWorkflowMutations } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useWorkflows.mockReturnValue(
+            infinite([
+                {
+                    workflowId: "system-sample",
+                    workflowName: "System Sample",
+                    databaseId: "GLOBAL",
+                    category: "SYSTEM - Sample",
+                    enabled: true,
+                    archived: false,
+                    isSystem: true,
+                    specifiedPipelines: [{ pipelineId: "system-sample" }],
+                },
+            ])
+        );
+        const mutateAsync = jest.fn();
+        useWorkflowMutations.mockReturnValue({ archiveWorkflow: { mutateAsync } });
+        useAllowedRoutes.mockReturnValue({ loading: false, can });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <WorkflowsPage />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+        return { mutateAsync };
+    };
+
+    it("marks a system workflow, offers View instead of Edit, and lists Archive disabled with its reason", async () => {
+        renderSystemWorkflow(() => true);
+
+        expect(screen.getByText("System")).toBeInTheDocument();
+        await userEvent.click(screen.getByRole("button", { name: "Actions for System Sample" }));
+        await screen.findByRole("menu");
+        expect(screen.queryByRole("menuitem", { name: "Edit" })).not.toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "View" })).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "Execute" })).toBeInTheDocument();
+        const archive = screen.getByRole("menuitem", { name: "Archive" });
+        expect(archive).toHaveAttribute("aria-disabled", "true");
+        expect(archive).toHaveAttribute("aria-description", WORKFLOW_ARCHIVE_REASON);
+    });
+
+    it("does nothing when a system workflow's disabled Archive is chosen", async () => {
+        const user = userEvent.setup();
+        const { mutateAsync } = renderSystemWorkflow(() => true);
+
+        await user.click(screen.getByRole("button", { name: "Actions for System Sample" }));
+        await screen.findByRole("menu");
+        await user.click(screen.getByRole("menuitem", { name: "Archive" }));
+        expect(screen.queryByText("Archive System Sample")).not.toBeInTheDocument();
+        expect(mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it("hides a system workflow's Archive from a role that may not archive", async () => {
+        // The route check comes first: a role refused the route is not told about the system rule.
+        renderSystemWorkflow(
+            (method, route) =>
+                !(method === "DELETE" && route === "/database/{databaseId}/workflows/{workflowId}")
+        );
+
+        await userEvent.click(screen.getByRole("button", { name: "Actions for System Sample" }));
+        await screen.findByRole("menu");
+        expect(screen.queryByRole("menuitem", { name: "Archive" })).not.toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "View" })).toBeInTheDocument();
+    });
+
+    it("explains why a disabled workflow's Execute action is unavailable", async () => {
+        const { useWorkflows, useWorkflowMutations } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useWorkflows.mockReturnValue(infinite(mockWorkflows));
+        useWorkflowMutations.mockReturnValue({ archiveWorkflow: { mutateAsync: jest.fn() } });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: () => true });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <WorkflowsPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        // Workflow Beta is disabled.
+        await userEvent.click(screen.getByRole("button", { name: "Actions for Workflow Beta" }));
+        await screen.findByRole("menu");
+        const execute = screen.getByRole("menuitem", { name: "Execute" });
+        expect(execute).toHaveAttribute("aria-disabled", "true");
+        expect(execute).toHaveAttribute(
+            "aria-description",
+            "Disabled workflows cannot be executed"
+        );
+        expect(screen.queryByText("System")).not.toBeInTheDocument();
+        expect(screen.queryByRole("menuitem", { name: "View" })).not.toBeInTheDocument();
+        // Control: an ordinary workflow's Archive is offered as before.
+        const archive = screen.getByRole("menuitem", { name: "Archive" });
+        expect(archive).not.toHaveAttribute("aria-disabled");
+        expect(archive).not.toHaveAttribute("aria-description");
+    });
+
+    const renderPage = () => {
+        const { useWorkflows, useWorkflowMutations } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useWorkflows.mockReturnValue(infinite(mockWorkflows));
+        useWorkflowMutations.mockReturnValue({ archiveWorkflow: { mutateAsync: jest.fn() } });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: () => true });
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <WorkflowsPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+
+    it("draws the row actions button as an icon and opens its menu by click and by keyboard", async () => {
+        renderPage();
+        const button = screen.getByRole("button", { name: "Actions for Workflow Alpha" });
+        // An SVG icon, not a text glyph that renders blank without a font carrying it.
+        expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+        expect(button.textContent).toBe("");
+
+        const user = userEvent.setup();
+        await user.click(button);
+        expect(await screen.findByRole("menu")).toBeInTheDocument();
+        await user.keyboard("{Escape}");
+        await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+        expect(button).toHaveFocus();
+
+        await user.keyboard("{Enter}");
+        expect(await screen.findByRole("menu")).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "Edit" })).toBeInTheDocument();
+    });
+
+    it("shows a placeholder in the search box", () => {
+        renderPage();
+        expect(screen.getByRole("textbox", { name: "Search" })).toHaveAttribute(
+            "placeholder",
+            "Search workflows"
+        );
     });
 });
 

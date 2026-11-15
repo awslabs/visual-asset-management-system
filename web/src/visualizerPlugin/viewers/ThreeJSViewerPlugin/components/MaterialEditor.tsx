@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from "react";
 import { MaterialLibraryItem } from "../ThreeJSMaterialLibrary";
+import { supportsWireframe } from "../utils/selectionHighlight";
 
 interface MaterialState {
     color: string;
@@ -387,22 +388,29 @@ const MaterialEditor: React.FC<MaterialEditorProps> = ({
                         />
                         <span>Transparent</span>
                     </label>
-                    <label
-                        style={{
-                            display: "flex",
-                            alignItems: "center",
-                            cursor: "pointer",
-                            fontSize: "0.85em",
-                        }}
-                    >
-                        <input
-                            type="checkbox"
-                            checked={material.wireframe}
-                            onChange={(e) => updateMaterial("wireframe", e.target.checked)}
-                            style={{ marginRight: "8px" }}
-                        />
-                        <span>Wireframe</span>
-                    </label>
+                    {supportsWireframe(mat) ? (
+                        <label
+                            style={{
+                                display: "flex",
+                                alignItems: "center",
+                                cursor: "pointer",
+                                fontSize: "0.85em",
+                            }}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={material.wireframe}
+                                onChange={(e) => updateMaterial("wireframe", e.target.checked)}
+                                style={{ marginRight: "8px" }}
+                            />
+                            <span>Wireframe</span>
+                        </label>
+                    ) : (
+                        // Points, lines and sprites have no faces to outline (#1275).
+                        <div style={{ fontSize: "0.75em", color: "#999" }}>
+                            Wireframe applies to mesh materials only.
+                        </div>
+                    )}
                 </div>
 
                 {/* Material Info */}

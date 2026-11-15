@@ -80,6 +80,7 @@ from common.s3 import region_routing_s3_client
 from common.dynamoDbMetadataKeys import REINDEX_METADATA_RECORD_KEY
 from common.validators import validate
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 
 logger = safeLogger(service_name="CrReindexer")
 
@@ -1521,6 +1522,17 @@ def send_cfn_response(event: Dict, context: Any, status: str, data: Dict = None,
         logger.error(f"Failed to send CloudFormation response: {type(e).__name__}")
 
 
+def _log_reindex(event: Dict, results: Dict, failure_reasons: List[str], operation: str,
+                 clear_indexes: bool, dry_run: bool = False) -> None:
+    """Record one reindex run: what it reindexed and how many records succeeded."""
+    counts = [part.get('success_count') for part in (results.get('assets'), results.get('files'))
+              if isinstance(part, dict) and isinstance(part.get('success_count'), int)]
+    log_action(event, "searchReindex", outcome="failed" if failure_reasons else "success",
+               reason="internal" if failure_reasons else None, item_count=sum(counts) if counts else None,
+               details={"operation": operation, "clearIndexes": bool(clear_indexes), "dryRun": bool(dry_run)})
+
+
+@audited_handler
 def lambda_handler(event: Dict, context: Any) -> Dict:
     """
     Lambda handler for reindexing operations.
@@ -1655,6 +1667,7 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
                     # indexes were emptied first, so a SUCCESS after partial restore
                     # leaves search silently incomplete with no signal.
                     failure_reasons = reindex_failure_reasons(results)
+                    _log_reindex(event, results, failure_reasons, operation, clear_indexes)
                     if failure_reasons:
                         reason = ("Reindexing did not complete: " + "; ".join(failure_reasons))[:1000]
                         logger.error(reason)
@@ -1740,6 +1753,7 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
                 results['files'] = file_results
 
             failure_reasons = reindex_failure_reasons(results)
+            _log_reindex(event, results, failure_reasons, operation, clear_indexes, dry_run)
             if failure_reasons:
                 logger.error("Reindexing did not complete: " + "; ".join(failure_reasons))
 

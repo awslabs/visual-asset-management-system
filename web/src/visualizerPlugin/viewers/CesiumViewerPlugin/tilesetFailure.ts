@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describeStreamFailure } from "../../core/streamFailure";
+import { apiRefusalMessage, describeStreamFailure } from "../../core/streamFailure";
 
 /** The JSON body of a Cesium request error's response, which Cesium keeps as text. */
 function responseBody(response: unknown): any {
@@ -29,6 +29,15 @@ export function describeTilesetFailure(key: string, error: any): string {
     }
     const message = error?.message || error?.toString() || "Unknown error";
     return `Tileset loading failed for "${key}": ${message}`;
+}
+
+/**
+ * Whether a tileset failed because the API refused it with a reason of its own (`apiRefusalMessage`,
+ * D166), which `describeTilesetFailure` names. The viewer then adds no format hint under it (D170).
+ */
+export function isTilesetRefusal(error: any): boolean {
+    if (!error || typeof error !== "object" || !("statusCode" in error)) return false;
+    return apiRefusalMessage(error.statusCode, responseBody(error.response)?.message) !== undefined;
 }
 
 /** The notice for tiles of a loaded tileset that failed, which otherwise leave holes in the model. */

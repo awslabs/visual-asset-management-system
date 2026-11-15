@@ -370,10 +370,20 @@ export class PcPotreeViewerConstruct extends NestedStack {
             resultPath: "$.error",
         });
 
+        // Both jobs submit by the revision-less job definition ARN, which Batch resolves to the latest
+        // ACTIVE revision. An E57/PLY run submits the Potree job only after PDAL finishes, so with the
+        // revisioned ARN a deploy that replaced the definition mid-run (any image change) left the run
+        // submitting against a deregistered revision. The state machine role's batch:SubmitJob grant
+        // (job-definition/*, from BatchSubmitJob) already covers this ARN.
+        const latestRevisionJobDefinitionArn = (pipeline: BatchFargatePipelineConstruct) =>
+            `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-definition/${
+                pipeline.batchJobDefinitionPhysicalName
+            }`;
+
         // batch job Potree Converter
         const potreeConverterBatchJob = new tasks.BatchSubmitJob(this, "PotreeConverterBatchJob", {
             jobName: sfn.JsonPath.stringAt("$.jobName"),
-            jobDefinitionArn: potreeBatchPipeline.batchJobDefinition.jobDefinitionArn,
+            jobDefinitionArn: latestRevisionJobDefinitionArn(potreeBatchPipeline),
             jobQueueArn: potreeBatchPipeline.batchJobQueue.jobQueueArn,
             containerOverrides: {
                 command: [...sfn.JsonPath.listAt("$.definition")],
@@ -391,7 +401,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
         // batch job PDAL
         const pdalConverterBatchJob = new tasks.BatchSubmitJob(this, "PdalConverterBatchJob", {
             jobName: sfn.JsonPath.stringAt("$.jobName"),
-            jobDefinitionArn: pdalBatchPipeline.batchJobDefinition.jobDefinitionArn,
+            jobDefinitionArn: latestRevisionJobDefinitionArn(pdalBatchPipeline),
             jobQueueArn: pdalBatchPipeline.batchJobQueue.jobQueueArn,
             containerOverrides: {
                 command: [...sfn.JsonPath.listAt("$.definition")],

@@ -30,14 +30,15 @@ from botocore.stub import Stubber
 from backend.backend.handlers.auth import apiOriginVerifyRotation as rotation
 
 HEADER = "x-vams-origin-verify"
+# pragma: allowlist nextline secret
 SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:vams-origin-verify-AbCdEf"
 DISTRIBUTION_ID = "E2EXAMPLE12345"
 WEB_ACL_NAME = "webacl-EXAMPLE"
 WEB_ACL_ID = "11111111-2222-3333-4444-555555555555"
 WEB_ACL_ARN = "arn:aws:wafv2:us-east-1:123456789012:regional/webacl/" + WEB_ACL_NAME + "/" + WEB_ACL_ID
 
-OLD = "oldValue0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRS"
-NEW = "newValue0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRS"
+OLD = "oldValue0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRS"  # pragma: allowlist secret
+NEW = "newValue0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRS"  # pragma: allowlist secret
 CURRENT_TOKEN = "aaaaaaaa-0000-0000-0000-000000000001"
 TOKEN = "bbbbbbbb-0000-0000-0000-000000000002"
 
@@ -271,7 +272,7 @@ def _client(service):
         service,
         region_name="us-east-1",
         aws_access_key_id="testing",
-        aws_secret_access_key="testing",
+        aws_secret_access_key="testing",  # pragma: allowlist secret
     )
 
 

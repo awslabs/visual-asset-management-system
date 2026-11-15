@@ -57,6 +57,7 @@ import {
     ViewerPluginMetadata,
     ViewerMode,
 } from "../core/PluginRegistry";
+import { describeExtensionToken } from "../core/extensionMatching";
 import { FileInfo } from "../core/types";
 import { StylesheetManager } from "../core/StylesheetManager";
 import ViewerSelector from "./ViewerSelector";
@@ -169,17 +170,15 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
         setCompatibleViewers(viewerMetadata);
 
         if (viewerMetadata.length === 0) {
-            // Customize error message based on whether multiple files are selected
+            // Customize error message based on whether multiple files are selected. The
+            // no-extension matching token is named in words, never shown as-is.
+            const fileTypes = fileExtensions.map(describeExtensionToken).join(", ");
             const errorMessage =
                 mode === "compare"
-                    ? `No compatible compare viewers found for file types: ${fileExtensions.join(
-                          ", "
-                      )}`
+                    ? `No compatible compare viewers found for file types: ${fileTypes}`
                     : isMultiFile
-                    ? `No compatible multi-file viewers found for file types: ${fileExtensions.join(
-                          ", "
-                      )}`
-                    : `No compatible viewers found for file types: ${fileExtensions.join(", ")}`;
+                    ? `No compatible multi-file viewers found for file types: ${fileTypes}`
+                    : `No compatible viewers found for file types: ${fileTypes}`;
             setSelectedViewerId(null);
             setLoadedViewer(null);
             setError(errorMessage);

@@ -11,13 +11,17 @@ import {
     computeRefetchInterval,
     qk,
     useExecutions,
+    usePipelines,
     useTemplateMutations,
+    useWorkflows,
 } from "./queries";
 import * as executionService from "./executions";
 import * as pipelineService from "./pipelines";
+import * as workflowService from "./workflows";
 
 jest.mock("./executions");
 jest.mock("./pipelines");
+jest.mock("./workflows");
 
 describe("computeRefetchInterval", () => {
     it("polls only while a row is non-terminal", () => {
@@ -223,6 +227,107 @@ describe("useExecutions", () => {
 
         const query: any = qc.getQueryCache().find({ queryKey: qk.executions({ kind: "global" }) });
         expect(query.options.refetchIntervalInBackground).toBeFalsy();
+    });
+});
+
+/**
+ * A list response without an `Items` array (an empty body, a message-only body, `Items: null`) is a
+ * page with no rows. The hooks hand every consumer a page whose `Items` is an array, so the poll
+ * cadence and the list views never read a row that is not there.
+ */
+describe("paged list hooks: a response without Items", () => {
+    const itemlessBodies: [string, any][] = [
+        ["an empty body", {}],
+        ["a message-only body", { message: "no rows" }],
+        ["Items: null", { Items: null }],
+    ];
+
+    const renderWithClient = <T,>(hook: () => T) => {
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const Wrapper = ({ children }: any) => (
+            <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+        );
+        Wrapper.displayName = "QueryWrapper";
+        return { qc, ...renderHook(hook, { wrapper: Wrapper }) };
+    };
+
+    beforeEach(() => jest.clearAllMocks());
+
+    it.each(itemlessBodies)(
+        "useExecutions reads %s as a page with no rows and stops polling",
+        async (_label, body) => {
+            (executionService.listExecutionsGlobal as jest.Mock).mockResolvedValue([true, body]);
+            const { qc, result } = renderWithClient(() => useExecutions({ kind: "global" }));
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect((result.current.data?.pages as any[])[0].Items).toEqual([]);
+            const query: any = qc
+                .getQueryCache()
+                .find({ queryKey: qk.executions({ kind: "global" }) });
+            expect(query.options.refetchInterval(query)).toBe(false);
+        }
+    );
+
+    it("useExecutions keeps polling for the running rows of the other pages", async () => {
+        (executionService.listExecutionsGlobal as jest.Mock).mockResolvedValue([
+            true,
+            { Items: [{ executionStatus: "RUNNING" }], NextToken: "t1" },
+        ]);
+        const { qc, result } = renderWithClient(() => useExecutions({ kind: "global" }));
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+        (executionService.listExecutionsGlobal as jest.Mock).mockResolvedValue([true, {}]);
+        const next = await result.current.fetchNextPage();
+
+        expect(next.data?.pages).toHaveLength(2);
+        expect((next.data?.pages as any[])[1].Items).toEqual([]);
+        const query: any = qc.getQueryCache().find({ queryKey: qk.executions({ kind: "global" }) });
+        expect(query.options.refetchInterval(query)).toBe(10000);
+    });
+
+    it.each(itemlessBodies)(
+        "useExecutions for an asset reads %s as a page with no rows",
+        async (_label, body) => {
+            (executionService.listExecutionsForAsset as jest.Mock).mockResolvedValue([true, body]);
+            const { result } = renderWithClient(() =>
+                useExecutions({ kind: "asset", databaseId: "db1", assetId: "a1" })
+            );
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+            expect((result.current.data?.pages as any[])[0].Items).toEqual([]);
+        }
+    );
+
+    it.each(itemlessBodies)(
+        "useWorkflows reads %s as a page with no rows",
+        async (_label, body) => {
+            (workflowService.listWorkflows as jest.Mock).mockResolvedValue([true, body]);
+            const { result } = renderWithClient(() => useWorkflows("db1"));
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+            expect(result.current.data?.pages[0].Items).toEqual([]);
+        }
+    );
+
+    it.each(itemlessBodies)(
+        "usePipelines reads %s as a page with no rows",
+        async (_label, body) => {
+            (pipelineService.listPipelines as jest.Mock).mockResolvedValue([true, body]);
+            const { result } = renderWithClient(() => usePipelines("db1"));
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+            expect(result.current.data?.pages[0].Items).toEqual([]);
+        }
+    );
+
+    it("keeps the rows and NextToken of a page that has Items", async () => {
+        (workflowService.listWorkflows as jest.Mock).mockResolvedValue([
+            true,
+            { Items: [{ workflowId: "wf1" }], NextToken: "t1" },
+        ]);
+        const { result } = renderWithClient(() => useWorkflows("db1"));
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+        expect(result.current.data?.pages[0]).toEqual({
+            Items: [{ workflowId: "wf1" }],
+            NextToken: "t1",
+        });
     });
 });
 
@@ -445,6 +550,148 @@ describe("useExecutionDetailMetadata", () => {
         ]);
         expect(qk.executionDetailMetadata("e1", "output")).not.toEqual(
             qk.executionDetailMetadata("e1", "input")
+        );
+    });
+});
+
+/**
+ * The paged result-text read. Pages load on request; the hook hands back their concatenation so a
+ * reader sees one growing text, and the token round-trips verbatim.
+ */
+describe("useExecutionResults", () => {
+    const wrapper = (qc: QueryClient) => {
+        const Wrapper = ({ children }: any) => (
+            <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+        );
+        Wrapper.displayName = "QueryWrapper";
+        return Wrapper;
+    };
+    const client = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    beforeEach(() => jest.clearAllMocks());
+
+    it("issues no request until the caller enables it", () => {
+        const { useExecutionResults } = require("./queries");
+        renderHook(() => useExecutionResults("e1", false), { wrapper: wrapper(client()) });
+        expect(executionService.getExecutionResults).not.toHaveBeenCalled();
+    });
+
+    it("concatenates the loaded pages and resumes from NextToken", async () => {
+        const { useExecutionResults } = require("./queries");
+        (executionService.getExecutionResults as jest.Mock)
+            .mockResolvedValueOnce([
+                true,
+                {
+                    resultContent: "first-",
+                    resultContentTruncated: false,
+                    resultRowCount: 2,
+                    resultContentBytes: 6,
+                    NextToken: "tok-2",
+                },
+            ])
+            .mockResolvedValueOnce([
+                true,
+                {
+                    resultContent: "second",
+                    resultContentTruncated: true,
+                    resultRowCount: 1,
+                    resultContentBytes: 6,
+                },
+            ]);
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.data?.resultContent).toBe("first-"));
+        expect(result.current.hasNextPage).toBe(true);
+        expect(executionService.getExecutionResults).toHaveBeenCalledWith("e1", undefined);
+
+        await result.current.fetchNextPage();
+        await waitFor(() => expect(result.current.data?.resultContent).toBe("first-second"));
+        expect(executionService.getExecutionResults).toHaveBeenLastCalledWith("e1", {
+            startingToken: "tok-2",
+        });
+        expect(result.current.data).toEqual({
+            resultContent: "first-second",
+            resultContentTruncated: true,
+            resultRowCount: 3,
+            resultContentBytes: 12,
+        });
+        expect(result.current.hasNextPage).toBe(false);
+    });
+    it("exposes each page's text and reads the full result for a download without caching it", async () => {
+        const { useExecutionResults } = require("./queries");
+        (executionService.getExecutionResults as jest.Mock)
+            .mockResolvedValueOnce([
+                true,
+                { resultContent: "p1-", resultRowCount: 1, resultContentBytes: 3, NextToken: "t2" },
+            ])
+            .mockResolvedValueOnce([
+                true,
+                { resultContent: "p2-", resultRowCount: 1, resultContentBytes: 3, NextToken: "t3" },
+            ])
+            .mockResolvedValueOnce([
+                true,
+                { resultContent: "p3", resultRowCount: 1, resultContentBytes: 2 },
+            ]);
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.pageContents).toEqual(["p1-"]));
+
+        await expect(result.current.readFullText()).resolves.toBe("p1-p2-p3");
+        expect(executionService.getExecutionResults).toHaveBeenNthCalledWith(2, "e1", {
+            startingToken: "t2",
+        });
+        expect(executionService.getExecutionResults).toHaveBeenNthCalledWith(3, "e1", {
+            startingToken: "t3",
+        });
+        // The downloaded pages are not added to the view.
+        expect(result.current.pageContents).toEqual(["p1-"]);
+        expect(result.current.hasNextPage).toBe(true);
+    });
+
+    it("rejects the full read when a remaining page fails", async () => {
+        const { useExecutionResults } = require("./queries");
+        (executionService.getExecutionResults as jest.Mock)
+            .mockResolvedValueOnce([true, { resultContent: "p1", NextToken: "t2" }])
+            .mockResolvedValueOnce([false, "denied"]);
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.pageContents).toEqual(["p1"]));
+        await expect(result.current.readFullText()).rejects.toThrow("denied");
+    });
+
+    it("rejects the full read when a page repeats a token", async () => {
+        const { useExecutionResults } = require("./queries");
+        (executionService.getExecutionResults as jest.Mock)
+            .mockResolvedValueOnce([true, { resultContent: "p1", NextToken: "t2" }])
+            .mockResolvedValueOnce([true, { resultContent: "p2", NextToken: "t2" }]);
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.pageContents).toEqual(["p1"]));
+        await expect(result.current.readFullText()).rejects.toThrow("already returned");
+        expect(executionService.getExecutionResults).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects the full read after the page bound", async () => {
+        const { useExecutionResults, RESULT_READ_MAX_PAGES } = require("./queries");
+        let n = 0;
+        (executionService.getExecutionResults as jest.Mock).mockImplementation(async () => {
+            n += 1;
+            return [true, { resultContent: "x", NextToken: `t${n + 1}` }];
+        });
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.pageContents).toEqual(["x"]));
+        await expect(result.current.readFullText()).rejects.toThrow(
+            `exceeded ${RESULT_READ_MAX_PAGES} pages`
+        );
+        // The first (loaded) page plus the bounded remaining pages.
+        expect(executionService.getExecutionResults).toHaveBeenCalledTimes(
+            RESULT_READ_MAX_PAGES + 1
         );
     });
 });

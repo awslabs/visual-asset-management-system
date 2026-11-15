@@ -20,6 +20,7 @@ const { postprocessDirectory, INIT_SCRIPT_NAME, REFERRER_META } = require("./pos
 const viewerId = "robotics-data-viewer";
 const LICHTBLICK_REPO = "https://github.com/lichtblick-suite/lichtblick.git";
 const LICHTBLICK_TAG = "v1.29.1"; // pinned release; bump the tag and the commit together
+// pragma: allowlist nextline secret
 const LICHTBLICK_COMMIT = "95713edb309d77589b130286642ab149995a5f7b"; // the commit v1.29.1 names
 const PUBLIC_PATH = "/viewers/robotics/"; // MUST match the publicPath in overlay/vams.webpack.config.ts
 

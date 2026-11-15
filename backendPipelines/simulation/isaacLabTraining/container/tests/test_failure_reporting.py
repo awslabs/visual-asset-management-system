@@ -231,14 +231,18 @@ class TestPolicyDownload:
             main_module.download_policy(s3, self._config(main_module, uri))
         assert s3.downloads == []
 
-    def test_an_s3_uri_is_downloaded(self, main_module):
-        # Positive control: a check that rejected everything would pass the cases above.
+    def test_an_s3_uri_is_downloaded(self, main_module, monkeypatch, tmp_path):
+        # Positive control: a check that rejected everything would pass the cases above. The
+        # destination is redirected into tmp_path; where it lands in the image, and what play.py then
+        # writes beside it, is covered by test_isaaclab_nonroot_write_paths.py (issue #1312).
+        local = str(tmp_path / "evaluation" / "checkpoints" / "policy.pt")
+        monkeypatch.setattr(main_module, "EVALUATION_POLICY_PATH", local)
         s3 = RecordingS3()
         path = main_module.download_policy(
             s3, self._config(main_module, "s3://asset-bucket/xid1/checkpoints/model_300.pt"))
-        assert path == "/tmp/policy.pt"
+        assert path == local
         assert s3.downloads == [
-            ("asset-bucket", "xid1/checkpoints/model_300.pt", "/tmp/policy.pt")]
+            ("asset-bucket", "xid1/checkpoints/model_300.pt", local)]
 
     def test_a_missing_uri_still_raises(self, main_module):
         with pytest.raises(ValueError, match="No policy S3 URI provided"):

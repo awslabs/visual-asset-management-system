@@ -39,12 +39,13 @@ Retrieves every comment on an asset, across all of its versions, newest first.
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                           |
-| --------------- | -------- | ------- | -------- | ------------------------------------- |
-| `assetId`       | path     | string  | Yes      | Asset identifier.                     |
-| `maxItems`      | query    | integer | No       | Maximum number of comments to return. |
-| `pageSize`      | query    | integer | No       | Number of comments per page.          |
-| `startingToken` | query    | string  | No       | Pagination token.                     |
+| Parameter       | Location | Type    | Required | Description                                                                  |
+| --------------- | -------- | ------- | -------- | ---------------------------------------------------------------------------- |
+| `assetId`       | path     | string  | Yes      | Asset identifier.                                                            |
+| `maxItems`      | query    | integer | No       | Maximum number of comments to return.                                        |
+| `pageSize`      | query    | integer | No       | Number of comments per page.                                                 |
+| `startingToken` | query    | string  | No       | Pagination token.                                                            |
+| `showArchived`  | query    | boolean | No       | When `true`, also lists the comments of an archived asset. Default: `false`. |
 
 **Response:**
 
@@ -85,13 +86,14 @@ Retrieves the comments recorded against one version of an asset, newest first.
 
 **Request Parameters:**
 
-| Parameter        | Location | Type    | Required | Description                           |
-| ---------------- | -------- | ------- | -------- | ------------------------------------- |
-| `assetId`        | path     | string  | Yes      | Asset identifier.                     |
-| `assetVersionId` | path     | string  | Yes      | Asset version identifier.             |
-| `maxItems`       | query    | integer | No       | Maximum number of comments to return. |
-| `pageSize`       | query    | integer | No       | Number of comments per page.          |
-| `startingToken`  | query    | string  | No       | Pagination token.                     |
+| Parameter        | Location | Type    | Required | Description                                                                  |
+| ---------------- | -------- | ------- | -------- | ---------------------------------------------------------------------------- |
+| `assetId`        | path     | string  | Yes      | Asset identifier.                                                            |
+| `assetVersionId` | path     | string  | Yes      | Asset version identifier.                                                    |
+| `maxItems`       | query    | integer | No       | Maximum number of comments to return.                                        |
+| `pageSize`       | query    | integer | No       | Number of comments per page.                                                 |
+| `startingToken`  | query    | string  | No       | Pagination token.                                                            |
+| `showArchived`   | query    | boolean | No       | When `true`, also lists the comments of an archived asset. Default: `false`. |
 
 **Response:**
 

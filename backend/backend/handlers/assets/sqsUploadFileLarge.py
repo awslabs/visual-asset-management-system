@@ -8,14 +8,15 @@ import boto3
 import json
 import logging
 from typing import Dict, Any, List
-from datetime import datetime
+from common.timestamps import utc_now
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_upload
+from customLogging.auditLogging import log_file_upload, audited_handler
 from common.dynamodb import to_update_expr
 from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, register_bucket_region
+from common.assetProvenance import asset_change_provenance
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -364,7 +365,8 @@ def validate_preview_file_extension(file_path: str) -> bool:
     file_extension = os.path.splitext(file_path)[1].lower()
     return file_extension in allowed_preview_extensions
 
-def update_asset_after_file_processing(asset_id: str, database_id: str, bucket_name: str, final_s3_key: str):
+def update_asset_after_file_processing(asset_id: str, database_id: str, bucket_name: str, final_s3_key: str,
+                                       workflow_execution_id: str = None):
     """
     Update asset record after successful file processing.
     Simplified version of the logic from uploadFile.py.
@@ -395,7 +397,10 @@ def update_asset_after_file_processing(asset_id: str, database_id: str, bucket_n
         # If asset already has a type and asset_type is None, keep the existing type
 
         # Save updated asset
-        update_asset_attributes(database_id, asset_id, {'assetType': asset['assetType']})
+        update_asset_attributes(database_id, asset_id, {
+            'assetType': asset['assetType'],
+            **asset_change_provenance(workflow_execution_id),
+        })
 
         # Send notification to subscribers
         send_subscription_email(database_id, asset_id)
@@ -405,7 +410,8 @@ def update_asset_after_file_processing(asset_id: str, database_id: str, bucket_n
     except Exception as e:
         logger.exception(f"Error updating asset after file processing: {e}")
 
-def update_asset_preview_location(asset_id: str, database_id: str, final_s3_key: str):
+def update_asset_preview_location(asset_id: str, database_id: str, final_s3_key: str,
+                                  workflow_execution_id: str = None):
     """
     Update asset with preview location after successful preview file processing.
     
@@ -425,7 +431,8 @@ def update_asset_preview_location(asset_id: str, database_id: str, final_s3_key:
         update_asset_attributes(database_id, asset_id, {
             'previewLocation': {
                 'Key': final_s3_key
-            }
+            },
+            **asset_change_provenance(workflow_execution_id),
         })
 
         logger.info(f"Updated asset {asset_id} with preview location: {final_s3_key}")
@@ -742,7 +749,7 @@ def log_processing_metrics(correlation_ids: Dict[str, str], step: str, duration:
             'asset_id': correlation_ids.get('assetId'),
             'database_id': correlation_ids.get('databaseId'),
             'file_size': correlation_ids.get('fileSize'),
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': utc_now().isoformat()
         }
         
         logger.info(f"STRUCTURED_METRICS: {json.dumps(metrics_data)}")
@@ -830,9 +837,11 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
         
         # Update asset record if this is an assetFile upload
         if upload_type == "assetFile":
-            update_asset_after_file_processing(asset_id, database_id, bucket_name, final_s3_key)
+            update_asset_after_file_processing(asset_id, database_id, bucket_name, final_s3_key,
+                                               file_info.get('workflowExecutionId'))
         elif upload_type == "assetPreview":
-            update_asset_preview_location(asset_id, database_id, final_s3_key)
+            update_asset_preview_location(asset_id, database_id, final_s3_key,
+                                          file_info.get('workflowExecutionId'))
         
         logger.info(f"Successfully validated and moved file {relative_key}")
         return True
@@ -983,7 +992,7 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
     Returns:
         True if processing was successful, False otherwise
     """
-    start_time = datetime.utcnow()
+    start_time = utc_now()
     correlation_str = format_correlation_ids(correlation_ids)
     
     try:
@@ -997,32 +1006,32 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
         
         # Step 1: Complete multipart upload at temporary location
         logger.info(f"Step 1: Completing multipart upload - {correlation_str}")
-        step1_start = datetime.utcnow()
+        step1_start = utc_now()
         
         if not complete_multipart_upload_for_large_file(file_info, correlation_ids):
             logger.error(f"Step 1 failed: multipart upload completion - {correlation_str}")
             return False
             
-        step1_duration = (datetime.utcnow() - step1_start).total_seconds()
+        step1_duration = (utc_now() - step1_start).total_seconds()
         logger.info(f"Step 1 completed in {step1_duration:.2f}s - {correlation_str}")
             
         # Step 2: Validate file content and move to final location
         logger.info(f"Step 2: Validating and moving file - {correlation_str}")
-        step2_start = datetime.utcnow()
+        step2_start = utc_now()
         
         if not validate_and_move_large_file(file_info, correlation_ids):
             logger.error(f"Step 2 failed: file validation and movement - {correlation_str}")
             return False
             
-        step2_duration = (datetime.utcnow() - step2_start).total_seconds()
+        step2_duration = (utc_now() - step2_start).total_seconds()
         logger.info(f"Step 2 completed in {step2_duration:.2f}s - {correlation_str}")
             
-        total_duration = (datetime.utcnow() - start_time).total_seconds()
+        total_duration = (utc_now() - start_time).total_seconds()
         logger.info(f"Large file processing completed successfully in {total_duration:.2f}s - {correlation_str}")
         return True
         
     except Exception as e:
-        total_duration = (datetime.utcnow() - start_time).total_seconds()
+        total_duration = (utc_now() - start_time).total_seconds()
         logger.exception(f"Unexpected error processing large file after {total_duration:.2f}s - {correlation_str}: {e}")
         
         # Attempt cleanup on failure
@@ -1033,6 +1042,8 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
             
         return False
 
+
+@audited_handler
 def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
     """
     Lambda handler for processing SQS events containing large file processing requests.

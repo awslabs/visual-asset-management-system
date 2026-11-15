@@ -12,6 +12,9 @@ import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 import { MouseControls } from "./MouseControls";
 import NeedleUSDPanel from "./NeedleUSDPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import { useKeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
 import {
     isRequestableDependencyPath,
@@ -19,6 +22,11 @@ import {
     listZipEntryNames,
     normalizePackagedPath,
 } from "./usdDependencyPaths";
+import {
+    ApiRefusalError,
+    isApiRefusalError,
+    streamResponseFailure,
+} from "../../core/streamFailure";
 
 const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
@@ -34,6 +42,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
     const [error, setError] = useState<string | null>(null);
+    // Whether `error` is the API's refusal of the file with its own reason (D170): shown alone.
+    const [errorIsRefusal, setErrorIsRefusal] = useState(false);
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
     const [additionalDepsWarning, setAdditionalDepsWarning] = useState<{
         loaded: number;
@@ -41,6 +51,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     }>({ loaded: 0, unresolved: 0 });
     const viewerInstanceRef = useRef<any>(null);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
     const [sceneReady, setSceneReady] = useState(false);
     const [selectedObjects, setSelectedObjects] = useState<any[]>([]);
     const [loadedFileGroups, setLoadedFileGroups] = useState<any[]>([]);
@@ -48,6 +59,11 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     const mouseRef = useRef<any>(null);
     const initializationRef = useRef(false);
     const originalTransformsRef = useRef<Map<string, any>>(new Map());
+    // Scene tree height the user picked. Held here, as the panel unmounts the scene tree when it
+    // switches tabs or is hidden; cleared when the viewer is given other files
+    const keptTreeHeight = useKeptSceneTreeHeight(
+        JSON.stringify({ assetKey, multiFileKeys, assetId, databaseId, versionId, assetVersionId })
+    );
 
     // Loading cancellation flag
     const loadingCancelledRef = useRef(false);
@@ -777,7 +793,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 const pathSegments = fileKey.split("/");
                 const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
                 const encodedFileKey = encodedSegments.join("/");
-                let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                let assetUrl = `${config.api}database/${databaseId}/assets/${encodeURIComponent(
+                    assetId
+                )}/download/stream/${encodedFileKey}`;
 
                 // Version resolution:
                 // - assetVersionId: used for ALL files (main + dependencies) to fetch from a specific asset version
@@ -800,7 +818,12 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (!response.ok) {
                     if (isMainFile) {
-                        throw new Error(`Failed to load: ${fileKey} (${response.status})`);
+                        // A refusal with the API's own reason is an ApiRefusalError carrying it
+                        // (D166); any other status keeps this file's own message.
+                        throw await streamResponseFailure(
+                            response,
+                            `Failed to load: ${fileKey} (${response.status})`
+                        );
                     } else {
                         console.warn(
                             `Dependency not found (skipping): ${fileKey} (${response.status})`
@@ -1170,7 +1193,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 const authHeader = await getDualAuthorizationHeader();
                 const loadedFiles = new Set<string>();
                 const failedDownloads = new Set<string>();
-                const errors: Array<{ file: string; error: string }> = [];
+                // `refusal`: the API refused the file with its own reason (an ApiRefusalError).
+                const errors: Array<{ file: string; error: string; refusal?: boolean }> = [];
 
                 // Store file info for driver creation
                 const fileInfos: Array<{
@@ -1311,11 +1335,16 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         errors.push({
                             file: fileKey,
                             error: fileError?.message || "Unknown error",
+                            refusal: isApiRefusalError(fileError),
                         });
                     }
                 }
 
                 if (fileInfos.length === 0) {
+                    // When the API refused a file with its own reason (a quarantined asset with
+                    // the download block on), that reason is what the viewer shows (D172).
+                    const refused = errors.find((err) => err.refusal);
+                    if (refused) throw new ApiRefusalError(refused.error);
                     throw new Error("No files loaded successfully");
                 }
 
@@ -1810,6 +1839,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             } catch (error) {
                 console.error("Error loading USD assets:", error);
                 setError(error instanceof Error ? error.message : "Failed to load USD files");
+                setErrorIsRefusal(isApiRefusalError(error));
                 setIsLoading(false);
             }
         };
@@ -2418,9 +2448,21 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     };
 
     if (error) {
+        // Keyed apart from the viewer root below so React does not reuse the scene container for
+        // this panel: the renderer's canvas is appended to that container outside React, and a
+        // reused node would keep it above the message (D176). The message is centred in the panel
+        // and scrolls within it, so a narrow panel never clips it.
         return (
             <div
-                style={{ position: "relative", height: "100%", backgroundColor: "#f5f5f5" }}
+                key="usd-viewer-error"
+                style={{
+                    position: "relative",
+                    height: "100%",
+                    backgroundColor: "#f5f5f5",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
                 id="usd-viewer-root"
             >
                 <div
@@ -2428,28 +2470,38 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         color: "#d13212",
                         fontSize: "1.4em",
                         lineHeight: "1.5",
-                        width: "100%",
-                        position: "absolute",
-                        top: "50%",
-                        left: "50%",
-                        transform: "translate(-50%, -50%)",
+                        maxWidth: "800px",
+                        maxHeight: "100%",
+                        overflowY: "auto",
+                        boxSizing: "border-box",
                         textAlign: "center",
+                        whiteSpace: "pre-line",
                         padding: "20px",
                     }}
                 >
                     {error}
-                    <br />
-                    <br />
-                    <span style={{ fontSize: ".9em", color: "#d13212" }}>
-                        Please ensure the file is a valid USD format (.usd, .usda, .usdz)
-                    </span>
+                    {/* The API's refusal names its own reason; a format hint would point at the
+                        file instead (D170). */}
+                    {!errorIsRefusal && (
+                        <>
+                            <br />
+                            <br />
+                            <span style={{ fontSize: ".9em", color: "#d13212" }}>
+                                Please ensure the file is a valid USD format (.usd, .usda, .usdz)
+                            </span>
+                        </>
+                    )}
                 </div>
             </div>
         );
     }
 
     return (
-        <div style={{ position: "relative", height: "100%", width: "100%" }} id="usd-viewer-root">
+        <div
+            key="usd-viewer"
+            style={{ position: "relative", height: "100%", width: "100%" }}
+            id="usd-viewer-root"
+        >
             <div
                 ref={containerRef}
                 style={{ width: "100%", height: "100%" }}
@@ -2468,7 +2520,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         borderRadius: "4px",
                         padding: "12px 16px",
                         margin: "8px",
-                        zIndex: 1001,
+                        zIndex: VIEWER_LAYER.notice,
                         fontSize: "0.85em",
                         maxHeight: "150px",
                         overflowY: "auto",
@@ -2529,7 +2581,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             borderRadius: "4px",
                             padding: "12px 16px",
                             margin: "8px",
-                            zIndex: 1001,
+                            zIndex: VIEWER_LAYER.notice,
                             fontSize: "0.85em",
                         }}
                     >
@@ -2569,6 +2621,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && showPanel && (
                 <NeedleUSDPanel
+                    panelRef={panelRef}
                     scene={viewerInstanceRef.current.scene}
                     camera={viewerInstanceRef.current.camera}
                     renderer={viewerInstanceRef.current.renderer}
@@ -2598,6 +2651,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     onToggle3DSelection={setEnable3DSelection}
                     animationPaused={animationPaused}
                     onToggleAnimation={setAnimationPaused}
+                    keptTreeHeight={keptTreeHeight}
                 />
             )}
 
@@ -2615,7 +2669,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         borderRadius: "4px",
                         cursor: "pointer",
                         fontSize: "0.8em",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.panel,
                     }}
                     title="Show controls panel"
                 >
@@ -2625,6 +2679,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: fileErrors.length > 0 ? "auto" : "10px",
@@ -2635,7 +2690,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "8px",
                         borderRadius: "4px",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>Needle USD Viewer</div>

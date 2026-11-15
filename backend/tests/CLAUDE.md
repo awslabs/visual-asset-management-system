@@ -16,7 +16,22 @@ pytest -m integration             # Integration tests only
 pytest -m "not slow"              # Skip slow tests
 pytest tests/test_specific.py     # Single file
 pytest -v --strict-markers        # Verbose with strict markers
+pytest -n auto --dist loadfile    # Parallel, one worker per CPU (what CI runs)
 ```
+
+### Running in parallel (`pytest-xdist`)
+
+CI runs `pytest -q --tb=short -n auto --dist loadfile`. `--dist loadfile` sends every test in a file to the same worker, in file order, so a file's module-level setup and its in-file test order behave exactly as in a serial run. Only the order of files, and which files share a process, changes.
+
+Every worker runs the full collection, so module-level setup in `conftest.py` and in test modules runs once per worker, the same as in a serial run. A test must still pass whichever test files ran before it in the same process. In new or edited tests:
+
+-   Set env vars inside a test with `monkeypatch.setenv` (or `patch.dict(os.environ, ...)`), never a bare `os.environ[...] =` in a test or fixture body. Module-level env seeding at import time is fine.
+-   Patch module globals and `sys.modules` entries with `monkeypatch` / `patch` / `patch.dict` so they are restored, and reset module-level caches (`resourceNames._cache`, authorizer caches, Casbin enforcer caches) in the fixture that fills them.
+-   Write files only under `tmp_path` or a `tempfile` directory, never at a fixed path; workers run at the same time.
+-   Do not depend on another file's tests having run first. Check with two different worker counts (`-n 2` and `-n auto`); a test that fails only in one of them is order-dependent. Fix the test, never skip it.
+-   Do not take a timestamp from the live clock at import when the code under test compares it with its own clock (a grace period, a stale cutoff, a TTL). A worker can reach a file many minutes after it imported it, so build that timestamp when the test runs (in the test, a fixture, or a helper the test calls), or give the code a fixed `now`.
+
+The collected count is the same with and without xdist (`pytest --collect-only -q | tail -1`). Pass `-p no:xdist` to force a plain serial run.
 
 ---
 
@@ -64,7 +79,7 @@ tests/mocks/
 
 When adding a new dependency that a handler imports at module load time, add a matching mock module here if the real one requires AWS or Casbin bootstrapping.
 
-The add-on and custom lane modules are pure data and need no mock: `custom/customConstants.py`, `custom/customApiRoutes.py` and `custom/customResourceNames.py` import as the real package from `backend/backend/` on `sys.path`. `common.addonConstants` and `common.addonResourceNames` are real modules too, but `common` is a `MagicMock` in `tests/conftest.py` (not a package), so `tests/conftest.py` and the root `conftest.py` register `common.addonConstants` in `sys.modules` by path before anything loads `constants.py`, as they do for `common.apiRouteTypes` and `common.addonApiRoutes`. A test that needs populated lanes loads a private copy of `constants.py` with stand-in lane modules in `sys.modules` (see `tests/common/test_constants_extension_lanes.py`) and never edits the shipped lane files. Tests that pin the constraint lists pin the `CORE_*` lists, so they hold in a fork that fills the lanes.
+The add-on and custom lane modules are pure data and need no mock: `custom/customConstants.py`, `custom/customApiRoutes.py` and `custom/customResourceNames.py` import as the real package from `backend/backend/` on `sys.path`. `common.addonConstants` and `common.addonResourceNames` are real modules too, but `common` is a `MagicMock` in `tests/conftest.py` (not a package), so `tests/conftest.py` and the root `conftest.py` register `common.addonConstants` in `sys.modules` by path before anything loads `constants.py`, as they do for `common.apiRouteTypes` and `common.addonApiRoutes`; `tests/conftest.py` also registers `common.addonFeatures`, which both route modules import, and the audit action registry (`common.auditActionTypes`, `common.addonAuditActions`, `common.auditActions`, which imports the pure-data `custom/customAuditActions.py` by name) right after `common.apiRoutes`. Under the mock `common`, `from common import auditActions` returns a `MagicMock` attribute; import a registry module by its full name (`from common.auditActions import ...` or `importlib.import_module("common.auditActions")`). `common/addonFeatures.py` reads `ADDON_FEATURES_ENABLED` on every call, and with the variable unset, as in a test that does not set it, the route and object-type listings include every add-on entry; a test of a listing that leaves a disabled add-on out sets or deletes the variable with `monkeypatch` (`tests/handlers/auth/test_addon_listings_follow_deployment.py`). The `handlers.auth` mock carries `AUTH_METHOD_JWT` and `AUTH_METHOD_API_KEY`, which `tests/handlers/auth/test_request_to_claims_authMethod.py` pins to the real module's values. A test that needs populated lanes loads a private copy of `constants.py` with stand-in lane modules in `sys.modules` (see `tests/common/test_constants_extension_lanes.py`) and never edits the shipped lane files. Tests that pin the constraint lists pin the `CORE_*` lists, so they hold in a fork that fills the lanes. `customLogging/logger.py` and `common/logRedaction.py` import their merged key lists from `common.constants`, so `tests/conftest.py` also loads the real `constants.py` once by path and pins `LOG_SENSITIVE_KEYS` and `LOG_TEXT_SENSITIVE_KEYS` on the mock `common.constants`; a redactor imported under the mock then redacts the real keys.
 
 ### A mock must be at least as wide as the thing it replaces
 
@@ -241,6 +256,15 @@ call from a read-only path, a validator regex that hardcodes a partition. Nor a 
 The shortcut "the forbidden literal appears nowhere in the source, so the test is spent" is **wrong** —
 a forbid-forever guardrail also has zero occurrences, and that absence is the guard working. Full
 criterion: root `CLAUDE.md` Rule 13.
+
+### Add-on tests live with the add-on
+
+An add-on's tests sit under `tests/handlers/addon/<add-on>/`, and its own test-suite rules (harness
+modules, captured fixtures) live in that add-on's `CLAUDE.md`. An add-on that ships routes records, per
+shipped permission template, the methods each template allows on them as `ROUTE_GRANTS` in
+`tests/handlers/addon/<add-on>/addonRouteGrants.py`: `tests/handlers/auth/test_permission_templates_addon_routes.py`
+merges every such file, refuses a route two sources decide, and evaluates each decision through the real
+policy generation and Casbin evaluation.
 
 ---
 

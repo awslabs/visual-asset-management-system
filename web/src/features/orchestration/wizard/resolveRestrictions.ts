@@ -185,33 +185,49 @@ export const METADATA_LABELS = {
     fileMetadata: "File metadata",
     fileAttributes: "File attributes",
     databaseMetadata: "Database metadata",
+    assetFileMetadata: "Per-file metadata for whole-asset and folder runs",
+    metadataSchema: "Metadata schema",
 };
 
 export type MetadataKey = keyof typeof METADATA_LABELS;
 
 /**
  * Every metadata key, widest entity first, so anything derived from this list — the resolved-metadata
- * summary and the forms' toggle rows — reads database -> asset -> file as the containment it describes.
+ * summary and the forms' toggle rows — reads database -> asset -> file as the containment it describes,
+ * followed by the two opt-in envelope sections.
  */
 const METADATA_KEYS: MetadataKey[] = [
     "databaseMetadata",
     "assetMetadata",
     "fileMetadata",
     "fileAttributes",
+    "assetFileMetadata",
+    "metadataSchema",
 ];
 
 /**
  * The value a metadataInputs map carries for a key it OMITS. A stored map may be partial two ways: a
  * record written before a key existed cannot carry it, and the API stores systemConfig wholesale, so a
- * client that sends only the keys it cares about persists exactly those. All four default ON, so a
- * configuration that says nothing about a metadata type gets it. Mirrors METADATA_INPUT_DEFAULTS in
- * common/workflows/executionRecords.py.
+ * client that sends only the keys it cares about persists exactly those. The four metadata types
+ * default ON, so a configuration that says nothing about a metadata type gets it; the two opt-in
+ * sections (assetFileMetadata, metadataSchema) default OFF, so a record written before they existed
+ * keeps the envelope it had. Mirrors METADATA_INPUT_DEFAULTS in common/workflows/executionRecords.py.
  */
 export const METADATA_INPUT_DEFAULTS: Record<MetadataKey, boolean> = {
     assetMetadata: true,
     fileMetadata: true,
     fileAttributes: true,
     databaseMetadata: true,
+    assetFileMetadata: false,
+    metadataSchema: false,
+};
+
+/** Help text for the two opt-in metadata inputs, shared by the pipeline, workflow and template forms. */
+export const OPT_IN_METADATA_HELP: Record<"assetFileMetadata" | "metadataSchema", string> = {
+    assetFileMetadata:
+        "When a run selects a whole asset or a folder, also include one record for each current file under it, carrying the file metadata and attributes the file toggles allow. Up to 500 files per selection; archived and preview files are left out, and a run over the limit reports how many files it left out. Off by default.",
+    metadataSchema:
+        "Include the metadata schema of each involved database (its own fields and the GLOBAL ones) for asset metadata, file metadata and file attributes, and whether the database restricts metadata to its schemas. A schema the user running the workflow may not read is left out with a warning. Off by default.",
 };
 
 /**

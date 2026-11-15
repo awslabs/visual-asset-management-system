@@ -80,7 +80,7 @@ def _natural_key(text):
 
 def _version(entry):
     value = entry.get("versionId")
-    return value if value and value != "null" else None
+    return value or None
 
 
 def _ordered_inputs(definition):

@@ -1,10 +1,15 @@
-"""Tests for VamsClient helper logic (pagination + search trimming).
+"""Tests for VamsClient helper logic (pagination, search trimming, the feature-switch accessor and
+pre-flight).
 
 These avoid constructing a real VamsClient (which needs a vamscli profile) by
 bypassing __init__ and setting only the attributes the helpers use.
 """
 
-from vams_mcp.client import VamsClient
+from unittest.mock import MagicMock
+
+import pytest
+
+from vams_mcp.client import FeatureDisabledError, VamsClient
 from vams_mcp.config import Config
 
 
@@ -299,6 +304,34 @@ def test_trim_search_results():
     assert trimmed["results"][0] == {"id": "a1", "score": 1.5, "source": {"name": "Asset One"}}
 
 
+def test_trim_search_results_exact_total_has_no_marker():
+    raw = {"hits": {"total": {"value": 7, "relation": "eq"}, "hits": []}}
+    trimmed = VamsClient.trim_search_results(raw)
+    assert trimmed["total"] == 7
+    assert trimmed["total_is_lower_bound"] is False
+    assert trimmed["total_display"] == "7"
+
+
+def test_trim_search_results_lower_bound_total_is_marked():
+    raw = {"hits": {"total": {"value": 120, "relation": "gte"}, "hits": []}}
+    trimmed = VamsClient.trim_search_results(raw)
+    # The number stays numeric for existing consumers; the marker is carried beside it.
+    assert trimmed["total"] == 120
+    assert trimmed["total_is_lower_bound"] is True
+    assert trimmed["total_display"] == "120+"
+
+
+def test_trim_search_results_total_without_relation_is_exact():
+    # Older backends omit `relation`; a bare-number total is also accepted.
+    assert VamsClient.trim_search_results({"hits": {"total": {"value": 3}, "hits": []}})[
+        "total_display"
+    ] == "3"
+    bare = VamsClient.trim_search_results({"hits": {"total": 4, "hits": []}})
+    assert bare["total"] == 4
+    assert bare["total_is_lower_bound"] is False
+    assert bare["total_display"] == "4"
+
+
 def test_trim_search_results_max_hits():
     hits = [{"_id": str(i), "_score": 1, "_source": {}} for i in range(10)]
     raw = {"hits": {"total": {"value": 10}, "hits": hits}}
@@ -309,12 +342,48 @@ def test_trim_search_results_max_hits():
 
 def test_trim_search_results_empty():
     trimmed = VamsClient.trim_search_results({})
-    assert trimmed == {"total": None, "returned": 0, "results": []}
+    assert trimmed == {
+        "total": None,
+        "total_is_lower_bound": False,
+        "total_display": None,
+        "returned": 0,
+        "results": [],
+    }
+
+
+def _snapshot_client(present: bool) -> VamsClient:
+    client = object.__new__(VamsClient)
+    client._profile = MagicMock()
+    client._profile.has_feature_switch.return_value = present
+    return client
+
+
+def test_has_feature_reads_the_profiles_login_time_snapshot():
+    """The pre-flight's source of truth is the vamscli profile, so `vamscli auth login` is the one
+    refresh for the CLI and this server alike."""
+    client = _snapshot_client(False)
+    assert client.has_feature("LOCATIONSERVICES") is False
+    client._profile.has_feature_switch.assert_called_once_with("LOCATIONSERVICES")
+
+
+def test_require_feature_raises_the_given_message_when_the_switch_is_absent():
+    """A feature-gated tool's pre-flight: `@tool_result` hands this back as `FeatureDisabledError`
+    data, in the caller's own words, before any request is made."""
+    client = _snapshot_client(False)
+    with pytest.raises(FeatureDisabledError) as raised:
+        client.require_feature("LOCATIONSERVICES", "Location services are not enabled.")
+    assert str(raised.value) == "Location services are not enabled."
+    client._profile.has_feature_switch.assert_called_once_with("LOCATIONSERVICES")
+
+
+def test_require_feature_passes_when_the_switch_is_present():
+    # Control for the refusal above: the same call with the switch in the snapshot raises nothing.
+    client = _snapshot_client(True)
+    assert client.require_feature("LOCATIONSERVICES", "unused") is None
+    client._profile.has_feature_switch.assert_called_once_with("LOCATIONSERVICES")
 
 
 def test_search_enabled_follows_the_noopensearch_feature_switch():
-    from unittest.mock import MagicMock
-
     client = _client()
     client._profile = MagicMock()
 

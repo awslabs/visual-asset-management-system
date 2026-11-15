@@ -16,11 +16,13 @@ import {
 import { SearchPreferences, FIELD_MAPPINGS, SearchFilters } from "../types";
 import { RECORD_TYPE_FIELD } from "../utils/recordType";
 import DraggableColumnList from "./DraggableColumnList";
+import { searchRunningReason } from "./searchRunning";
 
 interface PreferencesPanelProps {
     preferences: SearchPreferences;
     onPreferencesChange: (prefs: Partial<SearchPreferences>) => void;
     recordType: "asset" | "file";
+    /** True while a search runs: the controls keep focus and ignore input (see searchRunning). */
     disabled?: boolean;
     filters: SearchFilters;
     onFilterChange: (key: string, value: any) => void;
@@ -174,7 +176,7 @@ const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                             })
                         }
                         options={pageSizeOptions}
-                        disabled={disabled}
+                        readOnly={disabled}
                     />
                 </FormField>
 
@@ -205,7 +207,7 @@ const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                             onFilterChange("showResultExplanation", detail.checked)
                         }
                         checked={filters.showResultExplanation || false}
-                        disabled={disabled}
+                        readOnly={disabled}
                     >
                         Show result explanation
                     </Toggle>
@@ -213,7 +215,12 @@ const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
 
                 {/* Reset Button */}
                 <Box textAlign="center">
-                    <Button onClick={handleResetPreferences} disabled={disabled} iconName="refresh">
+                    <Button
+                        onClick={handleResetPreferences}
+                        disabled={disabled}
+                        disabledReason={searchRunningReason(disabled)}
+                        iconName="refresh"
+                    >
                         Reset to Defaults
                     </Button>
                 </Box>

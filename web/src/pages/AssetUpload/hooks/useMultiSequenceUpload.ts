@@ -39,6 +39,27 @@ interface SequenceInitResult {
     response: InitializeUploadResponse;
 }
 
+/** A non-empty file whose uploaded parts are not all recorded when its sequence is completed. */
+export interface IncompleteFileParts {
+    fileIndex: number;
+    relativeKey: string;
+    expectedParts: number;
+    recordedParts: number;
+}
+
+/**
+ * The files a completion response says the server refused.
+ *
+ * Only an EXPLICIT `success === false` counts: a result omitting `success` is not evidence of
+ * failure, and treating a missing field as one would fail every upload against a deployment
+ * predating that field.
+ */
+export function getRefusedFileResults(response: any): FileCompletionResult[] {
+    return (response?.fileResults || []).filter(
+        (fileResult: FileCompletionResult) => fileResult?.success === false
+    );
+}
+
 export function useMultiSequenceUpload() {
     const [sequenceUploadIds, setSequenceUploadIds] = useState<Map<number, string>>(new Map());
     const [sequenceInitStatuses, setSequenceInitStatuses] = useState<
@@ -237,6 +258,7 @@ export function useMultiSequenceUpload() {
                 });
 
                 // Prepare completion files for this sequence using init response
+                const incompleteFiles: IncompleteFileParts[] = [];
                 const completionFiles = initResponse.files.map((fileResponse, responseIndex) => {
                     const fileInfo = sequence.files[responseIndex];
 
@@ -251,12 +273,44 @@ export function useMultiSequenceUpload() {
 
                     const parts = filePartsMap.get(fileInfo.index) || [];
 
+                    // Empty parts tell the backend to abandon the file, so a file the user did not
+                    // cancel must carry every part it was given an upload URL for. A non-empty file
+                    // short of that would be dropped (or stored empty) while the page reports it
+                    // uploaded; stop the completion and fail the file instead.
+                    const expectedParts = fileResponse.partUploadUrls?.length || 0;
+                    const fileSize = fileUploadItems?.find((i) => i.index === fileInfo.index)?.size;
+                    if (
+                        parts.length < expectedParts ||
+                        (parts.length === 0 && (fileSize || 0) > 0)
+                    ) {
+                        incompleteFiles.push({
+                            fileIndex: fileInfo.index,
+                            relativeKey: fileResponse.relativeKey,
+                            expectedParts,
+                            recordedParts: parts.length,
+                        });
+                    }
+
                     return {
                         relativeKey: fileResponse.relativeKey,
                         uploadIdS3: fileResponse.uploadIdS3,
                         parts,
                     };
                 });
+
+                if (incompleteFiles.length > 0) {
+                    const incompleteError = new Error(
+                        `Sequence ${sequence.sequenceId} was not completed: ` +
+                            incompleteFiles
+                                .map(
+                                    (f) =>
+                                        `${f.relativeKey} has ${f.recordedParts} of ${f.expectedParts} uploaded parts recorded`
+                                )
+                                .join(", ")
+                    );
+                    (incompleteError as any).incompleteFiles = incompleteFiles;
+                    throw incompleteError;
+                }
 
                 // Check if this is an asset preview sequence
                 const isAssetPreviewSequence = sequence.files.some(
@@ -281,12 +335,8 @@ export function useMultiSequenceUpload() {
                     [429, 500, 502, 503]
                 );
 
-                // Record anything the server refused. Only an EXPLICIT false counts: a result
-                // omitting `success` is not evidence of failure, and treating a missing field as one
-                // would fail every upload against a deployment predating that field.
-                const refused = (response?.fileResults || []).filter(
-                    (fileResult) => fileResult?.success === false
-                );
+                // Record anything the server refused.
+                const refused = getRefusedFileResults(response);
                 if (refused.length > 0) {
                     console.warn(
                         `Sequence ${sequence.sequenceId}: ${refused.length} file(s) were rejected at ` +
@@ -313,6 +363,18 @@ export function useMultiSequenceUpload() {
 
                 return response;
             } catch (error: any) {
+                if (error?.incompleteFiles) {
+                    // Stopped before any request was sent: fail the sequence with the message as
+                    // written, so the file names reach the page unchanged.
+                    console.error("Sequence completion stopped before sending:", error.message);
+                    setSequenceCompleteStatuses((prev) => {
+                        const newMap = new Map(prev);
+                        newMap.set(sequence.sequenceId, "failed");
+                        return newMap;
+                    });
+                    throw error;
+                }
+
                 const errorMessage = extractErrorMessage(error);
                 const statusCode = extractStatusCode(error);
                 console.error(

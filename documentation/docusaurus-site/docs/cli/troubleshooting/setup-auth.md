@@ -348,6 +348,21 @@ The deployment is unreachable, the base URL is incorrect, or a network device is
 2. Verify the deployment is running and reachable from your network.
 3. Retry after a short delay; transient throttling and timeouts are retried automatically with exponential backoff.
 
+### Version Check Refused
+
+**Symptoms:**
+
+-   `vamscli auth login` fails with `Permission Denied: Access forbidden. The VAMS API is reachable, but its authorizer refused the version check (HTTP 403).`
+
+**Cause:**
+
+The API answered, so the deployment is running and the base URL is correct. Its authorizer denied a request that carries no sign-in. A deployment that sets `app.authProvider.authorizerOptions.allowedIpRanges` answers this way to a caller whose address is outside those ranges.
+
+**Resolution:**
+
+1. Ask the VAMS administrator whether the deployment restricts API access by source IP address, and whether your address is in the allowed ranges.
+2. Run the command from a network inside the allowed ranges, for example through the corporate VPN.
+
 ### TLS Certificate Errors
 
 **Symptoms:**

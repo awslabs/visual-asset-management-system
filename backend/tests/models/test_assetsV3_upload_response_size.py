@@ -71,7 +71,7 @@ def _temp_key(relative_key):
 @functools.lru_cache(maxsize=None)
 def _signing_client(region):
     session = boto3.session.Session(aws_access_key_id="testing".ljust(20, "0"),
-                                    aws_secret_access_key="testing".ljust(40, "0"),
+                                    aws_secret_access_key="testing".ljust(40, "0"),  # pragma: allowlist secret
                                     aws_session_token=SESSION_TOKEN)
     return session.client("s3", region_name=region, config=SIGNING_CONFIG)
 

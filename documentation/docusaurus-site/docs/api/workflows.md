@@ -6,6 +6,10 @@ The Workflows API allows you to create, retrieve, and delete workflows that orch
 All endpoints require a valid JWT token in the `Authorization` header. Workflows are subject to two-tier Casbin authorization.
 :::
 
+:::note[System workflows]
+A workflow registered from a `vamsSchema` bundle that declares `isSystem: true` is a **system workflow**, owned by the deployment. Every workflow response carries `isSystem` — `false` for a workflow created through this API, because the create and update bodies ignore the key. A system workflow accepts only `enabled` on [Update a workflow](#update-a-workflow); refuses [Delete a workflow](#delete-a-workflow) and the `archived` restore; and holds its triggers to their shipped filters and default templates — [Set a trigger](#set-a-trigger) may switch a stored trigger on or off, while adding a trigger under a new key or [deleting one](#delete-a-trigger) is refused. Each refusal is a `400` whose `message` names the rule. The switches are pauses: the deployment re-asserts the shipped values — the workflow enabled, the trigger's `enabled` set from `autoRegisterAutoTriggerOnFileUpload` — when it next registers the bundle. See [System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines).
+:::
+
 ---
 
 ## List all workflows
@@ -74,6 +78,7 @@ Three things shorten a page, so page until `NextToken` is absent rather than unt
                 "subDashboardUrl": "",
                 "enabled": true,
                 "archived": false,
+                "isSystem": false,
                 "workflow_arn": "arn:aws:states:us-east-1:123456789012:stateMachine:vams-convert-and-preview",
                 "dateCreated": "2026-03-15T10:30:00Z",
                 "dateModified": "2026-03-16T14:20:00Z",
@@ -167,7 +172,7 @@ Archived workflows are hidden by default. Set `includeArchived=true` to retrieve
 
 ### Response
 
-Returns a single workflow object, in the same shape as an item of [List all workflows](#list-all-workflows) plus a `triggers` array describing the workflow's configured triggers (each entry carrying `triggerType`, `triggerConfig`, and `enabled`). `executionCount`, `triggerCount`, and `triggersEnabledCount` are computed for list responses and are `null` here. See [System configuration](#system-configuration) for the shape of `systemConfig`.
+Returns a single workflow object, in the same shape as an item of [List all workflows](#list-all-workflows) plus a `triggers` array describing the workflow's configured triggers (each entry carrying `triggerType`, `triggerConfig`, and `enabled`). `executionCount`, `triggerCount`, and `triggersEnabledCount` are computed for list responses and are `null` here. See [System configuration](#system-configuration) for the shape of `systemConfig`. `isSystem` is `true` only for a workflow the deployment registered from a bundle that declares it.
 
 A workflow's AWS Step Functions definition is regenerated whenever a referenced pipeline's execution settings change. When that redeploy fails, the workflow carries `deploymentStale: true` and a `deploymentStaleReason`; both are `null` otherwise. A stale workflow is redeployed on its next save or launch, and a launch never runs the stale definition (see [Execute a workflow](#execute-a-workflow)).
 
@@ -306,16 +311,16 @@ PUT /database/{databaseId}/workflows/{workflowId}
 
 At least one field must be supplied.
 
-| Field                | Type    | Required | Description                                                                                                                       |
-| -------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `workflowName`       | string  | No       | Human-readable workflow name, at most 256 characters.                                                                             |
-| `category`           | string  | No       | Grouping label, at most 256 characters.                                                                                           |
-| `description`        | string  | No       | Workflow description, at most 1,024 characters.                                                                                   |
-| `specifiedPipelines` | array   | No       | Ordered list of up to 100 pipeline references, replaced wholesale. See [Specified pipelines](#specified-pipelines).               |
-| `systemConfig`       | object  | No       | Input handling, asset-scope gating, and output defaults, replaced wholesale. See [System configuration](#system-configuration).   |
-| `subDashboardUrl`    | string  | No       | Absolute `http://` or `https://` URL of an external dashboard associated with the workflow, at most 2,048 characters.             |
-| `enabled`            | boolean | No       | Whether the workflow is enabled.                                                                                                  |
-| `archived`           | boolean | No       | The soft-delete flag. Send `false` to restore a workflow archived by [Delete a workflow](#delete-a-workflow); `true` archives it. |
+| Field                | Type    | Required | Description                                                                                                                                                                               |
+| -------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workflowName`       | string  | No       | Human-readable workflow name, at most 256 characters.                                                                                                                                     |
+| `category`           | string  | No       | Grouping label, at most 256 characters.                                                                                                                                                   |
+| `description`        | string  | No       | Workflow description, at most 1,024 characters.                                                                                                                                           |
+| `specifiedPipelines` | array   | No       | Ordered list of up to 100 pipeline references, replaced wholesale. See [Specified pipelines](#specified-pipelines).                                                                       |
+| `systemConfig`       | object  | No       | Input handling, asset-scope gating, and output defaults, replaced wholesale. See [System configuration](#system-configuration).                                                           |
+| `subDashboardUrl`    | string  | No       | Absolute `http://` or `https://` URL of an external dashboard associated with the workflow, at most 2,048 characters.                                                                     |
+| `enabled`            | boolean | No       | Whether the workflow is enabled.                                                                                                                                                          |
+| `archived`           | boolean | No       | The soft-delete flag. Send `false` to restore a workflow archived by [Delete a workflow](#delete-a-workflow); `true` archives it and deletes its trigger rows, as Delete a workflow does. |
 
 :::tip[Enable or disable a workflow]
 Set `enabled` to `true` or `false` to enable or disable a workflow without changing any other field.
@@ -323,6 +328,10 @@ Set `enabled` to `true` or `false` to enable or disable a workflow without chang
 
 :::tip[Restore an archived workflow]
 `PUT` with `{"archived": false}` returns an archived workflow to the active listings under its original identifier, together with every execution record that names it. Set `enabled` back to `true` in the same request — the archive also disables the workflow.
+:::
+
+:::warning[A system workflow accepts only `enabled`]
+When the stored workflow carries `isSystem: true`, the body may contain no field other than `enabled`. The rule is by key: any other field is refused with `400` even when its value equals the stored one, and the message names the first such field in name order: `System workflows are read-only except "enabled"; "<field>" cannot be changed.` A body that sets `archived` is the restore and is refused with `System workflows cannot be archived or restored through the API; the deployment owns them.` A request that pairs `enabled` with a refused field is refused as a whole, so `enabled` does not change either. Keys the request model does not define, `isSystem` and keys that differ only in letter case among them, are ignored and never stored, as on every workflow. Disabling is a pause: the deployment re-enables the workflow when it next registers the bundle.
 :::
 
 :::warning[`specifiedPipelines` and `systemConfig` replace the stored value]
@@ -344,12 +353,12 @@ Returns the updated workflow, in the same shape as [Get a workflow](#get-a-workf
 
 ### Error responses
 
-| Status | Description                                                                                                                                                             |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error, no field supplied, a referenced pipeline out of the workflow's database scope or archived, or a save-consistency error (`saveErrors` under `message`) |
-| `403`  | Not authorized (API, the workflow as read, the workflow as changed, or one of the referenced pipelines)                                                                 |
-| `404`  | Workflow not found, or a referenced pipeline was not found                                                                                                              |
-| `500`  | Internal server error                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                        |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Validation error, no field supplied, a referenced pipeline out of the workflow's database scope or archived, a save-consistency error (`saveErrors` under `message`), or a field other than `enabled` on a system workflow (`System workflows are read-only except "enabled"; "<field>" cannot be changed.`, or the archive refusal when the body sets `archived`) |
+| `403`  | Not authorized (API, the workflow as read, the workflow as changed, or one of the referenced pipelines)                                                                                                                                                                                                                                                            |
+| `404`  | Workflow not found, or a referenced pipeline was not found                                                                                                                                                                                                                                                                                                         |
+| `500`  | Internal server error                                                                                                                                                                                                                                                                                                                                              |
 
 :::note[A save-consistency problem blocks or warns depending on the request]
 When the request supplies `specifiedPipelines`, a consistency problem in that set is a `400` carrying a `saveErrors` list. An edit that leaves the stored pipeline set untouched — a rename, a description change, enable or disable — reports the same conditions as `warnings` on a successful save instead, so a workflow whose pipeline was archived after it was added stays editable without replacing the pipeline list.
@@ -360,6 +369,8 @@ When the request supplies `specifiedPipelines`, a consistency problem in that se
 ## Delete a workflow
 
 Archives a workflow. The delete is a soft-delete that sets the workflow's `archived` flag to `true` and its `enabled` flag to `false`; the record is retained but hidden from listings and lookups unless `includeArchived=true` is supplied. The archive is reversible — see [Update a workflow](#update-a-workflow) for the restore.
+
+The workflow's trigger rows are deleted with the archive, so an upload matching a former trigger no longer launches an execution the workflow would refuse. The trigger deletion is not reversed by a restore: re-create any triggers a restored workflow needs with [Set a trigger](#set-a-trigger). A trigger cannot be set while the workflow is archived: [Set a trigger](#set-a-trigger) answers `400`, and [Delete a trigger](#delete-a-trigger) is still accepted. The upload trigger dispatcher also skips a trigger whose workflow is archived or disabled, so a disabled workflow keeps its trigger rows and resumes firing when re-enabled.
 
 ```
 DELETE /database/{databaseId}/workflows/{workflowId}
@@ -382,12 +393,12 @@ DELETE /database/{databaseId}/workflows/{workflowId}
 
 ### Error responses
 
-| Status | Description             |
-| ------ | ----------------------- |
-| `400`  | Invalid path parameters |
-| `403`  | Not authorized          |
-| `404`  | Workflow not found      |
-| `500`  | Internal server error   |
+| Status | Description                                                                                                                                                  |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid path parameters, or the workflow is a system workflow (`System workflows cannot be archived or restored through the API; the deployment owns them.`) |
+| `403`  | Not authorized                                                                                                                                               |
+| `404`  | Workflow not found                                                                                                                                           |
+| `500`  | Internal server error                                                                                                                                        |
 
 ---
 
@@ -412,12 +423,14 @@ A response also reports `triggerBaseType` (the plain type, for grouping and disp
 
 Two conditions on an additional trigger of a type are rejected with `400`; the headless-template rejections are described under [Set a trigger](#set-a-trigger):
 
--   **A workflow that serializes runs per asset supports only one trigger of a type.** When `concurrencyRestriction` is `perAsset`, several triggers firing the same workflow would contend on that asset. `perInputFile` is not restricted this way — overlapping filters there are caught by the execution's own per-file check, which fails that trigger's execution rather than the save.
+-   **A workflow that serializes runs per asset supports only one trigger of a type.** When `concurrencyRestriction` is `perAsset`, several triggers firing the same workflow would contend on that asset. `perInputFile` and `perInputFileVersion` are not restricted this way — overlapping filters there are caught by the execution's own lock, which refuses that trigger's launch rather than the save.
 -   **Two triggers of one type may not name the same default templates.** The templates are what distinguish them, so the same set twice is the same trigger declared twice. This includes two triggers that both name no templates: naming none is a valid choice when no pipeline requires one, which makes it a comparable value.
 
 Trigger endpoints are authorized on the parent workflow: API-level access is checked first, followed by object-level Casbin policy enforcement on the owning workflow.
 
 A trigger-launched execution runs as the reserved system identity rather than as the user whose action fired the trigger, and its execution record reflects this (`triggerType` `File-Upload`, `triggeredByUserId` set to the system identity). This is intentional: the user who uploaded a file may not hold permission to run the workflow, but the trigger must still process the upload reliably, so the execution is decoupled from the acting user's permissions. Executions started directly through the [execute endpoint](#execute-a-workflow) run as the calling user.
+
+On a **system workflow** (`isSystem: true`) the triggers are part of the shipped bundle. [Set a trigger](#set-a-trigger) may switch a stored trigger on or off: `enabled` is free, and `inputFileFilters` and `defaultTemplateIds`, when sent, must equal the stored trigger — the comparison is made after the same normalisation the store applies, so re-sending the stored trigger with `enabled` flipped is accepted, and a body carrying only `enabled` keeps the stored filters and templates. A key with no stored trigger, a locked field that differs, and [Delete a trigger](#delete-a-trigger) are refused with `400` (`Triggers of system workflows cannot be added or deleted.`, or a message naming the field). A request that pairs `enabled` with a changed filter or template set is refused as a whole, so `enabled` is not changed either.
 
 ### List triggers
 
@@ -610,12 +623,12 @@ This second check is best-effort: a step whose pipeline record cannot be read, o
 
 #### Error responses
 
-| Status | Description                                                                                                                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error; a chosen default template has a required tag with no default value; or a pipeline of the workflow requires a template and no default template is set for it. Both template rejections report `triggerTemplateErrors`. |
-| `403`  | Not authorized                                                                                                                                                                                                                          |
-| `404`  | Workflow not found                                                                                                                                                                                                                      |
-| `500`  | Internal server error                                                                                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Validation error; a chosen default template has a required tag with no default value; a pipeline of the workflow requires a template and no default template is set for it (both report `triggerTemplateErrors`); or, on a system workflow, a trigger key with no stored trigger (`Triggers of system workflows cannot be added or deleted.`) or a changed `inputFileFilters`/`defaultTemplateIds` (a message naming the field); or the workflow is archived (`Workflow is archived and cannot have a trigger set. Restore the workflow first.`) |
+| `403`  | Not authorized                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `404`  | Workflow not found                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `500`  | Internal server error                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ### Delete a trigger
 
@@ -643,12 +656,12 @@ DELETE /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
 
 #### Error responses
 
-| Status | Description                   |
-| ------ | ----------------------------- |
-| `400`  | Invalid path parameters       |
-| `403`  | Not authorized                |
-| `404`  | Workflow or trigger not found |
-| `500`  | Internal server error         |
+| Status | Description                                                                                                                |
+| ------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid path parameters, or the workflow is a system workflow (`Triggers of system workflows cannot be added or deleted.`) |
+| `403`  | Not authorized                                                                                                             |
+| `404`  | Workflow or trigger not found                                                                                              |
+| `500`  | Internal server error                                                                                                      |
 
 ---
 
@@ -699,9 +712,9 @@ The `systemConfig` object describes how a workflow consumes input, which asset s
 | --------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `inputFileArity`                              | string  | Number of input files the workflow consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `assetScope`                                  | object  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted asset selections. See [Asset scope](#asset-scope).                                                                                                                                                                                                                                                                                                                                                         |
-| `metadataInputs`                              | object  | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata` — which metadata is gathered and passed to the pipelines. See [Metadata inputs](#metadata-inputs).                                                                                                                                                                                                                                                                                                                                     |
+| `metadataInputs`                              | object  | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata`, and the opt-in `assetFileMetadata` and `metadataSchema` — which metadata is gathered and passed to the pipelines. See [Metadata inputs](#metadata-inputs).                                                                                                                                                                                                                                                                            |
 | `inputFileFilters`                            | object  | `allow` and `exclude` arrays. Each entry matches by extension (`*.glb`, with `.glb` also accepted as shorthand), exact path (`/models/x.glb`), file name, or wildcard (`*.previewFile.*`, `/models/*`). Matching is case-insensitive. See [Input-file filters](#input-file-filters).                                                                                                                                                                                                                                      |
-| `concurrencyRestriction`                      | string  | How concurrent executions are limited: `none`, `perAsset`, or `perInputFile`.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `concurrencyRestriction`                      | string  | How concurrent executions are limited: `none`, `perAsset`, `perInputFile`, or `perInputFileVersion`. See [Concurrency restriction](#concurrency-restriction).                                                                                                                                                                                                                                                                                                                                                             |
 | `outputTarget`                                | object  | Where the workflow writes its output. See [Output target](#output-target).                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `allowWorkflowTriggerChaining`                | boolean | Whether a file written by **another** workflow's execution may fire this workflow's triggers -- for example generating a preview or metadata from a conversion pipeline's output. A file whose recorded provenance names this workflow never re-triggers it, whatever this is set to; that check is narrower than it reads, and nothing bounds a chain of workflows firing one another. A chained file must still match the trigger's `inputFileFilters`. Defaults to `false`. See [Trigger chaining](#trigger-chaining). |
 | `defaultOutputFileBaseExecutionPathExtension` | string  | The output path prefix an execution uses when its request supplies none. Stored **unresolved**, so `{{tag}}` placeholders resolve per run — one stored `/{{jobName}}/` gives every execution its own output folder. Empty means no default. See [Output path prefix](#output-path-prefix).                                                                                                                                                                                                                                |
@@ -718,6 +731,8 @@ Both lists in an `inputFileFilters` block are optional, and an absent list is no
 A filter therefore only ever narrows eligibility, never grants it.
 
 A match-everything pattern in an `exclude` list is **rejected** when the pipeline, template, workflow, or trigger is saved: because `exclude` is applied last, it would remove every file and leave the pipeline or workflow permanently unable to run. Leave the list empty to exclude nothing.
+
+Extension patterns do not apply to a whole-asset (`/`) or folder (`/folder/`) selection. Such a selection names a container rather than a file, so the `*.ext` and `.ext` forms are dropped from both lists for it, while path and name globs and exact keys still apply. An `allow` list made up only of extension patterns therefore admits a container selection, and the `assetScope` booleans `wholeAssetAllowed` and `folderAllowed` decide whether it is accepted.
 
 Filters resolve down a three-level chain, and an open list defers to the next level:
 
@@ -750,18 +765,20 @@ The two span keys — `crossAssetAllowed` and `singleAssetOnly` — bound the **
 
 ### Metadata inputs
 
-`metadataInputs` is four independent booleans naming the metadata an execution gathers and hands to its pipelines:
+`metadataInputs` is four independent booleans naming the metadata an execution gathers and hands to its pipelines, plus two opt-in booleans that add a section to the metadata file:
 
-| Key                | Metadata gathered                      |
-| ------------------ | -------------------------------------- |
-| `assetMetadata`    | Each involved asset's own metadata.    |
-| `fileMetadata`     | Each input file's metadata.            |
-| `fileAttributes`   | Each input file's attributes.          |
-| `databaseMetadata` | Each involved database's own metadata. |
+| Key                 | Metadata gathered                                                                                                                                        | Default |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `assetMetadata`     | Each involved asset's own metadata.                                                                                                                      | `true`  |
+| `fileMetadata`      | Each input file's metadata.                                                                                                                              | `true`  |
+| `fileAttributes`    | Each input file's attributes.                                                                                                                            | `true`  |
+| `databaseMetadata`  | Each involved database's own metadata.                                                                                                                   | `true`  |
+| `assetFileMetadata` | For a whole-asset (`/`) or folder selection, one record per current file under it (at most 500 per selection).                                           | `false` |
+| `metadataSchema`    | Each involved database's aggregated metadata schema (its own and `GLOBAL`) and its `restrictMetadataOutsideSchemas` flag, read after a permission check. | `false` |
 
-Every key defaults to `true`, so the map is a list of opt-outs rather than opt-ins: a key the map omits is gathered. Create and update store `systemConfig` as sent, so a request naming only some keys persists exactly those and the rest keep their default — sending `{"fileMetadata": false}` suppresses file metadata and leaves the other three on. A key a block does not carry therefore reads as its default rather than as an opt-out.
+The four metadata types default to `true`, so for them the map is a list of opt-outs rather than opt-ins: a key the map omits is gathered. The two opt-in keys default to `false`, and the run gathers an opt-in section only when the workflow turns it on and at least one step's pipeline (or chosen template's `overrides`) asks for it. Create and update store `systemConfig` as sent, so a request naming only some keys persists exactly those and the rest keep their default — sending `{"fileMetadata": false}` suppresses file metadata and leaves the other three types on. A key a block does not carry therefore reads as its default rather than as an opt-out. See [Metadata inputs](pipelines.md#metadata-inputs) in the Pipelines API for the opt-in sections' limits, their warnings, and how the schema read is authorized.
 
-The workflow's booleans are the outer gate; each pipeline's own `metadataInputs` decides what that step receives. A type reaches a pipeline only when both have it on, so a workflow that gates a type off suppresses it for every step. A workflow response reports the resolved combination as `aggregateWorkflowPipelineMetadataInputs`, with `gatedOffByWorkflow` naming the types a pipeline asked for but the workflow suppresses.
+The workflow's booleans are the outer gate; each pipeline's own `metadataInputs` decides what that step receives. A type reaches a pipeline only when both have it on, so a workflow that gates a type off suppresses it for every step. A workflow response reports the resolved combination as `aggregateWorkflowPipelineMetadataInputs`, with `gatedOffByWorkflow` naming the types a pipeline asked for but the workflow suppresses. Like the filter aggregate, it leaves template overrides out (`includesTemplateOverrides: false`): a chosen template's `metadataInputs` replaces the pipeline's whole map for that step, which the aggregate does not show.
 
 `databaseMetadata` is read-only. Database metadata is supplied to a pipeline as input; an execution never writes metadata back to a database. Pipeline metadata write-back targets assets and files only.
 
@@ -817,6 +834,49 @@ An execution never truncates silently. When an entity is bounded, the execute re
 
 -   **`locationType`** — `asset` (default) writes the workflow's asset files and metadata to a VAMS asset. `none` is results-only: the workflow writes no asset files or metadata and records only results text and logs against the execution transaction — for example, analyzing input files and emitting a metadata report. A results-only (`none`) workflow **may still take input files** (its `inputFileArity` can be `none`, `one`, or `multi`); its executions write no asset output and supply no `outputAssetId`/`outputDatabaseId`. When `locationType` is `asset` and `inputFileArity` is `none` (no input file to lock the output to), `allowOverride` must be `true` so an output asset can be chosen at execution time.
 -   **`allowOverride`** — gates redirecting the output when an execution's input files resolve to exactly one input asset. With a single input asset the output is locked to that asset; `allowOverride` `true` lets the execute request redirect it via `outputAssetId`/`outputDatabaseId` (an omitted `outputDatabaseId` falls back to the input asset's database). With `allowOverride` `false`, an execute request that names a **different** output target is rejected rather than relocked to the input asset, so the caller is never told a run launched to a destination it did not ask for; naming the input asset itself is accepted as a no-op, which is what lets a re-run replay its recorded target. When the input files resolve to zero or multiple input assets there is no asset to lock to, so an explicit output target — both `outputAssetId` and `outputDatabaseId` — is honored regardless of `allowOverride`; supply both, or configure the workflow as results-only.
+
+### Concurrency restriction
+
+`concurrencyRestriction` limits how many executions of one workflow run at the same time. `none` applies no limit. The other three are locks at three granularities:
+
+| Value                 | One lock per                | A launch is refused while another execution of the workflow holds |
+| --------------------- | --------------------------- | ----------------------------------------------------------------- |
+| `perAsset`            | selected input asset        | the asset                                                         |
+| `perInputFile`        | selected input file         | the file                                                          |
+| `perInputFileVersion` | selected input file version | that version of the file                                          |
+
+Before the state machine starts, the launch writes one lock row per distinct asset, file, or file version among its selected inputs, each a conditional write that succeeds only when no unexpired row exists for it. A launch takes all of its locks or none: it takes them in a fixed order, and on a conflict it releases the ones it took, starts nothing, and answers `400` with a message naming the granularity: `A conflicting execution of this workflow is already running for this asset.`, `… for this file.`, or `… for this file version.` The response names no execution, asset, or file; the contested lock and its holder are recorded in the service log. Of two launches racing for one scope, exactly one starts, and an asset's execution history, however long, plays no part in the decision.
+
+A file is identified by its full key in its asset bucket, so a file moved or renamed while a run holds it is a different file to the lock. Whole-asset and folder selections, and files in an unversioned bucket, have no version id, so under `perInputFileVersion` they lock as they do under `perInputFile`. A whole-asset or folder selection takes one lock of its own, on the asset root or the folder key, and does not cover the files inside it: under `perInputFile` and `perInputFileVersion` a run on the whole asset or a folder and a run on one of its files can go at the same time. Under `perAsset` both lock the asset.
+
+The locks are released when the execution ends: by the end-state step, by the error handler, by an [abort](#abort-a-workflow-execution), and by a launch that fails after taking them. An abort, or a launch that fails after its state machine started, releases them only once the state machine runs no further: the stop succeeded, or Step Functions reports the execution ended. When the stop fails and the execution may still be running, the locks stay for its end-state step, its error handler or the expiry, and the abort says so in its `warnings`. An execution stopped outside VAMS (a direct AWS Step Functions stop) reaches none of those; its locks are released by the first Step Functions check the asset's executions list or the execution details view makes after the stop. Each view checks an execution at most once every 30 seconds, so the locks are released within about 30 seconds of a read, and a launch in that window is still refused. A lock whose release never ran expires after the sum of the `taskTimeout` values of the workflow's pipelines (a pipeline that declares none counts one day), at least one day, plus 30 minutes.
+
+A launch that stops between taking its locks and recording its execution (its function timed out, say) leaves locks that no release finds. The next launch on that scope takes such a lock over once the lock is older than the launch function's timeout (15 minutes) plus 5 minutes and its holder has no execution record. If a lock is ever left in place with no execution behind it, an operator can delete its row by `lockKey` from the deployment's lock table, the DynamoDB table whose name contains `WorkflowExecutionLocksStorageTable`. A refused launch's service log names the contested `lockKey` and its holder, and the key format is in the [data model](../architecture/data-model.md#workflow-execution-locks-storage-table). The condition below deletes the row only while that holder still has it:
+
+```bash
+aws dynamodb delete-item --table-name <lock-table-name> \
+    --key '{"lockKey": {"S": "<lockKey>"}}' \
+    --condition-expression "workflowExecutionId = :e" \
+    --expression-attribute-values '{":e": {"S": "<holder-workflowExecutionId>"}}'
+```
+
+A `fileUpload` trigger that fires twice for the same file version therefore launches once under `perInputFileVersion`. Unlike `perAsset`, that restriction places no limit on how many triggers of a type the workflow may carry.
+
+#### Skipped trigger launches
+
+A `fileUpload` trigger launch refused by a lock is recorded as an execution with status `SKIPPED`, so the refusal shows in the asset's and the global executions lists. A manual or API launch is not recorded: its caller gets the `400` itself. The trigger dispatcher still receives the same `400`.
+
+-   **One record per blocking execution and lock.** Every launch one running execution refuses on one lock key lands on the same `SKIPPED` record, which counts them. For example, 50 uploads into a `perAsset` workflow's asset give one `RUNNING` execution and one `SKIPPED` record with `skippedLaunchCount: 49`.
+-   **List fields.** A `SKIPPED` row adds `skippedLaunchCount`, `skipScope` (`asset`, `assetFile` or `assetFileVersion`) and `skipReason` (the fixed message of the refused launch). Its start and stop date are the first refused launch. Other rows are unchanged.
+-   **Details.** `GET /workflows/executions/{executionId}/details` adds a `skip` block: `reason`, `scope`, `count`, `firstSkippedDate`, `lastSkippedDate`, the first 20 `files` and `filesTruncated`. `inputFiles` and the details files route (`collection=input`) list every file recorded; files are recorded for the first 100 refused launches, and later ones are only counted. `blockingExecutionId` is present only when you may read the blocking execution; it is omitted alike when you may not and when that execution no longer exists.
+-   **Access.** A `SKIPPED` record is read under the same rule as any trigger-launched execution: `GET` on its workflow and on the assets of its files.
+-   **Actions.** A `SKIPPED` record has no logs (the logs route says so), no pipelines and nothing to stop. **Re-run** launches its recorded files as a new execution, as you, through the normal checks, with the trigger's templates and output target. **Permanent delete** removes it. **Abort** answers `400` (`This execution was skipped and has nothing to abort.`) and writes nothing; a group abort leaves it alone and reports it as `skipped-terminal`.
+-   **Filtering.** Lists include `SKIPPED` records by default; `status=SKIPPED` lists only them, and `excludeStatus=SKIPPED` leaves them out. `excludeStatus` takes one status or a comma-separated list and is applied before the page is cut, so pages stay full; an unknown status, or excluding the status `status` selects, answers `400`. On an asset's list an execution is left out only once it has passed the same read check as the listing, so an execution you may not read is treated exactly as without the parameter; at most 200 executions are left out per page; a page that reaches that limit stops with a `NextToken` and a warning. The web app's **All except skipped** sends `excludeStatus=SKIPPED`.
+-   **Retention.** Records are kept like other executions, with no expiry. Their number is bounded by the number of blocking executions.
+
+:::note[Executions running during the update hold no lock]
+Locks are taken by the launch. An execution that started before the update that introduced them holds none, so a launch on the same scope is not refused until that execution ends.
+:::
 
 ### Field rules and restrictions
 
@@ -984,7 +1044,7 @@ Executing requires access to this route plus `GET` permission on the workflow, `
 -   Metadata sources are optional and take no part in arity or input-file filters. The `assetScope` **span** keys do bound them: a workflow declaring `singleAssetOnly` (or `crossAssetAllowed` `false`) rejects an execution naming more than one asset in `metadataSourceAssets`. See [Metadata inputs](#metadata-inputs) for which entities a run captures and the limits it applies, and [Asset scope](#asset-scope) for the span rule.
 -   Per-pipeline template resolution and tag validation run before launch, followed by cross-entity validation: the workflow's input-file arity, asset scope, and file filters, the first step's file filters and arity, every step's asset scope, and, for each later step of `inputFileArity` `one`, whether two or more selected files already pass its filters. Everything else about a later step's file filters and arity is checked when the run reaches it (see [Input-file filters](#input-file-filters)).
 -   Every referenced pipeline must be enabled and not archived, and the workflow must be enabled and not archived.
--   The workflow's `concurrencyRestriction` may block a launch that conflicts with an already-running execution.
+-   The workflow's `concurrencyRestriction` may block a launch that conflicts with an already-running execution. The selected assets, files, or file versions (by restriction) are locked before the state machine starts, and a scope another execution holds is refused with a fixed `400` message naming that granularity. See [Concurrency restriction](#concurrency-restriction).
 -   When the input files resolve to zero or multiple input assets, supply an explicit output target — both `outputAssetId` and `outputDatabaseId` — or configure the workflow as results-only (`outputTarget.locationType` `none`); otherwise the request is rejected. A results-only workflow rejects a supplied `outputAssetId`/`outputDatabaseId` as a contradiction. See [Output target](#output-target).
     :::
 
@@ -1015,13 +1075,13 @@ A workflow's AWS Step Functions definition encodes each referenced pipeline's ex
 
 ### Error responses
 
-| Status | Description                                                                                                                                                                |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation, template-resolution, or cross-entity validation error, including `metadataSourceAssets` spanning more assets than `assetScope` allows                          |
-| `403`  | Not authorized (API, input asset, metadata-source asset or database, output asset, workflow, or pipeline level)                                                            |
-| `409`  | The workflow's state machine could not be brought up to date with its pipelines' current settings, so no execution was started. Retryable; the message carries any reason. |
-| `429`  | Throttling -- too many requests                                                                                                                                            |
-| `500`  | Internal server error or execution limit exceeded                                                                                                                          |
+| Status | Description                                                                                                                                                                                                                                                                                                                         |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation, template-resolution, or cross-entity validation error, including `metadataSourceAssets` spanning more assets than `assetScope` allows; or a conflicting execution already running under the workflow's `concurrencyRestriction` (a lock another execution holds on one of the selected assets, files, or file versions) |
+| `403`  | Not authorized (API, input asset, metadata-source asset or database, output asset, workflow, or pipeline level)                                                                                                                                                                                                                     |
+| `409`  | The workflow's state machine could not be brought up to date with its pipelines' current settings, so no execution was started. Retryable; the message carries any reason.                                                                                                                                                          |
+| `429`  | Throttling -- too many requests                                                                                                                                                                                                                                                                                                     |
+| `500`  | Internal server error or execution limit exceeded                                                                                                                                                                                                                                                                                   |
 
 ---
 
@@ -1064,6 +1124,7 @@ Each filter is optional and all supplied filters are AND-ed.
 | `workflowId`         | string | No       | --                 | List only executions of this workflow. An ID that does not match the ID pattern returns 400 rather than an empty list, so a typo is distinguishable from no matching history.               |
 | `workflowDatabaseId` | string | No       | --                 | List only executions of workflows in this database. Accepts `GLOBAL` for the shared workflow catalog.                                                                                       |
 | `status`             | string | No       | --                 | List only executions with this `executionStatus` (for example `RUNNING`, `SUCCEEDED`, `FAILED`).                                                                                            |
+| `excludeStatus`      | string | No       | --                 | Leave out executions of these statuses (one, or comma-separated), before the page is cut. See [Skipped trigger launches](#skipped-trigger-launches).                                        |
 | `triggerType`        | string | No       | --                 | List only executions with this trigger type (`Manual` or `File-Upload`).                                                                                                                    |
 | `groupId`            | string | No       | --                 | List only executions in this execution group.                                                                                                                                               |
 | `startingToken`      | string | No       | --                 | Continuation token from a previous response's `NextToken`. A token that cannot be decoded returns 400 rather than serving the first page again.                                             |
@@ -1092,13 +1153,22 @@ The applied lower bound is echoed back as `filterStartDate`.
                 "databaseId": "my-database",
                 "assetId": "building-01",
                 "executionError": "",
-                "executionLog": ""
+                "executionLog": "",
+                "outputTypes": ["File"]
             }
         ],
         "filterStartDate": "2025-12-15T10:30:00Z"
     }
 }
 ```
+
+Each row carries `outputTypes`, the subset of `["File", "Metadata", "Result"]` the run produced — the
+same field the global list reports, read from the execution's configuration record. It is `[]` for a
+run that produced none and for a run recorded before the field existed.
+
+Each row's `executionLog` is a shortened copy of the stored log: at most the newest 16 KB, led by a
+line giving the number of earlier events left out when the stored log is longer. The whole stored log
+(up to 256 KB) is returned by [Get execution logs](#get-execution-logs).
 
 One request lists the asset's most recent executions across both directions. `pageSize` is honoured and is capped at 200, because each listed execution costs a record read and a permission check — ask for fewer and you get fewer; ask for more and you get 200. `NextToken` is present when that cap was reached with older executions still available — page with `startingToken` until the token is absent. A run that only wrote into the asset carries no input file, so its `inputAssetFileKey` is empty.
 
@@ -1140,6 +1210,7 @@ GET /workflows/executions
 | `workflowId`                  | string  | No       | Filter by workflow id.                                                                                                                                                             |
 | `workflowDatabaseId`          | string  | No       | Filter by workflow database id.                                                                                                                                                    |
 | `status`                      | string  | No       | Filter by execution status.                                                                                                                                                        |
+| `excludeStatus`               | string  | No       | Leave out executions of these statuses (one, or comma-separated), before the page is cut. See [Skipped trigger launches](#skipped-trigger-launches).                               |
 | `triggerType`                 | string  | No       | Filter by trigger type (`Manual`, `File-Upload`).                                                                                                                                  |
 | `groupId`                     | string  | No       | Filter by execution group id.                                                                                                                                                      |
 | `triggeredByUserId`           | string  | No       | Filter by the user who triggered the execution.                                                                                                                                    |
@@ -1162,7 +1233,8 @@ GET /workflows/executions
                 "executionGroupId": "",
                 "outputLocationType": "asset",
                 "outputAssetId": "x1a2b3c4-d5e6-7890",
-                "outputDatabaseId": "my-database"
+                "outputDatabaseId": "my-database",
+                "outputTypes": ["File", "Metadata"]
             }
         ],
         "filterStartDate": "2025-12-15T10:30:00Z",
@@ -1176,6 +1248,14 @@ execution that writes no files), and `outputAssetId` / `outputDatabaseId` naming
 are empty strings for a results-only run. They are read from the execution's configuration record,
 which the endpoint loads at most once per listed row and shares with the output-asset visibility check,
 so reporting them costs no extra lookup.
+
+Each row also carries `outputTypes`, the subset of `["File", "Metadata", "Result"]` the run produced
+(in File → Metadata → Result order), read from that same configuration record. It is `[]` for a run
+that produced none and for a legacy run whose configuration record predates the attribute (there is no
+migration). No output content appears on the list — read a run's files with
+[Page execution detail files](#page-execution-detail-files), its result text with
+[Get execution results](#get-execution-results), and its metadata with
+[Read a metadata collection by page](#read-a-metadata-collection-by-page).
 
 :::note[A short page is a stated bound, not an absence of matches]
 Both the equality filters and the per-execution visibility check drop rows after a query's limit is spent, so the endpoint walks its query — repeating from its own continuation — until the page is full or the index is exhausted. A walk spanning several queries can return slightly more rows than `pageSize`.
@@ -1219,6 +1299,8 @@ DELETE /workflows/executions/{executionId}
 
 The route is keyed on the execution identifier because an execution may span input files across multiple assets.
 
+An execution that is already stopped can be aborted too. An execution stopped outside VAMS (a direct AWS Step Functions stop) ends only the outer state machine: the first executions list or details read after the stop marks its unfinished pipeline records with the observed status (`ABORTED`, or `TIMED_OUT` for a timed-out run) but stops none of the sub-processes those pipelines registered, such as AWS Batch or AWS Deadline Cloud jobs. Aborting the execution stops them, along with those of pipelines an earlier abort marked `ABORTED`; pipelines that finished on their own (`SUCCEEDED` or `FAILED`) are left alone. The web execution detail page shows a note with an **Abort** button while a stopped run still has a sub-process running.
+
 ### Path parameters
 
 | Parameter     | Type   | Required | Description                          |
@@ -1241,7 +1323,7 @@ Aborting a single execution returns:
 }
 ```
 
-A single-execution abort may include a `warnings` array when a best-effort inner sub-process abort failed, and a `notAbortable` array when a registered sub-process is of a type VAMS cannot stop (an externally owned pipeline's own compute, say). Each `notAbortable` entry is \{`resourceType`, `label`, `stageName`, `locator`\}, listed once per registered locator; `locator` is the registered id, or the final segment of a registered ARN (never the ARN itself). The sub-process is left running and its `warnings` sentence says so as well. Every `warnings` sentence names a sub-process the same way, by its registered id or the final segment of its registered ARN. Both arrays are absent from a clean abort.
+A single-execution abort may include a `warnings` array when a best-effort inner sub-process abort failed, and a `notAbortable` array when a registered sub-process is of a type VAMS cannot stop (an externally owned pipeline's own compute, say). Each `notAbortable` entry is \{`resourceType`, `label`, `stageName`, `locator`\}, listed once per registered locator; `locator` is the registered id, or the final segment of a registered ARN (never the ARN itself). The sub-process is left running and its `warnings` sentence says so as well. Every sub-process `warnings` sentence names a sub-process the same way, by its registered id or the final segment of its registered ARN. `warnings` also carries a sentence when the outer Step Functions execution could not be confirmed stopped (the stop failed and Step Functions still reports it running, or could not be asked): the execution keeps its [concurrency locks](#concurrency-restriction) until it ends, and repeating the abort retries the stop. Both arrays are absent from a clean abort.
 
 ```json
 {
@@ -1296,13 +1378,13 @@ Aborting an execution requires `GET` permission on the execution's workflow, `PO
 
 ### Error responses
 
-| Status | Description                                                                                      |
-| ------ | ------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid or missing `executionId`                                                                 |
-| `403`  | Not authorized (API, workflow, an asset the run touched, or a captured metadata-source database) |
-| `404`  | Execution not found, or no executions found for the supplied `groupId`                           |
-| `429`  | Throttling -- too many requests                                                                  |
-| `500`  | Internal server error                                                                            |
+| Status | Description                                                                                             |
+| ------ | ------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`, or the execution is `SKIPPED` (nothing to abort; after authorization) |
+| `403`  | Not authorized (API, workflow, an asset the run touched, or a captured metadata-source database)        |
+| `404`  | Execution not found, or no executions found for the supplied `groupId`                                  |
+| `429`  | Throttling -- too many requests                                                                         |
+| `500`  | Internal server error                                                                                   |
 
 ---
 
@@ -1310,7 +1392,9 @@ Aborting an execution requires `GET` permission on the execution's workflow, `PO
 
 Reconstructs the execute request from an execution's stored records and launches a new execution (new `executionId`). The caller must be able to view the original execution; the re-launch re-validates permissions against every referenced asset, workflow, and pipeline.
 
-A re-run reproduces the original request exactly. When a configuration value was too large to record in full on the original run — a pipeline step's template tag values, the custom configuration body of a template-less step, or the execution's metadata source asset list — the reconstruction returns `400` rather than launching a run that differs from the original. Start a new execution supplying those values.
+A re-run reproduces the original request exactly, with input file versions resolved as described below. When a configuration value was too large to record in full on the original run — a pipeline step's template tag values, the custom configuration body of a template-less step, or the execution's metadata source asset list — the reconstruction returns `400` rather than launching a run that differs from the original. Start a new execution supplying those values.
+
+Input file versions: for each input file, a re-run reuses the version recorded as pinned at launch; otherwise it reads the file's current version. A version is pinned only when the caller chose it: a `versionId` named in an execute request through the API or the CLI, or a version picked in the web: an older version chosen in the execute wizard, or a file run from the file manager while an asset version is browsed, even when that version is still the current one. A web launch from the current asset view and a launch by a `fileUpload` trigger are not pinned (the trigger's run still reads the uploaded version), so their re-runs read the current version. Executions recorded before version 2.7.0 carry no pinned record, so their re-runs read the current version. A pinned version that has since been deleted is refused the same way as an execute request naming that version.
 
 ```
 POST /workflows/executions/{executionId}/rerun
@@ -1510,7 +1594,8 @@ The route is keyed on the execution identifier because an execution may span inp
                 "filePath": "/",
                 "scope": "asset",
                 "metadata": { "site": "north" },
-                "attributes": {}
+                "attributes": {},
+                "expanded": false
             },
             {
                 "pipelineId": "convert-to-glb",
@@ -1519,7 +1604,8 @@ The route is keyed on the execution identifier because an execution may span inp
                 "filePath": "/scans/pump.e57",
                 "scope": "asset",
                 "metadata": { "captured": "2026-05-01" },
-                "attributes": { "sensor": "faro" }
+                "attributes": { "sensor": "faro" },
+                "expanded": false
             }
         ],
         "inputDatabaseMetadata": [
@@ -1530,7 +1616,8 @@ The route is keyed on the execution identifier because an execution may span inp
                 "filePath": "/",
                 "scope": "database",
                 "metadata": { "program": "apollo" },
-                "attributes": {}
+                "attributes": {},
+                "expanded": false
             },
             {
                 "pipelineId": "generate-preview",
@@ -1640,7 +1727,7 @@ A file counts once against those bounds whatever it carries. Its metadata and it
 
 A collection is bounded two ways, and either bound names it here: a row count, and a size budget measured over the serialized rows. The size budget is what keeps the response inside the AWS Lambda synchronous-response limit, because a metadata row carries a whole entity's captured map and a row count alone says nothing about how large each row is. An execution over many files that each carry hundreds of metadata entries therefore returns a bounded, flagged view rather than failing. When a collection reports the metadata each pipeline read, the budget is spent evenly across the pipelines, so every pipeline stays represented and no step's absence is mistaken for a step that read nothing.
 
-Each row reports two content maps. `metadata` holds the entity's metadata, and `attributes` holds that file's attributes — kept apart because a pipeline's `metadataInputs` grants `fileMetadata` and `fileAttributes` independently, so a merged map would lose which grant delivered a value. A row whose file carries attributes but no metadata still appears, with an empty `metadata` map; asset-level and database-scope rows always report an empty `attributes` map. Comparing the two maps across a run's steps is how you confirm what each step received, since the grants are resolved per step.
+Each row reports two content maps. `metadata` holds the entity's metadata, and `attributes` holds that file's attributes — kept apart because a pipeline's `metadataInputs` grants `fileMetadata` and `fileAttributes` independently, so a merged map would lose which grant delivered a value. A row whose file carries attributes but no metadata still appears, with an empty `metadata` map; asset-level and database-scope rows always report an empty `attributes` map. `expanded` is `true` for a file record that `metadataInputs.assetFileMetadata` added by expanding a whole-asset or folder selection, which the step was handed as context rather than as one of its input files, and `false` on every other row, including rows recorded before the flag existed. Comparing the two maps across a run's steps is how you confirm what each step received, since the grants are resolved per step.
 
 `inputMetadata` and `inputDatabaseMetadata` are read together and separated afterwards by each row's `scope`. Because a row dropped at the read cap has no known scope, reaching that cap names both collections; a return trim, which runs after the split, names only the collection that was trimmed.
 
@@ -1783,7 +1870,9 @@ Three collections are addressable, matching the detail view's three metadata sec
 | `inputDatabase` | `inputDatabaseMetadata` | Each metadata-source database's own metadata. |
 | `output`        | `outputs.metadata`      | The metadata each step wrote.                 |
 
-The detail view's `inputFiles`, `outputs.files`, and `outputs.results` collections have no paged equivalent.
+The detail view's `inputFiles` and `outputs.files` collections are paged by
+[Page execution detail files](#page-execution-detail-files), and `outputs.results` is read in full by
+[Get execution results](#get-execution-results).
 
 ### Path parameters
 
@@ -1815,13 +1904,16 @@ The detail view's `inputFiles`, `outputs.files`, and `outputs.results` collectio
                 "filePath": "/models/building.fbx",
                 "scope": "asset",
                 "metadata": { "captured": "2026-05-01" },
-                "attributes": { "sensor": "faro" }
+                "attributes": { "sensor": "faro" },
+                "expanded": false
             }
         ],
         "NextToken": "eyJzdGVwSW5kZXgiOiAwLCAi…"
     }
 }
 ```
+
+An `output` row carries `targetFilePath`, `metadataKey`, `metadataValue`, `metadataType`, and `pipelineId`. `metadataType` is `metadata` or `attribute`: a step that writes one key to a file as both file metadata (`<file>.metadata.json`) and a file attribute (`<file>.attribute.json`) records two rows, told apart by this field. Rows recorded by an earlier release report the type of the file they were written from.
 
 `NextToken` is absent on the last page, so its presence is the only signal that more rows remain — page until it is gone. A page carries at most the requested row count and at most 4 MB of serialized rows, whichever comes first, and nothing is dropped by either bound: a page ends at the first row it could not carry, and the token resumes there.
 
@@ -1848,11 +1940,155 @@ This route enforces the rule [Get execution details](#get-execution-details) enf
 
 ---
 
+## Page execution detail files
+
+Reads one of an execution's **file** collections a page at a time, so a file collection the detail
+view reported truncated (`inputFiles` or `outputs.files`) can be walked in full. Rows carry the same
+scrubbed shape the detail view returns; output rows also carry the producing `pipelineId`. No S3
+bucket or key is returned.
+
+```
+GET /workflows/executions/{executionId}/details/files
+```
+
+Two collections are addressable (there is no `inputDatabase` — that split is metadata-only):
+
+| `collection` | Detail-view section | Rows                                                 |
+| ------------ | ------------------- | ---------------------------------------------------- |
+| `input`      | `inputFiles`        | The workflow-level input files (a single partition). |
+| `output`     | `outputs.files`     | The per-pipeline output files (walked across steps). |
+
+### Path parameters
+
+| Parameter     | Type   | Required | Description          |
+| ------------- | ------ | -------- | -------------------- |
+| `executionId` | string | Yes      | Execution identifier |
+
+### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                                                                 |
+| --------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `collection`    | string | No       | `input` | `input` or `output`. An omitted or empty value reads `input`; any other value (including `inputDatabase`) returns `400`.    |
+| `pageSize`      | number | No       | `100`   | Rows requested per page. Clamped to a maximum of 500. Below 1 returns `400`.                                                |
+| `startingToken` | string | No       | --      | Continuation token from a previous page's `NextToken`.                                                                      |
+| `NextToken`     | string | No       | --      | Accepted as a synonym for `startingToken`. `startingToken` wins on both.                                                    |
+| `pipelineId`    | string | No       | --      | Narrow the `output` collection to the steps running this pipeline. Does not apply to input files (they are workflow-level). |
+
+### Response
+
+```json
+{
+    "message": {
+        "collection": "output",
+        "Items": [
+            {
+                "relativeFilePath": "/converted/building.glb",
+                "fileType": "file",
+                "fileSize": 184320,
+                "contentType": "model/gltf-binary",
+                "s3VersionId": "AbC123…",
+                "pipelineId": "3d-conversion-pipeline"
+            }
+        ],
+        "NextToken": "eyJzdGVwSW5kZXgiOiAwLCAi…"
+    }
+}
+```
+
+An `input` row instead carries `databaseId`, `assetId`, `inputAssetFileKey`, and `versionId` (the
+concrete S3 version read at launch). `NextToken` is absent on the last page. A page carries at most the
+requested row count and at most 4 MB of serialized rows, whichever comes first, and nothing is dropped
+by either bound — a page ends at the first row it could not carry and the token resumes there.
+
+:::warning[Send a token back with the request that produced it]
+A token names a position in one collection's walk under one `pipelineId` filter. Repeat the
+`collection` and `pipelineId` of the request the token came from on every follow-up request; a token
+replayed against a different `collection` or filter returns `400`.
+:::
+
+:::note[Same authorization as the detail view]
+This route enforces the rule [Get execution details](#get-execution-details) enforces, evaluated for
+`GET`.
+:::
+
+### Error responses
+
+| Status | Description                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`, an unknown `collection`, an invalid `pipelineId` or `pageSize`, or an unusable token |
+| `403`  | Not authorized                                                                                                         |
+| `404`  | Execution not found                                                                                                    |
+| `500`  | Internal server error                                                                                                  |
+
+---
+
+## Get execution results
+
+Returns an execution's **concatenated result text**, a page at a time — output-only, no collection —
+for a pipeline that produces a textual result (an LLM-style response) rather than asset files.
+
+```
+GET /workflows/executions/{executionId}/details/results
+```
+
+### Path parameters
+
+| Parameter     | Type   | Required | Description          |
+| ------------- | ------ | -------- | -------------------- |
+| `executionId` | string | Yes      | Execution identifier |
+
+### Query parameters
+
+| Parameter       | Type   | Required | Description                                                  |
+| --------------- | ------ | -------- | ------------------------------------------------------------ |
+| `startingToken` | string | No       | `NextToken` from the previous page (`NextToken` is an alias) |
+
+### Response
+
+```json
+{
+    "message": {
+        "resultContent": "The result text of the rows on this page…",
+        "resultContentTruncated": false,
+        "resultRowCount": 2,
+        "resultContentBytes": 1480,
+        "NextToken": "eyJzdGVwSW5kZXgiOiAx…"
+    }
+}
+```
+
+Result rows are walked across the run's steps in a stable order and their text concatenated. A page
+carries as many rows as fit a 5 MiB budget measured on the response as sent — after JSON escaping, so
+a CJK character or a quote costs several bytes — under the AWS Lambda synchronous-response limit.
+`NextToken` is present while rows remain; pass it back as `startingToken`, and concatenate
+`resultContent` across every page for the whole result. `resultContentTruncated` is `true` when a row
+on the page was stored truncated or a single row larger than the budget was cut; that text is not
+retrievable. An empty or legacy run (one whose configuration record predates result capture) returns
+the empty shape (`resultContent` `""`, counts `0`, no `NextToken`), never an error. Internal S3 keys
+are never surfaced. A run's `outputTypes` includes `"Result"` exactly when there is result content to
+read here.
+
+:::note[Same authorization as the detail view]
+This route enforces the rule [Get execution details](#get-execution-details) enforces, evaluated for
+`GET`.
+:::
+
+### Error responses
+
+| Status | Description                                            |
+| ------ | ------------------------------------------------------ |
+| `400`  | Invalid or missing `executionId`, or an unusable token |
+| `403`  | Not authorized                                         |
+| `404`  | Execution not found                                    |
+| `500`  | Internal server error                                  |
+
+---
+
 ## Get execution logs
 
 Returns logs for an execution in one of two modes. Logs are always scoped to the requested execution; supplying a `pipelineExecutionId` narrows the result to that single pipeline execution.
 
-Returned log text is redacted: credential-bearing values — authorization headers, bearer tokens, AWS access-key IDs, JSON web tokens, and labelled secret fields such as `SecretAccessKey` and `SessionToken` — are replaced with `<redacted>` before the logs are stored or returned.
+Returned log text is redacted: credential-bearing values — authorization headers, bearer tokens, AWS access-key IDs, JSON web tokens, and labelled secret fields such as `SecretAccessKey` and `SessionToken` — are replaced with `<redacted>` before the logs are stored or returned. So are the client details of the request that launched the execution: its source IP address, user agent, API key ID, IAM or Amazon Cognito caller identity, and the AWS account ID and API Gateway API ID it called.
 
 ```
 GET /workflows/executions/{executionId}/logs
@@ -1891,9 +2127,9 @@ GET /workflows/executions/{executionId}/logs
 }
 ```
 
-The stored execution log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, so it is frequently empty even for a succeeded run. When the stored log for the requested scope is empty, truncated mode transparently falls back to a live CloudWatch Logs search for the same scope. For the whole execution, when that search is also empty it falls back to the Step Functions execution history — the authoritative record of the run's state transitions, available immediately with no ingestion lag. `logsSource` reports the origin of the returned text: `"stored"`, `"live"` (CloudWatch), or `"sfnHistory"` (Step Functions execution history).
+The stored execution log is captured as the run ends, while Amazon CloudWatch Logs is still ingesting the run's events, and is refreshed once they are in; it never holds events logged after it was taken, and when the refresh could not confirm that every event was in, its last line says the log may be incomplete. For the whole execution, truncated mode therefore also runs a live CloudWatch Logs search for the execution and returns whichever of the two holds more of the log's lines (the live search also when it holds as many lines as a stored copy marked as possibly incomplete), so the stored copy is returned only when the live search is empty, unavailable, or shorter (for example after the log group's retention has removed the events). When both are empty it falls back to the Step Functions execution history — the authoritative record of the run's state transitions, available immediately with no ingestion lag. `logsSource` reports the origin of the returned text: `"stored"`, `"live"` (CloudWatch), or `"sfnHistory"` (Step Functions execution history).
 
-When `pipelineExecutionId` is supplied in truncated mode, the stored per-pipeline log is returned instead (with the same live fallback and `logsSource`):
+When `pipelineExecutionId` is supplied in truncated mode, the stored per-pipeline log is returned instead, falling back to a live CloudWatch Logs search for that pipeline execution when the stored log is empty (`logsSource` as above):
 
 ```json
 {
@@ -2013,7 +2249,7 @@ Each `logSources` entry reports the location as registered, so a prefix-only `ba
 `warnings` is present only when a log could not be read — a missing permission on one group, or a registration list longer than the per-request cap. Each entry names the log in question. A warning never fails the request: the logs that could be read are still returned.
 
 :::note[Redaction]
-Every log string in the response passes through credential redaction first, so an inline token, AWS key, or JWT in a log message is masked before it reaches the caller.
+Every log string in the response passes through credential redaction first, so an inline token, AWS key, or JWT in a log message is masked before it reaches the caller, as are the source IP address, user agent, API key ID, AWS account ID, and API Gateway API ID of the request that launched the execution.
 :::
 
 :::note[Scope]

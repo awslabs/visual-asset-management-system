@@ -43,7 +43,7 @@ _Use cases include:_
 ### Key capabilities
 
 -   **Centralized storage** — Manage 3D models, point clouds, CAD files, and media in Amazon S3 with versioning and access control
--   **Interactive visualization** — View assets in the browser with 21 built-in viewer plugins (Three.js, Potree, Cesium, USD, Gaussian Splat, and more)
+-   **Interactive visualization** — View assets in the browser with 22 built-in viewer plugins (Three.js, Potree, Cesium, USD, Gaussian Splat, and more)
 -   **Automated processing** — Transform assets using configurable pipelines backed by AWS Lambda, Amazon SQS, or Amazon EventBridge
 -   **Intelligent search** — Full-text and metadata search powered by Amazon OpenSearch with map-based geographic views
 -   **Fine-grained permissions** — Attribute-based and role-based access control (ABAC/RBAC) at both API and data entity levels
@@ -140,13 +140,13 @@ Then open `http://localhost:3000/visual-asset-management-system/` in your browse
 | -------------------- | ------------------------------ | ------------------------ | ------------------------- |
 | **Best for**         | Interactive use, visualization | Automation, scripting    | Custom integrations       |
 | **Asset management** | Visual interface               | Programmatic control     | Full programmatic control |
-| **3D viewing**       | 20 interactive viewers         | N/A                      | N/A                       |
+| **3D viewing**       | 22 interactive viewers         | N/A                      | N/A                       |
 | **Automation**       | Manual                         | Full automation          | Complete control          |
 | **CI/CD**            | Not suitable                   | Designed for integration | Full flexibility          |
 
 ## Partner integrations
 
-**Open source:** Online 3D Viewer, CesiumJS, Potree, BabylonJS, PlayCanvas, Needle Engine, Three.js, Trimesh, CadQuery, Blender, 3D Reconstruction Toolkit, Garnet Framework, NVIDIA Isaac Lab / Cosmos / Gr00t
+**Open source:** Online 3D Viewer, CesiumJS, Potree, BabylonJS, PlayCanvas, Needle Engine, Three.js, Trimesh, CadQuery, Strands Agents, Blender, 3D Reconstruction Toolkit, Garnet Framework, NVIDIA Isaac Lab / Cosmos / Gr00t, EDH (GPU DCV workstations)
 
 **Licensed:** [RapidPipeline](https://rapidpipeline.com/), [VNTANA](https://www.vntana.com/), [Veerum](https://veerum.com/), [Physna](https://physna.com/)
 

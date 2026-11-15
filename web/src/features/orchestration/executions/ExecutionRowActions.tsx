@@ -5,6 +5,8 @@
 
 import React from "react";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import RowActionsButton from "../components/RowActionsButton";
+import { rowActionsFor } from "../components/useReturnFocus";
 import type { Execution } from "../types";
 
 interface ExecutionRowActionsProps {
@@ -30,28 +32,27 @@ const ExecutionRowActions: React.FC<ExecutionRowActionsProps> = ({
     onPermanentDelete,
     onOpenDetails,
 }) => {
-    const isTerminal = ["SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", "COMPLETE"].includes(
-        execution.executionStatus
-    );
+    // A SKIPPED record never ran, so it offers no Abort at all (the API still decides every call).
+    const isSkipped = execution.executionStatus === "SKIPPED";
     const isNonTerminal = ["NEW", "RUNNING"].includes(execution.executionStatus);
     const hasGroup = !!execution.executionGroupId;
 
     const menuItems: ContextMenuItem[] = [
         {
-            label: "View results",
+            label: "View details",
             onSelect: onView,
         },
         {
             label: "Abort",
             onSelect: onAbort,
             disabled: !isNonTerminal,
-            hidden: !can("DELETE", "/workflows/executions/{executionId}"),
+            hidden: isSkipped || !can("DELETE", "/workflows/executions/{executionId}"),
         },
         {
             label: "Abort group",
             onSelect: onAbortGroup || (() => {}),
             disabled: !isNonTerminal || !hasGroup,
-            hidden: !can("DELETE", "/workflows/executions/{executionId}") || !hasGroup,
+            hidden: isSkipped || !can("DELETE", "/workflows/executions/{executionId}") || !hasGroup,
         },
         {
             label: "Rerun",
@@ -80,12 +81,12 @@ const ExecutionRowActions: React.FC<ExecutionRowActionsProps> = ({
         <ContextMenu
             items={menuItems}
             trigger={
-                <button
+                <RowActionsButton
+                    {...rowActionsFor(execution.workflowExecutionId)}
+                    orientation="horizontal"
                     aria-label="Execution actions"
                     className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-900 hover:bg-gray-100 dark:hover:text-gray-100 dark:hover:bg-gray-700 cursor-pointer"
-                >
-                    ⋯
-                </button>
+                />
             }
         />
     );

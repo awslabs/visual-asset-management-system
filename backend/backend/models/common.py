@@ -7,7 +7,7 @@ from typing import Any, Dict, TypedDict, Optional
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_errors
 
-logger = safeLogger(service_name="CommonModels")
+logger = safeLogger()
 
 
 def _json_default(obj: Any):
@@ -100,8 +100,9 @@ def commonHeaders() -> Dict[str, str]:
         # handled separately by the API's MOCK method). Mirrors the preflight's
         # allow-origin so cross-origin browser callers can read the response.
         'Access-Control-Allow-Origin': '*',
-        # Lets a cross-origin browser caller read the Retry-After of a 429
-        'Access-Control-Expose-Headers': 'Retry-After',
+        # Lets a cross-origin browser caller read the Retry-After of a 429, the
+        # Location of a redirect (e.g. the asset export's 303), and the ETag.
+        'Access-Control-Expose-Headers': 'Retry-After, Location, ETag',
     }
 
 
@@ -125,7 +126,10 @@ def success(status_code: int = 200, body: Any = {'message': 'Success'}) -> APIGa
 def validation_error(status_code: int = 400, body: dict = {'message': 'Validation Error'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
     # An error body is the returned message rather than a payload, so it stays in the log - passed as
     # structured data, not interpolated, so safeLogger's key-driven redaction still walks it.
-    logger.error("Validation error", extra={'statusCode': status_code, 'errorBody': body})
+    # A rejected request is a client outcome, so a 4xx logs at WARNING and ERROR stays reserved for
+    # 5xx, as in general_error().
+    log_validation_error = logger.error if status_code >= 500 else logger.warning
+    log_validation_error("Validation error", extra={'statusCode': status_code, 'errorBody': body})
     
     # AUDIT LOG: Log validation error if event provided
     if event:
@@ -145,7 +149,11 @@ def validation_error(status_code: int = 400, body: dict = {'message': 'Validatio
     )
 
 def general_error(status_code: int = 400, body: dict = {'message': 'VAMS General Error'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
-    logger.error("General error", extra={'statusCode': status_code, 'errorBody': body})
+    # A 4xx is an expected client outcome (not found, conflict, invalid state), so it logs at WARNING
+    # and ERROR stays reserved for 5xx; metric filters and alarms that count ERROR lines then track
+    # real failures only.
+    log_general_error = logger.error if status_code >= 500 else logger.warning
+    log_general_error("General error", extra={'statusCode': status_code, 'errorBody': body})
     
     # AUDIT LOG: Log general error if event provided
     if event:
@@ -219,3 +227,22 @@ class VAMSGeneralErrorResponse(VAMSGeneralError):
     def __init__(self, message, status_code=400):
         super().__init__(f"VAMS General Error: {message}")
         self.status_code = status_code
+
+
+class VAMSAuthorizationDeniedResponse(VAMSGeneralErrorResponse):
+    """An object-level (Tier 2) authorization refusal.
+
+    A route that answers refusals with 403 catches this ahead of VAMSGeneralErrorResponse; a route
+    that does not still answers 400 with the same message.
+    """
+    def __init__(self, message="Not authorized to perform this operation on the asset"):
+        super().__init__(message, status_code=403)
+
+class VAMSAssetNotFoundResponse(VAMSGeneralErrorResponse):
+    """The requested asset does not exist, raised only after the caller was authorized for it.
+
+    A route that answers a missing asset with 404 catches this ahead of VAMSGeneralErrorResponse;
+    a route that does not still answers 400 with the same message.
+    """
+    def __init__(self, message="Asset not found"):
+        super().__init__(message, status_code=404)

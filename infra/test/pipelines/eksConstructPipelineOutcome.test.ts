@@ -110,11 +110,13 @@ describe("EKS ConstructPipeline error response reaches PipelineEnd", () => {
     /** The Pass state a result with no manifest is routed to. */
     const errorHandler = (): any => states[absentManifestRule().Next];
 
-    test("the pipeline IS in this synth and starts at ConstructPipeline", () => {
+    test("the pipeline IS in this synth and reaches ConstructPipeline first", () => {
         expect(synth.resources.filter((r) => r.type === "Custom::AWSCDK-EKS-Cluster").length).toBe(
             1
         );
-        expect(asl.StartAt).toBe("ConstructPipeline");
+        // Two Pass states default inputVersionId before it (eksInputVersionDefault.test.ts).
+        expect(asl.StartAt).toBe("StageInputVersionDefault");
+        expect(states[states[asl.StartAt].Next].Next).toBe("ConstructPipeline");
         for (const name of ["ConstructPipeline", "RunJob", "PipelineEnd"]) {
             expect(states[name]).toBeDefined();
         }

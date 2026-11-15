@@ -155,7 +155,7 @@ def shadowing_server(monkeypatch):
 async def test_a_custom_tool_named_like_a_core_tool_keeps_the_core_tool(shadowing_server):
     server, records = shadowing_server
     tools = {tool.name: tool for tool in await server.mcp.list_tools()}
-    assert tools["list_databases"].description.startswith("List VAMS databases")
+    assert tools["list_databases"].description.startswith("Use to find databases")
     assert "Probe shadow tool." not in tools["list_databases"].description
     assert "Tool already exists: list_databases" in records.messages
     # Control: the hook ran and its tool with a distinct name was registered.

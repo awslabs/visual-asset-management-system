@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Database Admin",
-        "description": "Administrative access for a specific database. Can create, update and delete (archive) the database and view its archived record, full CRUD on assets (including permanent delete) and on the database's archived assets (view, unarchive, permanent delete), create/delete pipelines/workflows/metadata schemas, execute workflows, and ingest assets. Can view and execute global pipelines and workflows.",
+        "description": "Administrative access for a specific database. Can create, update and delete (archive) the database and view its archived record, full CRUD on assets (including permanent delete) and on the database's archived assets (view, unarchive, permanent delete), create/delete pipelines/workflows/metadata schemas, execute workflows, and ingest assets. Can view and execute global pipelines and workflows. Administers the database's compliance: its schemas (GLOBAL schemas read-only), bindings, evaluations, quarantine and exceptions, and cascade approval.",
         "version": "1.0"
     },
     "variables": [
@@ -103,6 +103,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/auth/api-keys"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/compliance"
                 }
             ],
             "groupPermissions": [
@@ -217,6 +222,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/addon/physna/viewer"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/compliance"
                 }
             ],
             "groupPermissions": [
@@ -518,6 +528,148 @@
             "groupPermissions": [
                 {
                     "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas",
+            "description": "Allow management of the database's compliance schemas",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas-global",
+            "description": "Allow read of GLOBAL compliance schemas (bindable, not editable)",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "GLOBAL"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-evaluations",
+            "description": "Allow compliance evaluation, quarantine and exception actions for the database. Names both ids, as the asset constraint does: the compliance records of an archived asset must match both.",
+            "objectType": "complianceEvaluation",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                },
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}#deleted"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-cascades",
+            "description": "Allow read, approval and rejection of the database's cascades. Names both ids, as the asset constraint does: the compliance records of an archived asset must match both.",
+            "objectType": "complianceCascade",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                },
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}#deleted"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-bindings",
+            "description": "Allow binding and unbinding compliance schemas in the database. Names both ids, as the asset constraint does: the compliance records of an archived asset must match both.",
+            "objectType": "complianceBinding",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                },
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}#deleted"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
                     "type": "allow"
                 }
             ]

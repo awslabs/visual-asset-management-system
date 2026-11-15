@@ -15,6 +15,7 @@ import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { Duration, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { kmsKeyPolicyStatementGenerator } from "../../helper/security";
+import { SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT } from "../../helper/seedCustomResource";
 
 /* eslint-disable @typescript-eslint/no-empty-interface */
 export interface CustomFeatureEnabledConfigNestedStackProps {
@@ -151,6 +152,7 @@ export class CustomFeatureEnabledConfigNestedStack extends NestedStack {
                     installLatestAwsSdk: false,
                     policy: customResourcePolicy,
                     timeout: Duration.minutes(5),
+                    serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
                 }
             );
 

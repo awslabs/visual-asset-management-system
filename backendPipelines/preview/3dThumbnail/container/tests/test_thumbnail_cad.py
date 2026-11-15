@@ -13,6 +13,9 @@
 * An assembly placing the same component twice per level expands to 2^depth placements; the
   placements are counted from the file's text and bounded before OCCT transfers anything, and the
   tessellation stops at the triangle budget.
+* A coloured file renders in its colours on every Mesa: the renderer draws the per-face colours on the
+  faces' own corners (#1116).
+* A coloured assembly over the triangle budget keeps its colours through decimation (#1130).
 
 The tests build STEP files with cadquery and need the real cadquery/OCP and pyvista (pipeline image).
 """
@@ -22,7 +25,8 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from conftest import requires_real
+from conftest import colour_shares, requires_real
+from preview_pipeline import renderer
 from preview_pipeline.format_handlers import cad_handler
 
 
@@ -52,7 +56,8 @@ class TestStep:
         assert metres.n_cells == millimetres.n_cells
         assert metres.n_cells >= 60, "a cylinder must not be a handful of facets"
 
-    def test_part_component_and_nested_assembly_colours_and_placements_are_kept(self, tmp_path):
+    def _coloured_assembly(self, tmp_path):
+        """A red and a blue box and, in a nested assembly, a green sphere."""
         import cadquery as cq
 
         assembly = cq.Assembly()
@@ -64,8 +69,10 @@ class TestStep:
         assembly.add(nested, name="nested")
         path = str(tmp_path / "assembly.step")
         assembly.save(path)
+        return path
 
-        mesh = cad_handler.load(path)
+    def test_part_component_and_nested_assembly_colours_and_placements_are_kept(self, tmp_path):
+        mesh = cad_handler.load(self._coloured_assembly(tmp_path))
         rgb = np.asarray(mesh.cell_data["RGB"])
         centres = mesh.cell_centers().points
 
@@ -77,6 +84,27 @@ class TestStep:
         assert np.allclose(centre_of([255, 0, 0]), (0, 0, 0), atol=0.5)
         assert np.allclose(centre_of([0, 0, 255]), (20, 0, 0), atol=0.5)
         assert np.allclose(centre_of([0, 255, 0]), (0, 30, 0), atol=0.5)
+
+        frame = renderer.generate_static_frame(mesh, resolution=(160, 120))
+        assert (frame[..., 3] == 255).mean() > 0.05, "the assembly fills part of the frame"
+        shares = colour_shares(frame, [(255, 0, 0), (0, 0, 255), (0, 255, 0)])
+        assert min(shares) > 0.05, f"red, blue and green parts render in their colours: {shares}"
+
+    def test_a_coloured_assembly_over_the_triangle_budget_keeps_its_colours(self, tmp_path):
+        # The walk keeps the placement that crosses the budget, so the loaded mesh is over it and is
+        # decimated.
+        from preview_pipeline import core, geometry_budget, resources
+
+        budgets = resources.Budgets(memory_bytes=16 * 1024 ** 3, cpus=4, points=1_000_000,
+                                    triangles=200, splats=250_000)
+        loaded = core._load_file(self._coloured_assembly(tmp_path), ".step", budgets=budgets)
+        assert loaded.n_cells > budgets.triangles
+        mesh = geometry_budget.apply_budgets(loaded, budgets)
+        assert mesh.n_cells <= budgets.triangles and "RGB" in mesh.cell_data
+        frame = renderer.generate_static_frame(mesh, resolution=(160, 120))
+        assert (frame[..., 3] == 255).mean() > 0.05, "the assembly fills part of the frame"
+        shares = colour_shares(frame, [(255, 0, 0), (0, 0, 255), (0, 255, 0)])
+        assert min(shares) > 0.05, f"red, blue and green parts render in their colours: {shares}"
 
     def test_free_surfaces_beside_a_solid_are_kept(self, tmp_path):
         import cadquery as cq

@@ -74,7 +74,7 @@ class TestCommandLogging:
         """Test that sensitive arguments are redacted."""
         log_command_start("test_command", {
             "username": "user",
-            "password": "secret",
+            "password": "secret",  # pragma: allowlist secret
             "token": "abc123"
         })
         # Sensitive data should be redacted in logs
@@ -190,9 +190,9 @@ class TestConfigLogging:
         """Test that sensitive config values are redacted."""
         config = {
             "api_gateway_url": "https://api.example.com",
-            "password": "secret",
+            "password": "secret",  # pragma: allowlist secret
             "token": "abc123",
-            "api_key": "key123"
+            "api_key": "key123"  # pragma: allowlist secret
         }
         log_config_info(config)
         # Sensitive config values should be redacted

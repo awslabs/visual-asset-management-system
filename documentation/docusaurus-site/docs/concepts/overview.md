@@ -97,6 +97,10 @@ Tags are free-form labels that can be applied to assets for categorization and f
 
 VAMS uses a two-tier authorization model. Tier 1 controls which API routes a role can access, while Tier 2 controls which specific data entities (databases, assets, pipelines) a role can operate on. Both tiers must allow access for an operation to succeed. See [Permissions Model](permissions-model.md).
 
+### Compliance
+
+Compliance schemas are versioned rule sets in the `vams-rules-v1` format, bound to a database or, as an override, to one asset. VAMS evaluates a bound asset on demand, in a per-schema sweep, and, when the binding's automatic evaluation is on (the default), whenever the asset changes. An asset that fails a `quarantine`-level rule is quarantined until it is released or granted an exception. See [Compliance](compliance.md).
+
 ### Subscriptions
 
 Users can subscribe to asset change notifications. When a subscribed asset is modified (new files uploaded, versions created, metadata changed), VAMS sends email notifications through Amazon Simple Notification Service (Amazon SNS). See [Subscriptions](subscriptions.md).

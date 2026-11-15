@@ -88,12 +88,13 @@ def comment():
 @click.option('--page-size', type=int, default=None, help='Number of comments per page')
 @click.option('--max-items', type=int, default=None, help='Maximum total comments to fetch')
 @click.option('--starting-token', default=None, help='Token for pagination')
+@click.option('--show-archived', is_flag=True, help='Also find an archived asset')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def list(ctx: click.Context, asset_id: str, asset_version_id: Optional[str],
          page_size: Optional[int], max_items: Optional[int], starting_token: Optional[str],
-         json_output: bool):
+         show_archived: bool, json_output: bool):
     """List the comments on an asset, or on one of its versions.
 
     The endpoint bounds the read with the pagination options but returns no continuation token,
@@ -104,6 +105,7 @@ def list(ctx: click.Context, asset_id: str, asset_version_id: Optional[str],
         vamscli comment list -a my-asset -v 1
         vamscli comment list -a my-asset --page-size 50
         vamscli comment list -a my-asset --json-output
+        vamscli comment list -a my-archived-asset --show-archived
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -121,11 +123,13 @@ def list(ctx: click.Context, asset_id: str, asset_version_id: Optional[str],
         if asset_version_id:
             result = api_client.list_asset_version_comments(
                 asset_id, asset_version_id,
-                max_items=max_items, page_size=page_size, starting_token=starting_token)
+                max_items=max_items, page_size=page_size, starting_token=starting_token,
+                show_archived=show_archived)
         else:
             result = api_client.list_asset_comments(
                 asset_id,
-                max_items=max_items, page_size=page_size, starting_token=starting_token)
+                max_items=max_items, page_size=page_size, starting_token=starting_token,
+                show_archived=show_archived)
 
         items = _comment_items(result)
         output_result(

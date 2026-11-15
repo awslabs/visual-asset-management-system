@@ -20,13 +20,17 @@ from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_download, log_file_download_bulk
+from customLogging.auditLogging import log_file_download, log_file_download_bulk, audited_handler
 from common.s3 import (
     bucket_region_fields,
     region_routing_s3_client,
     validateS3AssetExtensionsAndContentType,
     validateUnallowedFileExtensionAndContentType,
     list_all_objects,
+    presigned_get_object_params,
+)
+from common.compliance.quarantineGuard import (
+    QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
 )
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
@@ -270,6 +274,7 @@ def normalize_s3_path(base_path, relative_path):
     # Join with a single slash
     return f"{base_path}/{relative_path}"
 
+
 #######################
 # Core Download Logic
 #######################
@@ -283,6 +288,10 @@ def get_distributable_asset_context(databaseId, assetId):
     # Check if asset is distributable
     if not asset.get('isDistributable', False):
         raise VAMSGeneralErrorResponse("Asset not distributable")
+
+    # Quarantine block (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The caller has
+    # already passed authorization, so a denied caller never reaches this read.
+    check_quarantine_block(databaseId, assetId)
 
     # Get asset location
     asset_location = asset.get('assetLocation')
@@ -390,9 +399,10 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
         if version_id:
             params['VersionId'] = version_id
 
+        # SVG keys get the image/svg+xml type and an attachment disposition (common.s3)
         url = s3.generate_presigned_url(
             'get_object',
-            Params=params,
+            Params=presigned_get_object_params(params),
             ExpiresIn=int(token_timeout)
         )
         return url, version_id
@@ -513,7 +523,11 @@ def download_asset_preview(databaseId, assetId, request_model):
     # Check if asset is distributable
     if not asset.get('isDistributable', False):
         raise VAMSGeneralErrorResponse("Asset not distributable")
-        
+
+    # Quarantine block (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The caller has
+    # already passed authorization, so a denied caller never reaches this read.
+    check_quarantine_block(databaseId, assetId)
+
     # Get preview location
     preview_location = asset.get('previewLocation')
     if not preview_location:
@@ -534,12 +548,13 @@ def download_asset_preview(databaseId, assetId, request_model):
     
     # Generate presigned URL
     try:
+        # SVG keys get the image/svg+xml type and an attachment disposition (common.s3)
         url = s3.generate_presigned_url(
             'get_object',
-            Params={
+            Params=presigned_get_object_params({
                 'Bucket': preview_bucket,
                 'Key': preview_key
-            },
+            }),
             ExpiresIn=int(token_timeout)
         )
         
@@ -557,6 +572,8 @@ def download_asset_preview(databaseId, assetId, request_model):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset download API"""
     claims_and_roles = request_to_claims(event)
@@ -662,6 +679,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 )
 
             return success(body=response.dict())
+        except QuarantineBlockedResponse as refusal:
+            # An expected refusal: one INFO line, no traceback (D174).
+            return quarantine_refusal(refusal, event)
         except VAMSGeneralErrorResponse as e:
             # Extract status code if provided
             status_code = getattr(e, 'status_code', 400)
@@ -673,6 +693,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ValueError as v:
         logger.exception(f"Value error: {v}")
         return validation_error(body={'message': str(v)}, event=event)
+    except QuarantineBlockedResponse as refusal:
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         # Extract status code if provided

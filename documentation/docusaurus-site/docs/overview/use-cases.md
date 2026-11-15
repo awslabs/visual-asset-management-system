@@ -18,6 +18,7 @@ VAMS centralizes manufacturing visual assets in Amazon S3 with metadata-rich org
 
 -   Three.js viewer with CAD format support (STEP, IGES, BREP via WebAssembly)
 -   CAD/Mesh Metadata Extraction pipeline for automated property extraction
+-   GenAI CAD STEP agent pipeline for creating or modifying a STEP part from a natural-language instruction, with a report of what it could not verify
 -   Asset versioning with alias naming for engineering revision tracking
 -   Metadata schemas for standardized part number and BOM (Bill of Materials) tracking
 -   Fine-grained access control to separate product lines and restrict access by team
@@ -95,16 +96,17 @@ Robotics and Physical AI teams need to manage simulation environments, training 
 
 ### How VAMS Solves It
 
-VAMS provides centralized management of simulation assets with the NVIDIA Isaac Lab Training pipeline for running reinforcement learning workloads directly from managed assets. USD scene files are viewable through the Needle Engine viewer, and Gaussian splat reconstructions are rendered via BabylonJS or PlayCanvas viewers. The workflow system chains multiple processing steps for end-to-end asset preparation.
+VAMS provides centralized management of simulation assets with the NVIDIA Isaac Lab Training pipeline for running reinforcement learning workloads directly from managed assets. USD scene files are viewable through the Three.js viewer (and the Needle Engine viewer where `allowUnsafeEvalFeatures` is enabled), and Gaussian splat reconstructions are rendered via BabylonJS or PlayCanvas viewers. The workflow system chains multiple processing steps for end-to-end asset preparation.
 
 **Key features used:**
 
 -   NVIDIA Isaac Lab Training pipeline for reinforcement learning training and evaluation
--   Needle USD Viewer for Universal Scene Description file visualization
+-   Three.js and Needle USD viewers for Universal Scene Description file visualization
 -   Gaussian Splat pipelines (BabylonJS and PlayCanvas viewers, 3D Reconstruction Toolkit pipeline)
 -   Workflow system for chaining asset processing steps
 -   API and CLI access for CI/CD integration with robotics development pipelines
 -   Metadata schemas for tracking simulation parameters and training configurations
+-   EDH Workstations add-on for GPU desktops with NVIDIA Isaac Sim and the VAMS Isaac Sim connector pre-installed, and for containerized simulation jobs
 
 ---
 
@@ -122,6 +124,7 @@ VAMS serves as the central asset repository for digital twin 3D models, with the
 
 -   Garnet Framework addon for NGSI-LD digital twin knowledge graph synchronization
 -   Physna Sync addon for VAMS->Physna data sync to support 3D/CAD AI geometric 3D searching in Physna
+-   EDH Workstations addon for launching Amazon DCV desktops next to the assets they work on, optionally with the user's VAMS CLI signed in on the desktop
 -   Asset versioning with alias naming for tracking as-built model revisions
 -   Cross-database asset linking for connecting related twin representations
 -   Multiple viewer plugins for visualizing different aspects of the digital twin
@@ -142,7 +145,7 @@ VAMS provides a unified library for all visual and media assets with dedicated v
 
 **Key features used:**
 
--   21 viewer plugins covering 3D, BIM/IFC, video, audio, image, document, and data formats
+-   22 viewer plugins covering 3D, BIM/IFC, video, audio, image, document, and data formats
 -   3D Preview Thumbnail pipeline for generating animated GIF previews of 3D assets
 -   Comment system with rich text for collaborative asset review
 -   Permission templates for external collaborator access (database-readonly, database-user)
@@ -168,6 +171,7 @@ VAMS provides automated 3D format conversion through the 3D Conversion Basic pip
 -   RapidPipeline integration for asset optimization (licensed)
 -   VNTANA ModelOps for advanced spatial data optimization (licensed)
 -   Gaussian Splat viewers and pipeline for photogrammetry-based environment capture
+-   Image to 3D pipeline for generating a starting mesh from a single reference photograph
 -   Workflow system for chaining conversion, optimization, and quality validation steps
 -   VamsCLI for automated asset ingestion from build pipelines
 

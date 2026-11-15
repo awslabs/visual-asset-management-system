@@ -56,7 +56,7 @@ ACCOUNT = "123456789012"
 TRAINING_JOB_NAME = "mock-bridge-train-0001"
 TRAINING_JOB_ARN = f"arn:aws:sagemaker:us-east-1:{ACCOUNT}:training-job/{TRAINING_JOB_NAME}"
 PIPELINE_EXECUTION_ARN = (f"arn:aws:sagemaker:us-east-1:{ACCOUNT}:pipeline/mock-bridge/execution/"
-                          "a1b2c3d4e5f6")
+                          "a1b2c3d4e5f6")  # pragma: allowlist secret
 
 TRAINING_SUB = {"resourceType": eo.RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB,
                 "trainingJobArn": TRAINING_JOB_ARN, "label": "Mock training", "stageName": "Train"}
@@ -139,7 +139,7 @@ class TestTheSharedStopHelperStopsSageMaker:
         assert TRAINING_JOB_NAME in message and "may still be running" in message
         message = eo.stop_registered_sub_process(dict(PIPELINE_SUB), sagemaker_client=None)
         # Named by the execution id tail; the ARN (account id, Region) never reaches a message.
-        assert "a1b2c3d4e5f6" in message and "may still be running" in message
+        assert "a1b2c3d4e5f6" in message and "may still be running" in message  # pragma: allowlist secret
         assert PIPELINE_EXECUTION_ARN not in message
 
     def test_a_resource_that_is_gone_is_not_reported_and_not_described(self):
@@ -178,7 +178,7 @@ class TestTheSharedStopHelperStopsSageMaker:
         assert TRAINING_JOB_NAME in message and "may still be running" in message
         assert "ValidationException while the job is InProgress" in message
         message = eo.stop_registered_sub_process(dict(PIPELINE_SUB), sagemaker_client=sagemaker)
-        assert "a1b2c3d4e5f6" in message and "while the job is Executing" in message
+        assert "a1b2c3d4e5f6" in message and "while the job is Executing" in message  # pragma: allowlist secret
         # Rule 11: the service message, the ARN and the account never reach the warning.
         assert "request was rejected" not in message and PIPELINE_EXECUTION_ARN not in message
         assert ACCOUNT not in message
@@ -235,7 +235,7 @@ class TestTheSharedStopHelperStopsSageMaker:
         assert TRAINING_JOB_NAME in message and "may still be running" in message
         assert code in message and "boom" not in message
         message = eo.stop_registered_sub_process(dict(PIPELINE_SUB), sagemaker_client=sagemaker)
-        assert "a1b2c3d4e5f6" in message and "may still be running" in message
+        assert "a1b2c3d4e5f6" in message and "may still be running" in message  # pragma: allowlist secret
         assert PIPELINE_EXECUTION_ARN not in message
         sagemaker.describe_training_job.assert_not_called()
         sagemaker.describe_pipeline_execution.assert_not_called()
@@ -592,7 +592,7 @@ class TestTheSummaryCarriesAbortableAndSageMakerStatus:
         assert summary["status"] == mapped and warnings == []
         assert summary["resourceName"] == "nightly"
         assert summary["sageMaker"] == {"pipelineName": "mock-bridge",
-                                        "pipelineExecutionId": "a1b2c3d4e5f6"}
+                                        "pipelineExecutionId": "a1b2c3d4e5f6"}  # pragma: allowlist secret
         assert (summary["stopDate"] != "") is (mapped in ("SUCCEEDED", "FAILED", "ABORTED"))
         assert "PipelineParameters" not in json.dumps(es._sagemaker_describe_cache)
         assert ACCOUNT not in json.dumps(summary) and "arn:" not in json.dumps(summary)
@@ -626,7 +626,7 @@ class TestTheSummaryCarriesAbortableAndSageMakerStatus:
 
     def test_the_pipeline_execution_parser(self):
         assert ses.sagemaker_pipeline_execution_ids_from_arn(PIPELINE_EXECUTION_ARN) == (
-            "mock-bridge", "a1b2c3d4e5f6")
+            "mock-bridge", "a1b2c3d4e5f6")  # pragma: allowlist secret
         assert ses.sagemaker_pipeline_execution_ids_from_arn("") == ("", "")
         assert ses.sagemaker_pipeline_execution_ids_from_arn(TRAINING_JOB_ARN) == ("", "")
         assert ses.sagemaker_pipeline_execution_ids_from_arn(

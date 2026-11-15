@@ -303,7 +303,7 @@ vamscli api-key update --api-key-id UUID --description "New description"
 
 **Symptoms:** API calls authenticated with a key return 401 or 403.
 
-**Cause:** The key is malformed, inactive, expired, or its bound user lost its roles.
+**Cause:** From v2.7.0 the two codes tell the causes apart. A `401` means the key is not accepted: it is malformed, unknown, inactive or expired. A `403` means the key is accepted but refused: its bound user has no roles, or the deployment restricts API access by source IP address. Before v2.7.0 every one of these causes answered `403`.
 
 **Resolution:**
 
@@ -385,6 +385,24 @@ Re-authenticate, or set a fresh override token for external auth.
 ```bash
 vamscli auth login -u your-username@example.com
 ```
+
+### Authentication Failed (HTTP 401)
+
+**Symptoms:** `Authentication Error: Authentication failed: the VAMS API did not accept the credential even after refreshing it (HTTP 401). Please run 'vamscli auth login' to re-authenticate.` In `--json-output` mode, `error_type` is `AuthenticationError`.
+
+**Cause:** The API answered `401` to every attempt, after the CLI refreshed the token and resent the request. From v2.7.0 the API's authorizer answers `401` when it does not accept the credential: the token is expired or invalid and cannot be refreshed, or an API key is unknown, disabled or expired. A refused request that the authorizer accepted the credential for answers `403` instead (see [Access Forbidden or Not Authorized](#access-forbidden-or-not-authorized)).
+
+**Resolution:**
+
+Sign in again. For an API key, check it as described in [API Key Returns 401 or 403](#api-key-returns-401-or-403).
+
+```bash
+vamscli auth login -u your-username@example.com
+```
+
+:::note
+A script that parses `error_type` to decide whether to sign in again should treat `AuthenticationError` the same as `TokenExpiredError`. Against a v2.7.0 or later API an expired session that cannot be refreshed reports `AuthenticationError`; against an earlier API it can report `TokenExpiredError`.
+:::
 
 :::tip
 Run any command with `--verbose` to see API request and response detail, timing, and full error information when diagnosing permission or authentication problems.

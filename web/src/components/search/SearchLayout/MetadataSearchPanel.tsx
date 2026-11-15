@@ -15,12 +15,25 @@ import {
     Grid,
 } from "@cloudscape-design/components";
 import { MetadataFilter } from "../types";
+import { searchRunningReason } from "./searchRunning";
+
+/**
+ * The name of a filter row's icon-only remove button: the filter's field name, else its value, else
+ * the row's position, so each row's button says which filter it removes.
+ */
+const removeFilterLabel = (filter: MetadataFilter, index: number) =>
+    filter.key
+        ? `Remove metadata filter ${filter.key}`
+        : filter.value
+        ? `Remove metadata filter with value ${filter.value}`
+        : `Remove metadata filter ${index + 1}`;
 
 interface MetadataSearchPanelProps {
     metadataFilters: MetadataFilter[];
     onAddFilter: () => void;
     onRemoveFilter: (index: number) => void;
     onUpdateFilter: (index: number, filter: MetadataFilter) => void;
+    /** True while a search runs: the controls keep focus and ignore input (see searchRunning). */
     disabled?: boolean;
     metadataSearchMode?: string;
     onSearchModeChange?: (mode: string) => void;
@@ -90,7 +103,8 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                 }
                             }}
                             options={searchModeOptions}
-                            disabled={disabled || isMapView}
+                            disabled={isMapView}
+                            readOnly={disabled}
                         />
                     </FormField>
                 )}
@@ -116,7 +130,8 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                 }
                             }}
                             options={operatorOptions}
-                            disabled={disabled || isMapView}
+                            disabled={isMapView}
+                            readOnly={disabled}
                         />
                     </FormField>
                 )}
@@ -134,11 +149,8 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                             onUpdateFilter(index, { ...filter, key: detail.value })
                                         }
                                         placeholder="e.g., product"
-                                        disabled={
-                                            disabled ||
-                                            metadataSearchMode === "value" ||
-                                            isLocFilter
-                                        }
+                                        disabled={metadataSearchMode === "value" || isLocFilter}
+                                        readOnly={disabled}
                                     />
                                 </FormField>
 
@@ -152,16 +164,19 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                             })
                                         }
                                         placeholder="Enter value (use * for wildcard)"
-                                        disabled={
-                                            disabled || metadataSearchMode === "key" || isLocFilter
-                                        }
+                                        disabled={metadataSearchMode === "key" || isLocFilter}
+                                        readOnly={disabled}
                                     />
                                 </FormField>
 
                                 <FormField label="Action">
                                     <Button
+                                        ariaLabel={removeFilterLabel(filter, index)}
                                         onClick={() => onRemoveFilter(index)}
                                         disabled={disabled || isLocFilter}
+                                        disabledReason={searchRunningReason(
+                                            disabled && !isLocFilter
+                                        )}
                                         iconName="remove"
                                     />
                                 </FormField>
@@ -170,7 +185,12 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                     );
                 })}
 
-                <Button onClick={onAddFilter} disabled={disabled} iconName="add-plus">
+                <Button
+                    onClick={onAddFilter}
+                    disabled={disabled}
+                    disabledReason={searchRunningReason(disabled)}
+                    iconName="add-plus"
+                >
                     Add Metadata Filter
                 </Button>
             </SpaceBetween>

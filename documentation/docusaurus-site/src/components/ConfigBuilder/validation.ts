@@ -19,42 +19,31 @@
  * condition is active (warnings).
  *
  * Note on ordering: the builder runs `applyDerived()` before evaluating rules.
- * `applyDerived()` forces nothing (see `derived.ts`), so the config these rules read
- * is exactly what the operator entered and exactly what the serialized config.json
- * carries. Where config.ts rejects a configuration rather than adjusting it — the
- * VPC requirement is the worked example (config.ts: "Features that require a VPC") —
- * the rejection is mirrored here as an error rule, not applied as a mutation there.
+ * `applyDerived()` mirrors the normalizations `getConfig()` performs (see `derived.ts`), so the
+ * config these rules read is what `getConfig()` would validate. Where config.ts rejects a
+ * configuration rather than adjusting it — the VPC requirement is the worked example (config.ts:
+ * "Features that require a VPC") — the rejection is mirrored here as an error rule, not applied as
+ * a mutation there.
+ *
+ * Each add-on's rules live in its module under `addon/` and join `RULES` through `ADDON_RULES`; their
+ * anchors quote the add-on's configuration module under infra/config/addon/.
  */
 
 import type { ConfigShape, Rule } from "./types";
-import { getByPath } from "./pathUtils";
 import { isCidr, isVpceId } from "./fields/presignedUrlFormats";
 import { ipAddressFamily } from "./fields/ipAddressFormats";
-
-/** config.ts treats null / "" / "UNDEFINED" (and missing) all as unset. */
-function isUnset(value: unknown): boolean {
-    return value == null || value === "" || value === "UNDEFINED";
-}
-
-/**
- * True for the values `getConfig()`'s `== undefined` backfills treat as absent — null and undefined,
- * and nothing else. A field that is absent from `config.json` is filled with its default before the
- * matching check runs, so a rule guarded by this stays silent rather than reporting a value the
- * deployment would supply for itself. `""` is deliberately NOT absent: `getConfig()` does not backfill
- * it, so an empty string reaches the check and is rejected there.
- */
-function isAbsent(value: unknown): boolean {
-    return value == null;
-}
-
-/** HuggingFace token check also rejects whitespace-only (config.ts: the `huggingFaceToken.trim() === ""` checks). */
-function isBlank(value: unknown): boolean {
-    return isUnset(value) || (typeof value === "string" && value.trim() === "");
-}
-
-function g(cfg: ConfigShape, path: string): any {
-    return getByPath(cfg, path);
-}
+import {
+    g,
+    isAbsent,
+    isBlank,
+    isUnset,
+    isValidUrl,
+    PARTITION_DNS_SUFFIXES,
+    partitionForRegionName,
+    SECRETSMANAGER_ARN_PATTERN,
+} from "./ruleHelpers";
+import type { VpcRequiringFeature } from "./ruleHelpers";
+import { ADDON_RULES, ADDON_VPC_REQUIRING_FEATURES } from "./addon";
 
 // Regexes copied verbatim from config.ts.
 const CERT_ARN_PATTERN = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
@@ -64,38 +53,11 @@ const API_CUSTOM_DOMAIN_HOST_PATTERN =
     /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
 // config.ts EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN and EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS.
-const EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN = /^[A-Za-z0-9_:.-]+$/;
+const EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN = /^(?!vams:)[A-Za-z0-9_:.-]+$/i;
 const EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS = ["aud", "client_id"];
 // config.ts API_CUSTOM_DOMAIN_PARTITIONS.
 const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
-/**
- * Region-name prefix to partition name and DNS suffix, matching what
- * `region_info.RegionInfo.get(region)` resolves at synth time (config.ts: "garnetIngestionQueueSqsUrl
- * must be a valid SQS URL" builds the pattern from that suffix). A region with no listed prefix is
- * commercial. Verified against every Region
- * aws-cdk-lib knows. Ordered longest-prefix-first so `us-isob-` is not shadowed by `us-iso-`.
- */
-const PARTITION_DNS_SUFFIXES: { prefix: string; partition: string; suffix: string }[] = [
-    { prefix: "us-gov-", partition: "aws-us-gov", suffix: "amazonaws.com" },
-    { prefix: "cn-", partition: "aws-cn", suffix: "amazonaws.com.cn" },
-    { prefix: "eusc-", partition: "aws-eusc", suffix: "amazonaws.eu" },
-    { prefix: "us-isob-", partition: "aws-iso-b", suffix: "sc2s.sgov.gov" },
-    { prefix: "us-isof-", partition: "aws-iso-f", suffix: "csp.hci.ic.gov" },
-    { prefix: "us-iso-", partition: "aws-iso", suffix: "c2s.ic.gov" },
-    { prefix: "eu-isoe-", partition: "aws-iso-e", suffix: "cloud.adc-e.uk" },
-];
 const COMMERCIAL_DNS_SUFFIX = "amazonaws.com";
-
-/**
- * The partition implied by `env.region`, or undefined when the region is unset — the deploy-time
- * region can still come from CDK context or the environment, which the browser cannot read, so the
- * partition is unknowable and partition-specific rules stay silent.
- */
-function partitionForRegionName(region: unknown): string | undefined {
-    if (isUnset(region) || typeof region !== "string") return undefined;
-    const match = PARTITION_DNS_SUFFIXES.find((entry) => region.startsWith(entry.prefix));
-    return match ? match.partition : "aws";
-}
 
 /**
  * The partition DNS suffix implied by `env.region`, or undefined when the region is unset — the
@@ -162,7 +124,6 @@ function isAllowedOcu(value: unknown): boolean {
     return n === 0 || n === 2 || n === 4 || n === 8 || (n >= 16 && n % 16 === 0);
 }
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SECRETSMANAGER_ARN_PATTERN = /^arn:aws[a-z-]*:secretsmanager:/;
 
 // Amazon Cognito's username limit, mirroring COGNITO_USERNAME_MAX_LENGTH in infra/config/config.ts.
 const COGNITO_USERNAME_MAX_LENGTH = 128;
@@ -244,18 +205,6 @@ function isFargateCpuMemory(vcpu: unknown, memoryGiB: unknown): boolean {
 // infra/config/config.ts.
 const SUPPORTED_API_TYPES = ["APIGATEWAY_REST"];
 
-/** True when a value looks like a valid URL (config.ts uses `new URL(...)`). */
-function isValidUrl(value: unknown): boolean {
-    if (typeof value !== "string" || value === "") return false;
-    try {
-        // eslint-disable-next-line no-new
-        new URL(value);
-        return true;
-    } catch {
-        return false;
-    }
-}
-
 /** Physna credentials supplied via an operator-managed secret ARN (config.ts: `hasSecretArn`). */
 function physnaHasSecretArn(cfg: ConfigShape): boolean {
     return !isUnset(g(cfg, "app.addons.usePhysnaSync.credentialsSecretArn"));
@@ -267,6 +216,80 @@ function physnaHasInlineCreds(cfg: ConfigShape): boolean {
         !isUnset(g(cfg, "app.addons.usePhysnaSync.clientId")) &&
         !isUnset(g(cfg, "app.addons.usePhysnaSync.clientSecret"))
     );
+}
+
+/**
+ * Rules for app.authProvider.<provider>.additionalTokenAudiences (config.ts:
+ * validateAdditionalTokenAudiences, and the "additionalTokenAudiences is ignored because" warning
+ * getConfig() gives when the provider is disabled). Each entry is matched exactly by the API
+ * authorizer, so the shape rules reject what could never match or would widen it.
+ */
+const MAX_ADDITIONAL_TOKEN_AUDIENCES = 10;
+const ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH = 512;
+const COGNITO_APP_CLIENT_ID_PATTERN = /^[\w+]{1,128}$/;
+
+function additionalTokenAudienceRules(
+    base: string,
+    provider: "cognito" | "external",
+    enabledLabel: string,
+    primaryLabel: string
+): Rule[] {
+    const path = `${base}.additionalTokenAudiences`;
+    const list = (c: ConfigShape): unknown[] | undefined => {
+        const value = g(c, path);
+        return Array.isArray(value) ? value : undefined;
+    };
+    const enabled = (c: ConfigShape) => !!g(c, `${base}.enabled`);
+    return [
+        {
+            id: `${provider}-additional-token-audiences-ignored-warn`,
+            severity: "warning",
+            fieldPaths: [path],
+            appliesWhen: (c) => !enabled(c) && (list(c)?.length ?? 0) > 0,
+            message: `${path} is ignored because ${enabledLabel} is false.`,
+        },
+        {
+            id: `${provider}-additional-token-audiences-shape`,
+            severity: "error",
+            fieldPaths: [path],
+            appliesWhen: (c) => {
+                if (!enabled(c)) return false;
+                const value = g(c, path);
+                if (value == null) return false;
+                if (!Array.isArray(value) || value.length > MAX_ADDITIONAL_TOKEN_AUDIENCES)
+                    return true;
+                return value.some(
+                    (a: unknown) =>
+                        typeof a !== "string" ||
+                        a.trim() === "" ||
+                        a !== a.trim() ||
+                        a.includes("*") ||
+                        a.length > ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH ||
+                        (provider === "cognito" && !COGNITO_APP_CLIENT_ID_PATTERN.test(a))
+                );
+            },
+            message:
+                provider === "cognito"
+                    ? `${path} must list at most ${MAX_ADDITIONAL_TOKEN_AUDIENCES} exact Amazon Cognito app client ids (letters, digits, '_' and '+') of app clients in the VAMS user pool; wildcards, blank entries and surrounding whitespace are not accepted.`
+                    : `${path} must list at most ${MAX_ADDITIONAL_TOKEN_AUDIENCES} exact audience values of up to ${ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH} characters; wildcards, blank entries and surrounding whitespace are not accepted.`,
+        },
+        {
+            id: `${provider}-additional-token-audiences-duplicate`,
+            severity: "error",
+            fieldPaths: [path],
+            appliesWhen: (c) => {
+                const value = list(c);
+                if (!enabled(c) || !value) return false;
+                if (new Set(value.map((a) => String(a))).size !== value.length) return true;
+                const primary =
+                    provider === "external"
+                        ? g(c, `${base}.lambdaAuthorizorJWTAudience`)
+                        : undefined;
+                return !!primary && value.some((a) => a === primary);
+            },
+            message: `${path} lists an audience more than once, or repeats ${primaryLabel}, which is always accepted.`,
+        },
+    ];
 }
 
 /**
@@ -320,6 +343,20 @@ function anyCosmos3ModelEnabled(cfg: ConfigShape): boolean {
         !!g(cfg, `${p}.modelsOmni.super64B.enabled`) ||
         !!g(cfg, `${p}.modelsOmni.superText2Image64B.enabled`) ||
         !!g(cfg, `${p}.modelsOmni.superImage2Video64B.enabled`)
+    );
+}
+
+/** True if any Image to 3D model is enabled (config.ts:1122-1127). */
+function anyImageTo3dModelEnabled(cfg: ConfigShape): boolean {
+    const p = "app.pipelines.useImageTo3d.models";
+    return (
+        !!g(cfg, `${p}.sam3d.enabled`) ||
+        !!g(cfg, `${p}.stable3dgen.enabled`) ||
+        !!g(cfg, `${p}.trellis2.enabled`) ||
+        !!g(cfg, `${p}.triposr.enabled`) ||
+        !!g(cfg, `${p}.step1x3d.enabled`) ||
+        !!g(cfg, `${p}.hunyuan3d.enabled`) ||
+        !!g(cfg, `${p}.blenderagent.enabled`)
     );
 }
 
@@ -639,12 +676,7 @@ function isIsoPartitionRegion(region: unknown): boolean {
  * are the fields the operator would change to clear the error. Adding a feature to the config.ts
  * collection means adding it here.
  */
-const VPC_REQUIRING_FEATURES: {
-    id: string;
-    label: string;
-    fieldPaths: string[];
-    appliesWhen: (cfg: ConfigShape) => boolean;
-}[] = [
+const VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
     {
         id: "vpc-required-use-alb",
         label: "useAlb",
@@ -746,6 +778,13 @@ const VPC_REQUIRING_FEATURES: {
         fieldPaths: ["app.pipelines.useGenAiVideoSopBom.enabled"],
         appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
     },
+    {
+        id: "vpc-required-pipelines-use-genai-cad-step-agent",
+        label: "pipelines.useGenAiCadStepAgent",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    ...ADDON_VPC_REQUIRING_FEATURES,
 ];
 
 /** Partitions whose capability downgrades are gated on app.govCloud.enabled (config.ts: `restrictedPartitionRequiringFlag`). */
@@ -780,7 +819,7 @@ function createsRekognitionEndpoint(c: ConfigShape): boolean {
     );
 }
 
-export const RULES: Rule[] = [
+const CORE_RULES: Rule[] = [
     // ----- Restricted-partition flag agreement
     // (config.ts: "app.govCloud.enabled is the restricted-partition switch") -----
     {
@@ -823,6 +862,18 @@ export const RULES: Rule[] = [
         fieldPaths: ["app.govCloud.enabled", "app.useLocationService.enabled"],
         appliesWhen: (c) => g(c, "app.govCloud.enabled") && g(c, "app.useLocationService.enabled"),
         message: "GovCloud must have app.useLocationService.enabled set to false.",
+    },
+    // ----- Audit logging (config.ts resolveAuditLoggingConfig: absent = true, else a boolean) -----
+    {
+        id: "audit-logging-record-reads-boolean",
+        severity: "error",
+        fieldPaths: ["app.auditLogging.recordReads"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.auditLogging.recordReads");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message:
+            "app.auditLogging.recordReads must be true or false (a JSON boolean). Leave it out to record reads.",
     },
     {
         id: "govcloud-no-deadline-cloud",
@@ -925,6 +976,7 @@ export const RULES: Rule[] = [
         [
             "useConversionCadMeshMetadataExtraction",
             "useConversionCoordinateTransform",
+            "useGenAiCadStepAgent",
             "usePreviewPcPotreeViewer",
             "usePreview3dThumbnail",
             "useGenAiMetadata3dLabeling",
@@ -1259,6 +1311,102 @@ export const RULES: Rule[] = [
             ),
         message:
             "useNvidiaCosmos3.modelsOmni.superImage2Video64B.instanceTypes must be a non-empty array.",
+    },
+
+    // ----- Image to 3D (config.ts: "Image to 3D validation") -----
+    {
+        id: "imageto3d-no-model",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.enabled"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useImageTo3d.enabled") && !anyImageTo3dModelEnabled(c),
+        message:
+            "useImageTo3d is enabled but no models are enabled. Enable at least one model in useImageTo3d.models.",
+    },
+    {
+        id: "imageto3d-hf-token",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.huggingFaceToken"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useImageTo3d.enabled") &&
+            isBlank(g(c, "app.pipelines.useImageTo3d.huggingFaceToken")),
+        message: "useImageTo3d requires huggingFaceToken for model downloads from HuggingFace.",
+    },
+    {
+        id: "imageto3d-instancetypes",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.instanceTypes"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            const types = g(c, "app.pipelines.useImageTo3d.instanceTypes");
+            return !Array.isArray(types) || types.length === 0;
+        },
+        message: "useImageTo3d.instanceTypes must be a non-empty array.",
+    },
+    {
+        id: "imageto3d-blenderagent-model-id",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useImageTo3d.enabled") &&
+            !!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled") &&
+            isBlank(g(c, "app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId")),
+        message:
+            "useImageTo3d.models.blenderagent.bedrockModelId must be set when the Blender agent is enabled. Foundation model availability differs by partition and account; the restricted-partition presets leave it empty.",
+    },
+    {
+        id: "imageto3d-blenderagent-model-id-commercial-only-prefix",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            if (!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled")) return false;
+            const id = String(
+                g(c, "app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId") ?? ""
+            );
+            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
+        },
+        message:
+            'useImageTo3d.models.blenderagent.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition.',
+    },
+    {
+        id: "imageto3d-blenderagent-image-editing-region",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing",
+            "env.region",
+        ],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            if (!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled")) return false;
+            if (!g(c, "app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing"))
+                return false;
+            const region = g(c, "env.region");
+            // An unset region is checked at deploy time, once it is known.
+            if (isUnset(region) || typeof region !== "string") return false;
+            return !(isCommercialPartition(c) && region.startsWith("us-"));
+        },
+        message:
+            "useImageTo3d.models.blenderagent.useStabilityImageEditing can be enabled only in the commercial partition's US Regions, where the Stability AI us. inference profiles exist. Set it to false; the agent then textures from the photographs alone.",
+    },
+    {
+        id: "imageto3d-hunyuan3d-territory",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.models.hunyuan3d.enabled", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            if (!g(c, "app.pipelines.useImageTo3d.models.hunyuan3d.enabled")) return false;
+            const region = String(g(c, "env.region") ?? "");
+            // eu-central-2 is Zurich, which is in neither the European Union nor the United Kingdom.
+            if (region === "eu-central-2") return false;
+            return (
+                region.startsWith("eu-") ||
+                region.startsWith("eusc-") ||
+                region === "ap-northeast-2"
+            );
+        },
+        message:
+            "useImageTo3d.models.hunyuan3d cannot be enabled in this region. The Tencent Hunyuan 3D 2.0 Community License Agreement grants no licence in the European Union, the United Kingdom or South Korea.",
     },
 
     // ----- NVIDIA Cosmos 3 instance-type GPU capacity
@@ -2074,7 +2222,7 @@ export const RULES: Rule[] = [
             );
         },
         message:
-            "JWT user ID claim must be empty (cognito:username, then username, then sub) or a token claim name of letters, digits, '_', ':', '.' and '-'.",
+            "JWT user ID claim must be empty (cognito:username, then username, then sub) or a token claim name of letters, digits, '_', ':', '.' and '-' that does not start with the reserved prefix 'vams:'.",
     },
     {
         id: "oauth-audience-claims",
@@ -2758,6 +2906,30 @@ export const RULES: Rule[] = [
             "Cognito USER_PASSWORD_AUTH flow is enabled (non-SRP). This may be flagged as a security finding in some environments.",
     },
     {
+        id: "cognito-legacy-groups-attribute-unset-warn",
+        severity: "warning",
+        fieldPaths: ["app.authProvider.useCognito.retainLegacyGroupsAttribute"],
+        // config.ts: "app.authProvider.useCognito.retainLegacyGroupsAttribute is not set, so it
+        // defaults to true". getConfig() applies the default and warns only when Cognito is enabled.
+        appliesWhen: (c) =>
+            g(c, "app.authProvider.useCognito.enabled") &&
+            g(c, "app.authProvider.useCognito.retainLegacyGroupsAttribute") == undefined,
+        message:
+            "useCognito.retainLegacyGroupsAttribute is not set, so it defaults to true and the user pool keeps declaring the custom:groups attribute that existing deployments' user pools carry. Leave it unset or true for an existing deployment. A new deployment must set it to false, or creating the user pool fails with Amazon Cognito's attribute name error.",
+    },
+    ...additionalTokenAudienceRules(
+        "app.authProvider.useCognito",
+        "cognito",
+        "useCognito.enabled",
+        "the web app client"
+    ),
+    ...additionalTokenAudienceRules(
+        "app.authProvider.useExternalOAuthIdp",
+        "external",
+        "useExternalOAuthIdp.enabled",
+        "lambdaAuthorizorJWTAudience"
+    ),
+    {
         id: "external-vpc-context-warn",
         severity: "warning",
         fieldPaths: ["app.useGlobalVpc.optionalExternalVpcId", "env.loadContextIgnoreVPCStacks"],
@@ -3087,6 +3259,203 @@ export const RULES: Rule[] = [
             "useGenAiVideoSopBom.limits.maxTotalDurationMinutes must be an integer from 1 to 480 (minutes of video per run; Amazon Transcribe accepts at most 28,800 seconds of audio per job).",
     },
 
+    // ----- GenAI CAD STEP agent (config.ts: "GenAI CAD STEP agent pipeline. The AgentCore runtime
+    // exists only in the commercial partition") -----
+    {
+        id: "cad-step-agent-runtime-value",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.runtime"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            !["agentcore", "fargate"].includes(
+                String(g(c, "app.pipelines.useGenAiCadStepAgent.runtime"))
+            ),
+        message: 'pipelines.useGenAiCadStepAgent.runtime must be "agentcore" or "fargate".',
+    },
+    {
+        id: "cad-step-agent-agentcore-commercial-only",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.runtime", "env.region"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            g(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore" &&
+            !isCommercialPartition(c),
+        message:
+            'pipelines.useGenAiCadStepAgent.runtime "agentcore" is offered only in the commercial (aws) partition. Set runtime to "fargate".',
+    },
+    {
+        id: "cad-step-agent-agentcore-requires-codebuild",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.runtime",
+            "app.pipelines.useGenAiCadStepAgent.useCodeBuild",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            g(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore" &&
+            g(c, "app.pipelines.useGenAiCadStepAgent.useCodeBuild") !== true,
+        message:
+            'pipelines.useGenAiCadStepAgent.runtime "agentcore" requires useCodeBuild to be true (the AgentCore Runtime pulls an arm64 image the CodeBuild project produces).',
+    },
+    {
+        id: "cad-step-agent-bedrock-model-id-required",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockModelId"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockModelId")),
+        message:
+            "useGenAiCadStepAgent requires a bedrockModelId available in this partition and Region.",
+    },
+    {
+        id: "cad-step-agent-bedrock-model-id-commercial-only-prefix",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockModelId", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")) return false;
+            const id = String(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockModelId") ?? "");
+            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
+        },
+        message:
+            'useGenAiCadStepAgent.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition.',
+    },
+    {
+        id: "cad-step-agent-openai-secret-arn",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn",
+            "app.pipelines.useGenAiCadStepAgent.openAi.modelId",
+        ],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")) return false;
+            const secret = String(
+                g(c, "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn") ?? ""
+            );
+            const model = String(g(c, "app.pipelines.useGenAiCadStepAgent.openAi.modelId") ?? "");
+            if (isBlank(secret) && isBlank(model)) return false;
+            return !/^arn:(aws|aws-us-gov|aws-cn|aws-eusc|aws-iso(-[a-z])?):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$/.test(
+                secret
+            );
+        },
+        message:
+            "useGenAiCadStepAgent.openAi.apiKeySecretArn must be an AWS Secrets Manager secret ARN when the OpenAI provider is configured.",
+    },
+    {
+        id: "cad-step-agent-openai-model-id-required",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.openAi.modelId",
+            "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            !isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn")) &&
+            isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.openAi.modelId")),
+        message:
+            "useGenAiCadStepAgent.openAi.modelId must be set when openAi.apiKeySecretArn is set.",
+    },
+    ...(
+        [
+            ["agentCore.warmSessionSlots", 0, 20],
+            ["agentCore.idleRuntimeSessionTimeoutSeconds", 60, 28800],
+            ["agentCore.maxLifetimeSeconds", 60, 28800],
+            ["maxRunSeconds", 300, 6000],
+        ] as const
+    ).map(
+        ([field, min, max]): Rule => ({
+            id: `cad-step-agent-range-${field.replace(/\./g, "-")}`,
+            severity: "error",
+            fieldPaths: [`app.pipelines.useGenAiCadStepAgent.${field}`],
+            appliesWhen: (c) => {
+                if (!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")) return false;
+                const v = Number(g(c, `app.pipelines.useGenAiCadStepAgent.${field}`));
+                return !Number.isInteger(v) || v < min || v > max;
+            },
+            message: `pipelines.useGenAiCadStepAgent.${field} must be an integer between ${min} and ${max}.`,
+        })
+    ),
+    {
+        id: "cad-step-agent-guardrail-pair",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId",
+            "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId")) !==
+                isBlank(
+                    g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion")
+                ),
+        message:
+            "useGenAiCadStepAgent.bedrockGuardrail.guardrailId and guardrailVersion must be set together (an existing guardrail) or both left empty (the deployment creates one).",
+    },
+    {
+        id: "cad-step-agent-guardrail-id-format",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            !isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId")) &&
+            !/^[a-z0-9]+$/.test(
+                String(
+                    g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId")
+                ).trim()
+            ),
+        message:
+            "useGenAiCadStepAgent.bedrockGuardrail.guardrailId must be a guardrail id (lower-case letters and digits), not an ARN or a name.",
+    },
+    {
+        id: "cad-step-agent-guardrail-version-format",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            !isBlank(
+                g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion")
+            ) &&
+            !/^(DRAFT|[0-9]+)$/.test(
+                String(
+                    g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion")
+                ).trim()
+            ),
+        message:
+            'useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion must be a numbered guardrail version or "DRAFT".',
+    },
+    {
+        id: "cad-step-agent-idle-exceeds-lifetime",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.agentCore.idleRuntimeSessionTimeoutSeconds",
+            "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            Number(
+                g(
+                    c,
+                    "app.pipelines.useGenAiCadStepAgent.agentCore.idleRuntimeSessionTimeoutSeconds"
+                )
+            ) > Number(g(c, "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds")),
+        message:
+            "useGenAiCadStepAgent.agentCore.idleRuntimeSessionTimeoutSeconds cannot exceed maxLifetimeSeconds.",
+    },
+    {
+        id: "cad-step-agent-run-exceeds-lifetime",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.maxRunSeconds",
+            "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            g(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore" &&
+            Number(g(c, "app.pipelines.useGenAiCadStepAgent.maxRunSeconds")) >
+                Number(g(c, "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds")),
+        message:
+            "useGenAiCadStepAgent.maxRunSeconds cannot exceed agentCore.maxLifetimeSeconds when the runtime is agentcore.",
+    },
+
     // ----- Physna outbound endpoints (config.ts: "must use https, or the credentials VAMS sends to it travel in cleartext") -----
     ...(
         [
@@ -3144,7 +3513,40 @@ export const RULES: Rule[] = [
         },
         message: `usePhysnaSync.${label} points at a loopback, link-local, or private address. It is called by a Lambda that can read the VAMS asset buckets, so it must name an external service.`,
     })),
+
+    // ----- Compliance default schema
+    // (config.ts: "The default compliance schema holds one metadata rule against the GLOBAL
+    // `defaultAsset` metadata schema") -----
+    //
+    // The seeded compliance schema's only rule references the GLOBAL `defaultAsset` metadata schema,
+    // which is seeded by `autoLoadDefaultAssetSchema` alone. Without it the rule cannot be checked
+    // (a tooling error, "Metadata schema not found"), so every evaluation under the schema ends in an
+    // error with no verdict. Absence follows `getConfig()`'s backfills: a missing
+    // `autoLoadDefaultSchema` is true, a missing `metadataSchema` BLOCK is every flag true, and a
+    // missing flag inside a present block is false (the seeding construct tests it for truthiness).
+    {
+        id: "compliance-default-schema-requires-default-asset-metadata-schema",
+        severity: "error",
+        fieldPaths: [
+            "app.compliance.autoLoadDefaultSchema",
+            "app.metadataSchema.autoLoadDefaultAssetSchema",
+        ],
+        appliesWhen: (c) => {
+            const autoLoadDefaultSchema = g(c, "app.compliance.autoLoadDefaultSchema");
+            const seedsComplianceSchema = isAbsent(autoLoadDefaultSchema)
+                ? true
+                : !!autoLoadDefaultSchema;
+            const seedsDefaultAssetSchema = isAbsent(g(c, "app.metadataSchema"))
+                ? true
+                : !!g(c, "app.metadataSchema.autoLoadDefaultAssetSchema");
+            return seedsComplianceSchema && !seedsDefaultAssetSchema;
+        },
+        message:
+            "app.compliance.autoLoadDefaultSchema is true but app.metadataSchema.autoLoadDefaultAssetSchema is false. The default compliance schema validates assets against the GLOBAL defaultAsset metadata schema, which only that flag seeds; without it every evaluation under the default schema ends in an error with no verdict (Metadata schema not found). Set autoLoadDefaultAssetSchema to true, or set autoLoadDefaultSchema to false.",
+    },
 ];
+
+export const RULES: Rule[] = [...CORE_RULES, ...ADDON_RULES];
 
 /** Evaluate every rule against the config and return those that apply. */
 export function evaluateRules(config: ConfigShape): Rule[] {

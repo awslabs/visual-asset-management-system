@@ -44,10 +44,11 @@ function rotationStatements(withRegionalAcl: boolean): any[] {
         config,
         {
             secret: {
+                // pragma: allowlist nextline secret
                 secretArn: `arn:aws:secretsmanager:${REGION}:${ACCOUNT}:secret:origin-verify-AbCdEf`,
             },
             distribution: cloudfront.Distribution.fromDistributionAttributes(stack, "Dist", {
-                distributionId: "E1234567890ABC",
+                distributionId: "E1234567890ABC", // pragma: allowlist secret
                 domainName: "d111111abcdef8.cloudfront.net",
             }),
             regionalWebAclArn: withRegionalAcl ? REGIONAL_ACL : undefined,

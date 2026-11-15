@@ -25,7 +25,7 @@ The app mounts with `createRoot` from `react-dom/client`, so React 18 APIs such 
 ```
 web/src/
   App.tsx                 # Root shell, HashRouter, TopNavigation
-  routes.tsx              # Centralized route table with React.lazy (core + add-on + custom)
+  routes.tsx              # Centralized route table with lazyWithRetry (core + add-on + custom)
   config.ts               # Static config (APP_TITLE, APP_TITLE_PREFIX, DEV_API_ENDPOINT)
   synonyms.tsx            # Customizable display names (Asset, Database, Comment)
   index.tsx               # Entry point (createRoot)
@@ -136,11 +136,11 @@ File paths must be URL-encoded (`encodeURIComponent`). Version parameters: `?ver
 
 ### Rule 4: Lazy Load All Pages
 
-Every page component in `routes.tsx` must be lazy-loaded for route-level code splitting.
+Every page component in `routes.tsx` must be lazy-loaded for route-level code splitting, through `lazyWithRetry` from `src/utils/chunkLoadRecovery.ts`. It retries a page chunk that failed to download, then reloads the page once; if the chunk still cannot be downloaded, the page shows "This page could not be downloaded" with a Reload button.
 
 ```typescript
 // CORRECT
-const MyPage = React.lazy(() => import("./pages/MyPage"));
+const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 // WRONG -- defeats code splitting
 import MyPage from "./pages/MyPage";
@@ -528,7 +528,7 @@ The preview file pattern and allowed preview extensions are mirrored in the back
 2. Add the lazy import and route in `src/routes.tsx`:
 
     ```typescript
-    const MyPage = React.lazy(() => import("./pages/MyPage"));
+    const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
     // In routeTable array:
     {
@@ -542,7 +542,7 @@ The preview file pattern and allowed preview extensions are mirrored in the back
 
 The route is automatically permission-filtered via the `webRoutes()` API call. The backend must also allow the route in the Casbin policy.
 
-The route table and the side navigation are composed in the order core, add-on, custom: `routes.tsx` appends `addonRouteTable` (`src/addons/addonRoutes.tsx`) and then `customRouteTable` (`src/custom/customRoutes.tsx`) to its core routes, and `Navigation.tsx` appends `addonNavSections` (`src/addons/addonNavigation.ts`) and then `customNavSections` (`src/custom/customNavigation.ts`) to its core sections. Both lanes ship empty. An add-on page is declared in the add-on files, and a fork's in the custom files ([Extending VAMS in a Fork](customizing-vams.md)), so neither edits the core files. Their routes and links pass through the same `web`-constraint filter as core ones, and a path that repeats an earlier route's path never replaces the core page, because the earlier route matches first.
+The route table and the side navigation are composed in the order core, add-on, custom: `routes.tsx` appends `addonRouteTable` (`src/addons/addonRoutes.tsx`) and then `customRouteTable` (`src/custom/customRoutes.tsx`) to its core routes. `Navigation.tsx` splices the two add-on lists from `src/addons/addonNavigation.ts` into its core sections, `addonNavMainSections` in the main menu after **Orchestrate & Automate** and `addonNavAdminSections` in the admin area after the core **Admin - ...** sections and before **User**, and appends `customNavSections` (`src/custom/customNavigation.ts`) after everything. The custom lane ships empty. An add-on page is declared in the add-on files, and a fork's in the custom files ([Extending VAMS in a Fork](customizing-vams.md)), so neither edits the core files. Their routes and links pass through the same `web`-constraint filter as core ones, and a path that repeats an earlier route's path never replaces the core page, because the earlier route matches first. A route or navigation entry can carry `featuresEnabledRestriction`, the feature switches that must all be enabled for it to exist: `routeTableFor()` in `routes.tsx` keeps only the routes whose switches the deployment meets; `AppRoutes` mounts those, sends them to the web-route check, runs the check again when the switches arrive after sign-in or on Retry, and uses only the latest check's answer. `useFeaturesEnabled()` (`src/context/RuntimeConfigContext.ts`) gives a component the deployment's switches and updates when they change.
 
 ### Component Template
 
@@ -614,7 +614,7 @@ When add-ons that embed external content are enabled, CSP is extended dynamicall
 | Import `apiClient` in components                   | Import from `APIService.ts` or other service files       |
 | Barrel import from `@cloudscape-design/components` | Use individual subpath imports                           |
 | Use `BrowserRouter`                                | Use `HashRouter`                                         |
-| Eagerly import page components                     | Use `React.lazy()` in `routes.tsx`                       |
+| Eagerly import page components                     | Use `lazyWithRetry()` in `routes.tsx`                    |
 | Add Redux, Zustand, or MobX                        | Use React Context + `useReducer`                         |
 | Use `Amplify Cache`                                | Use `appCache` from `src/services/appCache.ts`           |
 | Access Amplify Auth directly                       | Use `getDualValidAccessToken()` from `authTokenUtils.ts` |

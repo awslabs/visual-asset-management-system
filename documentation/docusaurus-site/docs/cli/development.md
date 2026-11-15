@@ -167,6 +167,40 @@ Match the established patterns: never `print()` directly in commands that suppor
 
 ---
 
+## Using the API client from Python
+
+Every VamsCLI command calls the VAMS API through `APIClient` (`vamscli/utils/api_client.py`). A Python program can use the same client in one of two ways.
+
+**With a saved profile.** The client reads the token from a profile that `vamscli auth login` created, refreshes it when it expires, and saves the refreshed token back to the profile:
+
+```python
+from vamscli.utils.api_client import APIClient
+from vamscli.utils.profile import ProfileManager
+
+profile_manager = ProfileManager("default")
+config = profile_manager.load_config()
+api_client = APIClient(config["api_gateway_url"], profile_manager)
+```
+
+**With a per-call token.** A process that serves several users, such as a remotely hosted MCP server, creates one client per request from the caller's own token:
+
+```python
+api_client = APIClient(api_gateway_url, bearer_token=caller_token)
+```
+
+-   The token is held in memory on that client only. No profile is read or written, and the token is never saved or refreshed.
+-   Pass the raw token: the Cognito or external IdP JWT, or a VAMS API key, without a `Bearer ` prefix. The client sends it as `Authorization: Bearer <token>`. A value that contains whitespace or control characters raises `ValueError`.
+-   Requests carry the caller's own permissions. The API's authorizer and the caller's roles decide every request, as for any other client.
+-   A rejected token is reported after one attempt: `AuthenticationError` for a `401` (for example an expired token), and `PermissionDeniedError` when the authorizer refuses it. Other errors are raised as for a profile-based client.
+-   Two clients created with different tokens share no state, so a client must not be reused for another caller.
+-   The request log is still written, with the `Authorization` header redacted.
+
+:::note
+No VamsCLI command takes a per-call token. To sign in from the command line, use `vamscli auth login`, or `vamscli auth login --user-id <user-id> --token-override-stdin` for a token from an external identity provider.
+:::
+
+---
+
 ## Building Distribution Packages
 
 VamsCLI is not published to PyPI. Organizations build and distribute their own wheel:

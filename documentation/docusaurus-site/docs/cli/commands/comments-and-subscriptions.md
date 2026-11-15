@@ -30,12 +30,14 @@ vamscli comment list [OPTIONS]
 | `--page-size`              | INTEGER | No       | Number of items read per page             |
 | `--max-items`              | INTEGER | No       | Maximum total items to return             |
 | `--starting-token`         | TEXT    | No       | Token to resume from                      |
+| `--show-archived`          | FLAG    | No       | Also find an archived asset               |
 | `--json-output`            | FLAG    | No       | Output raw JSON response                  |
 
 ```bash
 vamscli comment list -a my-asset
 vamscli comment list -a my-asset -v version-001
 vamscli comment list -a my-asset --max-items 50 --json-output
+vamscli comment list -a my-archived-asset --show-archived
 ```
 
 :::note[The listing returns no continuation token]

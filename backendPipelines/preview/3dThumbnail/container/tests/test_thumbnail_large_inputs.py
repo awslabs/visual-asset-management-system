@@ -3,7 +3,12 @@
 
 """Point clouds and large inputs (#467, and the container half of #470).
 
-* Budgets come from the cgroup memory limit and CPU quota; ``VAMS_COMPUTE_TIER`` is only logged.
+* Budgets come from the memory limit and CPU quota; ``VAMS_COMPUTE_TIER`` is only logged. The memory
+  limit is the smallest of the cgroup limit, the task memory the state machine passes and physical
+  memory, since on AWS Fargate the cgroup has no limit and physical memory is the micro-VM's (#1131).
+* A mesh coloured per face keeps its colours through decimation, each triangle its own polygon's or
+  strip's, whatever lines, polygons and strips it mixes (#1130), and a mesh drawn with per-face
+  colours is held to a triangle cap that covers the renderer's corner copy (#1116).
 * The 100 GB constant is replaced by a free-disk check before the download, and the download runs as
   parallel ranged GETs.
 * FARO (.fls/.fws) is removed from every list: Open3D has no FARO reader, so each such run failed.
@@ -27,7 +32,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from conftest import requires_real
+from conftest import colour_shares, requires_real
 from preview_pipeline import core, resources
 from preview_pipeline.format_handlers import point_streams, pointcloud_handler
 from preview_pipeline.utils import s3_utils
@@ -61,16 +66,56 @@ class TestResources:
         root = _cgroup(tmp_path, {"memory.max": str(16 * GIB)})
         with patch("os.sysconf", side_effect=lambda name: {"SC_PAGE_SIZE": 4096,
                                                            "SC_PHYS_PAGES": 64 * GIB // 4096}[name]):
-            assert resources.memory_limit_bytes(root) == 16 * GIB
+            assert resources.memory_limit_bytes(root, environ={}) == 16 * GIB
 
     def test_an_unlimited_cgroup_reads_as_physical_memory_and_v1_is_a_fallback(self, tmp_path):
         physical = {"SC_PAGE_SIZE": 4096, "SC_PHYS_PAGES": 32 * GIB // 4096}
         with patch("os.sysconf", side_effect=lambda name: physical[name]):
-            assert resources.memory_limit_bytes(_cgroup(tmp_path / "a", {"memory.max": "max"})) == 32 * GIB
+            unlimited = _cgroup(tmp_path / "a", {"memory.max": "max"})
+            assert resources.memory_limit_bytes(unlimited, environ={}) == 32 * GIB
             v1 = _cgroup(tmp_path / "b", {"memory/memory.limit_in_bytes": str(8 * GIB)})
-            assert resources.memory_limit_bytes(v1) == 8 * GIB
+            assert resources.memory_limit_bytes(v1, environ={}) == 8 * GIB
             unlimited_v1 = _cgroup(tmp_path / "c", {"memory/memory.limit_in_bytes": str(2 ** 63 - 4096)})
-            assert resources.memory_limit_bytes(unlimited_v1) == 32 * GIB
+            assert resources.memory_limit_bytes(unlimited_v1, environ={}) == 32 * GIB
+
+    def test_on_fargate_the_task_memory_the_state_machine_passes_is_the_limit(self, tmp_path):
+        # A Fargate container's cgroup has no limit and physical memory is the micro-VM's: a 16 GiB
+        # task reads 31 GiB.
+        physical = {"SC_PAGE_SIZE": 4096, "SC_PHYS_PAGES": 31 * GIB // 4096}
+        task = {resources.TASK_MEMORY_ENV: str(16 * 1024)}
+        with patch("os.sysconf", side_effect=lambda name: physical[name]):
+            unlimited = _cgroup(tmp_path / "a", {"memory.max": "max"})
+            assert resources.memory_limit_bytes(unlimited, environ=task) == 16 * GIB
+            assert resources.memory_limit_bytes(str(tmp_path / "none"), environ=task) == 16 * GIB
+            assert resources.memory_limit_bytes(unlimited, environ={}) == 31 * GIB
+
+    @pytest.mark.parametrize("cgroup_gib, task_mib, physical_gib, expected_gib", [
+        (8, 16 * 1024, 64, 8),
+        (16, 8 * 1024, 64, 8),
+        (16, 16 * 1024, 4, 4),
+    ], ids=["cgroup-smallest", "task-smallest", "physical-smallest"])
+    def test_the_smallest_of_the_cgroup_task_and_physical_memory_is_the_limit(
+            self, tmp_path, cgroup_gib, task_mib, physical_gib, expected_gib):
+        physical = {"SC_PAGE_SIZE": 4096, "SC_PHYS_PAGES": physical_gib * GIB // 4096}
+        root = _cgroup(tmp_path, {"memory.max": str(cgroup_gib * GIB)})
+        with patch("os.sysconf", side_effect=lambda name: physical[name]):
+            assert resources.memory_limit_bytes(
+                root, environ={resources.TASK_MEMORY_ENV: str(task_mib)}) == expected_gib * GIB
+
+    @pytest.mark.parametrize("value", ["", "  ", "abc", "0", "-1024", "16384.5", "16 GiB"])
+    def test_a_task_memory_that_is_not_a_positive_whole_number_of_mib_is_ignored(self, tmp_path, value):
+        physical = {"SC_PAGE_SIZE": 4096, "SC_PHYS_PAGES": 32 * GIB // 4096}
+        unlimited = _cgroup(tmp_path, {"memory.max": "max"})
+        with patch("os.sysconf", side_effect=lambda name: physical[name]):
+            assert resources.task_memory_bytes({resources.TASK_MEMORY_ENV: value}) is None
+            assert resources.memory_limit_bytes(
+                unlimited, environ={resources.TASK_MEMORY_ENV: value}) == 32 * GIB
+
+    def test_the_task_memory_is_read_from_the_process_environment(self, monkeypatch):
+        monkeypatch.setenv(resources.TASK_MEMORY_ENV, "8192")
+        assert resources.task_memory_bytes() == 8 * GIB
+        monkeypatch.delenv(resources.TASK_MEMORY_ENV)
+        assert resources.task_memory_bytes() is None
 
     def test_the_cpu_quota_caps_the_cpu_count(self, tmp_path):
         with patch("os.sched_getaffinity", return_value=set(range(16))):
@@ -283,6 +328,104 @@ class TestE57AllScans:
 # Mesh decimation
 # --------------------------------------------------------------------------------------------------
 
+_RED, _BLUE = (255, 0, 0), (0, 0, 255)
+
+
+def _half_red_half_blue_sphere(resolution):
+    """A sphere coloured per face, as a STEP or 3MF loads: red above the renderer's horizon (y up) and
+    blue below."""
+    import pyvista as pv
+
+    mesh = pv.Sphere(theta_resolution=resolution, phi_resolution=resolution)
+    upper = np.asarray(mesh.cell_centers().points)[:, 1] >= 0
+    mesh.cell_data["RGB"] = np.where(upper[:, None], np.uint8([_RED]), np.uint8([_BLUE])).astype(np.uint8)
+    return mesh
+
+
+def _cell_codes(n):
+    """A distinct colour for each of ``n`` cells, none of them white."""
+    index = np.arange(1, n + 1)
+    return np.column_stack([index % 256, index // 256 % 256, np.full(n, 7)]).astype(np.uint8)
+
+
+def _plane(resolution, triangles):
+    """The points and the polygons (point ids) of a plane of triangles or quads, as copies."""
+    import pyvista as pv
+
+    plane = pv.Plane(i_resolution=resolution, j_resolution=resolution)
+    if triangles:
+        plane = plane.triangulate()
+    corners = 3 if triangles else 4
+    return (np.array(plane.points, dtype=np.float64),
+            np.array(plane.faces).reshape(-1, corners + 1)[:, 1:].tolist())
+
+
+def _with_strip(points):
+    """``points`` and six more above them, and the strip of four triangles those six make."""
+    first = len(points)
+    above = [[x, y, 1.0] for x in (0.0, 0.5, 1.0) for y in (0.0, 0.5)]
+    return np.vstack([points, above]), [list(range(first, first + 6))]
+
+
+def _coloured_cells(points, polygons, strips=(), lines=()):
+    """A mesh of ``lines``, ``polygons`` and ``strips`` (point ids) on ``points``, built from its own
+    arrays. Cell data runs lines, polygons, then strips: each line is white, and each polygon and strip
+    has its own colour (``_cell_codes``)."""
+    import pyvista as pv
+
+    def cell_array(cells):
+        return np.concatenate([[len(cell), *cell] for cell in cells]).astype(np.int64)
+
+    arrays = {"faces": cell_array(polygons)}
+    if strips:
+        arrays["strips"] = cell_array(strips)
+    if lines:
+        arrays["lines"] = cell_array(lines)
+    mesh = pv.PolyData(np.array(points, dtype=np.float64), **arrays)
+    mesh.cell_data["RGB"] = np.vstack([np.full((len(lines), 3), 255, dtype=np.uint8),
+                                       _cell_codes(len(polygons) + len(strips))])
+    assert mesh.n_lines == len(lines) and mesh.n_strips == len(strips)
+    return mesh
+
+
+def _triangles_each_cell_makes(points, cells, strips):
+    """How many triangles VTK's triangle filter makes of each cell, run on that cell alone."""
+    import pyvista as pv
+
+    counts = []
+    for cell in cells:
+        kind = "strips" if strips else "faces"
+        one = pv.PolyData(np.array(points, dtype=np.float64), **{kind: np.array([len(cell), *cell])})
+        counts.append(int(one.triangulate().n_cells))
+    return counts
+
+
+def _assert_each_triangle_has_its_cells_colour(reduced, points, polygons, strips):
+    """Every triangle of ``reduced`` has the colour of the polygon or strip whose corners it joins, and
+    every polygon and strip keeps all the triangles the filter makes of it."""
+    assert "RGB" in reduced.cell_data, "the per-face colours are kept"
+    rgb = np.asarray(reduced.cell_data["RGB"])
+    assert len(rgb) == reduced.n_cells and rgb.dtype == np.uint8
+    cells = list(polygons) + list(strips)
+    owner = {tuple(code.tolist()): k for k, code in enumerate(_cell_codes(len(cells)))}
+    made = [0] * len(cells)
+    for triangle, colour in zip(np.asarray(reduced.faces).reshape(-1, 4)[:, 1:].tolist(), rgb.tolist()):
+        k = owner.get(tuple(colour))
+        assert k is not None and set(triangle) <= set(cells[k]), \
+            f"triangle {triangle} has colour {colour}, not its own polygon's or strip's"
+        made[k] += 1
+    expected = (_triangles_each_cell_makes(points, polygons, strips=False)
+                + _triangles_each_cell_makes(points, strips, strips=True))
+    assert made == expected, "every polygon and strip keeps all its triangles"
+
+
+def _identity_clustering(monkeypatch):
+    """Clustering that returns its input, so the mesh ``limit_triangles`` builds comes out as it is."""
+    from preview_pipeline import geometry_budget
+
+    monkeypatch.setattr(geometry_budget, "_cluster", lambda polydata, divisions: polydata)
+
+
 @pytest.mark.unit
 @requires_real("pyvista", "vtk")
 class TestTriangleBudget:
@@ -357,6 +500,201 @@ class TestTriangleBudget:
         assert np.allclose(np.asarray(reduced.cell_data["RGB"]).mean(axis=0), (30, 160, 60), atol=1)
         frame = renderer.generate_static_frame(reduced, resolution=(160, 120))
         assert (frame[..., 3] == 255).mean() > 0.1, "the decimated sphere fills part of the frame"
+        assert colour_shares(frame, [(30, 160, 60)])[0] > 0.95, "the decimated sphere keeps its colour"
+
+    def test_a_mesh_coloured_per_face_above_the_budget_keeps_its_colours_and_renders_them(self):
+        from preview_pipeline import geometry_budget, renderer
+
+        mesh = _half_red_half_blue_sphere(100)
+        reduced = geometry_budget.limit_triangles(mesh, 2_000)
+        assert mesh.n_cells > 2_000 and 200 < reduced.n_cells <= 2_000
+        rgb = np.asarray(reduced.cell_data["RGB"])
+        assert rgb.dtype == np.uint8 and "RGB" not in reduced.point_data
+        red = (rgb == _RED).all(axis=1).mean()
+        blue = (rgb == _BLUE).all(axis=1).mean()
+        assert red > 0.3 and blue > 0.3 and red + blue > 0.9, (red, blue)
+        frame = renderer.generate_static_frame(reduced, resolution=(160, 120))
+        assert (frame[..., 3] == 255).mean() > 0.1, "the decimated sphere fills part of the frame"
+        assert min(colour_shares(frame, [_RED, _BLUE])) > 0.1, "both halves render in their colours"
+
+    def test_the_face_colours_of_a_mesh_with_lines_stay_on_their_triangles(self):
+        import pyvista as pv
+
+        from preview_pipeline import geometry_budget
+
+        grid = pv.Plane(i_resolution=60, j_resolution=60)
+        n_quads = grid.n_cells
+        # Copies, so the mesh owns its arrays rather than viewing the plane's.
+        points, faces = np.array(grid.points, dtype=np.float64), np.array(grid.faces)
+        quads = np.where(np.asarray(grid.cell_centers().points)[:, 0] < 0, 0, 1)
+        mesh = pv.PolyData(points, faces=faces, lines=np.array([2, 0, grid.n_points - 1]))
+        # Cell data runs lines first, then polygons: a white line, then red and blue halves of the plane.
+        mesh.cell_data["RGB"] = np.vstack([[[255, 255, 255]], np.array([_RED, _BLUE], np.uint8)[quads]])
+        assert mesh.n_lines == 1 and mesh.n_cells == n_quads + 1
+        reduced = geometry_budget.limit_triangles(mesh, 500)
+        rgb = np.asarray(reduced.cell_data["RGB"])
+        centres = np.asarray(reduced.cell_centers().points)[:, 0]
+        assert len(rgb) == reduced.n_cells <= 500 and not (rgb == 255).all(axis=1).any()
+        assert (rgb[centres < -0.15] == _RED).all() and (rgb[centres > 0.15] == _BLUE).all()
+
+    # With the clustering replaced by the identity, the next tests compare the colour of every triangle
+    # that goes into the clustering with the colour of the polygon or strip it comes from.
+
+    def test_triangles_beside_a_line_keep_each_face_colour(self, monkeypatch):
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        points, triangles = _plane(20, triangles=True)
+        mesh = _coloured_cells(points, triangles, lines=[[0, 1, 2]])
+        reduced = geometry_budget.limit_triangles(mesh, 100, max_bins=1_000)
+        _assert_each_triangle_has_its_cells_colour(reduced, points, triangles, [])
+
+    def test_triangles_beside_a_strip_keep_each_face_colour_and_the_strip(self, monkeypatch):
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        points, triangles = _plane(20, triangles=True)
+        points, strips = _with_strip(points)
+        mesh = _coloured_cells(points, triangles, strips=strips)
+        reduced = geometry_budget.limit_triangles(mesh, 100, max_bins=1_000)
+        _assert_each_triangle_has_its_cells_colour(reduced, points, triangles, strips)
+
+    def test_triangles_beside_a_line_and_a_strip_keep_each_face_colour(self, monkeypatch):
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        points, triangles = _plane(20, triangles=True)
+        points, strips = _with_strip(points)
+        mesh = _coloured_cells(points, triangles, strips=strips, lines=[[0, 1], [2, 3, 4]])
+        reduced = geometry_budget.limit_triangles(mesh, 100, max_bins=1_000)
+        _assert_each_triangle_has_its_cells_colour(reduced, points, triangles, strips)
+
+    def test_quads_beside_a_strip_keep_each_face_colour(self, monkeypatch):
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        points, quads = _plane(20, triangles=False)
+        points, strips = _with_strip(points)
+        mesh = _coloured_cells(points, quads, strips=strips)
+        reduced = geometry_budget.limit_triangles(mesh, 100, max_bins=1_000)
+        _assert_each_triangle_has_its_cells_colour(reduced, points, quads, strips)
+
+    def test_polygons_of_more_than_four_corners_keep_each_face_colour(self, monkeypatch):
+        # Beside a plane of triangles: a pentagon with a repeated corner, of which VTK makes fewer than
+        # n - 2 triangles, so counting n - 2 would move every later colour, then a concave hexagon and
+        # an octagon.
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        points, polygons = _plane(20, triangles=True)
+        shapes = [
+            [[9, 0, 0], [10, 0, 0], [10, 1, 0], [10, 1, 0], [9, 1, 0]],
+            [[3, 0, 0], [5, 0, 0], [5, 1, 0], [4, 1, 0], [4, 2, 0], [3, 2, 0]],
+            [[7 + math.cos(a), math.sin(a), 0] for a in np.linspace(0, 2 * math.pi, 9)[:-1]],
+        ]
+        for shape in shapes:
+            polygons.append(list(range(len(points), len(points) + len(shape))))
+            points = np.vstack([points, shape])
+        mesh = _coloured_cells(points, polygons)
+        assert _triangles_each_cell_makes(points, polygons[-3:], strips=False) == [2, 4, 6]
+        reduced = geometry_budget.limit_triangles(mesh, 100, max_bins=1_000)
+        _assert_each_triangle_has_its_cells_colour(reduced, points, polygons, [])
+
+    @pytest.mark.parametrize("colours", ["point", "none"])
+    def test_a_strip_beside_triangles_is_kept_with_point_colours_or_none(self, monkeypatch, colours):
+        import pyvista as pv
+
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        points, triangles = _plane(20, triangles=True)
+        points, strips = _with_strip(points)
+        mesh = pv.PolyData(points, faces=np.array([[3, *t] for t in triangles]).ravel(),
+                           strips=np.array([len(strips[0]), *strips[0]]))
+        if colours == "point":
+            mesh.point_data["RGB"] = np.full((mesh.n_points, 3), 120, dtype=np.uint8)
+        reduced = geometry_budget.limit_triangles(mesh, 100, max_bins=1_000)
+        made = np.asarray(reduced.faces).reshape(-1, 4)[:, 1:]
+        assert reduced.n_cells == len(triangles) + 4
+        assert np.isin(made, strips[0]).all(axis=1).sum() == 4, "the strip's four triangles are kept"
+
+    def test_face_colours_the_filter_cannot_place_are_dropped_and_the_mesh_is_kept(self, monkeypatch):
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        monkeypatch.setattr(geometry_budget, "_triangulated", lambda points, cells, strips: None)
+        points, quads = _plane(20, triangles=False)
+        reduced = geometry_budget.limit_triangles(_coloured_cells(points, quads), 100, max_bins=1_000)
+        assert reduced.n_cells == 2 * len(quads) and "RGB" not in reduced.cell_data
+
+    def test_a_mesh_drawn_with_per_face_colours_is_held_to_the_corner_copys_cap(self, monkeypatch):
+        import pyvista as pv
+
+        from preview_pipeline import geometry_budget
+
+        cap = 3_000
+        monkeypatch.setattr(resources, "cell_colour_triangle_limit", lambda memory_bytes: cap)
+        budgets = resources.Budgets(memory_bytes=16 * GIB, cpus=4, points=1_000_000,
+                                    triangles=20_000, splats=250_000)
+
+        def sphere(resolution, colour=None):
+            mesh = pv.Sphere(theta_resolution=resolution, phi_resolution=resolution)
+            if colour == "cell":
+                mesh.cell_data["RGB"] = np.full((mesh.n_cells, 3), 200, dtype=np.uint8)
+            elif colour == "point":
+                mesh.point_data["RGB"] = np.full((mesh.n_points, 3), 200, dtype=np.uint8)
+            return mesh
+
+        # Within the budget, a mesh coloured per face is drawn from the corner copy, so it is capped.
+        cell_within = sphere(72, "cell")
+        assert cap < cell_within.n_cells <= budgets.triangles
+        reduced = geometry_budget.apply_budgets(cell_within, budgets)
+        assert reduced.n_cells <= cap and "RGB" in reduced.cell_data
+        # Point colours within the budget are drawn as they are: no copy, no cap.
+        point_within = sphere(72, "point")
+        assert geometry_budget.apply_budgets(point_within, budgets) is point_within
+        # Over the budget, any colour comes out of the clustering per face, so it is capped too.
+        point_over = sphere(142, "point")
+        assert point_over.n_cells > budgets.triangles
+        reduced = geometry_budget.apply_budgets(point_over, budgets)
+        assert reduced.n_cells <= cap and "RGB" in reduced.cell_data
+        textured_over = pv.Plane(i_resolution=150, j_resolution=150)
+        textured_over._preview_texture = pv.Texture(np.full((4, 4, 3), 90, dtype=np.uint8))
+        assert textured_over.n_cells > budgets.triangles
+        reduced = geometry_budget.apply_budgets(textured_over, budgets)
+        assert reduced.n_cells <= cap and "RGB" in reduced.cell_data
+        # An uncoloured mesh keeps the shared triangle budget.
+        plain_over = sphere(142)
+        reduced = geometry_budget.apply_budgets(plain_over, budgets)
+        assert cap < reduced.n_cells <= budgets.triangles and "RGB" not in reduced.cell_data
+
+
+@pytest.mark.unit
+class TestCellColourCap:
+    """The triangle cap of a mesh drawn with per-face colours, on plain numbers (no VTK). The corner
+    copy peaks at about 0.75 GiB plus at most 475 bytes per triangle; the cap holds that within 60% of
+    the task's memory and never above the triangle budget."""
+
+    def test_the_cap_at_2_gib_keeps_the_copys_peak_within_60_percent(self):
+        cap = resources.cell_colour_triangle_limit(2 * GIB)
+        assert cap == int((2 * GIB * 0.6 - 0.75 * GIB) / 475) == 1_017_229
+        assert resources.CELL_COLOUR_FIXED_BYTES + cap * resources.BYTES_PER_CELL_COLOUR_TRIANGLE \
+            <= 0.6 * 2 * GIB
+        budgets = resources.compute_budgets(memory_bytes=2 * GIB, cpus=1)
+        assert budgets.triangles == 3_758_096 and cap < budgets.triangles, \
+            "on 1 vCPU / 2 GiB the cap, not the shared budget, bounds a mesh coloured per face"
+
+    def test_the_cap_at_16_gib_leaves_the_standard_tiers_budget_unchanged(self):
+        cap = resources.cell_colour_triangle_limit(16 * GIB)
+        assert cap == int((16 * GIB * 0.6 - 0.75 * GIB) / 475) == 20_005_505
+        standard = resources.compute_budgets(memory_bytes=16 * GIB, cpus=4)
+        assert min(standard.triangles, cap) == standard.triangles == 20_000_000
+        large = resources.compute_budgets(memory_bytes=120 * GIB, cpus=16)
+        assert min(large.triangles, resources.cell_colour_triangle_limit(120 * GIB)) == resources.MAX_TRIANGLES
+
+    def test_a_task_too_small_for_the_copy_gets_the_floor(self):
+        assert resources.cell_colour_triangle_limit(1 * GIB) == resources.MIN_CELL_COLOUR_TRIANGLES
+        assert resources.cell_colour_triangle_limit(512 * 1024 ** 2) == resources.MIN_CELL_COLOUR_TRIANGLES
 
 
 @pytest.mark.unit

@@ -38,7 +38,15 @@
 import * as fs from "fs";
 import * as path from "path";
 
-const PIPELINES_DIR = path.join(__dirname, "..", "..", "..", "backendPipelines");
+const REPO_ROOT = path.join(__dirname, "..", "..", "..");
+const PIPELINES_DIR = path.join(REPO_ROOT, "backendPipelines");
+/** Add-on build sources shipped with the repository, scanned with the pipeline buildspecs. */
+const ADDONS_DIR = path.join(REPO_ROOT, "backendAddons");
+
+/** Every buildspec.yml under both build-source roots. */
+function allBuildspecs(): string[] {
+    return [...buildspecs(PIPELINES_DIR), ...buildspecs(ADDONS_DIR)];
+}
 const COORD_DOCKERFILE = path.join(
     PIPELINES_DIR,
     "conversion",
@@ -47,7 +55,7 @@ const COORD_DOCKERFILE = path.join(
     "Dockerfile"
 );
 
-/** Every buildspec.yml under backendPipelines/, recursively. */
+/** Every buildspec.yml under `dir`, recursively. */
 function buildspecs(dir: string): string[] {
     const out: string[] = [];
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -68,7 +76,7 @@ const COMPOSED_HOST = /--password-stdin\s+\S*dkr\.ecr\.\S*amazonaws\.(com|com\.c
 const DERIVED_HOST = "--password-stdin ${ECR_REPO_URI%%/*}";
 
 describe("container buildspecs are partition-portable", () => {
-    const files = buildspecs(PIPELINES_DIR);
+    const files = allBuildspecs();
 
     it("finds the buildspecs to scan", () => {
         // Control. An empty list would make both assertions below pass while checking nothing, which is
@@ -100,7 +108,7 @@ describe("container buildspecs are partition-portable", () => {
             for (const line of fs.readFileSync(file, "utf-8").split(/\r?\n/)) {
                 if (/^\s*#/.test(line)) continue;
                 if (COMPOSED_HOST.test(line)) {
-                    offenders.push(path.relative(PIPELINES_DIR, file));
+                    offenders.push(path.relative(REPO_ROOT, file));
                 }
             }
         }
@@ -114,7 +122,7 @@ describe("container buildspecs are partition-portable", () => {
         for (const file of files) {
             const text = fs.readFileSync(file, "utf-8");
             if (!/get-login-password/.test(text)) continue;
-            if (!text.includes(DERIVED_HOST)) missing.push(path.relative(PIPELINES_DIR, file));
+            if (!text.includes(DERIVED_HOST)) missing.push(path.relative(REPO_ROOT, file));
         }
         expect(missing).toEqual([]);
     });
@@ -128,8 +136,7 @@ describe("container buildspecs are partition-portable", () => {
             const text = fs.readFileSync(file, "utf-8");
             if (!text.includes(DERIVED_HOST)) continue;
             const uses = (text.match(/ECR_REPO_URI/g) || []).length;
-            if (uses < 2)
-                unsupplied.push(`${path.relative(PIPELINES_DIR, file)} (${uses} reference)`);
+            if (uses < 2) unsupplied.push(`${path.relative(REPO_ROOT, file)} (${uses} reference)`);
         }
         expect(unsupplied).toEqual([]);
     });
@@ -139,7 +146,7 @@ describe("container buildspecs are partition-portable", () => {
 const DEFAULTED_IMAGE_TAG = /^\s*IMAGE_TAG:\s*\S/m;
 
 describe("container buildspecs push an immutable tag", () => {
-    const files = buildspecs(PIPELINES_DIR);
+    const files = allBuildspecs();
 
     it("finds the buildspecs to scan", () => {
         // Control, as above: an empty list passes every assertion in this block.
@@ -167,7 +174,7 @@ describe("container buildspecs push an immutable tag", () => {
         // definition names a content hash, and every execution fails with CannotPullContainerError.
         const offenders = files
             .filter((file) => DEFAULTED_IMAGE_TAG.test(fs.readFileSync(file, "utf-8")))
-            .map((file) => path.relative(PIPELINES_DIR, file));
+            .map((file) => path.relative(REPO_ROOT, file));
         expect(offenders).toEqual([]);
     });
 
@@ -177,7 +184,7 @@ describe("container buildspecs push an immutable tag", () => {
         // the reference format rather than about the missing variable.
         const missing = files
             .filter((file) => !fs.readFileSync(file, "utf-8").includes('test -n "${IMAGE_TAG}"'))
-            .map((file) => path.relative(PIPELINES_DIR, file));
+            .map((file) => path.relative(REPO_ROOT, file));
         expect(missing).toEqual([]);
     });
 
@@ -189,7 +196,7 @@ describe("container buildspecs push an immutable tag", () => {
         const offenders: string[] = [];
         for (const file of files) {
             const text = fs.readFileSync(file, "utf-8");
-            const relative = path.relative(PIPELINES_DIR, file);
+            const relative = path.relative(REPO_ROOT, file);
             if (!text.includes("docker push ${IMAGE_URI}"))
                 offenders.push(`${relative}: no immutable push`);
             if (!text.includes("docker push ${CACHE_URI}"))
@@ -410,8 +417,9 @@ describe.each(NON_ROOT_IMAGES)(
 );
 
 /**
- * The five NVIDIA GPU images clone an upstream repository at build time, and each must clone a fixed
- * revision rather than whatever the default branch holds that day.
+ * The GPU images that clone an upstream repository at build time -- the five NVIDIA images and the
+ * SAM 3D image-to-3D image -- must each clone a fixed revision rather than whatever the default branch
+ * holds that day.
  *
  * An unpinned clone makes the framework version part of WHEN the image was built rather than of which
  * VAMS commit built it: two builds of the same commit ship different inference code, `uv sync --locked`
@@ -425,7 +433,7 @@ describe.each(NON_ROOT_IMAGES)(
  * Named explicitly rather than globbed, for the reason in the file header: the splat Dockerfile is
  * gitignored, so a glob passes locally and fails in CI.
  */
-const NVIDIA_DOCKERFILES: { label: string; file: string }[] = [
+const UPSTREAM_CLONE_DOCKERFILES: { label: string; file: string }[] = [
     {
         label: "cosmos 3",
         file: path.join(PIPELINES_DIR, "genAi", "nvidia", "cosmos", "3", "container", "Dockerfile"),
@@ -470,6 +478,20 @@ const NVIDIA_DOCKERFILES: { label: string; file: string }[] = [
         label: "gr00t",
         file: path.join(PIPELINES_DIR, "genAi", "nvidia", "gr00t", "container", "Dockerfile"),
     },
+    {
+        label: "sam 3d",
+        file: path.join(PIPELINES_DIR, "genAi", "imageTo3d", "container", "Dockerfile.sam3d"),
+    },
+    {
+        label: "blender agent",
+        file: path.join(
+            PIPELINES_DIR,
+            "genAi",
+            "imageTo3d",
+            "container",
+            "Dockerfile.blenderagent"
+        ),
+    },
 ];
 
 /** Logical Dockerfile instructions: backslash continuations joined, so one RUN is one entry. */
@@ -506,12 +528,12 @@ const FULL_SHA = /^[0-9a-f]{40}$/;
 const MOVING_COPY_FROM = /COPY\s+--from=\S+:(latest|main|master)\b/;
 const UNVERSIONED_AWS_CLI = /awscli-exe-linux-x86_64\.zip/;
 
-describe("the NVIDIA container images clone a pinned revision", () => {
+describe("the container images that clone an upstream repository pin its revision", () => {
     it("[control] the Dockerfiles are all present and all clone something", () => {
         // Both halves matter. A missing file would make every assertion below pass on an empty string,
         // and an image that stopped cloning would make the pin assertions vacuously true.
-        expect(NVIDIA_DOCKERFILES.length).toBe(5);
-        const cloneCounts = NVIDIA_DOCKERFILES.map(({ label, file }) => {
+        expect(UPSTREAM_CLONE_DOCKERFILES.length).toBe(7);
+        const cloneCounts = UPSTREAM_CLONE_DOCKERFILES.map(({ label, file }) => {
             expect(fs.existsSync(file)).toBe(true);
             return `${label}=${cloneInstructions(fs.readFileSync(file, "utf-8")).length}`;
         });
@@ -521,6 +543,8 @@ describe("the NVIDIA container images clone a pinned revision", () => {
             "cosmos transfer=1",
             "cosmos reason=1",
             "gr00t=1",
+            "sam 3d=1",
+            "blender agent=1",
         ]);
     });
 
@@ -539,7 +563,7 @@ describe("the NVIDIA container images clone a pinned revision", () => {
 
     it("every clone checks out a 40-hex commit and verifies it landed", () => {
         const offenders: string[] = [];
-        for (const { label, file } of NVIDIA_DOCKERFILES) {
+        for (const { label, file } of UPSTREAM_CLONE_DOCKERFILES) {
             const text = fs.readFileSync(file, "utf-8");
             const args = argDefaults(text);
             for (const instruction of cloneInstructions(text)) {
@@ -578,7 +602,7 @@ describe("the NVIDIA container images clone a pinned revision", () => {
         // `COPY --from=ghcr.io/astral-sh/uv:latest` pulls a different binary on every build, and it is
         // not covered by the clone assertions above.
         const offenders: string[] = [];
-        for (const { label, file } of NVIDIA_DOCKERFILES) {
+        for (const { label, file } of UPSTREAM_CLONE_DOCKERFILES) {
             for (const instruction of instructions(fs.readFileSync(file, "utf-8"))) {
                 if (MOVING_COPY_FROM.test(instruction)) {
                     offenders.push(`${label}: ${instruction.trim().slice(0, 80)}`);
@@ -592,7 +616,7 @@ describe("the NVIDIA container images clone a pinned revision", () => {
         // A second unpinned build input on the same rebuild. Its failure mode is milder than the
         // clone's, but it is the same class and the same one-line fix.
         const offenders: string[] = [];
-        for (const { label, file } of NVIDIA_DOCKERFILES) {
+        for (const { label, file } of UPSTREAM_CLONE_DOCKERFILES) {
             const text = fs.readFileSync(file, "utf-8");
             if (!/awscli-exe-linux-x86_64/.test(text)) continue;
             if (UNVERSIONED_AWS_CLI.test(text)) {

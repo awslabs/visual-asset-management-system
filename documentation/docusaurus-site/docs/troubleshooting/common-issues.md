@@ -46,7 +46,7 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
 
 1. In `infra/config/config.json`, disable everything that requires VPC networking so the dependent ENIs are torn down. This includes:
     - Amazon OpenSearch Service provisioned (`openSearch.useProvisioned.enabled = false`)
-    - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, ModelOps, RapidPipeline, point cloud / 3D thumbnail / GenAI labeling previews)
+    - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, Image to 3D, ModelOps, RapidPipeline, GenAI CAD STEP agent on its `fargate` runtime, point cloud / 3D thumbnail / GenAI labeling previews)
     - `useGlobalVpc.useForAllLambdas = false` so Lambda functions are removed from the VPC (this releases the Lambda Hyperplane ENIs that most commonly block subnet deletion)
     - The ALB public subnet if it is being removed (`useAlb.usePublicSubnet = false`), or the ALB itself if the web tier is changing
 2. Remove any Lambda functions and their VPC ENIs. Deploy with networking disabled so AWS CloudFormation detaches the Lambda functions from the VPC and deletes their ENIs:
@@ -189,6 +189,22 @@ Verify that the KMS key policy includes the required principals. If using an ext
 -   `kms:GenerateDataKey`
 -   `kms:ReEncrypt*`
 
+### Amazon Cognito User Pool Schema Errors
+
+The user pool fails to create or update on its `custom:groups` attribute. `app.authProvider.useCognito.retainLegacyGroupsAttribute` decides whether the user pool declares that attribute, and the value has to match the user pool the deployment has.
+
+**Symptoms:**
+
+-   A new deployment fails creating the user pool with `Attribute names MUST conform to the following rules` (`InvalidRequest`), and the core stack rolls back.
+-   An update fails on the user pool with `Existing schema attributes cannot be modified or deleted` (`InvalidRequest`), and the core stack rolls back to `UPDATE_ROLLBACK_COMPLETE`.
+
+**Resolution:**
+
+-   For the create error, set `retainLegacyGroupsAttribute` to `false` in `infra/config/config.json`. A core stack whose first creation failed is left in `ROLLBACK_COMPLETE` and cannot be updated, so delete it in the AWS CloudFormation console, then deploy again. Amazon Cognito rejects the attribute name when it creates a user pool.
+-   For the update error, set `retainLegacyGroupsAttribute` to `true` (or remove the key, which resolves to `true`) and deploy again. The existing user pool declares the attribute, and Amazon Cognito keeps a custom attribute for the life of the pool.
+
+See [Update the solution](../deployment/update-the-solution.md#v266-and-later-amazon-cognito-user-pool-attribute).
+
 ### Amazon OpenSearch Provisioned Domain Update Failures
 
 Updating a provisioned Amazon OpenSearch Service domain can fail when the requested domain configuration is incompatible with the existing indexes.
@@ -269,18 +285,31 @@ Safari does not fully support the cross-origin isolation requirements needed by 
 
 Use a Chromium-based browser (Google Chrome, Microsoft Edge) or Mozilla Firefox for WASM-dependent viewers. Non-WASM viewers and standard mesh formats work in all supported browsers.
 
+### BabylonJS Gaussian Splat Viewer Reports SPZ Format Version 4
+
+The BabylonJS Gaussian Splat viewer opens SPZ versions 2 and 3. Babylon.js reads SPZ version 4 only through the `@adobe/spz` WebAssembly module, which the VAMS Content Security Policy does not allow to load.
+
+**Symptoms:**
+
+-   Opening a `.spz` file shows "`<file>` uses SPZ format version 4, which the BabylonJS Gaussian Splat viewer does not support" (or "does not open"), and nothing is drawn
+
+**Resolution:**
+
+-   On a deployment with `ALLOWUNSAFEEVAL` enabled, the message points to the SuperSplat Editor: choose **SuperSplat Editor (PlayCanvas)** in the viewer list.
+-   Otherwise, convert the file to SPZ version 3, `.ply` or `.sog` (for example with `@playcanvas/splat-transform` and `--spz-version 3`) and upload the converted file.
+
 ### SuperSplat Editor Reports That WebGPU Is Required
 
 The SuperSplat Editor renders through WebGPU and has no WebGL fallback.
 
 **Symptoms:**
 
--   Opening a `.ply`, `.sog`, `.splat`, or `.lcc` file in the SuperSplat Editor shows the message "SuperSplat requires WebGPU, which this browser does not support" instead of the editor
--   The BabylonJS and PlayCanvas Gaussian Splat viewers render the same `.ply` and `.sog` files
+-   Opening a `.ksplat`, `.lcc`, `.ply`, `.sog`, `.splat`, or `.spz` file in the SuperSplat Editor shows the message "SuperSplat requires WebGPU, which this browser does not support" instead of the editor
+-   The BabylonJS and PlayCanvas Gaussian Splat viewers render the same `.ply` and `.sog` files, and the BabylonJS viewer renders the same `.splat` files and SPZ version 2 and 3 `.spz` files
 
 **Resolution:**
 
-Use a browser with WebGPU enabled: current Google Chrome or Microsoft Edge, Safari 26 or later, or Mozilla Firefox where WebGPU is enabled. Where a browser policy disables WebGPU or the machine has no supported GPU driver, open `.ply` files with the BabylonJS or PlayCanvas Gaussian Splat viewer and `.sog` files with the PlayCanvas Gaussian Splat viewer instead; `.lcc` and `.splat` files have no alternative viewer.
+Use a browser with WebGPU enabled: current Google Chrome or Microsoft Edge, Safari 26 or later, or Mozilla Firefox where WebGPU is enabled. Where a browser policy disables WebGPU or the machine has no supported GPU driver, open `.ply` and `.sog` files with the BabylonJS or PlayCanvas Gaussian Splat viewer, and `.splat` files and SPZ version 2 and 3 `.spz` files with the BabylonJS Gaussian Splat viewer instead; `.ksplat`, `.lcc` and SPZ version 4 `.spz` files have no alternative viewer.
 
 ### Point Cloud or 3D Tileset Viewer Reports a Load Failure
 
@@ -298,7 +327,7 @@ The Potree Viewer and the Cesium 3D Tileset Viewer stream their files from the A
 | Message                                                                          | Cause and resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Preview files not currently available, with the pipeline prompt                  | The point cloud has no Potree preview files. Run the Point Cloud Potree Viewer Pipeline on the file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `Request blocked by the deployment's AWS WAF web ACL (request ID ...)`           | A web ACL rule blocked the request. Find the request by its ID in the web ACL's log group to see the rule that matched (see [AWS WAF and Rate Limiting](../architecture/security.md#aws-waf-and-rate-limiting)).                                                                                                                                                                                                                                                                                                                                                                      |
+| `Request blocked by the deployment's AWS WAF web ACL (request ID ...)`           | A web ACL rule blocked the request. Find the request by its ID in the web ACL's log group to see the rule that matched (see [Requests the web ACL blocks](../architecture/security.md#requests-the-web-acl-blocks)).                                                                                                                                                                                                                                                                                                                                                                  |
 | `Unable to reach ...`                                                            | The request failed before VAMS answered it, so the browser reports no status: a network failure, Amazon API Gateway throttling of the browser's CORS preflight (`OPTIONS`) request, or an AWS WAF block of the preflight by a rule on the request's URI path or by the rate-based rule. Each file and tile request has its own preflight. Look for an `OPTIONS` request to the file's path at that time in the REST API access log group, where a `429` status is throttling (see [429 Rate Limiting](#429-rate-limiting)), and, when AWS WAF is enabled, in the web ACL's log group. |
 | `Unable to display ...`                                                          | The file downloads, but the Potree Viewer could not read it. Check the file, or run the Point Cloud Potree Viewer Pipeline on it again to regenerate the preview files.                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `Tileset loading failed for ...`                                                 | Cesium could not use the tileset for a reason other than a failed request, such as tileset JSON it cannot read. The text after the colon is Cesium's message. Check the tileset file.                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -331,7 +360,7 @@ Users may experience a login loop where the application repeatedly redirects to 
 
 ### 429 Rate Limiting
 
-VAMS applies API rate limiting through Amazon API Gateway throttling.
+A `429 Too Many Requests` comes from Amazon API Gateway stage throttling or, when `app.useWaf` is enabled, from the web ACL's rate-based rule.
 
 **Symptoms:**
 
@@ -340,20 +369,24 @@ VAMS applies API rate limiting through Amazon API Gateway throttling.
 
 **Resolution:**
 
-Increase the rate limits in `infra/config/config.json`:
+Increase the stage limits in `infra/config/config.json`:
 
 ```json
 {
     "app": {
         "api": {
-            "globalRateLimit": 100,
-            "globalBurstLimit": 200
+            "apiGatewayRest": {
+                "globalRateLimit": 100,
+                "globalBurstLimit": 200
+            }
         }
     }
 }
 ```
 
-The default values are `globalRateLimit: 50` requests per second and `globalBurstLimit: 100`. Redeploy after changing these values.
+The default values are `app.api.apiGatewayRest.globalRateLimit: 50` requests per second and `app.api.apiGatewayRest.globalBurstLimit: 100`. Every caller of the API shares them, and each browser CORS preflight request counts against them. Redeploy after changing these values.
+
+A `429` from the web ACL's rate-based rule carries `Retry-After: 1` and is recorded in the web ACL's log group; the stage limits do not affect it. Raise the rule's `limit`, the number of requests each IP address may make in a 5-minute window, in `infra/config/policy/wafPolicyConfig.json` (see [WAF rule policy](../deployment/configuration-reference.md#waf-rule-policy-configpolicywafpolicyconfigjson)).
 
 :::warning
 Increasing rate limits raises the potential cost of Amazon API Gateway usage and may affect downstream service limits. Monitor your Amazon CloudWatch metrics after adjustments.
@@ -396,6 +429,52 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 1. Check the Amazon CloudWatch logs for the indexing Lambda functions.
 2. Verify the Amazon OpenSearch cluster health in the AWS Management Console.
 3. If necessary, trigger a re-index by setting `reindexOnCdkDeploy: true` in the configuration and redeploying, or by using the manual re-index tool in `infra/deploymentDataMigration/`.
+4. If a file is in the asset's file list but never appears in search, or a deleted asset or file is still listed, check the indexing dead-letter queues (next section).
+
+### Indexing Dead-Letter Queue Holds Messages
+
+**Symptoms:**
+
+-   One of these Amazon CloudWatch alarms is in the `ALARM` state:
+
+    | Alarm                                                                         | Source queue                                                               |
+    | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreatedDLQ--<n>` | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreated--<n>` |
+    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeletedDLQ--<n>` | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeleted--<n>` |
+    | `<configuration name>-<app.baseStackName>-<region>-fileIndexerDLQ`            | `<configuration name>-<app.baseStackName>-<region>-fileIndexer`            |
+    | `<configuration name>-<app.baseStackName>-<region>-assetIndexerDLQ`           | `<configuration name>-<app.baseStackName>-<region>-assetIndexer`           |
+
+-   Files appear in the asset's file list but not in search results, have no version history entry, or did not fire a file-upload workflow trigger
+-   Deleted assets or files still appear in search results
+
+**Cause:**
+
+A bucket-sync or indexer Lambda could not process those events within three receives, so Amazon SQS moved them to the dead-letter queue of its source queue. The objects in Amazon S3 are unaffected. For the bucket-sync created queue before v2.6.7, AWS Lambda recursive loop detection caused this in the commercial partition under sustained parallel uploads; the bucket-sync Lambda's `RecursiveInvocationsDropped` metric is above zero when that was the cause. For the indexer queues, an interruption of the Amazon OpenSearch Service domain or collection is the usual cause.
+
+**Resolution:**
+
+Fix the cause shown in the logs of the Lambda that reads the source queue, if any, then move the messages back to the source queue listed in the table above. Each dead-letter queue keeps messages for 14 days.
+
+1. Find the source queue and read its dead-letter queue ARN from the redrive policy:
+
+    ```bash
+    aws sqs get-queue-url --queue-name <source queue name>
+    aws sqs get-queue-attributes --queue-url <source queue URL> --attribute-names RedrivePolicy QueueArn
+    ```
+
+2. Start the move from the dead-letter queue back to the source queue:
+
+    ```bash
+    aws sqs start-message-move-task --source-arn <dead-letter queue ARN> --destination-arn <source queue ARN>
+    ```
+
+3. Track it until the status is `COMPLETED`:
+
+    ```bash
+    aws sqs list-message-move-tasks --source-arn <dead-letter queue ARN>
+    ```
+
+The credentials you use need `sqs:StartMessageMoveTask`, `sqs:ListMessageMoveTasks`, `sqs:ReceiveMessage`, `sqs:DeleteMessage` and `sqs:GetQueueAttributes` on the dead-letter queue, `sqs:SendMessage` on the source queue and, with `app.useKmsCmkEncryption.enabled`, `kms:Decrypt` and `kms:GenerateDataKey` on the VAMS key. Each replayed event is processed as the original event would have been. A bucket-sync created event indexes the file, writes its version history row, and fires matching file-upload workflow triggers; a bucket-sync deleted event removes the file's metadata and search entry; an indexer event updates the search index. The alarm returns to `OK` once the queue is empty. The [Reindex utility](../developer/utilities/reindex.md) restores the search entries only.
 
 ---
 
@@ -420,7 +499,7 @@ Pipeline containers require network access to Amazon ECR endpoints. Verify:
 
 ### GPU Instance Unavailability for AWS Batch Jobs
 
-Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox) require GPU instances that may not be available in all AWS Regions or Availability Zones.
+Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox, Image to 3D) require GPU instances that may not be available in all AWS Regions or Availability Zones.
 
 **Symptoms:**
 

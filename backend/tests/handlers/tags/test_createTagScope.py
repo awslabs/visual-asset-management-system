@@ -224,9 +224,9 @@ class TestUpdateTagImmutableScope:
         mock_enf.return_value = enf
         tag_table.get_item.return_value = {'Item': {'tagName': 'Status', 'databaseId': 'factory-db',
                                                     'tagTypeName': 'Custom', 'description': 'd'}}
-        result = update_tag({'tagName': 'Status', 'description': 'd2', 'tagTypeName': 'Custom'}, CLAIMS)
-        # denied -> handler returns authorization_error() dict (statusCode 403)
-        assert isinstance(result, dict) and result.get('statusCode') == 403
+        # denied -> the service raises, and the handler answers 403
+        with pytest.raises(createTag.TagAccessDenied):
+            update_tag({'tagName': 'Status', 'description': 'd2', 'tagTypeName': 'Custom'}, CLAIMS)
         # the enforced object carried the stored databaseId
         enforced_obj = enf.enforce.call_args.args[0]
         assert enforced_obj['databaseId'] == 'factory-db'

@@ -21,7 +21,6 @@ import requests
 import urllib.request
 from collections import OrderedDict
 from typing import Dict, Any, Optional, List
-from aws_lambda_powertools import Logger
 import boto3
 from boto3.dynamodb.conditions import Key as DDBKey
 from botocore.config import Config as BotoConfig
@@ -40,9 +39,43 @@ from common.auth.apiEvent import strip_custom_domain_base_path
 from common.auth.clientIp import resolve_client_ip, is_ip_authorized
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import normalize_userid
+from customLogging.logger import safeLogger
 
-# Configure AWS Lambda Powertools logger
-logger = Logger()
+logger = safeLogger()
+
+# Failure kinds an unauthorized authenticate_request result carries in "failure" (issue #1212).
+# UNAUTHENTICATED means the credential itself did not authenticate (missing, malformed,
+# expired, badly signed, unknown, disabled): signing in again or presenting a new credential
+# can fix it, so the REST authorizer answers it with API Gateway's 401. Every other denial is
+# FORBIDDEN and stays a 403 Deny: a blocked IP, a credential that authenticated but carries
+# no roles, a configuration fault, a key-set outage, an unexpected error. An outage or a
+# configuration fault must not tell clients to re-authenticate, and a result without a
+# failure kind is read as FORBIDDEN, so the default stays a Deny.
+FAILURE_UNAUTHENTICATED = "unauthenticated"
+FAILURE_FORBIDDEN = "forbidden"
+
+
+class TokenVerificationUnavailableError(Exception):
+    """The authorizer could not evaluate a token, as opposed to rejecting it.
+
+    Raised by the JWT verifiers when the signing key set cannot be fetched (JWKS or
+    discovery failure) or when the verifier is missing its configuration. Neither says
+    anything about the caller's token, so authenticate_request maps it to FAILURE_FORBIDDEN
+    instead of the 401 a rejected token gets.
+    """
+
+
+class ApiKeyLookupUnavailableError(Exception):
+    """The API key table could not be read and no cached record exists for the key.
+
+    Kept distinct from a "not found" result (None) so a DynamoDB outage is answered with a
+    403 Deny rather than the 401 an unknown key gets (issue #1212).
+    """
+
+
+def _denied(reason: str, failure: str) -> dict:
+    return {"authorized": False, "context": None, "reason": reason, "failure": failure}
+
 
 # Environment Variables - Retrieved at module load time
 AWS_REGION = os.environ.get('AWS_REGION')
@@ -70,8 +103,15 @@ JWT_USER_ID_CLAIM_ENV = os.environ.get('JWT_USER_ID_CLAIM')
 SUPPORTED_JWT_AUDIENCE_CLAIMS = ('aud', 'client_id')
 DEFAULT_JWT_AUDIENCE_CLAIMS = ['aud']
 
-# A user id claim name, matching the getConfig() validation in infra/config/config.ts.
-JWT_USER_ID_CLAIM_PATTERN = re.compile(r'^[A-Za-z0-9_:.\-]+$')
+# A user id claim name, matching the getConfig() validation in infra/config/config.ts. A name under
+# the reserved 'vams:' prefix is refused (any letter case): those claims never reach the context.
+JWT_USER_ID_CLAIM_PATTERN = re.compile(r'^(?!vams:)[A-Za-z0-9_:.\-]+$', re.IGNORECASE)
+
+# Additional token audiences. Each is a JSON array of strings, set by CDK only when
+# the operator lists extra audiences (app.authProvider.<provider>.additionalTokenAudiences), so an
+# unset variable means the primary audience above is the only one accepted.
+ADDITIONAL_APP_CLIENT_IDS_ENV = os.environ.get('ADDITIONAL_APP_CLIENT_IDS')
+JWT_ADDITIONAL_AUDIENCES_ENV = os.environ.get('JWT_ADDITIONAL_AUDIENCES')
 
 # Authorizer Configuration
 ALLOWED_IP_RANGES_ENV = os.environ.get('ALLOWED_IP_RANGES')
@@ -132,8 +172,40 @@ JWT_USER_ID_CLAIM = parse_jwt_user_id_claim(JWT_USER_ID_CLAIM_ENV)
 if JWT_USER_ID_CLAIM is None:
     logger.error("Invalid JWT_USER_ID_CLAIM environment variable; external tokens will be refused")
 
+def parse_additional_audiences(raw: Optional[str], env_name: str) -> List[str]:
+    """Parse an additional-audience environment variable into a list of exact audience values.
+
+    Fails closed: a value that is not a JSON array yields an empty list (only the primary
+    audience is then accepted), and an entry that is not a non-empty string, or is a wildcard,
+    is dropped. config.ts rejects all of these at synth time, so they reach here only through a
+    hand-edited function environment. Matching is exact string equality; no pattern is ever
+    interpreted.
+    """
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.error(f"Failed to parse {env_name} environment variable; no additional audiences accepted")
+        return []
+    if not isinstance(value, list):
+        logger.error(f"{env_name} is not a JSON array; no additional audiences accepted")
+        return []
+    audiences = []
+    for entry in value:
+        if not isinstance(entry, str) or not entry.strip() or '*' in entry:
+            logger.error(f"{env_name} carries an entry that is not an exact audience value; it is ignored")
+            continue
+        if entry not in audiences:
+            audiences.append(entry)
+    return audiences
+
+
+ADDITIONAL_APP_CLIENT_IDS = parse_additional_audiences(ADDITIONAL_APP_CLIENT_IDS_ENV, 'ADDITIONAL_APP_CLIENT_IDS')
+JWT_ADDITIONAL_AUDIENCES = parse_additional_audiences(JWT_ADDITIONAL_AUDIENCES_ENV, 'JWT_ADDITIONAL_AUDIENCES')
+
 # API Key Configuration
-API_KEY_HASH_INDEX_NAME = 'apiKeyHashIndex'
+API_KEY_HASH_INDEX_NAME = 'apiKeyHashIndex'  # pragma: allowlist secret
 API_KEY_CACHE_TTL = 15  # seconds before a cached entry expires
 
 # User Roles Configuration
@@ -151,6 +223,12 @@ USER_ROLES_CACHE_TTL = 60  # seconds before a cached entry expires
 # leaving a floor of about 30 seconds rather than 5. A value below the authorizer cache
 # shortens nothing an operator can observe; a value above it puts the role cache back in
 # charge of the window.
+#
+# A roleless API key is still a Deny (403), so the window above applies to it. A credential
+# that does not authenticate at all is not answered with a policy: the REST authorizer
+# raises "Unauthorized" (401, issue #1212). Either way the cache key is the Authorization
+# header, so a new or refreshed credential is a new key and is never answered from an
+# earlier result for a different credential.
 USER_ROLES_EMPTY_CACHE_TTL = 5  # seconds before a cached EMPTY role list expires
 
 # Upper bound on entries held in each of the two per-request caches below.
@@ -200,6 +278,7 @@ def _cache_store(cache: OrderedDict, key: str, value: dict, max_entries: int) ->
         cache.popitem(last=False)
     cache[key] = value
 
+
 def _get_api_key_table():
     global _dynamodb_resource, _api_key_table
     if _api_key_table is None:
@@ -244,7 +323,9 @@ def _lookup_api_key_by_hash(key_hash: str):
     # Cache miss or expired — query DynamoDB GSI
     api_key_table = _get_api_key_table()
     if not api_key_table:
-        return None
+        # Not a "no such key" answer: the lookup could not run, so the caller must not read
+        # it as an unknown key (a 401) -- see ApiKeyLookupUnavailableError.
+        raise ApiKeyLookupUnavailableError("API key table not available")
 
     try:
         response = api_key_table.query(
@@ -264,8 +345,11 @@ def _lookup_api_key_by_hash(key_hash: str):
         return record
     except Exception as e:
         logger.error(f"Failed to query API key by hash: {str(e)}")
-        # On error, return cached record if available (even if expired), else None
-        return cached['record'] if cached else None
+        # On error, return the cached record if available (even if expired). With nothing
+        # cached the key's status is unknown, which is not the same as "not found".
+        if cached:
+            return cached['record']
+        raise ApiKeyLookupUnavailableError("API key lookup failed") from e
 
 def _lookup_user_roles(user_id: str) -> List[str]:
     """
@@ -542,39 +626,56 @@ def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
     Verify an API key by hashing it and looking up the hash via per-key cache.
     Each key is cached individually for API_KEY_CACHE_TTL seconds after first lookup.
     Invalid keys are cached as None to prevent DynamoDB DDOS.
-    Returns a synthetic claims dict if valid, None otherwise.
+    Returns a synthetic claims dict if valid, a denial dict ({'denied': True, 'reason',
+    'failure'}) if the key matched but may not be used or could not be checked, and None
+    when no key matches (the caller then falls through to the JWT path, which rejects it).
+
+    Failure kinds (issue #1212): a disabled key, an expired key, an unreadable expiry and a
+    key with no userId are FAILURE_UNAUTHENTICATED, the same 401 an unknown key gets, so the
+    status code does not reveal which keys exist. A key that authenticates but whose user
+    has no roles, and every case where the lookup itself could not run, are
+    FAILURE_FORBIDDEN.
     """
     try:
         user_roles_table = _get_user_roles_table()
         if not user_roles_table:
-            logger.warning("API key user roles table not available, skipping API key auth")
-            return None
+            logger.warning("API key user roles table not available, denying API key auth")
+            return {'denied': True, 'reason': 'API key verification unavailable',
+                    'failure': FAILURE_FORBIDDEN}
 
         # Hash the incoming key
         key_hash = hashlib.sha256(raw_key.encode('utf-8')).hexdigest()
 
         # Look up from cache (cache misses do NOT trigger refresh)
-        api_key_record = _lookup_api_key_by_hash(key_hash)
+        try:
+            api_key_record = _lookup_api_key_by_hash(key_hash)
+        except ApiKeyLookupUnavailableError as e:
+            logger.error(f"API key lookup unavailable: {str(e)}")
+            return {'denied': True, 'reason': 'API key verification unavailable',
+                    'failure': FAILURE_FORBIDDEN}
         if not api_key_record:
             return None  # No match — fall through to JWT
 
         # Check isActive
         if api_key_record.get('isActive') != 'true':
             logger.info(f"API key is disabled: {api_key_record.get('apiKeyId')}")
-            return {'denied': True, 'reason': 'API key is disabled'}
+            return {'denied': True, 'reason': 'API key is disabled',
+                    'failure': FAILURE_UNAUTHENTICATED}
 
         # Check expiration
         expires_at = api_key_record.get('expiresAt', '')
         if expires_at:
             expiry_denial = _api_key_expiry_denial(expires_at, api_key_record.get('apiKeyId'))
             if expiry_denial:
-                return {'denied': True, 'reason': expiry_denial}
+                return {'denied': True, 'reason': expiry_denial,
+                        'failure': FAILURE_UNAUTHENTICATED}
 
         # Look up userId roles
         user_id = api_key_record.get('userId', '')
         if not user_id:
             logger.error(f"API key has no userId: {api_key_record.get('apiKeyId')}")
-            return {'denied': True, 'reason': 'API key has no userId configured'}
+            return {'denied': True, 'reason': 'API key has no userId configured',
+                    'failure': FAILURE_UNAUTHENTICATED}
 
         # Roles come from the same per-user helper the JWT path uses, so the two cannot
         # drift. It pages the query to exhaustion -- one query returns at most 1 MB, and a
@@ -583,7 +684,8 @@ def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
         role_names = _lookup_user_roles(user_id)
         if not role_names:
             logger.info(f"No roles found for API key userId: {user_id}")
-            return {'denied': True, 'reason': f'No roles for API key user {user_id}'}
+            return {'denied': True, 'reason': f'No roles for API key user {user_id}',
+                    'failure': FAILURE_FORBIDDEN}
 
         # Build synthetic claims context
         claims = {
@@ -599,18 +701,127 @@ def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
 
     except Exception as e:
         logger.error(f"API key verification error: {str(e)}")
-        return None  # Fall through to JWT on error
+        # An unexpected error says nothing about the key, so it denies as FORBIDDEN rather
+        # than falling through to the JWT path, where a vams_ value is always rejected and
+        # would read as an unauthenticated (401) credential.
+        return {'denied': True, 'reason': 'API key verification error',
+                'failure': FAILURE_FORBIDDEN}
+
+
+def _non_blank(value: Any) -> bool:
+    return isinstance(value, str) and value.strip() != ''
+
+
+# Authorizer context keys with this prefix are set only by the authorizer itself (identity,
+# roles, MFA state, credential type); a verified token's claims never supply them.
+RESERVED_CONTEXT_KEY_PREFIX = 'vams:'
+
+
+def _is_reserved_context_key(key: Any) -> bool:
+    return str(key).lower().startswith(RESERVED_CONTEXT_KEY_PREFIX)
+
+
+# Claims an OAuth access token names its client with. A token whose user identity equals one of
+# them was issued to the client itself (a client_credentials grant), not to a user.
+_CLIENT_IDENTIFIER_CLAIMS = ('client_id', 'azp', 'cid')
+
+# Claim values by which common IdPs mark a token issued to an application rather than a user:
+# Auth0 client credentials grant ('gty'), Microsoft Entra ID app-only token ('idtyp').
+_MACHINE_TOKEN_CLAIM_MARKERS = (
+    ('gty', 'client-credentials'),
+    ('idtyp', 'app'),
+)
+# Keycloak names a client's service account user 'service-account-<client id>'.
+_MACHINE_TOKEN_USERNAME_PREFIXES = (
+    ('preferred_username', 'service-account-'),
+)
+
+
+def _is_machine_token(claims: Dict[str, Any]) -> bool:
+    """Whether claims carry a known app-only (machine-to-machine) token marker."""
+    for claim, value in _MACHINE_TOKEN_CLAIM_MARKERS:
+        if claims.get(claim) == value:
+            return True
+    for claim, prefix in _MACHINE_TOKEN_USERNAME_PREFIXES:
+        claim_value = claims.get(claim)
+        if isinstance(claim_value, str) and claim_value.startswith(prefix):
+            return True
+    return False
+
+
+def _external_token_names_a_user(claims: Dict[str, Any]) -> bool:
+    """Whether an external IdP token accepted through an additional audience identifies a user.
+
+    A token that names JWT_AUDIENCE (read through lambdaAuthorizorJWTAudienceClaims, 'aud' or
+    'client_id') is not checked here: that is the web app's own audience. A token accepted only
+    through JWT_ADDITIONAL_AUDIENCES must carry the identity claim the authorizer resolves the
+    user from (resolve_user_id: the configured user id claim, else cognito:username, then
+    username, then sub), that identity must not be the token's own client identifier, and the
+    token must carry no known machine-token marker (_is_machine_token). The markers cover common
+    IdPs only, so the configuration still has to list audiences of user sign-in clients.
+    """
+    if JWT_AUDIENCE and matched_external_audience(claims) == JWT_AUDIENCE:
+        return True
+    identity = resolve_user_id(claims)
+    if not _non_blank(identity) or _is_machine_token(claims):
+        return False
+    client_ids = {claims.get(c) for c in _CLIENT_IDENTIFIER_CLAIMS if _non_blank(claims.get(c))}
+    return identity not in client_ids
+
+
+def accepted_cognito_client_ids() -> List[str]:
+    """The Cognito app client ids whose tokens the API accepts: the web client first, then the
+    configured additional clients. Read at call time so it follows the module
+    configuration."""
+    accepted = [APP_CLIENT_ID] if APP_CLIENT_ID else []
+    for client_id in ADDITIONAL_APP_CLIENT_IDS:
+        if client_id not in accepted:
+            accepted.append(client_id)
+    return accepted
+
+
+def accepted_external_audiences() -> List[str]:
+    """The external IdP audiences the API accepts: the configured JWT_AUDIENCE first, then the
+    configured additional audiences."""
+    accepted = [JWT_AUDIENCE] if JWT_AUDIENCE else []
+    for audience in JWT_ADDITIONAL_AUDIENCES:
+        if audience not in accepted:
+            accepted.append(audience)
+    return accepted
+
+
+def token_audience_for_audit(claims: Dict[str, Any]) -> Optional[str]:
+    """The accepted audience a verified token was issued to, for the authorization audit record.
+
+    Cognito: the app client id ('aud' of an ID token, 'client_id' of an access token). External
+    IdP: the accepted audience the token names through the configured audience claims (a token
+    may carry several in 'aud').
+    Never any other token content. None when the claims carry no accepted audience (API keys).
+    """
+    if not claims:
+        return None
+    if AUTH_MODE == 'cognito':
+        value = claims.get('aud') or claims.get('client_id')
+        return value if isinstance(value, str) and value in accepted_cognito_client_ids() else None
+    if AUTH_MODE == 'external':
+        return matched_external_audience(claims)
+    return None
 
 
 def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
     """
     Verify Cognito JWT token using joserfc library
-    """
-    try:
-        if not USER_POOL_ID or not APP_CLIENT_ID:
-            logger.error("Missing Cognito configuration")
-            return None
 
+    Returns the claims of a token that verifies and None for a token that is rejected
+    (malformed, unknown kid after a refetch, bad signature, expired, wrong aud, iss or
+    token_use). Raises TokenVerificationUnavailableError when the token could not be
+    evaluated at all: missing Cognito configuration or a JWKS fetch failure (issue #1212).
+    """
+    if not USER_POOL_ID or not APP_CLIENT_ID or not COGNITO_BASE_URL:
+        logger.error("Missing Cognito configuration")
+        raise TokenVerificationUnavailableError("Missing Cognito configuration")
+
+    try:
         # Get the kid from the headers prior to verification
         token_obj = joserfc_jws.extract_compact(token.encode())
         headers = token_obj.protected
@@ -621,7 +832,7 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
             return None
 
         # Get the public keys
-        keys = get_cognito_keys(AWS_REGION, USER_POOL_ID)
+        keys = _fetch_key_set(get_cognito_keys, AWS_REGION, USER_POOL_ID)
 
         # Search for the kid in the downloaded public keys. A kid the cached set does not
         # contain is what an issuer signing-key rotation looks like, so refetch once
@@ -629,7 +840,7 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
         key_record = _key_for_kid(keys, kid)
         if key_record is None:
             logger.info(f"Public key for kid {kid} not in the cached key set; refetching JWKS")
-            keys = get_cognito_keys(AWS_REGION, USER_POOL_ID, force_refresh=True)
+            keys = _fetch_key_set(get_cognito_keys, AWS_REGION, USER_POOL_ID, force_refresh=True)
             key_record = _key_for_kid(keys, kid)
 
         if key_record is None:
@@ -655,19 +866,18 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
             logger.error('Token is expired')
             return None
 
-        # Verify the Audience (use claims['client_id'] if verifying an access token)
-        # For ID tokens, use 'aud' claim
+        # Verify the Audience: an ID token names its app client in 'aud', an access token in
+        # 'client_id'. The token must have been issued to the web app client or to one of the
+        # additional app clients the operator configured; the comparison is
+        # exact. Issuer, signature, expiry and token_use checks are the same for every client.
         token_audience = claims.get('aud') or claims.get('client_id')
-        if token_audience != APP_CLIENT_ID:
-            logger.error(f'Token was not issued for this audience. Expected: {APP_CLIENT_ID}, Got: {token_audience}')
+        accepted_client_ids = accepted_cognito_client_ids()
+        if not isinstance(token_audience, str) or token_audience not in accepted_client_ids:
+            logger.error(f'Token was not issued for an accepted app client. Got: {token_audience}')
             return None
 
         # Additional validations
-        # Verify issuer using configurable base URL
-        if not COGNITO_BASE_URL:
-            logger.error("Missing COGNITO_BASE_URL environment variable")
-            return None
-
+        # Verify issuer using the configurable base URL (presence checked on entry)
         expected_issuer = f"{COGNITO_BASE_URL}/{USER_POOL_ID}"
         if claims.get('iss') != expected_issuer:
             logger.error(f'Invalid token issuer. Expected: {expected_issuer}, Got: {claims.get("iss")}')
@@ -679,40 +889,67 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
             logger.error(f'Invalid token_use: {token_use}')
             return None
 
+        # An access token must name the user it was issued for. A Cognito client_credentials
+        # (machine-to-machine) access token carries no 'username' and its 'sub' is the app
+        # client id, so it identifies no VAMS user and is rejected like any other bad token.
+        if token_use == 'access' and not _non_blank(claims.get('username')):
+            logger.error('Access token carries no username claim; a machine-to-machine token is not accepted')
+            return None
+
         logger.info(f'Cognito token successfully verified for user: {claims.get("sub", "unknown")}')
         return claims
 
+    except TokenVerificationUnavailableError:
+        raise
     except Exception as e:
         logger.error(f"Cognito JWT verification error: {str(e)}")
         return None
 
 
-def _audience_claim_matches(claim_name: str, value: Any) -> bool:
-    """Whether one audience claim's value names JWT_AUDIENCE.
+def _audience_claim_values(claim_name: str, value: Any) -> List[str]:
+    """The audience strings one audience claim carries; empty when the value is malformed.
 
-    'aud' may be a string or a list of strings that contains the audience (RFC 7519 4.1.3; the
-    same rule PyJWT applies); 'client_id' must be the audience string itself.
+    'aud' may be a string or a list of strings (RFC 7519 4.1.3; the same rule PyJWT applies, and
+    a list holding a non-string is malformed); 'client_id' must be a string.
     """
     if claim_name == 'aud' and isinstance(value, list):
-        return all(isinstance(item, str) for item in value) and JWT_AUDIENCE in value
-    return isinstance(value, str) and value == JWT_AUDIENCE
+        return list(value) if all(isinstance(item, str) for item in value) else []
+    return [value] if isinstance(value, str) else []
+
+
+def matched_external_audience(claims: Dict[str, Any]) -> Optional[str]:
+    """The accepted audience an external token names, or None when it names none.
+
+    Accepted audiences are JWT_AUDIENCE and then the additional audiences (see
+    accepted_external_audiences), so the primary one is preferred when a token names both. The
+    claims are read through JWT_AUDIENCE_CLAIMS, in order, for the primary and the additional
+    audiences alike: the first claim of the list present in the token decides, it must name an
+    accepted audience, and a later claim cannot rescue a mismatch. A token carrying none of them
+    names none. The default ['aud'] is the same comparison as PyJWT's own audience verification
+    given the accepted list, and the comparison is always exact string equality.
+    """
+    for claim_name in JWT_AUDIENCE_CLAIMS or []:
+        if claim_name in claims:
+            values = _audience_claim_values(claim_name, claims[claim_name])
+            for audience in accepted_external_audiences():
+                if audience in values:
+                    return audience
+            return None
+    return None
 
 
 def verify_external_audience(claims: Dict[str, Any]) -> bool:
-    """Compare the token's audience with JWT_AUDIENCE through the configured claims, in order.
+    """Whether the token's audience, read through the configured claims, is an accepted one.
 
-    The first claim of JWT_AUDIENCE_CLAIMS present in the token decides: it must name the audience,
-    and a later claim cannot rescue a mismatch. A token carrying none of them is refused. The
-    default ['aud'] is the same comparison as PyJWT's own audience verification. Only claim names
-    are logged, never values.
+    See matched_external_audience for the rule. Only claim names are logged, never values.
     """
-    for claim_name in JWT_AUDIENCE_CLAIMS:
-        if claim_name in claims:
-            if _audience_claim_matches(claim_name, claims[claim_name]):
-                return True
-            logger.error(f"Token audience validation failed on claim '{claim_name}'")
-            return False
-    logger.error(f"Token audience validation failed: no {' or '.join(JWT_AUDIENCE_CLAIMS)} claim")
+    if matched_external_audience(claims) is not None:
+        return True
+    present = [name for name in (JWT_AUDIENCE_CLAIMS or []) if name in claims]
+    if present:
+        logger.error(f"Token audience validation failed on claim '{present[0]}'")
+    else:
+        logger.error(f"Token audience validation failed: no {' or '.join(JWT_AUDIENCE_CLAIMS or [])} claim")
     return False
 
 
@@ -742,32 +979,53 @@ def resolve_user_id(claims: Dict[str, Any]) -> Optional[str]:
         or claims.get('sub')
     )
 
+def _fetch_key_set(fetch, *args, **kwargs) -> List[Dict[str, Any]]:
+    """Call a key-set fetcher, turning any failure into TokenVerificationUnavailableError.
+
+    A JWKS or discovery failure is an outage, not a verdict on the caller's token, so it
+    must not reach the verifiers' catch-all and be reported as a rejected token. The fetcher
+    is passed in (rather than called by name here) so it is resolved from the module at call
+    time.
+    """
+    try:
+        return fetch(*args, **kwargs)
+    except Exception as e:
+        raise TokenVerificationUnavailableError(f"Signing key set unavailable: {str(e)}") from e
+
 
 def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
     """
-    Verify External IDP JWT token using PyJWT library.
+    Verify External IDP JWT token using PyJWT library
+
+    Same contract as verify_cognito_jwt: claims for a verified token, None for a rejected
+    one, TokenVerificationUnavailableError when the token could not be evaluated (missing or
+    malformed configuration, or a discovery/JWKS failure).
 
     PyJWT verifies the signature (RS256 only), expiry and issuer, and requires the exp and iss
-    claims; the audience is compared by verify_external_audience through the claims
-    lambdaAuthorizorJWTAudienceClaims names. When lambdaAuthorizorJWTUserIdClaim is set, a token
-    without that claim is refused here.
+    claims. The audience is compared by verify_external_audience, against the primary audience
+    and the additional audiences, through the claims lambdaAuthorizorJWTAudienceClaims names.
+    A token accepted through an additional audience must also name a user
+    (_external_token_names_a_user). When lambdaAuthorizorJWTUserIdClaim is set, a token without
+    that claim is refused here.
     """
+    if not JWT_ISSUER_URL or not JWT_AUDIENCE:
+        logger.error("Missing External IDP configuration")
+        raise TokenVerificationUnavailableError("Missing External IDP configuration")
+
+    if JWT_AUDIENCE_CLAIMS is None or JWT_USER_ID_CLAIM is None:
+        logger.error("Invalid External IDP claim configuration (JWT_AUDIENCE_CLAIMS or JWT_USER_ID_CLAIM)")
+        raise TokenVerificationUnavailableError("Invalid External IDP claim configuration")
+
     try:
-        if not JWT_ISSUER_URL or not JWT_AUDIENCE:
-            logger.error("Missing External IDP configuration")
-            return None
-
-        if JWT_AUDIENCE_CLAIMS is None or JWT_USER_ID_CLAIM is None:
-            logger.error("Invalid External IDP claim configuration (JWT_AUDIENCE_CLAIMS or JWT_USER_ID_CLAIM)")
-            return None
-
         # Get the signing key for token verification
         signing_key = get_signing_key_for_external_token(token, JWT_ISSUER_URL)
         if not signing_key:
             return None
 
         # Verify and decode the token. The audience is not handed to PyJWT: it reads only 'aud',
-        # and the claim(s) to read are configurable (verify_external_audience below).
+        # and the claim(s) to read are configurable (verify_external_audience below, which
+        # compares against the configured JWT_AUDIENCE plus the configured additional
+        # audiences).
         claims = pyjwt.decode(
             token,
             signing_key,
@@ -789,6 +1047,10 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
             logger.error(f"Token is missing the configured user id claim '{JWT_USER_ID_CLAIM}'")
             return None
 
+        if not _external_token_names_a_user(claims):
+            logger.error('Token accepted through an additional audience names no user; it is not accepted')
+            return None
+
         logger.info(f'External IDP token successfully verified for user: {resolve_user_id(claims) or "unknown"}')
         return claims
 
@@ -807,6 +1069,8 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
     except pyjwt.InvalidTokenError as e:
         logger.error(f"Invalid token: {str(e)}")
         return None
+    except TokenVerificationUnavailableError:
+        raise
     except Exception as e:
         logger.error(f"External JWT verification error: {str(e)}")
         return None
@@ -881,15 +1145,16 @@ def get_signing_key_for_external_token(token: str, jwt_issuer_url: str) -> Optio
             logger.error("Token header missing 'kid' field")
             return None
 
-        # Get the public keys
-        keys = get_external_keys(jwt_issuer_url)
+        # Get the public keys. A fetch failure raises TokenVerificationUnavailableError,
+        # which passes through to the caller: it is an outage, not a rejected token.
+        keys = _fetch_key_set(get_external_keys, jwt_issuer_url)
 
         # Find the key with matching kid, refetching once (rate-limited) when the cached set
         # does not carry it — the shape an issuer signing-key rotation takes.
         key = _key_for_kid(keys, kid)
         if key is None:
             logger.info(f"Public key for kid {kid} not in the cached key set; refetching JWKS")
-            keys = get_external_keys(jwt_issuer_url, force_refresh=True)
+            keys = _fetch_key_set(get_external_keys, jwt_issuer_url, force_refresh=True)
             key = _key_for_kid(keys, kid)
 
         if key is None:
@@ -898,6 +1163,8 @@ def get_signing_key_for_external_token(token: str, jwt_issuer_url: str) -> Optio
 
         return construct_public_key_from_jwk(key)
 
+    except TokenVerificationUnavailableError:
+        raise
     except Exception as e:
         logger.error(f"Error getting signing key: {str(e)}")
         return None
@@ -1083,6 +1350,18 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
     Returns a provider-neutral result dict:
         {"authorized": bool, "context": dict|None, "reason": str|None}
 
+    An unauthorized result also carries "failure": FAILURE_UNAUTHENTICATED when the
+    credential did not authenticate (missing or malformed header, rejected JWT, a verified
+    JWT with no username claim, an unknown, disabled or expired API key), or
+    FAILURE_FORBIDDEN for every other denial (IP not allowed, an API key whose user has no
+    roles, a misconfigured AUTH_MODE, a key-set or lookup outage). A caller must treat a
+    missing failure kind as FAILURE_FORBIDDEN. The "reason" is internal (audit and logs
+    only) and is never sent to the client.
+
+    On an authorized JWT result every context key under RESERVED_CONTEXT_KEY_PREFIX
+    ("vams:") is set by this function, never copied from the token: vams:tokens names the
+    same username vams:roles and vams:mfaEnabled were resolved for.
+
     An ignored-path bypass additionally carries "ignoredPath": True. It is the one
     authorized result that establishes no identity, so a caller building an IAM policy
     can scope it to the ignored paths rather than to the whole API.
@@ -1096,7 +1375,7 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
     client_ip = resolve_client_ip(event, fronted=fronted)
     if not is_ip_authorized(client_ip, ALLOWED_IP_RANGES):
         logger.info(f"IP {client_ip} not in allowed ranges")
-        return {"authorized": False, "context": None, "reason": "IP address not authorized"}
+        return _denied("IP address not authorized", FAILURE_FORBIDDEN)
 
     # Step 2: Check for ignored paths, on the stage-relative path (_resolve_request_path:
     # methodArn first, then requestContext.http.path, then the top-level "path").
@@ -1111,7 +1390,7 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
 
     if not authorization_header:
         logger.info("Authorization header not found")
-        return {"authorized": False, "context": None, "reason": "Token missing or invalid format"}
+        return _denied("Token missing or invalid format", FAILURE_UNAUTHENTICATED)
 
     # Step 4: API key path
     api_key_value = None
@@ -1125,7 +1404,8 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
         if api_key_result is not None:
             if api_key_result.get('denied'):
                 logger.info(f"API key denied: {api_key_result.get('reason')}")
-                return {"authorized": False, "context": None, "reason": api_key_result.get('reason', 'API key denied')}
+                return _denied(api_key_result.get('reason', 'API key denied'),
+                               api_key_result.get('failure') or FAILURE_FORBIDDEN)
             # Valid API key — build context
             context = {}
             for key, value in api_key_result.items():
@@ -1139,49 +1419,61 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
     token = extract_token_from_header(event)
     if not token:
         logger.info("Token not found in Authorization header")
-        return {"authorized": False, "context": None, "reason": "Token missing or invalid format"}
+        return _denied("Token missing or invalid format", FAILURE_UNAUTHENTICATED)
 
-    if AUTH_MODE == 'cognito':
-        claims = verify_cognito_jwt(token)
-    elif AUTH_MODE == 'external':
-        claims = verify_external_jwt(token)
-    else:
-        logger.error(f"Invalid AUTH_MODE: {AUTH_MODE}")
-        return {"authorized": False, "context": None, "reason": "Token verification failed"}
+    try:
+        if AUTH_MODE == 'cognito':
+            claims = verify_cognito_jwt(token)
+        elif AUTH_MODE == 'external':
+            claims = verify_external_jwt(token)
+        else:
+            logger.error(f"Invalid AUTH_MODE: {AUTH_MODE}")
+            return _denied("Invalid authorizer configuration", FAILURE_FORBIDDEN)
+    except TokenVerificationUnavailableError as e:
+        # The token was not evaluated, so this is not a verdict on it: deny as FORBIDDEN so
+        # an outage or a configuration fault does not tell clients to sign in again.
+        logger.error(f"Token verification unavailable: {str(e)}")
+        return _denied("Token verification unavailable", FAILURE_FORBIDDEN)
 
     if not claims:
         logger.error("Token verification failed")
-        return {"authorized": False, "context": None, "reason": "Token verification failed"}
+        return _denied("Token verification failed", FAILURE_UNAUTHENTICATED)
 
-    # Build context with string coercion
+    # Build context with string coercion. Keys under the reserved "vams:" prefix are this
+    # authorizer's own output and are set below, so a claim of that prefix in the token is
+    # not copied (the prefix match ignores case).
     context = {}
     for key, value in claims.items():
-        if value is not None:
+        if value is not None and not _is_reserved_context_key(key):
             context[key] = str(value)
 
+    # The user id is resolved here, once, by resolve_user_id: the username chain (cognito:username,
+    # username, sub), or in external mode with lambdaAuthorizorJWTUserIdClaim set that claim and no
+    # other. The same id feeds the log line, vams:tokens, the role lookup, the MFA hook, the
+    # authorization audit record and the handlers' verified context (which read vams:tokens).
+    # verify_external_jwt has already refused a token that lacks the configured claim; this check
+    # covers a token that reaches this point any other way, so nobody is authorized as no one.
+    if AUTH_MODE == 'external' and JWT_USER_ID_CLAIM is None:
+        # A malformed setting must not fall back to the username chain: another claim would
+        # name the user. verify_external_jwt refuses first; this covers any other route here.
+        logger.error("Invalid External IDP claim configuration (JWT_USER_ID_CLAIM)")
+        return _denied("Token verification unavailable", FAILURE_FORBIDDEN)
+
     username = resolve_user_id(claims)
+    if not _non_blank(username):
+        logger.info("Verified token carries no username claim")
+        return _denied("Token names no user", FAILURE_UNAUTHENTICATED)
 
-    logger.info(f"Token verified successfully for user: {username or 'unknown'}")
+    logger.info(f"Token verified successfully for user: {username}")
 
-    # External mode with lambdaAuthorizorJWTUserIdClaim set: no fallback to another claim.
-    # verify_external_jwt already refuses such a token (and every token when the setting is
-    # malformed); checked again here so a token that reaches this point by any other route
-    # cannot be authorized as nobody.
-    if AUTH_MODE == 'external':
-        if JWT_USER_ID_CLAIM is None:
-            logger.error("Invalid External IDP claim configuration (JWT_USER_ID_CLAIM)")
-            return {"authorized": False, "context": None, "reason": "Token verification failed"}
-        if JWT_USER_ID_CLAIM and not username:
-            logger.error(f"Token is missing the configured user id claim '{JWT_USER_ID_CLAIM}'")
-            return {"authorized": False, "context": None, "reason": "Token verification failed"}
-
-    # External mode: the resolved id is the caller's identity for the handlers as well.
-    # request_to_claims reads vams:tokens first, so setting it here makes every handler, the
-    # Casbin enforcement and the audit records use the id the roles below were read for,
-    # rather than re-deriving one from the token's claims (and ignoring a vams:tokens claim the
-    # token itself might carry). Cognito mode keeps the pre-token-generation trigger's claim.
-    if AUTH_MODE == 'external' and username:
-        context['vams:tokens'] = json.dumps([username])
+    # The caller's identity for every handler and for Casbin is the username the roles and the
+    # MFA state below are resolved for. For an Amazon Cognito token this is the value the
+    # pre-token-generation trigger writes (the user name, which Cognito also issues as
+    # cognito:username in an ID token and as username in an access token). For an external IdP
+    # token it is the configured user id claim when set, else the same chain.
+    context['vams:tokens'] = json.dumps([username])
+    # Reserved for external system attributes; empty, as the Cognito trigger issues it.
+    context['vams:externalAttributes'] = json.dumps([])
 
     # Role resolution: read the user's roles from the user roles table at authorization time
     # so every JWT auth mode carries them, and assign unconditionally so the freshly-read
@@ -1197,4 +1489,9 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
     mfa_enabled = resolve_mfa_enabled(username, claims, event)
     context['vams:mfaEnabled'] = 'true' if mfa_enabled else 'false'
 
-    return {"authorized": True, "context": context, "reason": None}
+    # The app client / audience the token was issued to, for the authorization audit record, so
+    # calls made through an additional client (for example a remote MCP server) are
+    # distinguishable from web app calls. Not added to the context: the token's own
+    # aud / client_id claim is already there.
+    return {"authorized": True, "context": context, "reason": None,
+            "tokenAudience": token_audience_for_audit(claims)}

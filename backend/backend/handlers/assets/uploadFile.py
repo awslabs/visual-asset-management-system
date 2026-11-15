@@ -5,11 +5,11 @@ import os
 import boto3
 import json
 import uuid
-import time
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import timedelta
+from common.timestamps import utc_now
 from botocore.config import Config
 from botocore.utils import percent_encode
 from boto3.dynamodb.conditions import Key
@@ -17,6 +17,8 @@ from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.assetProvenance import asset_change_provenance
+from common.assetUploads import UPLOAD_RECORD_NOT_FOUND, completion_refusal, validate_file_extension_against_database
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -41,7 +43,7 @@ from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_upload
+from customLogging.auditLogging import log_file_upload, audited_handler
 from botocore.exceptions import ClientError
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields, bucket_region_for_name
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
@@ -152,7 +154,7 @@ def check_user_rate_limit(user_id: str) -> bool:
     """
     try:
         # Calculate timestamp for 1 minute ago as ISO string
-        one_minute_ago = datetime.utcnow() - timedelta(minutes=1)
+        one_minute_ago = utc_now() - timedelta(minutes=1)
         one_minute_ago_iso = one_minute_ago.isoformat()  # STRING format for DynamoDB
         
         logger.info(f"Checking rate limit for user {user_id} since {one_minute_ago_iso}")
@@ -218,39 +220,6 @@ def get_database_details(databaseId):
         logger.exception(f"Error getting database details: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving database configuration")
 
-def validate_file_extension_against_database(file_path: str, allowed_extensions: str) -> tuple:
-    """Validate file extension against database restrictions
-    
-    Args:
-        file_path: The file path to validate
-        allowed_extensions: Comma-delimited list of allowed extensions (e.g., ".pdf,.jpg,.png")
-        
-    Returns:
-        Tuple of (is_valid, error_message)
-        - is_valid: True if extension is allowed, False otherwise
-        - error_message: Error message if validation fails, None otherwise
-    """
-    # Handle empty or None allowed_extensions (no restrictions)
-    if not allowed_extensions or allowed_extensions.strip() == "":
-        return True, None
-    
-    # Parse comma-delimited extensions and normalize to lowercase
-    allowed_list = [ext.strip().lower() for ext in allowed_extensions.split(',') if ext.strip()]
-    
-    # Check for ".all" bypass
-    if ".all" in allowed_list:
-        return True, None
-    
-    # Extract file extension (case-insensitive)
-    file_extension = os.path.splitext(file_path)[1].lower()
-    
-    # Validate extension
-    if file_extension not in allowed_list:
-        error_message = f"Database does not allow this file extension. Allowed extensions: {', '.join(allowed_list)}"
-        return False, error_message
-    
-    return True, None
-
 def get_default_bucket_details(bucketId):
     """Get default S3 bucket details from database default bucket DynamoDB"""
     try:
@@ -301,14 +270,24 @@ def get_asset_details(databaseId, assetId):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
-def update_asset_attributes(databaseId, assetId, updates):
-    """Update the named attributes of an existing asset record in DynamoDB.
+def upload_authorization_object(asset, databaseId, assetId):
+    """The object an upload is authorized against: the stored asset annotated with its object type,
+    or, when no asset was found, the identifiers the request supplied."""
+    if asset:
+        return {**asset, 'object__type': 'asset'}
+    return {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
 
-    Only the supplied attributes are written, so a field another writer changed while
-    the upload was in flight is not reverted. Conditional on the record still existing
-    so an asset removed during the upload is not recreated.
+def update_asset_attributes(databaseId, assetId, updates, workflow_execution_id=None):
+    """Update the named attributes of an existing asset record in DynamoDB, recording the change
+    provenance beside them.
+
+    Only the supplied attributes and the provenance attributes are written, so a field another
+    writer changed while the upload was in flight is not reverted. Conditional on the record
+    still existing so an asset removed during the upload is not recreated. `workflow_execution_id`
+    is the execution whose outputs the completion writes into the asset, when it is one.
     """
-    keys_map, values_map, expr = to_update_expr(updates)
+    keys_map, values_map, expr = to_update_expr(
+        {**updates, **asset_change_provenance(workflow_execution_id)})
     try:
         asset_table.update_item(
             Key={
@@ -329,6 +308,7 @@ def update_asset_attributes(databaseId, assetId, updates):
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error saving asset.")
+
 
 def save_upload_details(upload_data):
     """Save upload details to DynamoDB"""
@@ -359,7 +339,7 @@ def get_upload_details(uploadId, assetId):
         )
 
         if 'Item' not in response:
-            raise VAMSGeneralErrorResponse("Upload record not found")
+            raise VAMSGeneralErrorResponse(UPLOAD_RECORD_NOT_FOUND)
         return response['Item']
     except Exception as e:
         if isinstance(e, VAMSGeneralErrorResponse):
@@ -1026,6 +1006,20 @@ def queue_large_file_for_processing(file_info: dict, sqs_queue_url: str) -> bool
         logger.exception(f"Error in queue_large_file_for_processing for file {file_info.get('relativeKey', 'unknown')}: {e}")
         return False
 
+
+def accepted_asynchronously(file_results) -> bool:
+    """True when any file was queued for the large-file consumer. Such a file is not in
+    successful_files, which holds only the files the completion copies itself, so a completion
+    must not be failed for lacking those."""
+    return any(result.success and result.largeFileAsynchronousHandling for result in file_results)
+
+
+def landed_synchronously(file_results) -> bool:
+    """True when any file was copied into the asset by the completion itself. A queued file updates
+    the asset type and notifies subscribers once it lands (the large-file consumer does both)."""
+    return any(result.success and not result.largeFileAsynchronousHandling for result in file_results)
+
+
 def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: str, expected_parts: list) -> tuple:
     """Calculate total file size by listing parts of an incomplete multipart upload
     
@@ -1191,7 +1185,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     uploadId = f"y{str(uuid.uuid4())}"
     
     # Calculate expiration time (7 days from now)
-    now = datetime.utcnow()
+    now = utc_now()
     expires_at = int((now + timedelta(days=UPLOAD_EXPIRATION_DAYS)).timestamp())
     
     # Process files
@@ -1622,8 +1616,12 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             ))
             has_failures = True
     
+    # Files queued for asynchronous processing count as accepted: a completion whose every file is
+    # over the async threshold is not reported as failed while its files land.
+    has_async_accepted = accepted_asynchronously(file_results)
+
     # If no files were successfully uploaded, return error
-    if not successful_files:
+    if not successful_files and not has_async_accepted:
         delete_upload_details(uploadId, assetId)
         # Check if any file has largeFileAsynchronousHandling=true
         has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
@@ -1672,7 +1670,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         successful_files.remove(file_detail)
                 
                 # If no files remain successful, return error
-                if not successful_files:
+                if not successful_files and not has_async_accepted:
                     delete_upload_details(uploadId, assetId)
                     # Check if any file has largeFileAsynchronousHandling=true
                     has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
@@ -1739,8 +1737,9 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                     result.error = "Failed to copy file to final location"
                     has_failures = True
     
-    # Update asset record based on upload type
-    if uploadType == "assetFile" and any(f.success for f in file_results):
+    # Update asset record based on upload type. Only files copied here count: a queued file updates
+    # the asset type and notifies subscribers once it lands (the large-file consumer does both).
+    if uploadType == "assetFile" and landed_synchronously(file_results):
         # Determine asset type using the asset's bucket and key location
         assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
@@ -1754,7 +1753,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         # If asset already has a type and assetType is None, keep the existing type
         
         # Save updated asset
-        update_asset_attributes(databaseId, assetId, {'assetType': asset['assetType']})
+        update_asset_attributes(databaseId, assetId, {'assetType': asset['assetType']},
+                                workflow_execution_id=workflow_execution_id)
         
         # Send notification to subscribers
         send_subscription_email(databaseId, assetId)
@@ -1769,7 +1769,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             }
             
             # Save updated asset
-            update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']})
+            update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']},
+                                    workflow_execution_id=workflow_execution_id)
     
     # Update upload status in DynamoDB
     try:
@@ -1850,34 +1851,19 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found")
     
-    # Verify upload details match request
-    if upload_details['assetId'] != assetId or upload_details['databaseId'] != databaseId:
-        raise VAMSGeneralErrorResponse("Upload details do not match request")
-        
-    # Verify upload type matches
-    if upload_details['uploadType'] != uploadType:
-        raise VAMSGeneralErrorResponse(f"Upload type mismatch.")
-
-    # Refuse a record past its expiresAt. The table's TTL on expiresAt removes an expired record
-    # only some time after it expires, so until then this check is what keeps it from completing;
-    # in particular a record saved before the initialized file list was stored (no 'files'
-    # attribute) is completable without the membership check only until it expires. expiresAt is
-    # epoch seconds, set by every writer (initialize: 7 days; workflow output: 1 day); a missing or
-    # unreadable value counts as expired.
-    try:
-        expires_at = int(upload_details.get('expiresAt', 0))
-    except (TypeError, ValueError):
-        expires_at = 0
-    if expires_at < int(time.time()):
-        deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
-                               request_model.files, "Upload has expired")
-
-    # Refuse an external (workflow-output) record on this route, the mirror of the check
-    # complete_external_upload makes: external records carry no initialized file list by design
-    # and must only be completed by the internal route that reads the staged tempKeys.
-    if upload_details.get('isExternalUpload', False):
-        deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
-                               request_model.files, "Upload type mismatch.")
+    # Refuse a record that does not belong to this request, was initialized for another upload
+    # type, is past its expiresAt, or is an external (workflow-output) record (see
+    # common/assetUploads.py, shared with the ingest-asset complete stage). The expiry check is
+    # also what bounds a record saved before the initialized file list was stored (no 'files'
+    # attribute): it is completable without the membership check only until it expires. External
+    # records carry no initialized file list by design and must only be completed by the internal
+    # route that reads the staged tempKeys, the mirror of the check complete_external_upload makes.
+    refusal = completion_refusal(upload_details, databaseId, assetId, uploadType)
+    if refusal:
+        if refusal.audited:
+            deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
+                                   request_model.files, refusal.reason)
+        raise VAMSGeneralErrorResponse(refusal.reason)
     
     # Update upload status in DynamoDB
     try:
@@ -2432,8 +2418,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             ))
             has_failures = True
     
+    # Files queued for asynchronous processing count as accepted: a completion whose every file is
+    # over the async threshold is not reported as failed while its files land.
+    has_async_accepted = accepted_asynchronously(file_results)
+
     # If no files were successfully uploaded, return error
-    if not successful_files:
+    if not successful_files and not has_async_accepted:
         delete_upload_details(uploadId, assetId)
         # Check if any file has largeFileAsynchronousHandling=true
         has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
@@ -2483,7 +2473,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         successful_files.remove(file_detail)
                 
                 # If no files remain successful, return error
-                if not successful_files:
+                if not successful_files and not has_async_accepted:
                     delete_upload_details(uploadId, assetId)
                     # Check if any file has largeFileAsynchronousHandling=true
                     has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
@@ -2538,8 +2528,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     result.error = "Failed to copy file to final location"
                     has_failures = True
 
-    # Update asset record based on upload type
-    if uploadType == "assetFile" and any(f.success for f in file_results):
+    # Update asset record based on upload type. Only files copied here count: a queued file updates
+    # the asset type and notifies subscribers once it lands (the large-file consumer does both).
+    if uploadType == "assetFile" and landed_synchronously(file_results):
         # Determine asset type using the asset's bucket and key location
         assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
@@ -2636,6 +2627,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for file upload APIs"""
     global claims_and_roles
@@ -2669,21 +2662,22 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Initialize Upload API
             request_model = parse(body, model=InitializeUploadRequestModel)
             
-            # Check authorization
+            # Check authorization before existence, so a refused caller gets the same answer for a
+            # missing asset as for an existing one
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
-            if not asset:
-                return validation_error(body={'message': "Asset not found"}, event=event)
-            
-            asset["object__type"] = "asset"
-            
+
             # Fail closed: with no authenticated identity no authorization can be
             # evaluated, so deny rather than fall through to the upload.
             if len(claims_and_roles["tokens"]) == 0:
                 return authorization_error()
 
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
+            authorization_object = upload_authorization_object(asset, request_model.databaseId, request_model.assetId)
+            if not (casbin_enforcer.enforce(authorization_object, "POST") and casbin_enforcer.enforceAPI(event)):
                 return authorization_error()
+
+            if not asset:
+                return validation_error(body={'message': "Asset not found"}, event=event)
 
             # Process request
             response = initialize_upload(request_model, claims_and_roles)
@@ -2716,21 +2710,22 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Parse request model
             request_model = parse(body, model=CompleteExternalUploadRequestModel)
             
-            # Check authorization
+            # Check authorization before existence, so a refused caller gets the same answer for a
+            # missing asset as for an existing one
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
-            if not asset:
-                return validation_error(body={'message': "Asset not found"}, event=event)
-            
-            asset["object__type"] = "asset"
-            
+
             # Fail closed: with no authenticated identity no authorization can be
             # evaluated, so deny rather than fall through to the upload.
             if len(claims_and_roles["tokens"]) == 0:
                 return authorization_error()
 
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
+            authorization_object = upload_authorization_object(asset, request_model.databaseId, request_model.assetId)
+            if not (casbin_enforcer.enforce(authorization_object, "POST") and casbin_enforcer.enforceAPI(event)):
                 return authorization_error()
+
+            if not asset:
+                return validation_error(body={'message': "Asset not found"}, event=event)
 
             # Process request
             response = complete_external_upload(uploadId, request_model, event)
@@ -2750,21 +2745,22 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Parse request model
             request_model = parse(body, model=CompleteUploadRequestModel)
             
-            # Check authorization
+            # Check authorization before existence, so a refused caller gets the same answer for a
+            # missing asset as for an existing one
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
-            if not asset:
-                return validation_error(body={'message': "Asset not found"}, event=event)
-            
-            asset["object__type"] = "asset"
-            
+
             # Fail closed: with no authenticated identity no authorization can be
             # evaluated, so deny rather than fall through to the upload.
             if len(claims_and_roles["tokens"]) == 0:
                 return authorization_error()
 
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
+            authorization_object = upload_authorization_object(asset, request_model.databaseId, request_model.assetId)
+            if not (casbin_enforcer.enforce(authorization_object, "POST") and casbin_enforcer.enforceAPI(event)):
                 return authorization_error()
+
+            if not asset:
+                return validation_error(body={'message': "Asset not found"}, event=event)
 
             # Process request
             response = complete_upload(uploadId, request_model, event)

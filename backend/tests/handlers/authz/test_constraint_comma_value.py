@@ -28,9 +28,10 @@ unbalanced, and a raw newline starts a new record. Those shapes fail identically
 operator, including the ones whose comma is already contained by ``regexMatch(...)``. The containment
 has two halves, and both are asserted here:
 
-* ``_escape_rule_value`` rewrites each structural character as its ``\\xNN`` source escape, which
-  Python's parser (simpleeval compiles the matcher) turns back into exactly the same character. This
-  is the half that covers a line terminator and an unbalanced bracket, which no wrapper can contain;
+* ``_escape_rule_value`` writes every character of the value as its ``\\xNN`` (``\\uNNNN``,
+  ``\\UNNNNNNNN``) source escape, which Python's parser (simpleeval compiles the matcher) turns back
+  into exactly the same character. This is the half that covers a line terminator and an unbalanced
+  bracket, which no wrapper can contain;
 * ``_generate_criteria_object_rules`` parenthesises the clause group unconditionally, so every
   emitted clause is a bracketed span at the depth the reader counts. This is the half that holds if
   a separator ever reaches the clause text anyway.
@@ -45,6 +46,7 @@ stored comma constraint stops poisoning and starts evaluating, so a role that wa
 authorizing whatever its other constraints grant.
 """
 
+import ast
 import glob
 import itertools
 import os
@@ -83,11 +85,18 @@ _STRUCTURAL_VALUES = (
     "a\nb", "a\rb", "a\x00b", "a\tb",
 )
 
-# Values with no structural character. The emitted rule text for these is the contract other authz
-# tests pin, so it must not move.
+# Values with no structural character. Their emitted rule text is pinned below in its escaped form.
 _PLAIN_VALUES = (
     "Secret", "locked", ".*", "^abc$", "a|b", "name with spaces", "GLOBAL", "db1", "a.b", "\\d+",
 )
+
+# The source escapes of the values whose rule text is pinned by hand.
+SECRET = "\\x53\\x65\\x63\\x72\\x65\\x74"
+LOCKED = "\\x6c\\x6f\\x63\\x6b\\x65\\x64"
+A_COMMA_B = "\\x61\\x2c\\x62"
+
+# The body of a string literal the generator writes for a value: source escapes only.
+_ESCAPES_ONLY = re.compile(r"(?:\\x[0-9a-f]{2}|\\u[0-9a-f]{4}|\\U[0-9a-f]{8})*")
 
 
 def _strip_outer_group(rule):
@@ -256,13 +265,14 @@ class TestCommaInASingleValuedMembershipCriterion:
         assert _decide(rule, tags=[]) is False
 
     def test_the_comma_is_escaped_in_the_value_and_the_clause_is_bracketed(self):
-        """The rule text IS the contract here: it is what Casbin's reader tokenizes. The comma
-        becomes its source escape, and the clause sits inside parentheses, so the reader sees a
-        bracketed span either way. Both halves are pinned because either one alone keeps the field
-        count right, and a silent loss of one would not show up in a decision test."""
-        assert _rule("tags", "is_one_of", COMMA_VALUE) == "('a\\x2cb' in r.obj.tags)"
+        """The rule text IS the contract here: it is what Casbin's reader tokenizes. The value is
+        written as source escapes (the comma is ``\\x2c``), and the clause sits inside parentheses,
+        so the reader sees a bracketed span either way. Both halves are pinned because either one
+        alone keeps the field count right, and a silent loss of one would not show up in a decision
+        test."""
+        assert _rule("tags", "is_one_of", COMMA_VALUE) == f"('{A_COMMA_B}' in r.obj.tags)"
         assert _rule("assetName", "equals", COMMA_VALUE) == (
-            "(regexMatch(r.obj.assetName, '^a\\x2cb\\\\Z'))")
+            f"(regexMatch(r.obj.assetName, '^{A_COMMA_B}\\\\Z'))")
 
 
 @pytest.mark.unit
@@ -394,45 +404,71 @@ class TestParenthesisingIsDecisionNeutral:
 class TestPlainValueRuleTextIsPinned:
     """REGRESSION GUARD on the emitted expression itself.
 
-    A criterion with no structural character carries its value through verbatim -- no escape
-    sequence is introduced -- and the clause is wrapped in the parentheses the generator now adds
-    unconditionally. Nothing else about the text moves: the ``regexMatch`` anchors that
-    ``test_constraint_rule_anchors`` reasons about and the operator wrappers are as they were. The
-    emitted expression IS the authorization behaviour of every constraint in the product, so the
-    exact strings are pinned here; a change that re-quotes or re-shapes a clause has to come back
-    through this class and say so.
+    Every criterion value is written as source escapes -- one ``\\xNN`` per character, so the literal
+    body never carries text Casbin's reader or its rule-text rewrites act on -- and the clause is
+    wrapped in the parentheses the generator adds unconditionally. Nothing else about the text
+    moves: the ``regexMatch`` anchors that ``test_constraint_rule_anchors`` reasons about and the
+    operator wrappers are as they were, and the object-type check every line opens with keeps a
+    registered type name as it is. The emitted expression IS the authorization behaviour of every
+    constraint in the product, so the exact strings are pinned here; a change that re-quotes or
+    re-shapes a clause has to come back through this class and say so.
     """
 
     @pytest.mark.parametrize("operator,expected", [
-        ("equals", "(regexMatch(r.obj.assetName, '^Secret\\\\Z'))"),
-        ("contains", "(regexMatch(r.obj.assetName, '(?s:.*)Secret(?s:.*)'))"),
-        ("does_not_contain", "!(regexMatch(r.obj.assetName, '(?s:.*)Secret(?s:.*)'))"),
-        ("starts_with", "(regexMatch(r.obj.assetName, '^Secret.*'))"),
-        ("ends_with", "(regexMatch(r.obj.assetName, '(?s:.*)Secret\\\\Z'))"),
+        ("equals", f"(regexMatch(r.obj.assetName, '^{SECRET}\\\\Z'))"),
+        ("contains", f"(regexMatch(r.obj.assetName, '(?s:.*){SECRET}(?s:.*)'))"),
+        ("does_not_contain", f"!(regexMatch(r.obj.assetName, '(?s:.*){SECRET}(?s:.*)'))"),
+        ("starts_with", f"(regexMatch(r.obj.assetName, '^{SECRET}.*'))"),
+        ("ends_with", f"(regexMatch(r.obj.assetName, '(?s:.*){SECRET}\\\\Z'))"),
     ])
     def test_scalar_regex_operator_text_keeps_its_pattern_and_gains_only_the_group(
             self, operator, expected):
         assert _rule("assetName", operator, "Secret") == expected
 
     def test_scalar_membership_is_a_bracketed_membership_test(self):
-        assert _rule("tags", "is_one_of", "locked") == "('locked' in r.obj.tags)"
+        assert _rule("tags", "is_one_of", "locked") == f"('{LOCKED}' in r.obj.tags)"
 
     def test_scalar_negated_membership_keeps_its_scoped_negation(self):
-        assert _rule("tags", "is_not_one_of", "locked") == "!('locked' in r.obj.tags)"
+        assert _rule("tags", "is_not_one_of", "locked") == f"!('{LOCKED}' in r.obj.tags)"
 
     def test_the_object_type_rule_keeps_its_pattern(self):
-        """Every emitted policy line carries this clause, so a change here changes every rule."""
-        assert _rule("object__type", "equals", "asset") == (
+        """Every emitted policy line opens with this clause, so a change here changes every rule."""
+        svc = CasbinEnforcerService.__new__(CasbinEnforcerService)
+        assert svc._object_type_rule("asset") == (
             "(regexMatch(r.obj.object__type, '^asset\\\\Z'))")
 
-    @pytest.mark.parametrize("value", _PLAIN_VALUES)
+    def test_an_object_type_that_is_not_a_plain_name_is_escaped_like_any_value(self):
+        """A stored type string with regex syntax (an older multi-type constraint) is an ``equals``
+        criterion like any other."""
+        svc = CasbinEnforcerService.__new__(CasbinEnforcerService)
+        assert svc._object_type_rule("asset|database") == _rule(
+            "object__type", "equals", "asset|database")
+        assert "asset" not in svc._object_type_rule("asset|database")
+
+    # Each operator's pattern text around the value, as it appears in the rule source.
+    _SOURCE_WRAPPERS = {
+        "equals": ("^", "\\\\Z"),
+        "contains": ("(?s:.*)", "(?s:.*)"),
+        "does_not_contain": ("(?s:.*)", "(?s:.*)"),
+        "starts_with": ("^", ".*"),
+        "ends_with": ("(?s:.*)", "\\\\Z"),
+        "is_one_of": ("", ""),
+        "is_not_one_of": ("", ""),
+    }
+
+    @pytest.mark.parametrize("value", _PLAIN_VALUES + _STRUCTURAL_VALUES)
     @pytest.mark.parametrize("operator", _ALL_OPERATORS)
-    def test_a_plain_value_is_interpolated_verbatim(self, operator, value):
-        """Whatever wrapper the operator adds, a value with no structural character appears in the
-        rule exactly as stored -- no escape sequences introduced."""
+    def test_every_value_is_written_as_source_escapes(self, operator, value):
+        """Whatever wrapper the operator adds, the literal body is escapes only, and Python reads it
+        back as exactly the stored value."""
         rule = _rule(_field_for(operator), operator, value)
-        assert value.replace("\\", "\\\\") in rule, rule
-        assert "\\x" not in rule, rule
+        assert rule.count("'") == 2, rule
+        literal = rule[rule.index("'") + 1:rule.rindex("'")]
+        prefix, suffix = self._SOURCE_WRAPPERS[operator]
+        assert literal.startswith(prefix) and literal.endswith(suffix), rule
+        body = literal[len(prefix):len(literal) - len(suffix)]
+        assert _ESCAPES_ONLY.fullmatch(body), rule
+        assert ast.literal_eval(f"'{body}'") == value, rule
 
 
 @pytest.mark.unit
@@ -504,7 +540,8 @@ class TestEscapingIsSemanticallyTransparent:
         for operator in ("equals", "contains", "starts_with", "ends_with", "is_one_of"):
             rule = _rule("databaseId", operator, payload)
             assert _decide(rule, databaseId="some-unrelated-database") is False, rule
-            assert "\\'" in rule, f"value was not quote-escaped: {rule!r}"
+            assert "\\x27" in rule, f"value was not escaped: {rule!r}"
+            assert rule.count("'") == 2, f"a quote other than the literal's own reached the rule: {rule!r}"
 
 
 @pytest.mark.unit

@@ -1,0 +1,32 @@
+{
+    "commercial": {
+        "logicalId": "CognitoUserPool279BBD48",
+        "Schema": [
+            {
+                "AttributeDataType": "String",
+                "Mutable": true,
+                "Name": "custom:groups"
+            }
+        ]
+    },
+    "govcloud": {
+        "logicalId": "CognitoUserPool279BBD48",
+        "Schema": [
+            {
+                "AttributeDataType": "String",
+                "Mutable": true,
+                "Name": "custom:groups"
+            }
+        ]
+    },
+    "eusovereign": {
+        "logicalId": "CognitoUserPool279BBD48",
+        "Schema": [
+            {
+                "AttributeDataType": "String",
+                "Mutable": true,
+                "Name": "custom:groups"
+            }
+        ]
+    }
+}

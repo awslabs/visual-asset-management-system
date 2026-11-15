@@ -12,7 +12,7 @@ from customLogging.logger import safeLogger
 from models.common import VAMSGeneralErrorResponse
 from common.resourceNames import ResourceKeys, get_table_name
 
-logger = safeLogger(service_name="DynamoDBCommon")
+logger = safeLogger()
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
@@ -36,6 +36,51 @@ def _asset_table_resource():
     if _asset_table is None:
         _asset_table = dynamodb.Table(get_table_name(ResourceKeys.ASSET_STORAGE_TABLE))
     return _asset_table
+
+
+# Archiving an asset rewrites its record under the "<databaseId>#deleted" partition, while its
+# versions, metadata, links, comments and history stay keyed by the original database id.
+ARCHIVED_ASSET_DATABASE_SUFFIX = "#deleted"
+
+
+def get_asset_record(table, databaseId, assetId, include_archived=False):
+    """Read one asset record by databaseId + assetId, optionally falling back to its archived row.
+
+    The live partition is read first. Only when include_archived is set and no live row exists is
+    the archived partition read; a row found there without a status (written before the field
+    existed) is reported as archived. Returns the stored record (an archived one keeps its stored
+    "<databaseId>#deleted" id) or None when neither partition holds the asset.
+
+    The table is the caller's handle, so each handler reads through the table it already holds.
+    """
+    response = table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
+    item = response.get('Item')
+    if item or not include_archived or str(databaseId).endswith(ARCHIVED_ASSET_DATABASE_SUFFIX):
+        return item
+
+    response = table.get_item(
+        Key={'databaseId': f"{databaseId}{ARCHIVED_ASSET_DATABASE_SUFFIX}", 'assetId': assetId})
+    item = response.get('Item')
+    if item and 'status' not in item:
+        item['status'] = 'archived'
+    return item
+
+
+def asset_authorization_object(asset, databaseId, assetId, include_archived=False):
+    """The object Tier 2 decides for a single-asset request, built before existence is revealed.
+
+    A found record is evaluated as a copy annotated with its object type. When no record was
+    found, the request's identifiers stand in, so the verdict is reached whether or not the asset
+    exists. On a read that includes archived assets the stand-in carries the archived
+    "<databaseId>#deleted" id, so a caller who may not read that database's archived records is
+    refused for a missing id exactly as for an archived one.
+    """
+    if asset:
+        return {**asset, 'object__type': 'asset'}
+    stand_in_database_id = databaseId or ''
+    if include_archived and not str(stand_in_database_id).endswith(ARCHIVED_ASSET_DATABASE_SUFFIX):
+        stand_in_database_id = f"{stand_in_database_id}{ARCHIVED_ASSET_DATABASE_SUFFIX}"
+    return {'databaseId': stand_in_database_id, 'assetId': assetId, 'object__type': 'asset'}
 
 
 def query_all_items(table, **query_kwargs) -> List[Dict]:
@@ -203,7 +248,7 @@ def to_update_expr(record, op="SET") -> Tuple[Dict[str, str], Dict[str, Any], st
     return keys_map, values_map, expr
 
 
-def get_asset_object_from_id(databaseId, assetId):
+def get_asset_object_from_id(databaseId, assetId, include_archived=False):
     """Resolve an asset record for authorization, keyed by databaseId+assetId or by assetId alone.
 
     Returns the asset record annotated with object__type 'asset', or None when the asset
@@ -211,9 +256,14 @@ def get_asset_object_from_id(databaseId, assetId):
     against ABAC criteria as if the asset were present, which produces allow/deny outcomes
     for an asset that is not there.
 
+    With include_archived, an assetId alone that matches no live asset resolves to its
+    archived record instead (stored databaseId "<databaseId>#deleted"). A live match always
+    wins, so the flag never changes which record a live asset resolves to.
+
     Raises VAMSGeneralErrorResponse when assetId is empty, when the read fails, and when
     an assetId alone matches more than one live asset (assetIds are unique within a
-    database, not across databases, so that match cannot be resolved without a databaseId).
+    database, not across databases, so that match cannot be resolved without a databaseId),
+    or, with include_archived, more than one archived asset and no live one.
     """
     if not assetId:
         raise VAMSGeneralErrorResponse("Empty assetId or databaseId received")
@@ -277,12 +327,25 @@ def get_asset_object_from_id(databaseId, assetId):
             )
             raise VAMSGeneralErrorResponse("Asset ID matches more than one asset. Provide a database ID.")
 
-        if not live_items:
+        candidates = live_items
+        if not live_items and include_archived:
+            candidates = [
+                item for item in items
+                if str(item.get('databaseId', '')).endswith(ARCHIVED_ASSET_DATABASE_SUFFIX)
+            ]
+            if len(candidates) > 1:
+                logger.error(
+                    f"assetId {assetId} matches {len(candidates)} archived assets, in databases "
+                    f"{sorted(str(item.get('databaseId')) for item in candidates)}"
+                )
+                raise VAMSGeneralErrorResponse("Asset ID matches more than one asset. Provide a database ID.")
+
+        if not candidates:
             logger.info(
                 f"No live asset for assetId {assetId}. Archived matches: {len(items)}")
             return None
 
-        item = live_items[0]
+        item = candidates[0]
         return {
             "object__type": "asset",
             "assetId": item.get('assetId'),

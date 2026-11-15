@@ -12,6 +12,8 @@
 * The up axis comes from metadata (glTF Y-up, FBX ``UpAxis``, COLLADA ``<up_axis>``, 3MF Z-up, Leica
   and survey formats Z-up); STL is no longer rotated unconditionally and the ``dz > 1.2 * dy``
   guess, which put Y-up models that are long in depth on their side, is gone.
+* A coloured 3MF or COLLADA renders in its colours on every Mesa: the renderer draws the per-triangle
+  colours on the triangles' own corners (#1116).
 
 Tests that build meshes need the real pyvista (pipeline image).
 """
@@ -24,8 +26,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from conftest import requires_real
-from preview_pipeline import core
+from conftest import colour_shares, requires_real
+from preview_pipeline import core, renderer
 from preview_pipeline.format_handlers import mesh_handler, point_streams, xml_mesh_handler
 from preview_pipeline.utils import archive
 
@@ -133,6 +135,34 @@ _DAE = b"""<?xml version="1.0" encoding="utf-8"?>
  <scene><instance_visual_scene url="#s"/></scene>
 </COLLADA>"""
 
+# A green triangle beside a red quad, sharing an edge: one geometry, two bound materials.
+_DAE_TWO_MATERIALS = b"""<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+ <asset><up_axis>Y_UP</up_axis></asset>
+ <library_effects>
+  <effect id="green-fx"><profile_COMMON><technique sid="c"><phong>
+   <diffuse><color>0 1 0 1</color></diffuse></phong></technique></profile_COMMON></effect>
+  <effect id="red-fx"><profile_COMMON><technique sid="c"><phong>
+   <diffuse><color>1 0 0 1</color></diffuse></phong></technique></profile_COMMON></effect></library_effects>
+ <library_materials><material id="green"><instance_effect url="#green-fx"/></material>
+  <material id="red"><instance_effect url="#red-fx"/></material></library_materials>
+ <library_geometries><geometry id="g"><mesh>
+  <source id="g-pos"><float_array id="g-arr" count="15">0 0 0 10 0 0 10 10 0 0 10 0 20 0 0</float_array>
+   <technique_common><accessor source="#g-arr" count="5" stride="3"/></technique_common></source>
+  <vertices id="g-v"><input semantic="POSITION" source="#g-pos"/></vertices>
+  <triangles count="1" material="mg"><input semantic="VERTEX" source="#g-v" offset="0"/>
+   <p>1 4 2</p></triangles>
+  <polylist count="1" material="mr"><input semantic="VERTEX" source="#g-v" offset="0"/><vcount>4</vcount>
+   <p>0 1 2 3</p></polylist>
+ </mesh></geometry></library_geometries>
+ <library_visual_scenes><visual_scene id="s"><node id="n">
+   <instance_geometry url="#g"><bind_material><technique_common>
+    <instance_material symbol="mg" target="#green"/><instance_material symbol="mr" target="#red"/>
+   </technique_common></bind_material></instance_geometry>
+ </node></visual_scene></library_visual_scenes>
+ <scene><instance_visual_scene url="#s"/></scene>
+</COLLADA>"""
+
 
 @pytest.mark.unit
 @requires_real("pyvista")
@@ -148,6 +178,11 @@ class TestXmlMeshes:
         assert np.allclose(points[:, 0].min(), 10.0), "the component transform places the part"
         assert np.allclose(points[:, 1].max(), 1.0), "3MF z (up) becomes y"
 
+        frame = renderer.generate_static_frame(mesh, resolution=(160, 120))
+        assert (frame[..., 3] == 255).mean() > 0.02, "the part fills part of the frame"
+        red, blue = colour_shares(frame, [(255, 0, 0), (0, 0, 255)])
+        assert red > 0.1 and blue > 0.1, f"both triangles render in their colours: red {red}, blue {blue}"
+
     def test_a_dae_with_triangles_polylist_material_node_transform_and_z_up(self, tmp_path):
         path = tmp_path / "scene.dae"
         path.write_bytes(_DAE)
@@ -156,6 +191,16 @@ class TestXmlMeshes:
         colours = np.asarray(mesh.cell_data["RGB"])
         assert colours[0].tolist() == [0, 255, 0], "the bound material's diffuse colour"
         assert np.allclose(np.asarray(mesh.points)[:, 1].min(), 5.0), "translate z=5, Z_UP turned to Y"
+
+    def test_a_dae_renders_each_bound_materials_colour(self, tmp_path):
+        path = tmp_path / "materials.dae"
+        path.write_bytes(_DAE_TWO_MATERIALS)
+        mesh = core._load_file(str(path), ".dae")
+        assert np.asarray(mesh.cell_data["RGB"]).tolist() == [[0, 255, 0], [255, 0, 0], [255, 0, 0]]
+        frame = renderer.generate_static_frame(mesh, resolution=(160, 120))
+        assert (frame[..., 3] == 255).mean() > 0.02, "the geometry fills part of the frame"
+        green, red = colour_shares(frame, [(0, 255, 0), (255, 0, 0)])
+        assert green > 0.1 and red > 0.1, f"the triangle renders green and the quad red: {green}, {red}"
 
 
 # --------------------------------------------------------------------------------------------------

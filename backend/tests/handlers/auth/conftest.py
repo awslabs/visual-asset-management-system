@@ -66,5 +66,5 @@ def setup_environment():
     os.environ["JWT_AUDIENCE"] = "test-audience"
     os.environ["ALLOWED_IP_RANGES"] = "[]"
     os.environ["IGNORED_PATHS"] = "[]"
-    os.environ["API_KEY_STORAGE_TABLE_NAME"] = "test-apikey-table"
+    os.environ["API_KEY_STORAGE_TABLE_NAME"] = "test-apikey-table"  # pragma: allowlist secret
     os.environ["USER_ROLES_STORAGE_TABLE_NAME"] = "test-userroles-table"

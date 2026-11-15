@@ -18,21 +18,25 @@ S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBri
 
 Each pipeline step reads several S3 paths from its manifest (`manifestHelper.resolve_pipeline_inputs`), not from the Step Functions body. Pipelines must use the correct path for each output type:
 
-| Path Variable                          | Bucket           | Purpose                                                         | Versioned |
-| -------------------------------------- | ---------------- | --------------------------------------------------------------- | --------- |
-| `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs: new files, file previews (`.previewFile.X`) | Yes       |
-| `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level previews only (whole-asset representative image)    | Yes       |
-| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata files produced by the pipeline                         | Yes       |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or special non-versioned viewer data    | No        |
+| Path Variable                          | Bucket                    | Purpose                                                                                                                                                                    | Versioned |
+| -------------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `outputS3AssetFilesPath`               | Asset bucket              | File-level outputs: new files, file previews (`.previewFile.X`)                                                                                                            | Yes       |
+| `outputS3AssetPreviewPath`             | Asset bucket              | Asset-level previews only (whole-asset representative image)                                                                                                               | Yes       |
+| `outputS3AssetMetadataPath`            | Asset bucket              | Metadata files produced by the pipeline                                                                                                                                    | Yes       |
+| `outputS3AssetResultsPath`             | Asset bucket (run prefix) | Small text reports and result files read onto the EXECUTION (one row each, truncated past `MAX_TEXT_FIELD_BYTES`), not into the asset; `execution.status.json` is reserved | n/a       |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket          | Temporary working files or special non-versioned viewer data                                                                                                               | No        |
 
 **Key distinction:** `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the asset as a whole. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
+
+**Compliance output:** a pipeline that backs a compliance pipeline rule reports its measurements as one `compliance-output.json` under the execution's `outputs.results` prefix (`outputS3AssetResultsPath`). `backendPipelines/common/compliance_output.py` (`write_compliance_output`, `build_compliance_output`) writes the document — `{"complianceOutput": true, "status": "success"|"error", "measurements": {...}, "errors": [], "pipelineMetadata": {}}` — whose `measurements` keys match the `outputField` of the rule's checks. It is the canonical copy and is vendored like `manifestHelper.py`: a pipeline copies it into its own `lambda/` or `container/` directory and imports `compliance_output`, because the Lambda code asset and the container build context hold only that directory. Every copy stays byte-identical to the canonical one, and `backendPipelines/tests/test_compliance_output_helper.py` checks that, plus the file name and the `complianceOutput: true` flag the backend's `evaluationEngine` matches on. The pipeline needs no evaluation id or compliance table access; the compliance workflow callback reads the file from the execution's `PipelineExecutionOutputResults` rows. A written file replaces the derived `execution_success` / `processing_duration_seconds` measurements rather than adding to them. The walkthrough for authors is the user guide's "Building a pipeline for compliance checks" (`documentation/docusaurus-site/docs/user-guide/compliance.md`).
 
 **Rules for output path usage:**
 
 -   **Always pass through** all output paths resolved from the manifest in `vamsExecute` lambdas. Never hardcode empty strings for output paths — the workflow's process-output step relies on finding files at these locations.
 -   **Use `outputS3AssetFilesPath`** for file-level outputs, including `.previewFile.X` thumbnail files generated by preview pipelines.
 -   **Use `outputS3AssetPreviewPath`** only for asset-level preview images (not file-level previews).
--   **Use `inputOutputS3AssetAuxiliaryFilesPath`** only for temporary files during processing or for special non-versioned preview data (e.g., Potree octree viewer files) that the frontend reads directly from the auxiliary bucket.
+-   **Use `inputOutputS3AssetAuxiliaryFilesPath`** only for temporary files during processing or for special non-versioned preview data (e.g., Potree octree viewer files) that the frontend reads directly from the auxiliary bucket. A stage intermediate that a later stage of the same run reads goes in a working folder of that run's own (named as both stages' `temporaryFiles`, removed by the stage that consumes it), never in the viewer folder: that folder is fixed per input file, so runs on one file would share the intermediate, and a stage that replaces the viewer folder removes what it did not write. Only the final stage writes the viewer folder. Worked example: `preview/pcPotreeViewer/lambda/constructPipeline.py` (`PotreeViewerRuns/<jobName>/`).
+-   **Use `outputS3AssetResultsPath`** for anything that describes the RUN rather than the asset -- a gate report, a benchmark, an error detail, a structured result (JSON, Markdown, text), the reserved `execution.status.json`. The workflow's output processing lists that prefix, reads each object's content **as UTF-8 text** and records it against the execution as one output-result row of at most `MAX_TEXT_FIELD_BYTES` (`backend/backend/common/workflows/executionRecords.py`), truncating anything longer and flagging the row `resultsContentTruncated`, and writes nothing to the asset. So what lands there is readable on the run that produced it and is kept per run. The prefix is the execution's `results` folder, present in every manifest; it is empty only for a payload without a manifest. **Small text only:** a binary object there (a PNG render) fails the decode, which marks the whole execution FAILED after the pipeline has succeeded -- the first two finished Blender-agent runs were reported failed by a results-folder object, with passing models in the asset. Renders, transcripts and anything over a few tens of KB go to the auxiliary prefix, with a small index of their keys beside the report. Asset metadata is the wrong home for a run report: asset-level metadata is SINGULAR, so an asset carrying output from several pipelines or several models keeps only the last run's and silently replaces every earlier one. Per-FILE metadata is a different thing and stays -- that is what identifies which model produced a given file. See "Reporting a Post-Write-Back Failure" below.
 -   The `constructPipeline` lambda should prefer the appropriate output path when provided, falling back to the auxiliary path only for direct/local invocations where workflow context is unavailable.
 
 ## Metadata and Attribute Output Formats (`outputS3AssetMetadataPath`)
@@ -83,6 +87,48 @@ Two consequences of that ordering worth designing to:
 Ordering and all three write kinds are pinned by
 `backend/tests/handlers/workflows/test_processOutput_write_order.py`.
 
+## Reporting a Post-Write-Back Failure (`results/execution.status.json`)
+
+A pipeline whose outputs have already landed can still fail afterwards -- it writes a file's
+`.attribute.json` first and only then calls a model or a service that refuses, and that refusal must not
+discard the attributes. Raising at that point routes the sub-state-machine to `SendTaskFailure`, the
+workflow to `HandleExecutionError`, and the staged outputs are never ingested. The results channel
+carries the alternative:
+
+1. Write `execution.status.json` directly under `outputS3AssetResultsPath` with the body
+   `{"status": "FAILED", "error": "<code, up to 256 characters>", "cause": "<text, up to 1,024 characters>"}`,
+   then **return normally** -- no raise, no `SendTaskFailure`, no `$.error`. `PipelineEndTask` reports
+   `SendTaskSuccess` as on any successful run and the workflow reaches its process-output step.
+2. Process-output ingests `files/`, `previews/`, `metadata/` and `results/` exactly as for a succeeded
+   run, then reads the status object on **both** terminal paths (results-only and asset write-back).
+   `status: FAILED` records the execution and its end-state pipeline row `FAILED` with
+   `executionError = "<error>: <cause>"` (the error alone when the cause is empty, and
+   `PipelineReportedFailure` when the error is); `status: SUCCEEDED`, or no object, leaves the outcome to
+   the write-back result. The reported error heads `executionError`; write-back failure summaries, if
+   any, follow it, and the whole summary is bounded to 16 KiB.
+3. The object is recorded as an ordinary `PipelineExecutionOutputResults` row, so the report is also
+   readable from the execution record.
+
+`execution.status.json` is therefore a **reserved results object name**: a document of that name under
+the results prefix is read as a status report whatever the pipeline meant by it. An object the step
+cannot use is itself recorded as a failure, because the pipeline signalled an outcome the step cannot
+read: empty, malformed JSON, not UTF-8, or larger than `MAX_TEXT_FIELD_BYTES` (`The pipeline execution
+status file could not be read.`, and the object is not read past that size), or valid JSON that is not
+an object whose `status` is exactly `SUCCEEDED` or `FAILED` (`... could not be read: it must be a JSON
+object whose status is SUCCEEDED or FAILED.`). A leading UTF-8 byte order mark is accepted; a non-string
+`error` or `cause` is recorded as its JSON text. The name is
+`common.s3PathPatterns.EXECUTION_STATUS_RESULTS_FILENAME`; both terminal paths and every malformed shape
+are pinned by `backend/tests/handlers/workflows/test_processOutput_execution_status_file.py`.
+
+Use the status object for a failure the pipeline **chooses to record** after its outputs exist. A crash
+(function timeout, out-of-memory, import error) keeps the existing contract -- it routes through `$.error`
+to `PipelineEndTask` and `SendTaskFailure`, and staged outputs may be lost.
+
+A refused metadata or attribute write-back is recorded the same way from the other side: the metadata
+service's message (for example a value that does not match its declared type) follows the
+generic write-back failure, bounded to 1,024 characters
+(`backend/tests/handlers/workflows/test_processOutput_metadata_write_back_message.py`).
+
 ## Preserving Relative Paths for Asset-Adjacent Outputs
 
 When a pipeline writes output files that correspond to a specific input file (e.g., `.previewFile.X` thumbnails), the output **must preserve the input file's relative path within the asset**. The process-output step expects outputs at the same relative location as the input so it can move them to the correct final location in the asset bucket.
@@ -105,8 +151,9 @@ A container job role usually reads every asset bucket, so a path written inside 
 
 -   Accept only relative paths that, normalised against the referring file's directory, stay inside the input's asset prefix (the key up to the `assetId` segment; the run's output files folder for a file an earlier step wrote; else the input's own directory — the case for an asset on a `bucketExistingKey` folder). Reject absolute paths, `..` escapes, any URI scheme, control characters and values over 1,024 characters. Percent-decode only formats whose references are URIs (glTF), and check the decoded value.
 -   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
--   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference.
+-   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference. Report what was skipped: one WARNING summary listing each skipped file with its reason (quoted with `repr`), grouped by what the loss costs (geometry layers from a USD layer's composition arcs to USD layer files, never from layer or prim metadata such as an `assetInfo` `identifier` or `customLayerData`, which stay unreported; data files, value clips included; textures and other files; read only `asset`-typed attributes to classify, never geometry samples), and a completion message that says the output is incomplete (`dependencies.IncompletePreview`). When the run has a results folder, also write one small, bounded result document there (`preview-incomplete.json`: the message, the counts by kind, at most 100 entries with a `truncated` flag, asset-relative paths, and for a reference refused as outside the asset only its reason and at most a sanitized base file name, never a bucket, host or folder), so the run's Output Results show it; a complete run writes none, and a failed write is a WARNING, never a failed run.
 -   When a third-party tool opens the referenced files itself (splat-transform reads an `.lcc2` scene's chunk files by the names its description lists), check every name the description lists before the tool starts, and refuse the conversion when one would leave the work directory or a needed file is missing. Do not rely on the fetch having skipped it: the tool would still open the path. `format_handlers/splat_handler.prepare_lcc2` is the worked example.
+-   Ask only for the files the loader or tool reads, and report only what it uses: an `.lcc` scene's `shcoef.bin` only when splat-transform reads it (`format_handlers/lcc_meta.lcc_data_files`, the same test as its reader) and never its `environment.bin`; an FBX's texture names are fetched but never reported, since the FBX loader samples no textures (`dependencies.KIND_UNSAMPLED_TEXTURE`). Load the fetched files through a resolver confined to the same local root (`format_handlers/mesh_handler.asset_resolver` for glTF and OBJ), not one rooted at the input's folder: otherwise a `../` reference the fetch accepted is refused by the loader, while one outside the asset must still be refused.
 
 ## Parsing XML From Uploaded Files
 
@@ -114,11 +161,12 @@ An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expand
 
 ## Sizing a Container's Work to Its Task
 
-A Batch/Fargate container reads its limits from its own cgroup rather than from a tier name or a constant, so it stays inside whichever job size started it. `preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
+A Batch/Fargate container sizes its work to the limits of the task it runs in rather than to a tier name or a constant, so it stays inside whichever job size started it. `preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
 
--   Memory from `/sys/fs/cgroup/memory.max` (v1 `memory/memory.limit_in_bytes` fallback; "max" or a near-2^63 value means unlimited); CPUs from the scheduler affinity capped by `cpu.max` (v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`). `os.cpu_count()` alone reports the host's CPUs inside a quota.
+-   Memory is the smallest of three bounds, each read when it can be: the cgroup limit (`/sys/fs/cgroup/memory.max`, v1 `memory/memory.limit_in_bytes`; "max" or a near-2^63 value means unlimited), the task memory the orchestration passes, and physical memory. The cgroup alone is not enough: on AWS Fargate the container's cgroup sets no limit and physical memory is the micro-VM's, larger than the task (31 GiB read on a 16 GiB task), so every memory-derived budget comes out too large. The thumbnail state machine therefore passes each tier's memory override as `VAMS_TASK_MEMORY_MIB` beside `VAMS_COMPUTE_TIER` (`resources.task_memory_bytes`). CPUs come from the scheduler affinity capped by `cpu.max` (v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`). `os.cpu_count()` alone reports the host's CPUs inside a quota.
 -   Derive work budgets (points, triangles) from both, and set `LP_NUM_THREADS` (Mesa llvmpipe) to the CPU count before the first GL context exists.
 -   Bound what a library allocates for the work, not only what it returns. VTK's `vtkQuadricClustering` allocates its grid densely (88 bytes per bin, occupied or not) and counts the bins in a C `int`, so a grid sized from the triangle budget alone overflows at the shipping budgets and aborts the process with an uncaught `std::bad_alloc` that no `except MemoryError` sees. `geometry_budget.py` also bounds the grid by the task's memory (`cluster_bin_limit`) and keeps the grid arithmetic in pure functions a test checks at each tier's budget without allocating.
+-   Charge a path's own copies to that path. The renderer draws a mesh coloured per face from a copy with three corners per triangle, which measured up to 475 bytes per triangle at render against the 200 `BYTES_PER_TRIANGLE` charges. Measure such a cost on every task shape the configuration allows, not only the default: it was highest on 2 vCPU. `geometry_budget.apply_budgets` therefore holds such a mesh to `resources.cell_colour_triangle_limit` (the triangles that keep the measured peak within 60% of memory). Raising the shared constant instead would cut the budget of every mesh.
 -   Bound how far an instancing format expands before any budget applies. A 3MF component, a COLLADA `instance_node`, a STEP assembly component or an FBX model connected to several parents may place the same child several times per level, so a few-KB file describes 2^depth placements and a depth limit alone allows billions. Each walk counts its nodes and placed geometry against one `format_handlers/scene_limits.SceneLimit` (the triangle budget, three vertices per triangle of it, 1,000,000 nodes) and parses each object or geometry once (ARCC BSC1). Where a library expands the scene itself (OCCT's STEP transfer visits every placement; Assimp builds every FBX model placement and copies instanced geometry), count the placements from the file before handing it over (`cad_handler.assembly_occurrences`, `format_handlers/fbx_scene.scene_size`) and refuse a file over the bound. A recursive native parser can also be exhausted by nesting depth alone, independent of placement count: in the same pass `fbx_scene.scene_size` refuses an FBX whose scopes (ASCII) or node records (binary) nest past a fixed depth (`MAX_FBX_NESTING_DEPTH`), since the reader descends into each level as it opens.
 -   Check the input size plus output headroom against `shutil.disk_usage` before downloading, and fail with a message naming both sizes; do not keep a fixed maximum-size constant.
 -   Download with a `TransferConfig` (parallel ranged GETs); stream line-oriented inputs from S3 (`get_object` + `iter_chunks`, resuming with a `Range` header after a dropped stream) and sample as they are read (`format_handlers/point_streams.py`).
@@ -163,6 +211,17 @@ glTF/GLB buffer (the geometry) and skips a material library or texture image wit
 A skipped name is never in the resolver's set, and every name looked up counts toward the file limit,
 found or not. Real-trimesh coverage runs in a child interpreter (`tests/test_3dbasic_real_conversions.py`)
 since sibling modules stub `trimesh`.
+
+trimesh decodes model text (OBJ, MTL, ASCII STL, XYZ, glTF, a GLB's JSON chunk) through
+`util.decode_text`, which falls back to `charset_normalizer` when the text is not UTF-8. In an image that
+does not install it, as the 3D Basic Conversion's does not, such an input ends the run with `No module
+named 'charset_normalizer'`. The 3D Basic Conversion therefore reads that text as UTF-8 first, in
+`check_input_text` (`lambda.py`) before the reference fetch, and fails with a message saying the file could
+not be read rather than guessing another encoding (#910). The CAD/Mesh Metadata Extraction image does not
+install it either and applies the same check to mesh inputs, from its own `lambdaContainer/input_text.py`,
+after the download and before the mesh extractor runs, with the input's file name in the message (#1044).
+A new pipeline that loads model text through trimesh does the same. Read an image's lock file before
+assuming either behaviour for another pipeline.
 
 The two Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through
 `lambdaContainer/common/logger.py`, which is **not** in the `customLogging/logger.py` byte-identity set
@@ -324,6 +383,14 @@ relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
                    if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
 ```
 
+**A chained step's input is not under the asset.** A later workflow step receives the prior step's outputs
+(item 11 below), whose keys follow `pipelines/{pipelineId}/{jobName}/output/{executionId}/files/{relative}/{filename}`
+and carry no `assetId`, so `input_parts.index(assetId)` raises on them. When the `assetId` is absent, take
+the relative subdirectory from the segments between `output/{executionId}/files/` and the filename, and
+still refuse a key that is neither shape rather than guessing. Image to 3D's `export.compute_relative_subdir`
+does both (`container/tests/test_output_paths.py`); its two-step workflow failed in the container on exactly
+this before the fallback existed, with the Lambda and the mesh selection already fixed for chaining.
+
 **Pipeline state threading pattern** (applies to all pipelines, not just preview):
 
 ```
@@ -332,6 +399,99 @@ Workflow manifest (inputManifestS3Location: assetId, inputFiles, paths, ...)
     → constructPipeline lambda: read assetId from event, include in definition dict
       → Container: read assetId from PipelineDefinition, use for relative path computation
 ```
+
+## Input Version Threading
+
+**A pipeline reads its input file at the S3 version the run recorded at launch, never at whatever is
+current when its compute starts.** The workflow writes a `versionId` on every manifest input file: the
+version selected at launch, or the one current when the run started. It is `""` for a folder selection or
+an unversioned bucket and `"null"` for an object written while the bucket's versioning was off. A later
+workflow step's input is the earlier step's output at the version that step wrote.
+`manifestHelper.resolve_inputs` exposes the first input file's value as `inputVersionId` and maps `""`
+and a missing value to `""`; `"null"` is a real version id that S3 accepts on a read and is passed
+through. `manifestHelper.input_version_id(entry)` does the same for one entry of a multi-file pipeline.
+
+Thread it the way `inputBucketRegion` is threaded:
+
+```
+manifest inputFiles[].versionId
+  → vamsExecute: "inputVersionId": resolved['inputVersionId'] in the openPipeline message
+    → openPipeline: "inputVersionId": event.get("inputVersionId", "") on the state machine input
+      → constructPipeline: on the container definition (inputFile.versionId or inputVersionId),
+        or, for a strict-dataclass image, in a second Batch command argument (see below)
+        → container: VersionId on every read of the input file
+```
+
+-   **Every read of the input file sends it**: the download (`ExtraArgs={"VersionId": v}` for
+    `download_file`/`download_fileobj`), `head_object` and size checks, streamed `get_object` reads and
+    their `Range` resumes, and existence checks. An AWS CLI container uses
+    `aws s3api get-object --bucket B --key K --version-id V <dst>` (`aws s3 cp` cannot take a version),
+    keeping its `--region` arguments.
+-   **No version sends exactly the call made before**: no `VersionId` key at all, never an empty one. A
+    state machine input or definition from before this field (an in-flight run during an upgrade, a
+    legacy payload) reads `.get(..., "")` and behaves as it did.
+-   **An image built before the field must still parse a new launch.** During an upgrade the new
+    `constructPipeline` can run while the state machine still submits the old job definition, and every
+    launch carries a version (the selected one or the one current at launch). An image that reads its
+    definition with `.get` ignores an extra key, so the version may sit in the definition. An image that
+    parses it into plain dataclasses (3dThumbnail, pcPotreeViewer PDAL/Potree, coordinateTransform,
+    metadata3dLabeling: `StageInput(**inputFile)`, `PipelineDefinition(**params)`) rejects ANY unknown
+    key at any level, so `constructPipeline` keeps the definition byte-identical to the one written
+    before the field and returns the version as a second command element,
+    `{"inputVersions": {"<first stage type>": "<version id>"}}` (`definition_command`). Those images
+    read only `sys.argv[1]` outside `localTest`, so they ignore it; the new image's `__main__` calls
+    `objects.apply_input_versions(json.loads(sys.argv[1]), sys.argv[2:])`, which puts it on that
+    stage's `inputFile.versionId` and fails on an argument it cannot read. A later stage that reads an
+    earlier stage's output (Potree after PDAL) is not named. Each lambda suite feeds its command to the
+    development image's parsing (`backendPipelines/tests/fixtures/pre994/`, blob ids pinned in
+    `test_pipeline_input_version_upgrade_window.py`, which also fails a new `StageInput.versionId`
+    image that is not listed).
+-   **Another launch value for a strict-dataclass image goes in that same second element**, never in
+    the definition, and the element then always carries `inputVersions` (`{}` without a version): an
+    image built since the field passes the element through `apply_input_versions`, which refuses a
+    document without that key and ignores any other. 3dThumbnail carries its execution results folder
+    this way, `{"inputVersions": {...}, "outputResults": {"bucketName", "objectDir"}}`, read by
+    `objects.results_location`; an older image ignores it and an older Lambda's command names none.
+    `preview/3dThumbnail/lambda/tests/test_thumbnail_results_location.py` feeds the new command to
+    both older images (`fixtures/pre994/` and `fixtures/pre1415/`, the latter the image's `objects.py`
+    at development 8cddbe3f6, blob id pinned there).
+-   **A version deleted after launch fails the run** naming the file and the version (`NoSuchVersion`/`NoSuchKey`,
+    or a bare 404 or 405 on a HEAD); any other error keeps its own message. Never fall back to the current object.
+-   **Only the selected input.** Files the input references (glTF buffers, OBJ materials, splat chunks, USD
+    layers), hierarchy siblings, user-supplied control-signal URIs, model downloads and the pipeline's own
+    intermediates keep reading the current object.
+-   **A third-party image that reads Amazon S3 itself and cannot take a version** (ModelOps) is pointed at a
+    copy: when the launch version is no longer current, `constructPipeline` copies it to
+    `pipelines/modelops.staged-inputs/<pipelineId>/<executionId>/<original key>` in the auxiliary
+    bucket and names the copy in the handler's input and in `stagedInputS3Uri`. `pipelineEnd` deletes
+    every version of the copy on success and on failure (the ECS task's `ResultPath` keeps that field
+    in the state), and the bucket's lifecycle rule for the prefix (`Config.MODELOPS_STAGED_INPUT_PREFIX`)
+    expires a copy a crashed run leaves. A current-version or no-version run reads the original object
+    and makes no extra call.
+-   **IAM.** S3 authorizes a read that names a version as `s3:GetObjectVersion`. A container, job or pod
+    role built from explicit statements over `getS3AssetBucketRecords()` grants it beside `s3:GetObject`
+    (`infra/test/pipelines/pipelineInputVersionGrants.test.ts`); a Lambda granted through
+    `grantReadPermissionsToAllAssetBuckets` already has it (`s3:GetObject*`). An external bucket's own
+    bucket policy must allow it too
+    (`documentation/docusaurus-site/docs/deployment/external-s3-setup.md`, Step 1).
+-   **Exempt:** a pipeline that takes no input file (Cosmos Text2World), one that reads the whole asset as
+    a prefix (GR00T), and a multi-file pipeline whose `constructPipeline` puts each entry's own `versionId`
+    on its definition (Video SOP/BOM, the reference implementation). A multi-file pipeline keys its local
+    paths by index, since one launch may select the same file at two versions.
+-   **Several inputs travel as one list of objects**, each `{bucket, key, versionId}` built from one
+    manifest entry, never as a path list beside a parallel version list: two lists fall out of step without
+    an error, and a short version list reads the remaining inputs at the current object. Image to 3D sends
+    `inputViews` (`genAi/imageTo3d/lambda/inputViews.py`), reads it as the only list when present, and fails
+    the run on an entry without a bucket, a key or a `versionId` string. It still sends
+    `inputS3AssetFilePaths`, derived from the views, for a development build before `inputViews`. While the
+    three functions run different builds (a stack update or a rollback), views are read at the current
+    object, and a file selected at two versions is read once; where the `constructPipeline` that runs reads
+    `inputViews`, the primary input keeps its version.
+
+`backendPipelines/tests/test_pipeline_input_versions.py` checks every `vamsExecute*.py`,
+`openPipeline.py` and `constructPipeline.py` in the tree (and the RapidPipeline EKS
+`consolidated_handler.py`) against this rule, with the exemptions above listed in the test. Each pipeline's
+own `test_*_input_version.py` asserts its chain and its container reads.
 
 ## vamsSchema Registration (how a built-in becomes usable)
 
@@ -362,7 +522,8 @@ The registration custom resource re-fires only when the bundle changes: `schemaH
 -   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
     deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
     `vamsSchema/*` — otherwise refreshing an unrelated artefact deletes every bundle while the
-    registration resources still expect to read them. Test: `infra/test/storage/artefactsBucketPrune.test.ts`.
+    registration resources still expect to read them. It excludes `addon/*` for the same reason: the
+    add-on stacks upload their own trees there. Test: `infra/test/storage/artefactsBucketPrune.test.ts`.
 
 `pipeline.json` carries no ARNs — the execution target is injected at deploy time from
 `resource_overrides` per `executionConfig.executionType` (`lambda.resourceId`, `sqs.queueUrl`,
@@ -394,6 +555,20 @@ partition. Author it with the block for your execution type present but empty:
     }
 }
 ```
+
+**`metadataInputs`** names what the step's input metadata file carries: the four metadata types
+`assetMetadata`, `fileMetadata`, `fileAttributes`, `databaseMetadata` (each `true` when omitted) and
+two opt-in sections (each `false` when omitted). `assetFileMetadata: true` makes a whole-asset (`/`) or
+folder selection carry one record per current file under it (`"expanded": true`, at most 500 per
+selection, archived and `*.previewFile.*` files left out) with a `fileExpansion` block on the asset
+group saying how many were left out; read them with `file_metadata_for` / `file_attributes_for` like
+any file record. `metadataSchema: true` adds a top-level `metadataSchemas` list, per involved
+database, of the aggregated schema fields (its own and `GLOBAL`) for `assetMetadata`, `fileMetadata`
+and `fileAttributes` plus `restrictMetadataOutsideSchemas`; a database whose schema the launching user
+may not read is simply absent. A file field appears once per file-extension reach: for a file, use the
+entry whose `fileKeyTypeRestriction` lists its extension, else the one with an empty list. A step receives a section only when the workflow and its own pipeline
+(or template `overrides`) both turn it on. Shapes: the pipeline developer guide
+(`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`, "Opt-in sections").
 
 **Rules that bite if you get them wrong:**
 
@@ -488,7 +663,10 @@ partition. Author it with the block for your execution type present but empty:
    is scoped to it at synth, so the pipeline refuses a body carrying a model key rather than widening
    the grant. The Video SOP/BOM workload-profile templates are the worked example; their rules live
    in `genAi/videoSopBom/lambda/profileRules.py`, a byte-identical copy of the container's, so
-   `constructPipeline` refuses a bad profile before any AWS Batch job starts.
+   `constructPipeline` refuses a bad profile before any AWS Batch job starts. A pipeline offering a
+   provider that needs no IAM grant may let a template name that provider's model: the CAD STEP
+   agent's `MODEL_ID` tag selects an OpenAI model, and its `constructPipeline` refuses a Bedrock model
+   id other than the deployment's before the run starts.
 9. **A workflow ref's `jobName` is an output-path segment, not a display label.** It becomes the
    `{jobName}` folder in `{baseAssetsPrefix}pipelines/{pipelineName}/{jobName}/output/{executionId}/files/`
    — relative to the area VAMS owns in the default asset bucket, which
@@ -508,7 +686,12 @@ partition. Author it with the block for your execution type present but empty:
     pipeline silently overwrites the earlier step's resolved config and both steps run identically —
     with no error. When one model needs two modes in one workflow (train then evaluate, say), ship two
     pipelines sharing a container image / ECR repo / compute environment rather than one pipeline
-    listed twice with different templates.
+    listed twice with different templates. A later pipeline receives ONLY the prior step's outputs (the
+    interim tracking lambda hands them on), not the workflow's original inputs -- so a first step whose
+    successor also needs the input file copies that file into its own outputs. Image to 3D does this with
+    the `PASS_THROUGH_INPUTS` template tag, and registers the Blender agent's refine mode as
+    `genai-image-to-3d-refine` (a second `VamsSchemaRegistration` on the same Lambda, bundle
+    `vamsSchema/refine/`) so "reconstruct, then refine" is one workflow.
 11. **A sub-state-machine execution name must be unique at millisecond concurrency.** `openPipeline.py`
     derives the name a pipeline's own state machine runs under (`PipelineJob_<stamp>_<random>`), and
     Step Functions rejects a repeat with `ExecutionAlreadyExists`. A workflow may carry several triggers
@@ -521,6 +704,28 @@ partition. Author it with the block for your execution type present but empty:
     task-level timeout to stop it (it matches the group of the cluster's running tasks to the execution
     name), so keep it unique per execution and within ECS's 255-character task group limit: pinned by
     `multi/rapidPipeline/lambda/tests/test_rapidpipeline_ecs_timeout_stop_route.py`.
+12. **`isSystem: true` in `pipeline.json` / `workflow.json` makes the record deployment-owned — the
+    importer is the ONLY writer of the flag.** The value must be a JSON boolean: any other value fails
+    the registration (`vamsSchemaImport._is_system`), and an absent or `null` key reads `false`. The
+    pipeline and workflow request models ignore the key, so an API caller who supplies it creates an
+    ordinary record. The handlers (`handlers/pipelines/pipelineService.py`,
+    `pipelineTemplateService.py`, `handlers/workflows/workflowService.py`,
+    `workflowTriggerService.py`) refuse every mutation of a system record with a `400` carrying one of
+    the messages in `backend/backend/common/workflows/systemRecords.py` — the only exceptions are the
+    `enabled` switch on the pipeline, the workflow and its triggers, and a template's `configBody` /
+    `tagSchema` / `webFormJson`. Archive, restore, template add/delete and trigger add/delete are
+    refused outright. The importer's own cross-call is exempt because it identifies itself with the
+    `vamsSchemaImport` source marker AND the `SYSTEM_USER` identity on its `lambdaCrossCall` envelope
+    (an API Gateway request cannot carry that envelope), so any principal allowed to invoke the import
+    function can register system records. `enabled` is therefore a **pause switch**, not a setting:
+    each deployment that registers the bundle again writes the pipeline and workflow back as enabled
+    and unarchived and sets the trigger from its shipped value (for a built-in,
+    `autoRegisterAutoTriggerOnFileUpload`). The durable way to stop a system pipeline is the deployment
+    configuration (`autoRegisterWithVAMS: false` archives it, `autoRegisterAutoTriggerOnFileUpload:
+false` keeps its trigger off). No built-in bundle sets the flag yet; marking one changes nothing
+    about its `category`, which role constraints may scope on. Tests:
+    `backend/tests/common/workflows/test_systemRecords.py`, `test_vamsSchemaImport_isSystem.py` and
+    the `test_*_isSystem*.py` handler modules.
 
 Verify registration after a deploy rather than assuming it:
 
@@ -528,6 +733,350 @@ Verify registration after a deploy rather than assuming it:
 vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
 vamscli pipeline template list -d GLOBAL -p {pipelineId}
 ```
+
+## Caching Model Weights on a Shared Filesystem
+
+Six GPU pipelines cache HuggingFace weights on an EFS filesystem with an Amazon S3 backup, each through
+its own copy of `model_manager.py`. The copies diverged and repeated the same three mistakes, none of
+which fails a run -- they only make it slower, and one of them silently downloads gigabytes during
+inference. Audit a new copy against these.
+
+1.  **Key the cache directory by whatever the cache is FOR, and keep it in step with the S3 prefix.**
+    All four Cosmos pipelines mount one filesystem at one path and set the identical
+    `HF_CACHE_BASE = "/mnt/efs/cosmos-models/hf_cache"`, while each backs up to and restores from a
+    different S3 prefix. The check asks only "does this directory hold any weights at all", so the first
+    pipeline to run populates the shared directory and every other one reads a cache hit, skips its own
+    S3 restore, and downloads its own weights from HuggingFace during inference instead -- on billed GPU
+    time, on every run. The backup then uploads the combined directory to each pipeline's own prefix, so
+    every prefix accumulates every other pipeline's weights. The directory now ends in the pipeline
+    segment of its own `S3_HF_CACHE_PREFIX`, so the two cannot drift apart. **This lay dormant while the
+    mount was broken** -- an unmounted path is an empty local directory, so the check correctly reported
+    a miss -- and fixing the mount is what activates it. Image to 3D keys its cache per model
+    (`hf_cache/{model_key}`), which is the pattern to follow.
+
+    **Weights a library keeps outside the HuggingFace layout belong under the same directory.** rembg
+    stores its session ONNX files under `U2NET_HOME` and downloads them on first use, so a run that
+    selected the BiRefNet session fetched 973 MB from a GitHub release every time, inside preprocessing,
+    where the S3 backup never saw it. Image to 3D points `U2NET_HOME` at `hf_cache/{model_key}/rembg`,
+    fetches the selected session's file in the cache stage (`model_manager.fetch_rembg_session`, seeded
+    from the image's baked copy for the default session and retried like `fetch_repo`), and passes the
+    file to `ensure_models_cached(..., required_files=...)` so a cache holding the model's weights but
+    not the session's reports a miss. Each backend names its session explicitly rather than taking the
+    library default, so the file fetched is the file read.
+
+2.  **Ask whether THIS RUN's weights are cached, not whether ANY are, and stop at the first file.**
+    `matches = list(hub_dir.rglob(f"*{ext}"))` walks the whole tree once per extension and builds a list
+    of every match only to test it for emptiness -- over a network filesystem, before any GPU work.
+    Measured on Image to 3D: **477 s of a 606-second run**, more than the model's own generation, against
+    **0.0 s** for a check that looks only under the repositories the selected model declares and returns
+    at the first file it finds. A snapshot directory exists as soon as a download starts, so its presence
+    proves nothing; look for `.safetensors`, `.bin`, `.pth` or `.ckpt` inside it.
+
+    This is also what separates one model VARIANT from another, which rule 1's directory split does not: a
+    pipeline serving 2B and 14B, or Nano and Super, keeps them in one directory, and the repository name is
+    what distinguishes them (`models--nvidia--Cosmos-Reason2-2B` against `-8B`). So the caller passes the
+    run's own repository -- `ensure_models_cached(..., repos=(...))` -- and only the PRIMARY repository need
+    be named: the S3 backup is written after a successful run, so a prefix holding the primary repository
+    for a variant holds everything else that variant needed. A name that is wrong or unknown degrades to a
+    restore, never to a hit on the wrong weights.
+
+    **The per-repository check is byte-identical across all copies**, like the vendored
+    `manifestHelper.py`. Edit one, propagate to the rest in the same change;
+    `backendPipelines/genAi/nvidia/tests/test_model_cache_check.py` runs every pipeline's copy through the
+    same behaviour and asserts the shared text has not diverged.
+
+3.  **Verify the cache path is a network filesystem, and say so in the log.** The cache is a host path
+    bind-mounted into the container, so from inside a job an empty local directory is indistinguishable
+    from a shared filesystem -- which is how a broken EFS mount stayed invisible through a day of jobs
+    while every run paid a full restore. Discriminate by filesystem TYPE (`nfs`/`nfs4` vs `xfs`) read
+    from `/proc/mounts`, not by the presence of a mount point: a bind mount appears there whatever backs
+    it, so a first version of this check passed on every run. A check that cannot fail is worse than no
+    check. See `infra/lib/nestedStacks/pipelines/CLAUDE.md` for the launch-template half of the same
+    failure.
+
+## Fitting a Diffusion Pipeline onto a Smaller Card
+
+`diffusers` offers several memory controls and they are not equally safe. They divide into two kinds, and
+the distinction decides whether a run produces the right answer or a confident wrong one:
+
+-   **Controls that MOVE things.** `enable_model_cpu_offload` and `enable_sequential_cpu_offload` re-place
+    modules between devices between steps. Slower, and behaviour-preserving for a stock pipeline -- but a
+    custom processor holding learned weights that the pipeline placed on the device ITSELF is not known to
+    the offload hooks, and the forward pass then raises inside it. Installing the hooks succeeds, so the
+    failure lands later and reads as a model fault.
+-   **Controls that REPLACE things.** `enable_attention_slicing` is the one to watch.
+    `Attention.set_attention_slice` finishes with an unconditional `self.set_processor(...)` to a built-in
+    `SlicedAttnProcessor`. It checks nothing about what is already installed and has no preservation path --
+    `set_processor` logs that it is removing "possibly trained weights". `set_use_memory_efficient_attention_xformers`
+    replaces the processor too, though it at least copies state across for Custom Diffusion processors.
+
+**So attention slicing destroys a custom attention processor, and a model whose behaviour LIVES in one is
+ruined silently.** Image to 3D measured this: Step1X-3D's texture stage installs
+`DecoupledMVRowColSelfAttnProcessor2_0` and loads `step1x-3d-ig2v.safetensors` into it, and that processor
+carries both the reference-image conditioning and the coupling between the six views it generates. Slicing
+replaced it, so the stage sampled SD-XL with neither, and wrote a 2048x2048 atlas of content drawn from the
+prior -- several unrelated pairs of jeans, a teal top, red hair -- on a subject wearing none of it. The
+pipeline loaded without complaint, logged a clean success, and shipped a plausible-looking texture of the
+wrong thing. Removing the one call restored a clean likeness and still fit the 22 GiB card on VAE slicing
+alone, since the decode is where a 2048x2048 output puts its largest allocation.
+
+Three practical rules follow:
+
+1.  **Before applying a memory control, look for a custom processor or adapter.** An `init_custom_adapter`,
+    a `load_custom_adapter`, an IP-Adapter, a LoRA-in-processor, or any `set_attn_processor` call in the
+    pipeline's own construction means attention slicing is off the table AND component offload is suspect.
+    VAE slicing is the one that touches neither: it splits the decode, which is where a large output puts
+    its biggest allocation anyway. On Image to 3D it was enough on its own for a 22 GiB card.
+
+    Note how the two faults hid each other. Offload was applied alongside slicing and appeared to work,
+    because slicing had already swapped the adapter for a built-in processor that offload handles fine.
+    Removing slicing fixed the texture and immediately exposed the offload incompatibility on the very next
+    run. **When two optimisations are applied together, neither has been tested.**
+
+2.  **A control that cannot fail is not evidence that it worked.** Each of these is normally wrapped in a
+    `try` so a diffusers version lacking one does not end a run that has already produced its geometry.
+    `enable_attention_slicing` does not raise when it destroys an adapter -- it succeeds. Guard the
+    behaviour with a test that the call is absent, not with a runtime check that cannot see the damage.
+3.  **A sweep that changes the symptom without fixing it is pointing above itself.** Six runs varied the
+    memory mode, the segmentation backend and the reference image and every one produced a different wrong
+    atlas, which read as "none of these is the cause". True, but the sweep could not have succeeded:
+    slicing was applied in every mode that produced a texture at all, and the only mode that skipped it ran
+    out of memory and wrote nothing. Reading the code the pipeline actually runs, at the revision the image
+    pins, cost one afternoon less than the sweeps did.
+
+## Carrying Colour Across a Mesh Transformation
+
+A pipeline that changes a mesh's topology -- decimation, a repair ladder, a reconstruction -- gets geometry
+back and nothing else, so any colour has to be carried over. Three mistakes here all produce the same
+symptom, a model that looks wrong in the viewer, and none of them fails a run. All three were live in Image
+to 3D at once.
+
+1.  **Ask what the quantity IS before choosing how to transfer it.** Colour is a continuous field over the
+    surface, so the value at the nearest sample is an estimate of the value here. A **uv coordinate is
+    not**: it indexes a discontinuous chart layout, where two adjacent vertices legitimately sit in
+    unrelated islands of the atlas. Copying each new vertex the uv of its nearest old vertex therefore
+    builds triangles that sweep across the atlas as they interpolate, sampling other charts and the
+    unwritten space between them -- measured at 51% of one model's faces carrying a uv edge spanning more
+    than a tenth of the atlas, which rendered as speckle over the whole model with a black back and a black
+    face. Against each model's own untransferred output, as mean colour error over four rendered views:
+    re-baking the atlas 7.9, collapsing it to per-vertex colour 10.9, copying the uv values **43.4**.
+
+2.  **Query the SURFACE, not the vertices.** "Which point on the original surface is this" is a question
+    about triangles, so the snapshot has to carry the original **faces**, not just its vertices. The
+    nearest surviving _vertex_ is a different question with a different answer: a decimation removes four
+    vertices in five, so the nearest survivor can be far from the surface point a new vertex stands on, and
+    in a contact region -- a hand against a thigh -- it is on the wrong body part. Locate the closest point
+    on the surface, take its barycentric coordinates in that triangle, and read the field there. Then
+    **inset the read toward the triangle's centre by a fraction of a texel**: a decimation preserves the
+    silhouette, so its surviving vertices sit on the original creases and chart borders, where rounding to
+    a texel reaches into whatever the packer put next door.
+
+3.  **A colour palette is not a texture, and a renderer will prove it.** Converting per-vertex colour to an
+    image indexed by uv is only meaningful if neighbouring texels are neighbouring points on the surface.
+    `trimesh`'s `ColorVisuals.to_texture` does not do that -- it emits one texel per distinct colour in
+    deduplication order, a lookup table -- and a renderer does not look colour up per vertex. It
+    interpolates the uv across each triangle and samples per **fragment**, so the interior of a triangle
+    whose corners point at three scattered palette texels reads a line of unrelated entries, and a default
+    bilinear sampler blends four unrelated neighbours even at a vertex. Measured on a shipped mesh: 97.5%
+    of triangles had their corners more than eight palette texels apart, a median of 68 of a 184-wide
+    palette, and **43% of rendered pixels came out badly wrong** against the colour the mesh carried.
+    A flat-shaded preview hides this completely, because it never samples between the corners.
+
+    Prefer the carrier each format actually reads: glTF carries a per-vertex colour array natively and
+    round-trips it bit-exactly, and Wavefront OBJ needs an image, so bake one -- rasterise the colour into
+    the charts an unwrap lays out and flood the gaps between charts from their nearest written texel.
+
+4.  **Unwrap at unit scale, and measure the layout you get back.** xatlas works in absolute units with
+    fixed epsilons and reports a chart it cannot parameterise by leaving all of its vertices at (0, 0),
+    silently. The Blender agent models at its 60 mm print size in metres, so its meshes reach the re-bake
+    0.06 units tall: 99,980 of 100,028 atlas vertices came back at the origin, the 48 placed seam splits
+    fanned huge triangles from the corner, the rasteriser reported 13% coverage, the export carried an
+    image, and the model rendered one flat colour. The same geometry a thousand times larger charted
+    fully, on Linux and Windows alike. A uv layout is scale-free, so `texturing._unwrap` normalises the
+    geometry before calling xatlas, checks the fraction of vertices at the origin, retries with bounded
+    charts, and the re-bake declines a layout that stays collapsed in favour of per-vertex colour. **A
+    successful log line from a stage that cannot fail is the thing to distrust**; the number to log is the
+    one that would have been wrong.
+
+5.  **A model's OWN atlas can be wrong for a renderer, and the fix is per-model.** Not only a transferred
+    atlas tears -- a model that bakes a densely chart-packed one (thousands of small auto-unwrap islands
+    with unwritten background between them) ships an atlas that is complete yet tears when a renderer
+    samples per fragment across an island edge, the same speckle the copied-uv path produced. So a
+    PRESERVED atlas is not delivered one way: a contiguous atlas ships intact with its gaps flooded, while
+    a chart-packed one is collapsed to per-vertex colour read from the mesh's OWN uv (distinct from the
+    lossy nearest-vertex snapshot the topology-change fallback uses). That read is not the texel a vertex
+    names: every exported vertex is split at a uv seam and sits on its island's border, where the texel is
+    the next island's bake margin, so each corner is read a texel and a half inside its face and a vertex's
+    corners are averaged. Nor is every texel a colour: a sample that reads exactly black is the cleared
+    background between islands, which the bake never writes for an island narrower than a texel -- 40% of
+    the agent's atlas -- and is left out, and a vertex with no written sample takes the reading of the
+    copies that meet at its position, because a black dot on a brown coat is what a blind judge calls
+    pitted. The decision is a property of the MODEL, declared as `ModelAdapter.ATLAS_IS_CHART_PACKED` and
+    read off the selected adapter, so collapsing the one model that tears (the Blender agent) cannot
+    regress a model whose atlas is contiguous (Step1X-3D's own 2048x2048 texture stage) -- scope the
+    collapse to the model measured to need it, never to every preserved atlas. Collapsing leaves that mesh
+    with no atlas, so the glTF export then welds the per-vertex splits the bake left behind (measured six
+    to one on the agent's mesh), each merged vertex taking the mean colour of its copies, and recomputes
+    smooth normals; a mesh that still carries an atlas keeps its uv seams split, since welding them would
+    leave the uv array addressing positions that no longer exist.
+
+6.  **Carry a per-face colour by its cell's index, not through VTK's own cell data.** `vtkPolyData` orders
+    its cells, and their cell data, vertices, lines, polygons, then strips. `vtkTriangleFilter` gives each
+    cell's triangles one after another in that order, but on a mesh whose polygons are all triangles and
+    that also holds lines, vertices or strips it returns more cell-data rows than cells (1,601 rows for 801
+    cells in VTK 9.6, some of them garbage), and it makes fewer than n - 2 triangles of a polygon with a
+    repeated corner. pyvista's `is_all_triangles` ignores strips, so code that skips the filter on it drops
+    the strips and every colour after them moves by a cell. The 3D Thumbnail decimation
+    (`geometry_budget._triangles_with_face_colours`) reads the polygons' and the strips' colours at their
+    own offsets, keeps polygons that are all triangles as they are, and triangulates the other polygons and
+    the strips on their own with each cell's index as cell data, using it only when there is one index per
+    triangle.
+
+**Get ground truth by switching the transformation off.** None of the above was separable from "the model's
+texture is bad" until a run with `MESH_CLEANUP=false` shipped each model's atlas untouched. That reference
+settled it in one round: two models' own textures were clean likenesses, so everything wrong in a cleaned
+result had been introduced by the pipeline, while a third produced unrelated content that no transfer could
+have helped -- and that turned out to be a separate fault of this pipeline's own, in the memory controls it
+applied to that model's texture stage. When a pipeline has a switch that bypasses its own processing, that switch
+is a measurement instrument -- use it before changing the processing.
+
+**Render per fragment when judging texture placement.** A GL-free orthographic rasteriser with a depth
+buffer is enough, but it has to interpolate per pixel and sample the atlas there. A flat colour per face is
+what makes a broken parameterisation and a packed palette both look fine.
+
+## Running a Coding Agent as a Pipeline Stage
+
+Image to 3D has one generation path that is not a model but an agent: OpenAI's Codex CLI, reasoning with a
+vision model on Amazon Bedrock, driving a headless Blender until the model matches the photographs
+(`backendPipelines/genAi/imageTo3d/container/models/blenderagent.py`). Four things about it generalise to
+any stage that runs an agent, and each was found by measurement rather than reasoning.
+
+1.  **The agent's confinement is configuration, and each key is load-bearing.** Codex's `workspace-write`
+    sandbox carves `/tmp` and `$TMPDIR` out as writable BY DEFAULT, and the pipeline's own input, work and
+    output directories live under `/tmp`. So the agent's workspace sits outside `/tmp`, and
+    `exclude_slash_tmp` and `exclude_tmpdir_env_var` are set, so writable means the workspace and nothing
+    else. Its commands get no network. Credentials are excluded from the environment its commands see; the
+    model is reached by the agent process alone. Test the configuration keys, not the behaviour -- a
+    misconfigured sandbox does not fail, it widens.
+2.  **Completion is a set of files, never the final message.** The agent's instructions make the
+    deliverable `output/model.glb` plus a `DONE.json`, and the adapter checks for the mesh and loads it. A
+    message claiming completion is not evidence of anything. The same holds at the other end: **read the
+    input the stage edits before the agent starts, and fail the run when it does not load.** Handed a
+    modify input its STEP reader refused, the GenAI CAD STEP agent built a placeholder cube, and the run
+    saved it as a new version of the input file under a success status;
+    `genAi/cadStepAgent/container/cad_step_agent/run.py` (`read_input`, and the same rule in
+    `derive_outcome`) now ends such a run before any model call.
+3.  **The agent's wire protocol and Bedrock's do not meet, so bridge them locally on the task role.** Codex
+    speaks only the OpenAI Responses API (its config reference: `responses` is the only `wire_api`);
+    Bedrock exposes OpenAI-compatible Chat Completions and nothing else. A LiteLLM proxy on loopback
+    inside the container bridges the two and calls Converse with boto3's default credential chain, so no
+    API key is minted or stored. Prove the bridge with the real agent BEFORE the first live run: the
+    OpenAI SDK's request shapes are not Codex's. The pre-flight caught that Codex's `--image` flag takes a
+    comma-separated LIST and swallows a trailing positional prompt -- the agent then reads an empty stdin
+    and exits having done nothing, with a zero-length run that a report would have shown as "no mesh".
+    The prompt goes on stdin, named by `-`.
+
+    The first LIVE run then found the shape the pre-flight could not: the agent looked at its own render
+    with `view_image`, whose result carries the image, and Bedrock rejected it -- the OpenAI models there
+    refuse an image INSIDE a Converse tool result while accepting one beside it in the same user turn.
+    Probe every placement a mid-conversation image can take before concluding a model "does not do images";
+    only one of six failed. The bridge hook that lifts images out of tool outputs
+    (`blenderagent_tools/bridge_image_hook.py`) is the fix, verified against the model with the exact
+    failing request. And make a failure carry its evidence: that run's cause was only readable because the
+    adapter had by then learnt to collect the agent's event stream BEFORE raising and to put a digest of it
+    in the exception -- the two runs before it died with a one-line stderr tail and nothing else.
+
+4.  **The model id is deployment configuration, never a constant or a template field.** The intended model
+    was not in the Bedrock catalogue when this was built, and which models an account may invoke differs by
+    partition and entitlement. `models.blenderagent.bedrockModelId` carries it: the commercial template
+    ships `global.openai.gpt-6-astra`, the GovCloud and EU Sovereign templates ship it empty, and
+    `getConfig()` requires it whenever the agent is enabled and rejects a `global.`/`us.` prefix outside
+    `aws`. The construct passes it to the job as `BLENDERAGENT_BEDROCK_MODEL_ID` and names it in the job
+    role's `bedrock:InvokeModel` grant, so a per-run override would name a model the role cannot call.
+    The sandbox mode is fixed in the adapter for the same reason: it is a security boundary, not a run
+    option. Test: `infra/test/config/configPartitionValidation.test.ts`.
+5.  **State the downstream acceptance criteria to the agent exactly, and give it a tool for any criterion
+    it cannot cheaply meet.** The first finished model failed the print gate with 34 bodies where one is
+    expected. The agent had done what it was told: its instructions said several closed objects were
+    acceptable, so it built a figure from closed primitives and joined none, and the gate counts each as a
+    detached piece. An agent optimises the contract it is given, so a criterion the gate applies that the
+    instructions soften is a run wasted on a model that looks right. Fusing many parts into one manifold
+    body is also not a one-liner in `bpy`, so it is a tool (`bl_solidify.py`) and a mandatory step, not a
+    request. Read the agent's own known-deviations list too: the same run reported that the export checker
+    was wrong about its file, and it was.
+
+6.  **The agent's own checks must measure the criterion the gate measures, not a proxy for it.** The
+    inspection tool reported "watertight" per shell, and the agent read ten closed parts floating apart as
+    one finished model, wrote so in its record, and stopped. Closedness is not connectedness; the gate
+    counts pieces. Once the tool counted bodies and the fuse step refused a multi-body result outright,
+    the failure became impossible to declare complete. When an agent's self-report and the gate disagree,
+    the tool the agent trusted is the first suspect. The same holds for what the agent says it SAW: one
+    run described a blue cat as "ginger" for three iterations after a Blender hue node did the opposite of
+    what it assumed, and across five judged builds the agent scored its own silhouette and proportions 7
+    where a blind judge gave 3 and 2. So the render tool now prints each render's and each reference's mean
+    colour as a hex value and a word, and the instructions require those words in the notes. Give the
+    agent the measurement in a form it has to copy, and judge its output with something that is not it.
+
+7.  **Give the agent the judge itself, and the parts of the answer the input already holds.** The pipeline
+    applies a print gate, shape descriptors and a silhouette match after the agent hands over, and all of
+    it is Python in the same image; `blenderagent_tools/agent_gate.py` imports those modules and runs them
+    on the agent's export inside its sandbox, so the agent iterates against the numbers it will be judged
+    by rather than its impression of a render. And where the photograph already answers a question
+    exactly -- the front outline, the proportions, the colours -- a tool reads the answer off it
+    (`bl_silhouette_base.py`) instead of asking the agent to reinvent it from primitives, which six runs
+    did at 3 of 10 for silhouette. The agent's job becomes what the photograph cannot say: depth, the
+    sides, what projects. Measured on the first run with both: the blind judge moved the agent from fifth
+    of five to second, silhouette 4 to 8, face 2 to 7, colour 6 to 9, in fewer iterations and tokens than
+    any primitive build. Then the model: with the same instructions, tools and budget, GPT-5.6 placed third
+    and GPT-6 Astra placed first in both modes, at three to four times the tokens -- it used the gate tool
+    to measure, reshaped what the measurement named, and re-measured. Give the agent the judge, and then
+    give it a model that will listen to it.
+
+8.  **A model id the bridge library does not know gets no tools, silently.** LiteLLM decides which request
+    fields a Bedrock Converse model accepts by looking the id up in its own model map, and with
+    `drop_params` on it removes anything it decides is unsupported without a word. GPT-6 Astra, released
+    after the pinned LiteLLM, came back as "no tools, no reasoning effort": the agent answered the opening
+    prompt in 13 seconds with "this session provides no filesystem, terminal, or Blender tools" and ran
+    nothing, while GPT-5.6 through the same bridge ran the whole job. The bridge now registers the
+    configured id with the capabilities of its nearest known sibling before the first request
+    (`bridge_image_hook.ensure_model_known`), so a new model needs nothing but its id. The symptom to
+    recognise: a run that ends in seconds, exit 0, zero commands, and a polite message about missing tools.
+9.  **When the agent needs another model, broker it through files; do not open the sandbox.** The texture
+    work wants an image model (Stability AI inpainting on Bedrock, which runs only through its `us.`
+    inference profiles), and the agent's commands have no network and no credentials by design. So the
+    agent writes a request file into its workspace, a thread in the pipeline process
+    (`container/agent_broker.py`) serves it with the task role, confines every path to the workspace, allows
+    only the listed operations, and writes the result back; the agent-side tool waits for the file. The
+    confinement is unchanged, the capability is added, and every call is visible in the job log.
+10. **Hand an image model a picture, not an atlas -- and return only what it was asked to change.** An
+    inpainting model completes pictures; a packed uv atlas is islands with nothing around them, and the
+    first live request on one came back a uniform grey-brown. Render the surface from a view, mask what
+    needs filling in that picture, and bake the completed picture back with a depth test
+    (`blenderagent_tools/bl_view_fill.py`, arithmetic in bpy-free `view_fill.py` so it is tested without
+    Blender). And a model's whole output comes back through a resize, so a masked edit is composited under
+    its mask in the broker: the agent's "distorted protected detail" was the round trip, not the model.
+11. **A completed response that produced nothing is one the model never made; refuse it on the bridge.**
+    Bedrock answers a small share of `ConverseStream` calls -- six of one session's 662 -- with HTTP 200 and
+    a usage of zero input and zero output tokens. The bridge translates that into a `response.completed`
+    event, and Codex reads a completed response as the end of its turn: the agent stops with the build
+    where it stood, exit 0, and no error anywhere in its own log. Every completion the model actually made
+    carries a function call or text and bills output tokens, so the bridge hook reads the response stream
+    and raises on a completion whose output holds neither and whose usage bills no output tokens
+    (`bridge_image_hook.empty_completion`). The input count is not read: the bridge fills a zero prompt
+    count from its own token counter, so on the fault it can be non-zero. The proxy turns the raise into an
+    error frame with no `[DONE]`, and Codex re-sends the request with its in-memory history, up to its
+    `stream_max_retries`. The fault is measured in AWS CloudTrail, not in the agent's log, which shows only
+    a turn that ended early: list the `ConverseStream` events
+    (`aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=ConverseStream`),
+    pair each `AwsApiCall` record's `requestID` with the `AwsServiceEvent` whose
+    `serviceEventDetails.parentRequestId` matches, and read `inputTokens` and `outputTokens` from that
+    event's `serviceEventDetails.AdditionalEventData.additionalEntries`; the task role's session name in
+    `userIdentity.arn` is the Batch job id, which is how one run's calls are told from another's.
+
+An agent's record of its own work -- notes, self-assessment, scripts -- belongs on the EXECUTION beside
+the run report, through `GenerationResult.diagnostics`, and not in the asset; its renders and full
+transcript go to the auxiliary prefix with an index beside the report, because the results prefix is read
+as text (see Pipeline S3 Output Paths).
 
 ## Registering Sub-Processes and Logs (abort, stage status, log sources)
 
@@ -570,9 +1119,10 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
      "sourceType": "batch", "label": "<Batch state name> container"}
     ```
 
-    Which group that is depends on the compute family. The six **Fargate** job definitions (coordinate
-    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction) write through the
-    `awslogs` driver to a VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
+    Which group that is depends on the compute family. The seven **Fargate** job definitions (coordinate
+    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction, and the GenAI CAD
+    STEP agent on its `fargate` runtime) write through the `awslogs` driver to a VAMS-owned,
+    KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
     register **that** group;
     the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
     so theirs is AWS Batch's default `/aws/batch/job`. In both families the stream is
@@ -701,6 +1251,60 @@ suites have to be invoked one directory at a time. Worse than the inconvenience:
 invocation order a suite can import ANOTHER pipeline's same-named module and assert against the wrong
 file while passing. Prefix a new file with its pipeline (`test_splat_extension_gate.py`).
 
+**CI runs every tests directory, one process each.** The `pipelines-test` jobs in `.github/workflows/ci.yml`
+run `backendPipelines/ci/pipeline_tests.py`, which finds every directory named `tests` holding a `test_*.py`
+module and runs `python -m pytest tests -q` from its parent, on Python 3.12 (the Lambda runtime), in a
+virtual environment built from, in order: `ci/requirements-common.txt` (pytest plus the common base layer
+packages the Lambdas import), the nearest `requirements.txt` above the tests directory (stopping below the
+use-case directory, so `lambda/requirements.txt` or `container/requirements.txt`), and the directory's
+`extraRequirements` in `ci/suite-settings.json` when it has any. Put a package only the tests import, or a
+pipeline-specific Lambda layer (`-r backendPipelines/<use case>/<pipeline>/lambdaLayer/requirements.txt`,
+repo-relative), there, with its reason. **Never put a CI-only file inside a pipeline folder**: CDK packages
+`lambda/`, `container/` and the like as Lambda code and container build contexts, so any file there changes
+the deployed asset (a new image tag or Lambda code key, rebuilt on upgrade with no code change); the
+guard test fails on a `requirements-test.txt` or `ci-headless-display.txt` under `backendPipelines/`.
+Directories with the same requirements share an environment; the directories are split into three groups, one job each.
+`python backendPipelines/ci/pipeline_tests.py list` prints every directory with its group and files, and
+`run --group N --work-dir <dir>` runs one group as CI does (CI adds `--low-disk`, which skips the pip
+cache and removes each environment after its last suite, because the container environments together
+pass a runner's free disk). A new tests directory therefore runs
+without a workflow edit. One that cannot run on a CPU-only runner (it needs a GPU, a container runtime or a
+model download) goes in `ci/excluded-test-dirs.json` with its reason; a test that needs an optional package
+the default image does not install skips with `pytest.importorskip` rather than being excluded.
+A directory whose tests render (PyVista/VTK, pyrender, Open3D visualization) has a `headlessDisplay` entry
+in `ci/suite-settings.json` stating why (`preview/3dThumbnail/container/tests` does). The runner runs it
+under `xvfb-run -a` with the rendering environment of the thumbnail image (`HEADLESS_DISPLAY_ENV`:
+`PYVISTA_OFF_SCREEN`, `MESA_GL_VERSION_OVERRIDE`, `VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN`); without a display
+VTK segfaults on the first render. `pipeline_tests.py system-packages --group N` prints the Ubuntu packages
+that group needs (`DISPLAY_SYSTEM_PACKAGES`: Xvfb and Mesa's software OpenGL, only for a group holding a
+rendering suite) and the job installs them before running it. Locally, install `xvfb-run` (or run the
+group in an `ubuntu:24.04` container) before running that group.
+`tests/test_ci_pipeline_suites.py` fails when a test module sits outside a `tests` directory, an exclusion
+or a `suite-settings.json` entry names no test directory or gives no reason, a CI-only settings file sits
+in a pipeline folder, the workflow's group matrix and `GROUP_COUNT` differ, a suite
+whose pipeline code opens a render window does not declare a headless display, or `HEADLESS_DISPLAY_ENV`
+drifts from the thumbnail Dockerfile.
+
+**Container-level smoke scripts live in `ci/smoke/`, not in the pipeline folder.** They need Docker and
+built images, so CI does not run them; they are run by hand when a converter or its base image changes.
+`ci/smoke/pcPotreeViewer-formats.sh` fetches public E57/LAS/LAZ/PLY samples at pinned commits and runs
+them through the Potree preview's PDAL and PotreeConverter images with the stages' own commands, one TSV
+row per file (exit codes, input and output LAS format, point count, colour and intensity ranges, the
+route PotreeConverter's input took, octree points, attributes and RGB range); run it on the old and new
+PDAL image and diff the two (#1203). Its LAS/LAZ routing mirrors constructPipeline's header rule (point
+formats 0-7 direct, 8-10 through PDAL, #1215; an Extra Bytes descriptor with an unterminated name or
+description through PDAL, #783), reading each header with the pipeline's own `lasHeader.py`;
+`LAS_ROUTING=extension` reproduces the routing before both.
+
+**Route on what the file is, not what it is named.** The Potree preview's `openPipeline` reads a LAS/LAZ
+input's point data record format from a ranged GET of its header
+(`preview/pcPotreeViewer/lambda/lasHeader.py`) and `constructPipeline` sends a format the pinned
+PotreeConverter cannot read through the PDAL stage. For a format it reads, a second ranged GET walks the
+VLR block (to the point data offset, capped at 64 KiB) and an Extra Bytes descriptor whose 32-byte name
+or description has no NUL, which PotreeConverter reads past (#783), is routed the same way. The read is
+advisory: any failure leaves the field out and keeps the extension route, so an unreadable header or VLR
+block never fails a launch and an execution started before the field behaves as before.
+
 **A suite that reads configuration from the process environment must restore it.**
 `splatToolbox/lambda/tests/test_extension_gate.py` does `os.environ.setdefault` at import and then calls
 its loader with no argument, so any other suite in the same process that sets
@@ -718,6 +1322,9 @@ holding:
 
 -   the pinned-revision checks over each `Dockerfile` (a `--build-arg …_COMMIT=main` still builds green)
 -   the `manifestHelper.py` byte-identity check across every vendored copy
+    (`backendPipelines/tests/test_manifest_helper_byte_identity.py`), and the same check for
+    `compliance_output.py` with its backend file-name and flag checks
+    (`backendPipelines/tests/test_compliance_output_helper.py`)
 -   the `customLogging/logger.py` byte-identity check and the emitted-line token redaction checks
     (`backendPipelines/tests/test_pipeline_logger_identity.py`, `test_pipeline_logger_formatter.py`) — a
     handler can always be edited back to an f-string event log or a drifting logger copy
@@ -753,6 +1360,35 @@ files. `COPY --chown=<user>` is NOT sufficient — it makes the file readable by
 mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfile` and
 `conversion/coordinateTransform/container/Dockerfile`.
 
+## A Non-Root Container Owns Every Folder It Writes, Including Its Subprocesses' Working Directory
+
+The read bits above are half of the non-root rule. The other half: before `USER`, the Dockerfile
+gives that user every folder the container writes at run time. That covers the entrypoint's own
+output folders and the working directory of every subprocess it starts, because upstream tools write
+relative to it, both into folders they create there and as plain files. Folders under `/tmp` and
+`$HOME` are fine (Ubuntu's `/tmp` is `1777`; the image creates `$HOME` for the user). A folder the
+base image copied root-owned is not. When that folder also holds upstream sources the user must not
+change, do not `chown` it: give it the user's group and mode `1775` (`chgrp <group> <dir> && chmod
+1775 <dir>`, the `/tmp` model), so the user can create entries in it while the sticky bit stops it
+renaming or deleting the root-owned ones. A write the base image cannot hold fails only at run time:
+the image builds green and the job starts before the `PermissionError: [Errno 13]`.
+
+The Isaac Lab image is the example (#1312). `__main__.py` runs Isaac Lab's `train.py` and `play.py`
+with `cwd=/workspace/isaaclab`, which `nvcr.io/nvidia/isaac-lab:2.3.0` copies root-owned `0755`.
+Hydra creates its run folder at `outputs/<date>/<time>` relative to that directory, `train.py` writes
+its run under `logs/<library>/...`, and the AutoMate tasks download their asset JSON and meshes into
+`./` while the environment is built. The image creates `logs` and `outputs` for the user and makes
+`/workspace/isaaclab` itself group `vams`, mode `1775`; `isaaclab.sh`, `scripts/` and `source/` stay
+root-owned. Paths a tool derives from an input count too: `play.py` writes its video beside the
+`--checkpoint` it is given (rl_games and skrl one folder above it), so the container downloads the
+policy two folders below its owned log root (`EVALUATION_POLICY_PATH`) and creates that folder first.
+`simulation/isaacLabTraining/container/tests/test_isaaclab_nonroot_write_paths.py` reads the working
+directory from the pipeline's own `subprocess.run` call, parses the Dockerfile's `mkdir`, `chown`,
+`chgrp` and `chmod` lines before `USER`, and fails when a write is not possible as the runtime user,
+when the working directory is group-writable without the sticky bit, or when the Dockerfile's
+`ISAAC_LAB_VERSION` differs from the Isaac Lab release the modelled write paths were read from. Copy
+it for a new container that runs an upstream tool as a non-root user.
+
 ## Adding a New Processing Pipeline
 
 **In a fork, or for an external solution.** Pipelines have no custom lane and are not add-ons. A fork adds a pipeline without editing these core files by deploying it as its own stack and registering it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges`); the custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam. An upstream pipeline that calls a vendor's service is still a core pipeline behind its own `app.pipelines.*` switch. The `/add-pipeline` skill's fork mode and `documentation/docusaurus-site/docs/developer/customizing-vams.md` (Known Limits) say the same; the add-on definition is in `documentation/docusaurus-site/docs/developer/addons-overview.md`.
@@ -778,10 +1414,11 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     log a task token on its own.
 
     A pipeline that reads the workflow manifest also vendors `manifestHelper.py`. **All copies must stay
-    byte-identical** — verify with
-    `find backendPipelines -name manifestHelper.py -exec md5sum {} \; | awk '{print $1}' | sort -u`,
-    which must print exactly one hash. Edit one copy, then propagate to the rest in the same change
-    (`backendPipelines/tests/test_pipeline_cross_region_inputs.py` lists the copies and pins the digest).
+    byte-identical** — `backendPipelines/tests/test_manifest_helper_byte_identity.py` holds every copy to
+    the canonical `preview/3dThumbnail/lambda/manifestHelper.py`, and
+    `find backendPipelines -name manifestHelper.py -exec md5sum {} \; | awk '{print $1}' | sort -u`
+    must print exactly one hash. Edit the canonical copy, then `cp` it over the rest in the same change
+    (`backendPipelines/tests/test_pipeline_cross_region_inputs.py` lists the copies and pins the digest too).
 
     An asset bucket may be in another Region than the deployment. The manifest names it on every input
     file (`inputFiles[].bucketRegion`, plus `bucketAccountId` for a cross-account bucket) and on the
@@ -823,6 +1460,11 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     the event's input and output buckets to their Regions (`bucket_regions`) and sends the input's
     `HeadObject` and the input-configuration read through `s3_client_for`, which falls back to the
     default client for a bucket in the deployment Region.
+    The GenAI CAD STEP agent's one image serves its AgentCore runtime (outside the VPC) and its Fargate
+    runtime (private subnets): `cad_step_agent/run.py` reads the definition's map per run
+    (`bucket_regions`, `bucket_client`, `regional_s3_client`) and sends the input read and every output
+    write -- STEP file, report, metadata and attribute documents, results folder -- through the client
+    for that bucket's Region; its `vamsExecute` is in the Region-consuming class.
     The five NVIDIA containers (Cosmos 3, Predict v2.5, Reason, Transfer, GR00T) run the AWS CLI rather
     than boto3: their `manifest_io.py` carries the registry (`register_bucket_regions`, `bucket_region`,
     `s3_region_args`), `__main__.py` registers the definition's map right after loading it, and every
@@ -849,11 +1491,20 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     instance for the NVIDIA pipelines — is provisioned. Keep the token capture ahead of
     `resolve_pipeline_inputs` in every `vamsExecute` handler so the raise reaches `SendTaskFailure`.
 
+    **Carry the input version** from `resolved['inputVersionId']` through `openPipeline` and
+    `constructPipeline` to every read of the input file in the container, and grant the container role
+    `s3:GetObjectVersion` on the asset buckets. See [Input Version Threading](#input-version-threading);
+    `backendPipelines/tests/test_pipeline_input_versions.py` fails on a new pipeline that drops it.
+
 3. Add container if needed in `container/` subdirectory. **A container that drops to a non-root `USER`
    runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads** —
    `COPY` preserves the build host's umask, and a hardened host's root-owned `600`/`640` files raise
    `PermissionError` at import under the non-root user, invisible to the build. See
    [A Non-Root Container Normalizes Read Bits on the Source It COPYs](#a-non-root-container-normalizes-read-bits-on-the-source-it-copys).
+   Before `USER` it also gives that user every folder it writes at run time, including the working
+   directory of each subprocess it starts (a working directory that holds root-owned upstream
+   sources becomes the user's group with mode `1775`, not `chown`ed). See
+   [A Non-Root Container Owns Every Folder It Writes](#a-non-root-container-owns-every-folder-it-writes-including-its-subprocesses-working-directory).
 4. **Register the pipeline's sub-process and log sources** from `openPipeline.py` (or from
    `executeBatchJob.py` when that lambda submits the job itself): the state-machine log entry with
    `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the
@@ -887,38 +1538,66 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     - **Pipeline-only endpoint condition** (~line 651) — the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints in the isolated subnets. **Required for every pipeline, either placement.** Without it Batch jobs cannot pull container images.
     - **ECS endpoint condition** (~line 736) — the `needsEcsPrivate` variable. **Private-subnet pipelines only.** This is the ECS _control-plane_ endpoint that the ECS agent on an EC2-launch-type container instance needs; **Fargate tasks do not use it** (they need ECR, Amazon S3 and CloudWatch Logs, supplied by the block above). Each endpoint adds one ENI per AZ, ~$15/month.
 
-    Which blocks a flag belongs in is derived from the source, not from a list kept here. Read the placement off `pipelineBuilder-nestedStack.ts`: a stack given `pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline` is an isolated-subnet pipeline (endpoint block only); one given `privateSubnets.pipeline`, or both `pipelineSubnetsPrivate` and `pipelineSubnetsIsolated`, is a private-subnet pipeline (all three). A containerized Lambda pipeline (3dBasic, CAD/mesh metadata extraction) is placed in isolated subnets but runs no Batch job, so it appears in no block. A pipeline whose container calls a service that has no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime / Rekognition `if` — the Bedrock Runtime endpoint is created when `bedrockRuntimeFromLambda` (`useForAllLambdas && useGenAiMetadata3dLabeling.enabled`) **or** `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Isaac Lab training is the one placement the derivation does not predict: its EC2 Batch compute is placed in `privateSubnets.pipeline` (its EFS in isolated subnets) and the flag appears in the subnet-creation and endpoint blocks, while its ECS endpoint is gated separately by `needsEcsIsolated` rather than `needsEcsPrivate`. Recompute the membership with `grep -n "pipelineSubnets" infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` against `grep -n "subnetConfigurations.push(subnetPublicConfig)\|Pipeline-Only Required Endpoints\|const needsEcsPrivate\|bedrockRuntimeFromContainer" infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` (no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one) and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` (the service-endpoint gate widened for the container without widening the Lambda gate). `infra/test/security/vpcEndpointsAndAuthGrants.test.ts` asserts each flag's block membership from its `privateSubnetBatchFlags` / `isolatedSubnetBatchFlags` lists — add a new pipeline's flag to the matching list.
+    Which blocks a flag belongs in is derived from the source, not from a list kept here. Read the placement off `pipelineBuilder-nestedStack.ts`: a stack given `pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline` is an isolated-subnet pipeline (endpoint block only); one given `privateSubnets.pipeline`, or both `pipelineSubnetsPrivate` and `pipelineSubnetsIsolated`, is a private-subnet pipeline (all three). A containerized Lambda pipeline (3dBasic, CAD/mesh metadata extraction) is placed in isolated subnets but runs no Batch job, so it appears in no block. A pipeline whose container calls a service that has no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime / Rekognition `if` — the Bedrock Runtime endpoint is created when `bedrockRuntimeFromLambda` (`useForAllLambdas && useGenAiMetadata3dLabeling.enabled`) **or** `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Isaac Lab training is one of two placements the derivation does not predict: its EC2 Batch compute is placed in `privateSubnets.pipeline` (its EFS in isolated subnets) and the flag appears in the subnet-creation and endpoint blocks, while its ECS endpoint is gated separately by `needsEcsIsolated` rather than `needsEcsPrivate`. The other is the GenAI CAD STEP agent, whose placement follows its `runtime`: `pipelineBuilder-nestedStack.ts` gives it `privateSubnets.pipeline` on `fargate`, where its flag appears in all three blocks under a `runtime === "fargate"` condition, and `isolatedSubnets.pipeline` on `agentcore`, where only its Lambdas are in the VPC (the agent runs on Amazon Bedrock AgentCore outside it), so it appears in none of the three and instead gates the AgentCore interface endpoint (`BedrockAgentCoreEndpoint`, created with `useForAllLambdas` because its caller is the invoke Lambda) beside the Bedrock Runtime gate. Recompute the membership with `grep -n "pipelineSubnets" infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` against `grep -n "subnetConfigurations.push(subnetPublicConfig)\|Pipeline-Only Required Endpoints\|const needsEcsPrivate\|bedrockRuntimeFromContainer" infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` (no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one) and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` (the service-endpoint gate widened for the container without widening the Lambda gate). `infra/test/security/vpcEndpointsAndAuthGrants.test.ts` asserts each flag's block membership from its `privateSubnetBatchFlags` / `isolatedSubnetBatchFlags` lists — add a new pipeline's flag to the matching list.
 
-11. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
+11. **Pass through all output paths at EVERY hop**, not just in `vamsExecute` — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, `outputS3AssetMetadataPath`, or `outputS3AssetResultsPath`. A path crosses three lambdas before the container sees it — `vamsExecute` → `openPipeline` → `constructPipeline` — and **each one enumerates the paths explicitly**, so a path added at one hop is dropped silently at the next unless it is named there too. The results prefix was lost exactly that way twice over: first `manifestHelper.resolve_inputs` documented it in the manifest contract and dropped it, then with that fixed and both ends wired, `openPipeline` in the middle still did not forward it, so the container received an empty results target and wrote its report into asset metadata instead. Nothing failed either time. Assert the whole chain, not one hop: `backendPipelines/genAi/imageTo3d/lambda/tests/test_imageto3d_pipeline.py` covers all three. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
 12. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).
 13. **Preserve relative paths** in container output. When writing asset-adjacent files (e.g., `.previewFile.X`), the container must maintain the input file's relative subdirectory within the asset so process-output can locate outputs correctly. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for the derivation pattern.
 14. **Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`** with all new pipeline configuration options (`enabled`, `autoRegisterWithVAMS`, `autoRegisterAutoTriggerOnFileUpload`, and any pipeline-specific settings). Follow the existing format: `-   \`app.pipelines.{pipelineName}.{option}\` | default: {value} | #{description}`.
 15. **Update licenses/attributions** when a pipeline adds, removes, or changes a third-party model, container base image, or dependency with its own license. Update **both** `NOTICE.md` (the per-pipeline dependency table + attribution note at the repo root) **and** `documentation/docusaurus-site/docs/additional/notices.md` (the per-pipeline license paragraph + the closing attribution/reference list). Record the exact license (e.g. NVIDIA Open Model License, OpenMDW-1.1, Apache-2.0) and any required attribution string. A model under a new license (as Cosmos 3 uses OpenMDW-1.1 rather than the NVIDIA Open Model License) must be reflected in both files, and the pipeline doc page's Prerequisites + Attribution sections.
-16. **Update the pipeline count** wherever the docs state one. `documentation/docusaurus-site/docs/overview/features.md` opens the "Built-In Pipelines" section with a spelled-out count ("VAMS includes _N_ built-in processing pipelines…") followed by a table — bump the number to match the new table row count when adding or removing a pipeline. Grep the docs for the current number word to catch any other count references.
-17. **Update the root `CLAUDE.md`** — its Project Overview pipeline list and its directory tree both enumerate the pipeline set, and the tree's box-drawing glyphs assert which directory is a parent's last child, so a new sibling left out reads as an assertion that it does not exist. Required by root `CLAUDE.md` Rule 11 ("New pipeline"). Also add a row to `documentation/docusaurus-site/docs/pipelines/` and its `pipelines/overview.md` table per `documentation/CLAUDE.md`.
-18. **A pipeline built by AWS CodeBuild pushes and consumes ONE content-addressed tag.** The construct
+16. **A pipeline with SELECTABLE models or stages carries an options page, kept current.** Where a
+    pipeline offers a choice -- which model generates, which stages run, which produce colour -- a
+    reference page maps the stages, every option each takes, the combinations that interact, the licence
+    of each component, and what has been measured. `documentation/docusaurus-site/docs/pipelines/image-to-3d-options.md`
+    is the worked example. Update it in the same change as a new or removed model, a new template tag or
+    changed default, a new stage or a change to the stage order, a new dependency with its own licence,
+    or a recorded benchmark round. A stale matrix is worse than none: it is read as the list of what is
+    possible.
+
+17. **Update the pipeline count** wherever the docs state one. `documentation/docusaurus-site/docs/overview/features.md` opens the "Built-In Pipelines" section with a spelled-out count ("VAMS includes _N_ built-in processing pipelines…") followed by a table — bump the number to match the new table row count when adding or removing a pipeline. Grep the docs for the current number word to catch any other count references.
+18. **Update the root `CLAUDE.md`** — its Project Overview pipeline list and its directory tree both enumerate the pipeline set, and the tree's box-drawing glyphs assert which directory is a parent's last child, so a new sibling left out reads as an assertion that it does not exist. Required by root `CLAUDE.md` Rule 11 ("New pipeline"). Also add a row to `documentation/docusaurus-site/docs/pipelines/` and its `pipelines/overview.md` table per `documentation/CLAUDE.md`.
+19. **A pipeline built by AWS CodeBuild pushes and consumes ONE content-addressed tag.** The construct
     supplies `IMAGE_TAG` to the project's `environmentVariables` from `sourceAsset.assetHash`, and the
     pull site names that same value — a shared compute construct takes it as one prop together with the
     repository (`ecrImage` on `batch-fargate-pipeline.ts`, `codeBuildImage` on `batch-gpu-pipeline.ts`)
-    so the tag cannot be omitted while the repository is supplied. The buildspec must NOT default
+    so the tag cannot be omitted while the repository is supplied. A construct that builds one source
+    tree for more than one architecture (the CAD STEP agent: arm64 for the AgentCore Runtime, amd64 for
+    Fargate) passes the build platform as `contentImageTag`'s second argument, so the tag carries the
+    architecture (`<hash>-arm64`, `<hash>-amd64`) and a runtime switch cannot replace the digest behind
+    a tag the previous consumer still names. The buildspec must NOT default
     `IMAGE_TAG`; it fails the build when the project supplied none, because a default pushes a tag the
     Batch job definition does not name and the deploy still reports success. `:latest` is pushed
     alongside solely as the `--cache-from` alias, since a content-addressed tag never pre-exists and a
     cold cache adds hours to a GPU image build. Copying an existing buildspec is how this regresses;
     `infra/test/pipelines/codeBuildImageTagCoordination.test.ts` and the immutable-tag block of
     `infra/test/pipelines/containerBuildSources.test.ts` assert both halves.
-19. **A container that clones an upstream repository at build time clones a FIXED revision.** Declare
+
+    A consumer that validates the image when it is CREATED needs the build to be synchronous from
+    CloudFormation's point of view. A Batch job definition accepts a tag that does not exist yet (the
+    job fails at start), which is why the Batch pipelines start the build from a fire-and-forget custom
+    resource; an Amazon Bedrock AgentCore Runtime rejects `CreateAgentRuntime` for a missing tag, so a
+    fresh deploy that creates it in parallel with the build always fails. The CAD STEP agent's
+    `cadStepAgentCodeBuild-construct.ts` is the pattern: a `cr.Provider` whose `onEventHandler` is the
+    shared build trigger (`code: codeBuildTriggerCode()`, which starts the build and returns
+    `Data.BuildId`) and whose `isCompleteHandler` polls `codebuild:BatchGetBuilds` on the project until
+    that build is terminal, raising on a failed, stopped or timed-out build. The waiter is
+    `genAi/cadStepAgent/lambda/imageBuildCustomResource.py`, so the status mapping is unit-tested; it
+    reads `Data.BuildId`, never the physical id, which the shared trigger leaves at an earlier
+    deployment's value on an Update. Add `node.addDependency(<build custom resource>)` on every
+    resource that names the tag (`cadStepAgentRuntimes.test.ts` asserts the `DependsOn`).
+
+20. **A container that clones an upstream repository at build time clones a FIXED revision.** Declare
     the revision as an `ARG <NAME>_COMMIT=<40-hex>`, `git checkout --detach` it, and verify it landed
     with `test "$(git rev-parse HEAD)" = "${<NAME>_COMMIT}"` **in the same `RUN`** — a checkout in a
     later instruction is a different layer and pins nothing. Write the resolved id to a file in the
     image and echo it from the entrypoint, so a run's log names the code it ran. Without the
     verification the pin is decorative: `--build-arg <NAME>_COMMIT=main` checks out a moving ref and
     the build still succeeds. The same applies to a `COPY --from=<image>:<tag>` and to any installer
-    URL that omits a version. Coverage: the NVIDIA block of
+    URL that omits a version. Coverage: the `UPSTREAM_CLONE_DOCKERFILES` block of
     `infra/test/pipelines/containerBuildSources.test.ts`, which lists the Dockerfiles explicitly
     because a `**/Dockerfile` glob passes locally and fails in CI on the gitignored splat Dockerfile.
 
-20. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and
+21. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and
     on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and
     copies **every** upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. Editing one
     of those files does not stick: the change survives until the next CDK invocation and is then gone,

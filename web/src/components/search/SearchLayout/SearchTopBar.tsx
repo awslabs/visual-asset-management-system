@@ -5,6 +5,7 @@
 
 import React from "react";
 import { Box, Button, Input, SpaceBetween, Header, Badge } from "@cloudscape-design/components";
+import { SEARCH_RUNNING, searchRunningReason } from "./searchRunning";
 
 interface SearchTopBarProps {
     query: string;
@@ -13,6 +14,8 @@ interface SearchTopBarProps {
     onClearAll: () => void;
     loading?: boolean;
     resultCount?: number;
+    /** The count is a minimum (shown with "+") */
+    resultCountIsLowerBound?: boolean;
     hasActiveFilters?: boolean;
     title?: string;
     description?: string;
@@ -25,12 +28,14 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     onClearAll,
     loading = false,
     resultCount,
+    resultCountIsLowerBound = false,
     hasActiveFilters = false,
     title = "Search",
     description,
 }) => {
+    // Enter while a search runs sends nothing; the box keeps focus, read-only (see searchRunning).
     const handleKeyDown = (event: any) => {
-        if (event.detail.key === "Enter") {
+        if (event.detail.key === "Enter" && !loading) {
             onSearch();
         }
     };
@@ -50,7 +55,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                                 value={query}
                                 onChange={(e) => onQueryChange(e.detail.value)}
                                 onKeyDown={handleKeyDown}
-                                disabled={loading}
+                                readOnly={loading}
                                 clearAriaLabel="Clear search"
                             />
                         </div>
@@ -58,12 +63,17 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                             variant="primary"
                             onClick={onSearch}
                             loading={loading}
+                            loadingText={SEARCH_RUNNING}
                             iconName="search"
                         >
                             Search
                         </Button>
                         {hasActiveFilters && (
-                            <Button onClick={onClearAll} disabled={loading}>
+                            <Button
+                                onClick={onClearAll}
+                                disabled={loading}
+                                disabledReason={searchRunningReason(loading)}
+                            >
                                 Clear All Filters
                             </Button>
                         )}
@@ -71,7 +81,10 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                 }
                 info={
                     resultCount !== undefined && (
-                        <Badge color="blue">{resultCount.toLocaleString()} results</Badge>
+                        <Badge color="blue">
+                            {resultCount.toLocaleString()}
+                            {resultCountIsLowerBound ? "+" : ""} results
+                        </Badge>
                     )
                 }
             >

@@ -14,6 +14,7 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 _CONTAINER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,6 +47,21 @@ def requires_real(*names):
     stubbed = [name for name in names if is_stubbed(name) or not _importable(name)]
     return pytest.mark.skipif(bool(stubbed), reason=f"needs the real {', '.join(stubbed)} "
                                                     f"(run inside the pipeline image)")
+
+
+def colour_shares(frame, colours, min_cosine=0.99):
+    """For each of ``colours``, the share of the RGBA frame's opaque pixels that are a shade of it: their
+    RGB points the same way as the colour (cosine at least ``min_cosine``), so lighting may darken it
+    but no other colour is mixed in. An empty frame gives 0 for every colour."""
+    opaque = frame[..., 3] == 255
+    if not opaque.any():
+        return [0.0] * len(colours)
+    rgb = frame[..., :3][opaque].astype(np.float64)
+    rgb /= np.linalg.norm(rgb, axis=1, keepdims=True) + 1e-9
+    references = np.asarray(colours, dtype=np.float64)
+    references /= np.linalg.norm(references, axis=1, keepdims=True)
+    cosines = rgb @ references.T
+    return [float((cosines[:, i] >= min_cosine).mean()) for i in range(len(colours))]
 
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 os.environ.setdefault("AWS_REGION", "us-east-1")

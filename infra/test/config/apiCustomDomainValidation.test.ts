@@ -288,6 +288,7 @@ describe("app.api.apiGatewayRest.customDomain validation", () => {
     });
 
     test.each([
+        // pragma: allowlist nextline secret
         ["the /hostedzone/ prefix", "/hostedzone/Z0123456789ABCDEFGHIJ"],
         ["lowercase letters", "z0123456789abcdefghij"],
         ["no Z prefix", "A0123456789ABCDEFGHIJ"],
@@ -413,6 +414,7 @@ describe("the ConfigBuilder mirrors the customDomain rules", () => {
         expect(
             fired(
                 builderConfig("commercial", "us-east-1", "aws", {
+                    // pragma: allowlist nextline secret
                     optionalHostedZoneId: "/hostedzone/Z0123456789ABCDEFGHIJ",
                 })
             )

@@ -7,7 +7,7 @@ import json
 import base64
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from common.timestamps import utc_now
 from typing import Dict, List, Optional, Tuple, Any
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
@@ -27,12 +27,16 @@ from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.dynamodb import query_all_items, batch_get_items
 from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.validators import validate
-from common.s3 import region_routing_s3_client, bucket_region_fields
+from common.s3 import region_routing_s3_client, bucket_region_fields, presigned_get_object_params
+from common.compliance.quarantineGuard import (
+    QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
+)
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_download_bulk
+from customLogging.auditLogging import audited_handler, log_action, log_file_download_bulk
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
+from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from models.assetExport import (
     AssetExportRequestModel,
     AssetExportResponseModel,
@@ -99,10 +103,12 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 # carrying isBase64Encoded as literal text, so a compressed base64 body is not readable by a
 # client, and an inline body is additionally bounded by the 6 MB Lambda response limit.
 INLINE_RESPONSE_MAX_BYTES = 102400  # 100KB
-# Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant is
-# scoped to this prefix (ASSET_EXPORT_STAGING_PREFIX in
-# infra/lib/lambdaBuilder/assetFunctions.ts), so the two values move together.
-EXPORT_STAGING_PREFIX = "assetExports/"
+# Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant and the
+# bucket's lifecycle expiry for staged payloads are scoped to this prefix
+# (ASSET_EXPORT_STAGING_PREFIX in infra/config/config.ts), so the two values move together. The
+# bucket's preview and viewer data sits under {databaseId}/, and the dot is a character no database
+# ID can contain, so the expiry on this prefix never reaches a database's auxiliary data.
+EXPORT_STAGING_PREFIX = "vams.assetExports/"
 ALLOWED_PREVIEW_EXTENSIONS = ALLOWED_PREVIEW_FILE_EXTENSIONS
 # Concurrency cap for parallel per-asset export work. Bounds Lambda memory; not a data cap.
 MAX_PARALLEL_EXPORT_WORKERS = 10
@@ -169,24 +175,32 @@ def get_default_bucket_details(bucketId: str) -> Dict:
         raise VAMSGeneralErrorResponse("Error retrieving bucket configuration")
 
 def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict) -> Dict:
-    """Get asset and verify permissions for the specified operation"""
+    """Get asset and verify permissions for the specified operation.
+
+    Authorization is decided before existence, so a refused caller gets the same answer for a
+    missing asset as for an existing one; for a missing one the request's identifiers stand in.
+    """
     try:
         response = asset_table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
         asset = response.get('Item', {})
         
-        if not asset:
-            raise VAMSGeneralErrorResponse("Asset not found")
-        
-        asset["object__type"] = "asset"
-
         # Fail closed: with no authenticated identity no authorization can be
         # evaluated, so deny rather than return the asset.
         if len(claims_and_roles["tokens"]) == 0:
-            raise VAMSGeneralErrorResponse("Not Authorized to access asset")
+            raise VAMSAuthorizationDeniedResponse("Not Authorized to access asset")
+
+        if asset:
+            asset["object__type"] = "asset"
+            authorization_object = asset
+        else:
+            authorization_object = {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
 
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, operation):
-            raise VAMSGeneralErrorResponse("Not Authorized to access asset")
+        if not casbin_enforcer.enforce(authorization_object, operation):
+            raise VAMSAuthorizationDeniedResponse("Not Authorized to access asset")
+
+        if not asset:
+            raise VAMSAssetNotFoundResponse("Asset not found")
 
         return asset
     except VAMSGeneralErrorResponse as e:
@@ -208,7 +222,7 @@ def create_pagination_token(last_index: int, asset_tree: List[Dict],
     token_data = {
         'lastAssetIndex': last_index,
         'assetTree': asset_tree,
-        'timestamp': datetime.utcnow().isoformat()
+        'timestamp': utc_now().isoformat()
     }
     if file_resume_after_key:
         token_data['fileResumeAfterKey'] = file_resume_after_key
@@ -811,7 +825,7 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
             'assetId': assetId,
             'assetVersionId': assetVersionId,
             'files': files,
-            'createdAt': items[0].get('createdAt') if items else datetime.utcnow().isoformat()
+            'createdAt': items[0].get('createdAt') if items else utc_now().isoformat()
         }
         
     except Exception as e:
@@ -1027,10 +1041,11 @@ def generate_presigned_url(bucket: str, key: str, version_id: str) -> Optional[s
         
         if version_id and version_id != 'null':
             params['VersionId'] = version_id
-            
+
+        # SVG keys get the image/svg+xml type and an attachment disposition (common.s3)
         url = s3_client.generate_presigned_url(
             'get_object',
-            Params=params,
+            Params=presigned_get_object_params(params),
             ExpiresIn=int(presigned_url_timeout)
         )
         
@@ -1276,6 +1291,12 @@ def process_asset_batch(
         asset["object__type"] = "asset"
         # Default deny: only authorize if enforcer exists AND grants access
         if casbin_enforcer and casbin_enforcer.enforce(asset, "GET"):
+            # Single choke point for the quarantine block: every asset whose files are about to
+            # be signed passes here once, after its Tier-2 check. A quarantined asset without a
+            # granted exception fails the whole export before any presigned GET URL is minted.
+            # An export that mints no file URLs delivers no file bytes and is not blocked.
+            if request_model.generatePresignedUrls:
+                check_quarantine_block(asset_info['databaseId'], asset_info['assetId'])
             authorized_assets[position] = (asset_info, asset)
         else:
             logger.warning(f"Permission denied for asset {asset_info['assetId']}")
@@ -1833,6 +1854,12 @@ def export_assets(
 # Request Handlers
 #######################
 
+
+def _exported_files(asset) -> List:
+    files = asset.get('files') if isinstance(asset, dict) else getattr(asset, 'files', None)
+    return files if isinstance(files, list) else []
+
+
 def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /export requests"""
     try:
@@ -1898,6 +1925,12 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
             event
         )
         
+        exported = response_data.get('assets') or []
+        log_action(event, "assetExport", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   item_count=len(exported),
+                   file_count=sum(len(_exported_files(asset)) for asset in exported),
+                   request_parameters=request_model.dict(exclude_none=True))
+
         # Deliver inline, or redirect to a presigned URL when the payload is too large
         return build_export_response(
             response_data,
@@ -1908,6 +1941,13 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
+    except QuarantineBlockedResponse as refusal:
+        # An expected refusal: one INFO line, no traceback (D174).
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -1919,6 +1959,8 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset export operations"""
     global claims_and_roles, bucket_cache
@@ -1951,6 +1993,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except QuarantineBlockedResponse as refusal:
+        # An expected refusal: one INFO line, no traceback (D174).
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

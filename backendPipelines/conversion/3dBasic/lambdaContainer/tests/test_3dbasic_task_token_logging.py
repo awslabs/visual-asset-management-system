@@ -102,7 +102,7 @@ class TestTheEventIsNeverLogged:
         with patch.object(mod, "logger", logger), \
                 patch.object(mod, "fetch_input_configuration", MagicMock(return_value={"outputType": ".glb"})), \
                 patch.object(mod, "resolve_inputs_from_manifest",
-                             MagicMock(return_value=("s3://abkt/x/m.stl", "s3://obkt/f/", ""))), \
+                             MagicMock(return_value=("s3://abkt/x/m.stl", "s3://obkt/f/", "", ""))), \
                 patch.object(mod, "convert_input_output", MagicMock()):
             response = mod.lambda_handler({"body": body, "headers": {"marker": SENTINEL}}, MagicMock())
         assert response["statusCode"] == 200

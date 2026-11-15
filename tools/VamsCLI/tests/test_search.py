@@ -1303,3 +1303,95 @@ class TestSearchRecordTypeColumn:
 
 if __name__ == '__main__':
     pytest.main([__file__])
+
+
+class TestSearchLowerBoundTotal:
+    """`hits.total.relation == "gte"` means the caller's total is a minimum.
+
+    Table output shows it as "N+" so a minimum is not read as an exact count;
+    `--json-output` passes the API response through unchanged (it already carries
+    `relation`).
+    """
+
+    @staticmethod
+    def _result(relation):
+        total = {"value": 12}
+        if relation is not None:
+            total["relation"] = relation
+        return {
+            "hits": {
+                "total": total,
+                "hits": [
+                    {
+                        "_id": "db1:a1",
+                        "_source": {"str_databaseid": "db1", "str_assetid": "a1", "str_assetname": "Pump"},
+                    }
+                ],
+            }
+        }
+
+    @pytest.mark.parametrize(
+        "relation,expected", [("gte", "12+"), ("eq", "12"), (None, "12")]
+    )
+    def test_format_total(self, relation, expected):
+        from vamscli.commands.search import _format_total
+
+        assert _format_total(self._result(relation)) == expected
+
+    def test_format_total_tolerates_missing_or_bare_totals(self):
+        from vamscli.commands.search import _format_total
+
+        assert _format_total({}) == "0"
+        assert _format_total({"hits": {"total": 5}}) == "5"
+
+    @pytest.mark.parametrize(
+        "args,noun",
+        [
+            (['search', 'assets', '-q', 'pump'], "assets"),
+            (['search', 'files', '-q', 'pump'], "files"),
+            (['search', 'simple', '-q', 'pump'], "results"),
+        ],
+    )
+    @pytest.mark.parametrize("relation,shown", [("gte", "12+"), ("eq", "12")])
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_table_output_marks_a_lower_bound(
+        self, mock_is_feature_enabled, cli_runner, search_command_mocks, args, noun, relation, shown
+    ):
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.return_value = False
+            mocks['api_client'].search_query.return_value = self._result(relation)
+            mocks['api_client'].search_simple.return_value = self._result(relation)
+
+            result = cli_runner.invoke(cli, args)
+
+            assert result.exit_code == 0, result.output
+            assert f"Found {shown} {noun}" in result.output
+            assert f"Search completed. Found {shown} {noun}" in result.output
+            if relation == "eq":
+                # Control: an exact total never gains the marker.
+                assert "12+" not in result.output
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ['search', 'assets', '-q', 'pump', '--json-output'],
+            ['search', 'files', '-q', 'pump', '--json-output'],
+            ['search', 'simple', '-q', 'pump', '--json-output'],
+        ],
+    )
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_json_output_passes_the_response_through(
+        self, mock_is_feature_enabled, cli_runner, search_command_mocks, args
+    ):
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.return_value = False
+            response = self._result("gte")
+            mocks['api_client'].search_query.return_value = response
+            mocks['api_client'].search_simple.return_value = response
+
+            result = cli_runner.invoke(cli, args)
+
+            assert result.exit_code == 0, result.output
+            # Pure JSON (no status lines), identical to the API body: value stays numeric.
+            assert json.loads(result.output) == response
+            assert "12+" not in result.output

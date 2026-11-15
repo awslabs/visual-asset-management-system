@@ -176,6 +176,24 @@ def _build_sort_config(sort_field: Optional[str], sort_desc: bool) -> List[Any]:
     return [{"field": sort_field, "order": "desc" if sort_desc else "asc"}]
 
 
+def _format_total(result: Dict[str, Any]) -> str:
+    """Return the search total for display, with a trailing '+' when it is a lower bound.
+
+    The API reports ``hits.total.relation == "gte"`` when the true total is at least ``value``
+    (for example when the caller's permissions can only be counted as a minimum). An absent or
+    non-dict total (older backends) is shown as a plain number.
+    """
+    hits = result.get("hits", {}) if isinstance(result, dict) else {}
+    total = hits.get("total", {}) if isinstance(hits, dict) else {}
+    if isinstance(total, dict):
+        value = total.get("value", 0)
+        lower_bound = total.get("relation") == "gte"
+    else:
+        value = total if total is not None else 0
+        lower_bound = False
+    return f"{value}+" if lower_bound else f"{value}"
+
+
 def _format_table_output(result: Dict[str, Any], entity_type: str) -> str:
     """
     Format search results as a table.
@@ -554,7 +572,7 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
         if json_output:
             output_result(result, json_output)
         elif output_format == 'table':
-            total = result.get("hits", {}).get("total", {}).get("value", 0)
+            total = _format_total(result)
 
             def format_assets_table(data):
                 """Format assets search results for CLI display."""
@@ -715,7 +733,7 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
         if json_output:
             output_result(result, json_output)
         elif output_format == 'table':
-            total = result.get("hits", {}).get("total", {}).get("value", 0)
+            total = _format_total(result)
 
             def format_files_table(data):
                 """Format files search results for CLI display."""
@@ -874,7 +892,7 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
         if json_output:
             output_result(result, json_output)
         elif output_format == 'table':
-            total = result.get("hits", {}).get("total", {}).get("value", 0)
+            total = _format_total(result)
             
             def format_simple_table(data):
                 """Format simple search results for CLI display."""

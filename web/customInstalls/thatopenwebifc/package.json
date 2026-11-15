@@ -5,12 +5,12 @@
     "private": true,
     "license": "Apache-2.0",
     "dependencies": {
-        "@thatopen/components": "~3.4.6",
-        "@thatopen/components-front": "~3.4.3",
-        "@thatopen/fragments": "~3.4.5",
+        "@thatopen/components": "~3.6.0",
+        "@thatopen/components-front": "~3.6.0",
+        "@thatopen/fragments": "~3.6.0",
         "camera-controls": "^3.1.2",
         "fflate": "^0.8.2",
-        "three": "0.182.0",
+        "three": "0.184.0",
         "web-ifc": "0.0.77"
     },
     "optionalDependencies": {},

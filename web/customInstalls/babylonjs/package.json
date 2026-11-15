@@ -4,9 +4,9 @@
     "description": "Custom installation for BabylonJS with dynamic loading",
     "private": true,
     "dependencies": {
-        "@babylonjs/core": "^8.33.0",
-        "@babylonjs/loaders": "^8.33.0",
-        "fflate": "^0.8.2"
+        "@babylonjs/core": "9.33.1",
+        "@babylonjs/loaders": "9.33.1",
+        "fflate": "^0.8.3"
     },
     "devDependencies": {
         "webpack": "^5.89.0",

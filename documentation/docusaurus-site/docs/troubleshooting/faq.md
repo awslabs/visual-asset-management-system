@@ -38,11 +38,13 @@ vamscli user cognito create --email user@example.com
 POST /user/cognito
 ```
 
-After creating the user, assign them to a role under **Admin - Auth > User Roles** to grant appropriate permissions.
+After creating the user, assign them to a role under **Admin - Auth > Users in Roles** to grant appropriate permissions.
 
 ### Why can I not see certain navigation pages?
 
 VAMS uses a two-tier permission system. Navigation pages are filtered based on your assigned role constraints. If a page is missing from your navigation menu, your role does not include a `web` object type constraint that grants access to that route. Contact your VAMS administrator to review your role assignments and constraints.
+
+Add-ons a deployment enables can add navigation sections of their own, which appear only to roles granted the add-on's web routes; see [Add-ons Overview](../developer/addons-overview.md).
 
 :::tip
 If no navigation items appear at all, a message will display indicating that your user does not have permissions to view any web navigation pages.
@@ -160,7 +162,7 @@ Cognito federation uses the Amazon Cognito hosted UI, which is available only in
     - `lambdaAuthorizorJWTUserIdClaim` -- the claim whose value is the VAMS user id (default: `cognito:username`, then `username`, then `sub`)
 5. Deploy the stack with the updated configuration.
 
-The authorizer compares the access-token claims `lambdaAuthorizorJWTAudienceClaims` names with `lambdaAuthorizorJWTAudience`, and the web application and the authorizer identify the user by the same claim; see the token requirements in the [Configuration Guide](../deployment/configuration-reference.md).
+The authorizer compares the access-token claims `lambdaAuthorizorJWTAudienceClaims` names with `lambdaAuthorizorJWTAudience` (and any `additionalTokenAudiences`), and the web application and the authorizer identify the user by the same claim; see the token requirements in the [Configuration Guide](../deployment/configuration-reference.md).
 
 Refer to the [Configuration Guide](../deployment/configuration-reference.md) for the complete field list for both paths, and to [Plan your deployment](../deployment/plan-your-deployment.md) for the authentication decision table.
 

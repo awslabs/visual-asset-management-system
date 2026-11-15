@@ -6,6 +6,12 @@
 import type { SpecifiedPipelineRef, WorkflowTrigger } from "../types";
 import { TRIGGER_TYPES, triggerBaseTypeOf } from "../types";
 
+/**
+ * The route template the allowed-routes API lists for the trigger endpoint (`API_WORKFLOW_TRIGGER`):
+ * PUT adds or changes a trigger, DELETE removes one.
+ */
+export const TRIGGER_ROUTE = "/database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}";
+
 /** The label for a trigger type, falling back to the raw type for one the UI does not know yet. */
 export function typeLabel(baseType: string): string {
     return TRIGGER_TYPES.find((t) => t.type === baseType)?.label || baseType;
