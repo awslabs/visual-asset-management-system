@@ -114,6 +114,50 @@ def test_a_cross_region_bucket_is_presigned_for_its_own_region(isolated_aws, mon
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("region", REGIONS)
+def test_the_region_helpers_client_config_presigns_with_sigv4(isolated_aws, monkeypatch, region):
+    """The configuration itself, outside either handler: a client built from the configuration the per-Region
+    helper builds its clients from signs a URL with Signature Version 4 in each Region, including those where
+    botocore's default is Signature Version 2 (a 16-byte ranged read of an object encrypted with an AWS KMS key
+    over a Signature Version 2 URL is refused with 400; over a Signature Version 4 URL it returns 206)."""
+    _in_region(monkeypatch, region)
+    client = boto3.client("s3", region_name=region, config=s3_regions._regional_retry_config)
+    url = client.generate_presigned_url("get_object", Params={"Bucket": BUCKET, "Key": "a1/clip.mp4"},
+                                        ExpiresIn=900)
+    _assert_sigv4_for(url, region)
+
+
+_CROSS_REGION_PAIRS = [(default, bucket) for default in REGIONS for bucket in ("us-east-1", "us-west-2", "eu-west-1")
+                       if default != bucket]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("default_region,bucket_region", _CROSS_REGION_PAIRS)
+def test_every_client_the_region_helper_returns_presigns_with_sigv4(isolated_aws, monkeypatch, default_region,
+                                                                   bucket_region):
+    """client_for_bucket, called directly with a plain default client: the per-Region client it builds for a
+    bucket registered in another Region signs with Signature Version 4 for the bucket's Region."""
+    _in_region(monkeypatch, default_region)
+    default_client = boto3.client("s3", region_name=default_region)
+    s3_regions.register_bucket_regions({"regional-assets": bucket_region})
+    client = s3_regions.client_for_bucket("regional-assets", default_client)
+    assert client is not default_client and client.meta.region_name == bucket_region
+    assert client.meta.config.signature_version == "s3v4"
+    url = client.generate_presigned_url("get_object", Params={"Bucket": "regional-assets", "Key": "a1/clip.mp4"},
+                                        ExpiresIn=900)
+    _assert_sigv4_for(url, bucket_region, "regional-assets")
+
+
+@pytest.mark.unit
+def test_the_region_helper_hands_back_the_default_client_for_its_own_region(isolated_aws, monkeypatch):
+    _in_region(monkeypatch, "us-west-2")
+    default_client = boto3.client("s3", region_name="us-west-2", config=s3_regions._regional_retry_config)
+    s3_regions.register_bucket_regions({"local-assets": "us-west-2"})
+    assert s3_regions.client_for_bucket("local-assets", default_client) is default_client
+    assert s3_regions.client_for_bucket("unregistered-assets", default_client) is default_client
+
+
+@pytest.mark.unit
 def test_every_media_client_config_is_sigv4_with_regional_path_addressing():
     config = s3_regions.S3_CLIENT_CONFIG
     assert config.signature_version == "s3v4"
