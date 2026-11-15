@@ -20,6 +20,7 @@ from common.auth.authorizerCore import (
     API_FRONTED,
     FAILURE_UNAUTHENTICATED,
     IGNORED_PATHS,
+    external_user_id_claim_configured,
 )
 from common.auth.clientIp import origin_verify_audit_context, resolve_client_ip
 from common.auth.viewerAddress import ORIGIN_VERIFY_DIGEST_CONTEXT_KEY
@@ -68,20 +69,21 @@ def _wildcard_resource(method_arn: str) -> str:
 
 
 def _principal_id(ctx: dict) -> str:
-    """The principalId of an authenticated Allow: the user id the authorizer resolved.
+    """The principalId of an authenticated Allow.
 
-    vams:tokens is set by authenticate_request from resolve_user_id (the configured user id
-    claim, else the username chain), so the principal names the same user as the roles, the
-    audit record and the handlers. Nothing reads principalId as a decision input and the
-    authorizer result cache is keyed on the identity source, not on the principal. A context
-    without a usable vams:tokens falls back to the earlier sub / cognito:username choice.
+    Unchanged unless lambdaAuthorizorJWTUserIdClaim is set: the token's sub, else its
+    cognito:username, else "user", as in every earlier release. With the claim set the principal is
+    the user id the authorizer resolved (vams:tokens), the id used for roles, audit and handlers.
+    Nothing reads principalId as a decision input and the authorizer result cache is keyed on the
+    identity source, not on the principal.
     """
-    try:
-        tokens = json.loads(ctx.get("vams:tokens") or "[]")
-        if isinstance(tokens, list) and tokens and isinstance(tokens[0], str) and tokens[0].strip():
-            return tokens[0]
-    except (TypeError, ValueError):
-        pass
+    if external_user_id_claim_configured():
+        try:
+            tokens = json.loads(ctx.get("vams:tokens") or "[]")
+            if isinstance(tokens, list) and tokens and isinstance(tokens[0], str) and tokens[0].strip():
+                return tokens[0]
+        except (TypeError, ValueError):
+            pass
     return ctx.get("sub") or ctx.get("cognito:username") or "user"
 
 

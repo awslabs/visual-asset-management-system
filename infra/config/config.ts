@@ -1800,8 +1800,12 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim == undefined) {
         config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim = "";
     }
+    // An empty list is "not set" as well, like null and an absent field.
+    const configuredAudienceClaims = config.app.authProvider.useExternalOAuthIdp
+        .lambdaAuthorizorJWTAudienceClaims as unknown;
     if (
-        config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims == undefined
+        configuredAudienceClaims == undefined ||
+        (Array.isArray(configuredAudienceClaims) && configuredAudienceClaims.length === 0)
     ) {
         config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims = [
             ...EXTERNAL_OAUTH_DEFAULT_JWT_AUDIENCE_CLAIMS,
@@ -3783,7 +3787,6 @@ export function getConfig(app: cdk.App): Config {
             .lambdaAuthorizorJWTAudienceClaims as unknown;
         if (
             !Array.isArray(audienceClaims) ||
-            audienceClaims.length === 0 ||
             audienceClaims.some(
                 (claim) =>
                     typeof claim !== "string" || !EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS.includes(claim)
@@ -3791,7 +3794,7 @@ export function getConfig(app: cdk.App): Config {
             new Set(audienceClaims).size !== audienceClaims.length
         ) {
             throw new Error(
-                `Configuration Error: app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims must be a non-empty list of distinct claim names from [${EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS.map(
+                `Configuration Error: app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims must be a list of distinct claim names from [${EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS.map(
                     (claim) => `"${claim}"`
                 ).join(", ")}]. Got: ${JSON.stringify(audienceClaims)}`
             );

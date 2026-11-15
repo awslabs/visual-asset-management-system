@@ -979,6 +979,11 @@ def resolve_user_id(claims: Dict[str, Any]) -> Optional[str]:
         or claims.get('sub')
     )
 
+def external_user_id_claim_configured() -> bool:
+    """Whether lambdaAuthorizorJWTUserIdClaim is in force: external mode with the claim set."""
+    return AUTH_MODE == 'external' and bool(JWT_USER_ID_CLAIM)
+
+
 def _fetch_key_set(fetch, *args, **kwargs) -> List[Dict[str, Any]]:
     """Call a key-set fetcher, turning any failure into TokenVerificationUnavailableError.
 

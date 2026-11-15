@@ -2237,7 +2237,6 @@ const CORE_RULES: Rule[] = [
             if (isAbsent(claims)) return false;
             return (
                 !Array.isArray(claims) ||
-                claims.length === 0 ||
                 claims.some(
                     (claim: unknown) =>
                         typeof claim !== "string" ||
@@ -2247,7 +2246,7 @@ const CORE_RULES: Rule[] = [
             );
         },
         message:
-            'JWT audience claims must be a non-empty list of distinct claim names from "aud" and "client_id".',
+            'JWT audience claims must be a list (empty means the default, aud) of distinct claim names from "aud" and "client_id".',
     },
 
     // ----- Cognito federation: SAML or OIDC, or neither

@@ -171,12 +171,17 @@ describe("getConfig() validation of the external OAuth claim settings", () => {
         }
     );
 
-    test.each([[[]], [["azp"]], [["aud", "aud"]], ["aud"], [[1]], [["AUD"]]])(
+    test.each([[["azp"]], [["aud", "aud"]], ["aud"], [[1]], [["AUD"]]])(
         "audience claims %p are rejected",
         (claims) => {
             expect(withSettings("", claims)).toThrow(AUDIENCE_CLAIMS_ERROR);
         }
     );
+
+    test("an empty audience claims list is not set: the default applies", () => {
+        const idp = idpOf(withSettings("", [])());
+        expect(idp.lambdaAuthorizorJWTAudienceClaims).toEqual(["aud"]);
+    });
 
     test("null is not set, like an absent field: both settings take their defaults", () => {
         // getConfig()'s `== undefined` backfills treat null as absent, which is how the

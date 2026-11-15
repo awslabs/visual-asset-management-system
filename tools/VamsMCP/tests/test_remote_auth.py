@@ -232,6 +232,18 @@ def test_a_file_without_the_claim_settings_uses_the_defaults():
     assert "audienceClaims" not in settings.to_dict() and "userIdClaim" not in settings.to_dict()
 
 
+@pytest.mark.parametrize("provider", ["external", "cognito"])
+def test_null_or_blank_claim_settings_are_the_defaults_and_unknown_keys_are_ignored(provider):
+    """A file from an earlier or a later version keeps loading: version stays 1, nothing is required."""
+    plain = _settings(provider=provider)
+    settings = _settings(
+        provider=provider, audienceClaims=None, userIdClaim="", someFutureKey={"x": 1}
+    )
+    assert settings == plain
+    assert (settings.audience_claims, settings.user_id_claim) == (("aud",), None)
+    assert settings.to_dict()["version"] == 1
+
+
 def test_the_claim_settings_round_trip_through_the_file_format():
     settings = _external_settings(audienceClaims=["client_id", "aud"], userIdClaim="email")
     assert RemoteAuthSettings.from_dict(settings.to_dict()) == settings
