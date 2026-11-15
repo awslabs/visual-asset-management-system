@@ -3,7 +3,8 @@
 
 """Second function of the media image: the SegmentAnalyzeTask child of the VideoSegmentMap, one time window of
 a video per invocation. Three frames are read at 10 %, 50 % and 90 % of the window with the bundled ffmpeg over
-a presigned URL of the input (the object is downloaded once to /tmp when the URL read fails), the configured
+a presigned URL of the input (the object is downloaded once to /tmp when the URL read fails and the video is
+within the MEDIA download bound), the configured
 Converse model describes the window, the window's text is embedded through the vendored adapter, the videoTime
 document is written beside the whole-file document, one vector.embedding.ready event is published, and the
 description is kept as a results-prefix record. A caught Bedrock failure (a guardrail intervention included),
@@ -25,7 +26,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -40,7 +40,8 @@ import executionLogKeys
 from PIL import Image
 
 import bedrockGuardrail
-from media_extractors.common import human_duration
+from media_extractors.common import INPUT_MAX_DOWNLOAD_BYTES, human_duration, scrub_urls
+from media_extractors.common import URL_PLACEHOLDER  # noqa: F401 - the placeholder scrub_urls writes, for tests
 from media_extractors.imaging import normalise_for_vision, write_png
 from media_extractors.s3_regions import client_for_bucket, register_bucket_regions
 from media_extractors.video import run_ffmpeg
@@ -80,10 +81,8 @@ SEGMENT_MAX_LONG_EDGE_PX = 1024
 SEGMENT_FFMPEG_TIMEOUT_SECONDS = 30
 # ffmpeg reads the video over a presigned URL whose query string is the credential (X-Amz-Signature,
 # X-Amz-Security-Token), and echoes that URL in its error lines. Every URL, and every stray X-Amz-… query
-# parameter, is replaced before an ffmpeg message reaches a log line or the window's results record.
-URL_PLACEHOLDER = "<url>"
-_URL_TEXT = re.compile(r"https?://\S+")
-_SIGNED_QUERY_TEXT = re.compile(r"X-Amz-[A-Za-z-]+=\S*")
+# parameter, is replaced (media_extractors.common.scrub_urls, URL_PLACEHOLDER) before an ffmpeg message
+# reaches a log line or the window's results record.
 SEGMENT_JSON_KEYS = ("description", "keywords", "objects", "actions", "textSeen")
 ERROR_BEDROCK_SEGMENT = "BedrockSegmentError"
 # A guardrail intervention is a caught failure recorded under its own code, like the whole-file analysis.
@@ -296,11 +295,6 @@ def frame_times(start_ms: int, end_ms: int) -> List[float]:
     return [round((start_ms + (end_ms - start_ms) * position) / 1000.0, 3) for position in SEGMENT_FRAME_POSITIONS]
 
 
-def scrub_urls(text: str) -> str:
-    """``text`` with every URL, and every stray ``X-Amz-…=`` query parameter, replaced by URL_PLACEHOLDER."""
-    return _SIGNED_QUERY_TEXT.sub(URL_PLACEHOLDER, _URL_TEXT.sub(URL_PLACEHOLDER, text))
-
-
 def extract_frames(source: str, times: List[float], work_dir: str, run: Callable) -> Tuple[List[str], List[str]]:
     """PNG paths for the frames that decoded from ``source`` (a URL or a local path), one warning per frame that
     did not; each frame is fitted to the segment's long edge and the vision byte cap. A warning carries the tail
@@ -330,11 +324,17 @@ def extract_frames(source: str, times: List[float], work_dir: str, run: Callable
 
 
 def frames_for_window(bucket: str, key: str, version_id: str, start_ms: int, end_ms: int, work_dir: str,
-                      run: Callable) -> Tuple[List[str], List[str]]:
-    """The window's frames over a presigned URL; when none decoded, the object is downloaded once and read locally."""
+                      run: Callable, file_size: int = 0) -> Tuple[List[str], List[str]]:
+    """The window's frames over a presigned URL; when none decoded, the object is downloaded once and read
+    locally, unless it is over the MEDIA image's download bound (a video read by URL only), which no ephemeral
+    storage holds: the window then has no frame."""
     times = frame_times(start_ms, end_ms)
     paths, warnings = extract_frames(presign_input(bucket, key, version_id), times, work_dir, run)
     if paths:
+        return paths, warnings
+    if file_size > INPUT_MAX_DOWNLOAD_BYTES:
+        warnings.append(f"presigned read produced no frame, and the {file_size}-byte video is over the "
+                        f"{INPUT_MAX_DOWNLOAD_BYTES}-byte download bound, so it was not downloaded")
         return paths, warnings
     local = os.path.join(work_dir, "input" + os.path.splitext(key)[1].lower())
     client_for_bucket(bucket, s3_client).download_file(
@@ -595,7 +595,8 @@ def lambda_handler(event, context):
 
     work_dir = tempfile.mkdtemp(prefix="segment-")
     try:
-        frames, warnings = frames_for_window(bucket, key, version_id, start_ms, end_ms, work_dir, ffmpeg_run)
+        frames, warnings = frames_for_window(bucket, key, version_id, start_ms, end_ms, work_dir, ffmpeg_run,
+                                             file_size=int(state.get("fileSize", 0) or 0))
         if not frames:
             cause = f"segment {segment_key}: no frame could be read: " + "; ".join(warnings)
             logger.warning(cause)

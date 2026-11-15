@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """MEDIA branch of the SYSTEM GenAI metadata pipeline (the `MediaExtractTask` Lambda): receives the pipeline
-state, downloads the one input file, runs the extractor for its file class, uploads the analysis images
-beside the analysis manifest that constructPipeline pre-wrote, rewrites that manifest, and returns the state
-with its own fields laid over it. Anything that stops the manifest from being rewritten raises; the state
-machine's Catch degrades the render and continues attributes-only."""
+state, reads the one input file, runs the extractor for its file class, uploads the analysis images beside the
+analysis manifest that constructPipeline pre-wrote, rewrites that manifest, and returns the state with its own
+fields laid over it. The input is downloaded to ephemeral storage up to INPUT_MAX_DOWNLOAD_BYTES; over that bound
+a video or audio file is read over a presigned URL by range, and any other class keeps its sys_file attributes.
+Anything that stops the manifest from being rewritten raises; the state machine's Catch degrades the render and
+continues attributes-only."""
 
 import json
 import mimetypes
@@ -38,6 +40,7 @@ from media_extractors.common import (
     BranchResult,
     ExtractContext,
     class_for_extension,
+    scrub_urls,
 )
 from media_extractors.s3_regions import client_for_bucket, register_bucket_regions
 import videoSegments
@@ -81,6 +84,12 @@ SEGMENTS_SKIPPED_WARNING = ("video segments not analysed: the analysis model tak
 # Classes under which a .json or .geojson arrives; the text path re-sniffs the parsed root (text / tiles3d / data
 # for GeoJSON).
 _JSON_SNIFFED_CLASSES = (CLASS_TEXT, CLASS_TILES3D, CLASS_DATA)
+# Classes read over a presigned URL by range when the input is over INPUT_MAX_DOWNLOAD_BYTES: ffmpeg reads the
+# container header and seeks by HTTP range, so these need no local copy. Every other class over the bound keeps
+# its pre-written sys_file attributes.
+URL_READ_CLASSES = (CLASS_VIDEO, CLASS_AUDIO)
+# The presigned input URL's lifetime: longer than the function's 600-second timeout.
+INPUT_PRESIGN_SECONDS = 900
 
 _EXTRACTORS: Dict[str, Callable[[str, ExtractContext], BranchResult]] = {
     CLASS_VIDEO: video.extract_video,
@@ -288,16 +297,47 @@ def upload_full_text(result: BranchResult, aux_bucket: str, aux_prefix: str) -> 
 
 
 def oversized_input_result(file_class: str, file_name: str, file_size: int) -> BranchResult:
-    """The result for an input the image does not download: the state's class and the pre-written `sys_file`
-    attributes stand, no render is produced, and a warning names the size and the bound. The MEDIA image reads a
-    file from its ephemeral storage, so a file over INPUT_MAX_DOWNLOAD_BYTES would fail the download rather than
-    the extractor, and geospatial containers in particular reach that size."""
+    """The result for an input the image does not download and reads no other way: the state's class and the
+    pre-written `sys_file` attributes stand, no render is produced, and a warning names the size and the bound.
+    The MEDIA image reads a file from its ephemeral storage, so a file over INPUT_MAX_DOWNLOAD_BYTES would fail
+    the download rather than the extractor, and geospatial containers in particular reach that size."""
     return BranchResult(
         file_class=file_class,
         render_skipped=RENDER_SKIPPED_SIZE,
         warnings=[f"{file_name}: {file_size} bytes exceeds the {INPUT_MAX_DOWNLOAD_BYTES}-byte input bound; the file "
                   "was not downloaded and sys_file attributes alone describe it"],
     )
+
+
+def presign_input(bucket: str, key: str, version_id: Optional[str]) -> str:
+    """A presigned GET of the input at the run's version, signed for the bucket's own Region (a presigned URL
+    is honoured only there). The URL is a credential: it never reaches a log line, a warning or an error
+    unscrubbed (scrub_urls)."""
+    params = {"Bucket": bucket, "Key": key}
+    if version_id:
+        params["VersionId"] = version_id
+    return client_for_bucket(bucket, s3_client).generate_presigned_url(
+        "get_object", Params=params, ExpiresIn=INPUT_PRESIGN_SECONDS)
+
+
+def read_by_url(file_class: str, url: str, ctx: ExtractContext, file_name: str, file_size: int) -> BranchResult:
+    """A video or audio file over the download bound, read over a presigned URL instead of downloaded: ffmpeg
+    reads the container header and the frames it seeks to by HTTP range requests, so a long video still gets
+    its stream facts, keyframes and segment plan. Every warning, and the error of a failed read, is scrubbed
+    of the URL."""
+    try:
+        if file_class == CLASS_VIDEO:
+            result = video.extract_video(url, ctx)
+        else:
+            result = audio.extract_audio(url, ctx, read_tags=False)
+    except Exception as exc:  # noqa: BLE001 - re-raised scrubbed: the message may quote the presigned URL
+        raise MediaTaskError(f"{file_name}: the {file_class} could not be read over its URL: "
+                             f"{scrub_urls(str(exc))}") from None
+    result.warnings = [scrub_urls(warning) for warning in result.warnings]
+    note = (f"{file_name}: {file_size} bytes exceeds the {INPUT_MAX_DOWNLOAD_BYTES}-byte download bound, so the "
+            f"{file_class} was read over a presigned URL by range, not downloaded")
+    result.warnings.insert(0, note)
+    return result
 
 
 def skip_full_text_for_size(manifest: dict, file_size: int) -> None:
@@ -382,7 +422,23 @@ def lambda_handler(event, context):
     work_dir = tempfile.mkdtemp(prefix="media-")
     segment_state: Dict[str, Any] = {}
     try:
-        if file_size > INPUT_MAX_DOWNLOAD_BYTES:
+        ctx = ExtractContext(
+            file_name=file_name,
+            extension=extension,
+            content_type=payload.get("contentType") or mimetypes.guess_type(file_name)[0] or _DEFAULT_CONTENT_TYPE,
+            max_text_chars=max_text_chars,
+            work_dir=work_dir,
+            extract_geo_location=extract_geo_location,
+            capture_full_text=capture_full_text,
+            render_images=render_images,
+        )
+        if file_size > INPUT_MAX_DOWNLOAD_BYTES and file_class in URL_READ_CLASSES:
+            # Over the download bound a video or audio file is read over a presigned URL by range: nothing is
+            # downloaded, and the stream facts, keyframes and segment plan come from the ranged reads.
+            logger.info({"message": "MEDIA extract by URL: input over the download bound", "fileClass": file_class,
+                         "fileSize": file_size, "inputMaxDownloadBytes": INPUT_MAX_DOWNLOAD_BYTES})
+            result = read_by_url(file_class, presign_input(bucket, key, version_id), ctx, file_name, file_size)
+        elif file_size > INPUT_MAX_DOWNLOAD_BYTES:
             # Decided from the state's fileSize before any byte is fetched: the file would not fit beside the
             # image's other temporary files, so the pre-written sys_file attributes describe it.
             result = oversized_input_result(file_class, file_name, file_size)
@@ -390,16 +446,6 @@ def lambda_handler(event, context):
                          "fileSize": file_size, "inputMaxDownloadBytes": INPUT_MAX_DOWNLOAD_BYTES})
         else:
             local_path = download_input(bucket, key, version_id, work_dir, file_name)
-            ctx = ExtractContext(
-                file_name=file_name,
-                extension=extension,
-                content_type=payload.get("contentType") or mimetypes.guess_type(file_name)[0] or _DEFAULT_CONTENT_TYPE,
-                max_text_chars=max_text_chars,
-                work_dir=work_dir,
-                extract_geo_location=extract_geo_location,
-                capture_full_text=capture_full_text,
-                render_images=render_images,
-            )
             result = extractor(local_path, ctx)
         result.warnings = config_warnings + list(result.warnings)
         render_keys = upload_renders(result.render_images, aux_bucket, aux_prefix)

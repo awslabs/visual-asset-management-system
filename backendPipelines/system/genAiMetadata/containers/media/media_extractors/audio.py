@@ -135,12 +135,17 @@ def tag_text(tag: Optional[TinyTag]) -> Dict[str, str]:
     return rendered
 
 
-def extract_audio(path: str, ctx: ExtractContext, run: Callable = subprocess.run) -> BranchResult:
+def extract_audio(path: str, ctx: ExtractContext, run: Callable = subprocess.run,
+                  read_tags: bool = True) -> BranchResult:
+    """Audio facts and tags. ``path`` is a local file, or a URL when ``read_tags`` is false: tinytag reads
+    only local files, so a file read over a URL (one over the download bound) is described from the ffmpeg
+    header alone, which reads the container's header and one audio frame by range."""
     result = BranchResult(file_class=CLASS_AUDIO)
     extension_label = ctx.extension.lstrip(".").upper()
     tag: Optional[TinyTag] = None
     try:
-        tag = TinyTag.get(path)
+        if read_tags:
+            tag = TinyTag.get(path)
     except UnsupportedFormatError:
         result.warnings.append("Audio container was not recognised")
     except TinyTagException as exc:  # ParseError: a recognised container whose header does not parse
@@ -151,8 +156,10 @@ def extract_audio(path: str, ctx: ExtractContext, run: Callable = subprocess.run
         # tinytag hands back an empty tag object rather than raising when it finds no frame it understands.
         tag = None
         result.warnings.append("Audio header carried no stream facts or tags")
-    # An ISO base-media container names its `keys`/`mdta` atoms only in the ffmpeg header.
-    header = probe_header(path, run=run) if is_mp4_family(tag, ctx.extension) else {}
+    # An ISO base-media container names its `keys`/`mdta` atoms only in the ffmpeg header; without tinytag the
+    # header is the only source.
+    header = (probe_header(path, run=run) if (not read_tags or is_mp4_family(tag, ctx.extension))
+              else {})
     if tag is None and not header:
         result.attributes["sys_media"] = {"kind": "audio", "container": extension_label, "decodable": False}
         return result

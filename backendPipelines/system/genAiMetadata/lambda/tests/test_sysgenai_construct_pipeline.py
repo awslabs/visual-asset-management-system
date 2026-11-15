@@ -284,10 +284,11 @@ class TestNoneBranch:
         assert "detectedFormat" not in manifest["attributes"]["sys_file"]  # 64 zero bytes name no format
 
     def test_an_unknown_extension_over_the_size_limit_is_never_sent_to_fargate(self):
+        # D110: the Lambda render bound is not the MEDIA branch's; the generic probe applies its own bounds.
         s3 = _s3_with("xidM/models/thing.zzz", b"\x00" * 64, ContentLength=5 * 1024 * 1024)
         _mod, state = _run(_state(inputS3AssetFilePath="s3://abkt/xidM/models/thing.zzz"), s3,
                            {"MAX_INPUT_FILE_SIZE_MB": "2", "USE_FARGATE_RENDERER": "true"})
-        assert (state["fileClass"], state["renderBranch"], state["renderSkipped"]) == ("other", "NONE", "size")
+        assert (state["fileClass"], state["renderBranch"], state["renderSkipped"]) == ("other", "MEDIA", None)
 
     def test_a_file_without_extension_reports_none(self):
         s3 = _s3_with("xidM/models/README", b"hello")
@@ -397,6 +398,65 @@ class TestSizeGate:
         _mod, state = _run(_state(inputS3AssetFilePath="s3://abkt/xidM/models/bracket.sldprt"), s3,
                            {"MAX_INPUT_FILE_SIZE_MB": "2", "USE_FARGATE_RENDERER": "true"})
         assert (state["renderBranch"], state["renderSkipped"]) == ("NONE", "unsupported")
+
+
+# Over the Lambda render bound (MAX_INPUT_FILE_SIZE_MB 2 here, 3 MiB files): each MEDIA-branch class keeps
+# the MEDIA branch, whose own bounds apply there; a 3D class goes to Fargate when the renderer is on.
+_OVER_LIMIT = 3 * 1024 * 1024
+_MEDIA_CLASS_FILES = [
+    ("clip.mp4", b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64, "video"),
+    ("track.mp3", b"ID3\x03\x00" + b"\x00" * 64, "audio"),
+    ("manual.pdf", b"%PDF-1.7\n" + b"\x00" * 64, "document"),
+    ("table.csv", b"a,b,c\n1,2,3\n", "data"),
+    ("photo.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 64, "image"),
+    ("notes.txt", b"plain text\n", "text"),
+    ("bundle.zip", b"PK\x03\x04" + b"\x00" * 64, "other"),
+]
+
+
+@pytest.mark.unit
+class TestSizeGateByFileClass:
+    """D110: the Lambda render bound (maxInputFileSizeMb) applied to every branch, and with the Fargate
+    renderer on any class but `other` went to the Fargate render job, which runs the 3D render image: a
+    3 GB video, PDF, CSV or image paid for a Batch job and ended with no extraction, and with the renderer
+    off it got sys_file only. The bound is the 3D renders' only; the MEDIA branch keeps every MEDIA class
+    and applies its own bounds; only a 3D render branch's file may go to Fargate."""
+
+    @pytest.mark.parametrize("renderer", ["false", "true"])
+    @pytest.mark.parametrize("name, head, file_class", _MEDIA_CLASS_FILES,
+                             ids=[entry[2] for entry in _MEDIA_CLASS_FILES])
+    def test_an_over_limit_media_class_keeps_the_media_branch(self, name, head, file_class, renderer):
+        key = f"xidM/files/{name}"
+        s3 = _s3_with(key, head, ContentLength=_OVER_LIMIT)
+        _mod, state = _run(_state(inputS3AssetFilePath="s3://abkt/" + key), s3,
+                           {"MAX_INPUT_FILE_SIZE_MB": "2", "USE_FARGATE_RENDERER": renderer})
+        assert (state["fileClass"], state["renderBranch"], state["renderSkipped"]) == (file_class, "MEDIA", None)
+        manifest = s3.json_at("aux", MANIFEST_KEY)
+        assert manifest["renderBranch"] == "MEDIA" and manifest["renderSkipped"] is None
+        assert not any("exceeds the Lambda limits" in warning for warning in manifest["warnings"])
+
+    @pytest.mark.parametrize("renderer, expected", [("true", ("FARGATE", None)), ("false", ("NONE", "size"))])
+    @pytest.mark.parametrize("name, file_class", [("pump.glb", "mesh"), ("part.step", "cad"),
+                                                  ("site.e57", "pointcloud"), ("scene.usdz", "usd")])
+    def test_an_over_limit_3d_file_still_goes_to_fargate(self, name, file_class, renderer, expected):
+        key = f"xidM/models/{name}"
+        s3 = _s3_with(key, b"\x00" * 64, ContentLength=_OVER_LIMIT)
+        _mod, state = _run(_state(inputS3AssetFilePath="s3://abkt/" + key), s3,
+                           {"MAX_INPUT_FILE_SIZE_MB": "2", "USE_FARGATE_RENDERER": renderer})
+        assert state["fileClass"] == file_class
+        assert (state["renderBranch"], state["renderSkipped"]) == expected
+
+    def test_only_the_3d_render_branches_may_take_fargate(self):
+        mod = h.load_handler("constructPipeline", {"MAX_INPUT_FILE_SIZE_MB": "2", "USE_FARGATE_RENDERER": "true"})
+        fc = mod.fileClassifier
+        for file_class, branch in set(fc.EXTENSION_CLASSES.values()):
+            gated = mod.apply_size_gate(file_class, branch, _OVER_LIMIT, None)
+            if branch in (fc.BRANCH_BLENDER, fc.BRANCH_RENDER3D):
+                assert gated == (fc.BRANCH_FARGATE, None), (file_class, branch)
+            elif branch == fc.BRANCH_MEDIA:
+                assert gated == (fc.BRANCH_MEDIA, None), (file_class, branch)
+            else:
+                assert gated == (fc.BRANCH_NONE, "unsupported"), (file_class, branch)
 
 
 @pytest.mark.unit

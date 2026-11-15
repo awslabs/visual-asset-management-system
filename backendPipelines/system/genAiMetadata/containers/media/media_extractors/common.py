@@ -116,9 +116,23 @@ DATA_CELL_MAX_CHARS = 200
 DATA_MAX_ROWS_COUNTED = 2_000_000
 DATA_SNIFF_BYTES = 64 * 1024
 # The largest input the MEDIA image downloads to its ephemeral storage (4096 MiB, shared with the renders, the
-# captured text and the SQLite page cache). A larger file keeps the pre-written `sys_file` attributes and is not
-# fetched; the handler records why.
+# captured text and the SQLite page cache). A larger file is not fetched: a video or audio file is read over a
+# presigned URL by range instead (the handler's read_by_url), a ZIP container is listed from its central
+# directory by ranged reads at any size, and every other class keeps the pre-written `sys_file` attributes;
+# the handler records why.
 INPUT_MAX_DOWNLOAD_BYTES = 3_500 * 1024 * 1024
+
+# A presigned URL carries its credential in the query string (X-Amz-Signature, X-Amz-Security-Token), and
+# ffmpeg echoes its input URL in error lines. scrub_urls replaces every URL, and every stray X-Amz-... query
+# parameter, before a message read from a URL reaches a warning, a log line or an error.
+URL_PLACEHOLDER = "<url>"
+_URL_TEXT = re.compile(r"https?://\S+")
+_SIGNED_QUERY_TEXT = re.compile(r"X-Amz-[A-Za-z-]+=\S*")
+
+
+def scrub_urls(text: str) -> str:
+    """``text`` with every URL, and every stray ``X-Amz-...=`` query parameter, replaced by URL_PLACEHOLDER."""
+    return _SIGNED_QUERY_TEXT.sub(URL_PLACEHOLDER, _URL_TEXT.sub(URL_PLACEHOLDER, str(text)))
 
 
 RENDER_SKIPPED_SIZE = "size"

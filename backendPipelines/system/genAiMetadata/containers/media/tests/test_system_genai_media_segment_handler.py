@@ -24,6 +24,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from media_extractors.common import INPUT_MAX_DOWNLOAD_BYTES
 from system_genai_media_fixtures import (FakeBedrockRuntime, FakeEvents, FakeFfmpeg, FakeS3, apply_guardrail_response,
                                          client_error, converse_response)
 
@@ -650,6 +651,22 @@ class TestFrameFallbacks:
         assert all(not call[call.index("-i") + 1].startswith("http") for call in calls[3:])
         assert s3.downloads == [(_ASSETS, _INPUT_KEY, "v1")]
         assert len(bedrock.calls[0]["messages"][0]["content"]) == 4
+
+    def test_a_video_over_the_download_bound_is_never_downloaded(self, monkeypatch):
+        """D110: a video over the MEDIA download bound reaches the segment Map (it was read by URL), and no
+        ephemeral storage holds it, so a window whose URL read fails is skipped rather than downloaded."""
+        s3 = _seed(FakeS3())
+        bedrock = FakeBedrockRuntime([_reply()])
+        module = _load(monkeypatch, s3, bedrock, FakeEvents())
+        module.ffmpeg_run = FakeFfmpeg(fail_when_url=True)
+        state = dict(_STATE, fileSize=INPUT_MAX_DOWNLOAD_BYTES + 1)
+        response = _run(module, state=state)
+        assert response["status"] == "SKIPPED" and response["error"] == "SegmentFramesUnavailable"
+        assert s3.downloads == []
+        calls = _ss_calls(module)
+        assert len(calls) == 3 and all(call[call.index("-i") + 1].startswith("https://") for call in calls)
+        assert "not downloaded" in _failed_record(s3)["cause"]
+        assert bedrock.calls == []
 
     def test_no_readable_frame_skips_the_window(self, monkeypatch):
         s3 = _seed(FakeS3())

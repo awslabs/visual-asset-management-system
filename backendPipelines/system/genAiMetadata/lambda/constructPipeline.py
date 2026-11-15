@@ -178,28 +178,37 @@ def fargate_reads_region(region):
             or region in manifestHelper.cross_region_s3_endpoint_regions())
 
 
-def fargate_is_unreachable(file_class, input_region):
-    """True when an over-limit file would go to the Fargate renderer but its bucket's Region is one the
+def fargate_is_unreachable(render_branch, input_region):
+    """True when an over-limit 3D file would go to the Fargate renderer but its bucket's Region is one the
     VPC cannot reach, so the size gate keeps it on NONE instead."""
-    return (USE_FARGATE_RENDERER and file_class != fileClassifier.CLASS_OTHER
+    return (USE_FARGATE_RENDERER and render_branch in FARGATE_SOURCE_BRANCHES
             and not fargate_reads_region(input_region))
 
 
+# The branches that render a 3D scene, the only ones whose files may go to the Fargate render job when they
+# exceed the Lambda limits: the job runs the 3D render image's analysis (preview_pipeline/analysis), which
+# reads the 3D formats only, so a file of any other class sent there pays for a Batch job and gets nothing.
+FARGATE_SOURCE_BRANCHES = (fileClassifier.BRANCH_BLENDER, fileClassifier.BRANCH_RENDER3D)
+
+
 def apply_size_gate(file_class, render_branch, size_bytes, point_count, input_region=""):
-    """``(renderBranch, renderSkipped)`` after the Lambda limits. A class that never renders keeps
-    NONE with ``unsupported``; a renderable file over a limit goes to Fargate when the operator enabled
-    that branch and the job can read the file's bucket Region (``input_region``), else to NONE with
-    ``size``: no Lambda branch takes a file over the limits, so the file is described from its attributes.
-    An ``other`` file over the limit is never sent to Fargate: the generic probe reads a header the Lambda
-    could read as well, so it keeps NONE with ``size``."""
+    """``(renderBranch, renderSkipped)`` after the Lambda render limits (``MAX_INPUT_FILE_SIZE_MB`` and,
+    for a point cloud, ``MAX_POINT_CLOUD_POINTS``), which bound the 3D render branches only. A class that
+    never renders keeps NONE with ``unsupported``. A MEDIA-branch file keeps MEDIA at any size: that branch
+    applies its own bounds (the download bound, the reads by URL or by range, the text and chunk bounds).
+    A 3D file over a limit goes to Fargate when the operator enabled that branch and the job can read the
+    file's bucket Region (``input_region``), else to NONE with ``size``: no Lambda branch takes it, so the
+    file is described from its attributes."""
     if render_branch == fileClassifier.BRANCH_NONE:
         return render_branch, common.RENDER_SKIPPED_UNSUPPORTED
+    if render_branch == fileClassifier.BRANCH_MEDIA:
+        return render_branch, None
     over_size = size_bytes > MAX_INPUT_FILE_SIZE_MB * 1024 * 1024
     over_points = (file_class == fileClassifier.CLASS_POINTCLOUD and point_count is not None
                    and point_count > MAX_POINT_CLOUD_POINTS)
     if not (over_size or over_points):
         return render_branch, None
-    if (USE_FARGATE_RENDERER and file_class != fileClassifier.CLASS_OTHER
+    if (USE_FARGATE_RENDERER and render_branch in FARGATE_SOURCE_BRANCHES
             and fargate_reads_region(input_region)):
         return fileClassifier.BRANCH_FARGATE, None
     return fileClassifier.BRANCH_NONE, common.RENDER_SKIPPED_SIZE
@@ -266,7 +275,7 @@ def lambda_handler(event, context):
             f"render skipped: the file exceeds the Lambda limits (sizeBytes={size_bytes}, "
             f"points={point_count}, maxInputFileSizeMb={MAX_INPUT_FILE_SIZE_MB}, "
             f"maxPointCloudPoints={MAX_POINT_CLOUD_POINTS})")
-        if fargate_is_unreachable(file_class, input_region):
+        if fargate_is_unreachable(natural_branch, input_region):
             manifest["warnings"].append(
                 f"Fargate renderer not used: it runs in the VPC, which has no cross-Region Amazon S3 endpoint "
                 f"for {input_region}, where the file's bucket is; the file is described from its attributes")
