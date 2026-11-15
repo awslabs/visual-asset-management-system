@@ -134,7 +134,7 @@ _CROSS_REGION_PAIRS = [(default, bucket) for default in REGIONS for bucket in ("
 @pytest.mark.unit
 @pytest.mark.parametrize("default_region,bucket_region", _CROSS_REGION_PAIRS)
 def test_every_client_the_region_helper_returns_presigns_with_sigv4(isolated_aws, monkeypatch, default_region,
-                                                                   bucket_region):
+                                                                    bucket_region):
     """client_for_bucket, called directly with a plain default client: the per-Region client it builds for a
     bucket registered in another Region signs with Signature Version 4 for the bucket's Region."""
     _in_region(monkeypatch, default_region)
