@@ -576,6 +576,22 @@ export function validateSystemGenAiModelId(
                     .join(", ")}), at most ${BEDROCK_MODEL_ID_MAX_LENGTH} characters.`
         );
     }
+    validateBedrockProfilePrefix(fieldPath, modelId, partition);
+}
+
+/**
+ * Refuses a Bedrock model id whose cross-Region inference-profile prefix (the
+ * `BEDROCK_INFERENCE_PROFILE_PREFIXES` table) is not offered in the deployment's partition, and warns
+ * where the prefix is listed for the partition by some model cards only (`warnIn`). A bare model id
+ * passes. Every GenAI pipeline's model-id check calls it, so they refuse the same ids: in AWS GovCloud
+ * (US) `us-gov.` is offered and `us.` warns; in the AWS European Sovereign Cloud no prefix is offered;
+ * in the commercial partition every prefix but `us-gov.` is. `fieldPath` is the path the messages name.
+ */
+export function validateBedrockProfilePrefix(
+    fieldPath: string,
+    modelId: string,
+    partition: string
+): void {
     const prefix = BEDROCK_INFERENCE_PROFILE_PREFIX.exec(modelId)?.[1];
     if (prefix === undefined) return;
     const offered = BEDROCK_INFERENCE_PROFILE_PREFIXES[prefix];
@@ -588,7 +604,7 @@ export function validateSystemGenAiModelId(
                 } account before ` +
                 "deploying" +
                 (partition === "aws-us-gov"
-                    ? ' (the govcloud template names the "us-gov." form instead).'
+                    ? ' (AWS GovCloud (US) names its own profiles with the "us-gov." prefix).'
                     : ".")
         );
         return;
@@ -803,11 +819,11 @@ function validateOutboundHttpsEndpoint(endpoint: string, configPath: string) {
  * Requires an enabled GenAI pipeline's Amazon Bedrock model id to be set and to exist in the
  * deployment's partition.
  *
- * The id carries a cross-Region inference-profile prefix, and the prefixes are partition-specific:
- * `global.` and `us.` are commercial, GovCloud uses `us-gov.`. The value is passed through to the
- * Lambda unvalidated, and the IAM grant is derived by stripping the prefix — so a commercial profile
- * id in a restricted partition produces both a model that does not exist and a grant that does not
- * match it. `flagPath` is the `pipelines.<flag>` path the message names.
+ * The id may carry a cross-Region inference-profile prefix, and the prefixes are partition-specific
+ * (`BEDROCK_INFERENCE_PROFILE_PREFIXES`). The value is passed through to the pipeline unvalidated, and
+ * the IAM grant is derived by stripping the prefix, so a profile id from another partition produces
+ * both a model that does not exist and a grant that does not match it; `validateBedrockProfilePrefix`
+ * refuses it. `flagPath` is the `pipelines.<flag>` path the message names.
  */
 export function validateBedrockModelId(flagPath: string, modelId: string, partition: string): void {
     if (modelId.trim() === "") {
@@ -817,15 +833,7 @@ export function validateBedrockModelId(flagPath: string, modelId: string, partit
                 "empty because the commercial cross-Region inference profiles do not exist there)."
         );
     }
-    const commercialOnlyPrefix = ["global.", "us."].find((prefix) => modelId.startsWith(prefix));
-    if (commercialOnlyPrefix && partition !== "aws") {
-        throw new Error(
-            `Configuration Error: ${flagPath}.bedrockModelId is "${modelId}", whose ` +
-                `"${commercialOnlyPrefix}" cross-Region inference-profile prefix exists only in the ` +
-                `commercial partition. This deployment targets ${partition}. Use a model id or ` +
-                `inference profile offered there (GovCloud uses the "us-gov." prefix).`
-        );
-    }
+    validateBedrockProfilePrefix(`${flagPath}.bedrockModelId`, modelId.trim(), partition);
 }
 
 /**
@@ -3033,7 +3041,8 @@ export function getConfig(app: cdk.App): Config {
         // The Blender agent reasons with a Bedrock foundation model, and which models an account may invoke
         // differs by partition and by entitlement -- the same position as the labeling pipeline's model id,
         // handled the same way: the commercial template carries a model id, the restricted-partition
-        // templates ship it empty, and a commercial-only inference-profile prefix is rejected elsewhere.
+        // templates ship it empty, and an inference-profile prefix the partition does not offer is
+        // rejected (validateBedrockProfilePrefix).
         const agent = imageTo3dModels?.blenderagent;
         if (agent?.enabled) {
             const agentModelId = (agent.bedrockModelId ?? "").trim();
@@ -3046,17 +3055,11 @@ export function getConfig(app: cdk.App): Config {
                         `ships global.openai.gpt-6-astra).`
                 );
             }
-            const agentCommercialOnlyPrefix = ["global.", "us."].find((prefix) =>
-                agentModelId.startsWith(prefix)
+            validateBedrockProfilePrefix(
+                "useImageTo3d.models.blenderagent.bedrockModelId",
+                agentModelId,
+                config.env.partition
             );
-            if (agentCommercialOnlyPrefix && config.env.partition !== "aws") {
-                throw new Error(
-                    `Configuration Error: useImageTo3d.models.blenderagent.bedrockModelId is ` +
-                        `"${agentModelId}", whose "${agentCommercialOnlyPrefix}" cross-Region inference-profile ` +
-                        `prefix exists only in the commercial partition. This deployment targets ` +
-                        `${config.env.partition}. Use a model id or inference profile offered there.`
-                );
-            }
             if (
                 agent.useStabilityImageEditing &&
                 !(config.env.partition === "aws" && config.env.region.startsWith("us-"))
@@ -3408,17 +3411,11 @@ export function getConfig(app: cdk.App): Config {
                     "is empty. Set a model id available in this partition and Region."
             );
         }
-        const cadCommercialOnlyPrefix = ["global.", "us."].find((prefix) =>
-            bedrockModelId.startsWith(prefix)
+        validateBedrockProfilePrefix(
+            "pipelines.useGenAiCadStepAgent.bedrockModelId",
+            bedrockModelId.trim(),
+            config.env.partition
         );
-        if (cadCommercialOnlyPrefix && config.env.partition !== "aws") {
-            throw new Error(
-                `Configuration Error: pipelines.useGenAiCadStepAgent.bedrockModelId is ` +
-                    `"${bedrockModelId}", whose "${cadCommercialOnlyPrefix}" cross-Region ` +
-                    `inference-profile prefix exists only in the commercial partition. This ` +
-                    `deployment targets ${config.env.partition}.`
-            );
-        }
         const openAiSecret = cad.openAi?.apiKeySecretArn ?? "";
         const openAiModel = cad.openAi?.modelId ?? "";
         if (openAiSecret.trim() !== "" || openAiModel.trim() !== "") {

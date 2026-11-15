@@ -15,8 +15,8 @@
  * and the classification of a set of ids against `validateSystemGenAiModelId`.
  *
  * Keep in step with `BEDROCK_INFERENCE_PROFILE_PREFIXES`, `BEDROCK_MODEL_ID_PATTERN`,
- * `BEDROCK_MODEL_ID_MAX_LENGTH`, `validateSystemGenAiModelId` and `EMBEDDING_MODEL_FAMILIES` in
- * `infra/config/config.ts`.
+ * `BEDROCK_MODEL_ID_MAX_LENGTH`, `validateSystemGenAiModelId`, `validateBedrockProfilePrefix` and
+ * `EMBEDDING_MODEL_FAMILIES` in `infra/config/config.ts`.
  */
 
 /** Cross-Region inference-profile prefixes and the partitions each is offered in. */
@@ -60,6 +60,19 @@ export function systemGenAiModelIdIssue(
     if (modelId.length > BEDROCK_MODEL_ID_MAX_LENGTH || !BEDROCK_MODEL_ID_PATTERN.test(modelId)) {
         return "format";
     }
+    return bedrockProfilePrefixIssue(modelId, partition);
+}
+
+/**
+ * The partition outcome of a model id's cross-Region inference-profile prefix, mirroring
+ * `validateBedrockProfilePrefix` in `infra/config/config.ts`, which every GenAI pipeline's model-id
+ * check calls: `foreign-prefix` for a prefix the partition does not offer, `unverified-prefix` for the
+ * warning case, `undefined` for a bare id, an offered prefix or an unknown partition.
+ */
+export function bedrockProfilePrefixIssue(
+    modelId: string,
+    partition: string | undefined
+): "foreign-prefix" | "unverified-prefix" | undefined {
     const prefix = BEDROCK_INFERENCE_PROFILE_PREFIX.exec(modelId)?.[1];
     if (prefix === undefined || partition === undefined) return undefined;
     const offered = BEDROCK_INFERENCE_PROFILE_PREFIXES[prefix];

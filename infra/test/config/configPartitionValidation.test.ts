@@ -650,17 +650,17 @@ describe("ConfigBuilder mirror of the cross-Region S3 endpoint rules", () => {
  * **The Blender agent's Bedrock model.** The Image to 3D Blender agent reasons with a Bedrock model, and
  * which models an account may invoke differs by partition and by entitlement, so the model id follows the
  * labeling pipeline's rule: the commercial template carries one, the restricted-partition templates ship it
- * empty, `getConfig()` rejects an enabled agent with no model id in every partition, and rejects a
- * commercial-only `global.` or `us.` inference-profile prefix outside the `aws` partition. The model id is
+ * empty, `getConfig()` rejects an enabled agent with no model id in every partition, and rejects an
+ * inference-profile prefix the partition does not offer (`validateBedrockProfilePrefix`). The model id is
  * deployment configuration only; no template offers it per run. The ConfigBuilder's hand-ported rules are
  * asserted from the same arms.
  */
 const AGENT_MODEL_REQUIRED_MESSAGE =
     /useImageTo3d\.models\.blenderagent\.bedrockModelId must be set when the Blender agent is enabled/;
 const AGENT_MODEL_PREFIX_MESSAGE =
-    /useImageTo3d\.models\.blenderagent\.bedrockModelId is "[^"]+", whose "(global|us)\." cross-Region inference-profile prefix exists only in the commercial partition/;
+    /useImageTo3d\.models\.blenderagent\.bedrockModelId is "[^"]+", whose "[a-z-]+\." cross-Region inference-profile prefix exists only in the commercial partition/;
 const AGENT_MODEL_RULE_ID = "imageto3d-blenderagent-model-id";
-const AGENT_MODEL_PREFIX_RULE_ID = "imageto3d-blenderagent-model-id-commercial-only-prefix";
+const AGENT_MODEL_PREFIX_RULE_ID = "imageto3d-blenderagent-model-id-prefix-partition";
 
 /** Enable the Blender agent; `modelId` replaces the template's value when given. */
 const enableBlenderAgent = (modelId?: string) => (c: any) => {
@@ -715,7 +715,7 @@ describe("the Blender agent's Bedrock model id", () => {
         expect(run).toThrow(AGENT_MODEL_REQUIRED_MESSAGE);
     });
 
-    test.each(["global.openai.gpt-6-astra", "us.openai.gpt-6-astra"])(
+    test.each(["global.openai.gpt-6-astra", "eu.openai.gpt-6-astra", "jp.openai.gpt-6-astra"])(
         "rejects the commercial-only profile %s in GovCloud",
         (modelId) => {
             const run = loadConfig(govcloudTemplate, "us-gov-west-1", enableBlenderAgent(modelId));

@@ -41,7 +41,7 @@ const DEFAULTED_PIPELINES = ["useGenAiCadStepAgent"] as const;
 const MODEL_PIPELINES = [...DEFAULTED_PIPELINES, "useGenAiVideoSopBom"] as const;
 
 const foundationModel = (modelId: string): string =>
-    modelId.replace(/^(global|us-gov|us|eu|apac)\./, "");
+    modelId.replace(Config.BEDROCK_INFERENCE_PROFILE_PREFIX, "");
 
 const realReadFileSync = jest.requireActual("fs").readFileSync;
 

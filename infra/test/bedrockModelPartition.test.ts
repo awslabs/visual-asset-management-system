@@ -26,7 +26,11 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { validateSystemGenAiModelId } from "../config/config";
+import {
+    BEDROCK_INFERENCE_PROFILE_PREFIX,
+    BEDROCK_INFERENCE_PROFILE_PREFIXES,
+    validateSystemGenAiModelId,
+} from "../config/config";
 
 const CONFIG_DIR = path.join(__dirname, "..", "config");
 
@@ -64,9 +68,14 @@ describe("SYSTEM GenAI analysis model, by partition", () => {
         expect(isUnset(modelId("commercial"))).toBe(false);
     });
 
-    it("never names a commercial inference profile in a sovereign template", () => {
-        for (const name of ["govcloud", "eusovereign"]) {
-            expect(String(modelId(name) ?? "")).not.toMatch(/^(global|us)\./);
+    it("never names an inference profile from another partition in a sovereign template", () => {
+        for (const [name, partition] of [
+            ["govcloud", "aws-us-gov"],
+            ["eusovereign", "aws-eusc"],
+        ]) {
+            const prefix = BEDROCK_INFERENCE_PROFILE_PREFIX.exec(String(modelId(name) ?? ""))?.[1];
+            if (prefix === undefined) continue;
+            expect(BEDROCK_INFERENCE_PROFILE_PREFIXES[prefix].partitions).toContain(partition);
         }
     });
 

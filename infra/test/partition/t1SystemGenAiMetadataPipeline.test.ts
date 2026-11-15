@@ -21,6 +21,7 @@
 import commercial from "../../config/config.template.commercial.json";
 import govcloud from "../../config/config.template.govcloud.json";
 import eusovereign from "../../config/config.template.eusovereign.json";
+import { BEDROCK_INFERENCE_PROFILE_PREFIX } from "../../config/config";
 import { searchLambdasInVpc } from "../../lib/helper/searchPlacement";
 import { expectAbsent, synthTemplate, SynthResult, TemplateName } from "../support/templateSynth";
 
@@ -294,7 +295,7 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
             cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId;
         const embeddingModel: string =
             cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId;
-        const profilePrefix = /^(global|us-gov|us|eu|apac)\./;
+        const profilePrefix = BEDROCK_INFERENCE_PROFILE_PREFIX;
         // The commercial template ships a `global.` profile and the GovCloud template a `us-gov.` one;
         // the EU Sovereign template ships no model, so its arm runs on a plain id.
         expect(analysisModel).toBe(

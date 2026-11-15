@@ -1239,15 +1239,36 @@ describe("Video SOP/BOM Extraction pipeline validation (useGenAiVideoSopBom)", (
             );
         });
 
-        test('the "us." prefix is rejected there as well', () => {
+        test('a geographic prefix GovCloud does not offer ("jp.") is rejected there as well', () => {
             expect(
                 resolve((c) => {
                     enableVideoSopBom(c);
                     videoSopBomRestrictedPartition(c);
                     c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
-                        "us.anthropic.claude-sonnet-4-20250514-v1:0";
+                        "jp.anthropic.claude-sonnet-4-5-20250929-v1:0";
                 })
             ).toThrow(/useGenAiVideoSopBom.*exists only in the commercial partition/);
+        });
+
+        test('the commercial "us." prefix is accepted there with a warning', () => {
+            const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+            try {
+                expect(
+                    resolve((c) => {
+                        enableVideoSopBom(c);
+                        videoSopBomRestrictedPartition(c);
+                        c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
+                            "us.anthropic.claude-sonnet-4-20250514-v1:0";
+                    })
+                ).not.toThrow();
+                expect(
+                    warn.mock.calls.some((call) =>
+                        String(call[0]).includes("pipelines.useGenAiVideoSopBom.bedrockModelId")
+                    )
+                ).toBe(true);
+            } finally {
+                warn.mockRestore();
+            }
         });
 
         test('a "us-gov." prefix is accepted in GovCloud', () => {

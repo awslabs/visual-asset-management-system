@@ -104,4 +104,28 @@ describe("ConfigBuilder Bedrock model-id mirror", () => {
         expect(Builder.systemGenAiModelIdIssue("arn:aws:bedrock:x", undefined)).toBe("arn");
         expect(Builder.systemGenAiModelIdIssue("Bad Id", undefined)).toBe("format");
     });
+
+    /** What validateBedrockProfilePrefix (every GenAI pipeline's prefix check) does with an id. */
+    function prefixOutcome(modelId: string, partition: string): Builder.ModelIdIssue {
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+        try {
+            Config.validateBedrockProfilePrefix("field", modelId, partition);
+            return warn.mock.calls.length > 0 ? "unverified-prefix" : undefined;
+        } catch (error) {
+            if (String((error as Error).message).includes("prefix exists only")) {
+                return "foreign-prefix";
+            }
+            throw error;
+        } finally {
+            warn.mockRestore();
+        }
+    }
+
+    const PREFIXED_IDS = IDS.filter((id) => Builder.BEDROCK_MODEL_ID_PATTERN.test(id));
+
+    test.each(
+        PARTITIONS.flatMap((partition) => PREFIXED_IDS.map((id) => [partition, id] as const))
+    )("in %s, the GenAI pipelines' prefix rule treats %s as getConfig() does", (partition, id) => {
+        expect(Builder.bedrockProfilePrefixIssue(id, partition)).toBe(prefixOutcome(id, partition));
+    });
 });

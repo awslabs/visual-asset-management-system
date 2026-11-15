@@ -38,6 +38,7 @@ import {
     SYSTEM_GENAI_MIN_MAX_TOKENS,
     embeddingFamilySummary,
     embeddingModelFamily,
+    bedrockProfilePrefixIssue,
     systemGenAiModelIdIssue,
 } from "./fields/bedrockModelFormats";
 import {
@@ -806,6 +807,43 @@ function requiresGovCloudFlag(region: unknown): boolean {
     return partition === "aws-us-gov" || partition === "aws-eusc" || isIsoPartitionRegion(region);
 }
 
+/**
+ * The partition rules of a GenAI pipeline's Amazon Bedrock model id (config.ts:
+ * `validateBedrockProfilePrefix`, which the Video SOP/BOM, CAD STEP agent and Blender agent checks
+ * call): an error for a cross-Region inference-profile prefix the configured Region's partition does
+ * not offer (fields/bedrockModelFormats.ts), and a warning for the commercial "us." prefix in an AWS
+ * GovCloud (US) Region. Silent while the pipeline is off, the id is empty or the Region is unset.
+ */
+function bedrockProfilePrefixRules(
+    idPrefix: string,
+    field: string,
+    path: string,
+    enabled: (c: ConfigShape) => boolean
+): Rule[] {
+    const issue = (c: ConfigShape) => {
+        if (!enabled(c)) return undefined;
+        const id = String(g(c, path) ?? "").trim();
+        if (id === "") return undefined;
+        return bedrockProfilePrefixIssue(id, partitionForRegionName(g(c, "env.region")));
+    };
+    return [
+        {
+            id: `${idPrefix}-prefix-partition`,
+            severity: "error",
+            fieldPaths: [path, "env.region"],
+            appliesWhen: (c) => issue(c) === "foreign-prefix",
+            message: `${field} carries a cross-Region inference-profile prefix from another partition: "us-gov." exists only in AWS GovCloud (US); "global.", "eu.", "apac.", "au.", "jp." and "in." only in the commercial partition; "us." in the commercial partition, and in AWS GovCloud (US) with a warning. Use a model id or inference profile offered in the configured Region's partition.`,
+        },
+        {
+            id: `${idPrefix}-prefix-unverified`,
+            severity: "warning",
+            fieldPaths: [path, "env.region"],
+            appliesWhen: (c) => issue(c) === "unverified-prefix",
+            message: `${field} carries the commercial "us." cross-Region inference-profile prefix in an AWS GovCloud (US) Region. Verify that this inference profile exists in your GovCloud account before deploying; GovCloud profiles use the "us-gov." prefix.`,
+        },
+    ];
+}
+
 const CORE_RULES: Rule[] = [
     // ----- Restricted-partition flag agreement
     // (config.ts: "app.govCloud.enabled is the restricted-partition switch") -----
@@ -1340,21 +1378,14 @@ const CORE_RULES: Rule[] = [
         message:
             "useImageTo3d.models.blenderagent.bedrockModelId must be set when the Blender agent is enabled. Foundation model availability differs by partition and account; the restricted-partition presets leave it empty.",
     },
-    {
-        id: "imageto3d-blenderagent-model-id-commercial-only-prefix",
-        severity: "error",
-        fieldPaths: ["app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId", "env.region"],
-        appliesWhen: (c) => {
-            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
-            if (!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled")) return false;
-            const id = String(
-                g(c, "app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId") ?? ""
-            );
-            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
-        },
-        message:
-            'useImageTo3d.models.blenderagent.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition.',
-    },
+    ...bedrockProfilePrefixRules(
+        "imageto3d-blenderagent-model-id",
+        "useImageTo3d.models.blenderagent.bedrockModelId",
+        "app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId",
+        (c) =>
+            !!g(c, "app.pipelines.useImageTo3d.enabled") &&
+            !!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled")
+    ),
     {
         id: "imageto3d-blenderagent-image-editing-region",
         severity: "error",
@@ -3585,18 +3616,12 @@ const CORE_RULES: Rule[] = [
         message:
             "useGenAiVideoSopBom requires a bedrockModelId available in this partition and Region; one model serves the pipeline's text and vision calls. The restricted-partition presets leave it empty because the commercial cross-Region inference profiles do not exist there.",
     },
-    {
-        id: "video-sop-bom-bedrock-model-id-commercial-only-prefix",
-        severity: "error",
-        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.bedrockModelId", "env.region"],
-        appliesWhen: (c) => {
-            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
-            const id = String(g(c, "app.pipelines.useGenAiVideoSopBom.bedrockModelId") ?? "");
-            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
-        },
-        message:
-            'useGenAiVideoSopBom.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition (GovCloud uses the "us-gov." prefix).',
-    },
+    ...bedrockProfilePrefixRules(
+        "video-sop-bom-bedrock-model-id",
+        "useGenAiVideoSopBom.bedrockModelId",
+        "app.pipelines.useGenAiVideoSopBom.bedrockModelId",
+        (c) => !!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")
+    ),
 
     // ----- Video SOP/BOM Extraction partition and limits
     // (config.ts: "not validated outside the commercial and GovCloud partitions") -----
@@ -3697,18 +3722,12 @@ const CORE_RULES: Rule[] = [
         message:
             "useGenAiCadStepAgent requires a bedrockModelId available in this partition and Region.",
     },
-    {
-        id: "cad-step-agent-bedrock-model-id-commercial-only-prefix",
-        severity: "error",
-        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockModelId", "env.region"],
-        appliesWhen: (c) => {
-            if (!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")) return false;
-            const id = String(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockModelId") ?? "");
-            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
-        },
-        message:
-            'useGenAiCadStepAgent.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition.',
-    },
+    ...bedrockProfilePrefixRules(
+        "cad-step-agent-bedrock-model-id",
+        "useGenAiCadStepAgent.bedrockModelId",
+        "app.pipelines.useGenAiCadStepAgent.bedrockModelId",
+        (c) => !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")
+    ),
     {
         id: "cad-step-agent-openai-secret-arn",
         severity: "error",
