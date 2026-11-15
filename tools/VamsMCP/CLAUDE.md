@@ -49,7 +49,7 @@ tools/VamsMCP/
                              # (the server's own token check, before any tool runs)
     http_app.py              # remote mode: RemoteGate (RFC 9728 metadata, the 401 challenge, token
                              # check, per-request identity) in front of the SDK's streamable HTTP app
-    setup_remote.py          # `vams-mcp setup-remote`: writes the auth file from /api/amplify-config (incl. the published externalOAuthIdpAudienceClaims / UserIdClaim and the relative externalOAuthIdpDiscoveryEndpoint path joined to the provider URL, --issuer as fallback; --audience-claim overrides)
+    setup_remote.py          # `vams-mcp setup-remote`: writes the auth file from /api/amplify-config (incl. the published externalOAuthIdpAudienceClaims / UserIdClaim and the relative externalOAuthIdpDiscoveryEndpoint path joined to the provider URL, --issuer as fallback and required when the provider URL serves no discovery document, e.g. a Cognito hosted UI domain; --audience-claim overrides)
     annotations.py           # the MCP ToolAnnotations constant of each gate tier (Mandatory Rule 12)
     results.py               # typed results of the most-used reads -> outputSchema (Rule 13)
     client.py                # VamsClient: wraps vamscli APIClient + ProfileManager; remote mode's

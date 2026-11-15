@@ -111,7 +111,8 @@ connecting Amazon Quick, and a threat model) is the documentation site's **Remot
    For an external IdP, the next step reads the deployment's audience and user id claims from
    `/api/amplify-config`; pass `--audience-claim` only to override them, or when the deployment
    predates the published `externalOAuthIdpAudienceClaims` and its
-   `lambdaAuthorizorJWTAudienceClaims` is not `aud`.
+   `lambdaAuthorizorJWTAudienceClaims` is not `aud`. For an external IdP, pass `--issuer` whenever
+   the provider URL serves no discovery document (for example an Amazon Cognito hosted UI domain).
 2. Write the server's auth configuration from the deployment's own settings, and note the values it
    prints for the MCP client:
 

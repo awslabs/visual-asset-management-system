@@ -236,9 +236,13 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     externalOAuthIdpDisplayName:
                         props.config.app.authProvider.useExternalOAuthIdp.idpDisplayName ||
                         "undefined",
-                    externalOAuthIdpUserIdClaim:
-                        props.config.app.authProvider.useExternalOAuthIdp
-                            .lambdaAuthorizorJWTUserIdClaim || "undefined",
+                    // Published only for an external IdP deployment (the value is validated
+                    // there); a leftover value on a Cognito deployment publishes nothing.
+                    externalOAuthIdpUserIdClaim: props.config.app.authProvider.useExternalOAuthIdp
+                        .enabled
+                        ? props.config.app.authProvider.useExternalOAuthIdp
+                              .lambdaAuthorizorJWTUserIdClaim || "undefined"
+                        : "undefined",
                     // Claim NAMES only (closed allowlist validated by config.ts), published only
                     // for an external IdP deployment; never audience values.
                     externalOAuthIdpAudienceClaims: props.config.app.authProvider

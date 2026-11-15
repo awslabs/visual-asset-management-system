@@ -384,6 +384,19 @@ describe("GET /api/amplify-config", () => {
         expect(body.externalOAuthIdpAudienceClaims).toBe("undefined");
     });
 
+    test("a leftover user id claim on a Cognito deployment is not published", async () => {
+        const body = await amplifyConfigBody(
+            synthConfig((c) => {
+                idpOf(c).enabled = false;
+                idpOf(c).lambdaAuthorizorJWTUserIdClaim = "any text here";
+                idpOf(c).lambdaAuthorizorJWTAudienceClaims = ["client_id"];
+            })
+        );
+        expect(body.externalOAuthIdpUserIdClaim).toBe("undefined");
+        expect(body.externalOAuthIdpAudienceClaims).toBe("undefined");
+        expect(JSON.stringify(body)).not.toContain("any text here");
+    });
+
     test("never publishes audience values", async () => {
         const body = await amplifyConfigBody(
             synthConfig((c) => {

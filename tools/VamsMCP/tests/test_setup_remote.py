@@ -257,6 +257,25 @@ def test_the_user_id_claim_flag_equal_to_the_published_claim_gives_no_note(exter
     assert "published user id claim" not in capsys.readouterr().err
 
 
+def test_the_user_id_claim_flag_with_no_published_claim_gives_a_note(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpUserIdClaim": "undefined"}
+    code, output = _run(external, tmp_path, "--user-id-claim", "sub")
+    assert code == 0
+    assert RemoteAuthSettings.load(str(output)).user_id_claim == "sub"
+    err = capsys.readouterr().err
+    assert "publishes no user id claim; using --user-id-claim sub" in err
+    assert "cognito:username, username and sub" in err
+
+
+def test_the_audience_claim_flag_with_no_published_claims_gives_a_note(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpAudienceClaims": "undefined"}
+    code, _ = _run(external, tmp_path, "--audience-claim", "client_id")
+    assert code == 0
+    assert "publishes no audience claims; using --audience-claim client_id" in capsys.readouterr().err
+
+
 def test_a_relative_published_discovery_path_is_joined_to_the_provider_url(external, tmp_path, capsys):
     original = external.amplify_config
     external.amplify_config = lambda: {**original(), "externalOAuthIdpDiscoveryEndpoint": "/.well-known/openid-configuration"}

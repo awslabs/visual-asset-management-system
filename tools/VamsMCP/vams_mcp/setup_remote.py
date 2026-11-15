@@ -207,7 +207,14 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
         # predates the field publishes nothing: the default (aud) applies and a note says so.
         published_user_id_claim = _set(amplify.get("externalOAuthIdpUserIdClaim"))
         user_id_claim = args.user_id_claim or published_user_id_claim
-        if args.user_id_claim and published_user_id_claim and args.user_id_claim != published_user_id_claim:
+        if args.user_id_claim and not published_user_id_claim:
+            print(
+                f"vams-mcp setup-remote: note: the deployment publishes no user id claim; using "
+                f"--user-id-claim {args.user_id_claim}. The API identifies users by the first of "
+                "cognito:username, username and sub, so a different value makes the server refuse tokens",
+                file=sys.stderr,
+            )
+        elif args.user_id_claim and args.user_id_claim != published_user_id_claim:
             print(
                 f"vams-mcp setup-remote: note: --user-id-claim {args.user_id_claim} differs from the "
                 f"deployment's published user id claim ({published_user_id_claim}); the API identifies users "
@@ -217,7 +224,14 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
         published_claims = _published_audience_claims(amplify.get("externalOAuthIdpAudienceClaims"))
         if args.audience_claim:
             audience_claims = list(dict.fromkeys(args.audience_claim))
-            if published_claims and audience_claims != published_claims:
+            if not published_claims:
+                print(
+                    f"vams-mcp setup-remote: note: the deployment publishes no audience claims; using "
+                    f"--audience-claim {','.join(audience_claims)}. The API refuses tokens that do not "
+                    "match its lambdaAuthorizorJWTAudienceClaims",
+                    file=sys.stderr,
+                )
+            elif audience_claims != published_claims:
                 print(
                     f"vams-mcp setup-remote: note: --audience-claim {','.join(audience_claims)} overrides the "
                     f"deployment's published audience claims ({','.join(published_claims)}); the API will "
@@ -316,7 +330,11 @@ def _parser() -> argparse.ArgumentParser:
         "--audience", action="append", help="Another accepted audience (repeatable; the client id is always one)"
     )
     parser.add_argument("--cognito-domain", help="The Cognito user pool domain, for the authorization URLs")
-    parser.add_argument("--issuer", help="External IdP: the issuer of its access tokens, when discovery differs")
+    parser.add_argument(
+        "--issuer",
+        help="External IdP: the issuer of its access tokens, when it differs from the discovery document or "
+        "when the provider URL serves no discovery document (for example an Amazon Cognito hosted UI domain)",
+    )
     parser.add_argument(
         "--audience-claim",
         action="append",
