@@ -63,7 +63,7 @@ def _load(fake_s3):
         spec.loader.exec_module(module)
     # The client is built once, at import, with the retry configuration (backendPipelines/CLAUDE.md).
     assert client_factory.call_args.args == ("s3",)
-    assert client_factory.call_args.kwargs["config"] is module.retry_config
+    assert client_factory.call_args.kwargs["config"] is module.s3_config
     assert module.s3_client is fake_s3
     return module
 

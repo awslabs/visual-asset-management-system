@@ -1571,7 +1571,14 @@ it for a new container that runs an upstream tool as a non-root user.
     `client_for_bucket`) signs each registered bucket's requests with a cached client for that Region --
     adaptive retries, regional `us-east-1` endpoint, no `endpoint_url` -- called from `core.run` before
     the first S3 call. Every bucket-addressed helper call routes through `client_for_bucket`; the
-    auxiliary bucket is never registered and stays on the default client. Splat Toolbox hands the map to
+    auxiliary bucket is never registered and stays on the default client. **A client that presigns signs
+    with Signature Version 4:** botocore presigns with Signature Version 2 in the Regions that still accept
+    it unless the client's `Config` sets `signature_version="s3v4"`, and Amazon S3 refuses a Signature
+    Version 2 URL for an object encrypted with an AWS KMS key. The SYSTEM GenAI metadata media and Blender
+    images build every S3 client from a Signature Version 4, path-style, regional configuration
+    (`media_extractors.s3_regions.S3_CLIENT_CONFIG`, the Blender handler's `s3_config`, as the backend's
+    `common.s3.S3_ASSET_CLIENT_CONFIG`); `test_system_genai_media_presign_signing.py` pins the pipeline's
+    presign sites. Splat Toolbox hands the map to
     the upstream `main.py`'s process (`VAMS_BUCKET_REGIONS`), where the launcher replaces a bare
     `boto3.client('s3')` with `vams_utils.aws.s3.region_routing_client()`; Isaac Lab carries the map in
     its job config and `openPipeline` reads the asset bucket with `manifestHelper.s3_client_for_region`.

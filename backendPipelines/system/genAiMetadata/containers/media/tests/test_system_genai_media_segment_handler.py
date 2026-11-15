@@ -115,7 +115,9 @@ def _load(monkeypatch, s3, bedrock, events, env=None):
     # Three clients, each built once at import with the retry configuration (backendPipelines/CLAUDE.md).
     assert factory.call_args_list, "no boto3 client was built at import"
     assert {call.args[0] for call in factory.call_args_list} == set(fakes)
-    assert all(call.kwargs["config"] is module.retry_config for call in factory.call_args_list)
+    # The S3 client signs with Signature Version 4 (s3_config, D111); the other two keep the retry configuration.
+    assert all(call.kwargs["config"] is (module.s3_config if call.args[0] == "s3" else module.retry_config)
+               for call in factory.call_args_list)
     module.ffmpeg_run = FakeFfmpeg()
     monkeypatch.setattr(module.embeddings, "embed_text", MagicMock(return_value=list(VECTOR)))
     module.time = MagicMock()

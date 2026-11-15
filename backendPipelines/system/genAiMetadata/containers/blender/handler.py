@@ -41,11 +41,16 @@ import scene_dependencies
 # Adaptive retry with client-side rate limiting. A pipeline lambda runs against throttling-prone services
 # for the length of a job, so a bare client sits on botocore's default mode with no rate limiting and a
 # sustained burst surfaces as a throttling error on the caller.
-retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+# Every S3 client of this image signs with Signature Version 4 on the bucket Region's regional endpoint with
+# path-style addressing, as the media image's do (media_extractors.s3_regions.S3_CLIENT_CONFIG): botocore otherwise
+# presigns with Signature Version 2 in the Regions that still accept it, which Amazon S3 refuses for an object
+# encrypted with an AWS KMS key.
+s3_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'}, signature_version='s3v4',
+                   s3={'addressing_style': 'path', 'us_east_1_regional_endpoint': 'regional'})
 
 logger = safeLogger(service="systemGenAiMetadataBlenderRender")
 
-s3_client = boto3.client('s3', config=retry_config)
+s3_client = boto3.client('s3', config=s3_config)
 
 # An asset bucket may be in another Region than this function. The pipeline state carries a bucket name
 # -> Region map (`bucketRegions`, built by constructPipeline from the manifest), the handler registers it,
@@ -55,8 +60,7 @@ s3_client = boto3.client('s3', config=retry_config)
 # endpoint's private DNS covers where the global s3.amazonaws.com name is not.
 _bucket_regions = {}
 _clients_by_region = {}
-_regional_retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
-                                s3={'us_east_1_regional_endpoint': 'regional'})
+_regional_retry_config = s3_config
 
 
 def register_bucket_regions(bucket_regions):

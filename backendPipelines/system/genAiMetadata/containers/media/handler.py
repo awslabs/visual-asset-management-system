@@ -17,7 +17,6 @@ import tempfile
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import boto3
-from botocore.config import Config
 from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
 import executionLogKeys
@@ -43,18 +42,20 @@ from media_extractors.common import (
     scrub_urls,
 )
 from media_extractors.s3_ranged import RangedS3Reader
-from media_extractors.s3_regions import client_for_bucket, register_bucket_regions
+from media_extractors.s3_regions import S3_CLIENT_CONFIG, client_for_bucket, register_bucket_regions
 import videoSegments
 from contentChunks import CONTENT_EMBED_MAX_FILE_BYTES, CONTENT_TEXT_MAX_CHARS
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md: the Lambda reads and writes
 # Amazon S3 for the length of the extraction, so a bare client would surface a sustained burst as a
-# throttling error instead of smoothing it.
-retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+# throttling error instead of smoothing it. The S3 client signs with Signature Version 4 on the regional endpoint
+# (media_extractors.s3_regions.S3_CLIENT_CONFIG), so the presigned URL a large input is read over is accepted for
+# an object encrypted with an AWS KMS key.
+s3_config = S3_CLIENT_CONFIG
 
 logger = safeLogger(service="systemGenAiMetadataMediaExtract")
 
-s3_client = boto3.client('s3', config=retry_config)
+s3_client = boto3.client('s3', config=s3_config)
 
 MANIFEST_SCHEMA_VERSION = 1
 RENDER_IMAGE_PREFIX = "renders/"

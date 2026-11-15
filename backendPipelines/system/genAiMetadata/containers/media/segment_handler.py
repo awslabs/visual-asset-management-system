@@ -43,7 +43,7 @@ import bedrockGuardrail
 from media_extractors.common import INPUT_MAX_DOWNLOAD_BYTES, human_duration, scrub_urls
 from media_extractors.common import URL_PLACEHOLDER  # noqa: F401 - the placeholder scrub_urls writes, for tests
 from media_extractors.imaging import normalise_for_vision, write_png
-from media_extractors.s3_regions import client_for_bucket, register_bucket_regions
+from media_extractors.s3_regions import S3_CLIENT_CONFIG, client_for_bucket, register_bucket_regions
 from media_extractors.video import run_ffmpeg
 from vectorsearch import embeddings
 from videoSegments import SEGMENT_KIND
@@ -52,10 +52,13 @@ from videoSegments import SEGMENT_KIND
 # calls Amazon Bedrock and publishes to EventBridge for the length of one window, so a bare client would surface
 # a sustained burst as a throttling error instead of smoothing it.
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+# The S3 client also signs with Signature Version 4 on the regional endpoint (media_extractors.s3_regions), so the
+# presigned URL each window's frames are read over is accepted for an object encrypted with an AWS KMS key.
+s3_config = S3_CLIENT_CONFIG
 
 logger = safeLogger(service="systemGenAiMetadataSegmentAnalyze")
 
-s3_client = boto3.client('s3', config=retry_config)
+s3_client = boto3.client('s3', config=s3_config)
 bedrock_runtime = boto3.client('bedrock-runtime', config=retry_config)
 events_client = boto3.client('events', region_name=os.environ["AWS_REGION"], config=retry_config)
 
