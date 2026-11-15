@@ -122,6 +122,14 @@ interface InlineLambdaProps {
     externalOAuthIdpUserIdClaim?: string;
 
     /**
+     * External OAUTH IDP access-token claims the API authorizer reads the audience from, in order,
+     * as a comma-separated list of claim NAMES (`aud`, `client_id`; never audience values), from the
+     * validated `useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims`. `"undefined"` when not set.
+     * Clients that predate the field assume `aud`.
+     */
+    externalOAuthIdpAudienceClaims?: string;
+
+    /**
      * Name of deployed stack
      */
     stackName: string;
@@ -231,6 +239,14 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     externalOAuthIdpUserIdClaim:
                         props.config.app.authProvider.useExternalOAuthIdp
                             .lambdaAuthorizorJWTUserIdClaim || "undefined",
+                    // Claim NAMES only (closed allowlist validated by config.ts), published only
+                    // for an external IdP deployment; never audience values.
+                    externalOAuthIdpAudienceClaims: props.config.app.authProvider
+                        .useExternalOAuthIdp.enabled
+                        ? props.config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims?.join(
+                              ","
+                          ) || "undefined"
+                        : "undefined",
                     stackName: props.stackName!,
                     contentSecurityPolicy: "",
                     bannerHtmlMessage: props.config.app.webUi.optionalBannerHtmlMessage || "",

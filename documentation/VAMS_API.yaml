@@ -91,6 +91,9 @@ paths:
                                     externalOAuthIdpUserIdClaim:
                                         type: string
                                         description: "Access-token claim whose value is the VAMS user id (app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim); 'undefined' when not configured, in which case the web application and the API authorizer use cognito:username, then username, then sub"
+                                    externalOAuthIdpAudienceClaims:
+                                        type: string
+                                        description: "Comma-separated names of the access-token claims the API authorizer reads the audience from, in order (app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims; each is 'aud' or 'client_id'). Claim names only, never audience values. 'undefined' when external OAuth is not the authentication provider. Absent from a deployment that predates the field, in which case clients assume 'aud'"
                                     stackName:
                                         type: string
                                         nullable: true

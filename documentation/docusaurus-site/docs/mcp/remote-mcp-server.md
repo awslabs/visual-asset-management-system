@@ -96,7 +96,7 @@ The tokens must name a user and carry no app-only marker. The server applies the
 -   **Audience claims.** The audience is read from the claims `lambdaAuthorizorJWTAudienceClaims` lists (`aud` by default; `client_id` for access tokens that carry the client in `client_id` and no `aud`). The first listed claim the token carries decides, and a later claim cannot rescue a mismatch.
 -   **User.** The user is the claim `lambdaAuthorizorJWTUserIdClaim` names, or, when it is not set, the first of `cognito:username`, `username` and `sub`. The value must not be the client's own id.
 
-Pass the deployment's audience claims to `vams-mcp setup-remote` with `--audience-claim` (it reads the user id claim from the deployment). See [Tokens issued to other clients](../api/authentication.md) for the exact checks.
+`vams-mcp setup-remote` reads both the audience claims and the user id claim from the deployment (`externalOAuthIdpAudienceClaims` and `externalOAuthIdpUserIdClaim` in `/api/amplify-config`); `--audience-claim` overrides the published audience claims. A deployment from before the field was published gives no audience claims, so the command assumes `aud` and says so. See [Tokens issued to other clients](../api/authentication.md) for the exact checks.
 
 ## Step 2: Write the server's auth configuration
 
@@ -111,19 +111,19 @@ vams-mcp setup-remote \
     --output ./vams-mcp-remote-auth.json
 ```
 
-| Option                | Meaning                                                                                                                                                                           |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--vams-url`          | The VAMS web application URL or API Gateway URL                                                                                                                                   |
-| `--resource-url`      | The public HTTPS URL MCP clients connect to. Its path is `/mcp`                                                                                                                   |
-| `--client-id`         | The client from step 1. It cannot be the web application's own client                                                                                                             |
-| `--audience`          | Another accepted audience, repeatable (at most 10 in all). For an external IdP whose audience is not the client id, pass it here                                                  |
-| `--cognito-domain`    | Cognito: the user pool domain as the Cognito console shows it, for the authorization and token URLs. Without it the command reads them from the issuer when it can                |
-| `--audience-claim`    | External IdP: a token claim the audience is read from (`aud` or `client_id`), repeatable, in order. Default `aud`. Set it to the deployment's `lambdaAuthorizorJWTAudienceClaims` |
-| `--user-id-claim`     | External IdP: the token claim the user id is read from. Default: the deployment's `lambdaAuthorizorJWTUserIdClaim`, which the command reads from the deployment                   |
-| `--issuer`            | External IdP: the issuer of its access tokens, when it differs from the discovery document                                                                                        |
-| `--scopes`            | The scopes the MCP client requests. Default: `openid email profile` (Cognito), or the deployment's configured scope (external IdP)                                                |
-| `--output`, `--force` | The file to write, and whether to replace an existing one                                                                                                                         |
-| `--json`              | Print the summary as JSON                                                                                                                                                         |
+| Option                | Meaning                                                                                                                                                                                                                                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--vams-url`          | The VAMS web application URL or API Gateway URL                                                                                                                                                                                                                                                           |
+| `--resource-url`      | The public HTTPS URL MCP clients connect to. Its path is `/mcp`                                                                                                                                                                                                                                           |
+| `--client-id`         | The client from step 1. It cannot be the web application's own client                                                                                                                                                                                                                                     |
+| `--audience`          | Another accepted audience, repeatable (at most 10 in all). For an external IdP whose audience is not the client id, pass it here                                                                                                                                                                          |
+| `--cognito-domain`    | Cognito: the user pool domain as the Cognito console shows it, for the authorization and token URLs. Without it the command reads them from the issuer when it can                                                                                                                                        |
+| `--audience-claim`    | External IdP: a token claim the audience is read from (`aud` or `client_id`), repeatable, in order. Default: the deployment's published `externalOAuthIdpAudienceClaims`, or `aud` when it publishes none. Overrides the published value; must equal the deployment's `lambdaAuthorizorJWTAudienceClaims` |
+| `--user-id-claim`     | External IdP: the token claim the user id is read from. Default: the deployment's `lambdaAuthorizorJWTUserIdClaim`, which the command reads from the deployment                                                                                                                                           |
+| `--issuer`            | External IdP: the issuer of its access tokens, when it differs from the discovery document                                                                                                                                                                                                                |
+| `--scopes`            | The scopes the MCP client requests. Default: `openid email profile` (Cognito), or the deployment's configured scope (external IdP)                                                                                                                                                                        |
+| `--output`, `--force` | The file to write, and whether to replace an existing one                                                                                                                                                                                                                                                 |
+| `--json`              | Print the summary as JSON                                                                                                                                                                                                                                                                                 |
 
 The command prints:
 

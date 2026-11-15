@@ -702,6 +702,10 @@ token (`resolveExternalUserId` in `src/utils/authTokenUtils.ts`). With amplify-c
 `MissingUserIdClaimError` (sign-in, refresh, page load, amplify-config refresh), the app signs out,
 and the sign-in page names the claim from `MISSING_USER_ID_CLAIM_KEY`.
 
+amplify-config also carries `externalOAuthIdpAudienceClaims` (the claim names the authorizer reads
+the audience from). The web app does not read it: the API alone decides whether a token's audience
+is accepted, and `vams-mcp setup-remote` is its consumer.
+
 ---
 
 ## 6. State Management

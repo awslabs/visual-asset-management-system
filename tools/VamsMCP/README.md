@@ -108,8 +108,10 @@ connecting Amazon Quick, and a threat model) is the documentation site's **Remot
 1. Register an OAuth client for remote MCP clients (user sign-in: authorization code with PKCE; never
    a client credentials client), and list its client id in
    `app.authProvider.useCognito.additionalTokenAudiences` (or `useExternalOAuthIdp`), then deploy VAMS.
-   For an external IdP whose access tokens carry the client in `client_id` and no `aud`, also pass
-   `--audience-claim client_id` in the next step (the deployment's `lambdaAuthorizorJWTAudienceClaims`).
+   For an external IdP, the next step reads the deployment's audience and user id claims from
+   `/api/amplify-config`; pass `--audience-claim` only to override them, or when the deployment
+   predates the published `externalOAuthIdpAudienceClaims` and its
+   `lambdaAuthorizorJWTAudienceClaims` is not `aud`.
 2. Write the server's auth configuration from the deployment's own settings, and note the values it
    prints for the MCP client:
 

@@ -202,3 +202,39 @@ def test_a_reserved_user_id_claim_is_refused(external, tmp_path, capsys):
     code, _ = _run(external, tmp_path, "--user-id-claim", "vams:tokens")
     assert code == 1
     assert "userIdClaim" in capsys.readouterr().err
+
+
+def test_external_idp_setup_reads_the_published_audience_claims(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpAudienceClaims": "client_id,aud"}
+    code, output = _run(external, tmp_path)
+    assert code == 0
+    assert RemoteAuthSettings.load(str(output)).audience_claims == ("client_id", "aud")
+    assert "does not publish" not in capsys.readouterr().err
+
+
+def test_the_audience_claim_flag_overrides_the_published_claims_with_a_note(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpAudienceClaims": "client_id"}
+    code, output = _run(external, tmp_path, "--audience-claim", "aud")
+    assert code == 0
+    assert RemoteAuthSettings.load(str(output)).audience_claims == ("aud",)
+    assert "overrides the deployment's published audience claims" in capsys.readouterr().err
+
+
+def test_an_older_deployment_without_the_field_falls_back_to_the_default_with_a_note(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {k: v for k, v in original().items() if k != "externalOAuthIdpAudienceClaims"}
+    code, output = _run(external, tmp_path)
+    assert code == 0
+    assert "audienceClaims" not in json.loads(output.read_text())
+    assert "does not publish its audience claims" in capsys.readouterr().err
+
+
+def test_an_unrecognized_published_audience_claim_value_is_refused(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpAudienceClaims": "azp"}
+    code, output = _run(external, tmp_path)
+    assert code == 1
+    assert "externalOAuthIdpAudienceClaims" in capsys.readouterr().err
+    assert not output.exists()

@@ -353,13 +353,53 @@ describe("GET /api/amplify-config", () => {
         expect(body.externalOAuthIdpUserIdClaim).toBe("undefined");
     });
 
-    test("the audience claims are not sent to the browser", async () => {
+    test("publishes the validated audience claim names as a comma-separated list", async () => {
         const body = await amplifyConfigBody(
             synthConfig((c) => {
                 withExternalOAuth(c);
+                idpOf(c).lambdaAuthorizorJWTAudienceClaims = ["client_id", "aud"];
+            })
+        );
+        expect(body.externalOAuthIdpAudienceClaims).toBe("client_id,aud");
+    });
+
+    test("publishes the default aud when the setting is not configured", async () => {
+        // getConfig() fills the default for a config that predates the setting.
+        const config = loadConfig(commercialTemplate, "us-east-1", (c) => {
+            withExternalOAuth(c);
+            delete idpOf(c).lambdaAuthorizorJWTAudienceClaims;
+        })();
+        restoreReadFileSync();
+        const body = await amplifyConfigBody(config);
+        expect(body.externalOAuthIdpAudienceClaims).toBe("aud");
+    });
+
+    test("publishes nothing new for a Cognito deployment", async () => {
+        const body = await amplifyConfigBody(synthConfig());
+        expect(body.externalOAuthIdpAudienceClaims).toBe("undefined");
+    });
+
+    test("never publishes audience values", async () => {
+        const body = await amplifyConfigBody(
+            synthConfig((c) => {
+                withExternalOAuth(c);
+                idpOf(c).lambdaAuthorizorJWTAudience = "secret-audience-value";
+                idpOf(c).additionalTokenAudiences = ["another-audience-value"];
                 idpOf(c).lambdaAuthorizorJWTAudienceClaims = ["aud", "client_id"];
             })
         );
-        expect(JSON.stringify(body)).not.toContain("client_id");
+        expect(body.externalOAuthIdpAudienceClaims).toBe("aud,client_id");
+        expect(JSON.stringify(body)).not.toContain("secret-audience-value");
+        expect(JSON.stringify(body)).not.toContain("another-audience-value");
+    });
+
+    test("an invalid claim list is rejected by config validation and cannot be published", () => {
+        expect(() =>
+            loadConfig(commercialTemplate, "us-east-1", (c) => {
+                withExternalOAuth(c);
+                idpOf(c).lambdaAuthorizorJWTAudienceClaims = ["azp"];
+            })()
+        ).toThrow(AUDIENCE_CLAIMS_ERROR);
+        restoreReadFileSync();
     });
 });

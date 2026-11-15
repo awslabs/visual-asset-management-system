@@ -106,6 +106,20 @@ def _refuse_web_client(audiences: List[str], web_client_id: Optional[str]) -> No
         )
 
 
+def _published_audience_claims(value: Any) -> List[str]:
+    """The audience claim names a deployment publishes: [] when absent, an error when not recognized."""
+    text = _set(value)
+    if not text:
+        return []
+    names = [name.strip() for name in text.split(",")]
+    if not names or any(name not in SUPPORTED_AUDIENCE_CLAIMS for name in names) or len(set(names)) != len(names):
+        raise SetupError(
+            f"the deployment publishes an unrecognized externalOAuthIdpAudienceClaims value; expected a "
+            f"comma-separated list of {', '.join(SUPPORTED_AUDIENCE_CLAIMS)}. Pass --audience-claim instead"
+        )
+    return names
+
+
 def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteAuthSettings:
     api_url = _set(amplify.get("api"))
     if not api_url:
@@ -164,10 +178,29 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
             raise SetupError("the external IdP's discovery document names no issuer or jwks_uri")
         scopes = tuple((args.scopes or _set(amplify.get("externalOAuthIdpScope")) or "openid").split())
         # The deployment reports the claim its API reads the user id from (blank or "undefined" when
-        # not set); the audience claims are not published, so they come from --audience-claim and must
-        # equal the deployment's lambdaAuthorizorJWTAudienceClaims.
+        # not set) and the claims its API reads the audience from (externalOAuthIdpAudienceClaims,
+        # comma-separated names). --audience-claim stays as an explicit override. A deployment that
+        # predates the field publishes nothing: the default (aud) applies and a note says so.
         user_id_claim = args.user_id_claim or _set(amplify.get("externalOAuthIdpUserIdClaim"))
-        audience_claims = list(dict.fromkeys(args.audience_claim or []))
+        published_claims = _published_audience_claims(amplify.get("externalOAuthIdpAudienceClaims"))
+        if args.audience_claim:
+            audience_claims = list(dict.fromkeys(args.audience_claim))
+            if published_claims and audience_claims != published_claims:
+                print(
+                    f"vams-mcp setup-remote: note: --audience-claim {','.join(audience_claims)} overrides the "
+                    f"deployment's published audience claims ({','.join(published_claims)}); the API will "
+                    "refuse tokens that do not match the deployment",
+                    file=sys.stderr,
+                )
+        elif published_claims:
+            audience_claims = published_claims
+        else:
+            print(
+                "vams-mcp setup-remote: note: the deployment does not publish its audience claims (an older "
+                "VAMS release); assuming the default (aud). Pass --audience-claim if its "
+                "lambdaAuthorizorJWTAudienceClaims differs",
+                file=sys.stderr,
+            )
         authorization_url = _set(document.get("authorization_endpoint")) or _set(
             amplify.get("externalOAuthIdpAuthorizationEndpoint")
         )
@@ -257,8 +290,9 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         choices=SUPPORTED_AUDIENCE_CLAIMS,
         help="External IdP: a token claim the audience is read from (repeatable, in order; default aud). "
-        "Must equal the deployment's lambdaAuthorizorJWTAudienceClaims, for example client_id for access "
-        "tokens that carry no aud",
+        "Overrides the deployment's published externalOAuthIdpAudienceClaims (default: the published value, "
+        "or aud when the deployment does not publish it); must equal the deployment's "
+        "lambdaAuthorizorJWTAudienceClaims",
     )
     parser.add_argument(
         "--user-id-claim",
