@@ -150,12 +150,17 @@ describe("getConfig() validation of the external OAuth claim settings", () => {
         }
     );
 
-    test.each([["user name"], ["user/name"], ["   "], [7], [["email"]]])(
-        "user id claim %p is rejected",
-        (claim) => {
-            expect(withSettings(claim, ["aud"])).toThrow(USER_ID_CLAIM_ERROR);
-        }
-    );
+    test.each([
+        ["user name"],
+        ["user/name"],
+        ["   "],
+        [7],
+        [["email"]],
+        ["vams:tokens"],
+        ["VAMS:Roles"],
+    ])("user id claim %p is rejected", (claim) => {
+        expect(withSettings(claim, ["aud"])).toThrow(USER_ID_CLAIM_ERROR);
+    });
 
     test.each([[["aud"]], [["aud", "client_id"]], [["client_id"]], [["client_id", "aud"]]])(
         "audience claims %p are accepted",

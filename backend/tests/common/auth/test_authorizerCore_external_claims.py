@@ -177,8 +177,8 @@ class TestAudOrClientId:
 
     def test_an_unparseable_setting_refuses_every_token(self):
         """A malformed JWT_AUDIENCE_CLAIMS parses to None; nothing is accepted on it."""
-        with _audience_claims(None):
-            assert core.verify_external_jwt(_token()) is None
+        with _audience_claims(None), pytest.raises(core.TokenVerificationUnavailableError):
+            core.verify_external_jwt(_token())
 
 
 @pytest.mark.unit
