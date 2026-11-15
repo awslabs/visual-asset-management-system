@@ -79,12 +79,34 @@ def _amplify_config(vams_url: str) -> Dict[str, Any]:
     return _get_json(f"{vams_url}/{API_AMPLIFY_CONFIG.lstrip('/')}")
 
 
-def _discovery(issuer: str, explicit: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    url = explicit or f"{issuer.rstrip('/')}/.well-known/openid-configuration"
-    try:
-        return _get_json(url)
-    except SetupError:
-        return None
+def _discovery_url(base: str, published: Optional[str] = None) -> str:
+    """The discovery document URL: the deployment's published value, else the standard path under ``base``.
+
+    The deployment publishes externalOAuthIdpDiscoveryEndpoint as a path (for example
+    ``/.well-known/openid-configuration``) that is joined to the provider URL, as the web application
+    does; an absolute http(s) value is used as given.
+    """
+    if published:
+        if published.startswith(("https://", "http://")):
+            return published
+        if published.startswith("/"):
+            return f"{base.rstrip('/')}{published}"
+    return f"{base.rstrip('/')}/.well-known/openid-configuration"
+
+
+def _discovery(
+    issuer: str, explicit: Optional[str] = None, fallback_issuer: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """Read the discovery document from ``issuer`` (the published path applies), else from ``fallback_issuer``."""
+    urls = [_discovery_url(issuer, explicit)]
+    if fallback_issuer:
+        urls.append(_discovery_url(fallback_issuer))
+    for url in dict.fromkeys(urls):
+        try:
+            return _get_json(url)
+        except SetupError:
+            continue
+    return None
 
 
 def _domain_url(domain: str) -> str:
@@ -166,7 +188,9 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
         web_client_id = _set(amplify.get("externalOAuthIdpClientId"))
         _refuse_web_client(audiences, web_client_id)
         provider_url = _set(amplify.get("externalOAuthIdpURL"))
-        document = _discovery(args.issuer or provider_url, _set(amplify.get("externalOAuthIdpDiscoveryEndpoint")))
+        document = _discovery(
+            provider_url, _set(amplify.get("externalOAuthIdpDiscoveryEndpoint")), fallback_issuer=args.issuer
+        )
         if document is None:
             raise SetupError(
                 "the external IdP's OpenID Connect discovery document could not be read; pass --issuer "
@@ -181,7 +205,15 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
         # not set) and the claims its API reads the audience from (externalOAuthIdpAudienceClaims,
         # comma-separated names). --audience-claim stays as an explicit override. A deployment that
         # predates the field publishes nothing: the default (aud) applies and a note says so.
-        user_id_claim = args.user_id_claim or _set(amplify.get("externalOAuthIdpUserIdClaim"))
+        published_user_id_claim = _set(amplify.get("externalOAuthIdpUserIdClaim"))
+        user_id_claim = args.user_id_claim or published_user_id_claim
+        if args.user_id_claim and published_user_id_claim and args.user_id_claim != published_user_id_claim:
+            print(
+                f"vams-mcp setup-remote: note: --user-id-claim {args.user_id_claim} differs from the "
+                f"deployment's published user id claim ({published_user_id_claim}); the API identifies users "
+                "by the published claim, so the user label the server logs can differ from the API user",
+                file=sys.stderr,
+            )
         published_claims = _published_audience_claims(amplify.get("externalOAuthIdpAudienceClaims"))
         if args.audience_claim:
             audience_claims = list(dict.fromkeys(args.audience_claim))

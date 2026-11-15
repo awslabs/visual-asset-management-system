@@ -238,3 +238,54 @@ def test_an_unrecognized_published_audience_claim_value_is_refused(external, tmp
     assert code == 1
     assert "externalOAuthIdpAudienceClaims" in capsys.readouterr().err
     assert not output.exists()
+
+
+def test_the_user_id_claim_flag_that_differs_from_the_published_claim_gives_a_note(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpUserIdClaim": "sub"}
+    code, output = _run(external, tmp_path, "--user-id-claim", "email")
+    assert code == 0
+    assert RemoteAuthSettings.load(str(output)).user_id_claim == "email"
+    assert "differs from the deployment's published user id claim (sub)" in capsys.readouterr().err
+
+
+def test_the_user_id_claim_flag_equal_to_the_published_claim_gives_no_note(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpUserIdClaim": "sub"}
+    code, _ = _run(external, tmp_path, "--user-id-claim", "sub")
+    assert code == 0
+    assert "published user id claim" not in capsys.readouterr().err
+
+
+def test_a_relative_published_discovery_path_is_joined_to_the_provider_url(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpDiscoveryEndpoint": "/.well-known/openid-configuration"}
+    code, output = _run(external, tmp_path)
+    assert code == 0, capsys.readouterr().err
+    assert RemoteAuthSettings.load(str(output)).issuer == external.issuer
+    # with --issuer too: the issuer only overrides the issuer recorded, discovery still succeeds
+    code, _ = _run(external, tmp_path, "--force", "--issuer", external.issuer)
+    assert code == 0
+
+
+def test_an_absolute_published_discovery_url_is_used_as_given(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {
+        **original(),
+        "externalOAuthIdpDiscoveryEndpoint": f"{external.issuer}/.well-known/openid-configuration",
+    }
+    code, output = _run(external, tmp_path)
+    assert code == 0, capsys.readouterr().err
+    assert RemoteAuthSettings.load(str(output)).jwks_uri == external.jwks_uri
+
+
+def test_the_issuer_flag_is_the_fallback_when_the_published_discovery_path_does_not_resolve(
+    external, tmp_path, capsys
+):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpDiscoveryEndpoint": "/no/such/document"}
+    code, _ = _run(external, tmp_path)
+    assert code == 1 and "pass --issuer" in capsys.readouterr().err
+    code, output = _run(external, tmp_path, "--issuer", external.issuer)
+    assert code == 0, capsys.readouterr().err
+    assert RemoteAuthSettings.load(str(output)).jwks_uri == external.jwks_uri

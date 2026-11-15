@@ -262,6 +262,50 @@
                 "preferred_username": "alice"
             },
             "expectUser": "abc"
+        },
+        {
+            "name": "blank cognito:username does not fall through to username",
+            "claims": {
+                "aud": "vams-mcp",
+                "cognito:username": " ",
+                "username": "alice"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "aud null",
+            "claims": {
+                "aud": null,
+                "username": "alice"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "aud empty list",
+            "claims": {
+                "aud": [],
+                "username": "alice"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "client_id number, aud then client_id, valid aud decides",
+            "claims": {
+                "aud": "vams-mcp",
+                "client_id": 5,
+                "username": "alice"
+            },
+            "expectUser": "alice",
+            "audienceClaims": ["aud", "client_id"]
+        },
+        {
+            "name": "client_id number, client_id claim",
+            "claims": {
+                "client_id": 5,
+                "username": "alice"
+            },
+            "expectUser": null,
+            "audienceClaims": ["client_id"]
         }
     ]
 }
