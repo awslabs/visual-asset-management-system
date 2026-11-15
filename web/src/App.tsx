@@ -16,7 +16,11 @@ import { PageFooter } from "./authenticator/Footer";
 import config from "./config";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "./features/orchestration/components/ToastProvider";
-import { SIGN_OUT_ITEM_ID, useProfileMenuItems } from "./layout/useProfileMenuItems";
+import {
+    PAGE_ITEM_ID_PREFIX,
+    SIGN_OUT_ITEM_ID,
+    useProfileMenuItems,
+} from "./layout/useProfileMenuItems";
 import {
     clearLocalStore,
     clearStoredSession,
@@ -128,7 +132,11 @@ function App() {
                                 // still needs a name for assistive technologies.
                                 ariaLabel: menuText ? undefined : "Profile menu",
                                 onItemClick: (e) => {
-                                    if (e?.detail?.id === SIGN_OUT_ITEM_ID) void signOut();
+                                    const id = e?.detail?.id;
+                                    if (id === SIGN_OUT_ITEM_ID) void signOut();
+                                    // The current page's item is a checkbox item (no href).
+                                    else if (id?.startsWith(PAGE_ITEM_ID_PREFIX))
+                                        window.location.hash = id.slice(PAGE_ITEM_ID_PREFIX.length);
                                 },
                                 items: profileMenuItems,
                             },

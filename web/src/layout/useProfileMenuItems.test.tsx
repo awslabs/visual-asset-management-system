@@ -111,6 +111,74 @@ describe("useProfileMenuItems", () => {
         }
     });
 
+    describe("the current page", () => {
+        const pageItems = (items: any[]) =>
+            (items.find((item) => item.id === "group:Your pages") as any).items as any[];
+
+        afterEach(() => {
+            window.location.hash = "";
+        });
+
+        it("shows the page the user is on as checked, matching on the path and ignoring the query", async () => {
+            allowRoutes("/auth/api-keys");
+            window.location.hash = "#/auth/api-keys/?mode=user";
+            const { result } = renderHook(() => useProfileMenuItems());
+            await waitFor(() => expect(pageItems(result.current as any[])).toHaveLength(1));
+
+            const [item] = pageItems(result.current as any[]);
+            expect(item).toMatchObject({
+                id: "page:#/auth/api-keys/?mode=user",
+                itemType: "checkbox",
+                checked: true,
+            });
+            // A checkbox item takes no href; App.tsx follows it through onItemClick.
+            expect(item.href).toBeUndefined();
+        });
+
+        it("matches a path without the trailing slash or query", async () => {
+            allowRoutes("/auth/api-keys");
+            window.location.hash = "#/auth/api-keys";
+            const { result } = renderHook(() => useProfileMenuItems());
+            await waitFor(() => expect(pageItems(result.current as any[])).toHaveLength(1));
+            expect(pageItems(result.current as any[])[0].checked).toBe(true);
+        });
+
+        it("leaves the page a link while the user is elsewhere, and updates on hashchange", async () => {
+            allowRoutes("/auth/api-keys");
+            window.location.hash = "#/databases/";
+            const { result } = renderHook(() => useProfileMenuItems());
+            await waitFor(() => expect(pageItems(result.current as any[])).toHaveLength(1));
+            expect(pageItems(result.current as any[])[0]).toEqual({
+                id: "page:#/auth/api-keys/?mode=user",
+                text: "API Key Management",
+                href: "#/auth/api-keys/?mode=user",
+            });
+
+            act(() => {
+                window.location.hash = "#/auth/api-keys/?mode=user";
+                window.dispatchEvent(new HashChangeEvent("hashchange"));
+            });
+            await waitFor(() => expect(pageItems(result.current as any[])[0].checked).toBe(true));
+
+            act(() => {
+                window.location.hash = "#/pipelines/";
+                window.dispatchEvent(new HashChangeEvent("hashchange"));
+            });
+            await waitFor(() =>
+                expect(pageItems(result.current as any[])[0].checked).toBeUndefined()
+            );
+        });
+
+        it("never marks Sign out", async () => {
+            allowRoutes("/auth/api-keys");
+            window.location.hash = "#/";
+            const { result } = renderHook(() => useProfileMenuItems());
+            await waitFor(() => expect(pageItems(result.current as any[])).toHaveLength(1));
+            const items = result.current as any[];
+            expect(items[items.length - 1]).toEqual({ id: SIGN_OUT_ITEM_ID, text: "Sign out" });
+        });
+    });
+
     it("does not re-check after a successful check when the hash changes", async () => {
         allowRoutes("/auth/api-keys");
         const { result } = renderHook(() => useProfileMenuItems());

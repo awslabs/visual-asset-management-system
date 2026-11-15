@@ -163,7 +163,7 @@ web/
     layout/
       navigationRegistry.ts # The one navigation registry: core + add-on + custom, side/profile placement
       Navigation.tsx        # Left sidebar navigation (side entries)
-      useProfileMenuItems.ts # Top-bar profile menu items (profile entries, then Sign out)
+      useProfileMenuItems.ts # Top-bar profile menu items (profile entries, current page checked, then Sign out)
     utils/
       apiEndpoint.ts        # Resolves the API base URL
       chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload

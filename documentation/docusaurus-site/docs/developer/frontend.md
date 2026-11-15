@@ -56,7 +56,7 @@ web/src/
   visualizerPlugin/       # 3D/media viewer plugin system (viewers)
   layout/navigationRegistry.ts  # The one navigation registry: core + add-on + custom entries, placements
   layout/Navigation.tsx   # Left sidebar navigation (side entries)
-  layout/useProfileMenuItems.ts # Top-bar profile menu items (profile entries, then Sign out)
+  layout/useProfileMenuItems.ts # Top-bar profile menu items (profile entries, current page checked, then Sign out)
   styles/theme.css        # CSS custom properties for dark/light theme
   utils/authTokenUtils.ts # Dual-mode token utilities
 

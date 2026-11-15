@@ -27,7 +27,7 @@ The menu with your user name in the top bar lists the pages that belong to you, 
 | **API Key Management** | Opens your own API keys (**My Keys**). See [API keys](api-keys.md).                              |
 | **Sign out**           | Ends your session. It is always the last item and is available even when your pages cannot load. |
 
-The menu lists only the pages your role allows. While the check for which pages you can open is loading, or if it did not complete, the menu shows **Sign out** only; the pages appear after you next move to another page. The menu is keyboard-operable: focus it, press **Enter** to open it, use the arrow keys to move, and press **Escape** to close it. On phone-width screens the menu is the user icon in the top bar; only on the narrowest screens (about 280 px) does it move into the **More** menu.
+The page you are on is marked with a check mark in the menu, as the side navigation highlights the active page; it stays selectable. The menu lists only the pages your role allows. While the check for which pages you can open is loading, or if it did not complete, the menu shows **Sign out** only; the pages appear after you next move to another page. The menu is keyboard-operable: focus it, press **Enter** to open it, use the arrow keys to move, and press **Escape** to close it. On phone-width screens the menu is the user icon in the top bar; only on the narrowest screens (about 280 px) does it move into the **More** menu.
 
 The **Settings** menu next to it holds the theme choice, which is stored in your browser. See [Setting your theme preference](getting-started.mdx#setting-your-theme-preference).
 
