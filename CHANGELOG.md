@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
-## [2.6.7] (2026-11-13)
+## [2.6.7] (2026-11-15)
 
 ### Major Change Summary:
 
