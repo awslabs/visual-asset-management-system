@@ -13,13 +13,15 @@ import zipfile
 from typing import Dict, List, Optional, Tuple
 
 import docx
-import openpyxl
 from defusedxml import DefusedXmlException, ElementTree
 from defusedxml.ElementTree import ParseError
 from docx.opc.exceptions import PackageNotFoundError as DocxPackageNotFoundError
 from docx.table import Table
 from docx.text.paragraph import Paragraph
+from openpyxl.cell.text import Text
+from openpyxl.reader.excel import ExcelReader
 from openpyxl.utils.exceptions import InvalidFileException
+from openpyxl.xml.constants import SHARED_STRINGS, SHEET_MAIN_NS
 from pptx import Presentation
 from pptx.exc import PackageNotFoundError as PptxPackageNotFoundError
 
@@ -44,6 +46,12 @@ _PROPERTY_MAX_CHARS = 500
 _SHEET_NAMES_MAX = 50
 # Rows counted per sheet; the count stops here so a million-row workbook is not read to its end for a number.
 XLSX_MAX_ROWS_COUNTED = 200_000
+# The largest shared-strings part (its uncompressed size in the ZIP directory) whose string values are read. The
+# part holds every distinct text value of the workbook; a larger one is not read at all, and the sheets are
+# described without their text cells (blank in the columns, the samples and the text), which sys_data says.
+XLSX_SHARED_STRINGS_MAX_BYTES = 64 * 1024 * 1024
+_SHARED_STRING_TAG = "{%s}si" % SHEET_MAIN_NS
+XLSX_STRING_VALUES_SKIPPED = "skipped"
 # Slides and sheets of the captured full text are joined with a blank line; page offsets point at each part's
 # first character.
 _PAGE_SEPARATOR = "\n\n"
@@ -266,12 +274,109 @@ def _cell(value) -> str:
     return str(value)[:DATA_CELL_MAX_CHARS]
 
 
+class _StreamedSharedStrings:
+    """A workbook's shared-strings table read as a stream, only as far as the highest index a cell has looked up:
+    each `<si>` element's text is taken (as openpyxl's own table reader takes it) and the element is cleared from
+    the tree, so a sample of the first rows reads the first few strings of the part, not the whole part. With
+    ``skip`` (the part is over XLSX_SHARED_STRINGS_MAX_BYTES) nothing is read. A lookup the part does not reach
+    (skipped, past its end, or past a point it stops parsing at) is None, which the sheet reads as a blank cell."""
+
+    def __init__(self, archive: zipfile.ZipFile, name: str, skip: bool):
+        self._archive = archive
+        self._name = name
+        self._strings: List[str] = []
+        self._source = None
+        self._events = None
+        self._root = None
+        self.skipped = skip
+        self.done = skip
+        self.error: Optional[str] = None
+
+    def __getitem__(self, index: int) -> Optional[str]:
+        while index >= len(self._strings) and not self.done:
+            self._read_next()
+        return self._strings[index] if 0 <= index < len(self._strings) else None
+
+    def __len__(self) -> int:
+        return len(self._strings)
+
+    def _read_next(self) -> None:
+        if self._events is None:
+            self._source = self._archive.open(self._name)
+            self._events = ElementTree.iterparse(self._source, events=("start", "end"))
+        try:
+            for event, node in self._events:
+                if event == "start":
+                    if self._root is None:
+                        self._root = node
+                    continue
+                if node.tag == _SHARED_STRING_TAG:
+                    self._strings.append(Text.from_tree(node).content.replace("x005F_", ""))
+                    # The root keeps no finished element, so memory stays flat however far the part is read.
+                    self._root.clear()
+                    return
+        except (ParseError, DefusedXmlException) as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+        self.done = True
+        self.close()
+
+    def close(self) -> None:
+        if self._source is not None:
+            self._source.close()
+            self._source = None
+            self._events = None
+
+
+class _StreamingWorkbookReader(ExcelReader):
+    """openpyxl's read-only, values-only workbook reader (what ``load_workbook(read_only=True, data_only=True)``
+    builds), with the shared-strings table streamed on demand (_StreamedSharedStrings) instead of loaded whole:
+    openpyxl's own reader parses every string of the part into memory before the first sheet row is read."""
+
+    def __init__(self, path: str):
+        super().__init__(path, read_only=True, data_only=True)
+        self.shared_strings_bytes = 0
+
+    def read_strings(self) -> None:
+        part = self.package.find(SHARED_STRINGS)
+        if part is None:
+            return
+        name = part.PartName[1:]
+        self.shared_strings_bytes = self.archive.getinfo(name).file_size
+        self.shared_strings = _StreamedSharedStrings(
+            self.archive, name, skip=self.shared_strings_bytes > XLSX_SHARED_STRINGS_MAX_BYTES)
+
+
+def _open_workbook(path: str) -> _StreamingWorkbookReader:
+    reader = _StreamingWorkbookReader(path)
+    try:
+        reader.read()
+    except BaseException:
+        reader.archive.close()
+        raise
+    return reader
+
+
+def _declared_data_rows(sheet) -> Optional[int]:
+    """The rows below the header that the sheet's `<dimension>` declares, or None when it declares none. A read-only
+    sheet yields its rows from row 1 to the declared last row (padding gaps with empty rows), so this is the number
+    a scan of the sheet would count, known before any row is read."""
+    max_row = sheet.max_row
+    return None if max_row is None else max(0, int(max_row) - 1)
+
+
 def extract_xlsx(path: str, ctx: ExtractContext) -> BranchResult:
+    """sys_data for a workbook: sheet names, the first sheet's columns, row count and sample rows, and the text of
+    each sheet when the context captures it. The read is bounded: the shared strings are streamed only as far as
+    the rows read need them (none when the part is over XLSX_SHARED_STRINGS_MAX_BYTES); a sheet's row count comes
+    from its declared dimension, or from a scan that stops at XLSX_MAX_ROWS_COUNTED; and a sheet is read only as
+    far as its sample rows, its count and its share of the text need."""
     result = BranchResult(file_class=CLASS_DATA)
     try:
-        workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        reader = _open_workbook(path)
     except _OPEN_ERRORS as exc:
         return _unreadable(result, "sys_data", "XLSX", exc)
+    workbook = reader.wb
+    strings = reader.shared_strings
     collector = _TextCollector()
     first_columns: List[str] = []
     first_sample: List[List[str]] = []
@@ -280,16 +385,20 @@ def extract_xlsx(path: str, ctx: ExtractContext) -> BranchResult:
     try:
         sheet_names = list(workbook.sheetnames)
         for number, name in enumerate(sheet_names, start=1):
+            sheet = workbook[name]
+            declared = _declared_data_rows(sheet)
             header: Optional[List[str]] = None
             sample: List[List[str]] = []
-            rows = 0
-            capped = False
+            if declared is None:
+                rows, capped = 0, False
+            else:
+                rows, capped = min(declared, XLSX_MAX_ROWS_COUNTED), declared > XLSX_MAX_ROWS_COUNTED
             lines = [f"Sheet: {name}"]
             line_chars = len(lines[0])
             # The text this sheet may still add: the cap less what the earlier sheets used.
             want_text = ctx.capture_full_text and not collector.truncated
             text_budget = CONTENT_TEXT_MAX_CHARS - collector.length
-            for row in workbook[name].iter_rows(values_only=True):
+            for row in sheet.iter_rows(values_only=True):
                 cells = [_cell(value) for value in row[:DATA_MAX_COLUMNS]]
                 line = "\t".join(cells)
                 if header is None:
@@ -297,17 +406,20 @@ def extract_xlsx(path: str, ctx: ExtractContext) -> BranchResult:
                     lines.append(line)
                     line_chars += len(line) + 1
                     continue
-                if rows < XLSX_MAX_ROWS_COUNTED:
-                    rows += 1
-                else:
-                    capped = True
+                if declared is None:
+                    if rows < XLSX_MAX_ROWS_COUNTED:
+                        rows += 1
+                    else:
+                        capped = True
                 if len(sample) < DATA_SAMPLE_ROWS:
                     sample.append(cells)
                 if want_text and line_chars < text_budget:
                     lines.append(line)
                     line_chars += len(line) + 1
-                # One pass feeds the sample, the count and the text; it ends once none of them needs another row.
-                if capped and len(sample) >= DATA_SAMPLE_ROWS and (not want_text or line_chars >= text_budget):
+                # One pass feeds the sample, the count and the text; it ends once none of them needs another row
+                # (a declared dimension has given the count already).
+                counted = declared is not None or capped
+                if counted and len(sample) >= DATA_SAMPLE_ROWS and (not want_text or line_chars >= text_budget):
                     break
             if number == 1:
                 first_columns, first_sample, first_rows, first_capped = header or [], sample, rows, capped
@@ -315,6 +427,8 @@ def extract_xlsx(path: str, ctx: ExtractContext) -> BranchResult:
                 collector.add("\n".join(lines), number, name)
     finally:
         workbook.close()
+        if isinstance(strings, _StreamedSharedStrings):
+            strings.close()
     sys_data: Dict[str, object] = {
         "format": "XLSX",
         "decodable": True,
@@ -326,6 +440,16 @@ def extract_xlsx(path: str, ctx: ExtractContext) -> BranchResult:
         "rowCountExact": not first_capped,
         "sampleRows": first_sample,
     }
+    if isinstance(strings, _StreamedSharedStrings) and strings.skipped:
+        note = (f"the shared-strings part is {reader.shared_strings_bytes:,} bytes uncompressed, over the "
+                f"{XLSX_SHARED_STRINGS_MAX_BYTES:,}-byte read bound, so it was not read: text cells are blank in "
+                "the columns, the sample rows and the text; the counts and the numeric values stand")
+        sys_data["stringValues"] = XLSX_STRING_VALUES_SKIPPED
+        sys_data["stringValuesNote"] = note
+        result.warnings.append(f"{ctx.file_name}: text cell values not read: {note}")
+    elif isinstance(strings, _StreamedSharedStrings) and strings.error:
+        result.warnings.append(f"{ctx.file_name}: the shared-strings part stopped parsing after {len(strings):,} "
+                               f"strings ({strings.error}); later text cells read as blank")
     result.attributes["sys_data"] = sys_data
     result.facts["sheets"] = human_count(len(sheet_names), "sheet")
     result.facts["columns"] = human_count(len(first_columns), "column")
