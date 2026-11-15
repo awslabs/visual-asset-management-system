@@ -109,6 +109,16 @@ ARCHIVE_MAX_LISTED_ENTRIES = 50
 # A zip member an extractor reads whole into memory (an OPC package's docProps parts, a few kilobytes in practice)
 # is refused above this uncompressed size, which read_zip_member checks from the central directory first.
 ZIP_MEMBER_READ_MAX_BYTES = 4 * 1024 * 1024
+# A zip container's listing: the end-of-central-directory record is looked for in the file's last
+# ZIP_TAIL_READ_BYTES (the record, a comment of up to 64 KiB, and the ZIP64 locator and record before it), and a
+# central directory over ZIP_CENTRAL_DIRECTORY_MAX_BYTES is not parsed: its entry count and size come from that
+# record and the listing is marked skipped. No member is decompressed except the two OPC docProps parts.
+ZIP_TAIL_READ_BYTES = 128 * 1024
+ZIP_CENTRAL_DIRECTORY_MAX_BYTES = 64 * 1024 * 1024
+# A tar container is listed by scanning its member headers, which for a compressed tar decompresses the stream;
+# the scan stops at whichever bound it reaches first and the listing is marked partial.
+TAR_SCAN_MAX_MEMBERS = 100_000
+TAR_SCAN_MAX_SECONDS = 120
 # Tabular data.
 DATA_SAMPLE_ROWS = 5
 DATA_MAX_COLUMNS = 200

@@ -42,6 +42,7 @@ from media_extractors.common import (
     class_for_extension,
     scrub_urls,
 )
+from media_extractors.s3_ranged import RangedS3Reader
 from media_extractors.s3_regions import client_for_bucket, register_bucket_regions
 import videoSegments
 from contentChunks import CONTENT_EMBED_MAX_FILE_BYTES, CONTENT_TEXT_MAX_CHARS
@@ -90,6 +91,10 @@ _JSON_SNIFFED_CLASSES = (CLASS_TEXT, CLASS_TILES3D, CLASS_DATA)
 URL_READ_CLASSES = (CLASS_VIDEO, CLASS_AUDIO)
 # The presigned input URL's lifetime: longer than the function's 600-second timeout.
 INPUT_PRESIGN_SECONDS = 900
+# constructPipeline's signature-sniff labels (sys_file.detectedFormat) for a zip container, and for a tar or a
+# compressed stream that may hold one.
+ZIP_DETECTED_FORMAT = "zip"
+TAR_DETECTED_FORMATS = ("tar", "gzip", "bzip2", "xz")
 
 _EXTRACTORS: Dict[str, Callable[[str, ExtractContext], BranchResult]] = {
     CLASS_VIDEO: video.extract_video,
@@ -296,17 +301,46 @@ def upload_full_text(result: BranchResult, aux_bucket: str, aux_prefix: str) -> 
     }
 
 
-def oversized_input_result(file_class: str, file_name: str, file_size: int) -> BranchResult:
+def oversized_input_result(file_class: str, file_name: str, file_size: int,
+                           detected_format: Optional[str] = None) -> BranchResult:
     """The result for an input the image does not download and reads no other way: the state's class and the
     pre-written `sys_file` attributes stand, no render is produced, and a warning names the size and the bound.
     The MEDIA image reads a file from its ephemeral storage, so a file over INPUT_MAX_DOWNLOAD_BYTES would fail
-    the download rather than the extractor, and geospatial containers in particular reach that size."""
-    return BranchResult(
-        file_class=file_class,
-        render_skipped=RENDER_SKIPPED_SIZE,
-        warnings=[f"{file_name}: {file_size} bytes exceeds the {INPUT_MAX_DOWNLOAD_BYTES}-byte input bound; the file "
-                  "was not downloaded and sys_file attributes alone describe it"],
-    )
+    the download rather than the extractor, and geospatial containers in particular reach that size. A tar
+    archive, plain or compressed, is listed only from a downloaded copy, which the warning says."""
+    warning = (f"{file_name}: {file_size} bytes exceeds the {INPUT_MAX_DOWNLOAD_BYTES}-byte input bound; the file "
+               "was not downloaded and sys_file attributes alone describe it")
+    if file_class == CLASS_OTHER and detected_format in TAR_DETECTED_FORMATS:
+        warning += (" (a tar archive, plain or compressed, is listed from a downloaded copy, so one over the bound "
+                    "gets no sys_archive listing)")
+    return BranchResult(file_class=file_class, render_skipped=RENDER_SKIPPED_SIZE, warnings=[warning])
+
+
+def detected_format_of(manifest: dict) -> Optional[str]:
+    """The format constructPipeline's signature sniff recorded in the pre-written sys_file, or None."""
+    sys_file = (manifest.get("attributes") or {}).get("sys_file") or {}
+    value = sys_file.get("detectedFormat")
+    return str(value) if value else None
+
+
+def list_zip_by_range(bucket: str, key: str, version_id: Optional[str], file_size: int,
+                      ctx: ExtractContext) -> Optional[BranchResult]:
+    """The sys_archive listing of a zip container of any size, read by ranged GETs of the input at its version
+    (signed for the bucket's Region) instead of downloaded: the end-of-central-directory record, the central
+    directory (up to ZIP_CENTRAL_DIRECTORY_MAX_BYTES; a larger one is not read) and, for an OPC package, its two
+    bounded docProps parts. None when the bytes carry no end-of-central-directory record (a truncated file, or not
+    a zip), so the caller takes the usual path. One log line counts the GETs and the bytes they read."""
+    reader = RangedS3Reader(client_for_bucket(bucket, s3_client), bucket, key, version_id, size=file_size or None)
+    result = None
+    try:
+        result = generic.list_zip(reader, reader.size, ctx)
+    finally:
+        archive = (result.attributes.get("sys_archive") if result is not None else None) or {}
+        logger.info({"message": "ZIP container read by range", "fileSize": reader.size,
+                     "rangedGets": reader.gets, "bytesRead": reader.bytes_read,
+                     "listed": result is not None, "listing": archive.get("listing", "full" if archive else None),
+                     "entryCount": archive.get("entryCount")})
+    return result
 
 
 def presign_input(bucket: str, key: str, version_id: Optional[str]) -> str:
@@ -338,6 +372,25 @@ def read_by_url(file_class: str, url: str, ctx: ExtractContext, file_name: str, 
             f"{file_class} was read over a presigned URL by range, not downloaded")
     result.warnings.insert(0, note)
     return result
+
+
+def read_input(extractor: Callable, file_class: str, bucket: str, key: str, version_id: Optional[str],
+               file_size: int, detected_format: Optional[str], ctx: ExtractContext) -> BranchResult:
+    """The class extractor's result for the input, read within INPUT_MAX_DOWNLOAD_BYTES from a downloaded copy.
+    Over the bound, decided from the state's fileSize before any byte is fetched: a video or audio file is read
+    over a presigned URL by range (nothing is downloaded; the stream facts, keyframes and segment plan come from the
+    ranged reads), and any other class keeps the pre-written sys_file attributes, since the file would not fit
+    beside the image's other temporary files."""
+    if file_size > INPUT_MAX_DOWNLOAD_BYTES and file_class in URL_READ_CLASSES:
+        logger.info({"message": "MEDIA extract by URL: input over the download bound", "fileClass": file_class,
+                     "fileSize": file_size, "inputMaxDownloadBytes": INPUT_MAX_DOWNLOAD_BYTES})
+        return read_by_url(file_class, presign_input(bucket, key, version_id), ctx, ctx.file_name, file_size)
+    if file_size > INPUT_MAX_DOWNLOAD_BYTES:
+        logger.info({"message": "MEDIA extract skipped: input over the download bound", "fileClass": file_class,
+                     "fileSize": file_size, "inputMaxDownloadBytes": INPUT_MAX_DOWNLOAD_BYTES})
+        return oversized_input_result(file_class, ctx.file_name, file_size, detected_format)
+    local_path = download_input(bucket, key, version_id, ctx.work_dir, ctx.file_name)
+    return extractor(local_path, ctx)
 
 
 def skip_full_text_for_size(manifest: dict, file_size: int) -> None:
@@ -432,21 +485,14 @@ def lambda_handler(event, context):
             capture_full_text=capture_full_text,
             render_images=render_images,
         )
-        if file_size > INPUT_MAX_DOWNLOAD_BYTES and file_class in URL_READ_CLASSES:
-            # Over the download bound a video or audio file is read over a presigned URL by range: nothing is
-            # downloaded, and the stream facts, keyframes and segment plan come from the ranged reads.
-            logger.info({"message": "MEDIA extract by URL: input over the download bound", "fileClass": file_class,
-                         "fileSize": file_size, "inputMaxDownloadBytes": INPUT_MAX_DOWNLOAD_BYTES})
-            result = read_by_url(file_class, presign_input(bucket, key, version_id), ctx, file_name, file_size)
-        elif file_size > INPUT_MAX_DOWNLOAD_BYTES:
-            # Decided from the state's fileSize before any byte is fetched: the file would not fit beside the
-            # image's other temporary files, so the pre-written sys_file attributes describe it.
-            result = oversized_input_result(file_class, file_name, file_size)
-            logger.info({"message": "MEDIA extract skipped: input over the download bound", "fileClass": file_class,
-                         "fileSize": file_size, "inputMaxDownloadBytes": INPUT_MAX_DOWNLOAD_BYTES})
-        else:
-            local_path = download_input(bucket, key, version_id, work_dir, file_name)
-            result = extractor(local_path, ctx)
+        detected_format = detected_format_of(existing)
+        result = None
+        if file_class == CLASS_OTHER and detected_format == ZIP_DETECTED_FORMAT:
+            # A zip container of any size is listed from its central directory by ranged reads; one whose bytes
+            # carry no end-of-central-directory record takes the usual path.
+            result = list_zip_by_range(bucket, key, version_id, file_size, ctx)
+        if result is None:
+            result = read_input(extractor, file_class, bucket, key, version_id, file_size, detected_format, ctx)
         result.warnings = config_warnings + list(result.warnings)
         render_keys = upload_renders(result.render_images, aux_bucket, aux_prefix)
         manifest = merge_manifest(existing, result, render_keys)

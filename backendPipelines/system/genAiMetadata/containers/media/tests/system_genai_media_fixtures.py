@@ -345,25 +345,45 @@ def failing_read_frames(path):
 
 
 class FakeS3:
-    """The three S3 calls the handler makes, over an in-memory (bucket, key) -> bytes store."""
+    """The S3 calls the handlers make, over an in-memory (bucket, key) -> bytes store. A ranged GetObject returns
+    the slice it names; `files` maps a (bucket, key) to a local file served by range (a large sparse archive),
+    which download_file refuses. `ranged_gets` records each ranged read as (bucket, key, range, version id)."""
 
     def __init__(self):
         self.objects = {}
+        self.files = {}
         self.puts = []
         self.downloads = []
         self.presigns = []
+        self.ranged_gets = []
 
     def generate_presigned_url(self, ClientMethod, Params, ExpiresIn):
         self.presigns.append((ClientMethod, dict(Params), ExpiresIn))
         version = Params.get("VersionId", "")
         return f"https://{Params['Bucket']}.s3.amazonaws.com/{Params['Key']}?versionId={version}&X-Amz-Expires={ExpiresIn}"
 
-    def get_object(self, Bucket, Key):
+    def head_object(self, Bucket, Key, VersionId=None):
+        if (Bucket, Key) in self.files:
+            return {"ContentLength": os.path.getsize(self.files[(Bucket, Key)])}
+        return {"ContentLength": len(self.objects[(Bucket, Key)])}
+
+    def get_object(self, Bucket, Key, Range=None, VersionId=None):
         from botocore.exceptions import ClientError
 
-        if (Bucket, Key) not in self.objects:
+        if Range is None and (Bucket, Key) in self.files:
+            raise AssertionError(f"whole-object GET of {Key}")
+        if (Bucket, Key) not in self.objects and (Bucket, Key) not in self.files:
             raise ClientError({"Error": {"Code": "NoSuchKey", "Message": Key}}, "GetObject")
-        return {"Body": io.BytesIO(self.objects[(Bucket, Key)])}
+        if Range is None:
+            return {"Body": io.BytesIO(self.objects[(Bucket, Key)])}
+        self.ranged_gets.append((Bucket, Key, Range, VersionId))
+        first, _, last = Range[len("bytes="):].partition("-")
+        start, end = int(first), int(last)
+        if (Bucket, Key) in self.files:
+            with open(self.files[(Bucket, Key)], "rb") as handle:
+                handle.seek(start)
+                return {"Body": io.BytesIO(handle.read(end - start + 1))}
+        return {"Body": io.BytesIO(self.objects[(Bucket, Key)][start:end + 1])}
 
     def put_object(self, Bucket, Key, Body, **kwargs):
         payload = Body.read() if hasattr(Body, "read") else Body
@@ -372,6 +392,8 @@ class FakeS3:
         return {}
 
     def download_file(self, Bucket, Key, Filename, ExtraArgs=None):
+        if (Bucket, Key) in self.files:
+            raise AssertionError(f"whole-object download of {Key}")
         self.downloads.append((Bucket, Key, (ExtraArgs or {}).get("VersionId")))
         with open(Filename, "wb") as handle:
             handle.write(self.objects[(Bucket, Key)])

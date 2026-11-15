@@ -9,11 +9,20 @@ properties); readable text takes the text extractor. A file no probe recognises 
 constructPipeline `sys_file` facts (size, content type, last-modified time, S3 metadata, detected format).
 
 The probes run in order and the first that recognises the file decides: Pillow, then an ffmpeg header read
-(a video stream -> video, audio only -> audio), then the archive formats, then a text decode."""
+(a video stream -> video, audio only -> audio), then the archive formats, then a text decode.
+
+A zip container is listed from its end-of-central-directory record and central directory only (`list_zip`, over
+any seekable file object), so the handler lists one of any size by ranged reads of the S3 object without
+downloading it; a central directory over ZIP_CENTRAL_DIRECTORY_MAX_BYTES is not parsed, and the record's entry
+count and directory size stand with `listing: "skipped"`. No member is decompressed except the two OPC docProps
+parts, each bounded. A tar container's header scan stops at TAR_SCAN_MAX_MEMBERS members or TAR_SCAN_MAX_SECONDS
+seconds, whichever comes first, and its listing is then marked `partial`."""
 
 import os
+import struct
 import subprocess
 import tarfile
+import time
 import zipfile
 from typing import Callable, Dict, List, Optional
 
@@ -26,6 +35,10 @@ from .common import (
     ARCHIVE_MAX_LISTED_ENTRIES,
     CLASS_AUDIO,
     CLASS_OTHER,
+    TAR_SCAN_MAX_MEMBERS,
+    TAR_SCAN_MAX_SECONDS,
+    ZIP_CENTRAL_DIRECTORY_MAX_BYTES,
+    ZIP_TAIL_READ_BYTES,
     BranchResult,
     ExtractContext,
     ZipMemberTooLarge,
@@ -132,8 +145,9 @@ def _archive_entries(names: List[str], sizes: List[int]) -> Dict[str, object]:
 
 def _opc_part_properties(archive: zipfile.ZipFile, part: str, ctx: ExtractContext,
                          result: BranchResult) -> Dict[str, object]:
-    """The bounded leaf values of one OPC properties part. A part over the read limit, or one that declares
-    entities, is not parsed and is noted on the result instead."""
+    """The bounded leaf values of one OPC properties part. A part over the read limit, one that declares
+    entities, or one the reader could not fetch (a ranged read over its bound) is not parsed and is noted on the
+    result instead."""
     try:
         return bounded_tags(_xml_leaf_values(read_zip_member(archive, part)))
     except ZipMemberTooLarge as exc:
@@ -141,54 +155,176 @@ def _opc_part_properties(archive: zipfile.ZipFile, part: str, ctx: ExtractContex
     except defusedxml.DefusedXmlException as exc:
         result.warnings.append(f"{ctx.file_name}: {part} was not read: it declares entities or external "
                                f"references ({type(exc).__name__})")
+    except (OSError, zipfile.BadZipFile) as exc:
+        result.warnings.append(f"{ctx.file_name}: {part} was not read: {exc}")
     return {}
+
+
+# The end-of-central-directory record (22 bytes), its ZIP64 locator (20) and the ZIP64 record (56).
+_EOCD_SIGNATURE = b"PK\x05\x06"
+_EOCD_STRUCT = struct.Struct("<4s4H2LH")
+_ZIP64_LOCATOR_SIGNATURE = b"PK\x06\x07"
+_ZIP64_LOCATOR_STRUCT = struct.Struct("<4sLQL")
+_ZIP64_RECORD_SIGNATURE = b"PK\x06\x06"
+_ZIP64_RECORD_STRUCT = struct.Struct("<4sQ2H2L4Q")
+
+
+def read_zip_end_record(fileobj, size: int) -> Optional[Dict[str, int]]:
+    """``{"entryCount", "centralDirectoryBytes", "centralDirectoryOffset"}`` from a zip container's
+    end-of-central-directory record (its ZIP64 record when the classic one is saturated), found in the file's
+    last ZIP_TAIL_READ_BYTES; ``None`` when the file has no such record (not a zip, or a truncated one) or the
+    record names a directory larger than the file. ``entryCount`` counts every central-directory record,
+    directories included."""
+    if size < _EOCD_STRUCT.size:
+        return None
+    tail_start = max(0, size - ZIP_TAIL_READ_BYTES)
+    fileobj.seek(tail_start)
+    tail = fileobj.read(size - tail_start)
+
+    def read_at(offset: int, length: int) -> bytes:
+        if offset < 0 or offset + length > size:
+            return b""
+        if offset >= tail_start:
+            return tail[offset - tail_start:offset - tail_start + length]
+        fileobj.seek(offset)
+        return fileobj.read(length)
+
+    position = tail.rfind(_EOCD_SIGNATURE)
+    while position >= 0 and position + _EOCD_STRUCT.size > len(tail):
+        position = tail.rfind(_EOCD_SIGNATURE, 0, position)
+    if position < 0:
+        return None
+    _sig, _disk, _cd_disk, _disk_entries, entries, cd_bytes, cd_offset, _comment = _EOCD_STRUCT.unpack_from(
+        tail, position)
+    record_offset = tail_start + position
+    if entries == 0xFFFF or cd_bytes == 0xFFFFFFFF or cd_offset == 0xFFFFFFFF:
+        locator = read_at(record_offset - _ZIP64_LOCATOR_STRUCT.size, _ZIP64_LOCATOR_STRUCT.size)
+        if locator[:4] != _ZIP64_LOCATOR_SIGNATURE:
+            return None
+        zip64_offset = _ZIP64_LOCATOR_STRUCT.unpack(locator)[2]
+        zip64 = read_at(zip64_offset, _ZIP64_RECORD_STRUCT.size)
+        if zip64[:4] != _ZIP64_RECORD_SIGNATURE:
+            # Data before the archive (a self-extracting stub) shifts every offset; the record sits just before
+            # its locator.
+            zip64 = read_at(record_offset - _ZIP64_LOCATOR_STRUCT.size - _ZIP64_RECORD_STRUCT.size,
+                            _ZIP64_RECORD_STRUCT.size)
+        if zip64[:4] != _ZIP64_RECORD_SIGNATURE:
+            return None
+        fields = _ZIP64_RECORD_STRUCT.unpack(zip64)
+        entries, cd_bytes, cd_offset = fields[7], fields[8], fields[9]
+    if cd_bytes > size:
+        return None
+    return {"entryCount": int(entries), "centralDirectoryBytes": int(cd_bytes),
+            "centralDirectoryOffset": int(cd_offset)}
+
+
+def _zip_facts(result: BranchResult, section: Dict[str, object]) -> None:
+    result.attributes["sys_archive"] = section
+    result.facts["container"] = "zip archive"
+    count = int(section["entryCount"])
+    entries = f"{count:,} {'entry' if count == 1 else 'entries'}"
+    if section.get("listing") == "skipped":
+        entries += " (directory not read)"
+    result.facts["entries"] = entries
+
+
+def list_zip(fileobj, size: int, ctx: ExtractContext) -> Optional[BranchResult]:
+    """The `sys_archive` description of the zip container ``fileobj`` (``size`` bytes, any seekable file object:
+    a local file or the handler's ranged S3 reader). Only the end-of-central-directory record and the central
+    directory are read, and the two OPC docProps parts when the archive carries them. A central directory over
+    ZIP_CENTRAL_DIRECTORY_MAX_BYTES is not parsed: the record's entry count and the directory's size are recorded
+    with ``listing: "skipped"`` and the reason. ``None`` when the file carries no end-of-central-directory record,
+    so the caller falls back to the probe chain; a directory that does not parse keeps the class `other` with a
+    warning and no `sys_archive`."""
+    end = read_zip_end_record(fileobj, size)
+    if end is None:
+        return None
+    result = BranchResult(file_class=CLASS_OTHER)
+    if end["centralDirectoryBytes"] > ZIP_CENTRAL_DIRECTORY_MAX_BYTES:
+        note = (f"the central directory is {end['centralDirectoryBytes']:,} bytes, over the "
+                f"{ZIP_CENTRAL_DIRECTORY_MAX_BYTES:,}-byte bound, so it was not read; entryCount is the record count "
+                f"the end-of-central-directory record states, directories included")
+        section: Dict[str, object] = {
+            "containerFormat": "zip",
+            "entryCount": end["entryCount"],
+            "centralDirectoryBytes": end["centralDirectoryBytes"],
+            "listing": "skipped",
+            "listingNote": note,
+        }
+        result.warnings.append(f"{ctx.file_name}: zip entries not listed: {note}")
+        _zip_facts(result, section)
+        return result
+    try:
+        with zipfile.ZipFile(fileobj) as archive:
+            infos = [info for info in archive.infolist() if not info.is_dir()]
+            names = [info.filename for info in infos]
+            section = _archive_entries(names, [info.file_size for info in infos])
+            section["containerFormat"] = "zip"
+            if _OPC_CORE_PART in archive.NameToInfo:
+                core = _opc_part_properties(archive, _OPC_CORE_PART, ctx, result)
+                if core:
+                    section["coreProperties"] = core
+            if _OPC_APP_PART in archive.NameToInfo:
+                app = _opc_part_properties(archive, _OPC_APP_PART, ctx, result)
+                if app:
+                    section["appProperties"] = app
+    except (zipfile.BadZipFile, OSError, RuntimeError, ValueError) as exc:
+        result.warnings.append(f"{ctx.file_name}: zip container could not be read: {exc}")
+        return result
+    _zip_facts(result, section)
+    return result
 
 
 def _probe_zip(path: str, ctx: ExtractContext) -> Optional[BranchResult]:
     if not zipfile.is_zipfile(path):
         return None
-    result = BranchResult(file_class=CLASS_OTHER)
-    try:
-        with zipfile.ZipFile(path) as archive:
-            infos = [info for info in archive.infolist() if not info.is_dir()]
-            names = [info.filename for info in infos]
-            section = _archive_entries(names, [info.file_size for info in infos])
-            section["containerFormat"] = "zip"
-            if _OPC_CORE_PART in archive.namelist():
-                core = _opc_part_properties(archive, _OPC_CORE_PART, ctx, result)
-                if core:
-                    section["coreProperties"] = core
-            if _OPC_APP_PART in archive.namelist():
-                app = _opc_part_properties(archive, _OPC_APP_PART, ctx, result)
-                if app:
-                    section["appProperties"] = app
-    except (zipfile.BadZipFile, OSError, RuntimeError) as exc:
-        result.warnings.append(f"{ctx.file_name}: zip container could not be read: {exc}")
-        return result
-    result.attributes["sys_archive"] = section
-    result.facts["container"] = "zip archive"
-    result.facts["entries"] = f"{section['entryCount']:,} {'entry' if section['entryCount'] == 1 else 'entries'}"
-    return result
+    with open(path, "rb") as handle:
+        return list_zip(handle, os.path.getsize(path), ctx)
 
 
-def _probe_tar(path: str, ctx: ExtractContext) -> Optional[BranchResult]:
+def _probe_tar(path: str, ctx: ExtractContext, clock: Callable[[], float] = time.monotonic) -> Optional[BranchResult]:
     try:
         if not tarfile.is_tarfile(path):
             return None
     except (OSError, ValueError):
         return None
     result = BranchResult(file_class=CLASS_OTHER)
+    names: List[str] = []
+    sizes: List[int] = []
+    scanned = 0
+    stopped = None
     try:
         with tarfile.open(path) as archive:
-            members = [member for member in archive.getmembers() if member.isfile()]
-            section = _archive_entries([member.name for member in members], [member.size for member in members])
-            section["containerFormat"] = "tar"
-    except (tarfile.TarError, OSError) as exc:
-        result.warnings.append(f"{ctx.file_name}: tar container could not be read: {exc}")
-        return result
+            started = clock()
+            # Member by member: a compressed tar is decompressed as the scan moves through it, so the scan stops at
+            # whichever bound it reaches first rather than reading the whole stream.
+            for member in archive:
+                if scanned >= TAR_SCAN_MAX_MEMBERS:
+                    stopped = f"the header scan stopped at the {TAR_SCAN_MAX_MEMBERS:,}-member bound"
+                    break
+                if clock() - started > TAR_SCAN_MAX_SECONDS:
+                    stopped = f"the header scan stopped at the {TAR_SCAN_MAX_SECONDS}-second bound"
+                    break
+                scanned += 1
+                if member.isfile():
+                    names.append(member.name)
+                    sizes.append(member.size)
+    except (tarfile.TarError, OSError, EOFError) as exc:
+        if not scanned:
+            result.warnings.append(f"{ctx.file_name}: tar container could not be read: {exc}")
+            return result
+        stopped = f"the header scan stopped at an unreadable member ({type(exc).__name__})"
+    section = _archive_entries(names, sizes)
+    section["containerFormat"] = "tar"
+    if stopped:
+        section["partial"] = True
+        section["listingNote"] = (f"{stopped}; entryCount and uncompressedBytes count the files among the "
+                                  f"{scanned:,} members read")
+        result.warnings.append(f"{ctx.file_name}: tar listing is partial: {section['listingNote']}")
     result.attributes["sys_archive"] = section
     result.facts["container"] = "tar archive"
-    result.facts["entries"] = f"{section['entryCount']:,} {'entry' if section['entryCount'] == 1 else 'entries'}"
+    result.facts["entries"] = (f"{section['entryCount']:,} {'entry' if section['entryCount'] == 1 else 'entries'}"
+                               + (" (partial)" if stopped else ""))
     return result
 
 
