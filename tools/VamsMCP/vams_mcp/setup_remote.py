@@ -24,7 +24,13 @@ from urllib.parse import urlsplit
 import requests
 
 from .config import ConfigError
-from .remote_auth import MAX_AUDIENCES, PROVIDER_COGNITO, PROVIDER_EXTERNAL, RemoteAuthSettings
+from .remote_auth import (
+    MAX_AUDIENCES,
+    PROVIDER_COGNITO,
+    PROVIDER_EXTERNAL,
+    SUPPORTED_AUDIENCE_CLAIMS,
+    RemoteAuthSettings,
+)
 
 HTTP_TIMEOUT = (5, 15)
 DEFAULT_OUTPUT = "vams-mcp-remote-auth.json"
@@ -109,9 +115,13 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
     if len(audiences) > MAX_AUDIENCES:
         raise SetupError(f"at most {MAX_AUDIENCES} audiences can be configured")
 
+    user_id_claim: Optional[str] = None
+    audience_claims: List[str] = []
     pool_id = _set(amplify.get("cognitoUserPoolId"))
     if pool_id:
         provider = PROVIDER_COGNITO
+        if args.audience_claim or args.user_id_claim:
+            raise SetupError("--audience-claim and --user-id-claim apply to an external IdP deployment only")
         for value in audiences:
             if not _COGNITO_CLIENT_ID.match(value):
                 raise SetupError(f"'{value}' is not a Cognito app client id")
@@ -153,6 +163,11 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
         if not issuer or not jwks_uri:
             raise SetupError("the external IdP's discovery document names no issuer or jwks_uri")
         scopes = tuple((args.scopes or _set(amplify.get("externalOAuthIdpScope")) or "openid").split())
+        # The deployment reports the claim its API reads the user id from (blank or "undefined" when
+        # not set); the audience claims are not published, so they come from --audience-claim and must
+        # equal the deployment's lambdaAuthorizorJWTAudienceClaims.
+        user_id_claim = args.user_id_claim or _set(amplify.get("externalOAuthIdpUserIdClaim"))
+        audience_claims = list(dict.fromkeys(args.audience_claim or []))
         authorization_url = _set(document.get("authorization_endpoint")) or _set(
             amplify.get("externalOAuthIdpAuthorizationEndpoint")
         )
@@ -175,6 +190,10 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
         # Recorded so the server refuses to start if the file is later edited to accept the web
         # application's tokens.
         data["webAppClientId"] = web_client_id
+    if audience_claims:
+        data["audienceClaims"] = audience_claims
+    if user_id_claim:
+        data["userIdClaim"] = user_id_claim
     try:
         return RemoteAuthSettings.from_dict(data)
     except ConfigError as exc:
@@ -233,6 +252,19 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--cognito-domain", help="The Cognito user pool domain, for the authorization URLs")
     parser.add_argument("--issuer", help="External IdP: the issuer of its access tokens, when discovery differs")
+    parser.add_argument(
+        "--audience-claim",
+        action="append",
+        choices=SUPPORTED_AUDIENCE_CLAIMS,
+        help="External IdP: a token claim the audience is read from (repeatable, in order; default aud). "
+        "Must equal the deployment's lambdaAuthorizorJWTAudienceClaims, for example client_id for access "
+        "tokens that carry no aud",
+    )
+    parser.add_argument(
+        "--user-id-claim",
+        help="External IdP: the token claim the user id is read from, when the deployment does not "
+        "publish it (default: the deployment's externalOAuthIdpUserIdClaim)",
+    )
     parser.add_argument("--scopes", help="Space-separated scopes the MCP client requests")
     parser.add_argument("--output", default=DEFAULT_OUTPUT, help=f"The file to write (default {DEFAULT_OUTPUT})")
     parser.add_argument("--force", action="store_true", help="Replace an existing file")

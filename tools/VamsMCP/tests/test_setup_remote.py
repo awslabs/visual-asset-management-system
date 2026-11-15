@@ -157,3 +157,48 @@ def test_the_fallback_user_pool_host_follows_the_partition():
     assert setup_remote._dns_suffix("eusc-de-east-1") == "amazonaws.eu"
     assert setup_remote._dns_suffix("us-gov-west-1") == "amazonaws.com"
     assert setup_remote._dns_suffix("us-east-1") == "amazonaws.com"
+
+
+def test_external_idp_setup_records_the_deployments_user_id_claim_and_the_audience_claims(
+    external, tmp_path, capsys
+):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpUserIdClaim": "email"}
+    code, output = _run(external, tmp_path, "--audience-claim", "client_id", "--audience-claim", "aud")
+    assert code == 0
+    settings = RemoteAuthSettings.load(str(output))
+    assert (settings.audience_claims, settings.user_id_claim) == (("client_id", "aud"), "email")
+    written = json.loads(output.read_text())
+    assert (written["audienceClaims"], written["userIdClaim"]) == (["client_id", "aud"], "email")
+
+
+def test_external_idp_setup_without_the_claim_settings_writes_neither_key(external, tmp_path, capsys):
+    external.amplify_config = lambda: {**FakeDeployment.amplify_config(external), "externalOAuthIdpUserIdClaim": "undefined"}
+    code, output = _run(external, tmp_path)
+    assert code == 0
+    written = json.loads(output.read_text())
+    assert "audienceClaims" not in written and "userIdClaim" not in written
+
+
+def test_the_user_id_claim_flag_overrides_the_deployments(external, tmp_path, capsys):
+    original = external.amplify_config
+    external.amplify_config = lambda: {**original(), "externalOAuthIdpUserIdClaim": "email"}
+    code, output = _run(external, tmp_path, "--user-id-claim", "preferred_username")
+    assert code == 0
+    assert RemoteAuthSettings.load(str(output)).user_id_claim == "preferred_username"
+
+
+@pytest.mark.parametrize("flags", [
+    ("--audience-claim", "client_id"),
+    ("--user-id-claim", "email"),
+])
+def test_the_claim_flags_are_refused_for_cognito(cognito, tmp_path, capsys, flags):
+    code, _ = _run(cognito, tmp_path, *flags)
+    assert code == 1
+    assert "external IdP" in capsys.readouterr().err
+
+
+def test_a_reserved_user_id_claim_is_refused(external, tmp_path, capsys):
+    code, _ = _run(external, tmp_path, "--user-id-claim", "vams:tokens")
+    assert code == 1
+    assert "userIdClaim" in capsys.readouterr().err
