@@ -372,7 +372,11 @@ export default function ModifyAssetsUploadsPage() {
 
     // Handle view asset
     const handleViewAsset = () => {
-        navigate(`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`);
+        navigate(
+            `/databases/${assetDetail.databaseId}/assets/${encodeURIComponent(
+                String(assetDetail.assetId)
+            )}`
+        );
     };
 
     // Start upload process
@@ -407,7 +411,11 @@ export default function ModifyAssetsUploadsPage() {
         : destinationError || pathErrorReason;
 
     const assetLink = (
-        <Link href={`#/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`}>
+        <Link
+            href={`#/databases/${assetDetail.databaseId}/assets/${encodeURIComponent(
+                String(assetDetail.assetId)
+            )}`}
+        >
             {assetDetail.assetName || assetDetail.assetId || "Loading..."}
         </Link>
     );
@@ -513,7 +521,11 @@ export default function ModifyAssetsUploadsPage() {
                         },
                         {
                             text: assetDetail?.assetName || assetId || "",
-                            href: "#/databases/" + databaseId + "/assets/" + assetId,
+                            href:
+                                "#/databases/" +
+                                databaseId +
+                                "/assets/" +
+                                encodeURIComponent(String(assetId)),
                         },
                         { text: "Upload Files", href: "" },
                     ]}

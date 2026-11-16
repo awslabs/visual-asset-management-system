@@ -110,7 +110,10 @@ def auth():
               help='Read the new password from stdin instead of the command line. Combined with '
                    '--password-stdin, stdin carries two lines: current password, then new.')
 @click.option('--save-credentials', is_flag=True, help='Save credentials for automatic re-authentication')
-@click.option('--user-id', help='User ID for token override authentication')
+@click.option('--user-id',
+              help='User ID for token override authentication. With an external IDP it must be the user '
+                   'ID the API resolves from the token: the claim set as lambdaAuthorizorJWTUserIdClaim, '
+                   'else the first of cognito:username, username and sub.')
 @click.option('--token-override',
               help='Pre-generated token to use directly, for external IDP or SAML/OIDC-federated '
                    'logins (requires --user-id). Not recommended: the token is readable from the OS '

@@ -420,7 +420,9 @@ function columnRender(
                 <Box>
                     <SpaceBetween direction="horizontal" size="xs">
                         <Link
-                            href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}
+                            href={`#/databases/${e["str_databaseid"]}/assets/${encodeURIComponent(
+                                e["str_assetid"]
+                            )}`}
                         >
                             {value}
                         </Link>
@@ -486,11 +488,17 @@ function columnRender(
                         )}
                         <span style={pathCellStyle}>
                             <Link
-                                href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}${filePathQuery}`}
+                                href={`#/databases/${
+                                    e["str_databaseid"]
+                                }/assets/${encodeURIComponent(e["str_assetid"])}${filePathQuery}`}
                                 onFollow={(event) => {
                                     event.preventDefault();
                                     navigate(
-                                        `/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}${filePathQuery}`,
+                                        `/databases/${
+                                            e["str_databaseid"]
+                                        }/assets/${encodeURIComponent(
+                                            e["str_assetid"]
+                                        )}${filePathQuery}`,
                                         {
                                             state: { filePathToNavigate: value },
                                         }

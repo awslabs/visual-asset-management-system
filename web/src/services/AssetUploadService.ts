@@ -207,13 +207,15 @@ export class AssetUploadService {
      * Uploads a file part to a presigned URL
      * @param url Presigned URL
      * @param data File part data
+     * @param signal Optional signal that aborts the request in flight
      * @returns Promise with ETag
      */
-    async uploadPart(url: string, data: Blob): Promise<string> {
+    async uploadPart(url: string, data: Blob, signal?: AbortSignal): Promise<string> {
         try {
             const response = await fetch(url, {
                 method: "PUT",
                 body: data,
+                signal,
             });
 
             if (!response.ok) {
