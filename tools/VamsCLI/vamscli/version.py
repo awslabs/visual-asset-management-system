@@ -1,7 +1,7 @@
 """Version information for VamsCLI."""
 
-__version__ = "2.6.6"
-CLI_VERSION = "2.6.6"
+__version__ = "2.6.7"
+CLI_VERSION = "2.6.7"
 
 def get_version():
     """Get the current CLI version."""
