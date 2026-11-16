@@ -418,14 +418,82 @@ class TestTiffColourModes:
         image = image_handler.load_raster(path, ".tif", BUDGET)
         assert image.size == (64, 48) and image.mode in ("RGB", "RGBA")
 
-    def test_a_compression_only_tifffile_with_a_codec_package_could_read_fails_with_its_name(self, tmp_path):
-        """A 16-bit TIFF in a compression tifffile reads only with imagecodecs (here LZW): the failure
-        names the compression and the way out, not a package import error."""
+    @pytest.mark.parametrize("kind,compression,predictor,expected", [
+        ("rgb8", "lzw", None, (128, 128, 90)),
+        ("rgb8", "lzw", 2, (128, 128, 90)),
+        ("rgb16", "deflate", 2, (128, 128, 90)),
+        ("rgb16", "lzw", 2, (128, 128, 90)),
+        ("rgb16", "zstd", None, (128, 128, 90)),
+        ("rgb16", "lzma", None, (128, 128, 90)),
+        ("rgb8", "packbits", None, (128, 128, 90)),
+        ("gray16", "lzw", 2, None),
+        ("float32", "deflate", 3, None),
+        ("cmyk8", "lzw", None, None),
+    ])
+    def test_compressed_tiffs_are_decoded_for_real(self, tmp_path, kind, compression, predictor, expected):
+        pytest.importorskip("imagecodecs")
+        path = samples.write_tiff_codec(str(tmp_path / "c.tif"), kind, compression, predictor)
+        image = image_handler.load_raster(path, ".tif", BUDGET)
+        assert image.size == (64, 48) and image.mode in ("RGB", "RGBA")
+        if expected:
+            assert image.getpixel((32, 24)) == pytest.approx(expected, abs=8)
+        else:
+            assert len({image.getpixel((x, 24)) for x in range(0, 64, 4)}) > 4  # a gradient, not a flat fill
+        result = _generate(path, tmp_path)
+        assert result.path.endswith("c.tif.previewFile.jpg") and os.path.getsize(result.path) < LIMIT
+
+    def test_a_cmyk_lzw_tiff_decodes_to_the_right_colour_family(self, tmp_path):
+        pytest.importorskip("imagecodecs")
         import tifffile
-        path = str(tmp_path / "rgb16_zlib.tif")
-        samples.write_tiff_16bit_rgb(path)
-        # rewrite the Compression tag (259) of the raw file as LZW (5): the strips are not LZW data,
-        # but the codec is looked up before any strip is read
+        data = np.zeros((48, 64, 4), np.uint8)
+        data[..., 1] = 255
+        data[..., 2] = 255  # cyan 0, magenta 255, yellow 255, black 0 = red
+        path = str(tmp_path / "red.tif")
+        tifffile.imwrite(path, data, photometric="separated", compression="lzw")
+        image = image_handler.load_raster(path, ".tif", BUDGET)
+        r, g, b = image.getpixel((10, 10))
+        assert r > 200 and g < 80 and b < 80
+
+    def test_a_gray_alpha_lzw_16_bit_tiff_decodes(self, tmp_path):
+        pytest.importorskip("imagecodecs")
+        import tifffile
+        gray = np.linspace(0, 65535, 64 * 48, dtype=np.uint16).reshape(48, 64)
+        alpha = np.full((48, 64), 51200, np.uint16)
+        path = str(tmp_path / "ga16.tif")
+        tifffile.imwrite(path, np.dstack([gray, alpha]), photometric="minisblack", compression="lzw",
+                         extrasamples=["unassalpha"])
+        image = image_handler.load_raster(path, ".tif", BUDGET)
+        assert image.mode == "RGBA" and image.size == (64, 48)
+
+    @pytest.mark.parametrize("compression", ["JPEGXL", "WEBP", "JPEG2000", "CCITT_T4", "AVIF", "LERC_DEFLATE"])
+    def test_only_the_tiff_codecs_are_reachable(self, compression):
+        class _Compression:
+            name = compression
+
+        class _Page:
+            pass
+
+        page = _Page()
+        page.compression = _Compression()
+        if compression in image_handler.ALLOWED_TIFF_COMPRESSIONS:
+            image_handler._check_tiff_compression(page)
+            return
+        with pytest.raises(MediaError) as caught:
+            image_handler._check_tiff_compression(page)
+        assert compression in str(caught.value) and "does not decode" in str(caught.value)
+
+    def test_the_allowed_compressions_are_exactly_the_tiff_set(self):
+        assert image_handler.ALLOWED_TIFF_COMPRESSIONS == {
+            "NONE", "LZW", "ADOBE_DEFLATE", "DEFLATE", "PACKBITS", "ZSTD", "LZMA", "JPEG",
+            "LERC", "LERC_DEFLATE", "LERC_ZSTD"}
+
+    def test_a_tiff_in_a_compression_outside_the_set_fails_with_its_name_before_any_decoder_runs(
+            self, tmp_path, monkeypatch):
+        pytest.importorskip("imagecodecs")
+        import tifffile
+        path = str(tmp_path / "webp.tif")
+        samples.write_tiff_codec(path, "rgb16", "deflate")  # a 16-bit file: Pillow cannot read it
+        # rewrite the Compression tag (259) as 50001 (WebP) so the header names a codec outside the set
         import struct
         data = bytearray(open(path, "rb").read())
         offset = struct.unpack("<I", data[4:8])[0]
@@ -433,17 +501,33 @@ class TestTiffColourModes:
         for index in range(count):
             entry = offset + 2 + 12 * index
             if struct.unpack("<H", data[entry:entry + 2])[0] == 259:
-                data[entry + 8:entry + 10] = struct.pack("<H", 5)
+                data[entry + 8:entry + 10] = struct.pack("<H", 50001)
         open(path, "wb").write(bytes(data))
-        try:
-            tifffile.TiffFile(path).pages[0].asarray()
-        except Exception as e:
-            if "imagecodecs" not in str(e):
-                pytest.skip("this tifffile decodes LZW without imagecodecs")
+        decoded = []
+        monkeypatch.setattr(tifffile.TiffPage, "asarray", lambda self, *a, **k: decoded.append(1))
         with pytest.raises(MediaError) as caught:
             image_handler.load_raster(path, ".tif", BUDGET)
-        text = str(caught.value)
-        assert "TIFF" in text and "LZW" in text and "cannot decode" in text and "imagecodecs" not in text
+        assert "WEBP" in str(caught.value) and "does not decode" in str(caught.value)
+        assert not decoded
+
+    def test_the_missing_codec_message_is_kept_for_an_environment_without_imagecodecs(self):
+        error = ValueError("<COMPRESSION.LZW: 5> requires the 'imagecodecs' package")
+        message = image_handler._codec_message(error)
+        assert "LZW" in message and "not available" in message and "imagecodecs" not in message
+        assert image_handler._codec_message(ValueError("something else")) is None
+
+    def test_the_pixel_and_memory_budgets_still_bound_the_fallback(self, tmp_path):
+        pytest.importorskip("imagecodecs")
+        path = samples.write_tiff_codec(str(tmp_path / "big.tif"), "float32", "deflate", 3, width=400, height=300)
+        with pytest.raises(ImageTooLarge):
+            image_handler.load_raster(path, ".tif", 1000)  # over the pixel budget
+        class _Page:
+            imagewidth, imagelength, samplesperpixel = 400, 300, 1
+
+            class dtype:  # noqa: N801
+                itemsize = 4
+        with pytest.raises(ImageTooLarge):
+            image_handler._check_tiffile_decode_memory(_Page, 100)  # over the byte budget
 
     def test_tifffile_decode_memory_counts_float_samples(self):
         class _Page:

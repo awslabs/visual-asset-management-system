@@ -29,6 +29,7 @@ Pillow>=11.0.0               # MIT-like (PIL) - image optimization
 
 # Media previews (images, TGA/TIFF and video). Decoding runs only on local files inside this container.
 tifffile>=2025.1.10          # BSD-3 - TIFF files Pillow cannot read (BigTIFF, tiled, LZW/Deflate 16/32-bit, float)
+imagecodecs>=2025.3.30,<2027  # BSD-3 - the codecs tifffile needs for LZW, Deflate, PackBits, Zstd, LZMA and JPEG strips; binary wheels only (the bundled codec libraries are permissive, see NOTICE.md)
 av>=14.0.0,<20               # BSD-3 (PyAV) - video decoding; its wheels bundle LGPL FFmpeg libraries, so no Debian ffmpeg
 
 # Draco mesh compression support

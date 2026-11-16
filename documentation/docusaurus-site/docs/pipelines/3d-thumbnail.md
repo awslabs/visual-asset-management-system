@@ -75,11 +75,11 @@ A USD stage is rendered as composed: instanced prims and point instancers are dr
 
 The same container also writes previews for images and video, through a second registered pipeline and workflow, **Media Preview Thumbnail** (`preview-media-thumbnail`). One deployment (container, Batch queue and state machine) serves both workflows and deploys when either `app.pipelines.usePreview3dThumbnail.enabled` or `app.pipelines.useMediaPreviews.enabled` is `true`; the flags only choose which workflow is registered, so a media-only deployment (3D off) works and takes its compute tiers from `usePreview3dThumbnail`. A deployment whose configuration has no `useMediaPreviews` block keeps today's behaviour (media previews off).
 
-| Category | Extensions                                                          | Handler                                 |
-| :------- | :------------------------------------------------------------------ | :-------------------------------------- |
-| Image    | .png, .jpg, .jpeg, .gif, .webp, .bmp                                | Pillow                                  |
-| Image    | .tga, .tif, .tiff                                                   | Pillow, with tifffile for TIFF variants |
-| Video    | .mp4, .m4v, .mov, .mkv, .webm, .avi, .wmv, .mpg, .mpeg, .mts, .m2ts | PyAV (bundled FFmpeg libraries)         |
+| Category | Extensions                                                          | Handler                                                 |
+| :------- | :------------------------------------------------------------------ | :------------------------------------------------------ |
+| Image    | .png, .jpg, .jpeg, .gif, .webp, .bmp                                | Pillow                                                  |
+| Image    | .tga, .tif, .tiff                                                   | Pillow, with tifffile and imagecodecs for TIFF variants |
+| Video    | .mp4, .m4v, .mov, .mkv, .webm, .avi, .wmv, .mpg, .mpeg, .mts, .m2ts | PyAV (bundled FFmpeg libraries)                         |
 
 Not accepted: SVG, HEIC/HEIF, AVIF, EXR, HDR, PSD, DDS and MDL (MDL thumbnails are tracked in #1547).
 
@@ -97,6 +97,8 @@ An image whose extension is one the web shows as its own preview (`.png`, `.jpg`
 | Audio-only file or video with no decodable frames | Completes successfully, no preview                                                                                                         | Same                                                                                    |
 
 A run that writes no preview completes successfully and records why as `preview-not-generated.json` in the execution's results: for an image shown as its own preview the message reads "No preview was generated for '<name>': the file is under 5 MiB and is already shown as its own preview." With the downscale option on, an animated GIF or WebP under 5 MiB is still left alone (a JPEG would drop the animation), and the result says so. Every preview is strictly under 5 MiB. TGA and TIFF are never shown as their own preview because browsers cannot display them. A large still image, TGA or TIFF that cannot be decoded within the task's memory fails with a message that names the file type and the pixel limit.
+
+TIFF compressions: Pillow reads the common ones; a TIFF it cannot read (16-bit colour, float samples, BigTIFF, some predictors) is read with tifffile and its codec package imagecodecs, which the image installs from wheels only. The pipeline decodes the LZW, Deflate (Adobe and plain), PackBits, Zstandard, LZMA, JPEG and LERC (GeoTIFF) compressions, with or without a predictor, and refuses a TIFF in any other compression (JPEG XL, WebP, JPEG 2000, CCITT, vendor codecs) with a message that names it. The pixel budget and a byte budget for float and multi-sample images apply to this path as to the others. imagecodecs bundles about 90 codec libraries, all permissive licences plus the GCC OpenMP runtime; `NOTICE.md` lists them.
 
 ### Safety limits
 

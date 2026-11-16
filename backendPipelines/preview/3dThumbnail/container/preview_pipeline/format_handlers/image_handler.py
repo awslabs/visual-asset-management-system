@@ -287,16 +287,42 @@ def _check_tiffile_decode_memory(page, max_pixels: int) -> None:
             f"compute size.")
 
 
+# The TIFF compressions the tifffile fallback decodes with ``imagecodecs``. imagecodecs bundles about 90
+# codecs (image, video-adjacent, scientific and general purpose); an untrusted TIFF names its compression
+# in its own header, so only the ones TIFF files in practice use are reachable: LZW, Deflate (both tag
+# values), PackBits, Zstandard, LZMA, JPEG strips and tiles, and the LERC variants GeoTIFF uses. A file
+# naming any other compression (JPEG XL, WebP, JPEG 2000, CCITT, a vendor codec) fails with a message
+# before a decoder runs. Names are tifffile's ``COMPRESSION`` member names.
+ALLOWED_TIFF_COMPRESSIONS = frozenset({
+    "NONE", "LZW", "ADOBE_DEFLATE", "DEFLATE", "PACKBITS", "ZSTD", "LZMA", "JPEG",
+    "LERC", "LERC_DEFLATE", "LERC_ZSTD",
+})
+_COMPRESSIONS_ADVICE = "Re-save it uncompressed or with LZW or deflate (zip) compression."
+
+
+def _compression_name(page) -> str:
+    compression = getattr(page, "compression", None)
+    return str(getattr(compression, "name", compression)).upper()
+
+
+def _check_tiff_compression(page) -> None:
+    """Refuse a TIFF page whose compression is outside ALLOWED_TIFF_COMPRESSIONS, before decoding."""
+    name = _compression_name(page)
+    if name not in ALLOWED_TIFF_COMPRESSIONS:
+        raise MediaError(f"The TIFF file uses {name} compression, which this pipeline does not decode. "
+                         f"{_COMPRESSIONS_ADVICE}")
+
+
 def _codec_message(error: Exception) -> Optional[str]:
-    """A message for a TIFF compression tifffile cannot decode without its optional codec package, or
-    None when the error is something else."""
+    """A message for a TIFF compression tifffile cannot decode because its codec is missing (the
+    ``imagecodecs`` package, which the image installs, is absent from the running environment), or None
+    when the error is something else."""
     text = str(error)
     if "imagecodecs" not in text:
         return None
     name = re.search(r"<COMPRESSION\.(\w+)", text) or re.search(r"COMPRESSION\.(\w+)", text)
     return ("The TIFF file uses " + (f"{name.group(1)} " if name else "a ") + "compression, or a sample "
-            "layout, that this pipeline cannot decode. Re-save it uncompressed or with deflate (zip) "
-            "compression.")
+            "layout, whose decoder is not available in this pipeline. " + _COMPRESSIONS_ADVICE)
 
 
 def _load_with_tifffile(path: str, max_pixels: int) -> Image.Image:
@@ -311,6 +337,7 @@ def _load_with_tifffile(path: str, max_pixels: int) -> Image.Image:
         page = page if page is not None else tif.pages[0]
         height, width = page.imagelength, page.imagewidth
         check_pixels(width, height, max_pixels, ".tif")
+        _check_tiff_compression(page)
         _check_tiffile_decode_memory(page, max_pixels)
         array = page.asarray()
         photometric = getattr(page.photometric, "name", str(page.photometric))
@@ -338,7 +365,7 @@ def load_raster(path: str, ext: str, max_pixels: int, draft_edge: Optional[int] 
             logger.info(f"Pillow could not read the TIFF ({type(pillow_error).__name__}); trying tifffile")
             try:
                 return _load_with_tifffile(path, max_pixels)
-            except ImageTooLarge:
+            except (ImageTooLarge, MediaError):
                 raise
             except Exception as tiff_error:
                 raise MediaError(_codec_message(tiff_error) or _read_failure(ext, tiff_error)) from tiff_error

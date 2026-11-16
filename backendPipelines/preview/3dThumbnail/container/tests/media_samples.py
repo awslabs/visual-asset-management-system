@@ -242,6 +242,31 @@ def write_tiff_gray_alpha(path, associated=True, compression="tiff_lzw", width=6
     return path
 
 
+def write_tiff_codec(path, kind, compression, predictor=None, width=64, height=48, **kwargs):
+    """A TIFF written by tifffile with imagecodecs in ``compression`` (``lzw``, ``deflate``, ``zstd``,
+    ``lzma``, ``packbits``, ``jpeg``): ``kind`` is rgb8, rgb16, gray16, cmyk8, float32 or la8."""
+    import tifffile
+    base = np.linspace(0, 255, width * height, dtype=np.uint8).reshape(height, width)
+    if kind == "rgb8":
+        data, photometric = gradient(width, height), "rgb"
+    elif kind == "rgb16":
+        data, photometric = gradient(width, height).astype(np.uint16) * 257, "rgb"
+    elif kind == "gray16":
+        data, photometric = base.astype(np.uint16) * 257, "minisblack"
+    elif kind == "cmyk8":
+        data, photometric = np.dstack([base, base[::-1], base, base[::-1] // 2]), "separated"
+    elif kind == "float32":
+        data, photometric = base.astype(np.float32) / 255.0 * 4000.0, "minisblack"
+    elif kind == "la8":
+        data, photometric = np.dstack([base, np.full_like(base, 200)]), "minisblack"
+        kwargs.setdefault("extrasamples", ["unassalpha"])
+    else:
+        raise ValueError(kind)
+    tifffile.imwrite(path, data, photometric=photometric, compression=compression, predictor=predictor,
+                     **kwargs)
+    return path
+
+
 def write_tiff_mode(path, mode, compression=None, width=64, height=48):
     """A TIFF of Pillow mode ``mode`` (1, L, P, RGBA, CMYK, YCbCr, I, F, I;16) holding a gradient."""
     gray = np.linspace(0, 255, width * height, dtype=np.uint8).reshape(height, width)
