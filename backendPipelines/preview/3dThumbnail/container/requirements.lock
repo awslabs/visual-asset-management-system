@@ -191,6 +191,27 @@ attrs==26.1.0 \
     #   cyclopts
     #   jsonschema
     #   referencing
+av==19.0.2 \
+    --hash=sha256:04c8e412642c652cb2b1997a9cb2114546ee7d894600c631f4be8ceb26a0d0d2 \
+    --hash=sha256:0e425d631510ca21e47c58f3837a9dceae0453c24e926408c8a12b95239cbbd6 \
+    --hash=sha256:1e7cb7b66a832bce8996af5b94f1cf4014a05ff51e0005feac4cb2566d711020 \
+    --hash=sha256:32a8d37bde9e24ad0cc855140cbeecde17a363d7dc7928dcfc71a34b5f3ed387 \
+    --hash=sha256:3ce5a1d7b916d13c16ac58f1756f0fee4af2d53f02bc1403e18550b50d375a22 \
+    --hash=sha256:44d3faae747cf04a33f39db8ae983ff3d93adc864ee663bc186b25b686803c3e \
+    --hash=sha256:79a277b077e3768a0ea9f881ca0b3bc96d4135a8d3a7a579938adb58718d0dfd \
+    --hash=sha256:8596fad2017d380708de35ddf9d34f808b8488c912cdc3f361691d866d9dc32d \
+    --hash=sha256:91924f5c836b1cbf89fe1522c642f98e89a733124908561fd49dc7a70e9b6d10 \
+    --hash=sha256:9c1da7aad0fa6c13b4a5c1e7985be0d13f8526a96284573acaf3d55ead6d3fe8 \
+    --hash=sha256:9d4f9f78c0ce1f20deb72626fdb3c723757f61a8cd6fbb7dd44d9401884a91fd \
+    --hash=sha256:9db27c2248112a8eed3edd3ca83cf4405f52a402cda2eb1956035e646e6b99c6 \
+    --hash=sha256:ae4618eab172f8135596972252f39c7399291c921e661c1771ba26b9254b800f \
+    --hash=sha256:b0dff6dfcc6ff9944fbbff15bc4ee2d90a2c1695d493bdea96e86f48823e9feb \
+    --hash=sha256:b559ff381bd800c46fee6a17d7e22a3443708cdd58d0901ae91d27cf5dd0578c \
+    --hash=sha256:b632e026f4375037438a6b2b5d6a489e55bc9504fad22078991ef96211bec2a9 \
+    --hash=sha256:bebbc52598886480f4d861c575dc2b020785d6c04e1308680ddcc545e1b94c66 \
+    --hash=sha256:dfe7af5aa8243afd5d4778f85ad1a7c948e37fad272869da1f8f93f8d57fa7ad \
+    --hash=sha256:f5f7bcf987567cd3f9b01f1c375c59bf59d8a5b98c9c5c154aeda7a11e0c5dce
+    # via -r requirements.txt
 blinker==1.9.0 \
     --hash=sha256:b4ce2265a7abece45e7cc896e98dbebe6cead56bcf805a3d23136d145f5445bf \
     --hash=sha256:ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc
@@ -1727,6 +1748,7 @@ numpy==2.5.3 \
     #   pyvista-validation
     #   scikit-learn
     #   scipy
+    #   tifffile
     #   trimesh
 open3d==0.19.0 \
     --hash=sha256:01e4590dc2209040292ebe509542fbf2bf869ea60bcd9be7a3fe77b65bad3192 \
@@ -2619,6 +2641,10 @@ threadpoolctl==3.6.0 \
     --hash=sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb \
     --hash=sha256:8ab8b4aa3491d812b623328249fab5302a68d2d71745c8a4c719a2fcaba9f44e
     # via scikit-learn
+tifffile==2026.11.12 \
+    --hash=sha256:064e8b3b1a1baf0aed603e383f6efc67564a4340397fb8aff7d58bda1ceb1745 \
+    --hash=sha256:f7d46b81f8e55e607d0ad3d18c82acac6f791828fc0329d9263a664f12b6e32d
+    # via -r requirements.txt
 tqdm==4.70.1 \
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4

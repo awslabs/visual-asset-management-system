@@ -26,6 +26,9 @@ from .utils import manifest_io
 from .utils import image_utils
 from .format_handlers import mesh_handler, pointcloud_handler, cad_handler, usd_handler, splat_handler
 from .format_handlers import ply_header, xml_mesh_handler
+from .format_handlers import image_handler, video_handler
+from .format_handlers.image_handler import MediaError
+from . import media_preview
 from . import dependencies
 from . import geometry_budget
 from . import renderer
@@ -278,6 +281,15 @@ def _run_preview_stage(
         else:
             logger.info(f"Input size: {file_size / 1024 ** 3:.3f} GiB ({file_size:,} bytes)")
 
+        # An image the web already shows as its own preview needs no download: with the option that
+        # writes a smaller JPEG for it off, the run completes without writing a preview. (The Open
+        # Pipeline Lambda ends such a run before it reaches a container; this covers a direct launch.)
+        if (media_preview.is_media(declared_ext or key_ext)
+                and image_handler.is_self_previewable(declared_ext or key_ext, file_size)
+                and not media_preview.downscale_option_enabled()):
+            return _success_response(
+                stage, media_preview.self_preview_message(os.path.basename(stage_input.objectKey)))
+
         # A line-oriented point cloud is read straight from S3 and sampled as it streams, so it needs
         # no local copy and is not limited by the work volume.
         streamed = pointcloud_handler.is_streamed(declared_ext or key_ext)
@@ -324,6 +336,11 @@ def _run_preview_stage(
     ext = declared_ext or (key_ext if streamed else os.path.splitext(local_filepath)[1].lower())
 
     logger.info(f"Detected file extension: {ext}")
+
+    # Images, TGA/TIFF and video take the media route: no 3D loading, referenced files or rendering.
+    if media_preview.is_media(ext):
+        return _run_media_stage(stage, stage_output, local_filepath, ext, output_type, relative_subdir,
+                                local_output_dir, budgets, localTest, timer)
 
     # In S3 mode, fetch the files the input references (glTF buffers/images, USD layers and textures,
     # OBJ materials and textures, FBX textures, LCC data files and LCC2 chunks) from the input's own asset. A rejected or missing
@@ -441,8 +458,24 @@ def _run_preview_stage(
         return _error_response(stage, f"Failed to save preview image: {str(e)}")
 
     # Upload to S3 (or copy to local output in localTest mode)
-    # Preserve the relative subdirectory from the input path in the output
-    # so process-output can find files at the expected relative location.
+    failure = _publish_preview(stage, stage_output, relative_subdir, final_path, localTest, timer)
+    if failure is not None:
+        return failure
+
+    if incomplete is not None:
+        _write_incomplete_result(
+            results_location, incomplete,
+            dependencies.relative_to_root(stage_input.objectKey, reference_root_key))
+        return _success_response(stage, incomplete.message())
+    return _success_response(stage)
+
+
+def _publish_preview(stage: PipelineStage, stage_output: StageOutput, relative_subdir: str,
+                     final_path: str, localTest: bool, timer: PhaseTimer):
+    """Upload the preview at ``final_path`` to the stage's output location (or copy it to the local
+    output directory in localTest mode). The relative subdirectory of the input is kept in the output
+    so process-output can find the file at the expected relative location. Returns None on success, or
+    the failed stage."""
     try:
         final_filename = os.path.basename(final_path)
 
@@ -472,13 +505,45 @@ def _run_preview_stage(
     except Exception as e:
         logger.exception(f"Failed to save/upload preview: {e}")
         return _error_response(stage, f"Failed to save/upload preview: {str(e)}")
+    return None
 
-    if incomplete is not None:
-        _write_incomplete_result(
-            results_location, incomplete,
-            dependencies.relative_to_root(stage_input.objectKey, reference_root_key))
-        return _success_response(stage, incomplete.message())
-    return _success_response(stage)
+
+def _run_media_stage(stage: PipelineStage, stage_output: StageOutput, local_filepath: str, ext: str,
+                     output_type: str, relative_subdir: str, local_output_dir: str,
+                     budgets: "resources.Budgets", localTest: bool, timer: PhaseTimer) -> PipelineStage:
+    """Write the preview of an image, TGA/TIFF or video (``media_preview``), then upload it. A run with
+    nothing to write (an image the web shows as its own preview, a video with no frames, a downscale
+    that saves nothing) completes successfully and says why."""
+    basename = os.path.basename(local_filepath)
+    try:
+        with timer.phase("encode"):
+            result = media_preview.generate(
+                local_filepath, ext, output_type, local_output_dir, basename,
+                budgets.pixels or resources.MIN_IMAGE_PIXELS,
+                original_size=os.path.getsize(local_filepath),
+                downscale_self_previewable=media_preview.downscale_option_enabled())
+    except MediaError as e:
+        # The message names the file type and states the cause (too many pixels, unreadable, ...).
+        return _error_response(stage, str(e))
+    except MemoryError:
+        logger.exception("Out of memory while decoding the media file")
+        return _error_response(
+            stage,
+            f"Out of memory decoding the {image_handler.type_name(ext)} file within the task's "
+            f"{budgets.memory_bytes / 1024 ** 3:.1f} GiB memory limit. "
+            f"{resources.memory_advice(resources.compute_tier())}")
+    except Exception as e:
+        logger.exception(f"Failed to create the media preview: {e}")
+        return _error_response(
+            stage, f"Failed to create the preview of the {image_handler.type_name(ext)} file: "
+                   f"{type(e).__name__}: {str(e)[:200]}")
+
+    if result.path is None:
+        return _success_response(stage, result.message)
+
+    logger.info(f"Preview file generated: {result.path} ({os.path.getsize(result.path) / 1024:.1f} KB)")
+    failure = _publish_preview(stage, stage_output, relative_subdir, result.path, localTest, timer)
+    return failure if failure is not None else _success_response(stage)
 
 
 def _write_incomplete_result(results_location: dict, incomplete, input_path: str):
@@ -623,9 +688,14 @@ def _all_extensions():
     )
 
 
+def _media_extensions():
+    """Return the image and video extensions the media previews accept (not part of the 3D list)."""
+    return media_preview.media_extensions()
+
+
 def _find_local_test_file(input_dir: str) -> str:
-    """Find the first supported 3D file in the local test input directory."""
-    supported = _all_extensions()
+    """Find the first supported 3D, image or video file in the local test input directory."""
+    supported = _all_extensions() | _media_extensions()
     for entry in sorted(os.listdir(input_dir)):
         filepath = os.path.join(input_dir, entry)
         if os.path.isfile(filepath):

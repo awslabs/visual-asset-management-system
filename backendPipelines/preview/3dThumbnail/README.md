@@ -5,6 +5,7 @@ The Preview 3D Thumbnail pipeline generates animated GIF or static image preview
 ## Contents
 
 -   [Supported Formats](#supported-formats)
+-   [Media Formats](#media-formats)
 -   [Architecture](#architecture)
 -   [Output](#output)
 -   [Input Parameters](#input-parameters)
@@ -29,6 +30,37 @@ The Preview 3D Thumbnail pipeline generates animated GIF or static image preview
 | Gaussian splat | .ply (3DGS), .compressed.ply, .spz, .sog, .splat, .ksplat, .lcc, .lcc2 | numpy; PlayCanvas splat-transform for conversion |
 
 FARO scans (`.fls`, `.fws`) are not supported: reading them needs the proprietary FARO SDK. Convert them to E57 or LAS first.
+
+## Media Formats
+
+The same container also writes previews for images and video, through a second registered pipeline and workflow, **Media Preview Thumbnail** (`preview-media-thumbnail`). It is part of this pipeline's deployment: it exists when `usePreview3dThumbnail.enabled` and `usePreview3dThumbnail.mediaPreviews.enabled` are both `true`. A deployment whose configuration has no `mediaPreviews` block keeps today's behaviour (media previews off).
+
+| Category | Extensions                                                          | Handler                                 |
+| :------- | :------------------------------------------------------------------ | :-------------------------------------- |
+| Image    | .png, .jpg, .jpeg, .gif, .webp, .bmp                                | Pillow                                  |
+| Image    | .tga, .tif, .tiff                                                   | Pillow, with tifffile for TIFF variants |
+| Video    | .mp4, .m4v, .mov, .mkv, .webm, .avi, .wmv, .mpg, .mpeg, .mts, .m2ts | PyAV (bundled FFmpeg libraries)         |
+
+Not accepted: SVG, HEIC/HEIF, AVIF, EXR, HDR, PSD, DDS and MDL (MDL thumbnails are tracked in #1547).
+
+### What a run writes
+
+An image whose extension is one the web shows as its own preview (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) and whose size is strictly under 5,242,880 bytes (5 MiB) is shown as its own preview, so the run writes nothing.
+
+| Input                                             | Default                                                                                                                                    | With `downscaleSelfPreviewableImages`                                                   |
+| :------------------------------------------------ | :----------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------- |
+| Displayable image under 5 MiB                     | No preview and no container job: the run completes successfully and says why                                                               | A JPEG when it is at least 25% smaller or the long edge is over 2048 px; otherwise none |
+| Displayable still image of 5 MiB or more          | A JPEG under 5 MiB (EXIF orientation applied, transparency on white)                                                                       | Same                                                                                    |
+| Animated GIF or WebP of 5 MiB or more             | A smaller animated GIF (fewer frames, then smaller size, then fewer colours); else a first-frame JPEG                                      | Same                                                                                    |
+| `.tga`, `.tif`, `.tiff`, any size                 | A JPEG under 5 MiB (16-bit, float and CMYK scaled to 8-bit RGB; first full-resolution page)                                                | Same                                                                                    |
+| Video                                             | An animated GIF of 12 frames sampled across the duration (at most 24, long edge 480 px, rotation applied), else the middle frame as a JPEG | Same                                                                                    |
+| Audio-only file or video with no decodable frames | Completes successfully, no preview                                                                                                         | Same                                                                                    |
+
+Every preview is strictly under 5 MiB. TGA and TIFF are never shown as their own preview because browsers cannot display them. A large still image, TGA or TIFF that cannot be decoded within the task's memory fails with a message that names the file type and the pixel limit.
+
+### Safety limits
+
+The pixel count is read from the file header and checked against a budget derived from the task's memory before anything is decoded. Video is opened as a local file only (`protocol_whitelist=file`) through an allowlist of container formats, decoded for at most 10 minutes, and sampled by seeking rather than by decoding the whole file.
 
 ## Architecture
 
@@ -96,6 +128,20 @@ Enable the pipeline in `infra/config/config.json`:
 | `enabled`                             | Enables the pipeline infrastructure (Batch, Step Functions, Lambdas)                         |
 | `autoRegisterWithVAMS`                | Automatically registers the pipeline and workflow in the VAMS database during CDK deployment |
 | `autoRegisterAutoTriggerOnFileUpload` | When auto-registered, configures the workflow to trigger automatically on file upload        |
+
+Media previews are configured in the same block:
+
+```json
+"mediaPreviews": {
+    "enabled": true,
+    "autoRegisterAutoTriggerOnFileUpload": true,
+    "downscaleSelfPreviewableImages": false
+}
+```
+
+| `mediaPreviews.enabled` | `false` when missing | Also register the Media Preview Thumbnail pipeline and workflow (images, TGA/TIFF, video). Deploys only with the pipeline. The shipped config and templates set `true`. |
+| `mediaPreviews.autoRegisterAutoTriggerOnFileUpload` | `false` when missing | Trigger the media workflow when a supported image or video is uploaded. Needs `mediaPreviews.enabled`. The shipped config and templates set `true`. |
+| `mediaPreviews.downscaleSelfPreviewableImages` | `false` | Also write a smaller JPEG for an image the web already shows as its own preview (under 5 MiB). Needs `mediaPreviews.enabled`. |
 
 Enabling this pipeline requires the Global VPC to be enabled (`useGlobalVpc.enabled: true`). The CDK configuration validation enforces this automatically.
 

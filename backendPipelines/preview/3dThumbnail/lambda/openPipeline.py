@@ -33,6 +33,15 @@ s3_client = boto3.client('s3', config=retry_config)
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
+# Media previews (mediaPreviews.enabled): the image extensions the web shows as their own preview when the
+# file is under PREVIEW_FILE_SIZE_LIMIT_BYTES, and that limit. Both are set by CDK from the shared
+# constants (infra/lib/.../preview3dThumbnail-construct.ts) and are absent when media previews are off.
+# An input of one of those extensions that is under the limit gets no run unless
+# DOWNSCALE_SELF_PREVIEWABLE_IMAGES is "true" (mediaPreviews.downscaleSelfPreviewableImages).
+SELF_PREVIEWABLE_FILEEXTENSIONS = os.environ.get("SELF_PREVIEWABLE_FILEEXTENSIONS", "")
+PREVIEW_FILE_SIZE_LIMIT_BYTES = os.environ.get("PREVIEW_FILE_SIZE_LIMIT_BYTES", "")
+DOWNSCALE_SELF_PREVIEWABLE_IMAGES = os.environ.get(
+    "DOWNSCALE_SELF_PREVIEWABLE_IMAGES", "false").strip().lower() == "true"
 # Orchestration bus + state-machine log group for optional sub-process registration
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
@@ -63,6 +72,56 @@ def abort_external_workflow(error, task_token):
             error='Pipeline Failure: ' + error,
             cause='See AWS cloudwatch logs for error cause.'
         )
+
+
+def self_previewable_extensions():
+    """The extensions (lowercase, with the dot) the web shows as their own preview; empty when media
+    previews are off."""
+    return [ext.strip().lower() for ext in SELF_PREVIEWABLE_FILEEXTENSIONS.split(',') if ext.strip()]
+
+
+def preview_size_limit_bytes():
+    """The size an image must be strictly under to be shown as its own preview, or None when the
+    deployment sets none."""
+    try:
+        limit = int(PREVIEW_FILE_SIZE_LIMIT_BYTES)
+    except (TypeError, ValueError):
+        return None
+    return limit if limit > 0 else None
+
+
+def is_shown_as_own_preview(event, extension, input_uri):
+    """True when the input is an image the web already shows as its own preview and no preview is to be
+    written for it: its extension is a self-previewable one, the option that writes a smaller JPEG for
+    such images is off, and its size (HEAD of the version the run reads) is known and strictly under the
+    preview size limit. A size that cannot be read gives False, so the run starts and the container
+    checks the size again before it writes anything."""
+    limit = preview_size_limit_bytes()
+    if DOWNSCALE_SELF_PREVIEWABLE_IMAGES or limit is None:
+        return False
+    if extension.lower() not in self_previewable_extensions():
+        return False
+    try:
+        regions = computeTier.bucket_regions(event)
+        size = computeTier.input_size_bytes(
+            computeTier.s3_client_for(s3_client, regions, input_uri), input_uri,
+            event.get("inputVersionId") or "")
+    except Exception as e:
+        logger.warning(f"Could not read the input size to decide whether it is its own preview; "
+                       f"starting the run: {e}")
+        return False
+    return size < limit
+
+
+def complete_without_preview(task_token, message):
+    """Report the run successful on the workflow's task token with the shape the state machine's end
+    reports, without starting the state machine."""
+    if task_token:
+        sfn.send_task_success(
+            taskToken=task_token,
+            output=json.dumps({'status': 'Pipeline Success', 'message': message})
+        )
+        logger.info("Sent external task token: success (no preview needed)")
 
 
 def batch_container_log_entry(job_definition_name, state_name):
@@ -185,6 +244,30 @@ def lambda_handler(event, context):
             'statusCode': 400,
             'body': {
                 "message": "Pipeline cannot process file type provided"
+            }
+        }
+
+    # An image the web already shows as its own preview needs no run: end it here, successfully, so no
+    # container job starts and no object is written.
+    if is_shown_as_own_preview(event, extension, input_s3_asset_files_uri):
+        message = (f"'{os.path.basename(input_s3_asset_files_uri)}' is shown as its own preview; "
+                   f"no preview written.")
+        logger.info(message)
+        try:
+            complete_without_preview(external_sfn_task_token, message)
+        except Exception as e:
+            logger.exception(e)
+            abort_external_workflow("Internal Server Error", external_sfn_task_token)
+            return {
+                'statusCode': 500,
+                'body': {
+                    "message": "Internal Server Error",
+                }
+            }
+        return {
+            'statusCode': 200,
+            'body': {
+                "message": message,
             }
         }
 
