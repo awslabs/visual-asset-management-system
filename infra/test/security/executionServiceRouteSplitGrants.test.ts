@@ -28,8 +28,6 @@ import {
 import { ALL_TEMPLATES, SynthResult, synthTemplate } from "../support/templateSynth";
 import { inlinePolicies, managedPolicies, nestedTemplateKeyFor } from "../support/iamPolicySize";
 
-jest.setTimeout(900_000);
-
 /** CDK's generated overflow policy of a role (#1499 allows only those as managed policies). */
 const isOverflow = (id: string) => /OverflowPolicy\d+[0-9A-F]{8}$/.test(id);
 
@@ -38,6 +36,8 @@ const roleDocs = (synth: SynthResult, role: string, stack: string): [string, any
     ...inlinePolicies(synth, role, stack),
     ...managedPolicies(synth, role, stack).filter(([id]) => isOverflow(id)),
 ];
+
+jest.setTimeout(900_000);
 
 /** Construct id of each table, keyed by the logical name the backend tests use. */
 const TABLES: Record<string, string> = {
@@ -105,6 +105,9 @@ const ROUTE_SET_GRANTS: Record<string, string[]> = {
         "pipelineExecutions/index/PipelineExecByWorkflowExecGSI": ["Query"],
         pipeline: ["GetItem"],
         pipelineInputConfiguration: ["Query"],
+        // The abort route resolves an asset bucket's Region for the copy upload it aborts, when the
+        // copy job row carries none (grantLargeObjectCopyCoordination, #1123 D6).
+        "buckets/index/bucketNameGSI": ["Query"],
     }),
     executionDetails: expand({
         ...AUTHORIZATION_READS,
@@ -321,6 +324,67 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
         expect(logReads("executionService")).toHaveLength(4);
         expect(logReads("executionDetails")).toHaveLength(4);
         expect(logReads("executionLogs").length).toBeGreaterThan(4);
+    });
+
+    test("the large object copy grants land on the function whose routes use them", () => {
+        const statementsOf = (construct: string) =>
+            roleDocs(synth, roleId(synth, stack, construct), stack).flatMap(
+                ([, doc]) => (doc?.Statement ?? []) as any[]
+            );
+        const copyActions = (construct: string) =>
+            statementsOf(construct)
+                .filter((st) => JSON.stringify(st.Resource ?? "").includes("LargeObjectCopy"))
+                .flatMap((st) => ([] as string[]).concat(st.Action ?? []))
+                .sort();
+        // The abort (and the status change push) stops copies and starts their delayed sweep.
+        expect(copyActions("executionService")).toEqual(
+            expect.arrayContaining([
+                "dynamodb:GetItem",
+                "dynamodb:Query",
+                "dynamodb:UpdateItem",
+                "states:StartExecution",
+            ])
+        );
+        expect(copyActions("executionService")).not.toContain("states:DescribeExecution");
+        // The copy stop is covered by the abort's StopExecution on every execution of the account and
+        // Region, so no narrower statement repeats it (owner decision 2026-11-11).
+        expect(copyActions("executionService")).not.toContain("states:StopExecution");
+        const abortStop = statementsOf("executionService").filter(
+            (st) =>
+                ([] as string[]).concat(st.Action ?? []).includes("states:StopExecution") &&
+                ([] as any[])
+                    .concat(st.Resource ?? [])
+                    .some((r) => typeof r === "string" && /:execution:\*$/.test(r))
+        );
+        expect(abortStop).toHaveLength(1);
+        // The details read lists the copies and describes one whose execution ended unreported.
+        expect(copyActions("executionDetails")).toEqual([
+            "dynamodb:Query",
+            "states:DescribeExecution",
+        ]);
+        expect(copyActions("executionLogs")).toEqual([]);
+        expect(copyActions("executionPermanentDelete")).toEqual([]);
+        // Both hand copies to the engine by name, through the engine's resource-based permission.
+        for (const construct of ["executionService", "executionDetails"]) {
+            const env = functionOf(synth, stack, construct).properties.Environment.Variables;
+            expect([construct, env.LARGE_OBJECT_COPY_FUNCTION_NAME]).toEqual([
+                construct,
+                expect.anything(),
+            ]);
+            const role = roleId(synth, stack, construct);
+            const permissions = synth
+                .ofType("AWS::Lambda::Permission")
+                .filter(
+                    (p) =>
+                        p.stack === stack &&
+                        JSON.stringify(p.properties.Principal ?? "").includes(role)
+                );
+            expect([construct, permissions.length]).toEqual([construct, 1]);
+        }
+        for (const construct of ["executionLogs", "executionPermanentDelete"]) {
+            const env = functionOf(synth, stack, construct).properties.Environment.Variables;
+            expect(env.LARGE_OBJECT_COPY_FUNCTION_NAME).toBeUndefined();
+        }
     });
 
     test("the permanent-delete function holds exactly the calls its route makes", () => {

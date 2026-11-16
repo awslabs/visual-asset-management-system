@@ -16,7 +16,13 @@ and check what the retry records and how many asset versions each output has:
   retry does not write a second version of it, and still records the outputs the first attempt moved;
 - an upgrade: a first attempt that ran before the ledger existed leaves no ledger rows, and the retry
   still completes and writes no second version;
-- a large output the first attempt queued for its asynchronous copy is not queued a second time.
+- a large output (over the copy engine threshold) is handed to the large object copy engine (#1123):
+  across a retry or a takeover there is one copy job, one asset version and one record, its staged
+  source stays until the copy lands, and the run is recorded by the finalize step once it has.
+
+The copy engine is a fake with the engine's contract: a deterministic job id per (run, file), a
+repeated start is a no-op, the job pins the staged version it was handed and deletes it once its copy
+lands, and the finalize step reads every job's outcome.
 
 A Lambda timeout ends the process rather than raising, so `_Killed` derives from BaseException: no
 `except Exception` in either handler catches it, as nothing would catch a killed process.
@@ -52,6 +58,7 @@ from backend.backend.handlers.workflows.sfn import processWorkflowExecutionOutpu
 from backend.backend.handlers.assets import uploadFile as uf  # noqa: E402
 from backend.backend.common.workflows import executionOutputs as eo  # noqa: E402
 from backend.backend.common.s3MetadataKeys import VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY  # noqa: E402
+from backend.backend.common import largeObjectCopy as loc  # noqa: E402
 
 REGION = "us-east-1"
 RUN_BUCKET = "run-io-bucket-1271"
@@ -71,13 +78,17 @@ class _Killed(BaseException):
     """The Lambda runtime ending an attempt at its timeout."""
 
 
-def _event(with_preview=False):
+def _event(with_preview=False, attempt=0):
     body = {
+        # $$.State.RetryCount of the process-output state (ASL v2+).
+        "outputStepAttempt": attempt,
         "outputAssetId": ASSET_ID, "outputDatabaseId": DATABASE_ID, "workflowExecutionId": EXEC,
         "endStatePipelineExecutionId": "P1", "workflowDatabaseId": "GLOBAL", "workflowId": "wf1",
         "workflowExecutionS3InputOutputBucket": RUN_BUCKET,
         "executingUserName": "SYSTEM_USER", "executingRequestContext": {"http": {}},
         "filesPathKey": FILES_PREFIX,
+        # An ASL v2+ definition waits on its large outputs (AwaitOutputIngestion + FinalizeOutputs).
+        "awaitOutputIngestion": True,
     }
     if with_preview:
         body["previewPathKey"] = PREVIEW_PREFIX
@@ -140,9 +151,61 @@ class _Never(Exception):
     pass
 
 
+class _FakeCopyEngine:
+    """The large object copy engine as the output step sees it (uploadFile.start_output_copy_job and
+    processWorkflowExecutionOutput._engine), in memory over the moto buckets."""
+
+    def __init__(self, s3):
+        self.s3 = s3
+        self.jobs = {}
+        self.starts = []
+        self.batch = {}
+
+    def start(self, file_info, head_response, change_metadata, batch_id, _workflow_database_id):
+        job_id = loc.job_id_for(batch_id, file_info["relativeKey"])
+        self.starts.append(job_id)
+        self.jobs.setdefault(job_id, {
+            "jobId": job_id, "relativeKey": file_info["relativeKey"], "status": loc.STATUS_QUEUED,
+            "batchId": batch_id, "sourceBucket": file_info["sourceBucketName"],
+            "sourceKey": file_info["tempS3Key"], "sourceVersionId": head_response.get("VersionId") or "",
+            "sourceSize": int(head_response.get("ContentLength", 0) or 0),
+            "destBucket": file_info["bucketName"], "destKey": file_info["finalS3Key"],
+            "metadata": dict(change_metadata or {})})
+        return job_id
+
+    def call(self, operation, **fields):
+        if operation == loc.OUTPUT_STEP_RECORDED_JOBS:
+            return {"jobs": {j: dict(r) for j, r in self.jobs.items()}}
+        if operation == loc.OUTPUT_STEP_RECORD_BATCH:
+            self.batch = {"context": fields.get("context") or {}, "jobIds": fields.get("jobIds")}
+            return {"claimed": False}
+        if operation == loc.OUTPUT_STEP_BATCH_OUTCOMES:
+            return {"batch": self.batch, "outcomes": {r["relativeKey"]: dict(r) for r in self.jobs.values()}}
+        return {}
+
+    def land(self, fail=False):
+        """Every queued copy ends: it copies the pinned version into the asset and deletes exactly
+        that staged version (or, failing, leaves both)."""
+        for row in self.jobs.values():
+            if row["status"] != loc.STATUS_QUEUED:
+                continue
+            if fail:
+                row["status"] = loc.STATUS_FAILED
+                row["error"] = "copy failed"
+                continue
+            body = self.s3.get_object(Bucket=row["sourceBucket"], Key=row["sourceKey"],
+                                      VersionId=row["sourceVersionId"])["Body"].read()
+            self.s3.put_object(Bucket=row["destBucket"], Key=row["destKey"], Body=body,
+                               Metadata={VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: EXEC})
+            self.s3.delete_object(Bucket=row["sourceBucket"], Key=row["sourceKey"],
+                                  VersionId=row["sourceVersionId"])
+            row["status"] = loc.STATUS_SUCCEEDED
+
+
 def _run(first_attempt, with_preview=False, with_large=False, old_code_first=False, real_stamp=False,
          run_bucket_versioned=True, fail_upload_of=None, retry_remaining_ms=900_000,
-         kill_every_ingestion=False, record_override=None):
+         kill_every_ingestion=False, engine_fails=False, engine_lands_before_retry=False,
+         record_override=None):
     """Run attempt 0, which `first_attempt` ends, then the retries until one answers.
 
     'after_ingest' | 'mid_move' | 'during_record' kill attempt 0 at that point; 'finished' lets it
@@ -164,6 +227,7 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
     first = {}
     handed = []
     killed = [0]
+    engine = _FakeCopyEngine(s3)
 
     def invoke_upload(payload):
         context = MagicMock(**{"get_remaining_time_in_millis.return_value": 900_000})
@@ -242,6 +306,23 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
                 if attempt[0] == 0:
                     raise _Killed()
             record.side_effect = record_or_die
+        if first_attempt == "before_hand_off_record":
+            # The engine accepted the large output; the attempt is killed before it records the
+            # hand-off (its row stays `moving`), as on demo22 (combined smoke D1).
+            def mark_or_die(*args, **kwargs):
+                if attempt[0] == 0:
+                    raise _Killed()
+            p(po, "_mark_engine_copying", side_effect=mark_or_die)
+        if first_attempt == "before_wait":
+            # The attempt handed its large output to the engine and recorded the hand-off, then was
+            # killed before it saved the batch (no batch, no saved state).
+            real_begin = po._begin_waiting_for_ingestion
+
+            def begin_or_die(*args, **kwargs):
+                if attempt[0] == 0:
+                    raise _Killed()
+                return real_begin(*args, **kwargs)
+            p(po, "_begin_waiting_for_ingestion", side_effect=begin_or_die)
         p(po, "s3c", s3)
         p(uf, "request_to_claims", return_value={"tokens": ["SYSTEM_USER"], "roles": ["SYSTEM"]})
         p(uf, "CasbinEnforcer", return_value=enforcer)
@@ -266,6 +347,11 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
         p(uf, "MAX_PARALLEL_S3_WORKERS", 1)
         p(uf, "LARGE_FILE_THRESHOLD_BYTES", THRESHOLD)
         p(uf, "queue_large_file_for_processing", side_effect=queue)
+        # Files over THRESHOLD go to the copy engine (#1123): the same threshold on both sides.
+        p(po.loc, "LARGE_FILE_THRESHOLD_BYTES", THRESHOLD)
+        p(uf, "start_output_copy_job", side_effect=engine.start)
+        p(po, "_engine", side_effect=engine.call)
+        p(po, "_mark_ingesting", return_value=True)
 
         refusals = 0
         if old_code_first:
@@ -295,10 +381,13 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
             with pytest.raises(_Killed):
                 po.lambda_handler(_event(with_preview), _ctx(0))
         attempt[0] = 1
+        if engine_lands_before_retry:
+            # The copy lands (and deletes its staged source) before the retry lists the outputs.
+            engine.land(fail=engine_fails)
         answer = None
         for i in range(1, 4):
             try:
-                answer = po.lambda_handler(_event(with_preview), _ctx(i, retry_remaining_ms))
+                answer = po.lambda_handler(_event(with_preview, attempt=i), _ctx(i, retry_remaining_ms))
                 break
             except _refused():
                 refusals += 1
@@ -310,6 +399,20 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
                 attempt[0] = i + 1
         go.set()
 
+        # Before the engine lands its copies: what is still staged, then the copies end and the
+        # FinalizeOutputs state records the run (only when the step answered that copies are pending).
+        staged_before_landing = sorted(
+            v["Key"] for v in s3.list_object_versions(Bucket=RUN_BUCKET).get("Versions", [])
+            if v["Key"].startswith((FILES_PREFIX, PREVIEW_PREFIX)))
+        ledger_before_landing = eo.read_ingest_ledger(ddb, po.pipeline_execution_output_files_table, EXEC)
+        finalized = None
+        if answer and answer.get("outputIngestionPending"):
+            engine.land(fail=engine_fails)
+            finalized = po.lambda_handler(
+                {"body": {"mode": po.MODE_FINALIZE, "batchId": EXEC, "workflowExecutionId": EXEC}},
+                _ctx(9))
+        ledger = eo.read_ingest_ledger(ddb, po.pipeline_execution_output_files_table, EXEC)
+
         versions = {}
         for v in s3.list_object_versions(Bucket=ASSET_BUCKET).get("Versions", []):
             versions.setdefault(v["Key"], []).append(v["VersionId"])
@@ -318,13 +421,21 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
             recorded = sorted(
                 (f["fileType"], f["relativeFilePath"].lstrip("/"))
                 for f in record.call_args.kwargs["output_files"])
-        staged = sorted(o["Key"] for o in s3.list_objects_v2(Bucket=RUN_BUCKET).get("Contents", []))
+        # The staged outputs (the run bucket also holds the step's saved ingestion state).
+        outputs = (FILES_PREFIX, PREVIEW_PREFIX)
+        staged = sorted(o["Key"] for o in s3.list_objects_v2(Bucket=RUN_BUCKET).get("Contents", [])
+                        if o["Key"].startswith(outputs))
         staged_versions = sorted(
-            v["Key"] for v in s3.list_object_versions(Bucket=RUN_BUCKET).get("Versions", []))
+            v["Key"] for v in s3.list_object_versions(Bucket=RUN_BUCKET).get("Versions", [])
+            if v["Key"].startswith(outputs))
+        record_calls = record.call_count
     return {"answer": answer, "versions": versions, "recorded": recorded, "queued": queued,
             "staged": staged, "staged_versions": staged_versions, "ingestion_calls": ingestion_calls,
             "refusals": refusals, "slept": sleep.call_count, "handed": handed,
             "killed_retries": killed[0],
+            "starts": engine.starts, "jobs": engine.jobs, "finalized": finalized,
+            "staged_before_landing": staged_before_landing, "record_calls": record_calls,
+            "ledger_before_landing": ledger_before_landing, "ledger": ledger,
             "first_answer": first.get("answer")}
 
 
@@ -484,13 +595,16 @@ class TestAMoveLeavesNothingStaged:
         assert _asset_key(SMALL[1]) not in landed["versions"]
         assert FILES_PREFIX + SMALL[0] not in landed["staged_versions"]
 
-    def test_a_queued_large_output_keeps_the_version_its_copy_reads(self):
+    def test_a_large_output_keeps_the_version_its_copy_job_pinned_until_it_lands(self):
         with mock_aws():
             landed = _run("finished", real_stamp=True, with_large=True)
-        # The small outputs are gone; the large one keeps exactly its stamped version, which the
-        # asynchronous copy reads and then deletes.
-        assert landed["staged"] == [FILES_PREFIX + LARGE]
-        assert landed["staged_versions"] == [FILES_PREFIX + LARGE]
+        # The small outputs' staged versions are gone; the large one's stays, unstamped, as long as its
+        # copy job reads it (#1291 must not remove it), and the job deletes it once it lands.
+        assert landed["staged_before_landing"] == [FILES_PREFIX + LARGE]
+        (job,) = landed["jobs"].values()
+        assert job["sourceVersionId"]
+        assert landed["staged_versions"] == []
+        assert len(landed["versions"][_asset_key(LARGE)]) == 1
 
 
 @pytest.mark.unit
@@ -551,24 +665,86 @@ class TestUpgradeOverAnAttemptThatRanOnOldCode:
         assert landed["staged"] == []
 
 
+def _recorded_once(landed, names):
+    assert landed["recorded"] == sorted(("file", n) for n in names)
+    for name in names:
+        assert len(landed["versions"][_asset_key(name)]) == 1, landed["versions"]
+
+
 @pytest.mark.unit
 @pytest.mark.aws
 class TestALargeOutputAcrossARetry:
-    def test_after_the_ingestion_answered_the_retry_does_not_queue_it_again(self):
-        with mock_aws():
-            landed = _run("during_record", with_large=True)
-        # Its staged source outlives the ingest until the asynchronous copy runs; the ledger says it
-        # was ingested, so the retry neither queues it again nor drops it from the record.
-        assert landed["queued"] == [LARGE]
-        assert landed["recorded"] == sorted(("file", n) for n in (*SMALL, LARGE))
+    """Outputs handed to the copy engine across a retried or taken-over output step (#1271 + #1123):
+    one job, one asset version, one record, and the ledger row settled only once the copy landed."""
 
-    def test_before_the_ingestion_answered_the_retry_records_it(self):
+    def test_a_retry_after_the_hand_off_starts_no_second_job(self):
+        with mock_aws():
+            landed = _run("before_wait", with_large=True)
+        # Attempt 0 handed the large file to its job and recorded `engine-copying`; the retry finds that
+        # row, hands nothing over again and waits on the same job.
+        assert landed["starts"] == [loc.job_id_for(EXEC, LARGE)]
+        assert landed["answer"]["outputIngestionPending"] is True
+        _recorded_once(landed, (*SMALL, LARGE))
+        assert landed["record_calls"] == 1
+
+    @pytest.mark.parametrize("engine_lands_before_retry", [True, False])
+    def test_a_hand_off_the_killed_attempt_never_recorded_settles_at_finalize(self, engine_lands_before_retry):
+        # Combined smoke D1: the attempt died after the engine accepted the large output and before it
+        # wrote `engine-copying`. Whether the copy landed before the retry (the retry no longer lists the
+        # file) or after, the row ends `ingested` once FinalizeOutputs sees the job succeeded.
+        with mock_aws():
+            landed = _run("before_hand_off_record", with_large=True,
+                          engine_lands_before_retry=engine_lands_before_retry)
+        assert set(landed["starts"]) == {loc.job_id_for(EXEC, LARGE)}
+        _recorded_once(landed, (*SMALL, LARGE))
+        row = landed["ledger"][f"file:{LARGE}"]
+        assert row["ingestState"] == eo.INGEST_STATE_INGESTED
+        assert row["engineJobId"] == loc.job_id_for(EXEC, LARGE)
+
+    def test_a_failed_copy_the_killed_attempt_never_recorded_is_released(self):
+        with mock_aws():
+            landed = _run("before_hand_off_record", with_large=True, engine_fails=True,
+                          engine_lands_before_retry=True)
+        assert f"file:{LARGE}" not in landed["ledger"]
+        assert landed["finalized"]["failedFiles"] == 1
+
+    def test_a_takeover_while_the_copy_runs_starts_no_second_job(self):
         with mock_aws():
             landed = _run("after_ingest", with_large=True)
-        # The killed attempt never saw that the file was queued, so the retry hands it over again;
-        # the asynchronous copy writes it once (TestTheAsyncCopyIsWrittenOnce).
-        assert landed["queued"] == [LARGE, LARGE]
-        assert landed["recorded"] == sorted(("file", n) for n in (*SMALL, LARGE))
+        # Attempt 0 was killed before it saw the hand-off, so its rows stayed `moving`; the retry takes
+        # them over and hands the file to the job again, which is the same job (no second copy).
+        job_id = loc.job_id_for(EXEC, LARGE)
+        assert set(landed["starts"]) == {job_id}
+        assert len(landed["jobs"]) == 1
+        _recorded_once(landed, (*SMALL, LARGE))
+
+    def test_the_ledger_row_is_engine_copying_until_the_copy_lands(self):
+        with mock_aws():
+            landed = _run("finished", with_large=True)
+        key = f"file:{LARGE}"
+        before = landed["ledger_before_landing"][key]
+        assert before["ingestState"] == eo.INGEST_STATE_ENGINE_COPYING
+        assert before["engineJobId"] == loc.job_id_for(EXEC, LARGE)
+        assert landed["ledger"][key]["ingestState"] == eo.INGEST_STATE_INGESTED
+        for name in SMALL:
+            assert landed["ledger_before_landing"][f"file:{name}"]["ingestState"] == eo.INGEST_STATE_INGESTED
+
+    def test_mixed_small_and_large_outputs_are_all_recorded_once(self):
+        with mock_aws():
+            landed = _run("mid_move", with_large=True)
+        assert set(landed["starts"]) == {loc.job_id_for(EXEC, LARGE)}
+        _recorded_once(landed, (*SMALL, LARGE))
+        assert landed["staged"] == []
+
+    def test_a_failed_copy_fails_the_run_and_releases_its_row(self):
+        with mock_aws():
+            landed = _run("finished", with_large=True, engine_fails=True)
+        assert f"file:{LARGE}" not in landed["ledger"]
+        # The failed file is left out of the record and named in the run's error.
+        assert landed["recorded"] == sorted(("file", n) for n in SMALL)
+        assert landed["finalized"]["failedFiles"] == 1
+        # Its staged source is kept (the engine deletes it only after landing).
+        assert landed["staged"] == [FILES_PREFIX + LARGE]
 
 
 @pytest.mark.unit
@@ -736,39 +912,3 @@ class TestDestinationWrittenByExecution:
                 assert uf.destination_written_by_execution(ASSET_BUCKET, "user", EXEC) is False
                 assert uf.destination_written_by_execution(ASSET_BUCKET, "missing", EXEC) is False
                 assert uf.destination_written_by_execution(ASSET_BUCKET, "mine", None) is False
-
-
-@pytest.mark.unit
-@pytest.mark.aws
-class TestTheAsyncCopyIsWrittenOnce:
-    """A large output queued twice (the retry of an attempt killed before it saw the ingestion
-    response) is copied once: the second message finds this run's version in place."""
-
-    def test_a_second_message_for_a_written_output_writes_no_version(self):
-        from backend.backend.handlers.assets import sqsUploadFileLarge as large
-        file_info = {
-            "bucketName": ASSET_BUCKET, "sourceBucketName": RUN_BUCKET,
-            "tempS3Key": FILES_PREFIX + LARGE, "finalS3Key": _asset_key(LARGE),
-            "relativeKey": LARGE, "uploadType": "assetFile", "databaseId": DATABASE_ID,
-            "assetId": ASSET_ID, "changeUserId": "SYSTEM_USER", "workflowId": "wf1",
-            "workflowExecutionId": EXEC,
-        }
-        with mock_aws():
-            s3 = boto3.client("s3", region_name=REGION)
-            for bucket in (RUN_BUCKET, ASSET_BUCKET):
-                s3.create_bucket(Bucket=bucket)
-                s3.put_bucket_versioning(Bucket=bucket, VersioningConfiguration={"Status": "Enabled"})
-            s3.put_object(Bucket=ASSET_BUCKET, Key=_asset_key(LARGE), Body=b"x",
-                          Metadata={VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: EXEC})
-            s3.put_object(Bucket=RUN_BUCKET, Key=FILES_PREFIX + LARGE, Body=b"x")
-            ddb, _uploads = _tables()
-            with patch.object(large, "s3", s3), \
-                    patch.object(large, "dynamodb", ddb), \
-                    patch.object(large, "validateS3AssetExtensionsAndContentType", return_value=True), \
-                    patch.object(large, "copy_s3_object") as copy, \
-                    patch.object(large, "update_asset_after_file_processing") as update:
-                assert large.validate_and_move_large_file(file_info, {}) is True
-            copy.assert_not_called()
-            update.assert_not_called()
-            assert len(s3.list_object_versions(Bucket=ASSET_BUCKET)["Versions"]) == 1
-            assert "Contents" not in s3.list_objects_v2(Bucket=RUN_BUCKET)
