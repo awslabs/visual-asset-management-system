@@ -207,6 +207,14 @@ ALLOWED_SITES = {
     ("models/common.py", "internal_error", "7fee03a8"):
         "`errorBody` is the generic response body the handler returns (a fixed message), "
         "not the request",
+    ("common/uploadStatus.py", "_settle", "af896e7c"):
+        "logs the upload id from the stored upload record and the exception class; not request text",
+    ("handlers/assets/largeObjectCopy.py", "sweep", "7c0e515d"):
+        "`result` is the sweep outcome built by sweep_recorded_upload (swept, listed, remaining flags "
+        "or a fixed reason); the input is a direct invoke from the sweep state machine, not a request",
+    ("handlers/assets/zipDownloadService.py", "handle_sweep", "0f9689ec"):
+        "logs only the event's `final` flag and `result`, the sweep outcome (swept flag, counts or a "
+        "fixed reason); the event itself is not logged",
 }
 
 
