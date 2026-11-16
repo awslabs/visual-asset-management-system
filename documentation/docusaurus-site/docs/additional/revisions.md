@@ -157,6 +157,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Search text is not recorded in the audit log** — A search or text-filter read writes the text a user typed as `<redacted>` under `searchText`, with the names of the fields that held it and their total length. (issue #1542)
 -   **Compliance pipeline rules after a superseded failure** — A workflow run that reports failed and then succeeded replaces the rule's failed result with the success, and the evaluation is decided again (#1504).
 -   **No customer managed IAM policies of its own** — Roles are granted inline, and CDK's generated overflow policies hold what does not fit an inline policy, so every role stays within IAM's inline policy limit in every partition (#1499).
 -   **Needle USD viewer error messages are readable** — The error panel shows its whole message at any panel width; the 3D canvas no longer stays above the text and pushes it out of view. (issue #1234)

@@ -174,6 +174,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend/Audit** Search and text-filter reads no longer record the text a user typed in the audit log: the text is written as `<redacted>` under `searchText`, with the names of the fields that held it and their total length. ([#1542](https://github.com/awslabs/visual-asset-management-system/issues/1542))
 -   **Backend** Fixed a compliance pipeline rule keeping a failed result when its workflow run reported failed and then succeeded (two overlapping attempts of the run's last step): the later success of the same run now replaces the failure and the evaluation is decided again, while a release or exception granted after the evaluation began still stands. ([#1504](https://github.com/awslabs/visual-asset-management-system/issues/1504))
 -   **Web** The Needle USD viewer's error panel shows its whole message at any panel width; the 3D canvas no longer stays above the text and pushes it out of view. ([#1234](https://github.com/awslabs/visual-asset-management-system/issues/1234))
 -   **Web** A folder lands at the same path whether it is picked or dragged: a single folder added on its own on Create Asset becomes the asset's contents, and every other folder keeps its name, including every folder added to an existing asset. ([#1471](https://github.com/awslabs/visual-asset-management-system/issues/1471))

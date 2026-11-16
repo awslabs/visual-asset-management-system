@@ -174,6 +174,20 @@ CDK passes the value to every VAMS Lambda function as the `AUDIT_RECORD_READS` e
 
 Reads are the most frequent API calls, so they make up most of the action records of a read-heavy deployment such as the web app: expect several times the record count and ingestion of writes alone. Use the [Amazon CloudWatch pricing page](https://aws.amazon.com/cloudwatch/pricing/) or the AWS Pricing Calculator to estimate the cost in your Region, and measure your own volume with a Logs Insights query such as `stats count(*) by action` over the actions log group.
 
+### Search text
+
+The text a caller types into a search or a text filter can hold anything a user thinks of, so no audit record keeps it. `requestParameters` holds the request's IDs, options and paging, and puts every typed field under the one key `searchText`, which the redaction writes as `<redacted>`:
+
+-   `search` (`POST /search`): `query`, `metadataQuery`, each token's `value` and each filter's `query_string` options (`query`, `default_field`, `default_operator` and the rest, whether or not they hold words, so an auditor sees the filter count and not its options). Each token keeps its `operation`, `operator` and `propertyKey`, and the filters are counted in `filterCount`.
+-   `search` (`POST /search/simple`): `query`, `metadataKey`, `metadataValue`, `assetName`, `fileKey` and `tags`. The API accepts any string as a tag filter, with wildcards, and cannot tell a tag picked from a list from one typed by hand, so every tag value counts as typed text.
+-   The `text` filter of the compliance audit, quarantine, cascade and state listings, and the `filterPattern` of the execution log read.
+
+Beside `searchText` the record carries `searchTextFields`, the names of the request fields that held text, and `searchTextLength`, the characters they held in all, so an auditor can see that a text search ran and how large it was. A search with no typed text adds none of the three keys. The IDs, `entityTypes`, sort fields and paging stay readable. A handler that records a new search or text-filter read builds its `requestParameters` with `search_text_parameters` in `backend/backend/common/auditSearchText.py`; a test fails when a registered read or search action records a text field another way. Records written before this change are not rewritten, and a search term in one of them was recorded as typed.
+
+This applies to the audit log groups. The Lambda function logs are a separate store with their own retention, and some handlers still write request text there (for example a generated search clause or the request an entry point received). Set the function log retention to what your policy allows and restrict read access to those log groups the same way as the audit groups.
+
+**What the registry test checks.** `tests/common/test_audit_search_text.py` fails when a registered read or search action records a known free-text field name (`query`, `text`, `filterPattern` and similar) in `request_parameters` outside the helper, when a search action's module never calls the helper, and when a read action records the raw query string (`query_params`, `dict(query_params)`, `{**query_params}` or a comprehension over it) in a module that is not on the test's known list. It cannot catch a text field under a name the scan does not know, text placed in `details` or `changes`, or a dictionary built in a variable and passed in. The known list holds the modules that record the raw query string of a list read today, none of which defines a free-text query parameter; the follow-up is to name the keys they record (`request_parameters(params, keys)` as the compliance handlers do). A module on the list that stops passing the raw string must be removed from it.
+
 ### Redaction and Size Caps
 
 -   Every value section (`changes`, `previous`, `requestParameters`, `details`) passes through the same key-name redaction as the request echo (see [Automatic Data Masking](#automatic-data-masking)), so a credential or template body is written as `<redacted>`.
@@ -378,7 +392,7 @@ What the main records carry, beyond the [payload keys](#payload-keys) every reco
 | Metadata                          | The target's IDs (`databaseId`, `assetId`, `filePath`, `assetLinkId`)                                    | `itemCount`: entries written, deleted or returned                                                           | One record per target: each entry written (`value`, `valueType`) or `details.deletedKeys`                                                                       |
 | Asset links                       | `assetLinkId`; the source as `databaseId`/`assetId`, the target as `target*`                             | --                                                                                                          | The link fields written; an update's prior values                                                                                                               |
 | Subscriptions                     | `databaseId`, `assetId`, `subscriptionId`                                                                | `itemCount`: subscribers                                                                                    | The event, entity and subscribers written                                                                                                                       |
-| Search                            | --                                                                                                       | `itemCount`: hits returned                                                                                  | The search request (`requestParameters`), never the hits                                                                                                        |
+| Search                            | --                                                                                                       | `itemCount`: hits returned                                                                                  | The search request's IDs, options and paging (`requestParameters`); the text typed is `<redacted>` under `searchText`. Never the hits                           |
 | Workflow output and execution end | `databaseId`, `assetId`, `workflowId`, `executionId`                                                     | `fileCount`, `itemCount` (output write-back); `durationMs` (execution end)                                  | `actor.onBehalfOf` names the user the execution ran for; a trigger-launched run names none                                                                      |
 | Execution reads                   | `executionId`; `databaseId` when the run's assets share one database, `assetId` when it ran on one asset | --                                                                                                          | The query asked (`requestParameters`), never what it returned                                                                                                   |
 | Bucket sync                       | `databaseId`, `assetId`, `filePath`                                                                      | `bytes` from the storage event                                                                              | `details.operation` (`create`, `restore`, `created`); only objects written to the bucket directly, not through VAMS                                             |
@@ -788,6 +802,7 @@ The values of the redacted keys listed under [Automatic Data Masking](#automatic
 -   Proxy credentials (`Proxy-Authorization`) and AWS credentials (access keys, secret keys, session tokens, `X-Amz-Security-Token`)
 -   Token signatures or detailed token validation errors (the authorizer records a generic failure category)
 -   Pipeline template bodies -- stored or supplied inline as an execute-time override -- their form definitions and input instructions, and the tag values substituted into them
+-   The text typed into a search or a text filter, recorded under `searchText` (see [Search text](#search-text))
 
 Redaction is by key name. A secret typed into a free-form field that is not on the list, such as a description, a metadata value or a file name, is written as submitted.
 
@@ -825,10 +840,11 @@ Every audit entry carries an echo of the triggering API event, and the `mask_sen
 -   `webFormJson` -- the form definition stored alongside a template body
 -   `inputInstructions` -- the authored guidance stored alongside a template body
 -   `templateTags` and `tagValues` -- the caller-supplied values substituted into a template body
+-   `searchText` -- the text a caller typed into a search or a text filter (see [Search text](#search-text))
 
 The field name is preserved when the value is redacted, so the audit trail still records that a template body, form definition, or tag value was submitted with the request. A request `body` is filtered whether it arrives as a JSON object or as a JSON string: the string is parsed, filtered, and re-serialized, and a string payload that names a redacted key but does not parse as JSON is dropped in full.
 
-The two families are declared as `SENSITIVE_KEYS` (`CORE_LOG_SENSITIVE_KEYS` in `backend/backend/common/constants.py`, merged with the add-on and fork lists) and `CONTENT_KEYS` in `backend/backend/customLogging/logger.py`. A new request field that carries a caller-authored body is protected only when its key is added to `CONTENT_KEYS`, and a new header or field that carries a credential only when its name is added to the credential keys.
+The two families are declared as `SENSITIVE_KEYS` (`CORE_LOG_SENSITIVE_KEYS` in `backend/backend/common/constants.py`, merged with the add-on and fork lists) and `CONTENT_KEYS` in `backend/backend/customLogging/logger.py`. A new request field that carries a caller-authored body or typed text is protected only when its key is added to `CONTENT_KEYS` (or, for a search term, recorded under `searchText`), and a new header or field that carries a credential only when its name is added to the credential keys.
 
 ## Integration with SIEM Systems
 
