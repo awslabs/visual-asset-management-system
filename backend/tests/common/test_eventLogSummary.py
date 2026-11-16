@@ -104,3 +104,113 @@ class TestRequestSummaries:
         summary = query_clause_log_summary(clause)
         assert SECRET_VALUE not in summary
         assert "bool=1" in summary and "query_string=1" in summary and "match=1" in summary
+
+
+class _HostileObject:
+    """An object whose length, text and equality all raise."""
+
+    def __len__(self):
+        raise RuntimeError("len")
+
+    def __str__(self):
+        raise RuntimeError("str")
+
+    __repr__ = __str__
+
+    def __eq__(self, other):
+        raise RuntimeError("eq")
+
+    __hash__ = None
+
+
+def _cyclic_dict():
+    cycle: dict = {"bool": {}}
+    cycle["bool"]["must"] = [cycle]
+    return cycle
+
+
+@pytest.mark.unit
+class TestSummariesNeverRaise:
+    """Both summaries take hostile input without raising (#1552): they run before a handler's try block."""
+
+    HOSTILE_VALUES = [None, 5, 1.5, "text", b"bytes", [], ["a", "b"], ("a",), {}, {"a": 1}, _HostileObject(), True]
+
+    @pytest.mark.parametrize("value", HOSTILE_VALUES, ids=lambda v: type(v).__name__)
+    @pytest.mark.parametrize("field", ["pathParameters", "queryStringParameters", "requestContext", "body",
+                                       "routeKey", "httpMethod", "resource", "Records", "triggerSource",
+                                       "request", "operation", "databaseId"])
+    def test_event_with_a_hostile_field_value(self, field, value):
+        for base in ({"routeKey": "GET /x", "requestContext": {"http": {"method": "GET"}}},
+                     {"httpMethod": "GET", "requestContext": {}},
+                     {"triggerSource": "T", "request": {}},
+                     {}):
+            summary = event_log_summary({**base, field: value})
+            assert isinstance(summary, str) and summary
+
+    @pytest.mark.parametrize("http", ["POST", 5, ["POST"], None, _HostileObject()])
+    def test_request_context_http_of_any_type(self, http):
+        summary = event_log_summary({"routeKey": "GET /x", "requestContext": {"http": http}})
+        assert isinstance(summary, str) and summary
+
+    @pytest.mark.parametrize("path_parameters", [5, ["secret-a", "secret-b"], "secret-text", _HostileObject()])
+    def test_non_dict_path_parameters_list_no_names(self, path_parameters):
+        summary = event_log_summary({"routeKey": "GET /x", "requestContext": {}, "pathParameters": path_parameters})
+        assert "secret" not in summary and "pathParameters=[]" in summary
+
+    @pytest.mark.parametrize("event", [_HostileObject(), [1, 2], "x", 7, None, {"Records": [_HostileObject(), 3, None]}])
+    def test_any_event(self, event):
+        assert isinstance(event_log_summary(event), str)
+
+    def test_a_raising_internal_step_gives_the_fixed_fallback(self, monkeypatch):
+        import common.eventLogSummary as module
+
+        monkeypatch.setattr(module, "_event_log_summary", lambda event: (_ for _ in ()).throw(RuntimeError("x")))
+        assert module.event_log_summary({"a": 1}) == module.FALLBACK_SUMMARY
+
+    def test_path_parameter_names_are_capped_in_count_and_length(self):
+        names = {f"{'n' * 5000}{i}": "v" for i in range(2000)}
+        summary = event_log_summary({"routeKey": "GET /x", "requestContext": {}, "pathParameters": names})
+        assert "+1995 more" in summary
+        assert len(summary) < 2000
+
+    @pytest.mark.parametrize("clause", [None, 5, "text", [], {}, [[]], _HostileObject()])
+    def test_clause_of_any_shape(self, clause):
+        from common.eventLogSummary import query_clause_log_summary
+
+        assert isinstance(query_clause_log_summary(clause), str)
+
+    def test_clause_ten_thousand_levels_deep(self):
+        from common.eventLogSummary import MAX_CLAUSE_DEPTH, query_clause_log_summary
+
+        clause: dict = {}
+        node = clause
+        for _ in range(10_000):
+            node["bool"] = {}
+            node = node["bool"]
+        summary = query_clause_log_summary(clause)
+        assert "(truncated)" in summary
+        assert f"{MAX_CLAUSE_DEPTH + 1} node(s)" in summary
+
+    def test_clause_ten_thousand_levels_deep_in_lists(self):
+        from common.eventLogSummary import query_clause_log_summary
+
+        clause: list = []
+        node = clause
+        for _ in range(10_000):
+            child: list = []
+            node.append(child)
+            node = child
+        assert isinstance(query_clause_log_summary({"bool": {"must": clause}}), str)
+
+    def test_cyclic_clause(self):
+        from common.eventLogSummary import query_clause_log_summary
+
+        summary = query_clause_log_summary(_cyclic_dict())
+        assert "bool=1" in summary and "must=1" in summary
+
+    def test_a_very_wide_clause_is_bounded(self):
+        from common.eventLogSummary import MAX_CLAUSE_NODES, query_clause_log_summary
+
+        clause = {"bool": {"should": [{"match": {"f": str(i)}} for i in range(MAX_CLAUSE_NODES * 3)]}}
+        summary = query_clause_log_summary(clause)
+        assert "(truncated)" in summary and f"{MAX_CLAUSE_NODES} node(s)" in summary
