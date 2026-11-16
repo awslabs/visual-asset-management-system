@@ -151,11 +151,24 @@ FILE_CLASS_PHRASES: Dict[str, str] = {
     "other": "file",
 }
 
+# Content first, as in the whole-file analysis (lambda/generateMetadata.py CONTENT_FIRST_SYSTEM_TEXT): the asset's
+# name and the whole video's values are context, and the window's fields name what its frames show.
+SEGMENT_CONTENT_FIRST_TEXT = (
+    "The asset's name and the whole video's title, category and description are context: they may describe the "
+    "upload, a project or a test rather than this window, so do not present them as the window's content. "
+    "The description, keywords, objects and actions must name what the frames of this window show. "
+    "When the frames show little you can name, say so plainly rather than describe that context as the window's "
+    "content. "
+)
+SEGMENT_CONTENT_FIRST_INSTRUCTION = ("The asset name and the whole video's title, category and description are "
+                                     "context; describe what these frames show.")
 SEGMENT_SYSTEM_PROMPT = (
     "You are a digital asset librarian describing one time window of a video from an asset management system "
     "so the video can be found by what happens in that window. You receive the asset's name, the file's type "
     "and path, the window's time range, the title, category and description the whole video already carries, "
-    "and frames taken inside the window. Return ONLY a JSON object with exactly these keys: "
+    "and frames taken inside the window. "
+    + SEGMENT_CONTENT_FIRST_TEXT
+    + "Return ONLY a JSON object with exactly these keys: "
     '"description" (string, at most 400 characters of plain prose describing what the frames show), '
     '"keywords" (array of at most 10 lowercase strings of one to three words each), '
     '"objects" (array of at most 10 strings naming the distinct objects or entities visible), '
@@ -350,9 +363,10 @@ def frames_for_window(bucket: str, key: str, version_id: str, start_ms: int, end
 
 def build_user_blocks(asset_name: str, phrase: str, relative_path: str, label: str, duration_seconds: float,
                       genai: Dict[str, str], frame_count: int) -> List[dict]:
-    """The user message's text blocks. The instruction, the file-type phrase, the window sentence and the frame
-    note are the pipeline's own words; the asset name, the file path and the whole video's genai_* values come
-    from the file and its metadata and travel in the guardContent block when a guardrail is configured."""
+    """The user message's text blocks. The instruction, the file-type phrase, the window sentence, the frame
+    note and, with any context, the content-first instruction are the pipeline's own words; the asset name, the
+    file path and the whole video's genai_* values come from the file and its metadata and travel in the
+    guardContent block when a guardrail is configured."""
     plain = ["Describe this time window of a video for search indexing.", f"File type: {phrase}",
              f"Segment {label} of {human_duration(duration_seconds)}",
              f"The {frame_count} frames that follow were taken inside the window, at 10 %, 50 % and 90 % of it."]
@@ -364,6 +378,8 @@ def build_user_blocks(asset_name: str, phrase: str, relative_path: str, label: s
                          ("genai_description", "Video description")):
         if genai.get(key):
             guarded.append(f"{heading}: {genai[key]}")
+    if asset_name or any(genai.get(key) for key in ("genai_title", "genai_category", "genai_description")):
+        plain.append(SEGMENT_CONTENT_FIRST_INSTRUCTION)
     return bedrockGuardrail.user_content_blocks("\n".join(plain), "\n".join(guarded), GUARDRAIL_CONFIG)
 
 

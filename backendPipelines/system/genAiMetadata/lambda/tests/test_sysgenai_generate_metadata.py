@@ -233,7 +233,7 @@ class TestAttributesFirst:
         rows = {row["metadataKey"]: row for row in body["metadata"]}
         # sys_* groups, then the ext_* facts promoted from them, then the run's genai_* provenance.
         assert list(rows) == ["sys_file", "sys_geometry", "sys_statistics"] + MESH_EXT_KEYS + [
-            "genai_model", "genai_generated_at", "genai_source_modalities", "genai_complexity"]
+            "genai_model", "genai_generated_at", "genai_source_modalities", "genai_complexity", "genai_context_digest"]
         assert all(row["metadataValueType"] == "string" for row in rows.values())
         assert json.loads(rows["sys_geometry"]["metadataValue"]) == MESH_ATTRIBUTES["sys_geometry"]
         assert json.loads(rows["sys_file"]["metadataValue"])["etag"] == "abc123"
@@ -1502,7 +1502,8 @@ class TestKeyReuse:
         _run(_state(), s3, bedrock)
         text = _user_text(bedrock)
         assert "Previous analysis of this file:\n- title: Old title\n- keywords: pump, old" in text
-        assert "keep its wording" in text
+        # No asset-text digest is on record, so the previous analysis is given for reference only.
+        assert "included for reference only" in text and "keep its wording where it still" not in text
         assert text.index("Existing file metadata:") < text.index("Previous analysis") < text.index("rendered view")
         summary = s3.json_at("abkt", SUMMARY_KEY)
         assert summary["keyReuse"]["previousValues"] == 2

@@ -17,7 +17,11 @@ the file's ``genai_*`` rows, ``asset`` writes the asset's ``genai_asset_*`` rows
 version, ``both`` writes both. With ``reuseExistingKeys`` on (the default), a field lands in a key the entity
 already carries when the template's ``fieldMapping`` names it, a value a person edited is never overwritten,
 a pipeline-owned key the run no longer produces is cleared, and the prompt carries the pipeline's earlier
-result (``keyReuse``). With the input envelope's metadata schema section (``metadataSchemas``) for the subject's
+result (``keyReuse``). The model is told that the asset's name, description and tags are context and that the
+descriptive fields name what the file itself shows or contains; it is asked to keep the earlier result's wording
+only when that result was made from the asset text this run is given (the ``genai_context_digest`` attribute each
+successful analysis writes), and otherwise gets it for reference only. With the input envelope's metadata schema
+section (``metadataSchemas``) for the subject's
 database, a schema key (an empty one, or one an earlier run filled) is written with its schema type, a field that
 lands in a controlled-list key is offered the list's values (one of them when it fits, else the field's own value,
 which then stays in its genai_* key), and the answer comes as a structured-output tool's input
@@ -188,8 +192,19 @@ GENAI_ATTRIBUTE_MODEL_KEY = "genai_model"
 GENAI_ATTRIBUTE_GENERATED_AT_KEY = "genai_generated_at"
 GENAI_ATTRIBUTE_MODALITIES_KEY = "genai_source_modalities"
 GENAI_ATTRIBUTE_COMPLEXITY_KEY = "genai_complexity"
+# A digest of the asset text the analysis was given (the asset's name, description and tags, as the prompt carries
+# them; asset_context_digest), written beside the provenance once an analysis has succeeded. A later seeded run
+# compares it with the asset text it is given: unchanged, the previous analysis's wording is kept where it still
+# describes the file; changed, or not on record (an analysis made before the digest was written), the previous
+# analysis is context only (previous_analysis_use).
+GENAI_ATTRIBUTE_CONTEXT_DIGEST_KEY = "genai_context_digest"
 GENAI_ATTRIBUTE_KEYS = (GENAI_ATTRIBUTE_MODEL_KEY, GENAI_ATTRIBUTE_GENERATED_AT_KEY,
-                        GENAI_ATTRIBUTE_MODALITIES_KEY, GENAI_ATTRIBUTE_COMPLEXITY_KEY)
+                        GENAI_ATTRIBUTE_MODALITIES_KEY, GENAI_ATTRIBUTE_COMPLEXITY_KEY,
+                        GENAI_ATTRIBUTE_CONTEXT_DIGEST_KEY)
+# How a seeded run uses the previous analysis it carries (the analysis summary's keyReuse.previousAnalysisUse).
+PREVIOUS_KEEP_WORDING = "keepWording"
+PREVIOUS_CONTEXT_ONLY_CHANGED = "contextOnlyAssetTextChanged"
+PREVIOUS_CONTEXT_ONLY_NO_RECORD = "contextOnlyNoRecord"
 
 MODALITY_FILE_ATTRIBUTES = "file-attributes"
 MODALITY_ASSET_METADATA = "asset-metadata"
@@ -213,12 +228,24 @@ EXISTING_SECTION_HEADERS = {
     "fileAttributes": "Existing file attributes:",
 }
 
+# Content first: the asset text is context about the asset, and the descriptive fields name what the file itself
+# shows or contains. Restated for the video window prompt (containers/media/segment_handler.py) and the asset
+# summary (summarizeAsset.py).
+CONTENT_FIRST_SYSTEM_TEXT = (
+    "The asset's name, description and tags are context about the asset the file belongs to: they may describe the "
+    "upload, a project or a test rather than this file, so do not present them as the file's content. "
+    "The title, description and keywords must name what the file itself shows or contains, as its rendered views "
+    "or frames, its extracted text and its attributes show it. "
+    "When the file shows little you can name, say so plainly rather than describe the asset text as the file's "
+    "content. "
+)
 SYSTEM_PROMPT = (
     "You are a digital asset librarian describing one file from an asset management system so it can be "
     "searched and classified. You receive the asset's name, description and tags, the file's path and class, "
     "the file's technical attributes as JSON, the classification vocabulary to choose from, optionally existing "
     "metadata, optionally an excerpt of the file's text, and optionally rendered views or frames of the file. "
-    "Return ONLY a JSON object with exactly these keys: "
+    + CONTENT_FIRST_SYSTEM_TEXT
+    + "Return ONLY a JSON object with exactly these keys: "
     '"title" (string, at most 80 characters naming the content), '
     '"description" (string, at most 1200 characters of plain prose describing what the file contains and depicts), '
     '"keywords" (array of 8 to 15 lowercase strings of one to three words each), '
@@ -415,9 +442,19 @@ def existing_metadata_sections(existing_lines):
     return sections
 
 
+# The plain instructions of the user message that go with the asset text and the previous analysis.
+CONTENT_FIRST_INSTRUCTION = ("The asset's name, description and tags are context about the asset this file belongs "
+                             "to; the title, description and keywords name what this file itself shows or contains.")
+PREVIOUS_KEEP_WORDING_INSTRUCTION = ("A previous analysis of this file is included; keep its wording where it still "
+                                     "describes the file.")
+PREVIOUS_CONTEXT_ONLY_INSTRUCTION = ("A previous analysis of this file is included for reference only: the asset's "
+                                     "name, description or tags may have changed since it was made, so describe the "
+                                     "file afresh rather than keep its wording.")
+
+
 def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
                      existing_lines, text_excerpt, image_count, images_withheld=False, previous_lines=(),
-                     target_lines=()):
+                     target_lines=(), keep_previous_wording=False):
     """The prompt's parts by name. ``intro``, ``vocabularyOpening``, ``vocabularyClosing`` and ``closing`` are the
     pipeline's own words; ``context``, ``identity``, ``attributes``, ``facts``, ``existing``, ``previous`` and
     ``excerpt`` come from the file and its metadata, and ``vocabularyOptions`` from the template's operator-edited
@@ -425,7 +462,9 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
     returns. ``images_withheld`` says the file has, or would have had, rendered views the analysis model cannot
     take, so none follows. ``previous_lines`` are the ``field: value`` lines of the pipeline's earlier result for this subject.
     ``target_lines`` name the values a metadata schema's controlled list allows for a field (``targets``, guarded:
-    the lists are operator data)."""
+    the lists are operator data). ``keep_previous_wording`` (previous_analysis_use) says whether the model is asked
+    to keep the previous analysis's wording or given it for reference only. The content-first instruction goes with
+    any asset text."""
     vocabulary_opening, vocabulary_options, vocabulary_closing = vocabulary_parts
     context = []
     if asset_data.get("assetName"):
@@ -448,11 +487,13 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
         closing = ("No rendered views are sent (this analysis model takes no image input); describe the file "
                    "from its name, attributes and context.")
     closing_lines = [closing] if closing else []
+    if context:
+        closing_lines.append(CONTENT_FIRST_INSTRUCTION)
     if target_lines:
         closing_lines.append(TARGETS_INSTRUCTION)
     if previous_lines:
-        closing_lines.append("A previous analysis of this file is included; keep its wording where it still "
-                             "describes the file.")
+        closing_lines.append(PREVIOUS_KEEP_WORDING_INSTRUCTION if keep_previous_wording
+                             else PREVIOUS_CONTEXT_ONLY_INSTRUCTION)
     return {
         "intro": ["Describe and classify this file for search indexing."],
         "context": context,
@@ -486,16 +527,16 @@ _UNGUARDED_PARTS = ("intro", "vocabularyOpening", "vocabularyClosing", "closing"
 
 def build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
                     existing_lines, text_excerpt, image_count, images_withheld=False, previous_lines=(),
-                    target_lines=()):
+                    target_lines=(), keep_previous_wording=False):
     parts = _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest,
                              vocabulary_parts, existing_lines, text_excerpt, image_count, images_withheld,
-                             previous_lines, target_lines)
+                             previous_lines, target_lines, keep_previous_wording)
     return "\n".join(line for name in _USER_TEXT_ORDER for line in parts[name])
 
 
 def build_user_content(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
                        existing_lines, text_excerpt, image_count, guarded, images_withheld=False,
-                       previous_lines=(), target_lines=()):
+                       previous_lines=(), target_lines=(), keep_previous_wording=False):
     """The user message's text content blocks. Without a guardrail, one text block in prompt order. With one,
     a text block carrying the pipeline's own instructions (the intro, the vocabulary's opening and closing
     sentences, the render note), then a ``guardContent`` block carrying everything that comes from the file, its
@@ -503,10 +544,10 @@ def build_user_content(asset_data, database_id, relative_path, file_class, file_
     if not guarded:
         return [{"text": build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest,
                                          vocabulary_parts, existing_lines, text_excerpt, image_count,
-                                         images_withheld, previous_lines, target_lines)}]
+                                         images_withheld, previous_lines, target_lines, keep_previous_wording)}]
     parts = _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest,
                              vocabulary_parts, existing_lines, text_excerpt, image_count, images_withheld,
-                             previous_lines, target_lines)
+                             previous_lines, target_lines, keep_previous_wording)
     plain = "\n".join(line for name in _UNGUARDED_PARTS for line in parts[name])
     guarded_text = "\n".join(line for name in _GUARDED_PARTS for line in parts[name])
     return bedrockGuardrail.user_content_blocks(plain, guarded_text, GUARDRAIL_CONFIG)
@@ -788,10 +829,45 @@ def targets_row(plan, stored_targets):
     return _row(keyReuse.FILE_TARGETS_KEY, keyReuse.encode_digest_record(record), TYPE_STRING)
 
 
-def genai_attribute_rows(modalities, generated_at, result=None, model_id=None):
+def asset_context_digest(asset_data):
+    """The digest of the asset text the prompt carries: the asset's name, description and tags (blank tags left
+    out, as the prompt leaves them out), as canonical JSON through keyReuse.value_digest; a change to any of the
+    three changes it."""
+    tags = [str(tag) for tag in (asset_data.get("tags") or []) if str(tag).strip()]
+    text = json.dumps({"name": str(asset_data.get("assetName") or ""),
+                       "description": str(asset_data.get("description") or ""), "tags": tags},
+                      sort_keys=True, separators=(",", ":"))
+    return keyReuse.value_digest(text)
+
+
+def stored_context_digest(write_target, file_attributes, asset_metadata, relative_path):
+    """The asset-text digest of the analysis a seeded run's previous lines come from, or "" when none is on record.
+    For the file and both targets that is the file's own GENAI_ATTRIBUTE_CONTEXT_DIGEST_KEY attribute. For the
+    asset target the previous lines are the asset's, written by the run on the file genai_asset_source names; the
+    file's own record stands for them only when that is this file, since no other file's attributes reach the run."""
+    stored = str((file_attributes or {}).get(GENAI_ATTRIBUTE_CONTEXT_DIGEST_KEY) or "").strip()
+    if write_target == WRITE_TARGET_ASSET:
+        source = str((asset_metadata or {}).get(ASSET_SOURCE_KEY) or "")
+        if source != ASSET_SOURCE_FILE_PREFIX + (relative_path or ""):
+            return ""
+    return stored
+
+
+def previous_analysis_use(stored_digest, current_digest):
+    """PREVIOUS_KEEP_WORDING when the previous analysis was made from the asset text this run is given, else
+    PREVIOUS_CONTEXT_ONLY_CHANGED (the text changed) or PREVIOUS_CONTEXT_ONLY_NO_RECORD (no digest on record: an
+    analysis made before the digest was written, or another file's)."""
+    if not stored_digest:
+        return PREVIOUS_CONTEXT_ONLY_NO_RECORD
+    return PREVIOUS_KEEP_WORDING if stored_digest == current_digest else PREVIOUS_CONTEXT_ONLY_CHANGED
+
+
+def genai_attribute_rows(modalities, generated_at, result=None, model_id=None, context_digest=None):
     """The run's ``genai_*`` attribute rows: the model the request went to (the analysis model by default),
-    timestamp (ISO-8601 text), modalities, and — once the analysis has produced one — the complexity grade.
-    All string-typed, as file attributes are."""
+    timestamp (ISO-8601 text), modalities, and — once the analysis has produced one — the complexity grade and the
+    digest of the asset text it was given (``context_digest``). All string-typed, as file attributes are. The
+    digest is written only with a result, so a failed analysis leaves the record of the analysis the file's
+    descriptive rows still come from."""
     rows = [
         _row(GENAI_ATTRIBUTE_MODEL_KEY, model_id or BEDROCK_ANALYSIS_MODEL_ID, TYPE_STRING),
         _row(GENAI_ATTRIBUTE_GENERATED_AT_KEY, generated_at, TYPE_STRING),
@@ -800,6 +876,8 @@ def genai_attribute_rows(modalities, generated_at, result=None, model_id=None):
     complexity = (result or {}).get("complexity")
     if complexity is not None and str(complexity).strip():
         rows.append(_row(GENAI_ATTRIBUTE_COMPLEXITY_KEY, str(complexity), TYPE_STRING))
+    if result is not None and context_digest:
+        rows.append(_row(GENAI_ATTRIBUTE_CONTEXT_DIGEST_KEY, context_digest, TYPE_STRING))
     return rows
 
 
@@ -932,6 +1010,13 @@ def lambda_handler(event, context):
     if reuse_on and seed_on:
         previous_lines = (previous_analysis_lines(ASSET_FIELDS, asset_metadata, ASSET_FIELD_ALIASES)
                           if write_target == WRITE_TARGET_ASSET else previous_analysis_lines(FILE_FIELDS, file_metadata))
+    # The previous analysis's wording is kept only when it was made from the asset text this run is given; a
+    # changed asset name, description or tags (or no record of them) makes it context only, so a correction to the
+    # asset text reaches the result.
+    context_digest = asset_context_digest(asset_data)
+    previous_use = (previous_analysis_use(stored_context_digest(write_target, vams.get("fileAttributes"),
+                                                                asset_metadata, event.get("relativePath", "")),
+                                          context_digest) if previous_lines else None)
     text_excerpt = (manifest.get("textExcerpt") or "")[:max_text_chars]
     # An analysis model without image input gets the attributes and text only: the renders are not read and the
     # prompt says why none follows.
@@ -991,7 +1076,10 @@ def lambda_handler(event, context):
         "assetMetadataFile": None,
         # Key reuse: which key each field landed in per entity, the keys the run emptied, and how many lines of
         # the pipeline's earlier result the prompt carried.
-        "keyReuse": {"enabled": reuse_on, "targets": {}, "cleared": [], "previousValues": len(previous_lines)},
+        "keyReuse": {"enabled": reuse_on, "targets": {}, "cleared": [], "previousValues": len(previous_lines),
+                     # keepWording, contextOnlyAssetTextChanged or contextOnlyNoRecord; None without a previous
+                     # analysis in the prompt.
+                     "previousAnalysisUse": previous_use},
         # Keys the run left alone: a value a person edited, a key whose type is not known yet, or a schema key whose
         # type refuses the value.
         "keyConflicts": [],
@@ -1043,7 +1131,8 @@ def lambda_handler(event, context):
                                      images_withheld=bool(images_withheld) or views_not_rendered(file_class,
                                                                                                  render_branch),
                                      previous_lines=previous_lines,
-                                     target_lines=structuredOutput.controlled_list_lines(constraints))
+                                     target_lines=structuredOutput.controlled_list_lines(constraints),
+                                     keep_previous_wording=previous_use == PREVIOUS_KEEP_WORDING)
     try:
         result, usage, masked_types, reply_format = analyze(user_blocks, image_blocks, model_id,
                                                             tool=analysis_tool(constraints) if schema_aware else None)
@@ -1066,7 +1155,7 @@ def lambda_handler(event, context):
             summary["metadataFile"] = metadata_uri
         # The complexity grade is the one attribute the model supplies: rewrite the file with it, and with the
         # record of the person-named keys this run wrote.
-        attribute_rows = genai_attribute_rows(modalities, generated_at, result, model_id)
+        attribute_rows = genai_attribute_rows(modalities, generated_at, result, model_id, context_digest)
         if reuse_on:
             # The digest record, and the record of which key each field landed in when that is not its genai_*
             # key, so a reader of the file's analysis (the asset summary) finds the field there.

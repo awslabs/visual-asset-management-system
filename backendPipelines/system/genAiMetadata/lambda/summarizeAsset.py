@@ -86,6 +86,17 @@ SUMMARY_FIELD_NAMES = tuple(spec.name for spec in gm.ASSET_FIELDS)
 ASSET_FILE_COUNT_KEY = "genai_asset_file_count"
 ASSET_SOURCE_AGGREGATE_PREFIX = "aggregate:"
 
+# Content first, as in the file analysis (generateMetadata.CONTENT_FIRST_SYSTEM_TEXT): the asset's own text is
+# context, and the descriptive fields name what its files contain, as their descriptions say.
+SUMMARY_CONTENT_FIRST_TEXT = (
+    "The asset's name, description and tags are context: they may describe the upload, a project or a test rather "
+    "than what the asset contains, so do not present them as its content. "
+    "The title, description and keywords must name what the asset's files contain, as their descriptions say. "
+    "When those descriptions say little you can name, say so plainly rather than describe the asset text as the "
+    "asset's content. "
+)
+SUMMARY_CONTENT_FIRST_INSTRUCTION = ("The asset's name, description and tags are context; the title, description and "
+                                     "keywords name what its files contain, as their descriptions say.")
 SYSTEM_PROMPT = (
     "You are a digital asset librarian describing one asset of an asset management system, a set of files that "
     "belong together such as a 3D scene and the parts and textures it loads, so it can be searched and classified. "
@@ -93,7 +104,8 @@ SYSTEM_PROMPT = (
     "vocabulary to choose from, and one line per file with the description an earlier analysis gave that file; "
     "scene files that load other files come first and a file a scene loads is marked as its part. Describe the "
     "asset as a whole rather than file by file. "
-    "Return ONLY a JSON object with exactly these keys: "
+    + SUMMARY_CONTENT_FIRST_TEXT
+    + "Return ONLY a JSON object with exactly these keys: "
     '"title" (string, at most 80 characters naming the asset), '
     '"description" (string, at most 1200 characters of plain prose describing what the asset is and contains), '
     '"keywords" (array of 8 to 15 lowercase strings of one to three words each), '
@@ -257,6 +269,8 @@ def build_user_content(asset_data, database_id, asset_id, selection, vocabulary_
     if omitted:
         plain.append(f"The selection has {'at least ' if not omitted_exact else ''}{omitted} more file(s) that are "
                      "not listed here.")
+    if context:
+        plain.append(SUMMARY_CONTENT_FIRST_INSTRUCTION)
     if target_lines:
         plain.append(gm.TARGETS_INSTRUCTION)
     if previous_lines:
