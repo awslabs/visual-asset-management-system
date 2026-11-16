@@ -255,9 +255,9 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
         const encodedPath = encodeURIComponent(relativePath);
 
         // Build URL with version query parameter
-        const url = `/databases/${databaseId}/assets/${assetId}/file/${encodedPath}?version=${encodeURIComponent(
-            versionId
-        )}`;
+        const url = `/databases/${databaseId}/assets/${encodeURIComponent(
+            assetId
+        )}/file/${encodedPath}?version=${encodeURIComponent(versionId)}`;
 
         // Navigate with state for fast loading, URL for bookmarking/sharing
         navigate(url, {

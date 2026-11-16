@@ -94,7 +94,11 @@ export default function AssetUploadWorkflow({
     // Handle view asset button click
     const handleViewAsset = () => {
         if (uploadResponse) {
-            navigate(`/databases/${assetDetail.databaseId}/assets/${uploadResponse.assetId}`);
+            navigate(
+                `/databases/${assetDetail.databaseId}/assets/${encodeURIComponent(
+                    uploadResponse.assetId
+                )}`
+            );
         }
     };
 

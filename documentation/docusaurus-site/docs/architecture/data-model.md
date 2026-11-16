@@ -381,8 +381,10 @@ rather than pointing at definitions that may since have moved.
 
 **Main row** (`WorkflowExecutionsStorageTableV2`) — identity and status only: `executionStatus`,
 `executionStartDate` / `executionStopDate`, `triggerType`, `triggeredByUserId`, `executionGroupId`,
-`executionError`, the full `executionLog`, the Step Functions ARNs, and `lastSfnSyncCheckDate` (which
-bounds how often a status read polls Step Functions). Deliberately carries no output-target or
+`executionError`, the full `executionLog`, the Step Functions ARNs, `lastSfnSyncCheckDate` (which
+bounds how often a status read polls Step Functions), and `isSystem` (the launched workflow's flag,
+copied at launch; the execution lists hide `true` rows by default, and a row written before the flag
+existed has no attribute and is listed as a user run). Deliberately carries no output-target or
 configuration fields — those live on the configuration rows below, so a status list never pays to read
 them.
 
