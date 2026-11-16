@@ -64,7 +64,7 @@ IDENTIFIER_KEYS = {
     "assetId", "databaseId", "executionId", "workflowId", "pipelineId", "commentId", "tagName",
     "tagTypeName", "fileKey", "assetName", "databaseName", "relationshipId", "jobId", "requestType",
     "eventName", "eventSource", "triggerSource", "httpMethod", "resource", "path",
-    "message", "status", "statusCode", "success", "count", "size", "total",
+    "status", "statusCode", "success", "count", "size", "total",
     # table keys and record ids of rows (item/record in the data and compliance modules)
     "pk", "key", "Key", "constraintId", "applyId", "bindingDatabaseId", "evaluationId", "verdict",
     "runs", "runLimit", "recipeId",
@@ -76,7 +76,7 @@ IDENTIFIER_KEYS = {
     "clear_indexes",
     # request-model fields that are ids, a name of a tag type or a metadata type, or a flag
     "assetLinkId", "fromAssetId", "toAssetId", "assetVersionId", "tagTypeName", "type", "basic",
-    "revertMetadata", "comment",
+    "revertMetadata",
 }
 SAFE_FUNCTIONS = {"event_log_summary", "query_clause_log_summary", "len", "bool", "type", "sorted", "isinstance"}
 
@@ -201,6 +201,9 @@ ALLOWED_SITES = {
     ("handlers/workflows/importGlobalPipelineWorkflow.py", "lambda_handler", "b5498b99"):
         "`_loggable_event` returns the event as a structure with the template content keys redacted "
         "by safeLogger; an import of a pipeline template bundle, not search or comment text",
+    ("handlers/workflows/sfn/processWorkflowExecutionOutput.py", "process_metadata_file", "046a464f"):
+        "`body.get('message')` reads the 200 response of the metadata service, whose model default is "
+        "the fixed text 'Success'; it holds no request text",
     ("models/common.py", "authorization_error", "75e5a70a"):
         "`errorBody` is the generic response body the handler returns (a fixed message), "
         "not the request",
@@ -276,6 +279,9 @@ BAD_FORMS = [
     "logger.debug(f'image {str(new_image)}')",
     "logger.info('x', comment_body, request_body)",
     "logger.info(item['commentBody'])",
+    "logger.info(item['comment'])",
+    "logger.info(result['message'])",
+    "logger.info(body.get('message'))",
     "logger.info(item.get('commentBody'))",
     "logger.info(f\"c {item.get('commentBody', '')}\")",
     "logger.info(event['headers'])",
