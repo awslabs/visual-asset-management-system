@@ -199,19 +199,10 @@ export const EXECUTION_SERVICE_QUERIED_INDEXES = {
     assetFileVersionHistoryStorageTable: ["WorkflowExecutionIdIndex"],
 } as const;
 
-/** Construct id of the customer managed policy that carries the execution service's table reads. */
-export const EXECUTION_SERVICE_TABLE_READ_POLICY_ID = "TableReadPolicy";
-
-/**
- * Construct id of the customer managed policy that carries the end-state handler's PutEvents on the
- * orchestration bus (the workflow.execution.completed event).
- */
-export const PROCESS_OUTPUT_EVENTS_POLICY_ID = "OrchestrationEventsPolicy";
-
 /**
  * The execution service's table reads: GetItem, BatchGetItem and Query, the only read calls it makes,
  * on every table it reads and on the indexes it queries by exact ARN (not the `index/*`
- * Table.grantReadData() adds). Carried by a customer managed policy (see buildExecutionServiceFunction).
+ * Table.grantReadData() adds). Inline on the role, like every VAMS grant (#1499).
  */
 export function executionServiceTableReadStatements(
     storageResources: storageResources
@@ -270,20 +261,15 @@ export function executionServiceTableWriteStatements(
 }
 
 /**
- * Attaches statements to a handler's role as a customer managed policy, which IAM does not count against
- * the role's 10,240-character inline policy quota (each managed policy has its own 6,144). The role's
- * ManagedPolicyArns names the policy, so CloudFormation creates and attaches it before the role and its
- * default policy update; statements moving out of the default policy are therefore never missing on
- * upgrade. The function waits for it as well.
+ * Adds statements to a handler's role as inline statements of its default policy. VAMS grants
+ * Lambda roles inline only (#1499): a statement that does not fit the role's inline budget is
+ * narrowed, or the route moves to a function of its own, rather than held in a customer managed
+ * policy (infra/CLAUDE.md, IAM Inline Policy Budget).
  */
-function attachManagedHandlerPolicy(
-    fun: lambda.Function,
-    id: string,
-    statements: iam.PolicyStatement[]
-) {
-    const policy = new iam.ManagedPolicy(fun, id, { statements });
-    fun.role!.addManagedPolicy(policy);
-    fun.node.defaultChild!.node.addDependency(policy);
+function addHandlerStatements(fun: lambda.Function, statements: iam.PolicyStatement[]) {
+    for (const statement of statements) {
+        fun.addToRolePolicy(statement);
+    }
 }
 
 /**
@@ -456,14 +442,8 @@ export function buildExecutionServiceFunction(
     });
     storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
     // The table reads are the role's largest statement (about two dozen table and index ARNs, each
-    // carrying the stack name), so they sit in a managed policy of their own and the inline policies
-    // keep their headroom under IAM's quota in every partition (infra/CLAUDE.md, IAM inline policy
-    // budget).
-    attachManagedHandlerPolicy(
-        fun,
-        EXECUTION_SERVICE_TABLE_READ_POLICY_ID,
-        executionServiceTableReadStatements(storageResources)
-    );
+    // carrying the stack name); inline like every VAMS grant (#1499).
+    addHandlerStatements(fun, executionServiceTableReadStatements(storageResources));
     for (const statement of executionServiceTableWriteStatements(storageResources)) {
         fun.addToRolePolicy(statement);
     }
@@ -877,10 +857,8 @@ export function buildProcessWorkflowExecutionOutputFunction(
 
     fileUploadLambdaFunction.grantInvoke(fun);
     metadataServiceFunction.grantInvoke(fun);
-    // This role is a named exception to the IAM inline policy budget (its execution table grants), so
-    // the completion event's PutEvents sits in a customer managed policy of its own rather than
-    // adding to the inline total (infra/CLAUDE.md, IAM Inline Policy Budget).
-    attachManagedHandlerPolicy(fun, PROCESS_OUTPUT_EVENTS_POLICY_ID, [
+    // The completion event's PutEvents on the orchestration bus, inline like every VAMS grant (#1499).
+    addHandlerStatements(fun, [
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["events:PutEvents"],
