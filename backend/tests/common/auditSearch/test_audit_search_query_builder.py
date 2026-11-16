@@ -88,6 +88,18 @@ class TestRequestShape:
         filters = validate(startTime="2026-11-16T10:00:00Z", endTime="2026-11-16T11:00:00.500Z")
         assert filters.end_time - filters.start_time == 3600
 
+    @pytest.mark.parametrize("value", ["0001-01-01T00:00:00Z", "1969-12-31T23:59:59Z", "2100-01-01T00:00:01Z",
+                                       "9999-12-31T23:59:59Z"])
+    def test_iso_times_have_the_same_range_as_integers(self, value):
+        with pytest.raises(Error) as caught:
+            validate(startTime=value, endTime=value)
+        assert caught.value.code == "startTime:range"
+
+    def test_the_epoch_bounds_are_inclusive_for_both_forms(self):
+        assert queryBuilder._epoch(0, "t") == 0 and queryBuilder._epoch("1970-01-01T00:00:00Z", "t") == 0
+        top = queryBuilder.MAX_EPOCH_SECONDS
+        assert queryBuilder._epoch(top, "t") == top and queryBuilder._epoch("2100-01-01T00:00:00Z", "t") == top
+
     @pytest.mark.parametrize("value", [True, 1.5, "yesterday", "2026-11-16 10:00:00", -1, 10 ** 12, [], None])
     def test_bad_times_are_refused(self, value):
         with pytest.raises(Error):
@@ -249,9 +261,21 @@ class TestInjectionCorpus:
             queryBuilder._check_lines([queryBuilder._FIELDS_LINE, "filter @message like /a/b/"])
 
     def test_escape_literal_refuses_unsafe_values(self):
-        for value in ("a b", "a/b", 'a"b', "a\\b", "a`b", "a\nb", "", "x" * 257):
+        for value in ("a b", 'a"b', "a\\b", "a`b", "a\nb", "", "x" * 257):
             with pytest.raises(ValueError):
                 queryBuilder.escape_literal(value)
+
+    def test_a_file_path_entity_id_is_pushed_into_the_query_with_an_escaped_slash(self):
+        plan = build(entityIds=["database/db-1/assets/a1/model.glb"])
+        assert plan.warnings == () and plan.prefilter_complete is True
+        assert "like /database\\/db\\-1\\/assets\\/a1\\/model\\.glb/" in plan.query_string
+        assert queryBuilder.escape_literal("a/b") == "a\\/b"
+
+    def test_a_slash_never_leaves_the_pattern_delimiter_open(self):
+        # The unescaped delimiter is refused by the grammar check; the escaped one is not.
+        with pytest.raises(Error):
+            queryBuilder._check_lines([queryBuilder._FIELDS_LINE, "filter @message like /a/b/"])
+        queryBuilder._check_lines([queryBuilder._FIELDS_LINE, "filter @message like /a\\/b/"])
 
     def test_the_head_bound_covers_the_action_record_cap(self):
         auditLogging = importlib.import_module("backend.backend.customLogging.auditLogging")

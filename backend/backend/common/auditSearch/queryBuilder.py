@@ -51,9 +51,12 @@ SORT_DESC = "desc"
 SORT_ASC = "asc"
 
 # A value goes into a Logs Insights literal only when it is made of these characters and is at most
-# 256 characters long. Quotes, backslash, backtick, slash, brackets, braces, whitespace and every control
-# character are outside the set, so they never reach the query text.
-SAFE_LITERAL = re.compile(r"[A-Za-z0-9._@+:|=-]{1,256}\Z")
+# 256 characters long. Quotes, backslash, backtick, brackets, braces, whitespace and every control
+# character are outside the set, so they never reach the query text. ``/`` is inside it, written ``\/``
+# like every other punctuation character (the delimiter of the pattern is escaped; Logs Insights reads
+# ``\/database\/`` as the literal ``/database/``, checked live), so a file path in ``entityIds`` is
+# pushed into the query instead of widening the scan to the candidate limit.
+SAFE_LITERAL = re.compile(r"[A-Za-z0-9._@+:|=/-]{1,256}\Z")
 
 # Validation patterns by value class (all matched with ``\Z``, never ``$``, which allows a trailing newline).
 ACTION_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
@@ -189,20 +192,28 @@ def _text_values(raw: Any, name: str, max_length: int, normalize: bool) -> Tuple
     return _unique(checked)
 
 
+MAX_EPOCH_SECONDS = 4102444800   # 2100-01-01T00:00:00Z
+
+
+def _checked_epoch(seconds: int, name: str) -> int:
+    """An epoch second inside 0 .. year 2100, the same bounds for an integer and for an ISO string."""
+    if seconds < 0 or seconds > MAX_EPOCH_SECONDS:
+        raise AuditSearchValidationError(name + ":range")
+    return seconds
+
+
 def _epoch(value: Any, name: str) -> int:
     """An epoch second from an integer or an ISO 8601 UTC string."""
     if isinstance(value, bool):
         raise AuditSearchValidationError(name + ":type")
     if isinstance(value, int):
-        if value < 0 or value > 4102444800:   # year 2100
-            raise AuditSearchValidationError(name + ":range")
-        return value
+        return _checked_epoch(value, name)
     if isinstance(value, str) and re.match(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?Z\Z", value):
         try:
             parsed = datetime.fromisoformat(value[:-1] + "+00:00")
         except ValueError:
             raise AuditSearchValidationError(name + ":value")
-        return int(parsed.astimezone(timezone.utc).timestamp())
+        return _checked_epoch(int(parsed.astimezone(timezone.utc).timestamp()), name)
     raise AuditSearchValidationError(name + ":type")
 
 
