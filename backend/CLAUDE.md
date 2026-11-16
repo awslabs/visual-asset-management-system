@@ -1440,6 +1440,8 @@ Most anti-patterns are the inverse of a Critical Rule above. The compact list ci
 -   Hardcoding `arn:aws:` in an ARN string or a validator regex — see Partition Portability. Compose from `aws_partition_group` / `aws_dns_suffix_group`, or derive the partition from an ARN already in hand; a commercial-only pattern fails only in GovCloud / EU Sovereign.
 -   Passing `endpoint_url` or a hardcoded hostname to a boto3 client — see Partition Portability. Let the SDK resolve per region; read service endpoints from SSM.
 
+`PREVIEW_FILE_SIZE_LIMIT_BYTES` (5 MiB) and `is_self_previewable(name, size)` in `s3PathPatterns.py` are the one backend definition of "the web shows this file as its own preview": an allowed preview extension (`.webp` and `.bmp` included, `.tga`/`.tif`/`.tiff` never) and a size STRICTLY under the limit. The upload handlers' `MAX_PREVIEW_FILE_SIZE` takes the same value and still rejects a preview LARGER than it (a preview of exactly 5 MiB can be uploaded). The web (`fileFormats.ts`) and the 3D thumbnail container (`image_utils.MAX_FILE_SIZE_BYTES`) mirror both; drift tests read those files.
+
 ### Swallowing exceptions silently
 
 A bare `except Exception: pass` hides real failures — no log line, no metric, no re-raise. Log the error, then decide whether to raise, translate to a `VAMSGeneralErrorResponse`, or continue with a documented best-effort behavior:
