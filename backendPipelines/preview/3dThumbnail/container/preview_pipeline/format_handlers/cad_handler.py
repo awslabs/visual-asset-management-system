@@ -520,6 +520,14 @@ def shape_geometry(shape) -> dict:
     box = Bnd_Box()
     BRepBndLib.Add_s(shape, box, True)
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    # The box from the triangulation is enlarged by the mesh deflection, and the box from the geometry is loose
+    # on freeform faces (a B-spline's poles); each holds the shape, so their overlap does too and is the tighter
+    # of the two on every axis: exact for planes, cylinders and the other analytic faces.
+    geometric = Bnd_Box()
+    BRepBndLib.Add_s(shape, geometric, False)
+    gx0, gy0, gz0, gx1, gy1, gz1 = geometric.Get()
+    xmin, ymin, zmin = max(xmin, gx0), max(ymin, gy0), max(zmin, gz0)
+    xmax, ymax, zmax = min(xmax, gx1), min(ymax, gy1), min(zmax, gz1)
 
     volume = 0.0
     weighted = [0.0, 0.0, 0.0]
