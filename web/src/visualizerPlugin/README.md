@@ -105,10 +105,18 @@ All plugin behavior is defined in `viewerConfig.json`:
 ### 1. ImageViewerPlugin
 
 -   **ID**: `image-viewer`
--   **Extensions**: `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`
+-   **Extensions**: `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, `.bmp`
 -   **Features**: Image display fitted to the viewer panel
 -   **Multi-file**: No
 -   **Dependencies**: None
+
+### 1b. RasterImageViewerPlugin
+
+-   **ID**: `tiff-tga-viewer`
+-   **Extensions**: `.tga`, `.tif`, `.tiff`
+-   **Features**: Decodes in the browser with `utif2` (TIFF) and `tga-js` (TGA), pure JavaScript drawn to a canvas, so no CSP change and no `ALLOWUNSAFEEVAL`. Multi-page TIFF page picker; 16-bit, floating-point and CMYK data converted for display. `customParameters.maxDecodeBytes` (default 268435456) and `maxDecodePixels` (default 100000000) are checked from the file size and the header before decoding; above a cap or on a decode failure the file's generated preview (`fileInfo.previewFile`) is shown with a notice, else a message. BigTIFF, separate-colour-plane TIFF and old-style JPEG TIFF are not decoded
+-   **Multi-file**: No
+-   **Dependencies**: `utif2`, `tga-js`, `pako` (lazy-loaded by `RasterImageDependencyManager`)
 
 ### 2. Online3dViewerPlugin
 
@@ -939,6 +947,7 @@ interface ViewerPluginProps {
     assetKey?: string; // Single file key
     multiFileKeys?: string[]; // Multiple file keys
     multiFiles?: FileInfo[]; // Owning asset and database of each file in multiFileKeys
+    fileInfo?: FileInfo; // The one file of a single-file selection: size and generated preview key
     versionId?: string; // File version
     assetVersionId?: string; // Asset version to read files from
     viewerMode: string; // Display mode ("collapse", "wide", "fullscreen")

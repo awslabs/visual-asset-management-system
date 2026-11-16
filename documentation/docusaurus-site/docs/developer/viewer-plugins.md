@@ -353,6 +353,7 @@ interface ViewerPluginProps {
     assetKey?: string; // Single file S3 key
     multiFileKeys?: string[]; // Multiple file S3 keys
     multiFiles?: FileInfo[]; // Owning asset and database of each file in multiFileKeys
+    fileInfo?: FileInfo; // The one file of a single-file selection: size and generated preview key
     versionId?: string; // File version
     assetVersionId?: string; // Asset version to read files from
     viewerMode: string; // Display mode ("collapse", "wide", "fullscreen")
