@@ -37,8 +37,11 @@ FREE_TEXT_NAMES = frozenset({
     "query_string",
 })
 # The calls whose arguments are recorded through the redacted key: constants inside them are fine.
+# `_list_parameters` is the zip download service's helper that names the page bounds of a list (it
+# has no text parameter) and never passes the query on.
 _REDIRECTING_CALLS = frozenset({"search_text_parameters", "request_parameters",
-                                "_search_request_parameters", "_execution_read_parameters"})
+                                "_search_request_parameters", "_execution_read_parameters",
+                                "_list_parameters"})
 _AUDIT_CALLS = frozenset({"log_action", "log_actions"})
 # Names a handler gives the raw query string of the request. A request_parameters expression that
 # spreads or copies one of them records every query key the caller sent, whatever its name.

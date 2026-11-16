@@ -294,3 +294,41 @@ describe("featuresEnabledRestriction", () => {
         expect(hrefsIn(both)).toContain("#/addon-switched/both/");
     });
 });
+
+describe("My Download Queue (Download as Zip)", () => {
+    it("is a profile page, never a side-navigation link", () => {
+        expect(hrefsIn(entriesFor("side", ["ZIPDOWNLOADS"]))).not.toContain("#/zipdownloads/");
+        expect(hrefsIn(entriesFor("profile", ["ZIPDOWNLOADS"]))).toContain("#/zipdownloads/");
+    });
+
+    it("exists only while the ZIPDOWNLOADS switch is on, and its route is checked only then", () => {
+        expect(hrefsIn(entriesFor("profile"))).not.toContain("#/zipdownloads/");
+        expect(webRouteChecksFor(["side", "profile"]).map((r) => r.route__path)).not.toContain(
+            "/zipdownloads"
+        );
+        expect(
+            webRouteChecksFor(["side", "profile"], ["ZIPDOWNLOADS"]).map((r) => r.route__path)
+        ).toContain("/zipdownloads");
+    });
+
+    it("sits ahead of API Key Management in Your pages", () => {
+        const yourPages = entriesFor("profile", ["ZIPDOWNLOADS"]).find(
+            (entry) => entry.text === "Your pages"
+        );
+        expect(texts(yourPages?.items ?? [])).toEqual(["My Download Queue", "API Key Management"]);
+        expect(JSON.stringify(yourPages)).not.toContain("featuresEnabledRestriction");
+    });
+
+    it("is shown only when the web route check allows /zipdownloads", () => {
+        const allowed = allowedEntriesFor("profile", ["/auth/api-keys"], ["ZIPDOWNLOADS"]);
+        expect(hrefsIn(allowed)).not.toContain("#/zipdownloads/");
+        expect(hrefsIn(allowed)).toContain("#/auth/api-keys/?mode=user");
+
+        const both = allowedEntriesFor(
+            "profile",
+            ["/auth/api-keys", "/zipdownloads"],
+            ["ZIPDOWNLOADS"]
+        );
+        expect(hrefsIn(both)).toContain("#/zipdownloads/");
+    });
+});

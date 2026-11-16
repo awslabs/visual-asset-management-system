@@ -55,6 +55,35 @@ import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
 export const WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";
 
 /**
+ * Index of LargeObjectCopyJobsStorageTable on workflowExecutionId: the copy jobs of one workflow
+ * execution (batch rows do not carry the attribute). Mirrored as WORKFLOW_EXECUTION_ID_INDEX in
+ * backend/backend/common/largeObjectCopy.py.
+ */
+export const LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX = "WorkflowExecutionIdIndex";
+
+/**
+ * Index of ZipDownloadRequestsStorageTable on userAssetKey (`userId#databaseId#assetId`): one user's
+ * Download as Zip jobs for one asset. Mirrored as USER_ASSET_INDEX in
+ * backend/backend/handlers/assets/zipDownloadService.py.
+ */
+export const ZIP_DOWNLOAD_USER_ASSET_INDEX = "UserAssetIndex";
+export const ZIP_DOWNLOAD_ASSET_INDEX = "AssetIndex";
+
+/**
+ * Top-level auxiliary-bucket prefix of Download as Zip archives. Mirrored as
+ * AUXILIARY_PREPARED_DOWNLOADS_PREFIX in backend/backend/common/s3PathPatterns.py.
+ */
+export const PREPARED_DOWNLOADS_PREFIX = "vams.preparedDownloads/";
+
+/**
+ * Days a Download as Zip job and its prepared archive are kept: a fixed 7, not configuration. The
+ * vams.preparedDownloads/ lifecycle rule expires archives after this many days, and the job row's
+ * expiresAt (the zip download requests table's TTL) is createdAt plus the same days. Mirrored as
+ * ZIP_DOWNLOAD_RETENTION_DAYS in backend/backend/common/zipDownloads.py.
+ */
+export const ZIP_DOWNLOAD_RETENTION_DAYS = 7;
+
+/**
  * Index of MetadataSchemaStorageTableV2 on "databaseId:metadataEntityType": the schemas of one database
  * and entity type, which every schema read path queries. Named in
  * backend/backend/common/metadataSchemaValidation.py (load_enabled_schemas) and granted by exact ARN
@@ -156,6 +185,8 @@ export interface storageResources {
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock a running execution holds
+        largeObjectCopyJobsStorageTable: dynamodb.Table; // PK jobId; TTL expiresAt; copy jobs + ingestion batch rows of the large object copy engine
+        zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; GSIs UserAssetIndex, AssetIndex; TTL expiresAt; Download as Zip jobs
         // Compliance tables
         complianceSchemaStorageTable: dynamodb.Table;
         complianceAssetStateStorageTable: dynamodb.Table;
@@ -1082,6 +1113,28 @@ export function storageResourcesBuilder(
                       },
                   ]
                 : []),
+            // Download as Zip archives and their manifests
+            // (vams.preparedDownloads/<databaseId>/<assetId>/<userHash>/<requestId>/), expired after
+            // ZIP_DOWNLOAD_RETENTION_DAYS (7). Deployed whatever app.pipelines.useZipDownloads.enabled says, so turning the
+            // feature off never orphans an archive. Any incomplete upload under the prefix is aborted
+            // after a day (the bucket-wide rule above waits 14): the backstop for an upload a cancelled
+            // or failed job left open that neither the read-time reconcile nor the delayed sweep
+            // aborted (no terminal callback finalizes a job). Every other auxiliary object lives under
+            // <databaseId>/, and a database id has no dot, so these rules never match a database's data.
+            {
+                id: "PreparedDownloadsExpiration",
+                enabled: true,
+                prefix: PREPARED_DOWNLOADS_PREFIX,
+                expiration: Duration.days(ZIP_DOWNLOAD_RETENTION_DAYS),
+                noncurrentVersionExpiration: Duration.days(1),
+                abortIncompleteMultipartUploadAfter: Duration.days(1),
+            },
+            {
+                id: "PreparedDownloadsDeleteMarkers",
+                enabled: true,
+                prefix: PREPARED_DOWNLOADS_PREFIX,
+                expiredObjectDeleteMarker: true,
+            },
         ],
         serverAccessLogsBucket: accessLogsBucket,
         serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",
@@ -1644,6 +1697,63 @@ export function storageResourcesBuilder(
         indexName: WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX,
         partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
         projectionType: dynamodb.ProjectionType.KEYS_ONLY,
+    });
+
+    // Large Object Copy Jobs — the large object copy engine's state. One row per copy job (PK jobId:
+    // `{executionId or uploadId}#{hash of the relative key}`): status, the destination multipart upload
+    // id, the planned part size and count, the job's Step Functions execution ARN and its outcome. One
+    // row per workflow ingestion batch (PK `batch#{executionId}`): the number of jobs it waits on, the
+    // number that finished, the waiting state's task token and the finalize context. expiresAt is the TTL
+    // attribute (epoch seconds, 30 days after a row's last write). The index on workflowExecutionId lists
+    // an execution's jobs for its finalize step and for the abort and error paths, which stop them.
+    const largeObjectCopyJobsStorageTable = new dynamodb.Table(
+        scope,
+        "LargeObjectCopyJobsStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "jobId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            timeToLiveAttribute: "expiresAt",
+        }
+    );
+    largeObjectCopyJobsStorageTable.addGlobalSecondaryIndex({
+        indexName: LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX,
+        partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Zip Download Requests — Download as Zip jobs, one row per job, owned by the user who asked for it
+    // (PK userId = the authenticated caller, SK requestId = time-sortable id, so a reverse query lists
+    // newest first). UserAssetIndex (PK userAssetKey = `userId#databaseId#assetId`) lists one user's
+    // jobs for one asset; AssetIndex (PK assetKey = `databaseId#assetId`) lists every user's jobs for one
+    // asset (the Download Queue's shared view; written on each job from creation). expiresAt (epoch seconds) is the TTL: createdAt + ZIP_DOWNLOAD_RETENTION_DAYS (7),
+    // the same retention as the vams.preparedDownloads/ lifecycle rule. Deployed whether or not the feature
+    // is enabled, so turning it off leaves existing jobs readable until they expire.
+    const zipDownloadRequestsStorageTable = new dynamodb.Table(
+        scope,
+        "ZipDownloadRequestsStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "requestId", type: dynamodb.AttributeType.STRING },
+            timeToLiveAttribute: "expiresAt",
+        }
+    );
+    zipDownloadRequestsStorageTable.addGlobalSecondaryIndex({
+        indexName: ZIP_DOWNLOAD_USER_ASSET_INDEX,
+        partitionKey: { name: "userAssetKey", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "requestId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    // Added to an existing table in place (one GSI per table update; never add a second index in the
+    // same release as this one).
+    zipDownloadRequestsStorageTable.addGlobalSecondaryIndex({
+        indexName: ZIP_DOWNLOAD_ASSET_INDEX,
+        partitionKey: { name: "assetKey", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "requestId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
     });
 
     // Executions by OUTPUT asset. An asset's execution history is the union of runs that read it and
@@ -2744,6 +2854,8 @@ export function storageResourcesBuilder(
             workflowStorageTableV2: workflowStorageTableV2,
             workflowTriggersStorageTable: workflowTriggersStorageTable,
             workflowExecutionLocksStorageTable: workflowExecutionLocksStorageTable,
+            largeObjectCopyJobsStorageTable: largeObjectCopyJobsStorageTable,
+            zipDownloadRequestsStorageTable: zipDownloadRequestsStorageTable,
             // Compliance tables
             complianceSchemaStorageTable: complianceSchemaStorageTable,
             complianceAssetStateStorageTable: complianceAssetStateStorageTable,
@@ -3392,6 +3504,10 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowTriggersStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionLocksStorage]:
             storageResources.dynamo.workflowExecutionLocksStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.largeObjectCopyJobsStorage]:
+            storageResources.dynamo.largeObjectCopyJobsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.zipDownloadRequestsStorage]:
+            storageResources.dynamo.zipDownloadRequestsStorageTable.tableName,
         // Compliance tables
         [RESOURCE_PARAM_KEYS.dynamoTables.complianceSchemaStorage]:
             storageResources.dynamo.complianceSchemaStorageTable.tableName,

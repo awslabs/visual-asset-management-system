@@ -137,7 +137,7 @@ class TestAppliedMetadataRows:
                 patch.object(po, "verify_get_path_objects", return_value=listing), \
                 patch.object(po.s3c, "get_object", side_effect=_get_object), \
                 patch.object(po.s3c, "head_object", return_value={"VersionId": "v1"}), \
-                patch.object(po.client, "invoke", side_effect=_invoke), \
+                patch.object(po.invoke_client, "invoke", side_effect=_invoke), \
                 patch.object(po, "record_execution_outputs") as m_record:
             resp = po.lambda_handler(_event(metadataPathKey=METADATA_PREFIX), MagicMock())
         assert resp["statusCode"] == 200
@@ -312,7 +312,7 @@ class TestFailureStatusRecording:
                 patch.object(po, "verify_get_path_objects", return_value=listing), \
                 patch.object(po.s3c, "get_object",
                              return_value={"Body": MagicMock(read=lambda: payload.encode())}), \
-                patch.object(po.client, "invoke", return_value=rejected), \
+                patch.object(po.invoke_client, "invoke", return_value=rejected), \
                 patch.object(po, "record_execution_outputs") as m_record:
             po.lambda_handler(_event(metadataPathKey=METADATA_PREFIX), MagicMock())
         kw = m_record.call_args.kwargs
@@ -341,7 +341,7 @@ class TestFailureStatusRecording:
                 patch.object(po, "verify_get_path_objects", return_value=listing), \
                 patch.object(po.s3c, "get_object",
                              return_value={"Body": MagicMock(read=lambda: payload.encode())}), \
-                patch.object(po.client, "invoke", return_value=applied), \
+                patch.object(po.invoke_client, "invoke", return_value=applied), \
                 patch.object(po, "record_execution_outputs") as m_record:
             po.lambda_handler(_event(metadataPathKey=METADATA_PREFIX), MagicMock())
         kw = m_record.call_args.kwargs
@@ -381,7 +381,7 @@ class TestWriteBackCrossCallMfa:
             return {"Payload": MagicMock(read=lambda: json.dumps(
                 {"statusCode": 200, "body": json.dumps({"ok": True})}).encode())}
 
-        with patch.object(po.client, "invoke", side_effect=_invoke):
+        with patch.object(po.invoke_client, "invoke", side_effect=_invoke):
             po.process_external_upload(
                 "upl-1", "asset1", "db1", "assetFile", ["a/model.glb"], "a/", {"http": {}},
                 change_user_id="alice", mfa_enabled=mfa_enabled)

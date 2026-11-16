@@ -682,6 +682,8 @@ A file over 1 GiB is processed asynchronously: its result has `success: true` an
 }
 ```
 
+A file over 1 GiB is processed asynchronously: its result has `largeFileAsynchronousHandling: true` and counts as a success, also when every file in the upload is that large. The file appears in the asset when the copy finishes. Files over 5 GiB are copied by the large object copy engine, which has no time limit. Read each such file's outcome with [Get Upload Status](#get-upload-status).
+
 **Error Responses:**
 
 | Status | Description                                            |
@@ -689,6 +691,60 @@ A file over 1 GiB is processed asynchronously: its result has `success: true` an
 | `400`  | Invalid upload ID, upload not found, or missing parts. |
 | `403`  | Not authorized to upload files to this asset.          |
 | `500`  | Internal server error.                                 |
+
+---
+
+### Get Upload Status
+
+`GET /uploads/{uploadId}`
+
+Returns the outcome of each file an upload accepted for asynchronous processing. Completion keeps the record of an upload with such a file, with status `processing_async` and one `PENDING` entry per file. Each file then becomes `SUCCEEDED` or `FAILED`, and the upload `completed` or `completed_with_errors`. The record is kept for 7 days.
+
+**Request Parameters:**
+
+| Parameter    | Location | Type   | Required | Description                                            |
+| ------------ | -------- | ------ | -------- | ------------------------------------------------------ |
+| `uploadId`   | path     | string | Yes      | The upload identifier from the initial upload request. |
+| `assetId`    | query    | string | Yes      | The asset the upload targets.                          |
+| `databaseId` | query    | string | Yes      | The database of the asset.                             |
+
+**Response:**
+
+```json
+{
+    "uploadId": "upload-12345",
+    "databaseId": "my-database",
+    "assetId": "asset-001",
+    "status": "completed_with_errors",
+    "asyncFiles": [
+        {
+            "relativeKey": "/scans/site.e57",
+            "status": "SUCCEEDED",
+            "error": "",
+            "updatedAt": "2026-11-06T10:15:00Z"
+        },
+        {
+            "relativeKey": "/scans/site-2.e57",
+            "status": "FAILED",
+            "error": "The file could not be processed into the asset.",
+            "updatedAt": "2026-11-06T10:20:00Z"
+        }
+    ]
+}
+```
+
+`asyncFiles` is sorted by `relativeKey`. A failed file is not in the asset; upload it again.
+
+**Error Responses:**
+
+| Status | Description                                                                                                                                                                              |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters.                                                                                                                                                                      |
+| `403`  | Not authorized to call this route.                                                                                                                                                       |
+| `404`  | Upload not found. Also returned for an upload whose files all landed at completion (it has no record), a record past its 7 days, another database, and an asset the caller may not read. |
+| `500`  | Internal server error.                                                                                                                                                                   |
+
+The route requires `GET` on the upload's asset. From the CLI, use `vamscli file upload-status` or `vamscli file upload --wait-async`.
 
 ---
 

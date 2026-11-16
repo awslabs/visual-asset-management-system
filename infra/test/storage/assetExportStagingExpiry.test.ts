@@ -31,6 +31,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as Config from "../../config/config";
+import { PREPARED_DOWNLOADS_PREFIX } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
 import {
     buildTemplateConfig,
     Resource,
@@ -148,8 +149,12 @@ describe("asset export staging expiry", () => {
         });
 
         test("the incomplete-multipart abort rule is bucket-wide, so it covers the prefix", () => {
+            // The Download as Zip rule (vams.preparedDownloads/) aborts its own uploads after one
+            // day; the bucket-wide rule is the one that covers the staged export prefix.
             const abort = rulesOf(bucket).filter(
-                (rule: any) => rule.AbortIncompleteMultipartUpload !== undefined
+                (rule: any) =>
+                    rule.AbortIncompleteMultipartUpload !== undefined &&
+                    rule.Prefix !== PREPARED_DOWNLOADS_PREFIX
             );
             expect(abort).toHaveLength(1);
             expect(abort[0].Status).toBe("Enabled");
