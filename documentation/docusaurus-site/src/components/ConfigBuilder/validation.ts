@@ -1247,6 +1247,44 @@ const CORE_RULES: Rule[] = [
         message: "usePreview3dThumbnail.largeTierThresholdGiB must be a positive number of GiB.",
     },
 
+    // ----- 3D preview thumbnail media previews
+    // (config.ts: "Media previews on the 3D preview thumbnail container.") -----
+    ...(
+        [
+            "enabled",
+            "autoRegisterAutoTriggerOnFileUpload",
+            "downscaleSelfPreviewableImages",
+        ] as const
+    ).map(
+        (key): Rule => ({
+            id: `preview3dthumbnail-media-${key}-boolean`,
+            severity: "error",
+            fieldPaths: [`app.pipelines.usePreview3dThumbnail.mediaPreviews.${key}`],
+            appliesWhen: (c) => {
+                const value = g(c, `app.pipelines.usePreview3dThumbnail.mediaPreviews.${key}`);
+                return !isAbsent(value) && typeof value !== "boolean";
+            },
+            message: `usePreview3dThumbnail.mediaPreviews.${key} must be true or false.`,
+        })
+    ),
+    ...(["autoRegisterAutoTriggerOnFileUpload", "downscaleSelfPreviewableImages"] as const).map(
+        (key): Rule => ({
+            id: `preview3dthumbnail-media-${key}-needs-media`,
+            severity: "error",
+            fieldPaths: [
+                `app.pipelines.usePreview3dThumbnail.mediaPreviews.${key}`,
+                "app.pipelines.usePreview3dThumbnail.mediaPreviews.enabled",
+            ],
+            appliesWhen: (c) =>
+                g(c, `app.pipelines.usePreview3dThumbnail.mediaPreviews.${key}`) === true &&
+                g(c, "app.pipelines.usePreview3dThumbnail.mediaPreviews.enabled") !== true,
+            message:
+                `usePreview3dThumbnail.mediaPreviews.${key} requires ` +
+                `usePreview3dThumbnail.mediaPreviews.enabled to be true. Enable media previews, or ` +
+                `set ${key} to false.`,
+        })
+    ),
+
     // ----- NVIDIA Cosmos 3
     // (config.ts: the `useNvidiaCosmos3.enabled` block, "Enable at least one model in
     // useNvidiaCosmos3.modelsOmni.") -----

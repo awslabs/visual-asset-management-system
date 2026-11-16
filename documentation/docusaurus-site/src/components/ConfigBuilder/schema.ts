@@ -1289,6 +1289,36 @@ const CORE_FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
     },
     {
+        path: "app.pipelines.usePreview3dThumbnail.mediaPreviews.enabled",
+        label: "3D thumbnail — media previews",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Also register a Media Preview Thumbnail workflow: JPG previews for images 5 MiB or larger and for every TGA/TIFF, animated GIF previews for video. Deploys only with the pipeline; a missing value means off.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
+    },
+    {
+        path: "app.pipelines.usePreview3dThumbnail.mediaPreviews.autoRegisterAutoTriggerOnFileUpload",
+        label: "3D thumbnail — media previews auto-trigger on upload",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") &&
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.mediaPreviews.enabled"),
+    },
+    {
+        path: "app.pipelines.usePreview3dThumbnail.mediaPreviews.downscaleSelfPreviewableImages",
+        label: "3D thumbnail — media previews downscale small images",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Also write a smaller JPEG for an image the web already shows as its own preview (a PNG, JPG, GIF, WebP or BMP under 5 MiB), when the JPEG is meaningfully smaller. Off by default.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") &&
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.mediaPreviews.enabled"),
+    },
+    {
         path: "app.pipelines.usePreviewPcPotreeViewer.enabled",
         label: "Point cloud Potree viewer",
         input: "boolean",

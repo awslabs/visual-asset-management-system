@@ -340,6 +340,14 @@ export const PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS = {
 } as const;
 export const PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB = 2;
 
+// The media previews block of app.pipelines.usePreview3dThumbnail when the config sets none: every key
+// off, so a deployment upgraded from a release without media previews keeps its behaviour.
+export const PREVIEW_MEDIA_PREVIEWS_DEFAULTS = {
+    enabled: false,
+    autoRegisterAutoTriggerOnFileUpload: false,
+    downscaleSelfPreviewableImages: false,
+} as const;
+
 /** `minGiB`..`maxGiB` in `stepGiB` increments, as MiB. */
 const mibRange = (minGiB: number, maxGiB: number, stepGiB: number): number[] => {
     const values: number[] = [];
@@ -1180,6 +1188,7 @@ export function getConfig(app: cdk.App): Config {
                 large: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.large },
             },
             largeTierThresholdGiB: PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB,
+            mediaPreviews: { ...PREVIEW_MEDIA_PREVIEWS_DEFAULTS },
         };
     }
     if (config.app.pipelines.usePreview3dThumbnail.enabled == undefined) {
@@ -1198,6 +1207,44 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB == undefined) {
         config.app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB =
             PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB;
+    }
+
+    // Media previews on the 3D preview thumbnail container. A missing block or key is off, so an
+    // upgraded deployment keeps its behaviour; each key must be a boolean, and the trigger and the
+    // downscale option only make sense with the block enabled. The block deploys only with the
+    // pipeline itself (usePreview3dThumbnail.enabled): the shipped config turns it on beside a
+    // pipeline that is off by default, where it has nothing to deploy.
+    {
+        const thumbnail = config.app.pipelines.usePreview3dThumbnail;
+        if (thumbnail.mediaPreviews == undefined) {
+            thumbnail.mediaPreviews = { ...PREVIEW_MEDIA_PREVIEWS_DEFAULTS };
+        }
+        const media = thumbnail.mediaPreviews as unknown as Record<string, unknown>;
+        if (typeof media !== "object" || media === null || Array.isArray(media)) {
+            throw new Error(
+                "Configuration Error: pipelines.usePreview3dThumbnail.mediaPreviews must be an " +
+                    `object. Received: ${JSON.stringify(media)}`
+            );
+        }
+        for (const key of Object.keys(PREVIEW_MEDIA_PREVIEWS_DEFAULTS)) {
+            if (media[key] == undefined) {
+                media[key] = false;
+            } else if (typeof media[key] !== "boolean") {
+                throw new Error(
+                    `Configuration Error: pipelines.usePreview3dThumbnail.mediaPreviews.${key} ` +
+                        `must be true or false. Received: ${JSON.stringify(media[key])}`
+                );
+            }
+        }
+        for (const key of ["autoRegisterAutoTriggerOnFileUpload", "downscaleSelfPreviewableImages"]) {
+            if (media[key] === true && media.enabled !== true) {
+                throw new Error(
+                    `Configuration Error: pipelines.usePreview3dThumbnail.mediaPreviews.${key} ` +
+                        "requires pipelines.usePreview3dThumbnail.mediaPreviews.enabled to be true. " +
+                        `Set mediaPreviews.enabled to true, or set ${key} to false.`
+                );
+            }
+        }
     }
 
     // 3D preview thumbnail compute tiers. Each tier's vCPU and memory are the resource overrides of its
@@ -5069,6 +5116,20 @@ export interface ConfigPublic {
                     };
                 };
                 largeTierThresholdGiB: number;
+                /**
+                 * Media previews (images, TGA/TIFF and video) on the 3D preview thumbnail container, as
+                 * their own "Media Preview Thumbnail" workflow. Deployed only with the pipeline
+                 * (usePreview3dThumbnail.enabled). A missing block or key means off.
+                 */
+                mediaPreviews: {
+                    enabled: boolean;
+                    autoRegisterAutoTriggerOnFileUpload: boolean;
+                    /**
+                     * Also write a smaller JPEG for an image the web already shows as its own preview
+                     * (under 5 MiB), when the JPEG is meaningfully smaller. Off by default.
+                     */
+                    downscaleSelfPreviewableImages: boolean;
+                };
             };
             useNvidiaCosmos: {
                 enabled: boolean;

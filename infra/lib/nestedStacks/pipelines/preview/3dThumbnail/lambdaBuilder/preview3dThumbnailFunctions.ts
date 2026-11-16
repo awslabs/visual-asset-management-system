@@ -96,6 +96,17 @@ export interface OpenPipelineBatchLogProps {
     logGroup: logs.ILogGroup;
 }
 
+/**
+ * Media previews settings for openPipeline: the image extensions the web shows as their own preview,
+ * the size limit under which they are (strictly), and whether a smaller JPEG is still written for them.
+ * Absent when media previews are off, which leaves the function's environment as it was.
+ */
+export interface OpenPipelineMediaProps {
+    selfPreviewableFileExtensions: string;
+    previewFileSizeLimitBytes: number;
+    downscaleSelfPreviewableImages: boolean;
+}
+
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -109,7 +120,8 @@ export function buildOpenPipelineFunction(
     stateMachineLogGroup: logs.ILogGroup,
     batchLogs: OpenPipelineBatchLogProps,
     largeTierThresholdBytes: number,
-    kmsKey?: kms.IKey
+    kmsKey?: kms.IKey,
+    media?: OpenPipelineMediaProps
 ): lambda.Function {
     const name = "openPipeline";
 
@@ -142,6 +154,14 @@ export function buildOpenPipelineFunction(
             BATCH_JOB_DEFINITION_NAME: batchLogs.jobDefinitionName,
             // Inputs at or above this size run on the large compute tier.
             LARGE_TIER_THRESHOLD_BYTES: String(largeTierThresholdBytes),
+            // An image the web already shows as its own preview ends its run in this function.
+            ...(media
+                ? {
+                      SELF_PREVIEWABLE_FILEEXTENSIONS: media.selfPreviewableFileExtensions,
+                      PREVIEW_FILE_SIZE_LIMIT_BYTES: String(media.previewFileSizeLimitBytes),
+                      DOWNSCALE_SELF_PREVIEWABLE_IMAGES: String(media.downscaleSelfPreviewableImages),
+                  }
+                : {}),
         },
     });
 
