@@ -1,165 +1,278 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""No handler interpolates a whole Lambda event, stream record or image into a log message.
+"""Function logs keep request content out (#1552): a static scan of every backend module.
 
 `safeLogger` redacts by key, so a value rendered into the message text is never redacted, and a
-stream image holds every field value of its row (a metadata row even holds the field name as a
-value). A handler logs `common.eventLogSummary.event_log_summary(event)` and the record's ids
-instead. This scan reads every module under `backend/handlers` and fails on an f-string passed to a
-logger method that renders one of the event-shaped names below, directly or through `json.dumps`,
-`str` or `repr`.
+request carries text a user typed (search terms, filter patterns, comment text) and a stream image
+carries every field of its row. A module logs `event_log_summary(event)`, ids and sizes instead.
 
-A second scan (#1552) fails when a handler passes the event, a request body or the query-string
-parameters to a logger call unformatted (`logger.info(event)`) or renders `event[...]`/`event.get(...)`
-content for them (`event['body']`, `event.get('queryStringParameters')`) or the generated search query
-clause into a message. Those carry typed request text (search terms, filter patterns, comment text) that
-key-driven redaction cannot see. A handler logs `event_log_summary(event)` instead.
+The scan reads the AST of every module under `backend/backend` (handlers, common, add-ons, custom
+resources, models). It looks at every call that logs: a method named like a log level on a receiver
+whose dotted name contains "log" (`logger.info`, `self.logger.warning`, `log.info`,
+`logging.getLogger().info`), and `print`. It walks every argument subtree, keyword arguments
+(`extra=`) and f-strings included, so `%` formatting, `.format`, concatenation, `!r` and `json.dumps`
+wrappers are all seen. It flags a request-content name (see CONTENT_NAME) anywhere in them, unless
+the name only appears
 
-Scope: both scans read the AST of every module under `backend/handlers`. A request body bound to another
-name than `body`, `request_body` or `requestBody` is not recognised; the behavioural tests of the handlers
-named in the #1552 inventory cover the paths that matter most.
+* inside `event_log_summary(...)`, `query_clause_log_summary(...)`, `len`, `bool`, `type`,
+  `sorted` or `isinstance`, or
+* as `name['key']` / `name.get('key')` with a constant key that is not a content key (`event['assetId']`).
+
+What the scan cannot catch: request content bound to a name that is not in CONTENT_NAME (for
+example `payload = json.loads(event['body'])` followed by `logger.info(payload)`), a value reached
+through an attribute or a helper that returns it, and any log call whose receiver name does not
+contain "log". The live log search in the smoke plan covers those; review new log calls by hand.
+
+An existing call that is acceptable stays in ALLOWED_SITES with its reason. The allow-list is
+checked both ways: a new flagged call fails the scan, and an entry that no longer matches a
+flagged call fails the stale-entry test, so the list cannot rot.
 """
 
 import ast
+import hashlib
 import os
+import re
 
 import pytest
 
-_HANDLERS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "backend", "handlers",
+_BACKEND_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "backend"
 )
 
-LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critical"}
+LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
 
-# Names the handlers give a whole event, a stream record or a stream image.
-EVENT_NAMES = {"event", "record", "records", "event_record", "stream_record", "new_image", "old_image"}
-
-RENDERING_CALLS = {"dumps", "str", "repr"}
-
-# Names a handler gives request content, and the event keys that hold it.
-REQUEST_CONTENT_NAMES = {
-    "event", "body", "request_body", "requestBody", "query_params", "queryParams",
-    "query_clause", "queryClause", "query_string_parameters",
-}
-REQUEST_CONTENT_KEYS = {"body", "queryStringParameters", "multiValueQueryStringParameters"}
+# Names a module gives request content, a whole event, a stream record or image, and the whole
+# record it just read or built (`item` is a comment, `asset_object` an asset with its description).
+CONTENT_NAME = re.compile(
+    r"^(event|body|\w*_body|\w*Body|request_body|query_params|queryParams|query_clause|queryClause|"
+    r"query_string_parameters|parsed_body|item|asset_object|result|record|records|new_image|old_image|"
+    r"stream_record|event_record)$"
+)
+CONTENT_KEYS = {"body", "queryStringParameters", "multiValueQueryStringParameters"}
+SAFE_FUNCTIONS = {"event_log_summary", "query_clause_log_summary", "len", "bool", "type", "sorted", "isinstance"}
 
 
-def _renders_event(expression):
-    if isinstance(expression, ast.Name):
-        return expression.id in EVENT_NAMES
-    if isinstance(expression, ast.Call) and expression.args:
-        func = expression.func
-        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
-        return name in RENDERING_CALLS and _renders_event(expression.args[0])
-    return False
+def _is_log_call(call):
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id == "print"
+    if not isinstance(func, ast.Attribute) or func.attr not in LOG_METHODS:
+        return False
+    return "log" in ast.unparse(func.value).lower()
 
 
-def _violations(path):
-    with open(path, encoding="utf-8") as handle:
-        tree = ast.parse(handle.read(), filename=path)
+def _content_names(argument):
+    """The request-content names in one argument subtree that are not in a safe position."""
     found = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr in LOG_METHODS):
-            continue
-        for argument in node.args:
-            for part in ast.walk(argument):
-                if isinstance(part, ast.FormattedValue) and _renders_event(part.value):
-                    found.append(os.path.relpath(path, _HANDLERS_DIR) + ":" + str(node.lineno))
+
+    def walk(node):
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+            if name in SAFE_FUNCTIONS:
+                return
+            if (name == "get" and node.args and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value not in CONTENT_KEYS
+                    and isinstance(func.value, ast.Name) and CONTENT_NAME.match(func.value.id)):
+                return
+        if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+                and CONTENT_NAME.match(node.value.id)
+                and isinstance(node.slice, ast.Constant) and node.slice.value not in CONTENT_KEYS):
+            return
+        if isinstance(node, ast.Name) and CONTENT_NAME.match(node.id):
+            found.append(node.id)
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+
+    walk(argument)
     return found
 
 
-def _is_request_content(expression):
-    """The expression is request content: a bare name above, `event['body']` or `event.get('body')`."""
-    if isinstance(expression, ast.Name):
-        return expression.id in REQUEST_CONTENT_NAMES
-    if isinstance(expression, ast.Subscript):
-        key = expression.slice
-        return isinstance(key, ast.Constant) and key.value in REQUEST_CONTENT_KEYS
-    if isinstance(expression, ast.Call):
-        func = expression.func
-        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
-        if name == "get" and expression.args and isinstance(expression.args[0], ast.Constant):
-            return expression.args[0].value in REQUEST_CONTENT_KEYS
-        if name in RENDERING_CALLS and expression.args:
-            return _is_request_content(expression.args[0])
-    return False
+def _enclosing_functions(tree):
+    """Map each call node to the name of the function it sits in ('<module>' outside any)."""
+    owner = {}
+
+    def visit(node, current):
+        for child in ast.iter_child_nodes(node):
+            name = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else current
+            if isinstance(child, ast.Call):
+                owner[child] = current
+            visit(child, name)
+
+    visit(tree, "<module>")
+    return owner
 
 
-def _content_violations(path):
-    with open(path, encoding="utf-8") as handle:
-        tree = ast.parse(handle.read(), filename=path)
+def _scan_source(source, relative_path):
+    """Flagged log calls in one module, as (relative_path, function, digest, line, names)."""
+    tree = ast.parse(source)
+    owner = _enclosing_functions(tree)
     found = []
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr in LOG_METHODS):
+        if not (isinstance(node, ast.Call) and _is_log_call(node)):
             continue
-        # Only a logger (`logger.x(...)`), not any object that has an `info` method.
-        if not (isinstance(node.func.value, ast.Name) and node.func.value.id.endswith("logger")):
-            continue
-        for argument in node.args:
-            if _is_request_content(argument) or any(
-                isinstance(part, ast.FormattedValue) and _is_request_content(part.value)
-                for part in ast.walk(argument)
-            ):
-                found.append(os.path.relpath(path, _HANDLERS_DIR) + ":" + str(node.lineno))
+        names = []
+        for argument in node.args + [keyword.value for keyword in node.keywords]:
+            names += _content_names(argument)
+        if names:
+            digest = hashlib.sha1(ast.unparse(node).encode()).hexdigest()[:8]
+            found.append((relative_path, owner.get(node, "<module>"), digest, node.lineno, sorted(set(names))))
     return found
 
 
-def _handler_modules():
-    for root, _dirs, files in os.walk(_HANDLERS_DIR):
+def _scan_tree(root):
+    found = []
+    for directory, _dirs, files in os.walk(root):
+        if "__pycache__" in directory:
+            continue
         for name in sorted(files):
             if name.endswith(".py"):
-                yield os.path.join(root, name)
+                path = os.path.join(directory, name)
+                with open(path, encoding="utf-8") as handle:
+                    source = handle.read()
+                found += _scan_source(source, os.path.relpath(path, root))
+    return found
+
+
+# Reviewed sites the scan flags that are acceptable. Key: (module, function, digest of the call's
+# source); changing the call changes the digest and sends it back through review.
+ALLOWED_SITES = {
+    ("common/compliance/quarantineGuard.py", "quarantine_refusal", "363afb32"):
+        "passes the event to a route helper that returns the concrete path of a refused download "
+        "(an identifier); no request text is logged",
+    ("customResources/getVpcEndpointIps.py", "lambda_handler", "93b15aea"):
+        "the CloudFormation custom-resource event of the deployment (infrastructure values); "
+        "not a user request",
+    ("handlers/addon/edh/edhCatalogRegistration.py", "lambda_handler", "d4080df6"):
+        "the registration result is lists of catalog entry names and warnings from the deployment "
+        "custom resource; no request text",
+    ("handlers/addon/edh/edhLaunchWorker.py", "_handle_start", "efd77022"):
+        "logs only the whitelisted START_PAYLOAD_KEYS of the payload (ids and stamps)",
+    ("handlers/addon/edh/edhLaunchWorker.py", "lambda_handler", "828ba671"):
+        "logs only the whitelisted WORKER_PAYLOAD_KEYS of the payload (ids)",
+    ("handlers/addon/garnetFramework/garnetDataIndexDatabase.py", "get_bucket_details", "b59f4bd2"):
+        "`result` is a dict of bucket id, bucket name and prefix built in the function; not a request",
+    ("handlers/addon/physna/physnaAssetSync.py", "_delete_by_item", "476f8c54"):
+        "logs the key NAMES of a Physna listing item (a response from Physna), not its values",
+    ("handlers/addon/physna/physnaAssetSync.py", "_sync_asset_metadata_to_physna", "1ea169f1"):
+        "logs the key NAMES of a Physna listing item (a response from Physna), not its values",
+    ("handlers/addon/physna/physnaViewer.py", "_mint_viewer_token", "3c99a9f2"):
+        "logs the key names of the Physna token response (a service response, no secret value)",
+    ("handlers/assets/assetExportService.py", "get_asset_tree_via_lambda", "98fb6bd6"):
+        "the error body of the asset links service's own response (a downstream message), "
+        "not the caller's request",
+    ("handlers/compliance/complianceBindingApply.py", "stop_at_run_limit", "7358b9b5"):
+        "ids and run counters of an apply record; no typed text",
+    ("handlers/workflows/importGlobalPipelineWorkflow.py", "lambda_handler", "b5498b99"):
+        "`_loggable_event` returns the event as a structure with the template content keys redacted "
+        "by safeLogger; an import of a pipeline template bundle, not search or comment text",
+    ("models/common.py", "authorization_error", "75e5a70a"):
+        "`errorBody` is the generic response body the handler returns (a fixed message), "
+        "not the request",
+    ("models/common.py", "internal_error", "7fee03a8"):
+        "`errorBody` is the generic response body the handler returns (a fixed message), "
+        "not the request",
+}
+
+
+def _flagged_keys(found):
+    return {(path, function, digest) for path, function, digest, _line, _names in found}
 
 
 @pytest.mark.unit
-def test_no_handler_logs_a_whole_event():
-    violations = [hit for path in _handler_modules() for hit in _violations(path)]
-    assert not violations, (
-        "log messages render a whole event, record or stream image; log "
-        "event_log_summary(event) and the record ids instead: " + ", ".join(violations)
+def test_no_module_logs_request_content():
+    """Every flagged log call under backend/backend is a reviewed, allow-listed site."""
+    found = _scan_tree(_BACKEND_DIR)
+    unreviewed = [
+        f"{path}:{line} in {function} ({', '.join(names)})"
+        for path, function, digest, line, names in found
+        if (path, function, digest) not in ALLOWED_SITES
+    ]
+    assert not unreviewed, (
+        "log calls pass the event, a request body, query parameters, a search clause or a whole record; "
+        "log event_log_summary(event), ids and sizes instead (or, for a reviewed non-request case, add "
+        "the site to ALLOWED_SITES with its reason): " + "; ".join(unreviewed)
     )
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("source, flagged", [
-    ('logger.info(f"Processing event: {json.dumps(event, default=str)}")', True),
-    ('logger.warning(f"Bad record {record}")', True),
-    ('logger.debug(f"image {str(new_image)}")', True),
-    ('logger.info(f"Processing event: {event_log_summary(event)}")', False),
-    ('logger.info(f"Asset {event[\'assetId\']} not found")', False),
-    ('logger.info(f"Processed {len(event.get(\'Records\', []))} records")', False),
-])
-def test_the_scan_recognises_the_pattern(tmp_path, source, flagged):
-    module = tmp_path / "sample.py"
-    module.write_text(source + "\n")
-    assert bool(_violations(str(module))) is flagged
+def test_the_allow_list_has_no_stale_entry():
+    """An entry whose call was changed or removed must leave the list."""
+    stale = sorted(set(ALLOWED_SITES) - _flagged_keys(_scan_tree(_BACKEND_DIR)))
+    assert not stale, f"ALLOWED_SITES entries no longer match a flagged call: {stale}"
 
 
 @pytest.mark.unit
-def test_no_handler_logs_request_content():
-    violations = [hit for path in _handler_modules() for hit in _content_violations(path)]
-    assert not violations, (
-        "log calls pass the event, a request body, query parameters or a search query clause; log "
-        "event_log_summary(event) and ids instead: " + ", ".join(violations)
-    )
+def test_every_allow_list_entry_has_a_reason():
+    assert all(len(reason.strip()) > 20 for reason in ALLOWED_SITES.values())
+
+
+# Mutation self-test: each bad form, placed in a scratch module in each scanned area, is flagged.
+BAD_FORMS = [
+    "logger.info(event)",
+    "logger.info('x %s' % event)",
+    "logger.info('x {}'.format(event))",
+    "logger.info('x ' + str(event))",
+    "logger.info('x', extra={'e': event})",
+    "self.logger.info(event)",
+    "log = logger\n    log.info(event)",
+    "logger.info(f'{event!r}')",
+    "logger.info(f'{event}')",
+    "logging.getLogger().info(event)",
+    "print(event)",
+    "logger.info('b=' + event.get('body'))",
+    "logger.info(f'{event[\"queryStringParameters\"]}')",
+    "logger.debug(f\"q {event.get('queryStringParameters', {})}\")",
+    "logger.info(json.dumps(event['body']))",
+    "logger.info(f'Request body: {body}')",
+    "logger.info(f'clause {json.dumps(query_clause)}')",
+    "logger.info(item)",
+    "logger.info(result)",
+    "logger.info(asset_object)",
+    "logger.warning(f'Bad record {record}')",
+    "logger.debug(f'image {str(new_image)}')",
+    "logger.info('x', comment_body, request_body)",
+]
+
+SAFE_FORMS = [
+    "logger.info(f'Event: {event_log_summary(event)}')",
+    "logger.info(f\"Asset {event['assetId']} found\")",
+    "logger.info(f\"Asset {event.get('assetId')} found\")",
+    "logger.info(f'{len(event.get(\"Records\", []))} records')",
+    "logger.info('body parsed')",
+    "logger.info(f'clause {query_clause_log_summary(query_clause)}')",
+    "logger.info(f'comment {len(item[\"commentBody\"])} chars')",
+]
+
+
+def _scratch_function(form):
+    return "def handler(event, self=None):\n    " + form + "\n"
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("source, flagged", [
-    ("logger.info(event)", True),
-    ('logger.info(f"Request body: {body}")', True),
-    ("logger.debug(f\"q {event.get('queryStringParameters', {})}\")", True),
-    ("logger.info(json.dumps(event['body']))", True),
-    ('logger.info(f"clause {json.dumps(query_clause)}")', True),
-    ('logger.info(f"Event: {event_log_summary(event)}")', False),
-    ('logger.info(f"Asset {event[\'assetId\']} found")', False),
-    ('logger.info("body parsed")', False),
-])
-def test_the_content_scan_recognises_the_pattern(tmp_path, source, flagged):
-    module = tmp_path / "sample.py"
-    module.write_text(source + "\n")
-    assert bool(_content_violations(str(module))) is flagged
+@pytest.mark.parametrize("area", ["handlers/x/handler.py", "common/helper.py", "handlers/addon/edh/worker.py"])
+@pytest.mark.parametrize("form", BAD_FORMS)
+def test_the_scan_flags_each_bad_form(area, form):
+    assert _scan_source(_scratch_function(form), area), f"not flagged in {area}: {form}"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("form", SAFE_FORMS)
+def test_the_scan_passes_each_safe_form(form):
+    assert not _scan_source(_scratch_function(form), "handlers/x/handler.py"), form
+
+
+@pytest.mark.unit
+def test_the_scan_walks_common_and_the_addons():
+    """The scanned root holds the areas the first version of this test missed."""
+    paths = {path for path, *_ in _scan_tree(_BACKEND_DIR)}
+    assert any(p.startswith("common/") for p in paths)
+    assert any(p.startswith("handlers/addon/") for p in paths)
+
+
+@pytest.mark.unit
+def test_the_known_limit_a_body_under_another_name_is_not_seen():
+    """Documented limit: content bound to an unusual name passes the scan (see the module docstring)."""
+    source = "def handler(event):\n    payload = event['body']\n    logger.info(payload)\n"
+    assert not _scan_source(source, "handlers/x/handler.py")
