@@ -329,10 +329,20 @@ class TestRecheck:
         assert recordMatcher.row_matches(row, filters(users=["alice"]))
         assert not recordMatcher.row_matches(row, filters(databaseIds=["db1"]))
 
-    def test_recheck_counts_dropped_rows(self, writer):
+    def test_recheck_returns_the_matching_rows_only(self, writer):
         rows = [parse(one_action_message(writer, "assetUpdate", database_id=f"db{i}")) for i in (1, 2, 3)]
-        kept, dropped = recordMatcher.recheck(rows, filters(databaseIds=["db2"]))
-        assert len(kept) == 1 and dropped == 2
+        kept = recordMatcher.recheck(rows, filters(databaseIds=["db2"]))
+        assert isinstance(kept, list) and len(kept) == 1 and kept[0].databaseId == "db2"
+
+    def test_recheck_gives_no_signal_about_a_term_that_only_a_hidden_field_holds(self, writer):
+        # A record whose hidden field (changes) holds the term, and one that holds nothing: the
+        # recheck result is the same for both, so the caller cannot tell them apart.
+        hidden = parse(one_action_message(writer, "assetUpdate", database_id="db1",
+                                          changes={"assetName": "ChangedSecretValue"}))
+        empty = parse(one_action_message(writer, "assetUpdate", database_id="db1"))
+        wanted = filters(contains=["changedsecretvalue"])
+        assert recordMatcher.recheck([hidden], wanted) == recordMatcher.recheck([empty], wanted) == []
+        assert not isinstance(recordMatcher.recheck([hidden], wanted), tuple)
 
     def test_contains_applies_on_the_redacted_row(self):
         row = parse(LEGACY_SEARCH)

@@ -251,8 +251,8 @@ class TestMatcher:
         rows = [row_for(user="alice") for _ in range(5)]
         filters = queryBuilder.validate_filters(
             {"startTime": 1763000000, "endTime": 1763003600, "contains": ["alice"]}, ["auditActions"])
-        kept, dropped = recordMatcher.recheck(rows, filters, budget)
-        assert kept == [] and dropped == 5 and budget.exceeded is True
+        kept = recordMatcher.recheck(rows, filters, budget)
+        assert kept == [] and budget.exceeded is True
 
     def test_without_a_deadline_the_budget_never_trips(self):
         budget = containsFilter.MatchBudget()

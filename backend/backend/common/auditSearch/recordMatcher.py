@@ -13,7 +13,7 @@ and free text can never satisfy an ID, user or outcome filter.
 Semantics: a filter that names several values matches any of them; different filters must all match.
 """
 
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from common.auditSearch.containsFilter import MatchBudget, row_matches_terms
 from common.auditSearch.queryBuilder import SearchFilters, action_aliases
@@ -70,15 +70,17 @@ def row_matches(row: AuditRow, filters: SearchFilters, budget: Optional[MatchBud
     return True
 
 
-def recheck(rows: Iterable[AuditRow], filters: SearchFilters, budget: Optional[MatchBudget] = None
-            ) -> Tuple[list, int]:
-    """The rows that match and the number dropped. Stops matching when the budget's deadline passes
-    (``budget.exceeded`` is then set and the remaining rows are counted as dropped)."""
-    kept = []
-    dropped = 0
-    for row in rows:
-        if row_matches(row, filters, budget):
-            kept.append(row)
-        else:
-            dropped += 1
-    return kept, dropped
+def recheck(rows: Iterable[AuditRow], filters: SearchFilters, budget: Optional[MatchBudget] = None) -> List[AuditRow]:
+    """The rows that match, in order. Stops matching when the budget's deadline passes
+    (``budget.exceeded`` is then set and the remaining rows are not returned).
+
+    It returns the rows only, never a count of the rows it dropped. The Logs Insights prefilter matches
+    the whole raw record, including ``changes``, ``previous`` and the values the viewer shows as
+    ``<redacted>``; the recheck then drops a row whose visible fields do not match. A count of those
+    rows would tell a caller how many records contain a ``contains`` term in a place the viewer hides,
+    and a caller could read a hidden value out of it one guess at a time. A caller must not derive such a
+    count (``len(candidates) - len(kept)``) into a response, a header, an error text or a metric
+    dimension; the API pages end by visible matches only. ``budget.exceeded`` depends on the work done,
+    not on what a hidden field holds, and may be reported.
+    """
+    return [row for row in rows if row_matches(row, filters, budget)]
