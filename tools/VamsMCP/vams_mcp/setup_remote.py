@@ -24,7 +24,13 @@ from urllib.parse import urlsplit
 import requests
 
 from .config import ConfigError
-from .remote_auth import MAX_AUDIENCES, PROVIDER_COGNITO, PROVIDER_EXTERNAL, RemoteAuthSettings
+from .remote_auth import (
+    MAX_AUDIENCES,
+    PROVIDER_COGNITO,
+    PROVIDER_EXTERNAL,
+    SUPPORTED_AUDIENCE_CLAIMS,
+    RemoteAuthSettings,
+)
 
 HTTP_TIMEOUT = (5, 15)
 DEFAULT_OUTPUT = "vams-mcp-remote-auth.json"
@@ -73,12 +79,34 @@ def _amplify_config(vams_url: str) -> Dict[str, Any]:
     return _get_json(f"{vams_url}/{API_AMPLIFY_CONFIG.lstrip('/')}")
 
 
-def _discovery(issuer: str, explicit: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    url = explicit or f"{issuer.rstrip('/')}/.well-known/openid-configuration"
-    try:
-        return _get_json(url)
-    except SetupError:
-        return None
+def _discovery_url(base: str, published: Optional[str] = None) -> str:
+    """The discovery document URL: the deployment's published value, else the standard path under ``base``.
+
+    The deployment publishes externalOAuthIdpDiscoveryEndpoint as a path (for example
+    ``/.well-known/openid-configuration``) that is joined to the provider URL, as the web application
+    does; an absolute http(s) value is used as given.
+    """
+    if published:
+        if published.startswith(("https://", "http://")):
+            return published
+        if published.startswith("/"):
+            return f"{base.rstrip('/')}{published}"
+    return f"{base.rstrip('/')}/.well-known/openid-configuration"
+
+
+def _discovery(
+    issuer: str, explicit: Optional[str] = None, fallback_issuer: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """Read the discovery document from ``issuer`` (the published path applies), else from ``fallback_issuer``."""
+    urls = [_discovery_url(issuer, explicit)]
+    if fallback_issuer:
+        urls.append(_discovery_url(fallback_issuer))
+    for url in dict.fromkeys(urls):
+        try:
+            return _get_json(url)
+        except SetupError:
+            continue
+    return None
 
 
 def _domain_url(domain: str) -> str:
@@ -100,6 +128,20 @@ def _refuse_web_client(audiences: List[str], web_client_id: Optional[str]) -> No
         )
 
 
+def _published_audience_claims(value: Any) -> List[str]:
+    """The audience claim names a deployment publishes: [] when absent, an error when not recognized."""
+    text = _set(value)
+    if not text:
+        return []
+    names = [name.strip() for name in text.split(",")]
+    if not names or any(name not in SUPPORTED_AUDIENCE_CLAIMS for name in names) or len(set(names)) != len(names):
+        raise SetupError(
+            f"the deployment publishes an unrecognized externalOAuthIdpAudienceClaims value; expected a "
+            f"comma-separated list of {', '.join(SUPPORTED_AUDIENCE_CLAIMS)}. Pass --audience-claim instead"
+        )
+    return names
+
+
 def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteAuthSettings:
     api_url = _set(amplify.get("api"))
     if not api_url:
@@ -109,9 +151,13 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
     if len(audiences) > MAX_AUDIENCES:
         raise SetupError(f"at most {MAX_AUDIENCES} audiences can be configured")
 
+    user_id_claim: Optional[str] = None
+    audience_claims: List[str] = []
     pool_id = _set(amplify.get("cognitoUserPoolId"))
     if pool_id:
         provider = PROVIDER_COGNITO
+        if args.audience_claim or args.user_id_claim:
+            raise SetupError("--audience-claim and --user-id-claim apply to an external IdP deployment only")
         for value in audiences:
             if not _COGNITO_CLIENT_ID.match(value):
                 raise SetupError(f"'{value}' is not a Cognito app client id")
@@ -142,7 +188,9 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
         web_client_id = _set(amplify.get("externalOAuthIdpClientId"))
         _refuse_web_client(audiences, web_client_id)
         provider_url = _set(amplify.get("externalOAuthIdpURL"))
-        document = _discovery(args.issuer or provider_url, _set(amplify.get("externalOAuthIdpDiscoveryEndpoint")))
+        document = _discovery(
+            provider_url, _set(amplify.get("externalOAuthIdpDiscoveryEndpoint")), fallback_issuer=args.issuer
+        )
         if document is None:
             raise SetupError(
                 "the external IdP's OpenID Connect discovery document could not be read; pass --issuer "
@@ -153,6 +201,52 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
         if not issuer or not jwks_uri:
             raise SetupError("the external IdP's discovery document names no issuer or jwks_uri")
         scopes = tuple((args.scopes or _set(amplify.get("externalOAuthIdpScope")) or "openid").split())
+        # The deployment reports the claim its API reads the user id from (blank or "undefined" when
+        # not set) and the claims its API reads the audience from (externalOAuthIdpAudienceClaims,
+        # comma-separated names). --audience-claim stays as an explicit override. A deployment that
+        # predates the field publishes nothing: the default (aud) applies and a note says so.
+        published_user_id_claim = _set(amplify.get("externalOAuthIdpUserIdClaim"))
+        user_id_claim = args.user_id_claim or published_user_id_claim
+        if args.user_id_claim and not published_user_id_claim:
+            print(
+                f"vams-mcp setup-remote: note: the deployment publishes no user id claim; using "
+                f"--user-id-claim {args.user_id_claim}. The API identifies users by the first of "
+                "cognito:username, username and sub, so a different value makes the server refuse tokens",
+                file=sys.stderr,
+            )
+        elif args.user_id_claim and args.user_id_claim != published_user_id_claim:
+            print(
+                f"vams-mcp setup-remote: note: --user-id-claim {args.user_id_claim} differs from the "
+                f"deployment's published user id claim ({published_user_id_claim}); the API identifies users "
+                "by the published claim, so the user label the server logs can differ from the API user",
+                file=sys.stderr,
+            )
+        published_claims = _published_audience_claims(amplify.get("externalOAuthIdpAudienceClaims"))
+        if args.audience_claim:
+            audience_claims = list(dict.fromkeys(args.audience_claim))
+            if not published_claims:
+                print(
+                    f"vams-mcp setup-remote: note: the deployment publishes no audience claims; using "
+                    f"--audience-claim {','.join(audience_claims)}. The API refuses tokens that do not "
+                    "match its lambdaAuthorizorJWTAudienceClaims",
+                    file=sys.stderr,
+                )
+            elif audience_claims != published_claims:
+                print(
+                    f"vams-mcp setup-remote: note: --audience-claim {','.join(audience_claims)} overrides the "
+                    f"deployment's published audience claims ({','.join(published_claims)}); the API will "
+                    "refuse tokens that do not match the deployment",
+                    file=sys.stderr,
+                )
+        elif published_claims:
+            audience_claims = published_claims
+        else:
+            print(
+                "vams-mcp setup-remote: note: the deployment does not publish its audience claims (an older "
+                "VAMS release); assuming the default (aud). Pass --audience-claim if its "
+                "lambdaAuthorizorJWTAudienceClaims differs",
+                file=sys.stderr,
+            )
         authorization_url = _set(document.get("authorization_endpoint")) or _set(
             amplify.get("externalOAuthIdpAuthorizationEndpoint")
         )
@@ -175,6 +269,10 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
         # Recorded so the server refuses to start if the file is later edited to accept the web
         # application's tokens.
         data["webAppClientId"] = web_client_id
+    if audience_claims:
+        data["audienceClaims"] = audience_claims
+    if user_id_claim:
+        data["userIdClaim"] = user_id_claim
     try:
         return RemoteAuthSettings.from_dict(data)
     except ConfigError as exc:
@@ -232,7 +330,25 @@ def _parser() -> argparse.ArgumentParser:
         "--audience", action="append", help="Another accepted audience (repeatable; the client id is always one)"
     )
     parser.add_argument("--cognito-domain", help="The Cognito user pool domain, for the authorization URLs")
-    parser.add_argument("--issuer", help="External IdP: the issuer of its access tokens, when discovery differs")
+    parser.add_argument(
+        "--issuer",
+        help="External IdP: the issuer of its access tokens, when it differs from the discovery document or "
+        "when the provider URL serves no discovery document (for example an Amazon Cognito hosted UI domain)",
+    )
+    parser.add_argument(
+        "--audience-claim",
+        action="append",
+        choices=SUPPORTED_AUDIENCE_CLAIMS,
+        help="External IdP: a token claim the audience is read from (repeatable, in order; default aud). "
+        "Overrides the deployment's published externalOAuthIdpAudienceClaims (default: the published value, "
+        "or aud when the deployment does not publish it); must equal the deployment's "
+        "lambdaAuthorizorJWTAudienceClaims",
+    )
+    parser.add_argument(
+        "--user-id-claim",
+        help="External IdP: the token claim the user id is read from, when the deployment does not "
+        "publish it (default: the deployment's externalOAuthIdpUserIdClaim)",
+    )
     parser.add_argument("--scopes", help="Space-separated scopes the MCP client requests")
     parser.add_argument("--output", default=DEFAULT_OUTPUT, help=f"The file to write (default {DEFAULT_OUTPUT})")
     parser.add_argument("--force", action="store_true", help="Replace an existing file")

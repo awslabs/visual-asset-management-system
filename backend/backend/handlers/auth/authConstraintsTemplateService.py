@@ -463,6 +463,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             "roleName": request_model.variableValues.get('ROLE_NAME', 'unknown'),
             "constraintsCreated": result.constraintsCreated,
             "constraintIds": result.constraintIds
+        }, item_count=result.constraintsCreated, changes={
+            "templateName": template_header.name if template_header else None,
+            "variableValues": request_model.variableValues,
+            "constraintIds": result.constraintIds,
         })
 
         # Return success response

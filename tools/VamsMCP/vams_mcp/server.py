@@ -53,6 +53,7 @@ from .client import (  # noqa: E402
     RequestScopedClient,
     describe_profile,
     login_step_for,
+    route_path,
     sign_in_marker,
     silence_cli_request_log,
 )
@@ -876,7 +877,7 @@ def list_assets(
     BOUNDED: `truncated` means rows were
     not seen; pass `NextToken` as `starting_token` to continue. Do not report an asset count, or
     conclude an asset does not exist, from a truncated result."""
-    endpoint = API_DATABASE_ASSETS.format(databaseId=database_id) if database_id else API_ASSETS
+    endpoint = route_path(API_DATABASE_ASSETS, databaseId=database_id) if database_id else API_ASSETS
 
     def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
         if include_archived:

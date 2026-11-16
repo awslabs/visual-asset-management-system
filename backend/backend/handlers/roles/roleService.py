@@ -11,7 +11,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_auth_changes, audited_handler
+from customLogging.auditLogging import log_action, log_auth_changes, audited_handler
 from common.dynamodb import validate_pagination_info
 from models.common import (
     validation_error_message,
@@ -158,6 +158,8 @@ def handle_get_request(event):
         
         # Get all roles
         roles_result = get_all_roles(query_params)
+        log_action(event, "roleList", item_count=len(roles_result.get('Items', [])),
+                   request_parameters=dict(query_params))
         
         # Convert to response models
         formatted_items = []
