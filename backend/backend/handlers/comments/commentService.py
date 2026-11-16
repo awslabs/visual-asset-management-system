@@ -195,7 +195,10 @@ def delete_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, e
     item = get_single_comment(assetId, assetVersionIdAndCommentId)
     if item:
         logger.info(f"Got comment:")
-        logger.info(item)
+        logger.info(
+            f"Comment to delete: assetId={assetId}, commentId={assetVersionIdAndCommentId}, "
+            f"commentBody={len(item.get('commentBody') or '')} char(s)"
+        )
 
         logger.info("Verifying user")
         comment_user_id = item["commentOwnerID"]

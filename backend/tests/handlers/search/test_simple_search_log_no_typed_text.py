@@ -26,6 +26,11 @@ FIELDS = {
 }
 
 
+# Criteria that only exist on the other index: the builder drops them (a request holding only these
+# matches nothing on this index).
+FOREIGN_CRITERIA = {("fileKey", "asset")}
+
+
 def _logged_text(logger):
     """Every message and keyword argument passed to the mocked logger, as one string."""
     return "\n".join(str(call) for call in logger.method_calls)
@@ -44,9 +49,29 @@ def test_a_typed_term_never_reaches_the_log(search_module, field, index_type):  
 
     assert search_module.logger.info.called, "the query shape is still logged"
     assert term not in _logged_text(search_module.logger), f"typed {field} reached the function log"
-    # Unchanged behaviour: the typed term still shapes the query that is sent to the index. A
-    # criterion foreign to the index type yields match_none, which carries no term by design.
-    assert term in str(query) or "match_none" in str(query), f"{field} no longer shapes the query"
+    # Unchanged behaviour: the typed term still shapes the query that is sent to the index. The one
+    # criterion foreign to an index (a file key, on the asset index) yields exactly match_none, and
+    # every other field carries the term.
+    if (field, index_type) in FOREIGN_CRITERIA:
+        assert query["query"] == {"match_none": {}}
+        assert term not in str(query)
+    else:
+        assert term in str(query), f"{field} no longer shapes the {index_type} query"
+        assert "match_none" not in str(query)
+
+
+@pytest.mark.unit
+def test_an_index_foreign_field_leaves_the_query_clause_unchanged(search_module):  # noqa: F811
+    """A file key alongside a name on the asset index: the clause is the same as without the file key."""
+    builder = search_module.SimpleSearchQueryBuilder(search_module.DatabaseAccessManager())
+    with_foreign = search_module.SimpleSearchRequestModel(assetName=FIELDS["assetName"], fileKey=FIELDS["fileKey"])
+    without = search_module.SimpleSearchRequestModel(assetName=FIELDS["assetName"])
+    search_module.logger = MagicMock()
+    clause_with = builder._build_simple_index_query(with_foreign, ["db1"], "asset")["query"]
+    clause_without = builder._build_simple_index_query(without, ["db1"], "asset")["query"]
+    assert clause_with == clause_without
+    assert FIELDS["fileKey"] not in str(clause_with)
+    assert FIELDS["fileKey"] not in _logged_text(search_module.logger)
 
 
 @pytest.mark.unit
@@ -57,3 +82,25 @@ def test_the_log_still_describes_the_query_shape(search_module):  # noqa: F811
     builder._build_simple_index_query(request, ["db1"], "asset")
     messages = [c.args[0] for c in search_module.logger.info.call_args_list if "Generated" in c.args[0]]
     assert messages and "node(s)" in messages[0] and "bool=" in messages[0]
+
+
+class _EngineError(Exception):
+    """An OpenSearch error whose text quotes a fragment of the query, as a parse error does."""
+
+    status_code = 400
+
+
+@pytest.mark.unit
+def test_an_engine_error_that_quotes_the_query_is_logged_by_class_and_status(search_module):  # noqa: F811
+    manager = search_module.DualIndexSearchManager()
+    manager.client = MagicMock()
+    manager.client.search.side_effect = _EngineError(f"Failed to parse query [*{FIELDS['query']}*]")
+    manager.is_available = lambda: True
+    search_module.logger = MagicMock()
+
+    with pytest.raises(search_module.VAMSGeneralErrorResponse, match="Error executing search query"):
+        manager.search_dual_index({"query": {}}, {"query": {}}, ["asset"])
+
+    logged = _logged_text(search_module.logger)
+    assert FIELDS["query"] not in logged
+    assert "_EngineError (HTTP 400)" in logged

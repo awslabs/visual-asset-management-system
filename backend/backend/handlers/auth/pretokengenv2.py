@@ -47,5 +47,5 @@ def lambda_handler(event, context):
         }
     })
 
-    logger.info(result)
+    logger.info(f"Token generation trigger handled: email claim {'set' if email else 'empty'}")
     return result

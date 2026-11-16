@@ -68,7 +68,10 @@ def add_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, even
         response["message"] = "Internal Server Error"
         return response
 
-    logger.info(item)
+    logger.info(
+        f"Comment added: assetId={assetId}, commentId={assetVersionIdAndCommentId}, "
+        f"commentBody={len(item['commentBody'])} char(s)"
+    )
 
     return response
 

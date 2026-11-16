@@ -56,7 +56,10 @@ def edit_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, eve
 
     item = get_single_comment(assetId, assetVersionIdAndCommentId)
     if item:
-        logger.info(item)
+        logger.info(
+            f"Loaded comment: assetId={assetId}, commentId={assetVersionIdAndCommentId}, "
+            f"commentBody={len(item.get('commentBody') or '')} char(s)"
+        )
         logger.info("Validating owner")
 
 
