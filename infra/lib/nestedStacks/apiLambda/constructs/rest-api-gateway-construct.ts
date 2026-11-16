@@ -283,8 +283,9 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             // account + Region singleton shared by every REST API there — so RETAIN keeps
             // API Gateway logging in place for co-resident deployments when this one is torn
             // down. The retained role carries a fixed name (the IamRoleTransform aspect names
-            // every role in the tree), so it has to be deleted before this deployment is
-            // redeployed into the same account and Region.
+            // every role in the tree), so a fresh deploy of the same configuration finds it
+            // already there; configureApiCloudWatchRoleReuse (api-cloudwatch-role-reuse.ts,
+            // wired in core-stack.ts) makes such a deploy reuse it rather than fail.
             cloudWatchRole: true,
             cloudWatchRoleRemovalPolicy: cdk.RemovalPolicy.RETAIN,
         });
