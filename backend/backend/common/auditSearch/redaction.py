@@ -42,20 +42,40 @@ MAX_SECTIONS_BYTES = 16384
 # A string is searched for credential shapes only in its first characters: the rest is cut anyway.
 _SHAPE_SCAN_CHARS = 16384
 
-# Characters shown as a visible escape: C0 and C1 controls (CR, LF, NUL, DEL), soft hyphen, bidi
-# marks and isolates, zero-width characters, line and paragraph separators, the byte order mark,
-# interlinear annotation, lone surrogates, non-characters and the tag characters.
+# Characters shown as a visible escape. The rule is by Unicode category, not a hand-kept list:
+# every control (Cc), format (Cf: bidi marks and isolates, zero-width characters, the byte order mark,
+# soft hyphen, interlinear annotation, Arabic and Syriac number signs, tag characters), surrogate (Cs),
+# private use (Co), line and paragraph separator (Zl, Zp) and every space other than U+0020 (Zs:
+# no-break, ideographic and the typographic spaces), plus the characters that draw nothing but are
+# not in those categories: the combining grapheme joiner, Hangul and Braille fillers, the Khmer
+# inherent vowels, the Mongolian and general variation selectors, and the non-characters.
+# ``tests/common/auditSearch/test_audit_search_redaction_export_matcher.py`` checks that the class
+# covers every code point of those categories in the running Unicode database, so a character a newer
+# Unicode release adds to a category fails the test instead of passing through.
 _UNSAFE_CHARS = re.compile(
-    "[\x00-\x1f\x7f-\x9f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u206f"
-    "\ud800-\udfff\ufeff\ufff9-\ufffb\ufffe\uffff\U000e0000-\U000e007f]"
+    r"[\u0000-\u001f\u007f-\u00a0\u00ad\u034f\u0600-\u0605\u061c\u06dd\u070f\u0890-\u0891\u08e2\u115f-\u1160\u1680\u17b4-\u17b5\u180b-\u180f\u2000-\u200f\u2028-\u202f\u205f-\u206f\u2800\u3000\u3164\ud800-\uf8ff\ufdd0-\ufdef\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\ufffe-\uffff\U000110bd\U000110cd\U00013430-\U0001343f\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U0001fffe-\U0001ffff\U0002fffe-\U0002ffff\U0003fffe-\U0003ffff\U0004fffe-\U0004ffff\U0005fffe-\U0005ffff\U0006fffe-\U0006ffff\U0007fffe-\U0007ffff\U0008fffe-\U0008ffff\U0009fffe-\U0009ffff\U000afffe-\U000affff\U000bfffe-\U000bffff\U000cfffe-\U000cffff\U000dfffe-\U000dffff\U000e0001\U000e0020-\U000e007f\U000e0100-\U000e01ef\U000efffe-\U0010ffff]"
 )
-
 UNSAFE_CHARS = _UNSAFE_CHARS
 
 _SHAPE_PATTERNS: Tuple[Tuple["re.Pattern[str]", str], ...] = (
     (re.compile(r"eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*"), REDACTED),
     (re.compile(r"(?i)\bBearer[ \t]+[^\s\"']+"), "Bearer " + REDACTED),
     (re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"), REDACTED),
+    # GitHub personal, OAuth, user, server and refresh tokens and fine-grained tokens; Slack tokens;
+    # Google API keys; Stripe secret keys; npm tokens.
+    (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,255}|github_pat_[A-Za-z0-9_]{20,255})(?![A-Za-z0-9_])"), REDACTED),
+    (re.compile(r"\bxox[abeoprs]-[A-Za-z0-9-]{10,200}|\bxapp-[A-Za-z0-9-]{10,200}"), REDACTED),
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])"), REDACTED),
+    (re.compile(r"\b[sr]k_live_[A-Za-z0-9]{16,200}"), REDACTED),
+    (re.compile(r"\bnpm_[A-Za-z0-9]{36}(?![A-Za-z0-9])"), REDACTED),
+    # HTTP Basic credentials: the base64 of ``user:password``. The word "Basic" alone is common, so a
+    # value must be 12 or more base64 characters with a digit, ``+``, ``/`` or ``=`` in it.
+    (re.compile(r"(?i)\bBasic[ \t]+(?=[A-Za-z0-9+/_-]*[0-9+/=])[A-Za-z0-9+/_-]{12,512}={0,2}"), "Basic " + REDACTED),
+    # A password inside a URL: ``scheme://user:password@host``.
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]{1,20}://[^\s/:@\"']{1,256}):[^\s/@\"']{1,256}@"), r"\1:" + REDACTED + "@"),
+    # A PEM private key block, to its end line or the end of the scanned text.
+    (re.compile(r"-----BEGIN [A-Z ]{0,30}PRIVATE KEY-----.*?(?:-----END [A-Z ]{0,30}PRIVATE KEY-----|\Z)",
+                re.DOTALL), REDACTED),
     (re.compile(r"(?i)\b(X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|AWSAccessKeyId|Signature)=[^&\s\"']+"),
      r"\1=" + REDACTED),
 )

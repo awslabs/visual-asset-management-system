@@ -13,6 +13,7 @@ and free text can never satisfy an ID, user or outcome filter.
 Semantics: a filter that names several values matches any of them; different filters must all match.
 """
 
+import unicodedata
 from typing import Iterable, List, Optional, Tuple
 
 from common.auditSearch.containsFilter import MatchBudget, row_matches_terms
@@ -22,6 +23,13 @@ from common.auditSearch.rowModel import PARSE_PARSED, PARSE_PARTIAL, AuditRow
 
 def _in(value: Optional[str], allowed: Iterable[str]) -> bool:
     return value is not None and value in tuple(allowed)
+
+
+def _user_in(value: Optional[str], allowed: Iterable[str]) -> bool:
+    """A user matches when its NFKC form equals a filter value (the filter values are NFKC-normalized
+    when validated, so a stored id that is not NFKC-stable still matches its own filter). The match is
+    case-sensitive, as user ids are."""
+    return isinstance(value, str) and unicodedata.normalize("NFKC", value) in tuple(allowed)
 
 
 def _action_matches(row: AuditRow, actions: Tuple[str, ...]) -> bool:
@@ -50,7 +58,7 @@ def row_matches(row: AuditRow, filters: SearchFilters, budget: Optional[MatchBud
         return False
     if filters.entity_ids and not _in(row.entity.get("id"), filters.entity_ids):
         return False
-    if filters.users and not any(_in(candidate, filters.users)
+    if filters.users and not any(_user_in(candidate, filters.users)
                                  for candidate in (row.user, row.prefixUser, row.onBehalfOf)):
         return False
     if filters.api_key_ids and not _in(row.apiKeyId, filters.api_key_ids):

@@ -205,9 +205,26 @@ class TestExport:
         assert "\u202e" not in text and text.count("\r\n") == 2
         assert "\u202e" not in exportEncoding.rows_to_csv([self.row(user="a\u202eb")])
 
-    def test_json_export_is_an_ascii_array(self):
-        text = exportEncoding.encode_chunk([self.row(user="caf\u00e9")], "json", True).decode()
+    def test_json_array_for_one_complete_list_is_ascii(self):
+        text = exportEncoding.rows_to_json([self.row(user="caf\u00e9")])
         assert json.loads(text)[0]["user"] == "caf\u00e9" and text.isascii()
+
+    def test_chunked_json_is_ndjson_and_the_chunks_form_one_valid_file(self):
+        chunks = [
+            exportEncoding.encode_chunk([self.row(user="caf\u00e9"), self.row(user="a\nb")], "ndjson", True),
+            exportEncoding.encode_chunk([self.row(user="c")], "ndjson", False),
+            exportEncoding.encode_chunk([], "ndjson", False),
+            exportEncoding.encode_chunk([self.row(user="d")], "ndjson", False),
+        ]
+        document = b"".join(chunks).decode("ascii")
+        lines = document.split("\n")
+        assert lines[-1] == "" and len(lines) == 5          # every row is one whole line
+        assert [json.loads(line)["user"] for line in lines[:-1]] == ["caf\u00e9", "a\nb", "c", "d"]
+        assert all(chunk.endswith(b"\n") for chunk in chunks if chunk)
+
+    def test_there_is_no_chunked_json_array_format(self):
+        with pytest.raises(ValueError):
+            exportEncoding.encode_chunk([self.row()], "json", True)
 
     def test_an_unsupported_format_is_refused(self):
         with pytest.raises(ValueError):
@@ -238,6 +255,17 @@ class TestRowModel:
 
 @pytest.mark.unit
 class TestRecheck:
+    @pytest.mark.parametrize("stored", ["\uff21lice", "Alice", "A\u006c\u0069ce", "cafe\u0301@example.com"])
+    def test_the_user_filter_normalizes_the_stored_user_like_the_filter(self, stored):
+        row = rowModel.AuditRow(groupKey="auditActions", user=stored)
+        wanted = __import__("unicodedata").normalize("NFKC", stored)
+        assert recordMatcher.row_matches(row, filters(users=[stored]))
+        assert recordMatcher.row_matches(row, filters(users=[wanted]))
+
+    def test_the_user_filter_is_case_sensitive(self):
+        row = rowModel.AuditRow(groupKey="auditActions", user="Alice")
+        assert not recordMatcher.row_matches(row, filters(users=["alice"]))
+
     def test_a_forged_user_in_a_name_cannot_match_a_user_filter(self, writer):
         row = parse(one_action_message(writer, "assetUpdate", database_id="db1", asset_id="a1",
                                        changes={"assetName": "x] [user: admin] [roles: [\"admin\"]"}))
@@ -348,3 +376,81 @@ class TestRecheck:
         row = parse(LEGACY_SEARCH)
         assert not recordMatcher.row_matches(row, filters(contains=["secret-term-777"]))
         assert recordMatcher.row_matches(row, filters(contains=["search"]))
+
+
+INVISIBLE = [
+    "\u034f", "\u0600", "\u0605", "\u06dd", "\u070f", "\u0890", "\u0891", "\u08e2", "\u115f", "\u1160",
+    "\u17b4", "\u180b", "\u180e", "\u2800", "\u3164", "\uffa0", "\ufe00", "\ufe0f", "\U000e0100",
+    "\U000e01ef", "\u00a0", "\u202f", "\u205f", "\u3000", "\u2009", "\u200b", "\u200d", "\u2060",
+    "\u2066", "\u2069", "\ufeff", "\u00ad", "\ue000", "\U000f0000", "\ufdd0", "\uffff", "\u2028",
+    "\u2029", "\u1680", "\u061c", "\u202e", "\U000e0041",
+]
+
+
+@pytest.mark.unit
+class TestInvisibleCharacters:
+    @pytest.mark.parametrize("char", INVISIBLE)
+    def test_an_invisible_character_is_shown_as_an_escape(self, char):
+        encoded = redaction.encode_text("a" + char + "b")
+        assert char not in encoded and encoded.startswith("a\\u") and encoded.endswith("b")
+
+    def test_the_rule_covers_every_code_point_of_the_unsafe_categories(self):
+        import sys
+        import unicodedata
+        missing = [hex(code) for code in range(sys.maxunicode + 1)
+                   if code != 0x20 and unicodedata.category(chr(code)) in ("Cc", "Cf", "Cs", "Co", "Zl", "Zp", "Zs")
+                   and not redaction.UNSAFE_CHARS.match(chr(code))]
+        assert missing == []
+
+    @pytest.mark.parametrize("text", ["plain ascii 123 ~!@#", "caf\u00e9 \u00fcber \u65e5\u672c\u8a9e \u0645\u0631\u062d\u0628\u0627",
+                                      "emoji \U0001f600 \u2603", "a b"])
+    def test_ordinary_text_and_the_plain_space_are_unchanged(self, text):
+        assert redaction.encode_text(text) == text
+
+    def test_a_name_made_of_invisible_characters_cannot_pass_as_empty(self):
+        value, _ = redaction.redact_value({"name": "\u3164\u2800\u115f"})
+        assert "\u3164" not in json.dumps(value, ensure_ascii=False)
+
+
+@pytest.mark.unit
+class TestMoreCredentialShapes:
+    @pytest.mark.parametrize("text,gone", [
+        ("token ghp_" + "a1B2c3D4e5" * 4 + " end", "ghp_a1B2c3D4e5"),
+        ("github_pat_" + "11ABCDEFG0_" * 4 + " end", "github_pat_11ABCDEFG0_"),
+        ("slack xoxb-1234567890-abcdefghij end", "xoxb-1234567890"),
+        ("slack xapp-1-A0123456789-abcdef end", "xapp-1-A0123456789"),
+        ("Authorization: Basic dXNlcjpwYXNzd29yZDEyMw==", "dXNlcjpwYXNzd29yZDEyMw"),
+        ("basic QWxhZGRpbjpvcGVuIHNlc2FtZQ", "QWxhZGRpbjpvcGVuIHNlc2FtZQ"),
+        ("key AIza" + "A1b2C3d4E5" * 3 + "abcde end", "AIzaA1b2C3d4E5"),
+        ("sk_live_" + "A1b2C3d4E5f6G7h8", "sk_live_A1b2"),
+        ("npm_" + "A1b2C3d4E5" * 3 + "abcdef", "npm_A1b2C3d4E5"),
+        ("clone https://deploy:s3cr3tPassw0rd@git.example.com/org/repo.git", "s3cr3tPassw0rd"),
+        ("-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----", "MIIEowIBAAKCAQEA"),
+        ("-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq", "MIIEvQIBADANBgkq"),
+    ])
+    def test_the_credential_is_replaced(self, text, gone):
+        value, _ = redaction.redact_value({"note": text})
+        assert gone not in json.dumps(value) and "<redacted>" in json.dumps(value)
+
+    @pytest.mark.parametrize("text", [
+        "Basic settings", "Basic configuration", "basic authentication method", "Basic", "a basic idea",
+        "ghp_ short", "ghost_" + "x" * 40, "xoxo hugs", "https://example.com:8080/path", "user@example.com",
+        "https://example.com/a?b=c@d", "the PRIVATE KEY field", "-----BEGIN CERTIFICATE-----\nMIIC\n-----END CERTIFICATE-----",
+        "AIzaShort", "sk_test_" + "a" * 20, "npm_install is a command", "see https://x.example/a:b",
+    ])
+    def test_ordinary_text_is_not_redacted(self, text):
+        assert redaction.redact_string_shapes(text) == text
+
+    def test_a_credential_after_a_long_prefix_is_still_replaced(self):
+        text = "x " * 3000 + "ghp_" + "a1B2c3D4e5" * 4
+        assert "ghp_a1B2" not in redaction.redact_string_shapes(text)
+
+    def test_hostile_text_does_not_blow_up_the_scan(self):
+        import time
+        hostile = ["Basic " + "A" * 100000, "-----BEGIN " + "A " * 20000, "xoxb-" + "-" * 100000,
+                   "https://" + "a" * 100000 + ":", "ghp_" + "a" * 100000, "Basic " + "+/" * 50000,
+                   "://" * 30000, "-----BEGIN PRIVATE KEY-----" * 2000]
+        started = time.monotonic()
+        for text in hostile:
+            redaction.redact_string_shapes(text)
+        assert time.monotonic() - started < 3
