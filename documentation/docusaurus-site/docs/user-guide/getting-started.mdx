@@ -73,9 +73,9 @@ The top navigation bar appears at the top of every page and contains:
 | ------------------------- | ----------------------------------------------------------------------------------------------------- |
 | **Application logo**      | Displays the VAMS logo. Select it to return to the home page.                                         |
 | **Settings dropdown**     | Provides theme selection (Light Theme or Dark Theme). The active theme is indicated with a checkmark. |
-| **User profile dropdown** | Displays your username and provides a **Sign out** option.                                            |
+| **User profile dropdown** | Displays your username and lists your own pages, such as **API Key Management**, then **Sign out**.   |
 
-![VAMS home page showing the top navigation bar and side navigation panel](/img/home_page_20260323_v2.5.png)
+![VAMS home page showing the top navigation bar and side navigation panel](/img/home_page_20261109_v2.7.png)
 
 ### Side Navigation Panel
 
@@ -130,20 +130,22 @@ The navigation panel is divided into the following sections:
 | **Roles**                      | Create and manage roles that group sets of permissions.                                                                                          |
 | **Users in Roles**             | Assign users to roles to grant them the associated permissions.                                                                                  |
 | **User Management**            | Manage Amazon Cognito user accounts (create, disable, reset passwords). This item is only visible when Amazon Cognito authentication is enabled. |
+| **API Keys (all users)**       | Manage the API keys of every user. This item is only visible when your role may call the administrative API key routes.                          |
 
-#### User
+Add-ons a deployment enables can add navigation sections of their own: in the main menu after **Orchestrate & Automate**, and in the admin area after **Admin - Auth**. See [Add-ons Overview](../developer/addons-overview.md).
 
-| Navigation Item        | Description                                                 |
-| ---------------------- | ----------------------------------------------------------- |
-| **API Key Management** | Create and manage API keys for programmatic access to VAMS. |
+#### Your pages (profile menu)
 
-Add-ons a deployment enables can add navigation sections of their own: in the main menu after **Orchestrate & Automate**, and in the admin area before **User**. See [Add-ons Overview](../developer/addons-overview.md).
+Pages that belong to you are in the user profile dropdown in the top navigation bar, not in the side panel:
+
+| Menu Item              | Description                                                                            |
+| ---------------------- | -------------------------------------------------------------------------------------- |
+| **API Key Management** | Create and manage your own API keys for programmatic access to VAMS (**My Keys**).     |
+| **Sign out**           | End your session. Always the last item, and available even when your pages can't load. |
 
 :::info
 The navigation items visible to you depend on your assigned role and permissions. If you do not see a particular item, contact your administrator to request the necessary access.
 :::
-
-<!-- The home page screenshot above shows the full side navigation panel -->
 
 ---
 

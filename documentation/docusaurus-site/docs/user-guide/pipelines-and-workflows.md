@@ -36,7 +36,7 @@ Workflows can be:
 2. Select a database from the database selector, or view all pipelines across databases.
 3. The pipeline list displays all pipelines you have permission to access, showing the pipeline name and id, its owning database, execution type, status, and template count. The list can be grouped by category or by database, filtered by execution type, status and database, and archived pipelines can be included.
 
-![Pipelines page showing registered pipelines with properties](/img/pipelines_page_20260803_v2.6.png)
+![Pipelines page showing two built-in pipelines with their properties](/img/pipelines_page_20261109_v2.7.png)
 
 Each entry's **⋮** actions menu holds what you can do with that pipeline: **Edit** opens its form, where its
 execution settings and the admin settings that govern how it may be run are shown; **Templates** opens its
@@ -55,7 +55,7 @@ named workflows fail until each trigger picks a different default template for t
 
 Navigate to **Pipelines** and choose **Create Pipeline**. The form is a three-step wizard — **Basic**, **Execution**, then **Settings** — and the pipeline is created when you finish the last step.
 
-![Pipeline wizard showing the Basic step and the three-step progress indicator](/img/pipeline_wizard_20260803_v2.6.png)
+![Pipeline wizard showing the Basic step and the three-step progress indicator](/img/pipeline_wizard_20261109_v2.7.png)
 
 ### Basic
 
@@ -197,7 +197,7 @@ for the tag schema fields and the quoting rule in detail.
 2. Select a database or view all workflows across databases.
 3. The workflow list displays each workflow's name and id, its database, category, and how many pipelines, executions and triggers it has — with the number of enabled triggers called out when some are switched off. The list can be filtered by status, by whether the workflow has an enabled trigger, and by database.
 
-![Workflows page showing available workflows](/img/workflows_page_20260803_v2.6.png)
+![Workflows page showing two built-in workflows](/img/workflows_page_20261109_v2.7.png)
 
 Each entry's **⋮** actions menu holds **Edit**, **Execute**, **View Executions**, and **Archive**, limited to the actions your permissions allow. A system workflow, marked **System**, offers **View** in place of **Edit** and lists **Archive** disabled with the reason shown on hover or focus; in its trigger list **Add** and **Delete** are disabled the same way, and **Edit** switches a trigger on or off.
 
@@ -306,11 +306,11 @@ A **Validation** panel reports what it found before and after saving, split by c
     Warnings are worth resolving before anyone tries to run the workflow: a mismatch here becomes a
     rejected execution, or a step that fails partway through a run, when the reason is less obvious.
 
-![Workflow editor with pipeline steps configured and visual graph](/img/workflow_editor_20260803_v2.6.png)
+![Workflow editor with pipeline steps configured and visual graph](/img/workflow_editor_20261109_v2.7.png)
 
 ## Executing workflows
 
-![Workflow executions tab showing execution history on asset detail page](/img/view_asset_workflow_executions_tab_20260803_v2.6.png)
+![Workflow executions tab showing execution history on asset detail page](/img/view_asset_workflow_executions_tab_20261109_v2.7.png)
 
 Workflows can be executed in two ways:
 
@@ -503,7 +503,7 @@ The **Executions** page lists every execution you may see, across all workflows 
 
 Runs of system workflows, the workflows shipped with your deployment, are hidden so the list shows the runs people start. Select **Show system runs** on the **Executions** page or an asset's **Executions** tab to include them; each one then carries a **System** badge. The choice is kept in the page address, so a shared or reloaded link keeps it. A view opened for one system workflow shows its runs from the start, and clearing **Show system runs** hides them. The same holds for the **System reindex** trigger filter, offered when natural-language search is enabled: the vector-search reindexer's runs are runs of the SYSTEM GenAI metadata workflow, so choosing it shows them.
 
-![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
+![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20261109_v2.7.png)
 
 Aborting a run from an execution's **⋮** actions menu signals it to stop and records it as **Aborted**. Some
 steps submit work that VAMS stops separately from the workflow itself — a container job, or a Deadline Cloud

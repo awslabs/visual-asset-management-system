@@ -298,7 +298,9 @@ function apiGatewayAccountAndRole(s: SynthResult): { account: Resource; role: Re
     const accounts = s.ofType("AWS::ApiGateway::Account");
     expect(accounts.length).toBe(1);
     const account = accounts[0];
-    const ref = account.properties.CloudWatchRoleArn?.["Fn::GetAtt"];
+    // The stack-owned branch of the Fn::If the #1218 reuse decision wraps around the role ARN.
+    const arn = account.properties.CloudWatchRoleArn;
+    const ref = (arn?.["Fn::If"] ? arn["Fn::If"][1] : arn)?.["Fn::GetAtt"];
     // Resolve the role through the Account's own reference rather than by logical-id pattern, so the
     // assertion cannot silently target some other role that happens to be named similarly.
     expect(Array.isArray(ref)).toBe(true);
@@ -372,10 +374,10 @@ describe("FIX-059: the API Gateway account-level CloudWatch role and Account sur
     test.each(ALL_TEMPLATES)(
         "%s: the CloudWatch role has a literal RoleName, so a retained orphan collides on redeploy",
         (name) => {
-            // This is the fact that makes the uninstall.md warning load-bearing: `IamRoleTransform`
-            // stamps a fixed RoleName onto every role including CDK-generated ones, so RETAIN leaves
-            // a named orphan that blocks a redeploy of the same stack into the same Region. If the
-            // aspect is ever removed, the name becomes CFN-generated and the warning becomes wrong.
+            // `IamRoleTransform` stamps a fixed RoleName onto every role including CDK-generated
+            // ones, so RETAIN leaves a named role behind that a redeploy of the same stack into the
+            // same Region asks for again. The #1218 decision (api-cloudwatch-role-reuse.ts) makes a
+            // fresh deploy reuse it; test/api/apiCloudWatchRoleReuse.test.ts covers that path.
             const { role } = apiGatewayAccountAndRole(synth(name));
             const roleName = role.properties.RoleName;
             expect(typeof roleName).toBe("string");
