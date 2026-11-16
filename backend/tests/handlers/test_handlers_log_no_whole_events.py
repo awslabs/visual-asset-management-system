@@ -17,12 +17,17 @@ the name only appears
 
 * inside `event_log_summary(...)`, `query_clause_log_summary(...)`, `len`, `bool`, `type`,
   `sorted` or `isinstance`, or
-* as `name['key']` / `name.get('key')` with a constant key that is not a content key (`event['assetId']`).
+* as `name['key']`, `name.get('key')` or `name.key` with a constant key listed in IDENTIFIER_KEYS
+  (`event['assetId']`, `record['applyId']`, `request_model.assetLinkId`).
+
+Every other key or attribute of a content name is flagged, including a variable key and a nested
+one: `item['commentBody']`, `event['headers']`, `event['requestContext']`,
+`record['dynamodb']['NewImage']`, `request_model.dict()`.
 
 What the scan cannot catch: request content bound to a name that is not in CONTENT_NAME (for
-example `payload = json.loads(event['body'])` followed by `logger.info(payload)`), a value reached
-through an attribute or a helper that returns it, and any log call whose receiver name does not
-contain "log". The live log search in the smoke plan covers those; review new log calls by hand.
+example `typed = json.loads(event['body'])` followed by `logger.info(typed)`), a value reached
+through a helper's return value or an attribute of another object, a key listed in IDENTIFIER_KEYS
+that holds text in one module, and any log call whose receiver name does not contain "log". The live log search in the smoke plan covers those; review new log calls by hand.
 
 An existing call that is acceptable stays in ALLOWED_SITES with its reason. The allow-list is
 checked both ways: a new flagged call fails the scan, and an entry that no longer matches a
@@ -45,11 +50,34 @@ LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critic
 # Names a module gives request content, a whole event, a stream record or image, and the whole
 # record it just read or built (`item` is a comment, `asset_object` an asset with its description).
 CONTENT_NAME = re.compile(
-    r"^(event|body|\w*_body|\w*Body|request_body|query_params|queryParams|query_clause|queryClause|"
+    r"^(event|body|\w*_body|\w*Body|request_body|requestBody|request_model|query_params|queryParams|"
+    r"queryParameters|query_parameters|payload|query_clause|queryClause|"
     r"query_string_parameters|parsed_body|item|asset_object|result|record|records|new_image|old_image|"
     r"stream_record|event_record)$"
 )
-CONTENT_KEYS = {"body", "queryStringParameters", "multiValueQueryStringParameters"}
+# Keys whose value is an identifier, a count, a status or a fixed label, so `name['key']` and
+# `name.get('key')` with one of them is safe to log. Any other constant key (and any non-constant
+# key) of a content name is flagged: `item['commentBody']`, `event['headers']`,
+# `event['requestContext']`, `record['dynamodb']['NewImage']`. Add a key only after reading what
+# it holds; the reason sits next to it.
+IDENTIFIER_KEYS = {
+    "assetId", "databaseId", "executionId", "workflowId", "pipelineId", "commentId", "tagName",
+    "tagTypeName", "fileKey", "assetName", "databaseName", "relationshipId", "jobId", "requestType",
+    "eventName", "eventSource", "triggerSource", "httpMethod", "resource", "path",
+    "message", "status", "statusCode", "success", "count", "size", "total",
+    # table keys and record ids of rows (item/record in the data and compliance modules)
+    "pk", "key", "Key", "constraintId", "applyId", "bindingDatabaseId", "evaluationId", "verdict",
+    "runs", "runLimit", "recipeId",
+    # counters of an SNS publish result (snsQueuing)
+    "success_count", "total_records", "skipped_count", "unpublished_count",
+    # the CloudFormation custom-resource and re-index invocation fields (crReindexer): request type,
+    # stack and resource ids, and the operation switches
+    "RequestType", "StackId", "LogicalResourceId", "RequestId", "operation", "dry_run", "limit",
+    "clear_indexes",
+    # request-model fields that are ids, a name of a tag type or a metadata type, or a flag
+    "assetLinkId", "fromAssetId", "toAssetId", "assetVersionId", "tagTypeName", "type", "basic",
+    "revertMetadata", "comment",
+}
 SAFE_FUNCTIONS = {"event_log_summary", "query_clause_log_summary", "len", "bool", "type", "sorted", "isinstance"}
 
 
@@ -73,12 +101,15 @@ def _content_names(argument):
             if name in SAFE_FUNCTIONS:
                 return
             if (name == "get" and node.args and isinstance(node.args[0], ast.Constant)
-                    and node.args[0].value not in CONTENT_KEYS
+                    and node.args[0].value in IDENTIFIER_KEYS
                     and isinstance(func.value, ast.Name) and CONTENT_NAME.match(func.value.id)):
                 return
+        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and CONTENT_NAME.match(node.value.id) and node.attr in IDENTIFIER_KEYS):
+            return
         if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
                 and CONTENT_NAME.match(node.value.id)
-                and isinstance(node.slice, ast.Constant) and node.slice.value not in CONTENT_KEYS):
+                and isinstance(node.slice, ast.Constant) and node.slice.value in IDENTIFIER_KEYS):
             return
         if isinstance(node, ast.Name) and CONTENT_NAME.match(node.id):
             found.append(node.id)
@@ -141,6 +172,9 @@ ALLOWED_SITES = {
     ("common/compliance/quarantineGuard.py", "quarantine_refusal", "363afb32"):
         "passes the event to a route helper that returns the concrete path of a refused download "
         "(an identifier); no request text is logged",
+    ("handlers/indexing/sqsBucketSync.py", "parse_event", "c072afb1"):
+        "the Message field of an SQS or SNS wrapper around an S3 event notification (bucket and key "
+        "names), logged when its JSON cannot be parsed; not typed user text",
     ("customResources/getVpcEndpointIps.py", "lambda_handler", "93b15aea"):
         "the CloudFormation custom-resource event of the deployment (infrastructure values); "
         "not a user request",
@@ -233,6 +267,27 @@ BAD_FORMS = [
     "logger.warning(f'Bad record {record}')",
     "logger.debug(f'image {str(new_image)}')",
     "logger.info('x', comment_body, request_body)",
+    "logger.info(item['commentBody'])",
+    "logger.info(item.get('commentBody'))",
+    "logger.info(f\"c {item.get('commentBody', '')}\")",
+    "logger.info(event['headers'])",
+    "logger.info(event.get('headers'))",
+    "logger.info(event['requestContext'])",
+    "logger.info(event['pathParameters'])",
+    "logger.info(event['Records'])",
+    "logger.info(record['dynamodb']['NewImage'])",
+    "logger.info(record['dynamodb'])",
+    "logger.info(result['response'])",
+    "logger.info(event[key])",
+    "logger.info(event.get(key))",
+    "logger.info(queryParameters)",
+    "logger.info(query_parameters)",
+    "logger.info(request_model)",
+    "logger.info(request_model.dict())",
+    "logger.info(request_model.json())",
+    "logger.info(request_model.searchTerm)",
+    "logger.info(f'p {requestBody}')",
+    "logger.info(payload)",
 ]
 
 SAFE_FORMS = [
@@ -243,6 +298,9 @@ SAFE_FORMS = [
     "logger.info('body parsed')",
     "logger.info(f'clause {query_clause_log_summary(query_clause)}')",
     "logger.info(f'comment {len(item[\"commentBody\"])} chars')",
+    "logger.info(f\"Asset {record['assetId']} of {item.get('databaseId')}\")",
+    "logger.info(f'Created {request_model.assetLinkId}')",
+    "logger.info(f'{type(event)} {sorted(event)}')",
 ]
 
 
@@ -274,5 +332,5 @@ def test_the_scan_walks_common_and_the_addons():
 @pytest.mark.unit
 def test_the_known_limit_a_body_under_another_name_is_not_seen():
     """Documented limit: content bound to an unusual name passes the scan (see the module docstring)."""
-    source = "def handler(event):\n    payload = event['body']\n    logger.info(payload)\n"
+    source = "def handler(event):\n    typed = event['body']\n    logger.info(typed)\n"
     assert not _scan_source(source, "handlers/x/handler.py")
