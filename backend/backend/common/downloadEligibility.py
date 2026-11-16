@@ -349,7 +349,8 @@ def check_file_eligibility(database_id: str, asset_id: str, s3_client, asset_buc
     """Run every per-file check for one requested key and return what to sign.
 
     Order (each step refuses before the next runs): key containment and length, the per-key
-    quarantine block when one is passed, asset-version pin resolution, then for a prefix (key ending in ``/``) the blocklist over every object and
+    quarantine block when one is passed, asset-version pin resolution, then for a prefix (key
+    ending in ``/``) the blocklist over every object and
     the prefix's own existence, or for a single file one HeadObject of the requested version
     covering existence, delete marker and blocklist.
 
