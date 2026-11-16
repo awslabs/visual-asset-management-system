@@ -7,7 +7,11 @@ The audit log group registry: which audit log groups exist and how each one is r
 One :class:`~common.auditActionTypes.AuditLogGroup` descriptor per group. The core groups are below;
 the add-on groups are in ``common/addonAuditActions.py`` (``ADDON_AUDIT_LOG_GROUPS``) and a fork's in
 ``custom/customAuditActions.py`` (``CUSTOM_AUDIT_LOG_GROUPS``, optional). The lanes merge in the order
-core, add-on, custom; a later lane never replaces an earlier key.
+core, add-on, custom. A key or a record prefix that two groups share is a configuration error and
+fails at import (``AuditLogGroupConfigurationError``): a silently dropped group would be a silently
+unaudited group, and the registry contract test (and the fork's own CI) catches the mistake long before
+a deployment. The same holds for a group whose ``resource_key_name`` is on none of the resource-name
+key classes (core, add-on, custom, looked up in that order).
 
 Two consumers read the merged registry:
 
@@ -100,12 +104,28 @@ def _custom_lane() -> Tuple[AuditLogGroup, ...]:
     return tuple(getattr(_custom_audit_actions, "CUSTOM_AUDIT_LOG_GROUPS", ()) or ())
 
 
+class AuditLogGroupConfigurationError(ValueError):
+    """The audit log group registry is misconfigured (a repeated key or prefix, an unknown resource key).
+
+    Raised at import, so a handler that imports the writer fails at cold start: fail closed. The
+    alternative, skipping the group and logging, would leave a group silently without audit records.
+    """
+
+
 def merge_audit_log_groups(*lanes: Iterable[AuditLogGroup]) -> Tuple[AuditLogGroup, ...]:
-    """The descriptors of the lanes in order, a later lane never replacing an earlier key."""
+    """The descriptors of the lanes in order. A key or a prefix repeated anywhere raises
+    :class:`AuditLogGroupConfigurationError`; a later lane never replaces an earlier group."""
     merged: Dict[str, AuditLogGroup] = {}
+    prefixes: Dict[str, str] = {}
     for lane in lanes:
         for group in lane:
-            merged.setdefault(group.key, group)
+            if group.key in merged:
+                raise AuditLogGroupConfigurationError(f"audit log group key {group.key!r} is registered twice")
+            if group.prefix in prefixes:
+                raise AuditLogGroupConfigurationError(
+                    f"audit log group prefix {group.prefix!r} is used by {prefixes[group.prefix]!r} and {group.key!r}")
+            merged[group.key] = group
+            prefixes[group.prefix] = group.key
     return tuple(merged.values())
 
 
@@ -145,14 +165,42 @@ def groups_without_type_segment() -> FrozenSet[str]:
     return frozenset(group.key for group in AUDIT_LOG_GROUPS if group.action_target and not group.has_type_segment)
 
 
-def resource_key(group: AuditLogGroup) -> Any:
-    """The ``ResourceKeys`` entry that resolves a group's CloudWatch log group name.
-
-    Raises AttributeError for a descriptor naming a ``ResourceKeys`` attribute that does not exist; the
-    registry contract test fails on that before it reaches a deployment.
-    """
+def resource_key_lanes() -> Tuple[Any, ...]:
+    """The resource-name key classes a descriptor's ``resource_key_name`` is looked up on, in order:
+    ``ResourceKeys`` (core), ``AddonResourceKeys`` and ``CustomResourceKeys`` (optional in an old fork)."""
+    from common.addonResourceNames import AddonResourceKeys
     from common.resourceNames import ResourceKeys
-    return getattr(ResourceKeys, group.resource_key_name)
+    lanes: Tuple[Any, ...] = (ResourceKeys, AddonResourceKeys)
+    try:
+        from custom.customResourceNames import CustomResourceKeys
+        lanes += (CustomResourceKeys,)
+    except ImportError:  # a fork file without the class keeps importing
+        pass
+    return lanes
+
+
+def find_resource_key(name: str, lanes: Optional[Iterable[Any]] = None) -> Any:
+    """The resource-name key called ``name`` on the first lane that has it, or None."""
+    for lane in (resource_key_lanes() if lanes is None else lanes):
+        found = getattr(lane, str(name), None)
+        if found is not None:
+            return found
+    return None
+
+
+def resource_key(group: AuditLogGroup) -> Any:
+    """The resource-name key that resolves a group's CloudWatch log group name.
+
+    Looked up on the core, add-on and custom key classes in that order. Raises
+    :class:`AuditLogGroupConfigurationError` when none has it (fail closed at import; the registry
+    contract test fails on the same condition before it reaches a deployment).
+    """
+    found = find_resource_key(group.resource_key_name)
+    if found is None:
+        raise AuditLogGroupConfigurationError(
+            f"audit log group {group.key!r}: no ResourceKeys, AddonResourceKeys or CustomResourceKeys "
+            f"entry named {group.resource_key_name!r}")
+    return found
 
 
 def resource_keys() -> Tuple[Any, ...]:

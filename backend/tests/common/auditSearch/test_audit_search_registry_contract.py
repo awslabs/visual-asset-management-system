@@ -53,6 +53,8 @@ class _FakeKeys:
 @pytest.mark.unit
 class TestDescriptorCompleteness:
     def test_the_merged_registry_is_complete(self):
+        # The default lanes: core, add-on and custom resource-name keys. A misconfigured lane fails here.
+        assert registryCheck.descriptor_problems(GROUPS.AUDIT_LOG_GROUPS) == []
         assert registryCheck.descriptor_problems(GROUPS.AUDIT_LOG_GROUPS, KEYS) == []
 
     def test_nine_core_groups(self):
@@ -196,10 +198,25 @@ class TestLanes:
         merged = GROUPS.merge_audit_log_groups(GROUPS.CORE_AUDIT_LOG_GROUPS, (_fake_group(),), ())
         assert merged[-1].key == "auditFake" and len(merged) == len(GROUPS.CORE_AUDIT_LOG_GROUPS) + 1
 
-    def test_a_later_lane_never_replaces_a_core_group(self):
+    def test_a_later_lane_repeating_a_core_key_fails_loudly(self):
+        # Mutation of the brief: the key auditActions added to the add-on lane.
         impostor = _fake_group(key="auditActions", prefix="IMPOSTOR")
-        merged = GROUPS.merge_audit_log_groups(GROUPS.CORE_AUDIT_LOG_GROUPS, (impostor,), (impostor,))
-        assert [g for g in merged if g.key == "auditActions"][0].prefix == "ACTIONS"
+        with pytest.raises(GROUPS.AuditLogGroupConfigurationError, match="auditActions"):
+            GROUPS.merge_audit_log_groups(GROUPS.CORE_AUDIT_LOG_GROUPS, (impostor,), ())
+
+    def test_a_repeated_key_in_the_custom_lane_fails_loudly(self):
+        with pytest.raises(GROUPS.AuditLogGroupConfigurationError, match="twice"):
+            GROUPS.merge_audit_log_groups(GROUPS.CORE_AUDIT_LOG_GROUPS, (_fake_group(),),
+                                          (_fake_group(prefix="OTHER"),))
+
+    def test_a_later_lane_repeating_a_core_prefix_fails_loudly(self):
+        with pytest.raises(GROUPS.AuditLogGroupConfigurationError, match="prefix"):
+            GROUPS.merge_audit_log_groups(GROUPS.CORE_AUDIT_LOG_GROUPS, (_fake_group(prefix="ACTIONS"),), ())
+
+    def test_the_shipped_lanes_merge_without_error(self):
+        assert GROUPS.merge_audit_log_groups(
+            GROUPS.CORE_AUDIT_LOG_GROUPS, GROUPS.ADDON_AUDIT_LOG_GROUPS, GROUPS.CUSTOM_AUDIT_LOG_GROUPS
+        ) == GROUPS.AUDIT_LOG_GROUPS
 
     def test_a_fork_file_without_the_custom_lane_still_imports(self, monkeypatch):
         monkeypatch.setattr(GROUPS, "_custom_audit_actions", types.SimpleNamespace())
@@ -214,6 +231,55 @@ class TestLanes:
         monkeypatch.setattr(GROUPS, "_custom_audit_actions",
                             types.SimpleNamespace(CUSTOM_AUDIT_LOG_GROUPS=(_fake_group(),)))
         assert [g.key for g in GROUPS._custom_lane()] == ["auditFake"]
+
+    def test_an_addon_group_keyed_in_the_addon_resource_lane_resolves(self, monkeypatch):
+        addon_keys = importlib.import_module("common.addonResourceNames")
+        key = types.SimpleNamespace(param_key="cloudwatchLogGroups/auditFake")
+        monkeypatch.setattr(addon_keys.AddonResourceKeys, "AUDIT_LOG_FAKE", key, raising=False)
+        group = _fake_group()
+        assert GROUPS.resource_key(group) is key
+        assert registryCheck.descriptor_problems([group]) == []
+        # It also lands in the merged registry the writer derives its keys from.
+        merged = GROUPS.merge_audit_log_groups(GROUPS.CORE_AUDIT_LOG_GROUPS, (group,), ())
+        monkeypatch.setattr(GROUPS, "AUDIT_LOG_GROUPS", merged)
+        assert GROUPS.resource_keys()[-1] is key
+
+    def test_a_fork_group_keyed_in_the_custom_resource_lane_resolves(self, monkeypatch):
+        custom_keys = importlib.import_module("custom.customResourceNames")
+        key = types.SimpleNamespace(param_key="cloudwatchLogGroups/auditFake")
+        monkeypatch.setattr(custom_keys.CustomResourceKeys, "AUDIT_LOG_FAKE", key, raising=False)
+        group = _fake_group()
+        assert GROUPS.resource_key(group) is key
+        assert registryCheck.descriptor_problems([group]) == []
+
+    def test_the_lanes_resolve_in_order_core_addon_custom(self, monkeypatch):
+        addon_keys = importlib.import_module("common.addonResourceNames")
+        custom_keys = importlib.import_module("custom.customResourceNames")
+        addon = types.SimpleNamespace(param_key="cloudwatchLogGroups/auditFake")
+        custom = types.SimpleNamespace(param_key="cloudwatchLogGroups/auditFake")
+        monkeypatch.setattr(addon_keys.AddonResourceKeys, "AUDIT_LOG_FAKE", addon, raising=False)
+        monkeypatch.setattr(custom_keys.CustomResourceKeys, "AUDIT_LOG_FAKE", custom, raising=False)
+        assert GROUPS.resource_key(_fake_group()) is addon
+        # A name on the core lane is never taken from a later lane.
+        shadow = types.SimpleNamespace(param_key="cloudwatchLogGroups/shadow")
+        monkeypatch.setattr(addon_keys.AddonResourceKeys, "AUDIT_LOG_ACTIONS", shadow, raising=False)
+        core = _fake_group(key="auditActions", resource_key_name="AUDIT_LOG_ACTIONS")
+        assert GROUPS.resource_key(core).param_key == "cloudwatchLogGroups/auditActions"
+
+    def test_a_group_with_no_resource_key_on_any_lane_fails_closed_and_the_check_reports_it(self):
+        group = _fake_group(resource_key_name="AUDIT_LOG_NOWHERE")
+        with pytest.raises(GROUPS.AuditLogGroupConfigurationError, match="AUDIT_LOG_NOWHERE"):
+            GROUPS.resource_key(group)
+        assert any("no ResourceKeys" in p for p in registryCheck.descriptor_problems([group]))
+
+    def test_every_addon_and_custom_audit_resource_key_has_a_descriptor(self):
+        addon_keys = importlib.import_module("common.addonResourceNames")
+        custom_keys = importlib.import_module("custom.customResourceNames")
+        described = {group.resource_key_name for group in GROUPS.AUDIT_LOG_GROUPS}
+        for lane in (addon_keys.AddonResourceKeys, custom_keys.CustomResourceKeys):
+            for name in vars(lane):
+                if name.startswith("AUDIT_LOG_"):
+                    assert name in described, f"{lane.__name__}.{name} has no AuditLogGroup descriptor"
 
     def test_the_addon_lane_ships_empty(self):
         addon = importlib.import_module("common.addonAuditActions")
@@ -237,3 +303,39 @@ class TestLanes:
         with pytest.raises(queryBuilder.AuditSearchValidationError):
             queryBuilder.validate_filters({"logGroups": ["auditFake"], "startTime": 1763000000,
                                            "endTime": 1763003600}, allowed_group_keys=["auditFake"])
+
+
+@pytest.mark.unit
+class TestMisconfiguredLaneFailsAtImport:
+    """A misconfigured lane stops the import of the registry (and so of the writer) with a clear error."""
+
+    _BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend"))
+
+    def _run(self, groups_source, then):
+        import subprocess
+        import sys
+        code = (
+            "import sys; sys.path.insert(0, %r)\n"
+            "import common.addonAuditActions as addon\n"
+            "from common.auditActionTypes import AuditLogGroup\n"
+            "addon.ADDON_AUDIT_LOG_GROUPS = %s\n"
+            "import common.auditLogGroups as g\n%s\n" % (self._BACKEND, groups_source, then)
+        )
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+        return done.returncode, done.stdout + done.stderr
+
+    def test_a_duplicate_key_in_the_addon_lane_fails_the_import(self):
+        code, output = self._run(
+            "(AuditLogGroup('auditActions', 'AUDIT_LOG_ACTIONS', 'x', 'x', 'DUP', True, 'errors'),)", "")
+        assert code != 0 and "AuditLogGroupConfigurationError" in output and "auditActions" in output
+
+    def test_an_unknown_resource_key_fails_the_derivation_the_writer_runs_at_import(self):
+        group = "(AuditLogGroup('auditFake', 'AUDIT_LOG_NOWHERE', 'x', 'x', 'FAKE', True, 'errors'),)"
+        code, output = self._run(group, "g.resource_keys()")
+        assert code != 0 and "AUDIT_LOG_NOWHERE" in output
+
+    def test_a_valid_addon_group_with_a_resource_key_imports(self):
+        code, output = self._run(
+            "(AuditLogGroup('auditFake', 'EDH_SESSION_STORAGE_TABLE', 'x', 'x', 'FAKE', True, 'errors'),)",
+            "assert g.audit_log_group_keys()[-1] == 'auditFake'; assert g.resource_keys()[-1].param_key")
+        assert code == 0, output
