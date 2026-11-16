@@ -1412,7 +1412,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         from ..constants import API_UPLOAD_STATUS
 
         try:
-            endpoint = API_UPLOAD_STATUS.format(uploadId=upload_id)
+            endpoint = route_path(API_UPLOAD_STATUS, uploadId=upload_id)
             # raise_http_errors: the status code reaches the mapping below instead of becoming a
             # generic APIError in _make_request.
             response = self.get(endpoint, include_auth=True,
