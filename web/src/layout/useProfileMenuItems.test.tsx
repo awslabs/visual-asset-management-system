@@ -11,7 +11,8 @@
 
 import React from "react";
 import { act, render, renderHook, waitFor } from "@testing-library/react";
-import { useProfileMenuItems, SIGN_OUT_ITEM_ID } from "./useProfileMenuItems";
+import { useProfileMenuItems, SIGN_OUT_ITEM_ID, toMenuItems } from "./useProfileMenuItems";
+import { entriesFor } from "./navigationRegistry";
 import { Navigation } from "./Navigation";
 import { checkWebRoutesAllowed, WebRouteCheck } from "../services/webRoutesCheck";
 import { webRoutes } from "../services/APIService";
@@ -167,6 +168,21 @@ describe("useProfileMenuItems", () => {
             await waitFor(() =>
                 expect(pageItems(result.current as any[])[0].checked).toBeUndefined()
             );
+        });
+
+        it("marks My Download Queue on its page and leaves API Key Management a link (combined: both profile entries)", () => {
+            const entries = entriesFor("profile", ["ZIPDOWNLOADS"]);
+            const section = (path: string) => (toMenuItems(entries, path)[0] as any).items as any[];
+            const onQueue = section("/zipdownloads");
+            expect(onQueue.find((i) => i.text === "My Download Queue")).toMatchObject({
+                itemType: "checkbox",
+                checked: true,
+            });
+            expect(onQueue.find((i) => i.text === "API Key Management").href).toBe(
+                "#/auth/api-keys/?mode=user"
+            );
+            const elsewhere = section("/databases");
+            expect(elsewhere.every((i) => !i.checked && i.href)).toBe(true);
         });
 
         it("never marks Sign out", async () => {

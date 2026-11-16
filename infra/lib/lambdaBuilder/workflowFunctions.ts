@@ -457,10 +457,9 @@ function newExecutionServiceFunction(
 }
 
 /**
- * Adds statements to a handler's role as inline statements of its default policy. VAMS grants
- * Lambda roles inline only (#1499): a statement that does not fit the role's inline budget is
- * narrowed, or the route moves to a function of its own, rather than held in a customer managed
- * policy (infra/CLAUDE.md, IAM Inline Policy Budget).
+ * Adds statements to a handler's role as inline statements of its default policy (#1499). What does
+ * not fit the role's inline policy CDK moves into its generated overflow policies (infra/CLAUDE.md,
+ * IAM Inline Policy Budget); VAMS creates no managed policy of its own.
  */
 function addHandlerStatements(fun: lambda.Function, statements: iam.PolicyStatement[]) {
     for (const statement of statements) {
@@ -673,7 +672,9 @@ export function buildExecutionServiceFunction(
     addWorkflowLogCaptureGrant(fun, workflowsLogGroup, config);
     // Concurrency lock rows are released when an execution is aborted and when a list read observes a
     // run stopped outside VAMS. The workflow and input rows the release reads are granted above
-    // already, so only the lock-table calls are attached.
+    // already, so only the lock-table calls are attached, in the lock policy of their own like every
+    // other lock holder's (owner decision 2026-11-14): CDK splits only a role's default policy, so its
+    // overflow policies can never hold them.
     attachExecutionLockPolicy(fun, executionLockDeleteStatements(storageResources));
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
@@ -1209,9 +1210,16 @@ export function buildHandleExecutionErrorFunction(
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadData(fun);
-    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grant(
-        fun,
-        "dynamodb:UpdateItem"
+    // One UpdateItem on the configuration row, by its key: the table ARN alone (Table.grant would add
+    // the table's index ARNs, which an UpdateItem never names), keeping the role under its budget.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:UpdateItem"],
+            resources: [
+                storageResources.dynamo.workflowExecutionConfigurationStorageTable.tableArn,
+            ],
+        })
     );
     // The error handler releases the failed run's concurrency locks.
     attachExecutionLockPolicy(fun, executionLockReleaseStatements(storageResources));

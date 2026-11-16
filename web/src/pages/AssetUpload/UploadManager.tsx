@@ -18,6 +18,7 @@ import {
 } from "@cloudscape-design/components";
 import { FileUploadTableItem, FileUploadTable } from "./FileUploadTable";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
+import AsyncUploadOutcome from "./AsyncUploadOutcome";
 import { Metadata } from "../../components/single/Metadata";
 import { AssetDetail } from "./AssetUpload";
 import {
@@ -117,6 +118,8 @@ export default function UploadManager({
     });
 
     const [fileUploadItems, setFileUploadItems] = useState<FileUploadTableItem[]>(fileItems);
+    // Uploads whose completion accepted files over 1 GiB for asynchronous processing.
+    const [asyncUploadIds, setAsyncUploadIds] = useState<string[]>([]);
     const [isMultiSequence, setIsMultiSequence] = useState(false);
     const [totalSequences, setTotalSequences] = useState(0);
     const [completedInitSequences, setCompletedInitSequences] = useState(0);
@@ -260,6 +263,10 @@ export default function UploadManager({
                                 ...prev,
                                 largeFileAsynchronousHandling: true,
                             }));
+                            const asyncUploadId = (result as any).uploadId || uploadId;
+                            setAsyncUploadIds((prev) =>
+                                prev.includes(asyncUploadId) ? prev : [...prev, asyncUploadId]
+                            );
                         }
                     }
                 }
@@ -1657,6 +1664,15 @@ export default function UploadManager({
                         process. Please check the asset's file manager shortly to verify your files.
                     </Alert>
                 )}
+
+                {asyncUploadIds.length > 0 &&
+                    (uploadState.createdAssetId || assetDetail.assetId) && (
+                        <AsyncUploadOutcome
+                            uploadIds={asyncUploadIds}
+                            assetId={(uploadState.createdAssetId || assetDetail.assetId) as string}
+                            databaseId={assetDetail.databaseId || ""}
+                        />
+                    )}
 
                 {isMultiSequence && totalSequences > 1 && (
                     <Alert type="info" header="Multi-Sequence Upload">
