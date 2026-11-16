@@ -538,6 +538,8 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: `@vntana/viewer` is under the VNTANA Viewer Commercial License, which requires a commercial license from VNTANA beyond a 30-day internal evaluation; the terms are summarised in `NOTICE.md`.
 -   **Web** The ThatOpen IFC BIM viewer bundle moves to `@thatopen/components`, `@thatopen/components-front` and `@thatopen/fragments` 3.6.0 and its own isolated `three` 0.184.0, keeping `web-ifc` at 0.0.77 because 0.0.78's single-threaded browser build fails every IFC import ([ThatOpen/engine_web-ifc#2219](https://github.com/ThatOpen/engine_web-ifc/issues/2219), fixed upstream but not yet released); the bundle build fails when a web-ifc WASM file or the Fragments worker it copies is missing. ([#1174](https://github.com/awslabs/visual-asset-management-system/issues/1174))
 
+-   **Web** The build and test tooling moves to `vite` 8.3.7 (with `rolldown` 1.2.18 and `lightningcss` 1.33.0), `esbuild` 0.28.2, `jest` 30.5, `@playwright/test` 1.65.0 and the latest same-major `sass`, `postcss` and `autoprefixer`; the documentation site to `react` 19.3.1 and `mermaid` 12.3.0; and the Babylon.js, PlayCanvas and Three.js viewer installs to `webpack` 5.112.2. ([#1554](https://github.com/awslabs/visual-asset-management-system/pull/1554))
+
 ### Known Outstanding Issues
 
 -   **Backend** The comment and subscription routes find an asset by its ID alone, so an asset ID that is live in two databases is refused on those routes, except `GET /subscriptions`, which leaves that asset's subscriptions out of its list. ([#605](https://github.com/awslabs/visual-asset-management-system/issues/605))
