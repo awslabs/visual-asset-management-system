@@ -81,7 +81,7 @@ export const assetDownloadQueueLink = (
     const params = new URLSearchParams(currentSearch);
     params.set(ASSET_TAB_QUERY_PARAM, ZIP_DOWNLOADS_TAB_ID);
     return {
-        pathname: `/databases/${databaseId}/assets/${assetId}`,
+        pathname: `/databases/${databaseId}/assets/${encodeURIComponent(assetId)}`,
         search: `?${params.toString()}`,
     };
 };

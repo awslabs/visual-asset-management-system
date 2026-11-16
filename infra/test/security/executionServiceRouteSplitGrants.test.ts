@@ -39,15 +39,6 @@ const roleDocs = (synth: SynthResult, role: string, stack: string): [string, any
 
 jest.setTimeout(900_000);
 
-/** CDK's generated overflow policy of a role (#1499 allows only those as managed policies). */
-const isOverflow = (id: string) => /OverflowPolicy\d+[0-9A-F]{8}$/.test(id);
-
-/** A role's own statements: its inline documents and CDK's overflow policies of it (#1499). */
-const roleDocs = (synth: SynthResult, role: string, stack: string): [string, any][] => [
-    ...inlinePolicies(synth, role, stack),
-    ...managedPolicies(synth, role, stack).filter(([id]) => isOverflow(id)),
-];
-
 /** Construct id of each table, keyed by the logical name the backend tests use. */
 const TABLES: Record<string, string> = {
     main: "WorkflowExecutionsStorageTableV2",

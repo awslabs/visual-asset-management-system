@@ -372,10 +372,16 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                       header: Synonyms.Asset,
                       cell: (job: ZipDownloadJob) => (
                           <Link
-                              href={`#/databases/${job.databaseId}/assets/${job.assetId}`}
+                              href={`#/databases/${job.databaseId}/assets/${encodeURIComponent(
+                                  job.assetId
+                              )}`}
                               onFollow={(event) => {
                                   event.preventDefault();
-                                  navigate(`/databases/${job.databaseId}/assets/${job.assetId}`);
+                                  navigate(
+                                      `/databases/${job.databaseId}/assets/${encodeURIComponent(
+                                          job.assetId
+                                      )}`
+                                  );
                               }}
                           >
                               <Breakable>{job.assetName || job.assetId}</Breakable>
