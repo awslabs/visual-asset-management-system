@@ -1730,6 +1730,9 @@ _REASONING_BLOCKS = {
     "converse-reasoningContent": {"reasoningContent": {"reasoningText": {
         "text": "The views show a gear housing; the answer follows.", "signature": "sig-1"}}},
     "native-thinking": {"type": "thinking", "thinking": "The views show a gear housing.", "signature": "sig-1"},
+    # A redacted reasoning block (#1428's redacted_thinking case): Converse returns it as redactedContent bytes.
+    "converse-redactedContent": {"reasoningContent": {"redactedContent": b"ZW5jcnlwdGVk"}},
+    "native-redacted_thinking": {"type": "redacted_thinking", "data": "ZW5jcnlwdGVk"},
 }
 
 
@@ -1748,4 +1751,15 @@ class TestReasoningBlockBeforeTheAnswer:
         response = h.converse_tool_response(dict(MODEL_REPLY)) if tool else h.converse_response(json.dumps(MODEL_REPLY))
         _mod, state = _run(_state(), s3, h.FakeBedrock([_reasoning_first(response, _REASONING_BLOCKS[shape])]))
         assert state["analysisStatus"] == "SUCCEEDED"
+        assert _rows(s3, METADATA_FILE_KEY)["genai_description"]["metadataValue"] == MODEL_REPLY["description"]
+
+    @pytest.mark.parametrize("shape", sorted(_REASONING_BLOCKS))
+    def test_a_reply_of_reasoning_alone_is_retried_as_unparsable(self, shape):
+        # #1428's "no text block" case: the reasoning is not read as the answer, and the next attempt's is.
+        s3 = _seed(h.FakeS3())
+        reasoning_only = h.converse_response("")
+        reasoning_only["output"]["message"]["content"] = [dict(_REASONING_BLOCKS[shape])]
+        bedrock = h.FakeBedrock([reasoning_only, _reply()])
+        _mod, state = _run(_state(), s3, bedrock)
+        assert state["analysisStatus"] == "SUCCEEDED" and len(bedrock.calls) == 2
         assert _rows(s3, METADATA_FILE_KEY)["genai_description"]["metadataValue"] == MODEL_REPLY["description"]

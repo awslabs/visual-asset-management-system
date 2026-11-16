@@ -962,6 +962,9 @@ _REASONING_BLOCKS = {
     "converse-reasoningContent": {"reasoningContent": {"reasoningText": {
         "text": "The views show a gear housing; the answer follows.", "signature": "sig-1"}}},
     "native-thinking": {"type": "thinking", "thinking": "The views show a gear housing.", "signature": "sig-1"},
+    # A redacted reasoning block (#1428's redacted_thinking case): Converse returns it as redactedContent bytes.
+    "converse-redactedContent": {"reasoningContent": {"redactedContent": b"ZW5jcnlwdGVk"}},
+    "native-redacted_thinking": {"type": "redacted_thinking", "data": "ZW5jcnlwdGVk"},
 }
 
 
