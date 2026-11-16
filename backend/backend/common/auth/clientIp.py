@@ -34,39 +34,22 @@ import ipaddress
 from typing import Optional, List
 
 from common.auth import originVerify
+from common.auth.viewerAddress import (
+    ORIGIN_VERIFY_DIGEST_CONTEXT_KEY,
+    forwarded_client_ip,
+    origin_verify_digest,
+    rightmost_untrusted_xff,
+    strip_port,
+)
 from customLogging.logger import safeLogger
 
 logger = safeLogger()
 
 
-def _strip_port(addr: str) -> str:
-    """Strip the port from an ``ip:port`` value. Handles IPv6 ``[ip]:port`` bracket form."""
-    addr = addr.strip()
-    if addr.startswith("["):
-        # [IPv6]:port -> IPv6
-        return addr[1:].split("]", 1)[0]
-    # IPv4:port -> IPv4 (only strip when exactly one colon, else it's a bare IPv6)
-    if addr.count(":") == 1:
-        return addr.rsplit(":", 1)[0]
-    return addr
-
-
-def _rightmost_untrusted_xff(xff: str, trusted_peer: Optional[str]) -> Optional[str]:
-    """Return the right-most X-Forwarded-For entry that we did not add (the real client).
-
-    The entry adjacent to the gateway is the trusted proxy hop (e.g. CloudFront); the real
-    client is the entry to its left. Dropping a trailing entry equal to the trusted peer
-    prevents a client from spoofing access by prepending a fake left-most address.
-    """
-    parts = [p.strip() for p in xff.split(",") if p.strip()]
-    if not parts:
-        return None
-    # Drop a trailing entry equal to the trusted peer (the proxy that called us).
-    if trusted_peer and parts[-1] == trusted_peer:
-        parts = parts[:-1]
-    if not parts:
-        return None
-    return parts[-1]
+# The forwarding-header parsing is shared with the audit records' viewer address
+# (common/auth/viewerAddress.py); the names below are kept for existing callers.
+_strip_port = strip_port
+_rightmost_untrusted_xff = rightmost_untrusted_xff
 
 
 def resolve_client_ip(event: dict, *, fronted: str = "none") -> Optional[str]:
@@ -103,27 +86,40 @@ def resolve_client_ip(event: dict, *, fronted: str = "none") -> Optional[str]:
 
         # 1) CloudFront reverse-proxy path: the viewer-address header is the authoritative
         #    client IP and cannot be spoofed by a client (CloudFront overwrites it).
-        viewer = lower.get("cloudfront-viewer-address")
-        if viewer:
-            resolved = _strip_port(viewer)
-            if resolved:
-                return resolved
-
         # 2) Trust X-Forwarded-For only when its trailing hop is the TCP peer (the
         #    CloudFront edge that actually called the gateway), then take the right-most
         #    untrusted hop. This distinguishes a real forwarded request from a spoofed one.
-        xff = lower.get("x-forwarded-for")
-        if xff and source_ip:
-            parts = [p.strip() for p in xff.split(",") if p.strip()]
-            if parts and parts[-1] == source_ip and len(parts) > 1:
-                resolved = _rightmost_untrusted_xff(xff, source_ip)
-                if resolved:
-                    return resolved
+        resolved = forwarded_client_ip(lower, source_ip)
+        if resolved:
+            return resolved
 
     # 3) Direct caller (no trusted forwarding header) — including ALB redirects, existing
     #    integrations that hit the execute-api URL directly, and any non-CloudFront
     #    deployment. Use the TCP peer, which a client cannot forge.
     return source_ip
+
+
+def origin_verify_audit_context(event: dict, *, fronted: str = "none") -> dict:
+    """The authorizer context entry that lets handlers name the viewer in audit records.
+
+    On a CloudFront deployment, for a request that carries an accepted origin verification value,
+    returns ``{ORIGIN_VERIFY_DIGEST_CONTEXT_KEY: <digest of that value>}``; otherwise ``{}``.
+    ``common.auth.viewerAddress.viewer_ip_for_audit`` compares the digest with the request's own
+    header before it reads the forwarding headers, so a cached authorizer answer reused for a request
+    that did not come through CloudFront names the connection address. The entry is for audit records
+    only; no authorization decision reads it. Never raises.
+    """
+    try:
+        if fronted != "cloudfront":
+            return {}
+        headers = event.get("headers", {}) or {}
+        lower = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
+        value = lower.get(originVerify.ORIGIN_VERIFY_HEADER_NAME)
+        if not originVerify.is_valid_origin_verify_value(value):
+            return {}
+        return {ORIGIN_VERIFY_DIGEST_CONTEXT_KEY: origin_verify_digest(value)}
+    except Exception:
+        return {}
 
 
 def is_ip_authorized(source_ip: Optional[str], allowed_ranges: List) -> bool:

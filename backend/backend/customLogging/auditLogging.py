@@ -33,10 +33,11 @@ from botocore.config import Config
 from common.timestamps import utc_now
 from typing import Dict, Any, Callable, Iterator, Optional, List, Set, Tuple
 from handlers.auth import request_to_claims, AUTH_METHOD_API_KEY
+from common.auth.viewerAddress import viewer_ip_for_audit
+from common.validators import normalize_userid
 from customLogging.logger import mask_sensitive_data, safeLogger
 from common.resourceNames import ResourceKeys, get_log_group_name
 from common.auditActions import (
-    AUDIT_PENDING_ACTIONS,
     AuditSpec,
     GROUP_ACTIONS,
     GROUP_AUTH_CHANGES,
@@ -258,6 +259,59 @@ def _event_suffix(event: Optional[Dict[str, Any]]) -> str:
     return f" --- [event: {_serialize_json(masked_event)}]" if masked_event else ""
 
 
+# The requestContext keys the short request echo keeps, where the event has them: the request id, the
+# request time (REST requestTimeEpoch, HTTP API timeEpoch), the route key and the REST resource path.
+_SHORT_ECHO_CONTEXT_KEYS = ("requestId", "requestTimeEpoch", "timeEpoch", "routeKey", "resourcePath")
+
+
+def _short_echo_event(event: Any) -> Any:
+    """
+    The part of a request event the authorization, error, auth change and auth other records echo:
+    the request id and time, the method and concrete path, the route (route key, REST resource and
+    resource path), the path parameters (masked, each value capped like a record value) and the
+    connection addresses (``requestContext.http.sourceIp``, ``requestContext.identity.sourceIp``). No
+    headers, query string or body, so a request's content never reaches these records through the
+    echo and the echo stays a few hundred bytes. The keys sit at the paths the full echo had them at,
+    so a query on ``requestContext.requestId`` or ``requestContext.http.path`` keeps matching. A value
+    that is not a dict is returned unchanged.
+    """
+    if not isinstance(event, dict):
+        return event
+    request_context = event.get("requestContext") if isinstance(event.get("requestContext"), dict) else {}
+    short_context: Dict[str, Any] = {}
+    for key in _SHORT_ECHO_CONTEXT_KEYS:
+        if request_context.get(key) is not None:
+            short_context[key] = request_context[key]
+    http = request_context.get("http") if isinstance(request_context.get("http"), dict) else {}
+    short_http = {key: http[key] for key in ("method", "path", "sourceIp") if http.get(key) is not None}
+    if short_http:
+        short_context["http"] = short_http
+    identity = request_context.get("identity") if isinstance(request_context.get("identity"), dict) else {}
+    if identity.get("sourceIp") is not None:
+        short_context["identity"] = {"sourceIp": identity["sourceIp"]}
+    short: Dict[str, Any] = {}
+    if short_context:
+        short["requestContext"] = short_context
+    if event.get("resource") is not None:
+        short["resource"] = event["resource"]
+    path_parameters = event.get("pathParameters")
+    if isinstance(path_parameters, dict) and path_parameters:
+        masked = mask_sensitive_data(path_parameters)
+        if isinstance(masked, dict):
+            short["pathParameters"] = {str(key): _cap_value(value)[0] for key, value in masked.items()}
+    return short
+
+
+# The audit log types whose records echo the short request (_short_echo_event) instead of the masked
+# event.
+_SHORT_ECHO_LOG_TYPES = frozenset({GROUP_AUTHORIZATION, GROUP_ERRORS, GROUP_AUTH_CHANGES, GROUP_AUTH_OTHER})
+
+
+def _echo_event_for(log_type: str, event: Any) -> Any:
+    """The event a record of this log type echoes."""
+    return _short_echo_event(event) if log_type in _SHORT_ECHO_LOG_TYPES else event
+
+
 def _report_unresolved_log_group(key, messages: List[str], event: Optional[Dict[str, Any]]) -> None:
     """Report entries whose audit log group name did not resolve."""
     logger.error(f"{key.env_var_names[0]} resource name not resolved")
@@ -289,14 +343,15 @@ def _write_audit_entry(key, event_type: str, user_context: Dict[str, Any], custo
     if ctx is not None and log_type != GROUP_ERRORS:
         _note_recorded(ctx, canonical.get("action"))
     message = _format_log_message(event_type, user_context, custom_data, log_type)
+    echo_event = _echo_event_for(log_type, event)
     if ctx is not None:
-        _enqueue_records(ctx, log_type, _records_with_echo([message], event), buffer=buffer)
+        _enqueue_records(ctx, log_type, _records_with_echo([message], echo_event), buffer=buffer)
         return
     log_group_name = _audit_log_group(key)
     if not log_group_name:
-        _report_unresolved_log_group(key, [message], event)
+        _report_unresolved_log_group(key, [message], echo_event)
         return
-    _write_to_cloudwatch(log_group_name, message, event)
+    _write_to_cloudwatch(log_group_name, message, echo_event)
 
 
 def _extract_user_context(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -748,10 +803,13 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
     """
     Log authorization events with silent failure using claims_and_roles directly.
 
-    Inside the request audit context of this thread, an allowed decision is buffered and written in
-    the request's end-of-request flush, also inside deferred_authorization_audit(). A denial is
+    Inside the request audit context of this thread, the record gains the contract keys of the
+    request (``action``, ``outcome`` ``success`` or ``denied``, ``entity``, ``actor``, ``request``,
+    ``recordId``, ``eventTime``; a legacy key of the same name, such as the checked ``action``, moves
+    under ``legacy``) and echoes the request's short echo. An allowed decision is buffered and written
+    in the request's end-of-request flush, also inside deferred_authorization_audit(). A denial is
     written at once, or at the end of a deferred_authorization_audit() block. Outside a context the
-    behaviour is unchanged. The record is the same either way.
+    record and its echo are unchanged.
 
     Args:
         claims_and_roles: The claims and roles dictionary
@@ -781,8 +839,13 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
             }
         }
 
-        if _buffer_allowed_authorization(current_audit_context(), authorized, event_type, user_context,
-                                         custom_data, mock_event):
+        ctx = current_audit_context()
+        echo_event = mock_event
+        if ctx is not None:
+            custom_data = _with_authorization_keys(custom_data, ctx, authorized)
+            echo_event = _short_echo_or(ctx.event, mock_event)
+
+        if _buffer_allowed_authorization(ctx, authorized, event_type, user_context, custom_data, echo_event):
             return
 
         message = _format_log_message(event_type, user_context, custom_data,
@@ -790,15 +853,15 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
 
         log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
         if not log_group_name:
-            _report_unresolved_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION, [message], mock_event)
+            _report_unresolved_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION, [message], echo_event)
             return
 
         pending = _deferred_authorization_entries.get()
         if pending is not None:
-            pending.append((log_group_name, message, mock_event))
+            pending.append((log_group_name, message, echo_event))
             return
 
-        _write_to_cloudwatch(log_group_name, message, mock_event)
+        _write_to_cloudwatch(log_group_name, message, echo_event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
@@ -888,11 +951,16 @@ def log_authorization_denials(claims_and_roles: Dict[str, Any], denials: list) -
 
 def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: Optional[Any] = None) -> None:
     """
-    Log API authorization events with silent failure using full API Gateway event.
+    Log API authorization events with silent failure.
 
-    Inside the request audit context opened for this event, an allowed decision is buffered and
-    written in the request's end-of-request flush; a denial is written at once. Outside a context
-    every decision is written at once. The record is the same either way.
+    The record echoes the request's short echo (``_short_echo_event``: request id and time, method,
+    path, route, path parameters, connection addresses), never its headers, query string or body.
+    Inside the request audit context opened for this event, the record also gains the contract keys
+    (``action`` and ``entity`` of the route, ``outcome`` ``success`` or ``denied``, ``actor``,
+    ``request``, ``recordId``, ``eventTime``; the checked method, which the record names as
+    ``action``, moves to ``legacy.action``), and an allowed decision is buffered and written in the
+    request's end-of-request flush; a denial is written at once. Outside a context every decision is
+    written at once, without the contract keys.
 
     Args:
         event: The API Gateway event
@@ -902,8 +970,11 @@ def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: 
     try:
         user_context = _extract_user_context(event)
         event_type = _event_type(("AUTHORIZATION", None), ("authorized", authorized))
-        if _buffer_allowed_authorization(_context_for(event), authorized, event_type, user_context,
-                                         custom_data, event):
+        ctx = _context_for(event)
+        if ctx is not None:
+            custom_data = _with_authorization_keys(custom_data, ctx, authorized)
+        if _buffer_allowed_authorization(ctx, authorized, event_type, user_context,
+                                         custom_data, _short_echo_or(event, None)):
             return
         _write_audit_entry(ResourceKeys.AUDIT_LOG_AUTHORIZATION, event_type, user_context, custom_data, event)
         
@@ -921,8 +992,9 @@ def _buffer_allowed_authorization(ctx: Optional["AuditContext"], authorized: Any
 
     Only a decision that is exactly ``True`` and made inside an open context is buffered; a denial,
     or any decision outside a context, is left to the caller to write at once. The record is
-    formatted exactly as an immediate write formats it (same prefix, payload and event echo, no
-    contract keys); only when it is written changes. Returns True when the record was handed over.
+    formatted exactly as an immediate write formats it (same prefix, payload and echo); only when it
+    is written changes. ``event`` is the event the record echoes. Returns True when the record was
+    handed over.
     """
     if ctx is None or authorized is not True:
         return False
@@ -930,6 +1002,46 @@ def _buffer_allowed_authorization(ctx: Optional["AuditContext"], authorized: Any
     message = _format_log_message(event_type, user_context, custom_data, log_type)
     _enqueue_records(ctx, log_type, _records_with_echo([message], event), buffer=True)
     return True
+
+
+def _with_authorization_keys(custom_data: Any, ctx: "AuditContext", authorized: Any) -> Any:
+    """
+    The authorization payload with the contract keys of its request (_authorization_keys). When
+    building them fails, the payload is returned unchanged, so the record is written in its form
+    without the contract keys rather than dropped; a denial is still recorded.
+    """
+    try:
+        return _with_canonical_keys(custom_data, _authorization_keys(ctx, authorized))
+    except Exception as e:
+        logger.warning(f"Could not add the contract keys to an authorization record: {type(e).__name__}")
+        return custom_data
+
+
+def _short_echo_or(event: Any, fallback: Any) -> Any:
+    """The short request echo of the event, or ``fallback`` when it is empty or cannot be built."""
+    try:
+        return _short_echo_event(event) or fallback
+    except Exception as e:
+        logger.warning(f"Could not build the short request echo: {type(e).__name__}")
+        return fallback
+
+
+def _authorization_keys(ctx: "AuditContext", authorized: Any) -> Dict[str, Any]:
+    """
+    The contract keys an authorization record gains inside a request audit context: the route's
+    action and entity (with its id when the path names it), ``outcome`` ``success`` for an allowed
+    decision and ``denied`` otherwise, and the request's actor, request, recordId and eventTime.
+    """
+    route_spec = ctx.route_spec
+    outcome = OUTCOME_SUCCESS if authorized is True else OUTCOME_DENIED
+    keys = _legacy_canonical_keys(ctx, route_spec.action if route_spec else None, outcome,
+                                  route_spec.entity_type if route_spec else None)
+    if route_spec is not None and "entity" in keys:
+        id_field = _ENTITY_ID_FIELDS.get(route_spec.entity_type)
+        entity_id = _path_ids(ctx.event, route_spec.entity_type).get(id_field) if id_field else None
+        if entity_id:
+            keys["entity"]["id"] = _cap_value(entity_id)[0]
+    return keys
 
 
 def log_file_upload(
@@ -1129,40 +1241,115 @@ def log_file_download_streamed(
         report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD_STREAMED, "unexpectedError", [None])
 
 
-def log_auth_other(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None) -> None:
+def _log_auth_record(key, label: str, secondary_type: str, event: Dict[str, Any], custom_data: Any, *,
+                     outcome: str, reason: Optional[str], entity_id: Optional[str],
+                     ids: Optional[Dict[str, Any]], item_count: Optional[int],
+                     changes: Optional[Dict[str, Any]], previous: Optional[Dict[str, Any]],
+                     request_parameters: Optional[Dict[str, Any]]) -> None:
+    """
+    Write an auth change or auth other record.
+
+    The prefix is ``[<label>][type: <secondary_type>]`` in every case. Outside the request audit
+    context the record is the earlier one: the legacy payload and the short request echo. Inside it
+    the payload is the legacy payload (masked) plus the record contract keys: ``action`` (the route's
+    action when the secondary type is the one the route registers, else the secondary type's own),
+    ``outcome``, ``entity``, ``actor``, ``request``, the top-level ids, ``changes`` / ``previous`` /
+    ``requestParameters`` (masked and capped like an action record's) and ``legacyType`` (the
+    ``[type: ...]`` value). A legacy key of a contract key's name with a different value moves under
+    ``legacy``. The record is bounded to AUDIT_RECORD_MAX_BYTES with the short request echo; a
+    success is buffered for the request's flush, any other outcome is written at once.
+    """
+    user_context = _extract_user_context(event)
+    event_type = _event_type((label, None), ("type", secondary_type))
+    ctx = _context_for(event)
+    if ctx is None:
+        _write_audit_entry(key, event_type, user_context, custom_data, event)
+        return
+    log_type = _audit_log_type(key)
+    action, entity_type = _legacy_route_action(ctx, secondary_type)
+    action = action or secondary_type
+    outcome_written = outcome if outcome in AUDIT_OUTCOMES else OUTCOME_FAILED
+    legacy = mask_sensitive_data(custom_data) if custom_data is not None else None
+    record_ids: Dict[str, Any] = {}
+    if isinstance(legacy, dict):
+        record_ids.update({k: v for k, v in legacy.items() if k in AUDIT_ID_FIELDS and v is not None})
+    record_ids.update({k: v for k, v in (ids or {}).items() if v is not None})
+    legacy_bytes = len(_serialize_json(legacy)) if legacy is not None else 0
+    head = _format_log_message(event_type, user_context, None, log_type)
+
+    def build_payload(max_bytes: int) -> Dict[str, Any]:
+        contract = build_audit_payload(
+            action, actor=ctx.actor, request=ctx.request, outcome=outcome_written, reason=reason,
+            entity_type=entity_type, entity_id=entity_id, ids=record_ids, item_count=item_count,
+            changes=changes, previous=previous, request_parameters=request_parameters,
+            max_bytes=max(AUDIT_VALUE_MAX_BYTES, max_bytes - legacy_bytes))
+        contract["legacyType"] = secondary_type
+        return _with_canonical_keys(legacy, contract)
+
+    record = _bounded_action_record(head, build_payload, _short_echo(event))
+    _note_recorded(ctx, action)
+    _enqueue_records(ctx, log_type, [record], buffer=outcome_written == OUTCOME_SUCCESS)
+
+
+def log_auth_other(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None, *,
+                   outcome: str = "success", reason: Optional[str] = None,
+                   entity_id: Optional[str] = None, ids: Optional[Dict[str, Any]] = None,
+                   item_count: Optional[int] = None, changes: Optional[Dict[str, Any]] = None,
+                   previous: Optional[Dict[str, Any]] = None,
+                   request_parameters: Optional[Dict[str, Any]] = None) -> None:
     """
     Log other authentication-related events with silent failure.
 
+    Inside the request audit context the record carries the record contract keys as well as the
+    legacy payload (see _log_auth_record). Pass what a write changed as ``changes`` (and the prior
+    values the handler already holds as ``previous``), what a read asked for as
+    ``request_parameters``. Never pass a secret: redaction applies, but the caller chooses the fields.
+
     Args:
         event: The API Gateway event
-        secondary_type: The secondary type of auth event
-        custom_data: Additional data to log (optional)
+        secondary_type: The secondary type of auth event, the record's [type: ...] value
+        custom_data: The legacy payload (optional)
+        outcome, reason, entity_id, ids, item_count, changes, previous, request_parameters: As for
+            log_action; used inside a request audit context
     """
     try:
-        user_context = _extract_user_context(event)
-        event_type = _event_type(("AUTHOTHER", None), ("type", secondary_type))
-        _write_audit_entry(ResourceKeys.AUDIT_LOG_AUTHOTHER, event_type, user_context, custom_data, event)
-        
+        _log_auth_record(ResourceKeys.AUDIT_LOG_AUTHOTHER, "AUTHOTHER", secondary_type, event, custom_data,
+                         outcome=outcome, reason=reason, entity_id=entity_id, ids=ids,
+                         item_count=item_count, changes=changes, previous=previous,
+                         request_parameters=request_parameters)
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log auth other audit event: {e}")
         report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHOTHER, "unexpectedError", [None])
 
 
-def log_auth_changes(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None) -> None:
+def log_auth_changes(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None, *,
+                     outcome: str = "success", reason: Optional[str] = None,
+                     entity_id: Optional[str] = None, ids: Optional[Dict[str, Any]] = None,
+                     item_count: Optional[int] = None, changes: Optional[Dict[str, Any]] = None,
+                     previous: Optional[Dict[str, Any]] = None,
+                     request_parameters: Optional[Dict[str, Any]] = None) -> None:
     """
     Log authentication/authorization changes with silent failure.
 
+    Inside the request audit context the record carries the record contract keys as well as the
+    legacy payload (see _log_auth_record). Pass each field the change set, with its new value, as
+    ``changes`` and the prior values the handler already holds as ``previous``. Never pass a secret
+    (an API key, a password, a temporary password): redaction applies, but the caller chooses the
+    fields.
+
     Args:
         event: The API Gateway event
-        secondary_type: The secondary type of auth change
-        custom_data: Additional data to log (optional)
+        secondary_type: The secondary type of auth change, the record's [type: ...] value
+        custom_data: The legacy payload (optional)
+        outcome, reason, entity_id, ids, item_count, changes, previous, request_parameters: As for
+            log_action; used inside a request audit context
     """
     try:
-        user_context = _extract_user_context(event)
-        event_type = _event_type(("AUTHCHANGES", None), ("type", secondary_type))
-        _write_audit_entry(ResourceKeys.AUDIT_LOG_AUTHCHANGES, event_type, user_context, custom_data, event)
-        
+        _log_auth_record(ResourceKeys.AUDIT_LOG_AUTHCHANGES, "AUTHCHANGES", secondary_type, event, custom_data,
+                         outcome=outcome, reason=reason, entity_id=entity_id, ids=ids,
+                         item_count=item_count, changes=changes, previous=previous,
+                         request_parameters=request_parameters)
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log auth changes audit event: {e}")
@@ -1216,22 +1403,63 @@ def log_errors(event: Dict[str, Any], secondary_type: str, custom_data: Optional
         report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_ERRORS, "unexpectedError", [None])
 
 
+def _gateway_user_context(verified_context: Any) -> Dict[str, Any]:
+    """
+    The prefix user context of an allowed authorizer record, from the context the authorizer built
+    out of the verified token (or API key): the user id the handlers resolve (``vams:tokens``, then
+    ``cognito:username``, ``username``, ``sub``, ``upn``, ``email``, as ``request_to_claims`` reads
+    them, normalized the same way), the roles the authorizer read and the MFA state it resolved.
+    """
+    user_context: Dict[str, Any] = {"user": "unknown", "roles": [], "mfaEnabled": False}
+    if not isinstance(verified_context, dict):
+        return user_context
+    user = None
+    tokens = verified_context.get("vams:tokens")
+    if isinstance(tokens, str):
+        try:
+            parsed = json.loads(tokens)
+            if isinstance(parsed, list) and parsed:
+                user = parsed[0]
+        except ValueError:
+            user = None
+    if not user:
+        for claim in ("cognito:username", "username", "sub", "upn", "email"):
+            if verified_context.get(claim):
+                user = verified_context[claim]
+                break
+    if user:
+        user_context["user"] = normalize_userid(str(user)) or "unknown"
+    roles = verified_context.get("vams:roles")
+    if isinstance(roles, str):
+        try:
+            parsed = json.loads(roles)
+            if isinstance(parsed, list):
+                user_context["roles"] = [str(role) for role in parsed]
+        except ValueError:
+            pass
+    mfa_value = verified_context.get("vams:mfaEnabled", "false")
+    user_context["mfaEnabled"] = mfa_value == "true" if isinstance(mfa_value, str) else bool(mfa_value)
+    return user_context
+
+
 def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_reason: Optional[str] = None,
-                              token_audience: Optional[str] = None) -> None:
+                              token_audience: Optional[str] = None,
+                              verified_context: Optional[Dict[str, Any]] = None) -> None:
     """
     Log authorization events from API Gateway authorizer with silent failure.
 
     SECURITY: This function is designed for the API Gateway authorizer which runs
     BEFORE normal request processing. Its payload carries only non-sensitive data:
-    - User ID (only from verified JWT claims after successful authorization)
+    - User ID, roles and MFA state (only from the verified claims of an allowed request, the
+      ``verified_context`` the authorizer built; a denial names the user ``unknown``)
     - Authorization result (success/failure)
     - Generic failure reason (no token details or sensitive data)
     - Source IP address
     - The accepted audience (Cognito app client id or external IdP audience) a verified
       token was issued to, so calls made through an additional client are distinguishable
       It is a public client identifier, never token content.
-    The record's request echo is the authorizer event after mask_sensitive_data, so the
-    headers it keeps are the ones not on the credential key list.
+    The record's echo is the short request echo (_short_echo_event): request id and time, method,
+    path, route, path parameters and connection addresses, never a header.
 
     NEVER logs:
     - Raw JWT tokens
@@ -1244,23 +1472,12 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
         authorized: Whether authorization was successful
         failure_reason: Generic failure reason (optional, for failures only)
         token_audience: Accepted audience of the verified token (optional, successes only)
+        verified_context: The authorizer context built from the verified token or API key (allowed
+            requests only); an ignored-path allow has none and names the user ``unknown``
     """
     try:
-        # Extract ONLY safe user context
-        user_context = {
-            "user": "unknown",
-            "roles": [],
-            "mfaEnabled": False
-        }
-        
-        # Only extract user ID if token was successfully verified
-        # The 'context' field is only present after successful JWT verification
-        if authorized and 'context' in event:
-            context = event.get('context', {})
-            user_context["user"] = context.get('sub', 'unknown')
-            # MFA status from verified claims
-            mfa_value = context.get('mfaEnabled', 'false')
-            user_context["mfaEnabled"] = mfa_value == 'true' if isinstance(mfa_value, str) else bool(mfa_value)
+        # Only the verified claims of an allowed request name the user.
+        user_context = _gateway_user_context(verified_context if authorized else None)
         
         # Get source IP (safe to log)
         source_ip = event.get('requestContext', {}).get('http', {}).get('sourceIp', 'unknown')
@@ -1343,11 +1560,16 @@ _ENTITY_ID_FIELDS = {
     "pipelineTemplate": "templateId", "workflow": "workflowId", "workflowTrigger": "triggerType",
     "execution": "executionId", "executionGroup": "executionGroupId", "role": "roleName",
     "userRole": "targetUserId", "constraint": "constraintId", "user": "targetUserId",
-    "workstation": "sessionId",
+    "apiKey": "apiKeyId", "workstation": "sessionId",
     "complianceSchema": "schemaName", "complianceBinding": "databaseId",
     "complianceEvaluation": "evaluationId", "complianceState": "assetId",
     "complianceCascade": "cascadeId",
 }
+
+# Path parameters whose name differs from the id field of the entity they name, by entity type:
+# /roles/{roleId} names a role (roleName), /user/cognito/{userId} and /auth/loginProfile/{userId}
+# name a user (targetUserId).
+_PATH_ID_ALIASES = {"role": {"roleId": "roleName"}, "user": {"userId": "targetUserId"}}
 
 # Actions of these kinds record the request only: log_action drops the write sections (changes,
 # previous) a call passes for one, whatever the call site, and logs an error naming the action.
@@ -1561,9 +1783,12 @@ def _resolve_actor(event: Dict[str, Any], claims: Dict[str, Any],
 def _request_facts(event: Dict[str, Any], lambda_context: Any) -> Dict[str, Any]:
     """
     The record's request object: requestId, method, route (the template, never the concrete path),
-    sourceIp (the address API Gateway reports for the connection, which on a CloudFront deployment is the
-    CloudFront edge, not the client) and lambdaRequestId. A key that
-    does not apply is left out.
+    sourceIp and lambdaRequestId. A key that does not apply is left out.
+
+    sourceIp is the viewer address for a request that came through the deployment's CloudFront, as
+    the authorizer resolved it (common/auth/viewerAddress.py: the forwarding headers are read only
+    when the request carries the origin verification value the authorizer accepted), and otherwise
+    the address API Gateway reports for the connection.
     """
     request: Dict[str, Any] = {}
     if isinstance(event, dict):
@@ -1582,7 +1807,7 @@ def _request_facts(event: Dict[str, Any], lambda_context: Any) -> Dict[str, Any]
         request["method"] = method.upper() if isinstance(method, str) else None
         if path:
             request["route"] = resolve_route_template(path, template_hint) or "unmatched"
-        request["sourceIp"] = http.get("sourceIp") or identity.get("sourceIp")
+        request["sourceIp"] = viewer_ip_for_audit(event) or http.get("sourceIp") or identity.get("sourceIp")
     aws_request_id = getattr(lambda_context, "aws_request_id", None)
     if isinstance(aws_request_id, str):
         request["lambdaRequestId"] = aws_request_id
@@ -1697,7 +1922,7 @@ def audited_handler(handler: Callable) -> Callable:
     response (or an exception) is recorded as that action with ``outcome="failed"`` and a generic
     ``reason`` from the status code (``validation``, ``notFound``, ``conflict``, ``internal`` ...),
     in the action's own group, with the path's id fields. A 401 or 403 is not: the authorization
-    record is the denial's record. An action still on ``AUDIT_PENDING_ACTIONS`` is skipped.
+    record is the denial's record.
     """
 
     @functools.wraps(handler)
@@ -1725,9 +1950,8 @@ _FAILURE_REASONS = {400: "validation", 404: "notFound", 405: "validation", 409: 
                     410: "notFound", 412: "conflict", 413: "tooLarge", 415: "validation",
                     422: "validation", 429: "throttled"}
 _DENIAL_STATUSES = frozenset({401, 403})
-# The auth change and auth other records keep their current shape until they move to the record
-# contract, so a failed request on those routes adds no action record yet.
-_OUTCOME_KEPT_GROUPS = frozenset({GROUP_AUTH_CHANGES, GROUP_AUTH_OTHER})
+# The groups whose records name their [type: ...] value as legacyType.
+_AUTH_RECORD_GROUPS = frozenset({GROUP_AUTH_CHANGES, GROUP_AUTH_OTHER})
 
 
 def audit_failure_reason(status: int) -> str:
@@ -1747,13 +1971,22 @@ def _response_status(response: Any) -> Optional[int]:
         return None
 
 
-def _path_ids(event: Any) -> Dict[str, Any]:
-    """The path parameters that are record id fields (databaseId, assetId, workflowId, ...)."""
+def _path_ids(event: Any, entity_type: Optional[str] = None) -> Dict[str, Any]:
+    """
+    The path parameters that are record id fields (databaseId, assetId, workflowId, ...). On a route
+    whose entity is a role or a user, the path parameter that names it (``roleId``, ``userId``) is
+    returned under the entity's id field (``roleName``, ``targetUserId``).
+    """
     path_parameters = event.get("pathParameters") if isinstance(event, dict) else None
     if not isinstance(path_parameters, dict):
         return {}
-    return {key: value for key, value in path_parameters.items()
-            if key in AUDIT_ID_FIELDS and isinstance(value, str) and value}
+    ids = {key: value for key, value in path_parameters.items()
+           if key in AUDIT_ID_FIELDS and isinstance(value, str) and value}
+    for parameter, id_field in _PATH_ID_ALIASES.get(entity_type or "", {}).items():
+        value = path_parameters.get(parameter)
+        if id_field not in ids and isinstance(value, str) and value:
+            ids[id_field] = value
+    return ids
 
 
 def _record_route_failure(ctx: Optional[AuditContext], event: Any, status: int) -> None:
@@ -1762,11 +1995,12 @@ def _record_route_failure(ctx: Optional[AuditContext], event: Any, status: int) 
         if ctx is None or ctx.route_spec is None or status in _DENIAL_STATUSES:
             return
         action = ctx.route_spec.action
-        if (action in AUDIT_PENDING_ACTIONS or action in ctx.recorded_actions
-                or ctx.route_spec.group in _OUTCOME_KEPT_GROUPS):
+        if action in ctx.recorded_actions:
             return
+        # Written with the request's flush, which follows at once: the request has ended, so holding
+        # the record loses nothing and saves the request a write of its own.
         log_action(ctx.event, action, outcome=OUTCOME_FAILED, reason=audit_failure_reason(status),
-                   **_path_ids(ctx.event))
+                   flush_with_request=True, **_path_ids(ctx.event, ctx.route_spec.entity_type))
     except Exception as e:
         logger.exception(f"Failed to record the request's failed action: {e}")
 
@@ -2074,6 +2308,18 @@ def _compact_echo(event: Any) -> str:
     return f" --- [event: {_serialize_json({'requestContext': echo_context})}]"
 
 
+def _short_echo(event: Any) -> str:
+    """The ` --- [event: ...]` suffix of the short request echo (_short_echo_event), or ""."""
+    short = _short_echo_event(event)
+    return f" --- [event: {_serialize_json(short)}]" if isinstance(short, dict) and short else ""
+
+
+def _record_echo(group: str, event: Any) -> str:
+    """The echo a record contract record of this group carries: the short request echo for auth
+    change and auth other records (as their records outside a context), the compact echo otherwise."""
+    return _short_echo(event) if group in _AUTH_RECORD_GROUPS else _compact_echo(event)
+
+
 # The echo an action record carries when its compact echo would take the record past
 # AUDIT_RECORD_MAX_BYTES.
 AUDIT_ECHO_TRUNCATED = ' --- [event: {"truncated": true}]'
@@ -2121,6 +2367,27 @@ def _action_prefix(group: str, prefix_type: str, outcome: str) -> str:
     return _event_type((label, None), ("type", prefix_type))
 
 
+def _action_spec(action: Optional[str], event: Any, ctx: Optional[AuditContext]) -> Optional[AuditSpec]:
+    """
+    The spec a record of ``action`` is written with. Several routes register one action name with
+    different entity types (the metadata actions of an asset, a file, an asset link and a database),
+    so the spec of the request's matched route wins when it registers that name; otherwise, and for
+    an action another route registers, the spec registered for the name. None takes the route's spec.
+    """
+    route_spec = ctx.route_spec if ctx is not None else None
+    if route_spec is None and ctx is None and action:
+        try:
+            request = _request_facts(event, None) if isinstance(event, dict) else {}
+            route_spec = audit_spec_for_route(request.get("route"), request.get("method"))
+        except Exception:
+            route_spec = None
+    if not action:
+        return route_spec
+    if route_spec is not None and route_spec.action == action:
+        return route_spec
+    return audit_spec_for_action(action)
+
+
 def log_action(
     event: Dict[str, Any],
     action: Optional[str] = None,
@@ -2141,6 +2408,7 @@ def log_action(
     request_parameters: Optional[Dict[str, Any]] = None,
     details: Optional[Dict[str, Any]] = None,
     on_behalf_of: Optional[str] = None,
+    flush_with_request: bool = False,
     **ids: Any,
 ) -> None:
     """
@@ -2174,12 +2442,14 @@ def log_action(
         changes, previous, request_parameters, details: The record's value sections
         on_behalf_of: The user a system action ran for (an execution's initiator, a queued
             upload's uploader), recorded as actor.onBehalfOf on this record
+        flush_with_request: Inside a context, hold a failed record for the request's flush instead of
+            writing it at once (the outcome record audited_handler writes as the request ends)
         **ids: Further id fields by their record key (``AUDIT_ID_FIELDS``, e.g. ``versionId``);
             any other keyword is recorded in details
     """
     try:
         ctx = _context_for(event)
-        audit_spec = audit_spec_for_action(action) if action else (ctx.route_spec if ctx else None)
+        audit_spec = _action_spec(action, event, ctx)
         if audit_spec is None and not action:
             logger.error("log_action called without an action outside a registered route")
             return
@@ -2231,8 +2501,19 @@ def log_action(
                 item_count=item_count, duration_ms=duration_ms, changes=changes, previous=previous,
                 request_parameters=request_parameters, details=details, max_bytes=max_bytes)
 
-        record = _bounded_action_record(head, build_payload, _compact_echo(event))
-        _enqueue_records(ctx, target_group, [record], buffer=outcome_written == OUTCOME_SUCCESS)
+        if group in _AUTH_RECORD_GROUPS:
+            build_contract_payload = build_payload
+
+            def build_payload(max_bytes: int) -> Dict[str, Any]:
+                # An auth change or auth other record names its [type: ...] value as legacyType, as
+                # the records log_auth_changes and log_auth_other write do.
+                payload = build_contract_payload(max_bytes)
+                payload["legacyType"] = prefix_type
+                return payload
+
+        record = _bounded_action_record(head, build_payload, _record_echo(group, event))
+        hold = outcome_written == OUTCOME_SUCCESS or (flush_with_request and outcome_written == OUTCOME_FAILED)
+        _enqueue_records(ctx, target_group, [record], buffer=hold)
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log action audit event: {e}")

@@ -305,17 +305,18 @@ vamscli workflow list-executions -d my-db -a my-asset
 vamscli workflow list-executions -d my-db -a my-asset -w my-workflow --auto-paginate
 ```
 
-| Option                   | Description                                                                 |
-| ------------------------ | --------------------------------------------------------------------------- |
-| `-d, --database-id`      | Database containing the asset (required)                                    |
-| `-a, --asset-id`         | Asset to list executions for (required)                                     |
-| `-w, --workflow-id`      | Filter to one workflow; works on its own                                    |
-| `--workflow-database-id` | Filter to workflows in one database; accepts `GLOBAL`. Works on its own too |
-| `--exclude-status`       | Leave out these statuses, one or comma-separated (e.g. `SKIPPED`)           |
-| `--auto-paginate`        | Fetch every page rather than the first                                      |
-| `--page-size`            | Items per page (max 50)                                                     |
-| `--max-items`            | Cap on total items fetched; only meaningful with `--auto-paginate`          |
-| `--starting-token`       | Resume from a previous response's token (manual pagination)                 |
+| Option                                     | Description                                                                                          |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `-d, --database-id`                        | Database containing the asset (required)                                                             |
+| `-a, --asset-id`                           | Asset to list executions for (required)                                                              |
+| `-w, --workflow-id`                        | Filter to one workflow; works on its own                                                             |
+| `--workflow-database-id`                   | Filter to workflows in one database; accepts `GLOBAL`. Works on its own too                          |
+| `--include-system` / `--no-include-system` | Include runs of system workflows (hidden by default), or leave them out even for one system workflow |
+| `--exclude-status`                         | Leave out these statuses, one or comma-separated (e.g. `SKIPPED`)                                    |
+| `--auto-paginate`                          | Fetch every page rather than the first                                                               |
+| `--page-size`                              | Items per page (max 50)                                                                              |
+| `--max-items`                              | Cap on total items fetched; only meaningful with `--auto-paginate`                                   |
+| `--starting-token`                         | Resume from a previous response's token (manual pagination)                                          |
 
 The listing covers executions in both directions: those that read the asset as an input **and** those
 that wrote to it as their output target, merged newest-first.
@@ -323,6 +324,12 @@ that wrote to it as their output target, merged newest-first.
 Each item carries `outputTypes` under `--json-output`, the kinds of output the run produced (`File`,
 `Metadata`, `Result`); it is `[]` for a run that produced none or was recorded before the field
 existed.
+
+Runs of system workflows are hidden unless you pass `--include-system`. Filtering to one system
+workflow (`-w` with `--workflow-database-id`) shows its runs unless you pass `--no-include-system`;
+`-w` on its own is not that filter, so a system workflow's runs stay hidden and the text output names
+`--workflow-database-id`. Under `--json-output` each item carries `isSystem`, and `includeSystem`
+reports which applied.
 
 The two workflow filters are matched independently and AND-ed, so either narrows the list on its own.
 A workflow ID is unique across every database, so the workflow ID alone names the workflow; the

@@ -28,7 +28,7 @@ When a tag type is marked as **Required**, it appears with an `[R]` indicator in
     - **Require tag of this tag type on asset modification** -- Select the checkbox if assets must include a tag of this type.
 4. Choose **Create Tag Type**.
 
-![Tag management page showing tags and tag types](/img/tag_management_page_20260323_v2.5.png)
+![Tag Management page for the GLOBAL database, with Change Database and the tags and tag types tables](/img/tag_management_page_20261109_v2.7.png)
 
 ### Editing a tag type
 

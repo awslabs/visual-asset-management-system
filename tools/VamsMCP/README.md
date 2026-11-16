@@ -108,6 +108,11 @@ connecting Amazon Quick, and a threat model) is the documentation site's **Remot
 1. Register an OAuth client for remote MCP clients (user sign-in: authorization code with PKCE; never
    a client credentials client), and list its client id in
    `app.authProvider.useCognito.additionalTokenAudiences` (or `useExternalOAuthIdp`), then deploy VAMS.
+   For an external IdP, the next step reads the deployment's audience and user id claims from
+   `/api/amplify-config`; pass `--audience-claim` only to override them, or when the deployment
+   predates the published `externalOAuthIdpAudienceClaims` and its
+   `lambdaAuthorizorJWTAudienceClaims` is not `aud`. For an external IdP, pass `--issuer` whenever
+   the provider URL serves no discovery document (for example an Amazon Cognito hosted UI domain).
 2. Write the server's auth configuration from the deployment's own settings, and note the values it
    prints for the MCP client:
 
@@ -479,6 +484,13 @@ are lower-bounded by start date at 90 days back by default and echo the applied
 absent by design — widen `filter_start_date` to reach it. `group_id` is how a
 group's members are enumerated, since `rerun_execution` re-runs one execution at a
 time.
+
+Both hide runs of system workflows unless `include_system` is true. A listing
+narrowed to one system workflow (`workflow_id` plus `workflow_database_id`) shows its
+runs unless `include_system` is false. The applied value is echoed as
+`includeSystem`, and each row carries `isSystem`. A `workflow_id` without its
+`workflow_database_id` is not that scope; when runs were hidden there the result adds
+a `systemRunsHint` naming both ways to list them.
 
 Both also surface a `warnings` array — plus `truncated` — when a page withheld
 rows, so a short list is never mistaken for a complete one. On `list_executions` a
