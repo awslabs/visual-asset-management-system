@@ -60,6 +60,12 @@ VAMS_STATUS_METADATA_KEY = "vams-status"
 VAMS_STATUS_ARCHIVED = "archived"
 VAMS_STATUS_DELETED = "deleted"
 
+# VAMS_COPY_UPLOAD_TOKEN: the per-job token the large object copy engine records on its job row and
+#   stamps on its multipart upload (handlers/assets/largeObjectCopy.py prepare), so the engine can
+#   tell the object its own upload created from any earlier object at the same key
+#   (common/largeObjectCopy.landed_object_version). System-owned (``vams-`` prefix): not indexed.
+VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY = "vams-copyuploadtoken"
+
 # ---------------------------------------------------------------------------
 # Change-provenance keys (``vams-`` hyphen prefix).
 #

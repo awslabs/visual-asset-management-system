@@ -477,10 +477,11 @@ run. `PipelineExecutionLogsStorageTable` holds the per-step result and error log
 The same output-files table also holds each run's **ingest ledger**, under the partition
 `ingest#{workflowExecutionId}` rather than a `pipelineExecutionId`, so no output listing reads it. The
 end-state step writes one row per output it hands to ingestion (`ingestState` `moving`, then `ingested`),
-which lets a retried step record outputs an earlier attempt already moved into the asset. The large-file
-worker keeps a copy claim per output in the same partition (sort key `copy:{destination key}`,
-`claimHolder`, `claimedAt`, `claimState`), so two queued copies of one output never both write it. A claim
-whose holder stopped is taken over after 20 minutes. Permanently deleting an execution deletes the
+which lets a retried step record outputs an earlier attempt already moved into the asset. An output over
+1 GiB handed to the large object copy engine is `engine-copying` with its copy job's id (`engineJobId`)
+until the run's finalize step reads the job's outcome: `ingested` when the copy landed, the row removed
+when it did not. A `moving` row whose attempt stopped is taken over after 20 minutes; an `engine-copying`
+row is never taken over or handed to ingestion again. Permanently deleting an execution deletes the
 partition.
 
 ### Workflow Execution Locks Storage Table

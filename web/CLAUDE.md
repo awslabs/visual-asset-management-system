@@ -80,6 +80,9 @@ web/
                             #   chunks — never one re-rendered string) ResultDownloadButton.tsx
                             #   resourceTypeLabels.ts (sub-process type labels; unknown types render raw,
                             #   with a not-abortable note when abortable === false)
+                            #   OutputIngestionProgress.tsx ("Ingesting outputs (n of m)" from the
+                            #   details' executionPhase/outputIngestion; IngestedBadge for output
+                            #   rows with ingestionStatus SUCCEEDED; display only)
                             #   SkippedLaunchPanel.tsx (details `skip` block of a SKIPPED record; the
                             #   blocking run is linked only when the API returned its id)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,

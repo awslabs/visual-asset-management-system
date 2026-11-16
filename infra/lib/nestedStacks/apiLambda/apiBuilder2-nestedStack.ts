@@ -26,7 +26,13 @@ import {
     buildAuthConstraintsFunction,
     buildAuthConstraintsTemplateFunction,
 } from "../../lambdaBuilder/authFunctions";
-import { buildAssetHistoryFunction } from "../../lambdaBuilder/assetFunctions";
+import {
+    buildAssetHistoryFunction,
+    buildLargeObjectCopyEngine,
+    grantLargeObjectCopyCoordination,
+    grantLargeObjectCopyProgressRead,
+    grantLargeObjectCopyViaEngine,
+} from "../../lambdaBuilder/assetFunctions";
 import {
     buildDeadlineCloudJobCallbackFunction,
     buildExecuteWorkflowV2Function,
@@ -82,6 +88,8 @@ export interface ApiBuilder2NestedStackProps {
     // process-output to write outputs back to the asset).
     metadataServiceFunction: lambda.Function;
     uploadFileFunction: lambda.Function;
+    // Invoked by the large object copy engine built here once a large file has landed.
+    sendEmailFunction: lambda.Function;
 }
 
 /**
@@ -418,6 +426,49 @@ export class ApiBuilder2NestedStack extends NestedStack {
         // service's read-path reconcile, so its execution row does not wait for a read. A feature that
         // launched the run tracks it from that row by its stored workflowExecutionId.
         buildWorkflowStatusChangeRule(this, executionServiceFunction, storageResources);
+
+        // Large object copy engine: copies workflow outputs over 1 GiB (and API uploads over the
+        // engine threshold) into their asset as resumable multipart copies. The output step waits
+        // on a run's copies and finalizes it; the abort route and the error handler stop them. Each
+        // of the three gets its grants as one managed policy (their inline policies are near the
+        // IAM quota).
+        const largeObjectCopyEngine = buildLargeObjectCopyEngine(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            props.sendEmailFunction,
+            processWorkflowExecutionOutputFunction,
+            config,
+            vpc,
+            subnets
+        );
+        // The output step's copy work (batch, task token, outcomes, cancel) is done by the engine.
+        grantLargeObjectCopyViaEngine(
+            this,
+            processWorkflowExecutionOutputFunction,
+            largeObjectCopyEngine.engineFunction,
+            config
+        );
+        // Each stopper hands the engine the copies it stopped whose outcome the engine's reconcile
+        // finishes.
+        grantLargeObjectCopyCoordination(handleExecutionErrorFunction, storageResources, config, {
+            handsOffTo: largeObjectCopyEngine.engineFunction,
+        });
+        // The abort route (and the status change push) stops a run's copies and hands the engine the
+        // ones it stopped. Since the execution routes run on four functions (#1255), the details
+        // read's backstop for a copy whose execution ended unreported is granted to the details
+        // function only (grantLargeObjectCopyProgressRead).
+        grantLargeObjectCopyCoordination(executionServiceFunction, storageResources, config, {
+            handsOffTo: largeObjectCopyEngine.engineFunction,
+            // Its abort grant already covers the copy executions (states:StopExecution on execution:*).
+            stopCoveredByCallerGrant: true,
+        });
+        grantLargeObjectCopyProgressRead(
+            executionDetailsFunction,
+            storageResources,
+            config,
+            largeObjectCopyEngine.engineFunction
+        );
 
         // Pipeline sub-process registration lambda + its standing EventBridge rule on the
         // orchestration bus (pipelines optionally PutEvents to register sub-SFN / log ARNs).

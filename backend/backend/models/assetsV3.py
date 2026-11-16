@@ -464,6 +464,38 @@ class UploadFileCompletionModel(BaseModel, extra='ignore'):
         # complete_upload derives the final S3 key from this value.
         return validate_asset_file_path('relativeKey', v, new_object=True, file_only=True)
 
+class GetUploadStatusRequestModel(BaseModel, extra='ignore'):
+    """Request model for GET /uploads/{uploadId} (path uploadId, query assetId and databaseId)"""
+    uploadId: str = Field(min_length=1, max_length=64, regex=r'^[A-Za-z0-9-]+$')
+    assetId: str = Field(min_length=1, max_length=256)
+    databaseId: str = Field(min_length=4, max_length=256)
+
+    _trim_ids = validator('assetId', 'databaseId', pre=True, allow_reuse=True)(trim_name)
+
+    @root_validator
+    def validate_fields(cls, values):
+        validate_asset_identifiers(values)
+        return values
+
+
+class UploadAsyncFileStatusModel(BaseModel, extra='ignore'):
+    """Outcome of one file of an upload that is ingested asynchronously"""
+    relativeKey: str
+    status: Literal["PENDING", "SUCCEEDED", "FAILED"]
+    error: Optional[str] = ""
+    updatedAt: Optional[str] = ""
+
+
+class UploadStatusResponseModel(BaseModel, extra='ignore'):
+    """Response model for GET /uploads/{uploadId}: the upload's status and, while or after files over
+    the asynchronous threshold are ingested, each such file's outcome"""
+    uploadId: str
+    databaseId: str
+    assetId: str
+    status: str
+    asyncFiles: List[UploadAsyncFileStatusModel] = []
+
+
 class CompleteUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing a file upload"""
     assetId: str = Field(min_length=1, max_length=256)
@@ -520,6 +552,9 @@ class FileCompletionResult(BaseModel, extra='ignore'):
     success: bool
     error: Optional[str] = None
     largeFileAsynchronousHandling: bool = False
+    # Copy job ingesting this file asynchronously (workflow outputs over the async threshold, when the
+    # caller named an ingestion batch). Absent for every other file.
+    ingestionJobId: Optional[str] = None
 
 class ExternalFileModel(BaseModel, extra='ignore'):
     """Model for an external file in a completion request"""
@@ -549,6 +584,11 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
     # asset can live in another bucket; the copy reads from sourceBucket and writes to the asset
     # bucket. Empty/omitted => same as the asset bucket (the normal single-bucket upload path).
     sourceBucket: Optional[str] = Field(None, max_length=MAX_S3_BUCKET_NAME_LENGTH)
+    # Workflow output ingestion batch the caller waits on. When set, each file over the async
+    # threshold is ingested by a large object copy job in this batch (no queue, no synchronous
+    # fallback). Omitted: the large-file queue path as before.
+    ingestionBatchId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
+    workflowDatabaseId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
 
     _trim_ids = validator('assetId', 'databaseId', pre=True, allow_reuse=True)(trim_name)
 
@@ -587,6 +627,23 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
             # Functions assigns. The same validator the execution routes use keeps the provenance
             # field from accepting arbitrary text.
             (valid, message) = validate({'workflowExecutionId': {'value': values.get('workflowExecutionId'), 'validator': 'GUID'}})
+            if not valid:
+                logger.error(message)
+                raise ValueError(message)
+        if values.get('ingestionBatchId') is not None:
+            # A workflow output's ingestion batch is its execution: one batch per run, so a caller
+            # cannot place copy jobs in another execution's batch.
+            if values.get('ingestionBatchId') != values.get('workflowExecutionId'):
+                message = "ingestionBatchId must be the workflowExecutionId of the run"
+                logger.error(message)
+                raise ValueError(message)
+        if values.get('workflowDatabaseId') is not None:
+            # The database the running workflow is registered in. Every shipped pipeline registers
+            # a GLOBAL workflow, so the keyword is a valid value here, as it is on the execute
+            # route's workflowDatabaseId path parameter (executeWorkflow.py) and the execution
+            # models' databaseId fields (models/executions.py, allow_global=True).
+            (valid, message) = validate({'workflowDatabaseId': {'value': values.get('workflowDatabaseId'), 'validator': 'ID',
+                                                                'allowGlobalKeyword': True}})
             if not valid:
                 logger.error(message)
                 raise ValueError(message)

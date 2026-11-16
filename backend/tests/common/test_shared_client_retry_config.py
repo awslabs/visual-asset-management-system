@@ -104,6 +104,9 @@ DELIBERATE_DEPARTURES = {
     ("handlers/addon/edh/common/edhImageBuilder.py", "lookup_retry_config"),
     # The executeWorkflowV2 Invoke is not idempotent: a retry would launch a duplicate execution.
     ("handlers/workflows/sfn/workflowTriggerDispatch.py", "invoke_config"),
+    # The output step's file completion and metadata service RequestResponse invokes are not safe
+    # to repeat: a botocore retry after its read timeout sent a running completion again (#1205).
+    ("handlers/workflows/sfn/processWorkflowExecutionOutput.py", "invoke_config"),
     # One apiKeyService Invoke per EDH session key: a retried create would mint a second key that no
     # session row names, so the single attempt is bounded by its own timeouts instead.
     ("handlers/addon/edh/common/edhSessionBootstrap.py", "cross_call_config"),

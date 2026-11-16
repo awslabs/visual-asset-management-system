@@ -55,6 +55,13 @@ import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
 export const WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";
 
 /**
+ * Index of LargeObjectCopyJobsStorageTable on workflowExecutionId: the copy jobs of one workflow
+ * execution (batch rows do not carry the attribute). Mirrored as WORKFLOW_EXECUTION_ID_INDEX in
+ * backend/backend/common/largeObjectCopy.py.
+ */
+export const LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX = "WorkflowExecutionIdIndex";
+
+/**
  * Index of MetadataSchemaStorageTableV2 on "databaseId:metadataEntityType": the schemas of one database
  * and entity type, which every schema read path queries. Named in
  * backend/backend/common/metadataSchemaValidation.py (load_enabled_schemas) and granted by exact ARN
@@ -156,6 +163,7 @@ export interface storageResources {
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock a running execution holds
+        largeObjectCopyJobsStorageTable: dynamodb.Table; // PK jobId; TTL expiresAt; copy jobs + ingestion batch rows of the large object copy engine
         // Compliance tables
         complianceSchemaStorageTable: dynamodb.Table;
         complianceAssetStateStorageTable: dynamodb.Table;
@@ -1646,6 +1654,31 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.KEYS_ONLY,
     });
 
+    // Large Object Copy Jobs — the large object copy engine's state. One row per copy job (PK jobId:
+    // `{executionId or uploadId}#{hash of the relative key}`): status, the destination multipart upload
+    // id, the planned part size and count, the job's Step Functions execution ARN and its outcome. One
+    // row per workflow ingestion batch (PK `batch#{executionId}`): the number of jobs it waits on, the
+    // number that finished, the waiting state's task token and the finalize context. expiresAt is the TTL
+    // attribute (epoch seconds, 30 days after a row's last write). The index on workflowExecutionId lists
+    // an execution's jobs for its finalize step and for the abort and error paths, which stop them.
+    const largeObjectCopyJobsStorageTable = new dynamodb.Table(
+        scope,
+        "LargeObjectCopyJobsStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "jobId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            timeToLiveAttribute: "expiresAt",
+        }
+    );
+    largeObjectCopyJobsStorageTable.addGlobalSecondaryIndex({
+        indexName: LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX,
+        partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     // Executions by OUTPUT asset. An asset's execution history is the union of runs that read it and
     // runs that wrote to it, and the latter cannot be found any other way: a results-only or
     // generate-from-nothing pipeline (inputFileArity 'none') has no input rows at all, so its output
@@ -2744,6 +2777,7 @@ export function storageResourcesBuilder(
             workflowStorageTableV2: workflowStorageTableV2,
             workflowTriggersStorageTable: workflowTriggersStorageTable,
             workflowExecutionLocksStorageTable: workflowExecutionLocksStorageTable,
+            largeObjectCopyJobsStorageTable: largeObjectCopyJobsStorageTable,
             // Compliance tables
             complianceSchemaStorageTable: complianceSchemaStorageTable,
             complianceAssetStateStorageTable: complianceAssetStateStorageTable,
@@ -3392,6 +3426,8 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowTriggersStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionLocksStorage]:
             storageResources.dynamo.workflowExecutionLocksStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.largeObjectCopyJobsStorage]:
+            storageResources.dynamo.largeObjectCopyJobsStorageTable.tableName,
         // Compliance tables
         [RESOURCE_PARAM_KEYS.dynamoTables.complianceSchemaStorage]:
             storageResources.dynamo.complianceSchemaStorageTable.tableName,
