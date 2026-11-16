@@ -1131,13 +1131,14 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[bool]:
     Handle DynamoDB asset links table stream for Garnet indexing.
     Uses same pattern as OpenSearch assetIndexer.py handle_asset_links_stream().
     
-    Creates asset link entity AND updates both connected assets.
+    Creates or updates the asset link entity (not for a removed link) AND updates both connected
+    assets.
     
     Args:
         event_record: DynamoDB stream record
         
     Returns:
-        List of success booleans (one for link, two for assets)
+        List of success booleans (one for the link unless it was removed, one per asset found)
     """
     try:
         event_name = event_record.get('eventName', '')
@@ -1151,7 +1152,8 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[bool]:
         to_asset_key = record_data.get('toAssetDatabaseId:toAssetId', {}).get('S')
         
         if not asset_link_id or not from_asset_key or not to_asset_key:
-            logger.warning("Missing asset link information in stream")
+            logged_link_id = asset_link_id or dynamodb_data.get('Keys', {}).get('assetLinkId', {}).get('S')
+            logger.warning(f"Missing asset link information in {event_name} stream record for asset link {logged_link_id}")
             return [True]  # Skip, not an error
         
         # Parse asset keys
@@ -1162,16 +1164,10 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[bool]:
         
         results = []
         
-        # Handle the asset link entity itself
-        if event_name == 'REMOVE':
-            # Delete the asset link entity
-            ngsi_ld_entity = {
-                "id": f"urn:vams:assetlink:{asset_link_id}",
-                "type": "VAMSAssetLink"
-            }
-            success = send_to_garnet_ingestion_queue(ngsi_ld_entity)
-            results.append(success)
-        else:
+        # A removed link sends nothing for the link entity: the ingestion queue upserts with
+        # options=update and cannot remove an entity, so a send would only create a bare link entity
+        # for a link Garnet never held. Both assets are refreshed below either way.
+        if event_name != 'REMOVE':
             # Create/update the asset link entity
             asset_link_details = get_asset_link_details(asset_link_id)
             if asset_link_details:

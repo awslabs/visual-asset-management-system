@@ -1028,7 +1028,8 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[IndexOperati
         record_data = dynamodb_data.get(image_name, {})
 
         if not record_data:
-            logger.warning(f"No {image_name} found in {event_name} event for asset links")
+            asset_link_id = dynamodb_data.get('Keys', {}).get('assetLinkId', {}).get('S')
+            logger.warning(f"No {image_name} found in {event_name} event for asset link {asset_link_id}")
             return [IndexOperationResponse(
                 success=True,
                 message=f"No {image_name} data, skipping",

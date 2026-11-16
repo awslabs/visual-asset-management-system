@@ -4,7 +4,8 @@
 """The stream relay keeps the old image of a REMOVE record and drops it from INSERT and MODIFY.
 
 The asset-link and metadata tables stream both images so that a REMOVE carries the deleted row
-(the compliance trigger reads its assets, and whether a workflow execution deleted it, from there).
+(the compliance trigger reads its assets, and whether a workflow execution deleted it, from there;
+the search and Garnet indexers read a deleted asset link's assets from it too).
 Nothing reads an INSERT or MODIFY record's old image, and keeping it would double every metadata
 update's message toward the SNS size limit."""
 
