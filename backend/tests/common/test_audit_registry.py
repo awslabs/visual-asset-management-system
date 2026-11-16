@@ -12,8 +12,7 @@ mapping complete and consistent, and hold the registry to the handler code:
   kind or legacy type, fail;
 * a literal type a handler passes to ``log_actions`` / ``log_auth_changes`` / ``log_auth_other`` /
   ``log_action`` that the registry does not know fails;
-* a registered action that no handler records must be on ``AUDIT_PENDING_ACTIONS``, and an action on
-  that list that a handler already records fails, so the list only shrinks;
+* a registered action that no handler records fails;
 * each non-API handler the registry names exists.
 
 The scans read source with ``ast``; every check has a control proving it can fail.
@@ -237,24 +236,11 @@ class TestRegistryMatchesHandlers:
         assert not unknown, ("handlers record action types the registry does not know; register them "
                              f"in common/auditActions.py: {unknown}")
 
-    def test_every_pending_action_is_registered(self):
-        unknown = sorted(REGISTRY.AUDIT_PENDING_ACTIONS - set(REGISTRY.AUDIT_ACTIONS))
-        assert not unknown, f"pending actions that are not registered: {unknown}"
-
-    def test_every_registered_action_is_recorded_or_pending(self, handler_scan):
+    def test_every_registered_action_is_recorded(self, handler_scan):
         recorded = _recorded_actions(REGISTRY.AUDIT_ACTIONS, *handler_scan)
-        missing = sorted(set(REGISTRY.AUDIT_ACTIONS) - recorded - REGISTRY.AUDIT_PENDING_ACTIONS)
+        missing = sorted(set(REGISTRY.AUDIT_ACTIONS) - recorded)
         assert not missing, ("registered actions that no handler records; call log_action from the "
-                             f"handler or list them in AUDIT_PENDING_ACTIONS: {missing}")
-
-    # Temporary: the pending list exists only while handlers are being covered. Remove this test, and
-    # the list, only once AUDIT_PENDING_ACTIONS is empty (the auth-records change empties it); removing
-    # it while entries remain would let a stale entry hide an action a handler already records.
-    @pytest.mark.temporary  # pins the shrinking AUDIT_PENDING_ACTIONS list; remove when the list is empty
-    def test_no_pending_action_is_already_recorded(self, handler_scan):
-        recorded = _recorded_actions(REGISTRY.AUDIT_ACTIONS, *handler_scan)
-        stale = sorted(REGISTRY.AUDIT_PENDING_ACTIONS & recorded)
-        assert not stale, f"actions on AUDIT_PENDING_ACTIONS that a handler already records: {stale}"
+                             f"handler: {missing}")
 
     def test_the_scan_sees_a_literal_a_constant_and_a_file_function(self):
         # Control: the scan must find each emitter shape the checks above rely on.
@@ -305,7 +291,7 @@ class TestSystemActions:
         wrong = []
         for system in REGISTRY.AUDIT_SYSTEM_ACTIONS:
             path = os.path.join(BACKEND, *system.handler.split(".")) + ".py"
-            if not os.path.isfile(path) or system.spec.action in REGISTRY.AUDIT_PENDING_ACTIONS:
+            if not os.path.isfile(path):
                 continue
             with open(path, encoding="utf-8") as handle:
                 literals, functions = _scan_source(handle.read())

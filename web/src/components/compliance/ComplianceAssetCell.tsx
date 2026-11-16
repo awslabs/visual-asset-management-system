@@ -31,7 +31,9 @@ export const ComplianceAssetCell: React.FC<ComplianceAssetCellProps> = ({
 }) => {
     const label = assetName || assetId;
     const title = linked ? (
-        <Link href={`#/databases/${databaseId}/assets/${assetId}`}>{label}</Link>
+        <Link href={`#/databases/${databaseId}/assets/${encodeURIComponent(assetId)}`}>
+            {label}
+        </Link>
     ) : (
         label
     );

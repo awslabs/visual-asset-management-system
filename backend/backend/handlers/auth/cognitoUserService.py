@@ -18,7 +18,7 @@ from common.validators import validate, normalize_userid, find_confusable_userid
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_auth_changes, audited_handler
+from customLogging.auditLogging import log_action, log_auth_changes, audited_handler
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success,
@@ -554,6 +554,11 @@ def handle_get_request(event):
                 # Fall back to raw user data if conversion fails
                 formatted_users.append(user)
         
+        log_action(event, "cognitoUserList", item_count=len(formatted_users), request_parameters={
+            "startingToken": query_params.get('starting_token'),
+            "pageSize": query_params.get('max_results'),
+        })
+
         response = {'users': formatted_users}
         if 'NextToken' in result:
             response['NextToken'] = result['NextToken']
@@ -634,10 +639,11 @@ def handle_post_request(event):
             result = reset_user_password(user_id, claims_and_roles)
             
             # AUDIT LOG: Password reset
+            # The temporary password is never recorded.
             log_auth_changes(event, "cognitoUserPasswordReset", {
                 "userId": result.userId,
                 "operation": "resetPassword"
-            })
+            }, entity_id=result.userId, ids={"targetUserId": result.userId})
             
             return success(body=result.dict())
         
@@ -675,6 +681,10 @@ def handle_post_request(event):
                 "operation": "create",
                 "email": request_model.email,
                 "phone": request_model.phone
+            }, entity_id=result.userId, ids={"targetUserId": result.userId}, changes={
+                "userId": result.userId,
+                "email": request_model.email,
+                "phone": request_model.phone,
             })
             
             return success(body=result.dict())
@@ -792,6 +802,9 @@ def handle_put_request(event):
             "email": audit_email,
             "phone": audit_phone,
             "clearPhone": clear_phone
+        }, entity_id=result.userId, ids={"targetUserId": result.userId}, changes={
+            "email": audit_email,
+            "phone": "" if clear_phone else audit_phone,
         })
         
         return success(body=result.dict())
@@ -845,7 +858,7 @@ def handle_delete_request(event):
         log_auth_changes(event, "cognitoUserDelete", {
             "userId": result.userId,
             "operation": "delete"
-        })
+        }, entity_id=result.userId, ids={"targetUserId": result.userId})
         
         return success(body=result.dict())
     
