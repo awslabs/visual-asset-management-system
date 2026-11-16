@@ -287,8 +287,10 @@ def _run_preview_stage(
         if (media_preview.is_media(declared_ext or key_ext)
                 and image_handler.is_self_previewable(declared_ext or key_ext, file_size)
                 and not media_preview.downscale_option_enabled()):
-            return _success_response(
-                stage, media_preview.self_preview_message(os.path.basename(stage_input.objectKey)))
+            name = os.path.basename(stage_input.objectKey)
+            return _complete_without_preview(
+                stage, results_location, name, media_preview.self_preview_message(name),
+                media_preview.REASON_SELF_PREVIEWABLE)
 
         # A line-oriented point cloud is read straight from S3 and sampled as it streams, so it needs
         # no local copy and is not limited by the work volume.
@@ -340,7 +342,7 @@ def _run_preview_stage(
     # Images, TGA/TIFF and video take the media route: no 3D loading, referenced files or rendering.
     if media_preview.is_media(ext):
         return _run_media_stage(stage, stage_output, local_filepath, ext, output_type, relative_subdir,
-                                local_output_dir, budgets, localTest, timer)
+                                local_output_dir, budgets, localTest, timer, results_location)
 
     # In S3 mode, fetch the files the input references (glTF buffers/images, USD layers and textures,
     # OBJ materials and textures, FBX textures, LCC data files and LCC2 chunks) from the input's own asset. A rejected or missing
@@ -510,7 +512,8 @@ def _publish_preview(stage: PipelineStage, stage_output: StageOutput, relative_s
 
 def _run_media_stage(stage: PipelineStage, stage_output: StageOutput, local_filepath: str, ext: str,
                      output_type: str, relative_subdir: str, local_output_dir: str,
-                     budgets: "resources.Budgets", localTest: bool, timer: PhaseTimer) -> PipelineStage:
+                     budgets: "resources.Budgets", localTest: bool, timer: PhaseTimer,
+                     results_location: dict = None) -> PipelineStage:
     """Write the preview of an image, TGA/TIFF or video (``media_preview``), then upload it. A run with
     nothing to write (an image the web shows as its own preview, a video with no frames, a downscale
     that saves nothing) completes successfully and says why."""
@@ -539,11 +542,32 @@ def _run_media_stage(stage: PipelineStage, stage_output: StageOutput, local_file
                    f"{type(e).__name__}: {str(e)[:200]}")
 
     if result.path is None:
-        return _success_response(stage, result.message)
+        return _complete_without_preview(stage, results_location, basename, result.message,
+                                         result.reason or "noPreview")
 
     logger.info(f"Preview file generated: {result.path} ({os.path.getsize(result.path) / 1024:.1f} KB)")
     failure = _publish_preview(stage, stage_output, relative_subdir, result.path, localTest, timer)
     return failure if failure is not None else _success_response(stage)
+
+
+def _complete_without_preview(stage: PipelineStage, results_location: dict, name: str, message: str,
+                              reason: str) -> PipelineStage:
+    """Complete the run successfully with no preview written, and say why in the execution's results
+    (``media_preview.NO_PREVIEW_RESULT_FILENAME`` under the results folder, recorded on the execution as
+    an ordinary result). Best effort: a run with no results location, or a write that fails, still
+    completes, with the message in the job log and the stage."""
+    if results_location:
+        key = results_location["objectDir"] + media_preview.NO_PREVIEW_RESULT_FILENAME
+        try:
+            body = media_preview.no_preview_result_document(name, message, reason)
+            if s3.put_json(results_location["bucketName"], key, body) is None:
+                logger.warning("Could not write the no-preview result; the message is in the job log")
+        except Exception as e:
+            logger.warning(f"Could not write the no-preview result ({type(e).__name__}); the message "
+                           f"is in the job log")
+    else:
+        logger.info("No results location for this run; the no-preview message is in the job log only")
+    return _success_response(stage, message)
 
 
 def _write_incomplete_result(results_location: dict, incomplete, input_path: str):

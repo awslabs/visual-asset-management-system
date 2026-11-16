@@ -15,7 +15,7 @@ The decision table (what the run writes) is the one in the pipeline README:
 | video                                         | GIF under the limit, else JPEG | same                      |
 | audio-only / no frames                        | success, no preview     | same                             |
 
-"Option" is ``mediaPreviews.downscaleSelfPreviewableImages``, which reaches the container as the
+"Option" is ``useMediaPreviews.downscaleSelfPreviewableImages``, which reaches the container as the
 ``VAMS_DOWNSCALE_SELF_PREVIEWABLE_IMAGES`` environment variable. Every file written is strictly under
 the preview size limit (``image_utils.MAX_FILE_SIZE_BYTES``).
 """
@@ -40,11 +40,24 @@ MIN_DOWNSCALE_SAVING = 0.25
 DOWNSCALE_LONG_EDGE_TRIGGER = image_utils.DOWNSCALED_SELF_PREVIEW_LONG_EDGE
 
 
+# The result document a run writes under the execution's results folder when it writes no preview, so
+# the execution record says why. The Open Pipeline Lambda writes the same document for the runs it ends
+# itself (lambda/openPipeline.py NO_PREVIEW_RESULT_FILENAME); a drift test keeps the two equal.
+NO_PREVIEW_RESULT_FILENAME = "preview-not-generated.json"
+NO_PREVIEW_RESULT_SCHEMA = "vams.mediaPreview.noPreview/v1"
+REASON_SELF_PREVIEWABLE = "alreadyShownAsOwnPreview"
+REASON_NO_SMALLER_PREVIEW = "noSmallerPreview"
+REASON_ANIMATED_LEFT_ALONE = "animatedImageLeftAlone"
+REASON_NO_VIDEO_STREAM = "noVideoStream"
+
+
 @dataclass
 class MediaResult:
-    """What a media run produced: the preview file's path, or None with the message to report."""
+    """What a media run produced: the preview file's path, or None with the message to report and the
+    reason code written to the result document."""
     path: Optional[str]
     message: Optional[str] = None
+    reason: Optional[str] = None
 
 
 def media_extensions():
@@ -57,14 +70,27 @@ def is_media(ext: str) -> bool:
 
 
 def downscale_option_enabled(environ=None) -> bool:
-    """Whether ``mediaPreviews.downscaleSelfPreviewableImages`` is on for this task (off when the
+    """Whether ``useMediaPreviews.downscaleSelfPreviewableImages`` is on for this task (off when the
     variable is missing or anything but ``true``)."""
     value = (environ if environ is not None else os.environ).get(DOWNSCALE_ENV, "")
     return str(value).strip().lower() == "true"
 
 
 def self_preview_message(name: str) -> str:
-    return f"'{name}' is shown as its own preview; no preview written."
+    """The result statement of an image the web already shows as its own preview."""
+    return (f"No preview was generated for '{name}': the file is under 5 MiB and is already shown as "
+            f"its own preview.")
+
+
+def no_preview_result_document(name: str, message: str, reason: str) -> bytes:
+    """The result document of a run that wrote no preview, as UTF-8 JSON bytes."""
+    import json
+    return json.dumps({
+        "schema": NO_PREVIEW_RESULT_SCHEMA,
+        "file": name,
+        "reason": reason,
+        "message": message,
+    }).encode("utf-8")
 
 
 def _limit() -> int:
@@ -112,9 +138,15 @@ def _image_preview(path, ext, output_type, output_dir, basename, pixel_budget, o
                    downscale_self_previewable) -> MediaResult:
     if image_handler.is_self_previewable(ext, original_size):
         # An animated GIF/WebP is left alone even with the option on: a JPEG would drop the animation.
-        if not downscale_self_previewable or (ext in image_handler.ANIMATED_EXTENSIONS
-                                              and image_handler.frame_count(path, ext) > 1):
-            return MediaResult(None, self_preview_message(basename))
+        animated = ext in image_handler.ANIMATED_EXTENSIONS and image_handler.frame_count(path, ext) > 1
+        if animated and downscale_self_previewable:
+            return MediaResult(
+                None,
+                f"No preview was generated for '{basename}': the animated image is under 5 MiB and is "
+                f"already shown as its own preview (a JPEG would drop the animation).",
+                REASON_ANIMATED_LEFT_ALONE)
+        if not downscale_self_previewable:
+            return MediaResult(None, self_preview_message(basename), REASON_SELF_PREVIEWABLE)
         return _downscaled_self_preview(path, ext, output_dir, basename, pixel_budget, original_size)
 
     if output_type in ("auto", "gif") and ext in image_handler.ANIMATED_EXTENSIONS \
@@ -156,14 +188,19 @@ def _downscaled_self_preview(path, ext, output_dir, basename, pixel_budget, orig
     if saves_enough or original_long_edge > DOWNSCALE_LONG_EDGE_TRIGGER:
         return MediaResult(target)
     os.remove(target)
-    return MediaResult(None, f"No smaller preview possible for '{basename}'; no preview written.")
+    return MediaResult(
+        None,
+        f"No preview was generated for '{basename}': no JPEG meaningfully smaller than the original was "
+        f"possible, and the file is under 5 MiB and already shown as its own preview.",
+        REASON_NO_SMALLER_PREVIEW)
 
 
 def _video_preview(path, ext, output_type, output_dir, basename) -> MediaResult:
     try:
         frames, _duration = video_handler.sample_frames(path, ext)
     except video_handler.NoVideoStream:
-        return MediaResult(None, f"No video stream in '{basename}'; no preview written.")
+        return MediaResult(None, f"No video stream in '{basename}'; no preview written.",
+                           REASON_NO_VIDEO_STREAM)
     middle = frames[len(frames) // 2]
     if output_type in ("jpg", "png"):
         return MediaResult(_write_still(middle, output_dir, basename, output_type,

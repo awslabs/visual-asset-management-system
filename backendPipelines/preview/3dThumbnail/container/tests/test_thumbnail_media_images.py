@@ -52,7 +52,9 @@ class TestSelfPreviewableImages:
         path = writer(str(tmp_path / name))
         result = _generate(path, tmp_path)
         assert result.path is None
-        assert "is shown as its own preview" in result.message and name in result.message
+        assert result.message == (f"No preview was generated for '{name}': the file is under 5 MiB "
+                                  f"and is already shown as its own preview.")
+        assert result.reason == media_preview.REASON_SELF_PREVIEWABLE
         assert not [p for p in os.listdir(tmp_path) if ".previewFile." in p]
 
     def test_the_boundary_is_strictly_under_five_mib(self, tmp_path):
@@ -87,7 +89,7 @@ class TestSelfPreviewableImages:
 
 @pytest.mark.unit
 class TestDownscaleOption:
-    """mediaPreviews.downscaleSelfPreviewableImages: a JPEG for an image the web already shows, only
+    """useMediaPreviews.downscaleSelfPreviewableImages: a JPEG for an image the web already shows, only
     when it is meaningfully smaller."""
 
     def test_a_large_photo_gets_a_smaller_jpeg(self, tmp_path):
@@ -103,7 +105,9 @@ class TestDownscaleOption:
     def test_a_small_png_gets_no_preview(self, tmp_path):
         path = samples.write_png(str(tmp_path / "small.png"))
         result = _generate(path, tmp_path, downscale=True)
-        assert result.path is None and "No smaller preview possible" in result.message
+        assert result.path is None and result.reason == media_preview.REASON_NO_SMALLER_PREVIEW
+        assert "No preview was generated for 'small.png'" in result.message
+        assert "no JPEG meaningfully smaller" in result.message
         assert not [p for p in os.listdir(tmp_path) if ".previewFile." in p]
 
     def test_an_image_over_the_edge_trigger_is_written_even_when_not_smaller(self, tmp_path):
@@ -117,7 +121,10 @@ class TestDownscaleOption:
     def test_an_animated_gif_is_left_alone(self, tmp_path):
         path = samples.write_animated_gif(str(tmp_path / "anim.gif"), count=6)
         result = _generate(path, tmp_path, downscale=True)
-        assert result.path is None and "own preview" in result.message
+        assert result.path is None and result.reason == media_preview.REASON_ANIMATED_LEFT_ALONE
+        assert result.message == (
+            "No preview was generated for 'anim.gif': the animated image is under 5 MiB and is already "
+            "shown as its own preview (a JPEG would drop the animation).")
 
     def test_the_option_reads_the_environment_and_is_off_when_missing(self):
         assert media_preview.downscale_option_enabled({}) is False

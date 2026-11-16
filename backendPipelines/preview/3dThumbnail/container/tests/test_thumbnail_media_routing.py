@@ -43,6 +43,9 @@ def _stage(key, ext, version=None):
         outputFiles=output.__dict__, outputMetadata=output.__dict__, temporaryFiles=output.__dict__)
 
 
+RESULTS = {"bucketName": "run-bucket", "objectDir": "pipelines/preview3dThumbnail/JOB/output/E1/results/"}
+
+
 class _Run:
     """One run of the stage with S3 stubbed: ``source`` is the local file the 'download' copies."""
 
@@ -52,6 +55,7 @@ class _Run:
         self.download = MagicMock(side_effect=lambda bucket, k, path, **kw: shutil.copyfile(source, path)
                                   or path)
         self.upload = MagicMock(side_effect=lambda bucket, k, path: None if upload_fails else k)
+        self.put_json = MagicMock(side_effect=lambda bucket, k, body: k)
         self.uploaded_bytes = {}
         # size: None = the file's own size, "unknown" = a HEAD that reports none
         self.head = MagicMock(return_value=None if size == "unknown" else
@@ -77,11 +81,13 @@ class _Run:
                 patch.object(core.s3, "get_object_size", self.head), \
                 patch.object(core.s3, "download", self.download), \
                 patch.object(core.s3, "upload", upload), \
+                patch.object(core.s3, "put_json", self.put_json), \
                 patch.dict(os.environ, env, clear=False):
             for name in (media_preview.DOWNSCALE_ENV,):
                 if name not in env:
                     os.environ.pop(name, None)
-            self.result = core._run_preview_pipeline(_stage(key, ext, version), {}, params or {}, False, "xid")
+            self.result = core._run_preview_pipeline(_stage(key, ext, version), {}, params or {}, False, "xid",
+                                                     results_location=RESULTS)
 
 
 def _png(tmp_path, size=None):
@@ -98,7 +104,8 @@ class TestSelfPreviewableSkip:
         assert run.result.status == PipelineStatus.COMPLETE
         run.download.assert_not_called()
         run.upload.assert_not_called()
-        assert "'photo.png' is shown as its own preview; no preview written." in caplog.text
+        assert ("No preview was generated for 'photo.png': the file is under 5 MiB and is already "
+                "shown as its own preview.") in caplog.text
 
     def test_the_head_uses_the_input_version(self, tmp_path):
         run = _Run(tmp_path, _png(tmp_path), "xid/photo.png", version="v-7")
@@ -139,7 +146,7 @@ class TestSelfPreviewableSkip:
         run = _Run(tmp_path, _png(tmp_path), "xid/small.png", environ={media_preview.DOWNSCALE_ENV: "true"})
         assert run.result.status == PipelineStatus.COMPLETE
         run.upload.assert_not_called()
-        assert "No smaller preview possible" in caplog.text
+        assert "no JPEG meaningfully smaller" in caplog.text
 
 
 @pytest.mark.unit
@@ -250,3 +257,83 @@ class TestThreeDRoutingIsUnchanged:
     def test_the_local_test_finder_sees_both(self, tmp_path):
         (tmp_path / "a.mp4").write_bytes(b"x")
         assert core._find_local_test_file(str(tmp_path)).endswith("a.mp4")
+
+
+@pytest.mark.unit
+class TestNoPreviewResultDocument:
+    """A run that writes no preview says why in the execution's results (preview-not-generated.json)."""
+
+    def _document(self, run):
+        run.put_json.assert_called_once()
+        bucket, key, body = run.put_json.call_args.args
+        assert bucket == "run-bucket"
+        assert key == RESULTS["objectDir"] + media_preview.NO_PREVIEW_RESULT_FILENAME
+        import json
+        return json.loads(body.decode("utf-8"))
+
+    def test_an_image_shown_as_its_own_preview(self, tmp_path):
+        run = _Run(tmp_path, _png(tmp_path), "xid/pics/photo.png")
+        document = self._document(run)
+        assert document == {
+            "schema": media_preview.NO_PREVIEW_RESULT_SCHEMA,
+            "file": "photo.png",
+            "reason": "alreadyShownAsOwnPreview",
+            "message": ("No preview was generated for 'photo.png': the file is under 5 MiB and is "
+                        "already shown as its own preview."),
+        }
+
+    def test_the_downscale_option_finding_no_smaller_jpeg(self, tmp_path):
+        run = _Run(tmp_path, _png(tmp_path), "xid/small.png", environ={media_preview.DOWNSCALE_ENV: "true"})
+        document = self._document(run)
+        assert document["reason"] == "noSmallerPreview"
+        assert "already shown as its own preview" in document["message"]
+
+    def test_an_animated_image_left_alone_with_the_option_on(self, tmp_path):
+        source = samples.write_animated_gif(str(tmp_path / "src.gif"), count=5)
+        run = _Run(tmp_path, source, "xid/anim.gif", environ={media_preview.DOWNSCALE_ENV: "true"})
+        document = self._document(run)
+        assert document["reason"] == "animatedImageLeftAlone"
+        assert "would drop the animation" in document["message"]
+
+    def test_an_audio_only_file(self, tmp_path):
+        source = samples.write_audio_only(str(tmp_path / "src.mkv"))
+        run = _Run(tmp_path, source, "xid/talk.mkv")
+        document = self._document(run)
+        assert document["reason"] == "noVideoStream"
+        assert document["message"] == "No video stream in 'talk.mkv'; no preview written."
+
+    def test_a_run_that_writes_a_preview_writes_no_such_document(self, tmp_path):
+        run = _Run(tmp_path, _png(tmp_path, LIMIT + 1), "xid/big.png")
+        run.put_json.assert_not_called()
+
+    def test_a_failed_write_still_completes_the_run(self, tmp_path):
+        source = _png(tmp_path)
+        with patch.object(core.s3, "put_json", MagicMock(return_value=None)):
+            run = _Run(tmp_path, source, "xid/photo.png")
+        assert run.result.status == PipelineStatus.COMPLETE
+
+    def test_no_results_location_completes_the_run(self, tmp_path):
+        source = _png(tmp_path)
+        stage = _stage("xid/photo.png", ".png")
+        with patch.object(core, "_create_dir", lambda parts: str(_dir(tmp_path, parts))), \
+                patch.object(core.s3, "list_objects_with_prefix", MagicMock(return_value=[])), \
+                patch.object(core.s3, "get_object_size", MagicMock(return_value=os.path.getsize(source))), \
+                patch.object(core.s3, "put_json", MagicMock()) as put_json:
+            result = core._run_preview_pipeline(stage, {}, {}, False, "xid")
+        assert result.status == PipelineStatus.COMPLETE
+        put_json.assert_not_called()
+
+    def test_the_lambda_and_the_container_agree_on_the_document(self):
+        lambda_source = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lambda",
+                                          "openPipeline.py")).read()
+        assert f'NO_PREVIEW_RESULT_FILENAME = "{media_preview.NO_PREVIEW_RESULT_FILENAME}"' in lambda_source
+        assert f'NO_PREVIEW_RESULT_SCHEMA = "{media_preview.NO_PREVIEW_RESULT_SCHEMA}"' in lambda_source
+        for text in (media_preview.self_preview_message("x.png"),):
+            assert text == ("No preview was generated for 'x.png': the file is under 5 MiB and is already "
+                            "shown as its own preview.")
+
+
+def _dir(tmp_path, parts):
+    path = tmp_path / "-".join(parts)
+    path.mkdir(parents=True, exist_ok=True)
+    return path

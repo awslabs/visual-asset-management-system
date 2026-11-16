@@ -68,6 +68,7 @@ def _event(name="photo.png", token="tok-1", version=""):
         "inputConfigurationS3Location": CONFIG_URI,
         "sfnExternalTaskToken": token,
         "inputVersionId": version,
+        "outputS3AssetResultsPath": "s3://abkt/pipelines/p1/MJOB/output/E1/results/",
         "assetId": "xid",
         "databaseId": "db",
     }
@@ -109,8 +110,10 @@ class TestSelfPreviewableImageEndsTheRun:
         assert success.call_args.kwargs["taskToken"] == "tok-1"
         output = json.loads(success.call_args.kwargs["output"])
         assert output["status"] == "Pipeline Success"
-        assert f"'{name}' is shown as its own preview; no preview written." == output["message"]
-        assert "own preview" in response["body"]["message"]
+        expected = (f"No preview was generated for '{name}': the file is under 5 MiB and is already "
+                    f"shown as its own preview.")
+        assert output["message"] == expected
+        assert response["body"]["message"] == expected
 
     def test_the_output_has_the_shape_the_state_machine_end_sends(self):
         mod = _load(MEDIA_ENV)
@@ -213,3 +216,58 @@ class TestMediaExtensionsNeedTheSwitch:
         assert mod.self_previewable_extensions() == [] and mod.preview_size_limit_bytes() is None
         mod = _load({"PREVIEW_FILE_SIZE_LIMIT_BYTES": "junk"})
         assert mod.preview_size_limit_bytes() is None
+
+
+@pytest.mark.unit
+class TestNoPreviewResultDocument:
+    """The Lambda records why no run started in the execution's results, before the task ends."""
+
+    def test_the_document_is_written_under_the_results_folder_before_the_task_succeeds(self):
+        mod = _load(MEDIA_ENV)
+        s3 = _s3(10)
+        order = []
+        s3.put_object.side_effect = lambda **kw: order.append("put")
+        start = MagicMock()
+        success = MagicMock(side_effect=lambda **kw: order.append("success"))
+        with patch.object(mod, "s3_client", s3), patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.sfn, "send_task_success", success):
+            response = mod.lambda_handler(_event("photo.png"), MagicMock())
+        assert response["statusCode"] == 200 and order == ["put", "success"]
+        call = s3.put_object.call_args.kwargs
+        assert call["Bucket"] == "abkt"
+        assert call["Key"] == "pipelines/p1/MJOB/output/E1/results/preview-not-generated.json"
+        document = json.loads(call["Body"].decode("utf-8"))
+        assert document == {
+            "schema": "vams.mediaPreview.noPreview/v1",
+            "file": "photo.png",
+            "reason": "alreadyShownAsOwnPreview",
+            "message": ("No preview was generated for 'photo.png': the file is under 5 MiB and is "
+                        "already shown as its own preview."),
+        }
+
+    def test_a_failed_write_still_ends_the_run_successfully(self):
+        mod = _load(MEDIA_ENV)
+        s3 = _s3(10)
+        s3.put_object.side_effect = Exception("AccessDenied")
+        response, start, success, failure = _run(mod, _event("photo.png"), s3)
+        assert response["statusCode"] == 200
+        success.assert_called_once()
+        failure.assert_not_called()
+        start.assert_not_called()
+
+    def test_no_results_path_writes_nothing(self):
+        mod = _load(MEDIA_ENV)
+        s3 = _s3(10)
+        event = _event("photo.png")
+        event.pop("outputS3AssetResultsPath")
+        response, _, success, _ = _run(mod, event, s3)
+        assert response["statusCode"] == 200
+        success.assert_called_once()
+        s3.put_object.assert_not_called()
+
+    def test_a_run_that_starts_writes_no_document(self):
+        mod = _load(MEDIA_ENV)
+        s3 = _s3(LIMIT * 2)
+        _, start, _, _ = _run(mod, _event("big.png"), s3)
+        assert start.call_count == 1
+        s3.put_object.assert_not_called()

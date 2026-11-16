@@ -1247,7 +1247,9 @@ const CORE_FIELDS: FieldMeta[] = [
         advanced: true,
         min: 0.25,
         help: "AWS Fargate vCPU for inputs below the large-tier threshold: 0.25, 0.5, 1, 2, 4, 8 or 16.",
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") ||
+            !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
     },
     {
         path: "app.pipelines.usePreview3dThumbnail.computeTiers.standard.memoryGiB",
@@ -1257,7 +1259,9 @@ const CORE_FIELDS: FieldMeta[] = [
         advanced: true,
         min: 0.5,
         help: "A memory size AWS Fargate supports for the standard tier's vCPU (4 vCPU: 8–30 GiB).",
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") ||
+            !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
     },
     {
         path: "app.pipelines.usePreview3dThumbnail.computeTiers.large.vcpu",
@@ -1267,7 +1271,9 @@ const CORE_FIELDS: FieldMeta[] = [
         advanced: true,
         min: 0.25,
         help: "AWS Fargate vCPU for inputs at or above the large-tier threshold: 0.25, 0.5, 1, 2, 4, 8 or 16.",
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") ||
+            !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
     },
     {
         path: "app.pipelines.usePreview3dThumbnail.computeTiers.large.memoryGiB",
@@ -1277,7 +1283,9 @@ const CORE_FIELDS: FieldMeta[] = [
         advanced: true,
         min: 0.5,
         help: "A memory size AWS Fargate supports for the large tier's vCPU (16 vCPU: 32–120 GiB in 8 GiB steps).",
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") ||
+            !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
     },
     {
         path: "app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB",
@@ -1286,37 +1294,34 @@ const CORE_FIELDS: FieldMeta[] = [
         section: "pipelines-standard",
         advanced: true,
         help: "Inputs at or above this size run on the large tier.",
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
-    },
-    {
-        path: "app.pipelines.usePreview3dThumbnail.mediaPreviews.enabled",
-        label: "3D thumbnail — media previews",
-        input: "boolean",
-        section: "pipelines-standard",
-        advanced: true,
-        help: "Also register a Media Preview Thumbnail workflow: JPG previews for images 5 MiB or larger and for every TGA/TIFF, animated GIF previews for video. Deploys only with the pipeline; a missing value means off.",
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
-    },
-    {
-        path: "app.pipelines.usePreview3dThumbnail.mediaPreviews.autoRegisterAutoTriggerOnFileUpload",
-        label: "3D thumbnail — media previews auto-trigger on upload",
-        input: "boolean",
-        section: "pipelines-standard",
-        advanced: true,
         visibleWhen: (c) =>
-            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") &&
-            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.mediaPreviews.enabled"),
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") ||
+            !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
     },
     {
-        path: "app.pipelines.usePreview3dThumbnail.mediaPreviews.downscaleSelfPreviewableImages",
-        label: "3D thumbnail — media previews downscale small images",
+        path: "app.pipelines.useMediaPreviews.enabled",
+        label: "Media previews",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Media Preview Thumbnail workflow: JPG previews for images 5 MiB or larger and for every TGA/TIFF, animated GIF previews for video. Shares the 3D thumbnail container, so it deploys that container (tier sizes below) even when the 3D thumbnail pipeline is off. Requires VPC. A missing value means off.",
+    },
+    {
+        path: "app.pipelines.useMediaPreviews.autoRegisterAutoTriggerOnFileUpload",
+        label: "Media previews — auto-trigger on upload",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
+    },
+    {
+        path: "app.pipelines.useMediaPreviews.downscaleSelfPreviewableImages",
+        label: "Media previews — downscale small images",
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
         help: "Also write a smaller JPEG for an image the web already shows as its own preview (a PNG, JPG, GIF, WebP or BMP under 5 MiB), when the JPEG is meaningfully smaller. Off by default.",
-        visibleWhen: (c) =>
-            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") &&
-            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.mediaPreviews.enabled"),
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
     },
     {
         path: "app.pipelines.usePreviewPcPotreeViewer.enabled",

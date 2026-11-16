@@ -16,6 +16,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { Template } from "aws-cdk-lib/assertions";
+import * as Config from "../../config/config";
 import {
     Preview3dThumbnailConstruct,
     PREVIEW_DOWNSCALE_ENVIRONMENT_VARIABLE,
@@ -37,16 +38,20 @@ type Media = Partial<{
     downscaleSelfPreviewableImages: boolean;
 }>;
 
-/** Synthesize the construct; `media` undefined deletes the block (a config that predates it). */
-function synth(id: string, media: Media | undefined, register = false): Template {
+/**
+ * Synthesize the construct as the pipeline builder deploys it: `threeD` is
+ * `usePreview3dThumbnail.enabled`, `media` the `useMediaPreviews` block (undefined deletes it, as in a
+ * config that predates it).
+ */
+function synth(id: string, threeD: boolean, media: Media | undefined, register = true): Template {
     const h = makePipelineHarness(id, (c) => {
         const thumbnail = c.app.pipelines.usePreview3dThumbnail;
-        thumbnail.enabled = true;
+        thumbnail.enabled = threeD;
         thumbnail.autoRegisterWithVAMS = register;
         if (media === undefined) {
-            delete (thumbnail as any).mediaPreviews;
+            delete (c.app.pipelines as any).useMediaPreviews;
         } else {
-            thumbnail.mediaPreviews = {
+            c.app.pipelines.useMediaPreviews = {
                 enabled: false,
                 autoRegisterAutoTriggerOnFileUpload: false,
                 downscaleSelfPreviewableImages: false,
@@ -54,7 +59,11 @@ function synth(id: string, media: Media | undefined, register = false): Template
             };
         }
     });
-    const nested = new Preview3dThumbnailConstruct(h.stack, "Preview3dThumbnailPipeline", {
+    return Template.fromStack(construct(h));
+}
+
+function construct(h: ReturnType<typeof makePipelineHarness>) {
+    return new Preview3dThumbnailConstruct(h.stack, "Preview3dThumbnailPipeline", {
         config: h.config,
         storageResources: h.storage,
         vpc: h.vpc,
@@ -63,7 +72,6 @@ function synth(id: string, media: Media | undefined, register = false): Template
         lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
         importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
     });
-    return Template.fromStack(nested);
 }
 
 const openPipelineEnv = (template: Template): Record<string, string> => {
@@ -85,6 +93,11 @@ const registrations = (template: Template): any[] =>
         r.Properties.bundleS3Keys?.includes?.("pipeline.json")
     ) as any[];
 
+const pipelineIds = (template: Template): string[] =>
+    registrations(template)
+        .map((r) => JSON.parse(r.Properties.idOverrides).pipelineId as string)
+        .sort();
+
 const triggerByPipeline = (template: Template): Record<string, string> =>
     Object.fromEntries(
         registrations(template).map((r) => [
@@ -93,71 +106,22 @@ const triggerByPipeline = (template: Template): Record<string, string> =>
         ])
     );
 
-describe("media previews off (block missing, or enabled false)", () => {
+const BOTH_EXTENSIONS = `${THREE_D_EXTENSIONS},${PREVIEW_MEDIA_INPUT_FILE_EXTENSIONS}`;
+
+describe("one deployment serves both workflows", () => {
     test.each([
-        ["missing", undefined],
-        ["disabled", { enabled: false }],
-    ])("%s block: nothing about media is deployed", (name, media) => {
-        const template = synth(`MediaOff${name}`, media as Media | undefined, true);
+        ["3D only", true, { enabled: false }],
+        ["3D only, block missing", true, undefined],
+        ["media only", false, { enabled: true }],
+        ["both", true, { enabled: true }],
+    ])("%s: the container carries the 3D and the media paths", (name, threeD, media) => {
+        const template = synth(`Both${name.replace(/\W/g, "")}`, threeD as boolean, media as Media);
         const env = openPipelineEnv(template);
-        expect(env.ALLOWED_INPUT_FILEEXTENSIONS).toBe(THREE_D_EXTENSIONS);
-        expect(env).not.toHaveProperty("SELF_PREVIEWABLE_FILEEXTENSIONS");
-        expect(env).not.toHaveProperty("PREVIEW_FILE_SIZE_LIMIT_BYTES");
-        expect(env).not.toHaveProperty("DOWNSCALE_SELF_PREVIEWABLE_IMAGES");
-        const asl = parseAsl(singleStateMachine(template));
-        for (const state of STATES) {
-            expect(containerEnvironment(asl.States[state])).not.toHaveProperty(
-                PREVIEW_DOWNSCALE_ENVIRONMENT_VARIABLE
-            );
-        }
-        expect(registrations(template)).toHaveLength(1); // the 3D bundle only
-    });
-
-    test("the Lambda environment, state machine and resource types are the same with the block missing or all false", () => {
-        const missing = synth("MediaOffIdentityMissing", undefined);
-        const allFalse = synth("MediaOffIdentityFalse", {});
-        const strip = (value: unknown) =>
-            JSON.stringify(value).replace(/MediaOffIdentity(Missing|False)\w*?(Ref|")/g, "X$2");
-        expect(strip(openPipelineEnv(allFalse))).toEqual(strip(openPipelineEnv(missing)));
-        const states = (t: Template) =>
-            Object.fromEntries(
-                Object.entries(parseAsl(singleStateMachine(t)).States as Record<string, any>).map(
-                    ([name, state]) => [name, state.Parameters?.ContainerOverrides?.Environment]
-                )
-            );
-        expect(states(allFalse)).toEqual(states(missing));
-        const types = (t: Template) =>
-            Object.values(t.toJSON().Resources as Record<string, any>)
-                .map((r) => r.Type)
-                .sort();
-        expect(types(allFalse)).toEqual(types(missing));
-    });
-});
-
-describe("media previews on", () => {
-    let template: Template;
-
-    beforeAll(() => {
-        template = synth("MediaOnStack", { enabled: true }, true);
-    });
-
-    test("openPipeline accepts the media extensions beside the 3D ones", () => {
-        const env = openPipelineEnv(template);
-        expect(env.ALLOWED_INPUT_FILEEXTENSIONS).toBe(
-            `${THREE_D_EXTENSIONS},${PREVIEW_MEDIA_INPUT_FILE_EXTENSIONS}`
-        );
-        const all = env.ALLOWED_INPUT_FILEEXTENSIONS.split(",");
-        expect(new Set(all).size).toBe(all.length);
-    });
-
-    test("openPipeline receives the self-previewable list, the limit and the option (off)", () => {
-        const env = openPipelineEnv(template);
+        expect(env.ALLOWED_INPUT_FILEEXTENSIONS).toBe(BOTH_EXTENSIONS);
         expect(env.SELF_PREVIEWABLE_FILEEXTENSIONS).toBe(PREVIEW_SELF_PREVIEWABLE_FILE_EXTENSIONS);
         expect(env.PREVIEW_FILE_SIZE_LIMIT_BYTES).toBe("5242880");
-        expect(env.DOWNSCALE_SELF_PREVIEWABLE_IMAGES).toBe("false");
-    });
-
-    test("the container is told the option on both tiers", () => {
+        const all = env.ALLOWED_INPUT_FILEEXTENSIONS.split(",");
+        expect(new Set(all).size).toBe(all.length);
         const asl = parseAsl(singleStateMachine(template));
         for (const state of STATES) {
             expect(
@@ -166,10 +130,35 @@ describe("media previews on", () => {
         }
     });
 
-    test("a second bundle is registered with its own pipeline and workflow ids", () => {
-        const resources = registrations(template);
-        expect(resources).toHaveLength(2);
-        const ids = resources.map((r) => JSON.parse(r.Properties.idOverrides));
+    test("the flags choose only the registrations", () => {
+        expect(pipelineIds(synth("RegThreeD", true, { enabled: false }))).toEqual([
+            "preview-3d-thumbnail",
+        ]);
+        expect(pipelineIds(synth("RegThreeDMissing", true, undefined))).toEqual([
+            "preview-3d-thumbnail",
+        ]);
+        expect(pipelineIds(synth("RegMedia", false, { enabled: true }))).toEqual([
+            "preview-media-thumbnail",
+        ]);
+        expect(pipelineIds(synth("RegBoth", true, { enabled: true }))).toEqual([
+            "preview-3d-thumbnail",
+            "preview-media-thumbnail",
+        ]);
+    });
+
+    test("the media workflow registers whatever the 3D autoRegisterWithVAMS says", () => {
+        expect(pipelineIds(synth("RegMediaNo3dReg", false, { enabled: true }, false))).toEqual([
+            "preview-media-thumbnail",
+        ]);
+        expect(pipelineIds(synth("RegBothNo3dReg", true, { enabled: true }, false))).toEqual([
+            "preview-media-thumbnail",
+        ]);
+    });
+
+    test("the 3D bundle and the media bundle keep their own ids", () => {
+        const ids = registrations(synth("RegIds", true, { enabled: true })).map((r) =>
+            JSON.parse(r.Properties.idOverrides)
+        );
         expect(ids).toEqual(
             expect.arrayContaining([
                 { pipelineId: "preview-3d-thumbnail", workflowId: "preview-3d-thumbnail" },
@@ -178,34 +167,76 @@ describe("media previews on", () => {
         );
     });
 
-    test("the media registration's trigger follows its own flag", () => {
-        expect(triggerByPipeline(template)["preview-media-thumbnail"]).toBe("false");
-        const on = synth(
-            "MediaOnTrigger",
-            { enabled: true, autoRegisterAutoTriggerOnFileUpload: true },
-            true
+    test("each registration's trigger follows its own flag", () => {
+        const off = triggerByPipeline(synth("TrigOff", true, { enabled: true }));
+        expect(off["preview-media-thumbnail"]).toBe("false");
+        expect(off["preview-3d-thumbnail"]).toBe("true");
+        const on = triggerByPipeline(
+            synth("TrigOn", false, { enabled: true, autoRegisterAutoTriggerOnFileUpload: true })
         );
-        expect(triggerByPipeline(on)["preview-media-thumbnail"]).toBe("true");
+        expect(on["preview-media-thumbnail"]).toBe("true");
     });
 
-    test("the option reaches openPipeline and the container when it is on", () => {
-        const on = synth("MediaOnDownscale", {
+    test("the downscale option reaches openPipeline and the container on both tiers", () => {
+        const on = synth("Downscale", false, {
             enabled: true,
             downscaleSelfPreviewableImages: true,
         });
         expect(openPipelineEnv(on).DOWNSCALE_SELF_PREVIEWABLE_IMAGES).toBe("true");
         const asl = parseAsl(singleStateMachine(on));
-        expect(
-            containerEnvironment(asl.States.Preview3dThumbnailBatchJob)[
-                PREVIEW_DOWNSCALE_ENVIRONMENT_VARIABLE
-            ]
-        ).toBe("true");
+        for (const state of STATES) {
+            expect(
+                containerEnvironment(asl.States[state])[PREVIEW_DOWNSCALE_ENVIRONMENT_VARIABLE]
+            ).toBe("true");
+        }
+        const off = synth("DownscaleOff", true, { enabled: true });
+        expect(openPipelineEnv(off).DOWNSCALE_SELF_PREVIEWABLE_IMAGES).toBe("false");
     });
 
-    test("with auto-registration off no bundle is registered, and the env still follows", () => {
-        const noRegister = synth("MediaOnNoRegister", { enabled: true }, false);
-        expect(registrations(noRegister)).toHaveLength(0);
-        expect(openPipelineEnv(noRegister).ALLOWED_INPUT_FILEEXTENSIONS).toContain(".tif");
+    test("openPipeline may write only the no-preview result, under pipelines/ of the auxiliary bucket", () => {
+        const template = synth("NoWrite", false, { enabled: true });
+        const policies = Object.values(template.findResources("AWS::IAM::Policy")) as any[];
+        const open = policies.filter((p) =>
+            JSON.stringify(p.Properties.Roles ?? []).includes("openPipelineServiceRole")
+        );
+        expect(open.length).toBeGreaterThan(0);
+        const statements = open.flatMap((p) => p.Properties.PolicyDocument.Statement);
+        const actionsOf = (st: any): string[] =>
+            Array.isArray(st.Action) ? st.Action : [st.Action];
+        const allActions = statements.flatMap(actionsOf);
+        expect(allActions).toContain("states:SendTaskSuccess");
+        expect(allActions.filter((a: string) => /^s3:Delete/.test(a))).toEqual([]);
+        const writers = statements.filter((st: any) =>
+            actionsOf(st).some((a) => /^s3:Put/.test(a))
+        );
+        expect(writers.length).toBeGreaterThan(0);
+        for (const st of writers) {
+            const resources = Array.isArray(st.Resource) ? st.Resource : [st.Resource];
+            for (const r of resources) {
+                expect(JSON.stringify(r)).toMatch(/\/pipelines\/\*/);
+            }
+        }
+    });
+
+    test("the compute tiers come from the 3D block in a media-only deployment", () => {
+        const h = makePipelineHarness("MediaOnlyTiers", (c) => {
+            c.app.pipelines.usePreview3dThumbnail.enabled = false;
+            c.app.pipelines.usePreview3dThumbnail.computeTiers = {
+                standard: { vcpu: 2, memoryGiB: 8 },
+                large: { vcpu: 8, memoryGiB: 60 },
+            };
+            c.app.pipelines.useMediaPreviews = {
+                ...Config.PREVIEW_MEDIA_PREVIEWS_DEFAULTS,
+                enabled: true,
+            };
+        });
+        const asl = parseAsl(singleStateMachine(Template.fromStack(construct(h))));
+        const memory = (state: any) =>
+            (state.Parameters.ContainerOverrides.ResourceRequirements as any[]).find(
+                (r) => r.Type === "MEMORY"
+            ).Value;
+        expect(memory(asl.States[STATES[0]])).toBe(String(8 * 1024));
+        expect(memory(asl.States[STATES[1]])).toBe(String(60 * 1024));
     });
 });
 
@@ -290,18 +321,18 @@ describe("the shared lists and the limit", () => {
         expect(container).toContain(`DOWNSCALE_ENV = "${PREVIEW_DOWNSCALE_ENVIRONMENT_VARIABLE}"`);
     });
 
-    test("the shipped config and templates carry the same media block", () => {
+    test("the shipped config and templates carry the same sibling media block", () => {
         for (const name of [
             "config.json",
             "config.template.commercial.json",
             "config.template.govcloud.json",
             "config.template.eusovereign.json",
         ]) {
-            const block = JSON.parse(read("infra/config", name)).app.pipelines
-                .usePreview3dThumbnail;
-            expect(block.mediaPreviews).toEqual({
-                enabled: true,
-                autoRegisterAutoTriggerOnFileUpload: block.autoRegisterAutoTriggerOnFileUpload,
+            const pipelines = JSON.parse(read("infra/config", name)).app.pipelines;
+            expect(pipelines.usePreview3dThumbnail.mediaPreviews).toBeUndefined();
+            expect(pipelines.useMediaPreviews).toEqual({
+                enabled: false,
+                autoRegisterAutoTriggerOnFileUpload: false,
                 downscaleSelfPreviewableImages: false,
             });
         }

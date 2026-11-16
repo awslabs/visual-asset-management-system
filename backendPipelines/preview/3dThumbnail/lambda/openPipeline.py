@@ -33,11 +33,11 @@ s3_client = boto3.client('s3', config=retry_config)
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
-# Media previews (mediaPreviews.enabled): the image extensions the web shows as their own preview when the
+# Media previews (useMediaPreviews.enabled): the image extensions the web shows as their own preview when the
 # file is under PREVIEW_FILE_SIZE_LIMIT_BYTES, and that limit. Both are set by CDK from the shared
 # constants (infra/lib/.../preview3dThumbnail-construct.ts) and are absent when media previews are off.
 # An input of one of those extensions that is under the limit gets no run unless
-# DOWNSCALE_SELF_PREVIEWABLE_IMAGES is "true" (mediaPreviews.downscaleSelfPreviewableImages).
+# DOWNSCALE_SELF_PREVIEWABLE_IMAGES is "true" (useMediaPreviews.downscaleSelfPreviewableImages).
 SELF_PREVIEWABLE_FILEEXTENSIONS = os.environ.get("SELF_PREVIEWABLE_FILEEXTENSIONS", "")
 PREVIEW_FILE_SIZE_LIMIT_BYTES = os.environ.get("PREVIEW_FILE_SIZE_LIMIT_BYTES", "")
 DOWNSCALE_SELF_PREVIEWABLE_IMAGES = os.environ.get(
@@ -111,6 +111,38 @@ def is_shown_as_own_preview(event, extension, input_uri):
                        f"starting the run: {e}")
         return False
     return size < limit
+
+
+# The result document the run records on the execution (the container writes the same one; a drift test
+# keeps the name and schema equal to media_preview.py's).
+NO_PREVIEW_RESULT_FILENAME = "preview-not-generated.json"
+NO_PREVIEW_RESULT_SCHEMA = "vams.mediaPreview.noPreview/v1"
+
+
+def self_preview_message(name):
+    return (f"No preview was generated for '{name}': the file is under 5 MiB and is already shown as "
+            f"its own preview.")
+
+
+def write_no_preview_result(results_uri, name, message):
+    """Write the no-preview result document under the execution's results folder, where the workflow's
+    output step records it on the execution. Best effort: no results path, or a write that fails, leaves
+    the run successful with the message in the task output and the log."""
+    bucket, prefix = manifestHelper.parse_s3_uri(results_uri) if results_uri else (None, None)
+    if not bucket or prefix is None:
+        logger.info("No results path for this run; the no-preview message is in the task output only")
+        return
+    key = prefix + NO_PREVIEW_RESULT_FILENAME
+    body = json.dumps({
+        "schema": NO_PREVIEW_RESULT_SCHEMA,
+        "file": name,
+        "reason": "alreadyShownAsOwnPreview",
+        "message": message,
+    }).encode("utf-8")
+    try:
+        s3_client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
+    except Exception as e:  # nosec B110 - best effort; the run still completes successfully
+        logger.warning(f"Could not write the no-preview result ({type(e).__name__}): {e}")
 
 
 def complete_without_preview(task_token, message):
@@ -250,9 +282,11 @@ def lambda_handler(event, context):
     # An image the web already shows as its own preview needs no run: end it here, successfully, so no
     # container job starts and no object is written.
     if is_shown_as_own_preview(event, extension, input_s3_asset_files_uri):
-        message = (f"'{os.path.basename(input_s3_asset_files_uri)}' is shown as its own preview; "
-                   f"no preview written.")
+        name = os.path.basename(input_s3_asset_files_uri)
+        message = self_preview_message(name)
         logger.info(message)
+        # Record why in the execution's results before the task ends, so the output step finds it
+        write_no_preview_result(event.get("outputS3AssetResultsPath", ""), name, message)
         try:
             complete_without_preview(external_sfn_task_token, message)
         except Exception as e:

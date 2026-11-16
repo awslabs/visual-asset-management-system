@@ -22,6 +22,7 @@ import {
 } from "../../../../../helper/security";
 import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as iam from "aws-cdk-lib/aws-iam";
+import { NagSuppressions } from "cdk-nag";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
 import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
@@ -99,7 +100,7 @@ export interface OpenPipelineBatchLogProps {
 /**
  * Media previews settings for openPipeline: the image extensions the web shows as their own preview,
  * the size limit under which they are (strictly), and whether a smaller JPEG is still written for them.
- * Absent when media previews are off, which leaves the function's environment as it was.
+ * Always set: one deployment serves both the 3D and the media workflow.
  */
 export interface OpenPipelineMediaProps {
     selfPreviewableFileExtensions: string;
@@ -120,8 +121,8 @@ export function buildOpenPipelineFunction(
     stateMachineLogGroup: logs.ILogGroup,
     batchLogs: OpenPipelineBatchLogProps,
     largeTierThresholdBytes: number,
-    kmsKey?: kms.IKey,
-    media?: OpenPipelineMediaProps
+    kmsKey: kms.IKey | undefined,
+    media: OpenPipelineMediaProps
 ): lambda.Function {
     const name = "openPipeline";
 
@@ -155,15 +156,9 @@ export function buildOpenPipelineFunction(
             // Inputs at or above this size run on the large compute tier.
             LARGE_TIER_THRESHOLD_BYTES: String(largeTierThresholdBytes),
             // An image the web already shows as its own preview ends its run in this function.
-            ...(media
-                ? {
-                      SELF_PREVIEWABLE_FILEEXTENSIONS: media.selfPreviewableFileExtensions,
-                      PREVIEW_FILE_SIZE_LIMIT_BYTES: String(media.previewFileSizeLimitBytes),
-                      DOWNSCALE_SELF_PREVIEWABLE_IMAGES: String(
-                          media.downscaleSelfPreviewableImages
-                      ),
-                  }
-                : {}),
+            SELF_PREVIEWABLE_FILEEXTENSIONS: media.selfPreviewableFileExtensions,
+            PREVIEW_FILE_SIZE_LIMIT_BYTES: String(media.previewFileSizeLimitBytes),
+            DOWNSCALE_SELF_PREVIEWABLE_IMAGES: String(media.downscaleSelfPreviewableImages),
         },
     });
 
@@ -171,6 +166,31 @@ export function buildOpenPipelineFunction(
     // and the run's input configuration, which may force a tier.
     grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
+    // An image the web shows as its own preview ends its run here, and the Lambda records why as one
+    // small result document under the execution's results folder (pipelines/<...>/results/), so the
+    // grant is a put on that prefix of the auxiliary bucket and nothing else.
+    assetAuxiliaryBucket.grantPut(fun, "pipelines/*");
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "The no-preview result is written under the execution's results folder, whose key " +
+                    "(pipelines/<pipeline>/<job>/output/<execution>/results/) embeds identifiers that exist only " +
+                    "once a run starts. The write grant is therefore the auxiliary bucket's pipelines/ prefix, the " +
+                    "prefix every pipeline output of this solution lives under, and it is put-only: this Lambda " +
+                    "cannot write outside it or delete anything.",
+                appliesTo: [
+                    {
+                        // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
+                        regex: "/^Resource::<.*AssetAuxiliaryBucket.*\\.Arn>/pipelines/\\*$/g",
+                    },
+                ],
+            },
+        ],
+        true
+    );
     pipelineStateMachine.grantStartExecution(fun);
     orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);

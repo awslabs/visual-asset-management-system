@@ -155,11 +155,11 @@ describe("planUploadPaths extension rule (D3)", () => {
 
     it("exempts preview files from the list but still requires a preview image format", () => {
         const errors = errorsOf(
-            [loose("m.gltf.previewFile.png"), loose("m.gltf.previewFile.bmp")],
+            [loose("m.gltf.previewFile.png"), loose("m.gltf.previewFile.tif")],
             withRestriction(".usda")
         );
         expect(errors["/m.gltf.previewFile.png"]).toEqual([]);
-        expect(errors["/m.gltf.previewFile.bmp"][0]).toMatch(/^Preview files must be /);
+        expect(errors["/m.gltf.previewFile.tif"][0]).toMatch(/^Preview files must be /);
     });
 
     it("applies the preview format rule even without a restriction, and nothing else", () => {

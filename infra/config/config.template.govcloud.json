@@ -114,12 +114,12 @@
                         "memoryGiB": 120
                     }
                 },
-                "largeTierThresholdGiB": 2,
-                "mediaPreviews": {
-                    "enabled": true,
-                    "autoRegisterAutoTriggerOnFileUpload": true,
-                    "downscaleSelfPreviewableImages": false
-                }
+                "largeTierThresholdGiB": 2
+            },
+            "useMediaPreviews": {
+                "enabled": false,
+                "autoRegisterAutoTriggerOnFileUpload": false,
+                "downscaleSelfPreviewableImages": false
             },
             "useConversionCadMeshMetadataExtraction": {
                 "enabled": false,

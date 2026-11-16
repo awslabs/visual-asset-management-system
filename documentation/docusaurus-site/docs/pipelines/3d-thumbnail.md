@@ -73,7 +73,7 @@ A USD stage is rendered as composed: instanced prims and point instancers are dr
 
 ## Media Formats
 
-The same container also writes previews for images and video, through a second registered pipeline and workflow, **Media Preview Thumbnail** (`preview-media-thumbnail`). It is part of this pipeline's deployment: it exists when `usePreview3dThumbnail.enabled` and `usePreview3dThumbnail.mediaPreviews.enabled` are both `true`. A deployment whose configuration has no `mediaPreviews` block keeps today's behaviour (media previews off).
+The same container also writes previews for images and video, through a second registered pipeline and workflow, **Media Preview Thumbnail** (`preview-media-thumbnail`). One deployment (container, Batch queue and state machine) serves both workflows and deploys when either `app.pipelines.usePreview3dThumbnail.enabled` or `app.pipelines.useMediaPreviews.enabled` is `true`; the flags only choose which workflow is registered, so a media-only deployment (3D off) works and takes its compute tiers from `usePreview3dThumbnail`. A deployment whose configuration has no `useMediaPreviews` block keeps today's behaviour (media previews off).
 
 | Category | Extensions                                                          | Handler                                 |
 | :------- | :------------------------------------------------------------------ | :-------------------------------------- |
@@ -96,7 +96,7 @@ An image whose extension is one the web shows as its own preview (`.png`, `.jpg`
 | Video                                             | An animated GIF of 12 frames sampled across the duration (at most 24, long edge 480 px, rotation applied), else the middle frame as a JPEG | Same                                                                                    |
 | Audio-only file or video with no decodable frames | Completes successfully, no preview                                                                                                         | Same                                                                                    |
 
-Every preview is strictly under 5 MiB. TGA and TIFF are never shown as their own preview because browsers cannot display them. A large still image, TGA or TIFF that cannot be decoded within the task's memory fails with a message that names the file type and the pixel limit.
+A run that writes no preview completes successfully and records why as `preview-not-generated.json` in the execution's results: for an image shown as its own preview the message reads "No preview was generated for '<name>': the file is under 5 MiB and is already shown as its own preview." With the downscale option on, an animated GIF or WebP under 5 MiB is still left alone (a JPEG would drop the animation), and the result says so. Every preview is strictly under 5 MiB. TGA and TIFF are never shown as their own preview because browsers cannot display them. A large still image, TGA or TIFF that cannot be decoded within the task's memory fails with a message that names the file type and the pixel limit.
 
 ### Safety limits
 
@@ -216,12 +216,12 @@ Enable this pipeline in `infra/config/config.json`:
                     "standard": { "vcpu": 4, "memoryGiB": 16 },
                     "large": { "vcpu": 16, "memoryGiB": 120 }
                 },
-                "largeTierThresholdGiB": 2,
-                "mediaPreviews": {
-                    "enabled": true,
-                    "autoRegisterAutoTriggerOnFileUpload": true,
-                    "downscaleSelfPreviewableImages": false
-                }
+                "largeTierThresholdGiB": 2
+            },
+            "useMediaPreviews": {
+                "enabled": true,
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "downscaleSelfPreviewableImages": false
             }
         }
     }
@@ -230,19 +230,19 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                                              | Default              | Description                                                                                                                                                             |
-| --------------------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                                           | `false`              | Deploy the 3D thumbnail pipeline infrastructure. Requires `app.useGlobalVpc.enabled`.                                                                                   |
-| `autoRegisterWithVAMS`                              | `true`               | Automatically register the pipeline and workflow during CDK deployment.                                                                                                 |
-| `autoRegisterAutoTriggerOnFileUpload`               | `true`               | Automatically trigger the pipeline when supported 3D files are uploaded.                                                                                                |
-| `computeTiers.standard.vcpu`                        | `4`                  | AWS Fargate vCPU of the standard tier, which runs inputs below the large-tier threshold.                                                                                |
-| `computeTiers.standard.memoryGiB`                   | `16`                 | Memory (GiB) of the standard tier. Must be a size AWS Fargate supports for the tier's vCPU.                                                                             |
-| `computeTiers.large.vcpu`                           | `16`                 | AWS Fargate vCPU of the large tier, which runs inputs at or above the large-tier threshold.                                                                             |
-| `computeTiers.large.memoryGiB`                      | `120`                | Memory (GiB) of the large tier. Must be a size AWS Fargate supports for the tier's vCPU.                                                                                |
-| `largeTierThresholdGiB`                             | `2`                  | Input size (GiB) at or above which a run takes the large tier when its `computeTier` parameter is `auto`. Positive.                                                     |
-| `mediaPreviews.enabled`                             | `false` when missing | Also register the Media Preview Thumbnail pipeline and workflow (images, TGA/TIFF, video). Deploys only with the pipeline. The shipped config and templates set `true`. |
-| `mediaPreviews.autoRegisterAutoTriggerOnFileUpload` | `false` when missing | Trigger the media workflow when a supported image or video is uploaded. Needs `mediaPreviews.enabled`. The shipped config and templates set `true`.                     |
-| `mediaPreviews.downscaleSelfPreviewableImages`      | `false`              | Also write a smaller JPEG for an image the web already shows as its own preview (under 5 MiB). Needs `mediaPreviews.enabled`.                                           |
+| Option                                                 | Default | Description                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                                              | `false` | Deploy the 3D thumbnail pipeline infrastructure. Requires `app.useGlobalVpc.enabled`.                                                                                                                                                                         |
+| `autoRegisterWithVAMS`                                 | `true`  | Automatically register the pipeline and workflow during CDK deployment.                                                                                                                                                                                       |
+| `autoRegisterAutoTriggerOnFileUpload`                  | `true`  | Automatically trigger the pipeline when supported 3D files are uploaded.                                                                                                                                                                                      |
+| `computeTiers.standard.vcpu`                           | `4`     | AWS Fargate vCPU of the standard tier, which runs inputs below the large-tier threshold.                                                                                                                                                                      |
+| `computeTiers.standard.memoryGiB`                      | `16`    | Memory (GiB) of the standard tier. Must be a size AWS Fargate supports for the tier's vCPU.                                                                                                                                                                   |
+| `computeTiers.large.vcpu`                              | `16`    | AWS Fargate vCPU of the large tier, which runs inputs at or above the large-tier threshold.                                                                                                                                                                   |
+| `computeTiers.large.memoryGiB`                         | `120`   | Memory (GiB) of the large tier. Must be a size AWS Fargate supports for the tier's vCPU.                                                                                                                                                                      |
+| `largeTierThresholdGiB`                                | `2`     | Input size (GiB) at or above which a run takes the large tier when its `computeTier` parameter is `auto`. Positive.                                                                                                                                           |
+| `useMediaPreviews.enabled`                             | `false` | Registers the Media Preview Thumbnail pipeline and workflow (images, TGA/TIFF, video) and deploys the shared container when `usePreview3dThumbnail` is off. Requires the Global VPC. The shipped config and templates ship `false` (it needs the Global VPC). |
+| `useMediaPreviews.autoRegisterAutoTriggerOnFileUpload` | `false` | Triggers the media workflow when a supported image or video is uploaded. Needs `useMediaPreviews.enabled`. The shipped config and templates ship `false` (it needs the Global VPC).                                                                           |
+| `useMediaPreviews.downscaleSelfPreviewableImages`      | `false` | Also writes a smaller JPEG for an image the web already shows as its own preview (under 5 MiB), when the JPEG is at least 25% smaller. Needs `useMediaPreviews.enabled`.                                                                                      |
 
 The defaults are the values the shipped config templates carry. A pipeline block that omits a flag still registers the pipeline (`autoRegisterWithVAMS` falls back to `true`) but leaves the upload trigger off (`autoRegisterAutoTriggerOnFileUpload` falls back to `false`), and an omitted `computeTiers` or `largeTierThresholdGiB` takes the values in this table; see the [Configuration Reference](../deployment/configuration-reference.md).
 

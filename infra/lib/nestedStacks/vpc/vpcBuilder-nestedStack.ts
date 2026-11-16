@@ -697,6 +697,7 @@ export class VPCBuilderNestedStack extends NestedStack {
             if (
                 props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
                 props.config.app.pipelines.usePreview3dThumbnail.enabled ||
+                props.config.app.pipelines.useMediaPreviews?.enabled ||
                 props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
                 props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
                 props.config.app.pipelines.useGenAiVideoSopBom?.enabled ||

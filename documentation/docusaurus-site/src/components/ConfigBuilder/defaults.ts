@@ -280,11 +280,11 @@ const COMMERCIAL: ConfigShape = {
                     large: { vcpu: 16, memoryGiB: 120 },
                 },
                 largeTierThresholdGiB: 2,
-                mediaPreviews: {
-                    enabled: true,
-                    autoRegisterAutoTriggerOnFileUpload: true,
-                    downscaleSelfPreviewableImages: false,
-                },
+            },
+            useMediaPreviews: {
+                enabled: false,
+                autoRegisterAutoTriggerOnFileUpload: false,
+                downscaleSelfPreviewableImages: false,
             },
             useConversionCadMeshMetadataExtraction: {
                 enabled: false,
