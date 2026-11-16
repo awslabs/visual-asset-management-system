@@ -63,7 +63,7 @@ The file requires a top-level `sources` array and a `scene.nodes` array.
 
 ### Transform matrix
 
-The `matrix` field is a 4x4 transform stored as 16 floats in column-major order. When omitted, the node defaults to the identity matrix. Transforms are applied hierarchically so each child is positioned relative to its parent's coordinate system.
+The `matrix` field is a 4x4 transform stored as 16 floats in column-major order. When omitted, the node defaults to the identity matrix. Transforms are applied hierarchically so each child is positioned relative to its parent's coordinate system. A source GLB keeps its own node hierarchy inside its BOM node, so the BOM matrix applies on top of the GLB's own part transforms and unit or axis conversion.
 
 ```text
 [m00, m10, m20, m30, m01, m11, m21, m31, m02, m12, m22, m32, m03, m13, m23, m33]
@@ -190,6 +190,8 @@ The transform for each relationship is resolved in this order:
 1. **Matrix**: Uses the `Matrix` metadata when present. Accepted forms are a 2D array (row-major or column-major), a 1D array of 16 values, or a space-separated string of 16 values. A matrix whose last row is `[tx, ty, tz, 1]` is treated as row-major and transposed to the column-major glTF convention; otherwise it is used as-is.
 2. **Components**: Builds a matrix from `Transform`/`Translation`, `Rotation`, and `Scale` metadata components. Missing components default to Translation `[0, 0, 0]`, Rotation `[0, 0, 0, 1]`, and Scale `[1, 1, 1]`.
 3. **Identity**: Falls back to the identity matrix when no transform data is available. Malformed transform metadata logs a warning and also falls back to identity.
+
+Each asset's GLB keeps its own node hierarchy under the asset's transform node: every part keeps its own transform, nesting and repeated instances, including a root node that converts units or up axis. A part's final placement is the relationship transforms from the root asset down, then the GLB's own node transforms. Cameras, skins and node extensions (such as lights or GPU instancing) in a GLB are not carried into the combined GLB.
 
 ### Asset instancing
 

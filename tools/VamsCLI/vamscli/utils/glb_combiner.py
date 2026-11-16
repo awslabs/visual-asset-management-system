@@ -229,13 +229,57 @@ def build_transform_tree_from_export(export_result: Dict[str, Any]) -> Dict[str,
         raise GLBCombineError(f"Failed to build transform tree: {e}")
 
 
+# Node properties that index arrays the merge does not carry over (cameras, skins, and the lights
+# or instancing accessors of node extensions); they are left off the copied nodes.
+_UNMERGED_NODE_PROPERTIES = ('camera', 'skin', 'extensions')
+
+
+def _copy_glb_nodes(gltf: Dict[str, Any], child_json: Dict[str, Any],
+                    mesh_offset: int) -> List[int]:
+    """
+    Append a GLB's nodes to the combined glTF and return the indices of its scene root nodes.
+
+    Each copied node keeps its matrix or translation/rotation/scale, its children and its mesh, so
+    every mesh stays where the GLB placed it and a mesh used by several nodes appears at each one.
+    A GLB without nodes gets one node per mesh; one without scenes uses its parentless nodes.
+    """
+    node_offset = len(gltf['nodes'])
+    child_nodes = child_json.get('nodes', [])
+
+    if not child_nodes:
+        roots = []
+        for mesh_idx in range(mesh_offset, mesh_offset + len(child_json.get('meshes', []))):
+            gltf['nodes'].append({'name': gltf['meshes'][mesh_idx].get('name'), 'mesh': mesh_idx})
+            roots.append(len(gltf['nodes']) - 1)
+        return roots
+
+    for child_node in child_nodes:
+        node = {key: value for key, value in child_node.items()
+                if key not in _UNMERGED_NODE_PROPERTIES}
+        if 'mesh' in node:
+            node['mesh'] += mesh_offset
+        if 'children' in node:
+            node['children'] = [child_idx + node_offset for child_idx in node['children']]
+        gltf['nodes'].append(node)
+
+    scenes = child_json.get('scenes', [])
+    if scenes:
+        scene_roots = scenes[child_json.get('scene', 0)].get('nodes', [])
+    else:
+        child_indices = {idx for child_node in child_nodes
+                         for idx in child_node.get('children', [])}
+        scene_roots = [idx for idx in range(len(child_nodes)) if idx not in child_indices]
+    return [root_idx + node_offset for root_idx in scene_roots]
+
+
 def merge_glb_meshes_into_tree(tree_data: Dict[str, Any], temp_dir: str) -> Tuple[Dict[str, Any], bytes]:
     """
     Merge all GLB meshes into the transform tree.
     
-    Takes the pre-built transform tree and merges all GLB file meshes into it,
-    creating separate mesh objects for each GLB file and attaching them to the
-    appropriate nodes.
+    Takes the pre-built transform tree and merges every GLB file into it: each
+    GLB's meshes, materials and buffers are appended, and its own node
+    hierarchy is placed under its asset's node, so the asset-link transform
+    applies on top of the GLB's node transforms.
     
     Args:
         tree_data: Tree data from build_transform_tree_from_export()
@@ -256,7 +300,6 @@ def merge_glb_meshes_into_tree(tree_data: Dict[str, Any], temp_dir: str) -> Tupl
         # Process each node that has GLB files
         for node_idx, glb_files in glb_map.items():
             node = gltf['nodes'][node_idx]
-            mesh_indices = []
             
             # Process each GLB file for this node
             for glb_file_info in glb_files:
@@ -323,9 +366,8 @@ def merge_glb_meshes_into_tree(tree_data: Dict[str, Any], temp_dir: str) -> Tupl
                                 if 'material' in primitive:
                                     primitive['material'] += material_offset
                         
-                        # Add mesh and track its index
+                        # Add mesh
                         gltf['meshes'].append(mesh)
-                        mesh_indices.append(len(gltf['meshes']) - 1)
                 
                 # Update materials
                 if 'materials' in child_json:
@@ -368,26 +410,11 @@ def merge_glb_meshes_into_tree(tree_data: Dict[str, Any], temp_dir: str) -> Tupl
                 
                 # Append binary data
                 combined_binary += child_binary
-            
-            # Attach all meshes to this node
-            if mesh_indices:
-                if len(mesh_indices) == 1:
-                    node['mesh'] = mesh_indices[0]
-                else:
-                    # Multiple meshes - attach first one, others need separate child nodes
-                    node['mesh'] = mesh_indices[0]
-                    
-                    # Create child nodes for additional meshes
-                    if 'children' not in node:
-                        node['children'] = []
-                    
-                    for mesh_idx in mesh_indices[1:]:
-                        mesh_node = {
-                            'name': gltf['meshes'][mesh_idx]['name'],
-                            'mesh': mesh_idx
-                        }
-                        gltf['nodes'].append(mesh_node)
-                        node['children'].append(len(gltf['nodes']) - 1)
+
+                # Place the GLB's own node hierarchy under this node
+                root_indices = _copy_glb_nodes(gltf, child_json, mesh_offset)
+                if root_indices:
+                    node.setdefault('children', []).extend(root_indices)
         
         # Update buffer length
         if gltf['buffers']:
