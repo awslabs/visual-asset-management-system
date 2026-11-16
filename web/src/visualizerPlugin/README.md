@@ -114,7 +114,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 -   **ID**: `tiff-tga-viewer`
 -   **Extensions**: `.tga`, `.tif`, `.tiff`
--   **Features**: Decodes in the browser with `utif2` (TIFF) and `tga-js` (TGA), pure JavaScript drawn to a canvas, so no CSP change and no `ALLOWUNSAFEEVAL`. Multi-page TIFF page picker; 16-bit, floating-point and CMYK data converted for display. `customParameters.maxDecodeBytes` (default 268435456) and `maxDecodePixels` (default 100000000) are checked from the file size and the header before decoding; above a cap or on a decode failure the file's generated preview (`fileInfo.previewFile`) is shown with a notice, else a message. BigTIFF, separate-colour-plane TIFF and old-style JPEG TIFF are not decoded
+-   **Features**: Decodes in the browser with `utif2` (TIFF) and `tga-js` (TGA), pure JavaScript drawn to a canvas, so no CSP change and no `ALLOWUNSAFEEVAL`. Multi-page TIFF page picker; 16-bit, floating-point and CMYK data converted for display. `customParameters.maxDecodeBytes` (default 268435456) and `maxDecodePixels` (default 100000000) are checked from the file size and the header before decoding; above a cap or on a decode failure the file's generated preview (`fileInfo.previewFile`) is shown with a notice, else a message. Decoding runs in a same-origin worker (`rasterWorker.ts`, no CSP change) and the TIFF Orientation tag is applied. BigTIFF, separate-colour-plane TIFF and old-style JPEG TIFF are not decoded
 -   **Multi-file**: No
 -   **Dependencies**: `utif2`, `tga-js`, `pako` (lazy-loaded by `RasterImageDependencyManager`)
 

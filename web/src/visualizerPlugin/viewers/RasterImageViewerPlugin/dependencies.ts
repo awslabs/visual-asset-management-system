@@ -36,17 +36,27 @@ export class RasterImageDependencyManager {
     private static tga: TgaConstructor | null = null;
     private static pako: PakoModule | null = null;
 
-    /** Load the decoders. Safe to call concurrently and repeatedly. */
+    /**
+     * Called by the viewer registry when the viewer is chosen. With a decode worker the decoders
+     * load inside the worker, so nothing is fetched for the page; without one they load here.
+     */
     static async loadDecoders(): Promise<void> {
+        if (typeof Worker !== "undefined") return;
+        await this.loadInline();
+    }
+
+    /** Load the decoders into the page, for decoding without a worker. Safe to call repeatedly. */
+    static async loadInline(): Promise<void> {
         if (this.utif && this.tga && this.pako) {
             return;
         }
         if (!this.loadPromise) {
             this.loadPromise = (async () => {
-                const [utifModule, tgaModule, pakoModule] = await Promise.all([
+                // pako first, on the global `utif2` falls back to when `require` is unavailable.
+                const pakoModule = await import("./pakoGlobal").then(() => import("pako"));
+                const [utifModule, tgaModule] = await Promise.all([
                     import("utif2"),
                     import("tga-js"),
-                    import("pako"),
                 ]);
                 // utif2 and pako are CommonJS: depending on the bundler the API is the namespace
                 // itself or its `default`.

@@ -362,6 +362,8 @@ type RenderKind =
     | "text-binary"
     /** The Text Viewer names an encoding it cannot show (UTF-16 without a BOM, UTF-32) (#1198). */
     | "text-encoding"
+    /** The TIFF/TGA viewer refuses the file and shows its fallback notice (`expect.notice`). */
+    | "raster-notice"
     /** The Image Viewer's `<img>` loaded and shows content (a screenshot of the element). */
     | "image"
     | "not-offered"
@@ -558,6 +560,8 @@ const renderCases: RenderCase[] = [
     { sample: "tiff-cmyk-jpeg", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
     { sample: "tiff-multipage", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
     { sample: "tiff-large-8mp", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
+    { sample: "tiff-orientation-6", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
+    { sample: "tga-truncated-rle", viewer: "TIFF/TGA Image Viewer", kind: "raster-notice" },
     { sample: "webp", viewer: "Image Viewer", kind: "image" },
     { sample: "bmp", viewer: "Image Viewer", kind: "image" },
     { sample: "mdl-core-definitions", viewer: "Text Viewer", kind: "text", reads: [206, 200] },
@@ -797,6 +801,12 @@ test.describe("viewer render proof (seeded samples)", () => {
                         String(sample.expect.lastPageWidth)
                     );
                 }
+            } else if (c.kind === "raster-notice") {
+                // A damaged file shows the shared notice, never a blank canvas.
+                const notice = page.getByTestId("raster-viewer-fallback-notice");
+                await expect(notice).toBeVisible({ timeout: 60_000 });
+                await expect(notice).toContainText(sample.expect.notice);
+                await expect(page.getByTestId("raster-viewer-canvas")).toHaveCount(0);
             } else if (c.kind === "image") {
                 const image = page.locator('img[alt$="preview"]').first();
                 await expect(image).toBeVisible({ timeout: 60_000 });

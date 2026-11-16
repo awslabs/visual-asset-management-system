@@ -651,6 +651,35 @@
             "expect": {
                 "line": "NVIDIA CORPORATION"
             }
+        },
+        {
+            "id": "tiff-orientation-6",
+            "viewer": "tiff-tga-viewer",
+            "path": "/raster/g4_orientation_6.tif",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/g4_orientation_6.tif",
+            "size": 1024,
+            "sha256": "679f835a1741917b6235fc0870d0fca8d69ea5111a399312497122ce481342c5",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images)",
+            "expect": {
+                "canvasWidth": 590,
+                "canvasHeight": 88,
+                "minForegroundFraction": 0.02,
+                "minDistinctColours": 2
+            }
+        },
+        {
+            "id": "tga-truncated-rle",
+            "viewer": "tiff-tga-viewer",
+            "path": "/raster/cross_scan_line_truncated.tga",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/cross_scan_line_truncated.tga",
+            "size": 4881,
+            "sha256": "1f5379d8deaaaa7b1a92faa2fc24e4a2e9075e1f9cdcfe69a7eb190c481efa40",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images)",
+            "expect": {
+                "notice": "truncated"
+            }
         }
     ]
 }

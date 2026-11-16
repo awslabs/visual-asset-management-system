@@ -9,13 +9,14 @@ import pako from "pako";
 import {
     RasterDecodeError,
     decodeTga,
+    orient,
     decodeTiffPage,
     inspectTiff,
     limitsFromParameters,
     rasterKindOf,
     readTgaHeader,
 } from "./rasterDecode";
-import { buildTga, buildTiff, f32le, u16le } from "./rasterFixtures.testdata";
+import { buildRleTga, buildTga, buildTiff, f32le, u16le } from "./rasterFixtures.testdata";
 
 const limits = { maxBytes: 1 << 20, maxPixels: 10_000 };
 const utif: any = UTIF;
@@ -341,5 +342,123 @@ describe("TIFF refusals", () => {
         expect(reasonOf(() => decode(planar))).toBe("unsupported");
         const odd = buildTiff([{ ...page, compression: 34712 }]);
         expect(reasonOf(() => decode(odd))).toBe("unsupported");
+    });
+});
+
+describe("TGA run-length data", () => {
+    const pixels = [
+        [255, 0, 0],
+        [0, 255, 0],
+        [0, 0, 255],
+        [9, 9, 9],
+    ];
+
+    it("decodes a complete run-length image", () => {
+        const out = decodeTga(buildRleTga(2, 2, pixels), TGA as any, limits);
+        expect([out.width, out.height]).toEqual([2, 2]);
+    });
+
+    it("refuses one whose packets end before every pixel is covered", () => {
+        const file = buildRleTga(2, 2, pixels);
+        for (const cut of [file.length - 1, file.length - 8, 20]) {
+            expect(reasonOf(() => decodeTga(file.slice(0, cut), TGA as any, limits))).toBe(
+                "corrupt"
+            );
+        }
+    });
+});
+
+describe("TIFF orientation (tag 274)", () => {
+    // Stored 3 x 2, values: row 0 = 10 20 30, row 1 = 40 50 60.
+    const stored = new Uint8Array([10, 20, 30, 40, 50, 60]);
+    const grey = (o?: number) =>
+        decode(
+            buildTiff([
+                {
+                    width: 3,
+                    height: 2,
+                    bps: 8,
+                    spp: 1,
+                    photometric: 1,
+                    data: stored,
+                    orientation: o,
+                },
+            ])
+        );
+    const rows = (r: { width: number; height: number; data: Uint8ClampedArray }) =>
+        Array.from({ length: r.height }, (_, y) =>
+            Array.from({ length: r.width }, (_, x) => r.data[(y * r.width + x) * 4])
+        );
+
+    it.each([
+        [
+            1,
+            [
+                [10, 20, 30],
+                [40, 50, 60],
+            ],
+        ],
+        [
+            2,
+            [
+                [30, 20, 10],
+                [60, 50, 40],
+            ],
+        ],
+        [
+            3,
+            [
+                [60, 50, 40],
+                [30, 20, 10],
+            ],
+        ],
+        [
+            4,
+            [
+                [40, 50, 60],
+                [10, 20, 30],
+            ],
+        ],
+        [
+            5,
+            [
+                [10, 40],
+                [20, 50],
+                [30, 60],
+            ],
+        ],
+        [
+            6,
+            [
+                [40, 10],
+                [50, 20],
+                [60, 30],
+            ],
+        ],
+        [
+            7,
+            [
+                [60, 30],
+                [50, 20],
+                [40, 10],
+            ],
+        ],
+        [
+            8,
+            [
+                [30, 60],
+                [20, 50],
+                [10, 40],
+            ],
+        ],
+    ])("shows orientation %i the way it is meant to be seen", (value, expected) => {
+        expect(rows(grey(value as number))).toEqual(expected);
+    });
+
+    it("treats a missing or unknown value as stored", () => {
+        expect(rows(grey(undefined))).toEqual(rows(grey(1)));
+        expect(rows(grey(9))).toEqual(rows(grey(1)));
+        const same = { width: 1, height: 1, data: new Uint8ClampedArray(4) };
+        expect(orient(same, 0)).toBe(same);
     });
 });

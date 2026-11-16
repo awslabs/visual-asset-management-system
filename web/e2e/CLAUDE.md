@@ -264,7 +264,7 @@ to one distributable asset (`e2e-viewers-db` / `e2e-viewers-samples`) and writes
 through `npm exec --min-release-age=7` at the pinned version.
 
 **A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
-opened, and a web jest test checks the name), `kind` (`canvas`, `image` (the Image Viewer's `<img>` decoded and showing content), `pdf`, `grid`, `text`, `text-binary`, `text-encoding`, `not-offered`, `potree`, `refused` — the viewer's refusal message), and optionally
+opened, and a web jest test checks the name), `kind` (`canvas`, `image` (the Image Viewer's `<img>` decoded and showing content), `raster-notice` (the TIFF/TGA viewer's fallback notice, `expect.notice` names its text), `pdf`, `grid`, `text`, `text-binary`, `text-encoding`, `not-offered`, `potree`, `refused` — the viewer's refusal message), and optionally
 `select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
 must succeed for), `thresholds`, `cspAllowed`, `servedBundle` (a web path a disabled-by-default add-on
 serves only when enabled; the case skips when it is not served as JavaScript, as the VNTANA cases do), `consoleAllowed` (console lines that case alone may log,

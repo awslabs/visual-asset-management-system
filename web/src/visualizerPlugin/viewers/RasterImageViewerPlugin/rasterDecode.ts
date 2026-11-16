@@ -159,6 +159,22 @@ export function readTgaHeader(bytes: Uint8Array): TgaInfo {
     return { width, height, pixelDepth, imageType };
 }
 
+/** Whether the run-length packets from `start` cover `pixels` pixels without running off the data. */
+function rleCovers(bytes: Uint8Array, start: number, pixels: number, sampleBytes: number): boolean {
+    let at = start;
+    let covered = 0;
+    while (covered < pixels) {
+        if (at >= bytes.length) return false;
+        const header = bytes[at++];
+        const count = (header & 127) + 1;
+        const needed = header & 128 ? sampleBytes : count * sampleBytes;
+        if (at + needed > bytes.length) return false;
+        at += needed;
+        covered += count;
+    }
+    return true;
+}
+
 export function decodeTga(
     bytes: Uint8Array,
     Tga: TgaConstructor,
@@ -170,15 +186,18 @@ export function decodeTga(
     const bytesPerPixel = info.pixelDepth >> 3;
     const isRle = info.imageType >= 9;
     const isIndexed = info.imageType === 1 || info.imageType === 9;
+    const palette = isIndexed ? (bytes[5] | (bytes[6] << 8)) * (bytes[7] >> 3) : 0;
+    const dataStart = TGA_HEADER_BYTES + bytes[0] + palette;
+    const sampleBytes = isIndexed ? 1 : bytesPerPixel;
     if (!isRle) {
-        // An uncompressed image names its own size, so a truncated file is detectable. (A run-length
-        // one is only known to be short once it has been read; the decoder leaves the rest black.)
-        const palette = isIndexed ? (bytes[5] | (bytes[6] << 8)) * (bytes[7] >> 3) : 0;
-        const needed =
-            TGA_HEADER_BYTES + bytes[0] + palette + pixels * (isIndexed ? 1 : bytesPerPixel);
-        if (bytes.length < needed) {
+        // An uncompressed image names its own size, so a truncated file is detectable.
+        if (bytes.length < dataStart + pixels * sampleBytes) {
             throw new RasterDecodeError("corrupt", "The TGA file is truncated.");
         }
+    } else if (!rleCovers(bytes, dataStart, pixels, sampleBytes)) {
+        // tga-js leaves the pixels a short run-length stream does not reach black, so the packets
+        // are walked first: the stream must hold every pixel the header names.
+        throw new RasterDecodeError("corrupt", "The TGA file is truncated.");
     }
 
     let decoded: { width: number; height: number; data: Uint8ClampedArray };
@@ -625,6 +644,67 @@ function boundedInflate(
 // TIFF: decode and convert for display
 // ---------------------------------------------------------------------------------------------
 
+/** Whether TIFF orientation `value` (tag 274) swaps width and height (values 5 to 8). */
+export function orientationSwapsAxes(value?: number): boolean {
+    return value !== undefined && value >= 5 && value <= 8;
+}
+
+/**
+ * Applies the TIFF Orientation tag (274) so the page is shown the way it is meant to be seen.
+ * Values: 1 as stored, 2 mirrored horizontally, 3 rotated 180, 4 mirrored vertically, 5 transposed,
+ * 6 rotated 90 clockwise, 7 transversed, 8 rotated 90 counter-clockwise. Any other value is 1.
+ */
+export function orient(raster: DecodedRaster, value?: number): DecodedRaster {
+    if (value === undefined || value < 2 || value > 8) return raster;
+    const { width: w, height: h, data } = raster;
+    const swap = orientationSwapsAxes(value);
+    const dw = swap ? h : w;
+    const dh = swap ? w : h;
+    const out = new Uint8ClampedArray(data.length);
+    for (let y = 0; y < dh; y++) {
+        for (let x = 0; x < dw; x++) {
+            let sx: number;
+            let sy: number;
+            switch (value) {
+                case 2:
+                    sx = w - 1 - x;
+                    sy = y;
+                    break;
+                case 3:
+                    sx = w - 1 - x;
+                    sy = h - 1 - y;
+                    break;
+                case 4:
+                    sx = x;
+                    sy = h - 1 - y;
+                    break;
+                case 5:
+                    sx = y;
+                    sy = x;
+                    break;
+                case 6:
+                    sx = y;
+                    sy = h - 1 - x;
+                    break;
+                case 7:
+                    sx = w - 1 - y;
+                    sy = h - 1 - x;
+                    break;
+                default:
+                    sx = w - 1 - y;
+                    sy = x;
+            }
+            const from = (sy * w + sx) * 4;
+            const to = (y * dw + x) * 4;
+            out[to] = data[from];
+            out[to + 1] = data[from + 1];
+            out[to + 2] = data[from + 2];
+            out[to + 3] = data[from + 3];
+        }
+    }
+    return { ...raster, width: dw, height: dh, data: out };
+}
+
 /** Decodes one page to RGBA. `utif`/`pako` are the loaded libraries. */
 export function decodeTiffPage(
     utif: UtifModule,
@@ -654,13 +734,16 @@ export function decodeTiffPage(
         if (layout.photometric === 3 || layout.photometric === 6) {
             // Palette and YCbCr JPEG keep `utif2`'s own conversion.
             const rgba = utif.toRGBA8(ifd);
-            return {
-                width: layout.width,
-                height: layout.height,
-                data: new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength),
-            };
+            return orient(
+                {
+                    width: layout.width,
+                    height: layout.height,
+                    data: new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength),
+                },
+                page.ifd.t274?.[0]
+            );
         }
-        return toRgba(ifd.data, layout, ifd);
+        return orient(toRgba(ifd.data, layout, ifd), page.ifd.t274?.[0]);
     } catch (error) {
         if (error instanceof RasterDecodeError) throw error;
         throw new RasterDecodeError(

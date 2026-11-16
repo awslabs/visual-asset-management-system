@@ -233,15 +233,17 @@ If you uploaded a file in a supported format (such as `.gltf`, `.obj`, `.e57`, `
 
 ### Commonly Used File Formats
 
-| Format                                  | Viewer               | Description                           |
-| --------------------------------------- | -------------------- | ------------------------------------- |
-| `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl` | Three.js Viewer      | 3D models with full rotation and zoom |
-| `.e57`, `.las`, `.laz`                  | Potree Viewer        | Point cloud data with 3D navigation   |
-| `.usd`, `.usda`, `.usdc`, `.usdz`       | Three.js Viewer      | Universal Scene Description files     |
-| `.png`, `.jpg`, `.svg`, `.gif`          | Image Viewer         | Raster and vector images              |
-| `.mp4`, `.webm`, `.mov`                 | Video Player         | Video playback with controls          |
-| `.pdf`                                  | PDF Viewer           | Multi-page document viewing           |
-| `.csv`                                  | Columnar Data Viewer | Tabular data browsing                 |
+| Format                                          | Viewer                | Description                                      |
+| ----------------------------------------------- | --------------------- | ------------------------------------------------ |
+| `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`         | Three.js Viewer       | 3D models with full rotation and zoom            |
+| `.e57`, `.las`, `.laz`                          | Potree Viewer         | Point cloud data with 3D navigation              |
+| `.usd`, `.usda`, `.usdc`, `.usdz`               | Three.js Viewer       | Universal Scene Description files                |
+| `.png`, `.jpg`, `.svg`, `.gif`, `.webp`, `.bmp` | Image Viewer          | Raster and vector images                         |
+| `.tga`, `.tif`, `.tiff`                         | TIFF/TGA Image Viewer | Images browsers cannot show, decoded in the page |
+| `.mdl`                                          | Text Viewer           | NVIDIA MDL material files as text                |
+| `.mp4`, `.webm`, `.mov`                         | Video Player          | Video playback with controls                     |
+| `.pdf`                                          | PDF Viewer            | Multi-page document viewing                      |
+| `.csv`                                          | Columnar Data Viewer  | Tabular data browsing                            |
 
 :::tip
 If a file has a preview image, the file page offers a **Preview** option that shows the image, including for a file that has no dedicated viewer.

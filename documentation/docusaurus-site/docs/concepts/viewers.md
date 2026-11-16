@@ -40,7 +40,9 @@ Interactive 3D model, point cloud, CAD, BIM, USD, and Gaussian splat viewing. Th
 
 ### Media
 
-Image, video, and audio playback. The Image Viewer shows each image fitted to the viewer panel. The TIFF/TGA Image Viewer opens `.tga`, `.tif` and `.tiff` files, which browsers cannot draw, by decoding them in the page; a multi-page TIFF has a page picker, and 16-bit, floating-point and CMYK data are converted for display. A file above 256 MiB or 100 megapixels, or one the decoder cannot read (BigTIFF, TIFF stored in separate colour planes), shows its generated preview with a notice when media previews are enabled, and a message otherwise. The Text Viewer also opens `.mdl` (NVIDIA Material Definition Language) files as text. The Video Player and Audio Player provide standard browser-native playback controls.
+Image, video, and audio playback. The Image Viewer shows each image fitted to the viewer panel. The TIFF/TGA Image Viewer opens `.tga`, `.tif` and `.tiff` files, which browsers cannot draw, by decoding them in the page; a multi-page TIFF has a page picker, and 16-bit, floating-point and CMYK data are converted for display. The image is decoded in a background worker so the page stays responsive; a TIFF's orientation tag is applied. A file above 256 MiB or 100 megapixels, one that is truncated, or one the decoder cannot read (BigTIFF, TIFF stored in separate colour planes) shows its generated preview with a notice when media previews are enabled, and a message otherwise. A 100-megapixel image needs several hundred megabytes of browser memory to decode; if the browser runs out, the viewer shows the same notice.
+
+![The TIFF/TGA Image Viewer showing a 3307 x 2480 TIFF scan](/img/tiff_tga_viewer_20261116_v2.7.png) The Text Viewer also opens `.mdl` (NVIDIA Material Definition Language) files as text. The Video Player and Audio Player provide standard browser-native playback controls.
 
 ### Document
 
@@ -178,8 +180,8 @@ For USD, the viewer packages the root layer and every file it loaded into an in-
 | Extension        | Default Viewer        | Other Available Viewers |
 | ---------------- | --------------------- | ----------------------- |
 | `.aac`           | Audio Player          | --                      |
-| `.flac`          | Audio Player          | --                      |
 | `.bmp`           | Image Viewer          | --                      |
+| `.flac`          | Audio Player          | --                      |
 | `.gif`           | Image Viewer          | --                      |
 | `.jpg` / `.jpeg` | Image Viewer          | --                      |
 | `.m4a`           | Audio Player          | --                      |
@@ -211,13 +213,13 @@ The Video Player plays a file through the browser's built-in `<video>` element, 
 | `.htm`           | Text Viewer          | --                                         |
 | `.html`          | HTML Viewer          | Text Viewer                                |
 | `.inf`           | Text Viewer          | --                                         |
-| `.mdl`           | Text Viewer          | Text Diff Viewer (compare)                 |
 | `.ini`           | Text Viewer          | --                                         |
 | `.ipynb`         | Text Viewer          | --                                         |
 | `.js`            | Text Viewer          | --                                         |
 | `.json`          | Text Viewer          | Cesium 3D Tileset Viewer, VEERUM 3D Viewer |
 | `.log`           | Text Viewer          | --                                         |
 | `.md`            | Text Viewer          | --                                         |
+| `.mdl`           | Text Viewer          | Text Diff Viewer (compare)                 |
 | `.pdf`           | PDF Viewer           | --                                         |
 | `.ps1`           | Text Viewer          | --                                         |
 | `.py`            | Text Viewer          | --                                         |

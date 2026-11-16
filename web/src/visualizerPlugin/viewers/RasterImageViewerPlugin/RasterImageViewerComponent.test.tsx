@@ -6,7 +6,12 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import RasterImageViewerComponent from "./RasterImageViewerComponent";
-import { buildTga, buildTiff } from "./rasterFixtures.testdata";
+import { buildRleTga, buildTga, buildTiff } from "./rasterFixtures.testdata";
+
+// `import.meta.url` cannot be evaluated by jest's CommonJS transform, so the worker factory is
+// replaced; without a worker the viewer decodes on the page, which is the path under test here.
+const mockCreateWorker = jest.fn();
+jest.mock("./createRasterWorker", () => ({ createRasterWorker: () => mockCreateWorker() }));
 
 const mockDownloadAsset = jest.fn();
 jest.mock("../../../services/APIService", () => ({
@@ -43,6 +48,7 @@ const baseProps = {
 describe("RasterImageViewerComponent", () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        mockCreateWorker.mockReturnValue(null);
         mockDownloadAsset.mockResolvedValue([true, "https://example.test/file?sig=1"]);
     });
 
@@ -156,5 +162,125 @@ describe("RasterImageViewerComponent", () => {
         ).toBeInTheDocument();
         expect(screen.queryByTestId("raster-viewer-fallback-preview")).toBeNull();
         expect(mockDownloadAsset).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        [401, "Your session has expired. Sign in again to view this file."],
+        [404, "This file or version could not be found."],
+        [410, "This file version has been archived and is not available."],
+    ])("shows the shared message for a %i and never opens a preview", async (status, message) => {
+        mockDownloadAsset.mockResolvedValue([false, "refused", status]);
+        (global as any).fetch = jest.fn();
+        render(
+            <RasterImageViewerComponent
+                {...baseProps}
+                assetKey="/a.tga"
+                fileInfo={{ filename: "a.tga", key: "/a.tga", previewFile: "/p.jpg" } as any}
+            />
+        );
+        expect(await screen.findByText(message)).toBeInTheDocument();
+        expect(screen.queryByTestId("raster-viewer-fallback-preview")).toBeNull();
+        expect(mockDownloadAsset).toHaveBeenCalledTimes(1);
+    });
+
+    it("labels the canvas with the file name", async () => {
+        const tga = buildTga(1, 1, [[1, 2, 3]]);
+        (global as any).fetch = jest.fn().mockResolvedValue(respond(tga));
+        render(<RasterImageViewerComponent {...baseProps} assetKey="/tex/wall.tga" />);
+        const canvas = await screen.findByTestId("raster-viewer-canvas");
+        expect(canvas.getAttribute("role")).toBe("img");
+        expect(canvas.getAttribute("aria-label")).toBe("TGA image wall.tga");
+    });
+
+    it("aborts the download when the viewer unmounts", async () => {
+        let signal: AbortSignal | undefined;
+        (global as any).fetch = jest.fn((_url: string, init?: RequestInit) => {
+            signal = init?.signal as AbortSignal;
+            return new Promise(() => {});
+        });
+        const view = render(<RasterImageViewerComponent {...baseProps} assetKey="/a.tga" />);
+        await waitFor(() => expect(signal).toBeDefined());
+        expect(signal!.aborted).toBe(false);
+        view.unmount();
+        expect(signal!.aborted).toBe(true);
+    });
+
+    it("says the download failed, without a preview, when the network fails", async () => {
+        (global as any).fetch = jest.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+        render(
+            <RasterImageViewerComponent
+                {...baseProps}
+                assetKey="/a.tga"
+                fileInfo={{ filename: "a.tga", key: "/a.tga", previewFile: "/p.jpg" } as any}
+            />
+        );
+        expect(await screen.findByText(/could not be downloaded/)).toBeInTheDocument();
+        expect(screen.queryByTestId("raster-viewer-fallback-preview")).toBeNull();
+    });
+
+    it("shows the fallback notice for a truncated run-length TGA", async () => {
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+        const file = buildRleTga(2, 2, [
+            [1, 1, 1],
+            [2, 2, 2],
+            [3, 3, 3],
+            [4, 4, 4],
+        ]);
+        (global as any).fetch = jest
+            .fn()
+            .mockResolvedValue(respond(file.slice(0, file.length - 4)));
+        render(<RasterImageViewerComponent {...baseProps} assetKey="/cut.tga" />);
+        const notice = await screen.findByTestId("raster-viewer-fallback-notice");
+        expect(notice.textContent).toMatch(/truncated/);
+        warn.mockRestore();
+    });
+
+    it("decodes in the worker when one can be created, and falls back when it stops", async () => {
+        const tga = buildTga(2, 1, [
+            [255, 0, 0],
+            [0, 0, 255],
+        ]);
+        // A stand-in worker that answers with the real engine, as the bundled worker does.
+        const { RasterEngine } = await import("./rasterEngine");
+        const UTIF = (await import("utif2")).default as any;
+        const TGA = (await import("tga-js")).default as any;
+        const pako = (await import("pako")) as any;
+        const engine = new RasterEngine({ utif: UTIF, tga: TGA, pako });
+        const fake: any = {
+            terminate: jest.fn(),
+            postMessage(message: any) {
+                setTimeout(() => {
+                    if (message.type === "open") {
+                        const pages = engine.open(message.buffer, message.kind, message.limits);
+                        fake.onmessage({ data: { id: message.id, ok: true, pages } });
+                    } else {
+                        const r = engine.decode(message.index);
+                        fake.onmessage({ data: { id: message.id, ok: true, ...r } });
+                    }
+                }, 0);
+            },
+        };
+        mockCreateWorker.mockReturnValue(fake);
+        (global as any).fetch = jest.fn().mockResolvedValue(respond(tga));
+        const view = render(<RasterImageViewerComponent {...baseProps} assetKey="/w.tga" />);
+        const canvas = await screen.findByTestId("raster-viewer-canvas");
+        expect(canvas.getAttribute("data-width")).toBe("2");
+        view.unmount();
+        expect(fake.terminate).toHaveBeenCalled();
+
+        // A worker that dies (out of memory) ends in the fallback notice, not a hung spinner.
+        const dying: any = {
+            terminate: jest.fn(),
+            postMessage() {
+                setTimeout(() => dying.onerror({ preventDefault() {} }), 0);
+            },
+        };
+        mockCreateWorker.mockReturnValue(dying);
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+        render(<RasterImageViewerComponent {...baseProps} assetKey="/x.tga" />);
+        expect(
+            (await screen.findAllByTestId("raster-viewer-fallback-notice")).pop()!.textContent
+        ).toMatch(/decoder stopped unexpectedly/);
+        warn.mockRestore();
     });
 });

@@ -19,19 +19,15 @@ import { Alert, Box, Select, SpaceBetween, Spinner } from "@cloudscape-design/co
 import { downloadAsset } from "../../../services/APIService";
 import { downloadFailureMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
-import { RasterImageDependencyManager } from "./dependencies";
 import {
     DecodedRaster,
     RasterDecodeError,
     RasterKind,
-    TiffDocument,
-    decodeTga,
-    decodeTiffPage,
     formatBytes,
-    inspectTiff,
     limitsFromParameters,
     rasterKindOf,
 } from "./rasterDecode";
+import { RasterSession, openRasterSession } from "./rasterSession";
 
 class DownloadRefused extends Error {}
 
@@ -100,14 +96,15 @@ const RasterImageViewerComponent: React.FC<ViewerPluginProps> = ({
     const kind: RasterKind | null = rasterKindOf(assetKey);
     const previewKey = fileInfo?.previewFile;
     const fileSize = fileInfo?.size;
+    const fileName = (assetKey ?? "").split("/").pop() ?? "";
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const tiffRef = useRef<TiffDocument | null>(null);
+    const sessionRef = useRef<RasterSession | null>(null);
     const [phase, setPhase] = useState<Phase>({ kind: "loading", text: "Loading image..." });
     const [decoded, setDecoded] = useState<DecodedRaster | null>(null);
     const [page, setPage] = useState(0);
     const [pageError, setPageError] = useState<string | null>(null);
-    const [pageCount, setPageCount] = useState(1);
+    const [pages, setPages] = useState<{ index: number; width: number; height: number }[]>([]);
 
     const signedUrl = useCallback(
         async (key: string, withVersion: boolean) => {
@@ -156,11 +153,13 @@ const RasterImageViewerComponent: React.FC<ViewerPluginProps> = ({
     // Download, inspect and decode the first image or page.
     useEffect(() => {
         let cancelled = false;
+        const abort = new AbortController();
         const isCancelled = () => cancelled;
-        tiffRef.current = null;
+        sessionRef.current?.dispose();
+        sessionRef.current = null;
         setDecoded(null);
         setPage(0);
-        setPageCount(1);
+        setPages([]);
         setPageError(null);
 
         const run = async () => {
@@ -178,11 +177,17 @@ const RasterImageViewerComponent: React.FC<ViewerPluginProps> = ({
                         )} the viewer opens.`
                     );
                 }
-                const [url] = await Promise.all([
-                    signedUrl(assetKey, true),
-                    RasterImageDependencyManager.loadDecoders(),
-                ]);
-                const response = await fetch(url);
+                const url = await signedUrl(assetKey, true);
+                if (cancelled) return;
+                let response: Response;
+                try {
+                    response = await fetch(url, { signal: abort.signal });
+                } catch (networkError) {
+                    if (abort.signal.aborted) return;
+                    throw new DownloadRefused(
+                        "The file could not be downloaded. Check your connection and open it again."
+                    );
+                }
                 if (!response.ok) {
                     throw new DownloadRefused(
                         response.status === 403 || response.status === 404
@@ -196,25 +201,14 @@ const RasterImageViewerComponent: React.FC<ViewerPluginProps> = ({
                 await nextFrame();
                 if (cancelled) return;
 
-                let result: DecodedRaster;
-                if (kind === "tga") {
-                    result = decodeTga(
-                        new Uint8Array(buffer),
-                        RasterImageDependencyManager.getTga(),
-                        limits
-                    );
-                } else {
-                    const doc = inspectTiff(buffer);
-                    tiffRef.current = doc;
-                    setPageCount(doc.pages.length);
-                    result = decodeTiffPage(
-                        RasterImageDependencyManager.getUtif(),
-                        RasterImageDependencyManager.getPako(),
-                        doc,
-                        0,
-                        limits
-                    );
+                const session = await openRasterSession(buffer, kind, limits);
+                if (cancelled) {
+                    session.dispose();
+                    return;
                 }
+                sessionRef.current = session;
+                setPages(session.pages);
+                const result = await session.decode(0);
                 if (cancelled) return;
                 setDecoded(result);
                 setPhase({ kind: "ready" });
@@ -237,7 +231,9 @@ const RasterImageViewerComponent: React.FC<ViewerPluginProps> = ({
         run();
         return () => {
             cancelled = true;
-            tiffRef.current = null;
+            abort.abort();
+            sessionRef.current?.dispose();
+            sessionRef.current = null;
         };
     }, [assetKey, kind, limits, fileSize, signedUrl, showFallback]);
 
@@ -263,21 +259,15 @@ const RasterImageViewerComponent: React.FC<ViewerPluginProps> = ({
     }, [decoded, phase.kind]);
 
     const selectPage = async (index: number) => {
-        const doc = tiffRef.current;
-        if (!doc || index === page) return;
+        const session = sessionRef.current;
+        if (!session || index === page) return;
         setPage(index);
         setPageError(null);
-        await nextFrame();
         try {
-            const result = decodeTiffPage(
-                RasterImageDependencyManager.getUtif(),
-                RasterImageDependencyManager.getPako(),
-                doc,
-                index,
-                limits
-            );
-            setDecoded(result);
+            const result = await session.decode(index);
+            if (sessionRef.current === session) setDecoded(result);
         } catch (error) {
+            if (sessionRef.current !== session) return;
             setPageError(
                 error instanceof RasterDecodeError
                     ? error.message
@@ -331,15 +321,15 @@ const RasterImageViewerComponent: React.FC<ViewerPluginProps> = ({
         );
     }
 
-    const pageOptions = tiffRef.current?.pages.map((p) => ({
+    const pageOptions = pages.map((p) => ({
         value: String(p.index),
-        label: `Page ${p.index + 1} of ${pageCount}`,
+        label: `Page ${p.index + 1} of ${pages.length}`,
         description: `${p.width} × ${p.height} px`,
     }));
 
     return (
         <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: "8px" }}>
-            {pageOptions && pageOptions.length > 1 && (
+            {pageOptions.length > 1 && (
                 <div data-testid="raster-viewer-page-picker" style={{ maxWidth: "320px" }}>
                     <Select
                         ariaLabel="TIFF page"
@@ -367,6 +357,8 @@ const RasterImageViewerComponent: React.FC<ViewerPluginProps> = ({
             >
                 <canvas
                     ref={canvasRef}
+                    role="img"
+                    aria-label={`${kind === "tga" ? "TGA" : "TIFF"} image ${fileName}`}
                     data-testid="raster-viewer-canvas"
                     data-width={decoded?.width}
                     data-height={decoded?.height}

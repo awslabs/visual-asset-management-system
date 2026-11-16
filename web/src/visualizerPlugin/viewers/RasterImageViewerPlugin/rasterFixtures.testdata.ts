@@ -16,6 +16,8 @@ export interface TiffPageSpec {
     compression?: number;
     sampleFormat?: number;
     planar?: number;
+    /** TIFF Orientation tag (274). */
+    orientation?: number;
     extraSamples?: number[];
     /** Overrides the strip byte count written for the single strip. */
     stripByteCount?: number;
@@ -54,6 +56,7 @@ export function buildTiff(
         entries.push([277, 3, sh([page.spp])]);
         entries.push([278, 4, lg([page.height])]);
         entries.push([279, 4, lg([page.stripByteCount ?? page.data.length])]);
+        if (page.orientation) entries.push([274, 3, sh([page.orientation])]);
         if (page.planar) entries.push([284, 3, sh([page.planar])]);
         if (page.extraSamples) entries.push([338, 3, sh(page.extraSamples)]);
         if (page.sampleFormat)
@@ -109,6 +112,29 @@ export function f32le(values: number[]): Uint8Array {
     const out = new Uint8Array(values.length * 4);
     const view = new DataView(out.buffer);
     values.forEach((v, i) => view.setFloat32(4 * i, v, true));
+    return out;
+}
+
+/** A run-length 24-bit TGA made of one raw packet per row, so it can be cut short. */
+export function buildRleTga(width: number, height: number, pixels: number[][]): Uint8Array {
+    const header = new Uint8Array(18);
+    header[2] = 10;
+    header[12] = width & 255;
+    header[13] = width >> 8;
+    header[14] = height & 255;
+    header[15] = height >> 8;
+    header[16] = 24;
+    const body: number[] = [];
+    for (let y = 0; y < height; y++) {
+        body.push(width - 1);
+        for (let x = 0; x < width; x++) {
+            const [r, g, b] = pixels[y * width + x];
+            body.push(b, g, r);
+        }
+    }
+    const out = new Uint8Array(header.length + body.length);
+    out.set(header);
+    out.set(body, header.length);
     return out;
 }
 
