@@ -14,7 +14,7 @@ from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_auth_changes, audited_handler
+from customLogging.auditLogging import log_action, log_auth_changes, audited_handler
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2,
@@ -671,6 +671,8 @@ def handle_get_request(event):
         
         # Get user roles
         user_roles_result = get_user_roles(query_params)
+        log_action(event, "userRoleList", item_count=len(user_roles_result.get("Items", [])),
+                   request_parameters=query_params)
         
         # Return success response
         return success(body={"message": user_roles_result})
@@ -719,7 +721,8 @@ def handle_post_request(event):
             "userId": result.userId,
             "operation": "create",
             "roleNames": request_model.roleName
-        })
+        }, entity_id=result.userId, ids={"targetUserId": result.userId},
+            changes={"roleNames": request_model.roleName})
         
         # Return success response
         return success(body=result.dict())
@@ -778,7 +781,8 @@ def handle_put_request(event):
             "operation": "update",
             "roleNames": request_model.roleName,
             "changed": result.message != USER_ROLE_UPDATE_NO_CHANGES_MESSAGE
-        })
+        }, entity_id=result.userId, ids={"targetUserId": result.userId},
+            changes={"roleNames": request_model.roleName})
         
         # Return success response
         return success(body=result.dict())
@@ -834,7 +838,7 @@ def handle_delete_request(event):
             "userId": result.userId,
             "operation": "delete",
             "changed": result.message != USER_ROLE_DELETE_NO_CHANGES_MESSAGE
-        })
+        }, entity_id=result.userId, ids={"targetUserId": result.userId})
         
         # Return success response
         return success(body=result.dict())

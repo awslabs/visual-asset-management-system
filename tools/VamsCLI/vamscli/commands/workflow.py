@@ -19,10 +19,11 @@ from typing import Dict, Any, Optional, List
 
 import click
 
-from ..constants import MAX_WORKFLOW_EXECUTION_PAGE_SIZE
+from ..constants import EXECUTION_LIST_INCLUDE_SYSTEM_PARAM, MAX_WORKFLOW_EXECUTION_PAGE_SIZE
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
+from ..utils.system_records import system_runs_hidden_hint
 from ..utils.exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError, WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
@@ -931,6 +932,10 @@ def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, inp
 @click.option('-a', '--asset-id', required=True, help='Asset ID to list executions for')
 @click.option('-w', '--workflow-id', help='Filter by specific workflow ID')
 @click.option('--workflow-database-id', help="Workflow's database ID (for filtering)")
+@click.option('--include-system/--no-include-system', 'include_system', default=None,
+              help='Include runs of system workflows, which are hidden by default. Filtering to one '
+                   'system workflow (-w and --workflow-database-id) shows its runs unless '
+                   '--no-include-system is given.')
 @click.option('--filter-start-date',
               help='Only executions started on/after this UTC date-time, as '
                    'YYYY-MM-DDTHH:MM:SSZ (default: 90 days ago). Widen it to reach older history.')
@@ -948,7 +953,8 @@ def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, inp
 @click.pass_context
 @requires_setup_and_auth
 def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflow_id: Optional[str],
-                    workflow_database_id: Optional[str], filter_start_date: Optional[str],
+                    workflow_database_id: Optional[str], include_system: Optional[bool],
+                    filter_start_date: Optional[str],
                     filter_end_date: Optional[str], exclude_status: Optional[str],
                     page_size: Optional[int], max_items: Optional[int], starting_token: Optional[str],
                     auto_paginate: bool, json_output: bool):
@@ -956,7 +962,8 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
 
     Only recent executions (started within the last 90 days) are listed by default; use
     --filter-start-date / --filter-end-date to query an explicit date range. The window actually
-    applied is reported alongside the results.
+    applied is reported alongside the results. Runs of system workflows are hidden unless
+    --include-system is given (or the list is filtered to one system workflow).
 
     A run is listed only when you can read every asset it read and the asset it wrote to, so a run
     that touched this asset can still be withheld on account of another asset it touched.
@@ -984,6 +991,10 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
 
     def _base_params() -> Dict[str, Any]:
         params: Dict[str, Any] = {'pageSize': page_size}
+        # Sent only when given, so the service's default (hidden, or shown for one system
+        # workflow) applies otherwise.
+        if include_system is not None:
+            params[EXECUTION_LIST_INCLUDE_SYSTEM_PARAM] = 'true' if include_system else 'false'
         if filter_start_date:
             params['filterStartDate'] = filter_start_date
         if filter_end_date:
@@ -999,7 +1010,12 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
         if not applied:
             return ""
         end = data.get('filterEndDate')
-        return f"Window: {applied} to {end}" if end else f"Window: from {applied}"
+        window = f"Window: {applied} to {end}" if end else f"Window: from {applied}"
+        # System runs are hidden by default; saying so keeps a list without them from reading as
+        # the asset's complete history.
+        if data.get('includeSystem') is False:
+            window += "\n" + system_runs_hidden_hint(workflow_id, workflow_database_id)
+        return window
 
     def _fmt(data: Dict[str, Any]) -> str:
         def _rendered(lines) -> str:
@@ -1037,6 +1053,8 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
             out.append(f"  Workflow: {ex.get('workflowDatabaseId', 'N/A')}:{ex.get('workflowId', 'N/A')}")
             out.append(f"  Status: {ex.get('executionStatus', 'N/A')}")
             out.append(f"  Started: {ex.get('startDate', 'N/A')}")
+            if ex.get('isSystem') is True:
+                out.append("  System run: yes")
             # A SKIPPED record counts the file-upload trigger launches a concurrency restriction refused.
             if ex.get('executionStatus') == 'SKIPPED':
                 out.append(f"  Skipped launches: {ex.get('skippedLaunchCount', 0)}")
@@ -1080,6 +1098,9 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
                 for key in ('filterStartDate', 'filterEndDate'):
                     if page.get(key):
                         applied_window[key] = page[key]
+                # Whether the service included system runs: a boolean, so False is carried too.
+                if 'includeSystem' in page:
+                    applied_window['includeSystem'] = page['includeSystem']
                 if not json_output:
                     output_status(f"Fetched {len(all_items)} executions (page {page_count})...", False)
                 next_token = page.get('NextToken')

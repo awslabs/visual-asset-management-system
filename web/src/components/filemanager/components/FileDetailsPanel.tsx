@@ -418,7 +418,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
             return !itemIsFolder;
         });
 
-        navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
+        navigate(`/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}/file`, {
             state: {
                 assetVersionId: state.assetVersionId,
                 files: viewableFiles.map((file) => ({
@@ -449,20 +449,23 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
         });
 
         // Navigate to download page with selected files
-        navigate(`/databases/${databaseId}/assets/${assetId}/download`, {
-            state: {
-                fileTree: {
-                    name: "Selected Files",
-                    displayName: "Selected Files",
-                    relativePath: "/",
-                    keyPrefix: "/",
-                    level: 0,
-                    expanded: true,
-                    subTree: downloadableFiles,
+        navigate(
+            `/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}/download`,
+            {
+                state: {
+                    fileTree: {
+                        name: "Selected Files",
+                        displayName: "Selected Files",
+                        relativePath: "/",
+                        keyPrefix: "/",
+                        level: 0,
+                        expanded: true,
+                        subTree: downloadableFiles,
+                    },
+                    assetVersionId: state.assetVersionId,
                 },
-                assetVersionId: state.assetVersionId,
-            },
-        });
+            }
+        );
     };
 
     // Multi-selection display
@@ -802,7 +805,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     };
 
     const handleUpload = () => {
-        navigate(`/databases/${databaseId}/assets/${assetId}/uploads`, {
+        navigate(`/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}/uploads`, {
             state: {
                 fileTree: selectedItem,
                 isNewFiles: true,
@@ -823,7 +826,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
         const encodedPath = encodeURIComponent(pathForUrl);
 
         // Build URL with version query parameter — assetVersionId takes priority
-        let url = `/databases/${databaseId}/assets/${assetId}/file/${encodedPath}`;
+        let url = `/databases/${databaseId}/assets/${encodeURIComponent(
+            String(assetId)
+        )}/file/${encodedPath}`;
         if (state.assetVersionId) {
             url += `?assetVersion=${encodeURIComponent(state.assetVersionId)}`;
         } else if (selectedItem.versionId) {
@@ -1203,7 +1208,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                         onItemClick={({ detail }) => {
                                             if (detail.id === "download-folder") {
                                                 navigate(
-                                                    `/databases/${databaseId}/assets/${assetId}/download`,
+                                                    `/databases/${databaseId}/assets/${encodeURIComponent(
+                                                        String(assetId)
+                                                    )}/download`,
                                                     {
                                                         state: {
                                                             fileTree: selectedItem,
