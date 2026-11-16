@@ -59,6 +59,14 @@ const VECTOR_ONLY = [
     "VectorIndexingvectorIndexerServiceRoleDefaultPolicy65313BF6",
 ];
 
+/**
+ * A policy CDK splits off a role's default policy when it outgrows the size estimate
+ * (`OverflowPolicy<n>`, allowed by test/security/noCustomerManagedPolicies.test.ts since #1499 set
+ * `@aws-cdk/aws-iam.arnSizeEstimate`). It is created beside the role's existing ids rather than moving
+ * one, so it is left out of the pinned lists and checked on its own below.
+ */
+const OVERFLOW_POLICY = /ServiceRoleOverflowPolicy\d+[0-9A-F]{8}$/;
+
 /** Logical ids of the construct and the parameter, without the stack-named mappings and subscriptions. */
 const familyIds = (s: SynthResult): string[] =>
     s.resources
@@ -68,10 +76,20 @@ const familyIds = (s: SynthResult): string[] =>
                 (r.logicalId.startsWith("VectorIndexing") ||
                     r.logicalId.startsWith("ResourceNameParamVectorReindexer")) &&
                 r.type !== "AWS::Lambda::EventSourceMapping" &&
-                r.type !== "AWS::SNS::Subscription"
+                r.type !== "AWS::SNS::Subscription" &&
+                !OVERFLOW_POLICY.test(r.logicalId)
         )
         .map((r) => r.logicalId)
         .sort();
+
+/** The CDK overflow policies of the construct's roles. */
+const overflowPolicies = (s: SynthResult) =>
+    s.resources.filter(
+        (r) =>
+            inSearchStack(r) &&
+            r.logicalId.startsWith("VectorIndexing") &&
+            OVERFLOW_POLICY.test(r.logicalId)
+    );
 
 const lambdaByModule = (s: SynthResult, module: string) =>
     s.where(
@@ -108,6 +126,17 @@ describe("vector search on: the reindexer family keeps its logical ids", () => {
     test("every pinned id is emitted, and the construct emits nothing else", () => {
         const s = synthTemplate("commercial");
         expect(familyIds(s)).toEqual([...REINDEXER_FAMILY, ...VECTOR_ONLY].sort());
+    });
+
+    test("a CDK overflow policy is a managed policy attached to one of the construct's own roles", () => {
+        const s = synthTemplate("commercial");
+        const roles = familyIds(s).filter((id) => /ServiceRole[0-9A-F]{8}$/.test(id));
+        for (const policy of overflowPolicies(s)) {
+            expect(policy.type).toBe("AWS::IAM::ManagedPolicy");
+            const attached = SynthResult.flatten(policy.properties.Roles);
+            expect(roles.some((role) => policy.logicalId.startsWith(role.slice(0, -8)))).toBe(true);
+            expect(roles.some((role) => attached.includes(role))).toBe(true);
+        }
     });
 });
 
