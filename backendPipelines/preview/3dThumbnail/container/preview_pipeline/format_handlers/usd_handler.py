@@ -664,7 +664,7 @@ def _mdl_colours(prim, topology, context, n_points):
     if colours is None:
         _count_unread(context, diffuse.material_path,
                       f"{diffuse.module!r}, whose {diffuse.texture_name} could not be sampled (unreadable, "
-                      f"or no UVs) and which sets no base colour constant")
+                      f"past the stage's texture budget, or no UVs) and which sets no base colour constant")
         return None
     if diffuse.tint is not None:
         colours = colours * diffuse.tint
@@ -711,7 +711,7 @@ def _read_mdl_diffuse(material, context):
     tint = _colour_value(_input_value(shader, tint_name, context)) if tint_name else None
     if texture is None and constant is None:
         return _MdlDiffuse(module, material.GetPath(),
-                           unread=f"{module!r}, neither {texture_name} nor {constant_name} set")
+                           unread=f"{module!r}, with neither {texture_name} nor {constant_name} read")
     return _MdlDiffuse(module, material.GetPath(), texture, constant, tint,
                        names=(texture_name, constant_name, tint_name))
 

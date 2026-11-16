@@ -212,7 +212,7 @@ class TestOtherMaterials:
         with caplog.at_level("INFO"):
             data = usd_handler.load(path)
         assert _rgb(data) is None
-        assert "'OmniPBR.mdl', neither diffuse_texture nor diffuse_color_constant set" in caplog.text
+        assert "'OmniPBR.mdl', with neither diffuse_texture nor diffuse_color_constant read" in caplog.text
 
 
 @pytest.mark.unit
@@ -306,11 +306,13 @@ class TestConnectionWalk:
     def test_a_chain_past_the_bound_is_not_read_and_the_log_says_why(self, tmp_path, caplog):
         path = _stage(tmp_path, _mesh(extra=_GREEN_DISPLAY) + _mdl_material(
             _CHAINED_CONSTANT, interface=_chain(usd_handler.MAX_CONNECTION_HOPS + 1)))
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("INFO"):
             rgb = _rgb(usd_handler.load(path))
         assert rgb == [[0, 255, 0]] * 3
         assert (f"Shader input /Mat/Shader.inputs:diffuse_color_constant: its connections run past "
                 f"{usd_handler.MAX_CONNECTION_HOPS} hops, so it is not read") in caplog.text
+        # The summary does not claim the constant is unset: it was set, through a chain not followed.
+        assert "with neither diffuse_texture nor diffuse_color_constant read" in caplog.text
 
     def test_a_connection_loop_is_not_read_and_the_log_says_why(self, tmp_path, caplog):
         path = _stage(tmp_path, _mesh(extra=_GREEN_DISPLAY) + _mdl_material(
