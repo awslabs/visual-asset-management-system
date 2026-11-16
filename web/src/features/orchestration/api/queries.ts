@@ -628,7 +628,9 @@ export function useTriggers(databaseId: string, workflowId: string) {
 // EXECUTION HOOKS
 // ============================================================================
 
-type ExecutionListResponse = { Items: Execution[]; NextToken?: string };
+// includeSystem: whether the page includes system workflow runs (the server's echo of the applied
+// value, so a board left on the default can show it).
+type ExecutionListResponse = { Items: Execution[]; NextToken?: string; includeSystem?: boolean };
 
 export function useExecutions(scope: ExecutionScope, filters?: Record<string, string>, opts?: any) {
     return useInfiniteQuery({
