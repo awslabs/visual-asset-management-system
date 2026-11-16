@@ -54,22 +54,31 @@ vamscli execution list -w my-workflow --status RUNNING
 vamscli execution list --filter-start-date 2026-01-01T00:00:00Z --filter-end-date 2026-02-01T00:00:00Z
 vamscli execution list --group-id batch-2026-01 --auto-paginate
 vamscli execution list --triggered-by user@example.com --json-output
+vamscli execution list --include-system
 ```
 
-| Option                            | Description                                                                                            |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `-w, --workflow-id`               | Filter by workflow ID                                                                                  |
-| `--workflow-database-id`          | Filter by workflow database ID                                                                         |
-| `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`, `SKIPPED`)                          |
-| `--exclude-status`                | Leave out these statuses, one or comma-separated (e.g. `SKIPPED`); applied by the service              |
-| `--trigger-type`                  | Filter by trigger type (`Manual` / `File-Upload`)                                                      |
-| `--group-id`                      | Filter by `executionGroupId`                                                                           |
-| `--triggered-by`                  | Filter by the user ID that triggered the execution                                                     |
-| `--filter-start-date`             | Only executions started on/after this UTC date-time, as `YYYY-MM-DDTHH:MM:SSZ` (default: 90 days ago)  |
-| `--filter-end-date`               | Only executions started on/before this UTC date-time, as `YYYY-MM-DDTHH:MM:SSZ` (optional upper bound) |
-| `--page-size`                     | Items per page (max 100)                                                                               |
-| `--auto-paginate` / `--max-items` | Fetch all pages (up to max-items)                                                                      |
-| `--starting-token`                | Continuation token for manual pagination                                                               |
+Runs of system workflows (workflows shipped with the deployment) are hidden unless you pass
+`--include-system`; the text output then says `System workflow runs hidden`. Filtering to one system
+workflow (`-w` with `--workflow-database-id`) shows its runs unless you pass `--no-include-system`;
+`-w` on its own is not that filter, so a system workflow's runs stay hidden and the text output names
+`--workflow-database-id`. Under `--json-output` each row carries `isSystem`, and `includeSystem`
+reports which applied.
+
+| Option                                     | Description                                                                                            |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `-w, --workflow-id`                        | Filter by workflow ID                                                                                  |
+| `--workflow-database-id`                   | Filter by workflow database ID                                                                         |
+| `--status`                                 | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`, `SKIPPED`)                          |
+| `--exclude-status`                         | Leave out these statuses, one or comma-separated (e.g. `SKIPPED`); applied by the service              |
+| `--trigger-type`                           | Filter by trigger type (`Manual` / `File-Upload`)                                                      |
+| `--group-id`                               | Filter by `executionGroupId`                                                                           |
+| `--triggered-by`                           | Filter by the user ID that triggered the execution                                                     |
+| `--include-system` / `--no-include-system` | Include runs of system workflows (hidden by default), or leave them out even for one system workflow   |
+| `--filter-start-date`                      | Only executions started on/after this UTC date-time, as `YYYY-MM-DDTHH:MM:SSZ` (default: 90 days ago)  |
+| `--filter-end-date`                        | Only executions started on/before this UTC date-time, as `YYYY-MM-DDTHH:MM:SSZ` (optional upper bound) |
+| `--page-size`                              | Items per page (max 100)                                                                               |
+| `--auto-paginate` / `--max-items`          | Fetch all pages (up to max-items)                                                                      |
+| `--starting-token`                         | Continuation token for manual pagination                                                               |
 
 ---
 

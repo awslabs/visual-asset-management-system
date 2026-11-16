@@ -40,6 +40,9 @@ FREE_TEXT_NAMES = frozenset({
 _REDIRECTING_CALLS = frozenset({"search_text_parameters", "request_parameters",
                                 "_search_request_parameters", "_execution_read_parameters"})
 _AUDIT_CALLS = frozenset({"log_action", "log_actions"})
+# Names a handler gives the raw query string of the request. A request_parameters expression that
+# spreads or copies one of them records every query key the caller sent, whatever its name.
+_RAW_QUERY_NAMES = frozenset({"query_params", "query_parameters", "query", "querystringparameters"})
 
 
 def _call_name(node):
@@ -62,6 +65,22 @@ def _free_text_constants(node):
     for child in ast.iter_child_nodes(node):
         found.extend(_free_text_constants(child))
     return found
+
+
+def _raw_query_pass_through(node):
+    """True when a ``request_parameters`` expression carries the raw query string (``query_params``,
+    ``dict(query_params)``, ``{**query_params}``, a comprehension over it, or
+    ``event.get('queryStringParameters')``), skipping calls that pick named keys or redact."""
+    if isinstance(node, ast.Call) and _call_name(node) in _REDIRECTING_CALLS:
+        return False
+    if isinstance(node, ast.Call) and _call_name(node) == "get" and node.args \
+            and isinstance(node.args[0], ast.Constant) and node.args[0].value != "queryStringParameters":
+        return False  # one named key picked out of the query, such as query_params.get('max_results')
+    if isinstance(node, ast.Name) and node.id.lower() in _RAW_QUERY_NAMES:
+        return True
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.lower() in _RAW_QUERY_NAMES:
+        return True
+    return any(_raw_query_pass_through(child) for child in ast.iter_child_nodes(node))
 
 
 def _scan_source(source):
@@ -97,6 +116,36 @@ def _handler_files():
 def _kind(action):
     spec = REGISTRY.AUDIT_ACTIONS.get(action)
     return spec.kind if spec else None
+
+
+def _pass_through_actions(source):
+    """The literal actions whose ``request_parameters`` carry the raw query string."""
+    found = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or _call_name(node) not in _AUDIT_CALLS:
+            continue
+        action = node.args[1] if len(node.args) > 1 else None
+        name = action.value if isinstance(action, ast.Constant) else None
+        if any(keyword.arg == "request_parameters" and _raw_query_pass_through(keyword.value)
+               for keyword in node.keywords):
+            found.add(name)
+    return found
+
+
+# Modules that record the raw query string of a read today (follow-up, not widened by #1542). None
+# defines a free-text query parameter, so no typed text is recorded now. The test below pins this list:
+# a new module that passes the raw query string fails it, and so does a module on it that stops.
+# The fix is to name the keys, as the compliance handlers do with ``request_parameters(params, keys)``.
+KNOWN_RAW_QUERY_MODULES = frozenset({
+    "handlers/addon/edh/common/edhAudit.py", "handlers/addon/physna/physnaViewer.py",
+    "handlers/assets/assetFiles.py", "handlers/assets/assetService.py", "handlers/auth/apiKeyService.py",
+    "handlers/auth/authConstraintsService.py", "handlers/databases/databaseService.py",
+    "handlers/metadata/metadataService.py", "handlers/pipelines/pipelineService.py",
+    "handlers/pipelines/pipelineTemplateService.py", "handlers/roles/roleService.py",
+    "handlers/subscription/subscriptionService.py", "handlers/tagTypes/tagTypeService.py",
+    "handlers/tags/tagService.py", "handlers/userRoles/userRolesService.py",
+    "handlers/workflows/workflowService.py", "handlers/workflows/workflowTriggerService.py",
+})
 
 
 @pytest.fixture(scope="module")
@@ -168,6 +217,31 @@ class TestRegisteredActions:
         by_name = {os.path.basename(path): result for path, result in scanned.items()}
         assert "search" in by_name["search.py"][1] and by_name["search.py"][2]
         assert by_name["executionService.py"][2]
+
+
+@pytest.mark.unit
+class TestRawQueryPassThrough:
+    def test_only_the_known_modules_record_the_raw_query_string(self):
+        found = set()
+        for path in _handler_files():
+            with open(path, encoding="utf-8") as handle:
+                actions = _pass_through_actions(handle.read())
+            if any(_kind(action) in ("read", "search") or action is None for action in actions):
+                found.add(os.path.relpath(path, BACKEND).replace(os.sep, "/"))
+        assert found - KNOWN_RAW_QUERY_MODULES == set(), (
+            "a read or search action records the raw query string; name the keys to record "
+            "(request_parameters(params, keys)) or move a text parameter under search_text_parameters")
+        assert KNOWN_RAW_QUERY_MODULES - found == set(), "remove a module that no longer passes it from the list"
+
+    def test_each_pass_through_shape_is_detected(self):
+        for expression in ("dict(query_params)", "{**query_params, 'a': 1}", "query_params",
+                           "{k: v for k, v in query_params.items()}", "event.get('queryStringParameters')"):
+            assert _pass_through_actions(f'log_action(event, "x", request_parameters={expression})') == {"x"}, expression
+
+    def test_named_keys_are_not_pass_through(self):
+        for expression in ("request_parameters(query_params, ('maxItems',))", "{'maxItems': 5}",
+                           "search_text_parameters({}, {'query': q})", "{'pageSize': query_params.get('max_results')}"):
+            assert _pass_through_actions(f'log_action(event, "x", request_parameters={expression})') == set(), expression
 
 
 @pytest.mark.unit

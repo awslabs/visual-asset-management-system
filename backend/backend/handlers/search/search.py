@@ -2603,7 +2603,7 @@ def handle_get_request(event: Dict[str, Any], search_manager: DualIndexSearchMan
 
 # The request fields that hold text the caller typed. They are recorded under the redacted searchText
 # key; the ids, options and paging of the request stay as they are.
-_SEARCH_TEXT_FIELDS = ("query", "metadataQuery", "metadataKey", "metadataValue", "assetName", "fileKey")
+_SEARCH_TEXT_FIELDS = ("query", "metadataQuery", "metadataKey", "metadataValue", "assetName", "fileKey", "tags")
 
 
 def _search_request_parameters(request_model: Any) -> Dict[str, Any]:

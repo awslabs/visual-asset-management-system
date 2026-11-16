@@ -115,13 +115,15 @@ class TestSearchTextIsRedacted:
         request = svc.SimpleSearchRequestModel(**{
             "query": "bracket-typed-marker", "assetName": "name-typed-marker", "fileKey": "key-typed-marker",
             "metadataKey": "metakey-typed-marker", "metadataValue": "metaval-typed-marker",
-            "assetId": "a1", "databaseId": "db1", "tags": ["t1"], "fileExtension": "glb", "size": 5})
+            "assetId": "a1", "databaseId": "db1", "tags": ["tag-typed-marker"], "fileExtension": "glb", "size": 5})
         recorded = _recorded(request)
         assert recorded["searchText"] == REDACTED
         assert not [marker for marker in _TYPED if marker in json.dumps(recorded)]
-        assert recorded["searchTextFields"] == ["query", "metadataKey", "metadataValue", "assetName", "fileKey"]
-        assert recorded["searchTextLength"] == sum(len(m) for m in _TYPED[5:]) + len(_TYPED[0])
-        assert recorded["assetId"] == "a1" and recorded["tags"] == ["t1"] and recorded["fileExtension"] == "glb"
+        assert "tag-typed-marker" not in json.dumps(recorded), "a typed tag is search text"
+        assert recorded["searchTextFields"] == ["query", "metadataKey", "metadataValue", "assetName", "fileKey", "tags"]
+        assert recorded["searchTextLength"] == sum(len(m) for m in _TYPED[5:]) + len(_TYPED[0]) + len("tag-typed-marker")
+        assert "tags" not in recorded
+        assert recorded["assetId"] == "a1" and recorded["fileExtension"] == "glb"
         assert recorded["databaseId"] == "db1" and recorded["size"] == 5
 
     def test_a_search_without_text_adds_no_text_keys(self):
