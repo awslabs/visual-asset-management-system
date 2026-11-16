@@ -142,7 +142,7 @@ creates no Amazon S3 model cache bucket of its own. See
 -   **VPC with NAT Gateway** -- The pipeline requires private subnets with internet access (via NAT Gateway) because the Isaac Lab container needs to download NVIDIA Omniverse assets at runtime. Its compute runs in `pipelineNetwork.privateSubnets.pipeline`, which the VPC builder creates as `PRIVATE_WITH_EGRESS`.
 
 :::warning[Air-gapped deployments]
-Any Isaac Lab feature that reaches the NVIDIA Omniverse content server needs outbound internet access, so those features do not operate in an air-gapped deployment. Amazon VPC endpoints cover the AWS services the pipeline calls but not the NVIDIA content server. Evaluate the tasks you intend to run before enabling `app.pipelines.useIsaacLabTraining` on an isolated network; configuration validation does not check for egress.
+Any Isaac Lab feature that reaches the NVIDIA Omniverse content server needs outbound internet access, so those features do not operate in an air-gapped deployment. Amazon VPC endpoints cover the AWS services the pipeline calls but not the NVIDIA content server. A task that reads its files from VAMS instead (see [Asset files staged before the run](#asset-files-staged-before-the-run)) does not need that access. Evaluate the tasks you intend to run before enabling `app.pipelines.useIsaacLabTraining` on an isolated network; configuration validation does not check for egress.
 :::
 
 -   **Amazon EFS** -- An Amazon EFS file system is automatically created in isolated subnets for training checkpoint persistence.
@@ -171,14 +171,15 @@ The training configuration is the configuration body of the pipeline template th
 
 The **Template tag** column names the execute-form field that supplies each parameter. A row with `--` is fixed by the template body: `mode` is what distinguishes this pipeline from the evaluation one, so it is not operator-settable.
 
-| Parameter                      | Template tag     | Default                      | Description                                                                                                                                                                                                                                                       |
-| ------------------------------ | ---------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `trainingConfig.mode`          | --               | `"train"`                    | Must be `"train"` for training mode.                                                                                                                                                                                                                              |
-| `trainingConfig.task`          | `TASK`           | `"Isaac-Cartpole-Direct-v0"` | The Isaac Lab task environment name.                                                                                                                                                                                                                              |
-| `trainingConfig.numEnvs`       | `NUM_ENVS`       | `4096`                       | Number of parallel simulation environments.                                                                                                                                                                                                                       |
-| `trainingConfig.maxIterations` | `MAX_ITERATIONS` | `1500`                       | Maximum training iterations.                                                                                                                                                                                                                                      |
-| `trainingConfig.rlLibrary`     | `RL_LIBRARY`     | `"rsl_rl"`                   | RL library to use. Options: `"rsl_rl"`, `"rl_games"`, `"skrl"`. Any other value fails the execution, naming the value and the supported set. The rejection happens in the pipeline's first state, so no GPU node is provisioned and no container image is pulled. |
-| `trainingConfig.seed`          | `SEED`           | `null`                       | Optional random seed for reproducibility. Leaving the field blank lets Isaac Lab choose one.                                                                                                                                                                      |
+| Parameter                        | Template tag     | Default                      | Description                                                                                                                                                                                                                                                       |
+| -------------------------------- | ---------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trainingConfig.mode`            | --               | `"train"`                    | Must be `"train"` for training mode.                                                                                                                                                                                                                              |
+| `trainingConfig.task`            | `TASK`           | `"Isaac-Cartpole-Direct-v0"` | The Isaac Lab task environment name.                                                                                                                                                                                                                              |
+| `trainingConfig.numEnvs`         | `NUM_ENVS`       | `4096`                       | Number of parallel simulation environments.                                                                                                                                                                                                                       |
+| `trainingConfig.maxIterations`   | `MAX_ITERATIONS` | `1500`                       | Maximum training iterations.                                                                                                                                                                                                                                      |
+| `trainingConfig.rlLibrary`       | `RL_LIBRARY`     | `"rsl_rl"`                   | RL library to use. Options: `"rsl_rl"`, `"rl_games"`, `"skrl"`. Any other value fails the execution, naming the value and the supported set. The rejection happens in the pipeline's first state, so no GPU node is provisioned and no container image is pulled. |
+| `trainingConfig.seed`            | `SEED`           | `null`                       | Optional random seed for reproducibility. Leaving the field blank lets Isaac Lab choose one.                                                                                                                                                                      |
+| `trainingConfig.stageAssetPaths` | --               | `[]`                         | Files and folders of the executing asset to download into the container before the run. See [Asset files staged before the run](#asset-files-staged-before-the-run).                                                                                              |
 
 :::note[AutoMate assembly with rl_games]
 The rl_games configuration of `Isaac-AutoMate-Assembly-Direct-v0` collects 32 steps per environment and trains on minibatches of 4096, and rl_games requires the batch to divide evenly into minibatches. Use a multiple of 128 for `NUM_ENVS`. With fewer, for example 64, the environment builds and rl_games then stops with an `AssertionError`, which the execution reports as `Training failed with exit code 1`.
@@ -233,6 +234,7 @@ The **Template tag** column names the execute-form field that supplies each para
 | `trainingConfig.rlLibrary`       | `RL_LIBRARY`        | `"rsl_rl"`                   | RL library the policy was trained with. Selects the Isaac Lab play script, so it must match the library used for training. Options: `"rsl_rl"`, `"rl_games"`, `"skrl"`; any other value fails the execution rather than falling back.            |
 | `trainingConfig.checkpointPath`  | `CHECKPOINT_PATH`   | `null`                       | Path to the policy file within the asset, for example `checkpoints/<executionId>/model_300.pt` for a checkpoint a training run wrote. Leaving the field blank evaluates the highest-numbered checkpoint in the run folder written most recently. |
 | `trainingConfig.policyS3Uri`     | --                  | `null`                       | Amazon S3 URI to a `.pt` policy file. Operator-supplied, and must name the executing asset's own bucket. Omit it to use `checkpointPath` or auto-discovery.                                                                                      |
+| `trainingConfig.stageAssetPaths` | --                  | `[]`                         | Files and folders of the executing asset to download into the container before the run. See [Asset files staged before the run](#asset-files-staged-before-the-run).                                                                             |
 
 ### Evaluation output
 
@@ -267,6 +269,33 @@ The pipeline supports custom Isaac Lab environments packaged as Python packages.
 The container downloads the package at runtime and installs it with `pip install --no-build-isolation <archive>` before starting training or evaluation. `pip install -e` is not used: the editable flag accepts only a local project directory or a version-control URL, never an archive.
 
 Training and evaluation run with Isaac Lab's directory, `/workspace/isaaclab`, as the working directory. An environment can create files there, as the built-in AutoMate assembly tasks do when they download their assets, but cannot change or remove the files Isaac Lab ships in it.
+
+## Asset files staged before the run
+
+A task often reads files from disk besides its environment package: robot and scene USD files with their materials and textures, meshes, terrains or datasets. Store them in the asset the execution runs against and list them in `trainingConfig.stageAssetPaths`. The container downloads them before Isaac Lab starts, keeping their paths within the asset, so relative references between the files resolve as they do in VAMS. The task reads them from the folder named by the `VAMS_ASSET_FILES_DIR` environment variable (`/tmp/assets`), which is set only when files were staged.
+
+```json
+{
+    "trainingConfig": {
+        "mode": "train",
+        "task": "MyCustomTask-v0",
+        "customEnvironmentPath": "environments/my-custom-env.whl",
+        "stageAssetPaths": ["Isaac/Robots/", "Isaac/Sensors/"]
+    }
+}
+```
+
+With this configuration, an asset file at `/Isaac/Robots/MyRobot/robot.usd` is at `$VAMS_ASSET_FILES_DIR/Isaac/Robots/MyRobot/robot.usd` during the run.
+
+| Entry               | Stages                                                   |
+| ------------------- | -------------------------------------------------------- |
+| `Isaac/Robots/`     | Every file in the folder and its subfolders              |
+| `configs/scene.usd` | That file, and the files of a folder of that name if any |
+| `/`                 | Every file of the asset                                  |
+
+The entries are paths within the executing asset. The `openPipeline` Lambda function resolves them against the asset's own root and rejects, before any AWS Batch job is submitted, an entry that is a URI, holds a backslash, a control character, or a `.`, `..` or empty path segment, or names no file. It also counts the selected files: a run stages at most 50 entries, 10,000 files and 50 GiB, and a larger selection fails in the same state. The container lists the files again when the job starts, applies the same limits, checks that the files fit on the instance's disk with 2 GiB to spare, and writes nothing outside the staging folder. File previews (`.previewFile.` files) are not staged. Files are read at their current version, as the custom environment package is.
+
+The container downloads 16 files at a time from the asset's Amazon S3 bucket and logs the number of files, the bytes and the seconds the staging took. Staging happens before the custom environment package is installed. A task that would otherwise fetch the same files from an external content server, such as the NVIDIA Omniverse content server, can read them from the staged folder instead, which also lets it run without internet access.
 
 ## Heartbeat mechanism
 

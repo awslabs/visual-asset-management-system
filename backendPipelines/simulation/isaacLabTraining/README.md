@@ -65,7 +65,8 @@ Training configs are used to train new RL policies from scratch.
     "numEnvs": number,        // Number of parallel environments (typically 1024-8192)
     "maxIterations": number,  // Training iterations (policy updates)
     "rlLibrary": "string",    // RL library: "rsl_rl", "rl_games", or "skrl"
-    "customEnvironmentPath": "string" // Optional: relative path to custom env package
+    "customEnvironmentPath": "string", // Optional: relative path to custom env package
+    "stageAssetPaths": ["string"]      // Optional: asset files/folders downloaded before the run
   }
 }
 ```
@@ -115,15 +116,16 @@ tags. Wherever both name the same parameter the form's value wins. The numeric a
 carry a value, so they always decide; `SEED` is the one that can be left blank, which falls through to
 the config file.
 
-| Parameter                      | Type   | Required | Description                                                                                                                                                                                                                                            |
-| ------------------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `name`                         | string | Yes      | Display name for the job shown in VAMS UI and logs                                                                                                                                                                                                     |
-| `description`                  | string | Yes      | Human-readable description of the training job purpose                                                                                                                                                                                                 |
-| `trainingConfig.mode`          | string | Yes      | Must be `"train"` for training jobs                                                                                                                                                                                                                    |
-| `trainingConfig.task`          | string | Yes      | Isaac Lab task/environment name (e.g., `"Isaac-Ant-Direct-v0"`, `"Isaac-Cartpole-Direct-v0"`)                                                                                                                                                          |
-| `trainingConfig.numEnvs`       | number | Yes      | Number of parallel simulation environments. Higher values = faster training but more GPU memory. Recommended: 1024-8192                                                                                                                                |
-| `trainingConfig.maxIterations` | number | Yes      | Number of policy update iterations. More iterations = longer training, potentially better policy. Recommended: 500-5000 depending on task complexity                                                                                                   |
-| `trainingConfig.rlLibrary`     | string | Yes      | Reinforcement learning library to use. Options: `"rsl_rl"` (recommended for locomotion), `"rl_games"`, `"skrl"`. Any other value fails the execution, naming the value and the supported set, before a GPU node is provisioned — it is not substituted |
+| Parameter                        | Type   | Required | Description                                                                                                                                                                                                                                                       |
+| -------------------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                           | string | Yes      | Display name for the job shown in VAMS UI and logs                                                                                                                                                                                                                |
+| `description`                    | string | Yes      | Human-readable description of the training job purpose                                                                                                                                                                                                            |
+| `trainingConfig.mode`            | string | Yes      | Must be `"train"` for training jobs                                                                                                                                                                                                                               |
+| `trainingConfig.task`            | string | Yes      | Isaac Lab task/environment name (e.g., `"Isaac-Ant-Direct-v0"`, `"Isaac-Cartpole-Direct-v0"`)                                                                                                                                                                     |
+| `trainingConfig.numEnvs`         | number | Yes      | Number of parallel simulation environments. Higher values = faster training but more GPU memory. Recommended: 1024-8192                                                                                                                                           |
+| `trainingConfig.maxIterations`   | number | Yes      | Number of policy update iterations. More iterations = longer training, potentially better policy. Recommended: 500-5000 depending on task complexity                                                                                                              |
+| `trainingConfig.rlLibrary`       | string | Yes      | Reinforcement learning library to use. Options: `"rsl_rl"` (recommended for locomotion), `"rl_games"`, `"skrl"`. Any other value fails the execution, naming the value and the supported set, before a GPU node is provisioned — it is not substituted            |
+| `trainingConfig.stageAssetPaths` | list   | No       | Files and folders of the executing asset that the container downloads into `/tmp/assets` (`VAMS_ASSET_FILES_DIR`) before the run, keeping their asset-relative paths; also accepted in evaluation configs. Limits and validation: the pipeline documentation page |
 
 ---
 
@@ -438,6 +440,7 @@ isaacLabTraining/
 │   ├── entrypoint.sh
 │   └── utils/
 │       ├── aws/s3.py           # S3 utilities
+│       ├── aws/staging.py      # Asset files staged before the run (stageAssetPaths)
 │       └── training/config.py  # Config parsing
 └── lambda/                      # AWS Lambda functions
     ├── openPipeline.py         # Parse config, prepare job
