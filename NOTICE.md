@@ -107,7 +107,7 @@ This software includes third party software subject to the following copyrights:
 | typescript                          | ^5.0.0        | Apache-2.0              |
 | vite                                | ^8.1.6        | MIT                     |
 | web-vitals                          | ^1.1.2        | Apache-2.0              |
-| zod                                 | ^3.23.8       | MIT                     |
+| zod                                 | ^4.6.7        | MIT                     |
 
 `jodit` is not declared directly — it arrives with `jodit-react` and the version shown is the one resolved in the lockfile. `fast-xml-parser` is carried transitively and pinned by the `overrides` block in `web/package.json`.
 

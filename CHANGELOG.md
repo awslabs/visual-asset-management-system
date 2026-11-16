@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Security** Dependency update to resolve a security advisory: `fast-xml-parser` 5.12.0 (`web/` and the ThatOpen IFC BIM viewer install); `infra/` no longer depends on it after `@aws-sdk/xml-builder` moves to 3.972.42. ([#1546](https://github.com/awslabs/visual-asset-management-system/issues/1546))
 -   **Security** Dependency update to resolve a security advisory: `mermaid` 12.2.0 with `katex` 0.18.10 (documentation site). ([#886](https://github.com/awslabs/visual-asset-management-system/pull/886))
+-   **Security** Dependency update to resolve a security advisory: `zod` 4.6.7 (`web/`; the pipeline form validation passes the issue code as the string `custom`). ([#820](https://github.com/awslabs/visual-asset-management-system/issues/820), [#886](https://github.com/awslabs/visual-asset-management-system/pull/886))
 
 ### Known Outstanding Issues
 
