@@ -462,8 +462,8 @@ class TestAnsweredOnce:
         wire = _Wire(monkeypatch, client, _response(AUTHORIZATION_HEADER_COMPLAINT))
 
         with pytest.raises(APIError) as excinfo:
-            client.get("/database/x/assets?startingToken=query-value", include_auth=include_auth,
-                       raise_http_errors=raise_http_errors)
+            client.get("/database/x/assets", params={"startingToken": "query-value"},
+                       include_auth=include_auth, raise_http_errors=raise_http_errors)
 
         text = str(excinfo.value)
         assert text == _no_route_message("GET", "/api/database/x/assets")

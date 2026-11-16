@@ -230,12 +230,15 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
             setShowDownloadModal(false);
 
             // Navigate to the AssetDownload page
-            navigate(`/databases/${databaseId}/assets/${assetId}/download`, {
-                state: {
-                    assetVersionId: `${downloadVersion.Version}`,
-                    fileTree: fileTree,
-                },
-            });
+            navigate(
+                `/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}/download`,
+                {
+                    state: {
+                        assetVersionId: `${downloadVersion.Version}`,
+                        fileTree: fileTree,
+                    },
+                }
+            );
         } catch (error) {
             console.error("Error preparing download:", error);
             setShowDownloadModal(false);

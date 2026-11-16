@@ -88,6 +88,12 @@ paths:
                                     externalOAuthIdpDisplayName:
                                         type: string
                                         description: "Label rendered on the external OAuth login button; 'undefined' when not configured, in which case the web application falls back to 'SSO'"
+                                    externalOAuthIdpUserIdClaim:
+                                        type: string
+                                        description: "Access-token claim whose value is the VAMS user id (app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim); 'undefined' when not configured, in which case the web application and the API authorizer use cognito:username, then username, then sub"
+                                    externalOAuthIdpAudienceClaims:
+                                        type: string
+                                        description: "Comma-separated names of the access-token claims the API authorizer reads the audience from, in order (app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims; each is 'aud' or 'client_id'). Claim names only, never audience values. 'undefined' when external OAuth is not the authentication provider. Absent from a deployment that predates the field, in which case clients assume 'aud'"
                                     stackName:
                                         type: string
                                         nullable: true
@@ -5356,7 +5362,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     - $ref: '#/components/schemas/ingestAssetInitializeResponse'
                                     - $ref: '#/components/schemas/ingestAssetCompleteResponse'
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, a database that does not exist, or a request the upload step refuses. When the asset does not exist, the request is refused before the asset is created, so a refusal creates nothing: the initialize stage refuses a file with a blocked extension, an extension the database does not allow, or a .previewFile. file with a disallowed extension, and the complete stage refuses an uploadId that is unknown, already completed, initialized for another asset or database, or expired."
                     content:
                         application/json:
                             schema:

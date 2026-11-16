@@ -207,7 +207,11 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                                 encodeURIComponent(segment)
                             );
                             const encodedFileKey = encodedSegments.join("/");
-                            let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                            let assetUrl = `${
+                                config.api
+                            }database/${databaseId}/assets/${encodeURIComponent(
+                                assetId
+                            )}/download/stream/${encodedFileKey}`;
 
                             // assetVersionId takes precedence (used for all files including deps)
                             // versionId is S3 file version, only for the primary file
@@ -263,7 +267,11 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             }
                             const potreeFileKey =
                                 relativeFileKey + "/preview/PotreeViewer/metadata.json";
-                            const assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${potreeFileKey}`;
+                            const assetUrl = `${
+                                config.api
+                            }database/${databaseId}/assets/${encodeURIComponent(
+                                assetId
+                            )}/auxiliaryPreviewAssets/stream/${potreeFileKey}`;
 
                             console.log(`VEERUM Viewer: Validating point cloud URL ${assetUrl}`);
 

@@ -93,6 +93,20 @@ COGNITO_BASE_URL = os.environ.get('COGNITO_BASE_URL')
 JWT_ISSUER_URL = os.environ.get('JWT_ISSUER_URL')
 JWT_AUDIENCE = os.environ.get('JWT_AUDIENCE')
 
+# External IDP claim settings (config: useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims and
+# .lambdaAuthorizorJWTUserIdClaim). Parsed below, once the logger exists.
+JWT_AUDIENCE_CLAIMS_ENV = os.environ.get('JWT_AUDIENCE_CLAIMS')
+JWT_USER_ID_CLAIM_ENV = os.environ.get('JWT_USER_ID_CLAIM')
+
+# The claims an external token's audience may be read from, and the default list. An Amazon
+# Cognito user pool access token, for one, carries client_id and no aud.
+SUPPORTED_JWT_AUDIENCE_CLAIMS = ('aud', 'client_id')
+DEFAULT_JWT_AUDIENCE_CLAIMS = ['aud']
+
+# A user id claim name, matching the getConfig() validation in infra/config/config.ts. A name under
+# the reserved 'vams:' prefix is refused (any letter case): those claims never reach the context.
+JWT_USER_ID_CLAIM_PATTERN = re.compile(r'^(?!vams:)[A-Za-z0-9_:.\-]+$', re.IGNORECASE)
+
 # Additional token audiences. Each is a JSON array of strings, set by CDK only when
 # the operator lists extra audiences (app.authProvider.<provider>.additionalTokenAudiences), so an
 # unset variable means the primary audience above is the only one accepted.
@@ -116,6 +130,47 @@ except json.JSONDecodeError:
     logger.error("Failed to parse IGNORED_PATHS environment variable")
     IGNORED_PATHS = []
 
+
+def parse_jwt_audience_claims(raw: Optional[str]) -> Optional[List[str]]:
+    """The JWT_AUDIENCE_CLAIMS value as a list of claim names, or None when it is malformed.
+
+    Unset or empty is the default ['aud']. Otherwise a JSON array of distinct names from
+    SUPPORTED_JWT_AUDIENCE_CLAIMS, at least one. A malformed value is None rather than a
+    fallback, so verify_external_jwt refuses every token instead of running a check nobody
+    configured.
+    """
+    if raw is None or raw.strip() == '':
+        return list(DEFAULT_JWT_AUDIENCE_CLAIMS)
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if (
+        not isinstance(value, list)
+        or len(value) == 0
+        or any(name not in SUPPORTED_JWT_AUDIENCE_CLAIMS for name in value)
+        or len(set(value)) != len(value)
+    ):
+        return None
+    return value
+
+
+def parse_jwt_user_id_claim(raw: Optional[str]) -> Optional[str]:
+    """The JWT_USER_ID_CLAIM value: '' when not set, the claim name, or None when it is malformed."""
+    if raw is None or raw.strip() == '':
+        return ''
+    if not JWT_USER_ID_CLAIM_PATTERN.fullmatch(raw):
+        return None
+    return raw
+
+
+JWT_AUDIENCE_CLAIMS = parse_jwt_audience_claims(JWT_AUDIENCE_CLAIMS_ENV)
+if JWT_AUDIENCE_CLAIMS is None:
+    logger.error("Invalid JWT_AUDIENCE_CLAIMS environment variable; external tokens will be refused")
+
+JWT_USER_ID_CLAIM = parse_jwt_user_id_claim(JWT_USER_ID_CLAIM_ENV)
+if JWT_USER_ID_CLAIM is None:
+    logger.error("Invalid JWT_USER_ID_CLAIM environment variable; external tokens will be refused")
 
 def parse_additional_audiences(raw: Optional[str], env_name: str) -> List[str]:
     """Parse an additional-audience environment variable into a list of exact audience values.
@@ -697,18 +752,17 @@ def _is_machine_token(claims: Dict[str, Any]) -> bool:
 def _external_token_names_a_user(claims: Dict[str, Any]) -> bool:
     """Whether an external IdP token accepted through an additional audience identifies a user.
 
-    A token whose 'aud' includes JWT_AUDIENCE is not checked here: that is the web app's own
-    audience. A token accepted only through JWT_ADDITIONAL_AUDIENCES must carry the identity
-    claim the authorizer resolves the user from (cognito:username, then username, then sub),
-    that identity must not be the token's own client identifier, and the token must carry no
-    known machine-token marker (_is_machine_token). The markers cover common IdPs only, so the
-    configuration still has to list audiences of user sign-in clients.
+    A token that names JWT_AUDIENCE (read through lambdaAuthorizorJWTAudienceClaims, 'aud' or
+    'client_id') is not checked here: that is the web app's own audience. A token accepted only
+    through JWT_ADDITIONAL_AUDIENCES must carry the identity claim the authorizer resolves the
+    user from (resolve_user_id: the configured user id claim, else cognito:username, then
+    username, then sub), that identity must not be the token's own client identifier, and the
+    token must carry no known machine-token marker (_is_machine_token). The markers cover common
+    IdPs only, so the configuration still has to list audiences of user sign-in clients.
     """
-    aud = claims.get('aud')
-    audiences = [aud] if isinstance(aud, str) else (aud if isinstance(aud, list) else [])
-    if JWT_AUDIENCE and JWT_AUDIENCE in audiences:
+    if JWT_AUDIENCE and matched_external_audience(claims) == JWT_AUDIENCE:
         return True
-    identity = claims.get('cognito:username') or claims.get('username') or claims.get('sub')
+    identity = resolve_user_id(claims)
     if not _non_blank(identity) or _is_machine_token(claims):
         return False
     client_ids = {claims.get(c) for c in _CLIENT_IDENTIFIER_CLAIMS if _non_blank(claims.get(c))}
@@ -740,7 +794,8 @@ def token_audience_for_audit(claims: Dict[str, Any]) -> Optional[str]:
     """The accepted audience a verified token was issued to, for the authorization audit record.
 
     Cognito: the app client id ('aud' of an ID token, 'client_id' of an access token). External
-    IdP: the token's 'aud' value that matched an accepted audience (a token may carry several).
+    IdP: the accepted audience the token names through the configured audience claims (a token
+    may carry several in 'aud').
     Never any other token content. None when the claims carry no accepted audience (API keys).
     """
     if not claims:
@@ -749,12 +804,7 @@ def token_audience_for_audit(claims: Dict[str, Any]) -> Optional[str]:
         value = claims.get('aud') or claims.get('client_id')
         return value if isinstance(value, str) and value in accepted_cognito_client_ids() else None
     if AUTH_MODE == 'external':
-        value = claims.get('aud')
-        candidates = [value] if isinstance(value, str) else (value if isinstance(value, list) else [])
-        accepted = accepted_external_audiences()
-        for candidate in candidates:
-            if isinstance(candidate, str) and candidate in accepted:
-                return candidate
+        return matched_external_audience(claims)
     return None
 
 
@@ -856,6 +906,84 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _audience_claim_values(claim_name: str, value: Any) -> List[str]:
+    """The audience strings one audience claim carries; empty when the value is malformed.
+
+    'aud' may be a string or a list of strings (RFC 7519 4.1.3; the same rule PyJWT applies, and
+    a list holding a non-string is malformed); 'client_id' must be a string.
+    """
+    if claim_name == 'aud' and isinstance(value, list):
+        return list(value) if all(isinstance(item, str) for item in value) else []
+    return [value] if isinstance(value, str) else []
+
+
+def matched_external_audience(claims: Dict[str, Any]) -> Optional[str]:
+    """The accepted audience an external token names, or None when it names none.
+
+    Accepted audiences are JWT_AUDIENCE and then the additional audiences (see
+    accepted_external_audiences), so the primary one is preferred when a token names both. The
+    claims are read through JWT_AUDIENCE_CLAIMS, in order, for the primary and the additional
+    audiences alike: the first claim of the list present in the token decides, it must name an
+    accepted audience, and a later claim cannot rescue a mismatch. A token carrying none of them
+    names none. The default ['aud'] is the same comparison as PyJWT's own audience verification
+    given the accepted list, and the comparison is always exact string equality.
+    """
+    for claim_name in JWT_AUDIENCE_CLAIMS or []:
+        if claim_name in claims:
+            values = _audience_claim_values(claim_name, claims[claim_name])
+            for audience in accepted_external_audiences():
+                if audience in values:
+                    return audience
+            return None
+    return None
+
+
+def verify_external_audience(claims: Dict[str, Any]) -> bool:
+    """Whether the token's audience, read through the configured claims, is an accepted one.
+
+    See matched_external_audience for the rule. Only claim names are logged, never values.
+    """
+    if matched_external_audience(claims) is not None:
+        return True
+    present = [name for name in (JWT_AUDIENCE_CLAIMS or []) if name in claims]
+    if present:
+        logger.error(f"Token audience validation failed on claim '{present[0]}'")
+    else:
+        logger.error(f"Token audience validation failed: no {' or '.join(JWT_AUDIENCE_CLAIMS or [])} claim")
+    return False
+
+
+def _external_user_id_claim_value(claims: Dict[str, Any]) -> Optional[str]:
+    """The configured JWT_USER_ID_CLAIM's value when it is a non-blank string, else None."""
+    value = claims.get(JWT_USER_ID_CLAIM)
+    return value if _non_blank(value) else None
+
+
+def resolve_user_id(claims: Dict[str, Any]) -> Optional[str]:
+    """The VAMS user id for verified claims: roles, the authorizer context, audit and the MFA hook.
+
+    External mode with JWT_USER_ID_CLAIM set uses that claim only. Otherwise (Cognito mode, or the
+    setting not provided) the first of cognito:username, username, sub.
+
+    Keep this in step with resolveExternalUserId in web/src/utils/authTokenUtils.ts, which applies
+    the same rule to the access token in the browser: the web application's user id must be the one
+    this function returns, or its login profile request is refused. String claims give the same
+    result on both sides; for a non-string value this chain takes the first truthy claim and the web
+    application the first non-empty string.
+    """
+    if AUTH_MODE == 'external' and JWT_USER_ID_CLAIM:
+        return _external_user_id_claim_value(claims)
+    return (
+        claims.get('cognito:username')
+        or claims.get('username')
+        or claims.get('sub')
+    )
+
+def external_user_id_claim_configured() -> bool:
+    """Whether lambdaAuthorizorJWTUserIdClaim is in force: external mode with the claim set."""
+    return AUTH_MODE == 'external' and bool(JWT_USER_ID_CLAIM)
+
+
 def _fetch_key_set(fetch, *args, **kwargs) -> List[Dict[str, Any]]:
     """Call a key-set fetcher, turning any failure into TokenVerificationUnavailableError.
 
@@ -875,12 +1003,23 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
     Verify External IDP JWT token using PyJWT library
 
     Same contract as verify_cognito_jwt: claims for a verified token, None for a rejected
-    one, TokenVerificationUnavailableError when the token could not be evaluated (missing
-    configuration, or a discovery/JWKS failure).
+    one, TokenVerificationUnavailableError when the token could not be evaluated (missing or
+    malformed configuration, or a discovery/JWKS failure).
+
+    PyJWT verifies the signature (RS256 only), expiry and issuer, and requires the exp and iss
+    claims. The audience is compared by verify_external_audience, against the primary audience
+    and the additional audiences, through the claims lambdaAuthorizorJWTAudienceClaims names.
+    A token accepted through an additional audience must also name a user
+    (_external_token_names_a_user). When lambdaAuthorizorJWTUserIdClaim is set, a token without
+    that claim is refused here.
     """
     if not JWT_ISSUER_URL or not JWT_AUDIENCE:
         logger.error("Missing External IDP configuration")
         raise TokenVerificationUnavailableError("Missing External IDP configuration")
+
+    if JWT_AUDIENCE_CLAIMS is None or JWT_USER_ID_CLAIM is None:
+        logger.error("Invalid External IDP claim configuration (JWT_AUDIENCE_CLAIMS or JWT_USER_ID_CLAIM)")
+        raise TokenVerificationUnavailableError("Invalid External IDP claim configuration")
 
     try:
         # Get the signing key for token verification
@@ -888,29 +1027,36 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
         if not signing_key:
             return None
 
-        # Verify and decode the token. PyJWT accepts the token when any of its 'aud' values is
-        # one of the listed audiences: the configured JWT_AUDIENCE plus the configured
-        # additional audiences. With none configured the list is the single
-        # JWT_AUDIENCE, which PyJWT treats exactly like the bare string.
+        # Verify and decode the token. The audience is not handed to PyJWT: it reads only 'aud',
+        # and the claim(s) to read are configurable (verify_external_audience below, which
+        # compares against the configured JWT_AUDIENCE plus the configured additional
+        # audiences).
         claims = pyjwt.decode(
             token,
             signing_key,
             algorithms=['RS256'],
-            audience=accepted_external_audiences(),
             issuer=JWT_ISSUER_URL,
             options={
                 'verify_signature': True,
                 'verify_exp': True,
-                'verify_aud': True,
-                'verify_iss': True
+                'verify_aud': False,
+                'verify_iss': True,
+                'require': ['exp', 'iss'],
             }
         )
+
+        if not verify_external_audience(claims):
+            return None
+
+        if JWT_USER_ID_CLAIM and _external_user_id_claim_value(claims) is None:
+            logger.error(f"Token is missing the configured user id claim '{JWT_USER_ID_CLAIM}'")
+            return None
 
         if not _external_token_names_a_user(claims):
             logger.error('Token accepted through an additional audience names no user; it is not accepted')
             return None
 
-        logger.info(f'External IDP token successfully verified for user: {claims.get("sub", "unknown")}')
+        logger.info(f'External IDP token successfully verified for user: {resolve_user_id(claims) or "unknown"}')
         return claims
 
     except pyjwt.ExpiredSignatureError:
@@ -1298,8 +1444,6 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
         logger.error("Token verification failed")
         return _denied("Token verification failed", FAILURE_UNAUTHENTICATED)
 
-    logger.info(f"Token verified successfully for user: {claims.get('sub', 'unknown')}")
-
     # Build context with string coercion. Keys under the reserved "vams:" prefix are this
     # authorizer's own output and are set below, so a claim of that prefix in the token is
     # not copied (the prefix match ignores case).
@@ -1308,19 +1452,30 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
         if value is not None and not _is_reserved_context_key(key):
             context[key] = str(value)
 
-    username = (
-        claims.get('cognito:username')
-        or claims.get('username')
-        or claims.get('sub')
-    )
+    # The user id is resolved here, once, by resolve_user_id: the username chain (cognito:username,
+    # username, sub), or in external mode with lambdaAuthorizorJWTUserIdClaim set that claim and no
+    # other. The same id feeds the log line, vams:tokens, the role lookup, the MFA hook, the
+    # authorization audit record and the handlers' verified context (which read vams:tokens).
+    # verify_external_jwt has already refused a token that lacks the configured claim; this check
+    # covers a token that reaches this point any other way, so nobody is authorized as no one.
+    if AUTH_MODE == 'external' and JWT_USER_ID_CLAIM is None:
+        # A malformed setting must not fall back to the username chain: another claim would
+        # name the user. verify_external_jwt refuses first; this covers any other route here.
+        logger.error("Invalid External IDP claim configuration (JWT_USER_ID_CLAIM)")
+        return _denied("Token verification unavailable", FAILURE_FORBIDDEN)
+
+    username = resolve_user_id(claims)
     if not _non_blank(username):
         logger.info("Verified token carries no username claim")
         return _denied("Token names no user", FAILURE_UNAUTHENTICATED)
 
+    logger.info(f"Token verified successfully for user: {username}")
+
     # The caller's identity for every handler and for Casbin is the username the roles and the
     # MFA state below are resolved for. For an Amazon Cognito token this is the value the
     # pre-token-generation trigger writes (the user name, which Cognito also issues as
-    # cognito:username in an ID token and as username in an access token).
+    # cognito:username in an ID token and as username in an access token). For an external IdP
+    # token it is the configured user id claim when set, else the same chain.
     context['vams:tokens'] = json.dumps([username])
     # Reserved for external system attributes; empty, as the Cognito trigger issues it.
     context['vams:externalAttributes'] = json.dumps([])

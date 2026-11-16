@@ -14,6 +14,7 @@ Every assertion is made on what the writer handed the CloudWatch Logs clients.
 
 import json
 import os
+import re
 import threading
 import time
 from types import SimpleNamespace
@@ -113,6 +114,18 @@ def api_check(event):
 
 
 CLAIMS = {"tokens": ["alice"], "roles": ["admin"], "mfaEnabled": True}
+_PREFIX = re.compile(r"^\[AUTHORIZATION\]\[authorized: (True|False)\] \[user: [^\]]*\] "
+                     r"\[roles: \[[^\]]*\]\] \[mfaEnabled: (True|False)\] ")
+
+
+def parse(message):
+    """Split an authorization record into (prefix match, payload, echo text)."""
+    match = _PREFIX.match(message)
+    assert match, message[:200]
+    payload, end = json.JSONDecoder().raw_decode(message, match.end())
+    return match, payload, message[end:]
+
+
 DATA_CHECK = {"action": "GET", "obj": {"object__type": "asset", "databaseId": "db1", "assetName": "a1"}}
 LAMBDA_CONTEXT = SimpleNamespace(aws_request_id="lambda-req-1", get_remaining_time_in_millis=lambda: 30000)
 
@@ -167,14 +180,21 @@ class TestApiAuthorizationDelivery:
             auditLogging.log_authorization_api(event, decision, api_check(event))
             assert len(clients.module.calls) == 1
 
-    def test_the_record_is_byte_identical_inside_and_outside_a_context(self, clients):
+    def test_inside_a_context_the_record_adds_the_contract_keys_to_the_same_record(self, clients):
         event = api_event()
         auditLogging.log_authorization_api(event, True, api_check(event))
         outside = clients.module.messages(clients.auth)
         with auditLogging.audit_request(event, LAMBDA_CONTEXT):
             auditLogging.log_authorization_api(event, True, api_check(event))
         inside = clients.flush.messages(clients.auth)
-        assert len(outside) == 1 and inside == outside
+        assert len(outside) == 1 and len(inside) == 1
+        out_match, out_payload, out_echo = parse(outside[0])
+        in_match, in_payload, in_echo = parse(inside[0])
+        assert in_match.group(0) == out_match.group(0) and in_echo == out_echo
+        assert out_payload == api_check(event)
+        assert in_payload["obj"] == out_payload["obj"]
+        assert in_payload["legacy"] == {"action": out_payload["action"]}
+        assert (in_payload["action"], in_payload["outcome"]) == ("assetGet", "success")
 
     def test_outside_a_context_the_record_is_written_at_once_as_before(self, clients):
         event = api_event()
@@ -182,7 +202,7 @@ class TestApiAuthorizationDelivery:
         assert clients.flush.calls == []
         expected = (auditLogging._format_log_message(
             "[AUTHORIZATION][authorized: True]", {"user": "alice", "roles": ["admin"], "mfaEnabled": True},
-            api_check(event)) + auditLogging._event_suffix(event))
+            api_check(event)) + auditLogging._event_suffix(auditLogging._short_echo_event(event)))
         assert clients.module.messages(clients.auth) == [expected]
 
     def test_a_record_for_another_event_is_written_at_once(self, clients):
@@ -260,13 +280,21 @@ class TestDataAuthorizationDelivery:
             assert len(clients.module.calls_to(clients.auth)) == 1
         assert clients.flush.calls == []
 
-    def test_the_record_is_byte_identical_inside_and_outside_a_context(self, clients):
+    def test_inside_a_context_the_record_adds_the_contract_keys_and_the_request_echo(self, clients):
         auditLogging.log_authorization(CLAIMS, True, DATA_CHECK)
         outside = clients.module.messages(clients.auth)
         event = api_event()
         with auditLogging.audit_request(event, LAMBDA_CONTEXT):
             auditLogging.log_authorization(CLAIMS, True, DATA_CHECK)
-        assert len(outside) == 1 and clients.flush.messages(clients.auth) == outside
+        inside = clients.flush.messages(clients.auth)
+        assert len(outside) == 1 and len(inside) == 1
+        out_match, out_payload, _ = parse(outside[0])
+        in_match, in_payload, in_echo = parse(inside[0])
+        assert in_match.group(0) == out_match.group(0)
+        assert out_payload == DATA_CHECK
+        assert in_payload["legacy"] == {"action": DATA_CHECK["action"]}
+        assert in_payload["obj"] == DATA_CHECK["obj"] and in_payload["outcome"] == "success"
+        assert in_echo == auditLogging._event_suffix(auditLogging._short_echo_event(event))
 
     def test_inside_a_deferred_block_allowed_records_join_the_flush_and_denials_the_block(self, clients):
         event = api_event()

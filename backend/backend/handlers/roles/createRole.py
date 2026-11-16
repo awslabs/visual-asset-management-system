@@ -259,7 +259,7 @@ def handle_post_request(event):
             "operation": "create",
             "description": request_model.description,
             "mfaRequired": request_model.mfaRequired
-        })
+        }, changes=request_model.dict(exclude_unset=True))
         
         # Return success response
         return success(body=result.dict())
@@ -334,7 +334,7 @@ def handle_put_request(event):
             audit_details["description"] = update_data['description']
         if 'mfaRequired' in update_data:
             audit_details["mfaRequired"] = update_data['mfaRequired']
-        log_auth_changes(event, "roleUpdate", audit_details)
+        log_auth_changes(event, "roleUpdate", audit_details, changes=update_data)
 
         # Return success response
         return success(body=result.dict())
