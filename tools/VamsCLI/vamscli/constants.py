@@ -302,7 +302,7 @@ DEFAULT_IGNORE_FILE_NAME = ".vamsignore"
 SYNC_MTIME_TOLERANCE_SECONDS = 2  # Filesystem timestamp granularity tolerance (FAT32 = 2s)
 
 # File Extensions
-ALLOWED_PREVIEW_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
+ALLOWED_PREVIEW_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.bmp']
 
 # Profile Configuration
 PROFILE_DIR_NAME = "vamscli"
