@@ -714,7 +714,9 @@ def _asset_path_text(asset_path):
 
 
 def _load_texture(asset_path, context):
-    """The texture image (RGB) named by an SdfAssetPath, read only from inside the asset root."""
+    """The texture named by an SdfAssetPath as an (H, W, 3) uint8 RGB array, read only from inside
+    the asset root. Each texture is decoded and converted once per stage; every prim that samples it
+    reads the same array (converting a 4096x4096 image took about 0.1 s, once per prim)."""
     authored = getattr(asset_path, "path", "") or ""
     resolved = getattr(asset_path, "resolvedPath", "") or ""
     key = resolved or authored
@@ -745,6 +747,8 @@ def _load_texture(asset_path, context):
                 image = _load_texture_from_usdz(real, inner.rstrip("]"))
     if image is None:
         logger.warning(f"    Could not load texture: {authored or resolved}")
+    else:
+        image = np.asarray(image)
     context.textures[key] = image
     return image
 
