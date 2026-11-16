@@ -680,23 +680,21 @@ This software includes third party software subject to the following copyrights:
 
 | Package                          | Version          | License      |
 | :------------------------------- | :--------------- | :----------- |
-| @aws-cdk/aws-lambda-python-alpha | ^2.214.0-alpha.0 | Apache-2.0   |
-| @aws-sdk/client-iam              | ^3.883.0         | Apache-2.0   |
-| @aws-sdk/client-ssm              | ^3.883.0         | Apache-2.0   |
-| @opensearch-project/opensearch   | ^3.5.1           | Apache-2.0   |
-| @types/aws-lambda                | ^8.10.152        | MIT          |
+| @aws-cdk/aws-lambda-python-alpha | ^2.275.0-alpha.0 | Apache-2.0   |
+| @aws-sdk/client-iam              | ^3.1164.0        | Apache-2.0   |
+| @aws-sdk/client-ssm              | ^3.1164.0        | Apache-2.0   |
+| @opensearch-project/opensearch   | ^3.9.0           | Apache-2.0   |
+| @types/aws-lambda                | ^8.10.164        | MIT          |
 | @types/aws4                      | ^1.11.6          | MIT          |
-| aws-cdk-lib                      | ^2.215.0         | Apache-2.0   |
-| aws-lambda                       | ^1.0.7           | Apache-2.0   |
-| aws-sdk                          | ^2.1692.0        | Apache-2.0   |
+| aws-cdk-lib                      | ^2.275.0         | Apache-2.0   |
 | aws4                             | ^1.13.2          | MIT          |
-| cdk-nag                          | ^2.37.29         | Apache-2.0   |
-| constructs                       | ^10.4.2          | Apache-2.0   |
-| dotenv                           | ^17.2.2          | BSD-2-Clause |
+| cdk-nag                          | ^2.38.2          | Apache-2.0   |
+| constructs                       | ^10.8.1          | Apache-2.0   |
+| dotenv                           | ^17.4.2          | BSD-2-Clause |
 | source-map-support               | ^0.5.21          | MIT          |
-| aws-cdk                          | ^2.1029.2        | Apache-2.0   |
-| esbuild                          | ^0.25.10         | MIT          |
-| typescript                       | ^5.9.2           | Apache-2.0   |
+| aws-cdk                          | ^2.1148.0        | Apache-2.0   |
+| esbuild                          | ^0.28.2          | MIT          |
+| typescript                       | ^5.9.3           | Apache-2.0   |
 
 ---
 
