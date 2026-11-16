@@ -1022,39 +1022,23 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[IndexOperati
         event_name = event_record.get('eventName', '')
         dynamodb_data = event_record.get('dynamodb', {})
         
-        # For REMOVE events, Keys are always present regardless of StreamViewType
-        # We should use Keys directly since OldImage won't exist for NEW_IMAGE stream type
-        if event_name == 'REMOVE':
-            # Get keys from Keys (always present for REMOVE)
-            keys = dynamodb_data.get('Keys', {})
-            if not keys:
-                logger.warning("Missing Keys in REMOVE event for asset links")
-                return [IndexOperationResponse(
-                    success=True,
-                    message="Missing Keys in REMOVE event, skipping",
-                    indexName=opensearch_asset_index,
-                    operation="skip"
-                )]
-            
-            # Extract from and to asset information from Keys
-            from_asset_key = keys.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
-            to_asset_key = keys.get('toAssetDatabaseId:toAssetId', {}).get('S')
-        else:
-            # For INSERT/MODIFY, use NewImage
-            record_data = dynamodb_data.get('NewImage', {})
-            
-            if not record_data:
-                logger.warning("No NewImage found in INSERT/MODIFY event for asset links")
-                return [IndexOperationResponse(
-                    success=True,
-                    message="No NewImage data, skipping",
-                    indexName=opensearch_asset_index,
-                    operation="skip"
-                )]
-            
-            # Extract from and to asset information from NewImage
-            from_asset_key = record_data.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
-            to_asset_key = record_data.get('toAssetDatabaseId:toAssetId', {}).get('S')
+        # The table is keyed on assetLinkId alone, so a REMOVE record's Keys do not name the
+        # two assets; its OldImage (the deleted row) does.
+        image_name = 'OldImage' if event_name == 'REMOVE' else 'NewImage'
+        record_data = dynamodb_data.get(image_name, {})
+
+        if not record_data:
+            asset_link_id = dynamodb_data.get('Keys', {}).get('assetLinkId', {}).get('S')
+            logger.warning(f"No {image_name} found in {event_name} event for asset link {asset_link_id}")
+            return [IndexOperationResponse(
+                success=True,
+                message=f"No {image_name} data, skipping",
+                indexName=opensearch_asset_index,
+                operation="skip"
+            )]
+
+        from_asset_key = record_data.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
+        to_asset_key = record_data.get('toAssetDatabaseId:toAssetId', {}).get('S')
         
         if not from_asset_key or not to_asset_key:
             logger.warning("Missing asset keys in asset links stream")
