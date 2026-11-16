@@ -177,7 +177,7 @@ This software includes third party software subject to the following copyrights:
 | opensearch-py         | 2.7.1      | Apache-2.0 |
 | casbin                | 1.36.0     | Apache-2.0 |
 | locked-dict           | 2023.10.22 | MIT        |
-| boto3                 | 1.43.45    | Apache-2.0 |
+| boto3                 | 1.43.126   | Apache-2.0 |
 
 ---
 
@@ -651,7 +651,7 @@ packages from PyPI when the layer is built:
 
 | Name         | Version | License                    |
 | :----------- | :------ | :------------------------- |
-| cryptography | 50.0.1  | Apache-2.0 OR BSD-3-Clause |
+| cryptography | 50.0.2  | Apache-2.0 OR BSD-3-Clause |
 | cffi         | 2.0.0   | MIT                        |
 | pycparser    | 2.22    | BSD-3-Clause               |
 
