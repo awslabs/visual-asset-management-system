@@ -39,6 +39,7 @@ from media_extractors.common import (
     BranchResult,
     ExtractContext,
     class_for_extension,
+    name_input,
     scrub_urls,
 )
 from media_extractors.s3_ranged import RangedS3Reader
@@ -235,11 +236,30 @@ def fetch_manifest(location: str) -> dict:
 
 
 def download_input(bucket: str, key: str, version_id: Optional[str], work_dir: str, file_name: str) -> str:
+    """Downloads the input to ``input<ext>`` in ``work_dir`` (a name of the pipeline's own, whatever the user's
+    file is called) and returns that path; read_input names the user's file wherever a message quotes it."""
     local_path = os.path.join(work_dir, "input" + os.path.splitext(file_name)[1].lower())
     extra_args = {"VersionId": version_id} if version_id else None
     # The input file's bucket may be in another Region; its reads are signed for that Region.
     client_for_bucket(bucket, s3_client).download_file(bucket, key, local_path, ExtraArgs=extra_args)
     return local_path
+
+
+def named_failure(exc: Exception, local_path: str, input_name: str) -> Optional[Exception]:
+    """``exc`` with its message naming the user's file where it quoted the downloaded copy (name_input): of the
+    same type when that type is built from a message alone, else a MediaTaskError; None when the message does not
+    quote the copy."""
+    text = str(exc)
+    named = name_input(text, local_path, input_name)
+    if named == text:
+        return None
+    try:
+        renamed = type(exc)(named)
+    except Exception:  # noqa: BLE001 - a type that is not built from one message
+        renamed = None
+    if renamed is None or str(renamed) != named:
+        renamed = MediaTaskError(named)
+    return renamed
 
 
 def upload_renders(paths: List[str], aux_bucket: str, aux_prefix: str) -> List[str]:
@@ -386,12 +406,14 @@ def read_by_url(file_class: str, url: str, ctx: ExtractContext, file_name: str, 
 
 
 def read_input(extractor: Callable, file_class: str, bucket: str, key: str, version_id: Optional[str],
-               file_size: int, detected_format: Optional[str], ctx: ExtractContext) -> BranchResult:
+               file_size: int, detected_format: Optional[str], ctx: ExtractContext,
+               input_name: Optional[str] = None) -> BranchResult:
     """The class extractor's result for the input, read within INPUT_MAX_DOWNLOAD_BYTES from a downloaded copy.
     Over the bound, decided from the state's fileSize before any byte is fetched: a video or audio file is read
     over a presigned URL by range (nothing is downloaded; the stream facts, keyframes and segment plan come from the
     ranged reads), and any other class keeps the pre-written sys_file attributes, since the file would not fit
-    beside the image's other temporary files."""
+    beside the image's other temporary files. A warning or a failure that quotes the downloaded copy names
+    ``input_name`` (the file's path within its asset; default ``ctx.file_name``) instead."""
     if file_size > INPUT_MAX_DOWNLOAD_BYTES and file_class in URL_READ_CLASSES:
         logger.info({"message": "MEDIA extract by URL: input over the download bound", "fileClass": file_class,
                      "fileSize": file_size, "inputMaxDownloadBytes": INPUT_MAX_DOWNLOAD_BYTES})
@@ -401,7 +423,16 @@ def read_input(extractor: Callable, file_class: str, bucket: str, key: str, vers
                      "fileSize": file_size, "inputMaxDownloadBytes": INPUT_MAX_DOWNLOAD_BYTES})
         return oversized_input_result(file_class, ctx.file_name, file_size, detected_format)
     local_path = download_input(bucket, key, version_id, ctx.work_dir, ctx.file_name)
-    return extractor(local_path, ctx)
+    name = input_name or ctx.file_name
+    try:
+        result = extractor(local_path, ctx)
+    except Exception as exc:  # noqa: BLE001 - re-raised as it was, or naming the user's file
+        renamed = named_failure(exc, local_path, name)
+        if renamed is None:
+            raise
+        raise renamed.with_traceback(exc.__traceback__) from None
+    result.warnings = [name_input(warning, local_path, name) for warning in result.warnings]
+    return result
 
 
 def skip_full_text_for_size(manifest: dict, file_size: int) -> None:
@@ -503,7 +534,8 @@ def lambda_handler(event, context):
             # carry no end-of-central-directory record takes the usual path.
             result = list_zip_by_range(bucket, key, version_id, file_size, ctx)
         if result is None:
-            result = read_input(extractor, file_class, bucket, key, version_id, file_size, detected_format, ctx)
+            result = read_input(extractor, file_class, bucket, key, version_id, file_size, detected_format, ctx,
+                                input_name=str(payload.get("relativePath") or file_name))
         result.warnings = config_warnings + list(result.warnings)
         render_keys = upload_renders(result.render_images, aux_bucket, aux_prefix)
         manifest = merge_manifest(existing, result, render_keys)

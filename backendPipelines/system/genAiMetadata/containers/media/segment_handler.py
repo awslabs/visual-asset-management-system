@@ -40,7 +40,7 @@ import executionLogKeys
 from PIL import Image
 
 import bedrockGuardrail
-from media_extractors.common import INPUT_MAX_DOWNLOAD_BYTES, human_duration, scrub_urls, scrubbed_tail
+from media_extractors.common import INPUT_MAX_DOWNLOAD_BYTES, human_duration, name_input, scrub_urls, scrubbed_tail
 from media_extractors.common import URL_PLACEHOLDER  # noqa: F401 - the placeholder scrub_urls writes, for tests
 from media_extractors.imaging import normalise_for_vision, write_png
 from media_extractors.s3_regions import S3_CLIENT_CONFIG, client_for_bucket, register_bucket_regions
@@ -341,10 +341,11 @@ def extract_frames(source: str, times: List[float], work_dir: str, run: Callable
 
 
 def frames_for_window(bucket: str, key: str, version_id: str, start_ms: int, end_ms: int, work_dir: str,
-                      run: Callable, file_size: int = 0) -> Tuple[List[str], List[str]]:
+                      run: Callable, file_size: int = 0, input_name: str = "") -> Tuple[List[str], List[str]]:
     """The window's frames over a presigned URL; when none decoded, the object is downloaded once and read
     locally, unless it is over the MEDIA image's download bound (a video read by URL only), which no ephemeral
-    storage holds: the window then has no frame."""
+    storage holds: the window then has no frame. A warning from the downloaded copy names ``input_name`` (the
+    file's path within its asset; default the key's file name) where ffmpeg quoted the copy."""
     times = frame_times(start_ms, end_ms)
     paths, warnings = extract_frames(presign_input(bucket, key, version_id), times, work_dir, run)
     if paths:
@@ -358,7 +359,8 @@ def frames_for_window(bucket: str, key: str, version_id: str, start_ms: int, end
         bucket, key, local, ExtraArgs={"VersionId": version_id} if version_id else None)
     warnings.append("presigned read produced no frame; the object was downloaded once and read locally")
     paths, more = extract_frames(local, times, work_dir, run)
-    return paths, warnings + more
+    name = input_name or os.path.basename(key)
+    return paths, warnings + [name_input(warning, local, name) for warning in more]
 
 
 def build_user_blocks(asset_name: str, phrase: str, relative_path: str, label: str, duration_seconds: float,
@@ -616,7 +618,7 @@ def lambda_handler(event, context):
     work_dir = tempfile.mkdtemp(prefix="segment-")
     try:
         frames, warnings = frames_for_window(bucket, key, version_id, start_ms, end_ms, work_dir, ffmpeg_run,
-                                             file_size=int(state.get("fileSize", 0) or 0))
+                                             file_size=int(state.get("fileSize", 0) or 0), input_name=relative_path)
         if not frames:
             cause = scrub_urls(f"segment {segment_key}: no frame could be read: " + "; ".join(warnings))
             logger.warning(cause)

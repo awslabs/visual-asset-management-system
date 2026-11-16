@@ -173,6 +173,20 @@ def scrubbed_tail(text, limit: int = FFMPEG_STDERR_TAIL_CHARS) -> str:
     return scrub_urls(text)[-limit:].strip()
 
 
+def name_input(text, local_path: str, input_name: str) -> str:
+    """``text`` with the input's downloaded copy named as the user's file. The handlers download the input to
+    ``input<ext>`` in a working directory of their own, so a library's message about it (Pillow, ffmpeg,
+    python-docx, ...) quotes that copy's path whatever the file is called. The copy's path becomes
+    ``input_name``, and so does any end of it from a ``/`` on, since an ffmpeg stderr tail (scrubbed_tail) can
+    start inside the path; a path that only ends in the same file name is left alone."""
+    text = str(text)
+    if not local_path:
+        return text
+    text = text.replace(local_path, input_name)
+    suffix = re.compile(r"[^\s'\"<>]*" + re.escape("/" + local_path.rsplit("/", 1)[-1]) + r"(?![\w.-])")
+    return suffix.sub(lambda match: input_name if local_path.endswith(match.group(0)) else match.group(0), text)
+
+
 RENDER_SKIPPED_SIZE = "size"
 RENDER_SKIPPED_UNSUPPORTED = "unsupported"
 RENDER_SKIPPED_ERROR = "error"
