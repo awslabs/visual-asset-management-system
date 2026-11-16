@@ -137,9 +137,34 @@ class TestStagingStaysInsideTheAssetAndTheFolder:
     ])
     def test_a_key_whose_path_leaves_the_folder_fails_the_run(self, tmp_path, key):
         objects = {key: b"payload"}
-        with pytest.raises(ValueError, match="leaves the staging folder"):
+        with pytest.raises(ValueError, match="cannot be staged: its path has a '.', '..' or empty segment"):
             _stage(tmp_path, ["/"], objects=objects)
         assert not os.path.exists(tmp_path / "assets")
+
+    @pytest.mark.parametrize("key", [
+        _ROOT + "Isaac/../../etc/cron.d/x", _ROOT + "../outside", _ROOT + "Isaac//double.usd",
+        _ROOT + "Isaac/./here.usd",
+    ])
+    def test_the_local_path_guard_refuses_the_same_keys(self, tmp_path, key):
+        with pytest.raises(ValueError, match="leaves the staging folder"):
+            staging.local_path_for(key, _ROOT, str(tmp_path / "assets"))
+
+    def test_a_name_longer_than_the_file_system_holds_fails_before_any_download(self, tmp_path):
+        objects = {_ROOT + "Isaac/" + "n" * 256 + ".usd": b"x", _ROOT + "Isaac/ok.usd": b"y"}
+        with pytest.raises(ValueError, match="longer than 255 bytes"):
+            _stage(tmp_path, ["Isaac/"], objects=objects)
+        assert not os.path.exists(tmp_path / "assets")
+
+    def test_a_file_and_a_folder_of_the_same_path_fail_before_any_download(self, tmp_path):
+        objects = {_ROOT + "Isaac/scene": b"file", _ROOT + "Isaac/scene/part.usd": b"part"}
+        with pytest.raises(ValueError, match="a folder of other selected files has the same path"):
+            _stage(tmp_path, ["Isaac/"], objects=objects)
+        assert not os.path.exists(tmp_path / "assets")
+
+    def test_paths_over_the_total_length_are_rejected_again(self, tmp_path):
+        paths = [f"{i:02d}/" + "p" * 60 + "/" for i in range(40)]
+        with pytest.raises(ValueError, match="at most 2048 are allowed"):
+            _stage(tmp_path, paths)
 
     def test_a_symlinked_folder_cannot_redirect_a_file(self, tmp_path):
         local_root = tmp_path / "assets"

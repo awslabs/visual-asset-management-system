@@ -10,6 +10,7 @@ submitted. A run that leaves the setting out builds the job configuration it bui
 
 import ast
 import importlib
+import importlib.util
 import json
 import os
 import sys
@@ -193,6 +194,74 @@ class TestStagePathList:
         with pytest.raises(ValueError, match="must be a list"):
             _load().stage_asset_paths({"stageAssetPaths": value})
 
+    def test_paths_up_to_the_total_length_are_accepted(self):
+        mod = _load()
+        # Two entries of 1,024 characters (the per-entry maximum), 2,048 in total.
+        paths = ["a" * 1023 + "/", "b" * 1023 + "/"]
+        assert mod.stage_asset_paths({"stageAssetPaths": paths}) == paths
+        assert sum(len(p) for p in paths) == mod.MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH
+
+    def test_paths_over_the_total_length_are_rejected_before_any_listing(self):
+        mod = _load()
+        paths = ["a" * 1023 + "/", "b" * 1023 + "/", "c"]
+        with pytest.raises(ValueError, match="total 2049 characters; at most 2048 are allowed"):
+            mod.stage_asset_paths({"stageAssetPaths": paths})
+
+    def test_the_total_counts_the_paths_as_validated(self):
+        # Leading slashes and surrounding blanks are not sent to the job, so they do not count:
+        # 1,024 + 1,024 + 3 characters as written, 1,023 + 1,023 + 2 = 2,048 as validated.
+        mod = _load()
+        paths = [" /" + "a" * 1022 + "/ ", "/" + "b" * 1022 + "/", "/cc"]
+        assert mod.stage_asset_paths({"stageAssetPaths": paths}) == ["a" * 1022 + "/", "b" * 1022 + "/", "cc"]
+
+
+def _stage_definition_with(objects_extra, paths):
+    """lambda_handler on a run that stages ``paths`` from the test asset plus ``objects_extra``."""
+    mod = _load()
+    objects = {**_OBJECTS, **{_ROOT + k: v for k, v in objects_extra.items()}}
+    event = _event({"mode": "train", "stageAssetPaths": paths})
+    sfn = MagicMock()
+    with patch.object(mod, "s3_client", FakeBucket(objects)), patch.object(mod, "sfn_client", sfn):
+        try:
+            return json.loads(mod.lambda_handler(event, MagicMock())["definition"]), sfn
+        except ValueError as error:
+            return error, sfn
+
+
+@pytest.mark.unit
+class TestFilesTheContainerCannotWrite:
+    @pytest.mark.parametrize("key", [
+        "Isaac/../escape.usd", "Isaac/./here.usd", "Isaac//double.usd", "Isaac/trailing/./x.usd",
+    ])
+    def test_a_key_with_a_dot_or_empty_segment_fails_before_a_job_is_submitted(self, key):
+        result, sfn = _stage_definition_with({key: 1}, ["Isaac/"])
+        assert isinstance(result, ValueError)
+        assert "cannot be staged: its path has a '.', '..' or empty segment" in str(result)
+        sfn.send_task_failure.assert_called_once()
+
+    @pytest.mark.parametrize("name", ["n" * 256, "é" * 128])
+    def test_a_name_longer_than_the_file_system_holds_fails_before_a_job_is_submitted(self, name):
+        result, sfn = _stage_definition_with({f"Isaac/{name}": 1}, ["Isaac/"])
+        assert isinstance(result, ValueError)
+        assert "longer than 255 bytes" in str(result)
+        sfn.send_task_failure.assert_called_once()
+
+    def test_a_name_of_255_bytes_is_staged(self):
+        definition, _ = _stage_definition_with({"Isaac/" + "n" * 255: 1}, ["Isaac/"])
+        assert definition["stageAssetFiles"]["fileCount"] == 5
+
+    def test_a_file_and_a_folder_of_the_same_path_fail_before_a_job_is_submitted(self):
+        # A bare path names the file and the folder of that name, so both are selected.
+        result, sfn = _stage_definition_with({"layout/scene": 3, "layout/scene/part.usd": 4}, ["layout/scene"])
+        assert isinstance(result, ValueError)
+        assert "a folder of other selected files has the same path" in str(result)
+        sfn.send_task_failure.assert_called_once()
+
+    def test_a_file_beside_a_selected_folder_of_its_name_is_not_a_conflict(self):
+        definition, _ = _stage_definition_with({"layout/scene": 3, "layout/scene/part.usd": 4},
+                                               ["layout/scene/"])
+        assert definition["stageAssetFiles"]["fileCount"] == 1
+
 
 @pytest.mark.unit
 class TestStagedSelection:
@@ -312,8 +381,8 @@ def _constant(node):
 def _literal_assignments(path: str, name: str) -> list:
     """Every constant assigned to ``name`` at module level in ``path``, read from the source text.
 
-    The container is its own code bundle, so its module cannot be imported beside this one; parsing
-    the source is what makes the comparison possible, and each caller asserts how many it found."""
+    The container is its own code bundle, so its package cannot be imported beside this one; parsing
+    the source finds each declaration, and each caller asserts how many it found."""
     with open(path, encoding="utf-8") as handle:
         tree = ast.parse(handle.read())
     found = []
@@ -325,12 +394,74 @@ def _literal_assignments(path: str, name: str) -> list:
     return found
 
 
+def _container_staging():
+    """The container's staging module, loaded alone from its file: it imports only the standard
+    library and boto3, which this suite's environment has."""
+    spec = importlib.util.spec_from_file_location("isaaclab_container_staging", _STAGING_MODULE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _outcome(function, *args):
+    """``("ok", result)`` or ``("rejected", None)`` for a ValueError, so two copies can be compared."""
+    try:
+        return "ok", function(*args)
+    except ValueError:
+        return "rejected", None
+
+
+# Paths both layers must treat alike: accepted ones normalize to the same path, rejected ones are
+# rejected by both.
+_PARITY_PATHS = [
+    "Isaac/", "/Isaac/Robots/", "Isaac", "/", "  Isaac/Sensors  ", "a/b/c.usd", "Isaac/Props/small KLT.usd",
+    "Isaac/ü/é.usd", "x" * 1024, "x" * 1025, "", "   ", None, 7, ["Isaac/"],
+    "../other/", "Isaac/../..", "./Isaac", "Isaac/./Robots", "Isaac//Robots", "Isaac/.",
+    "s3://asset-bucket/x/", "https://example.com/a.usd", "file:///etc/passwd", "C:/Isaac", "C:\\Isaac",
+    "Isaac\\Robots", "Isaac/\x00.usd", "Isaac/\nRobots/", "Isaac/\x7f", "Isaac/\x1f",
+]
+
+# Asset-relative file paths both layers must judge alike.
+_PARITY_RELATIVE_FILES = [
+    "Isaac/Robots/a.usd", "a", "Isaac/" + "n" * 255, "Isaac/" + "n" * 256, "Isaac/" + "é" * 127 + "e",
+    "Isaac/" + "é" * 128, "Isaac/../a", "Isaac/./a", "Isaac//a", "../a", "./a", "/a", "a/", "",
+]
+
+
 @pytest.mark.unit
 class TestTheContainerAppliesTheSameLimits:
     @pytest.mark.parametrize("name", ["MAX_STAGE_ASSET_PATHS", "MAX_STAGE_ASSET_PATH_LENGTH",
-                                      "MAX_STAGED_ASSET_FILES", "MAX_STAGED_ASSET_BYTES",
+                                      "MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH", "MAX_STAGED_ASSET_FILES",
+                                      "MAX_STAGED_ASSET_BYTES", "MAX_STAGED_NAME_BYTES",
                                       "PREVIEW_FILE_MARKER"])
     def test_the_two_copies_agree(self, name):
         container_values = _literal_assignments(_STAGING_MODULE, name)
         assert len(container_values) == 1, f"{name} is declared {len(container_values)} times in staging.py"
         assert container_values[0] == getattr(_load(), name)
+
+    @pytest.mark.parametrize("value", _PARITY_PATHS)
+    def test_both_layers_normalize_a_path_alike(self, value):
+        lambda_side = _outcome(_load().normalize_stage_asset_path, value)
+        assert _outcome(_container_staging().normalize_stage_asset_path, value) == lambda_side
+
+    @pytest.mark.parametrize("relative", _PARITY_RELATIVE_FILES)
+    def test_both_layers_judge_a_file_path_alike(self, relative):
+        assert _container_staging().unstageable_reason(relative) == _load().unstageable_reason(relative)
+
+    @pytest.mark.parametrize("relatives", [
+        ["a/b.usd", "a/c.usd"], ["a", "a/b.usd"], ["a/b", "a/b/c/d.usd"], ["ab", "a/b.usd"], ["a.usd", "a/x"],
+    ])
+    def test_both_layers_find_the_same_file_and_folder_conflicts(self, relatives):
+        files = {_ROOT + r: 1 for r in relatives}
+        lambda_side = _outcome(_load().require_stageable, files, _ROOT)
+        assert _outcome(_container_staging().require_stageable, files, _ROOT) == lambda_side
+
+    def test_both_layers_bound_the_total_path_length_alike(self):
+        mod, container = _load(), _container_staging()
+        for paths in (["a" * 1023 + "/", "b" * 1023 + "/"], ["a" * 1023 + "/", "b" * 1023 + "/", "c"]):
+            lambda_side = _outcome(mod.stage_asset_paths, {"stageAssetPaths": paths})
+            container_side = _outcome(container.parse_stage_config,
+                                      {"rootS3Uri": f"s3://{_BUCKET}/{_ROOT}", "paths": paths})
+            assert lambda_side[0] == container_side[0]
+            if lambda_side[0] == "ok":
+                assert container_side[1][2] == lambda_side[1]

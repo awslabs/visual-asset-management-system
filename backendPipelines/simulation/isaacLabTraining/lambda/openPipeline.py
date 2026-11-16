@@ -74,8 +74,13 @@ MAX_STEPS_PER_EPISODE = 100000
 # asset holds when the job starts. lambda/tests/test_isaaclab_stage_assets.py asserts the two agree.
 MAX_STAGE_ASSET_PATHS = 50
 MAX_STAGE_ASSET_PATH_LENGTH = 1024
+# The validated paths travel in the Batch job's command beside the task tokens and the run's S3
+# paths; their total keeps the container overrides well inside AWS Batch's size limits.
+MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH = 2048
 MAX_STAGED_ASSET_FILES = 10000
 MAX_STAGED_ASSET_BYTES = 50 * 1024 ** 3
+# The longest file or folder name a Linux file system holds (NAME_MAX), in bytes.
+MAX_STAGED_NAME_BYTES = 255
 
 # A VAMS file preview (`<file>.previewFile.<ext>`) belongs to the file it previews, not to the task.
 PREVIEW_FILE_MARKER = ".previewFile."
@@ -566,6 +571,11 @@ def stage_asset_paths(training_config) -> list:
         path = normalize_stage_asset_path(entry)
         if path not in paths:
             paths.append(path)
+    total_length = sum(len(path) for path in paths)
+    if total_length > MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH:
+        raise ValueError(
+            f"stageAssetPaths entries total {total_length} characters; at most "
+            f"{MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH} are allowed")
     return paths
 
 
@@ -631,14 +641,45 @@ def list_stage_asset_files(bucket: str, root_prefix: str, paths: list) -> dict:
     return files
 
 
+def unstageable_reason(relative: str):
+    """Why an asset file at ``relative``, its path under the asset root, cannot be written under the
+    staging folder, or ``None`` when it can. S3 keys are opaque, so a key may hold a ``.``, ``..``
+    or empty segment, or a name longer than a Linux file system holds."""
+    segments = relative.split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        return "its path has a '.', '..' or empty segment"
+    if any(len(segment.encode("utf-8")) > MAX_STAGED_NAME_BYTES for segment in segments):
+        return f"a name in its path is longer than {MAX_STAGED_NAME_BYTES} bytes"
+    return None
+
+
+def require_stageable(files, root_prefix: str) -> None:
+    """Reject a selection holding a file the container cannot write to disk: one ``unstageable_reason``
+    names, or one at the same path as a folder that holds other selected files."""
+    relatives = sorted(key[len(root_prefix):] for key in files)
+    folders = set()
+    for relative in relatives:
+        reason = unstageable_reason(relative)
+        if reason:
+            raise ValueError(f"stageAssetPaths selects asset file {_shown(relative)}, which cannot be "
+                             f"staged: {reason}")
+        parts = relative.split("/")
+        folders.update("/".join(parts[:i]) for i in range(1, len(parts)))
+    for relative in relatives:
+        if relative in folders:
+            raise ValueError(f"stageAssetPaths selects asset file {_shown(relative)}, which cannot be "
+                             f"staged: a folder of other selected files has the same path")
+
+
 def resolve_stage_asset_files(event, training_config) -> dict:
     """The executing asset's files the container stages before the run, or ``{}`` for none.
 
     Paths resolve against the asset root the workflow manifest names (``bucketAsset`` +
     ``inputAssetLocationKey``), never against a location the run configuration supplies, so a run
-    stages only files of the asset it executes against. They are counted here, before a GPU node is
-    provisioned. The container receives the root and the validated paths rather than the file list,
-    which could pass the Batch command's size limit; it lists them again and re-applies the limits.
+    stages only files of the asset it executes against. They are counted and checked here, before a
+    GPU node is provisioned. The container receives the root and the validated paths, whose total
+    length is bounded, rather than the file list, which could pass the Batch command's size limit;
+    it lists them again and re-applies the limits and checks.
     """
     paths = stage_asset_paths(training_config)
     if not paths:
@@ -653,6 +694,7 @@ def resolve_stage_asset_files(event, training_config) -> dict:
 
     root_prefix = asset_location_key if asset_location_key.endswith("/") else asset_location_key + "/"
     files = list_stage_asset_files(bucket, root_prefix, paths)
+    require_stageable(files, root_prefix)
     total_bytes = sum(files.values())
     logger.info(f"stageAssetPaths {paths}: {len(files)} files, {total_bytes} bytes")
     return {

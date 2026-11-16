@@ -26,15 +26,18 @@ from urllib.parse import urlparse
 from boto3.s3.transfer import TransferConfig
 
 # The image creates /tmp/assets for the runtime user (Dockerfile); the container runs one job.
-STAGED_ASSET_FILES_PATH = "/tmp/assets"  # nosec B108 - the image's own folder for the runtime user, one job per container
+STAGED_ASSET_FILES_PATH = "/tmp/assets"  # nosec B108 - see the comment above
 STAGED_ASSET_FILES_ENV = "VAMS_ASSET_FILES_DIR"
 
 # A second copy of the limits in lambda/openPipeline.py, which rejects an oversized selection before
 # the Batch job is submitted. lambda/tests/test_isaaclab_stage_assets.py asserts the two agree.
 MAX_STAGE_ASSET_PATHS = 50
 MAX_STAGE_ASSET_PATH_LENGTH = 1024
+MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH = 2048
 MAX_STAGED_ASSET_FILES = 10000
 MAX_STAGED_ASSET_BYTES = 50 * 1024 ** 3
+# The longest file or folder name a Linux file system holds (NAME_MAX), in bytes.
+MAX_STAGED_NAME_BYTES = 255
 
 PREVIEW_FILE_MARKER = ".previewFile."
 
@@ -93,7 +96,13 @@ def parse_stage_config(stage_config: dict):
     paths = stage_config.get("paths")
     if not isinstance(paths, list) or not paths or len(paths) > MAX_STAGE_ASSET_PATHS:
         raise ValueError(f"stageAssetFiles.paths must list 1 to {MAX_STAGE_ASSET_PATHS} paths")
-    return parsed.netloc, root_prefix, [normalize_stage_asset_path(p) for p in paths]
+    paths = [normalize_stage_asset_path(p) for p in paths]
+    total_length = sum(len(path) for path in paths)
+    if total_length > MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH:
+        raise ValueError(
+            f"stageAssetPaths entries total {total_length} characters; at most "
+            f"{MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH} are allowed")
+    return parsed.netloc, root_prefix, paths
 
 
 def list_selected_files(client, bucket: str, root_prefix: str, paths: list) -> dict:
@@ -139,6 +148,35 @@ def list_selected_files(client, bucket: str, root_prefix: str, paths: list) -> d
     return files
 
 
+def unstageable_reason(relative: str):
+    """Why an asset file at ``relative``, its path under the asset root, cannot be written under the
+    staging folder, or ``None`` when it can. The same check openPipeline makes before the job."""
+    segments = relative.split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        return "its path has a '.', '..' or empty segment"
+    if any(len(segment.encode("utf-8")) > MAX_STAGED_NAME_BYTES for segment in segments):
+        return f"a name in its path is longer than {MAX_STAGED_NAME_BYTES} bytes"
+    return None
+
+
+def require_stageable(files, root_prefix: str) -> None:
+    """Fail before any download when a selected file cannot be written to disk: one
+    ``unstageable_reason`` names, or one at the same path as a folder that holds other selected files."""
+    relatives = sorted(key[len(root_prefix):] for key in files)
+    folders = set()
+    for relative in relatives:
+        reason = unstageable_reason(relative)
+        if reason:
+            raise ValueError(f"stageAssetPaths selects asset file {_shown(relative)}, which cannot be "
+                             f"staged: {reason}")
+        parts = relative.split("/")
+        folders.update("/".join(parts[:i]) for i in range(1, len(parts)))
+    for relative in relatives:
+        if relative in folders:
+            raise ValueError(f"stageAssetPaths selects asset file {_shown(relative)}, which cannot be "
+                             f"staged: a folder of other selected files has the same path")
+
+
 def local_path_for(key: str, root_prefix: str, local_root: str) -> str:
     """Where an asset file lands: its asset-relative path under ``local_root``.
 
@@ -180,6 +218,7 @@ def stage_asset_files(s3, stage_config: dict, local_root: str = STAGED_ASSET_FIL
     bucket, root_prefix, paths = parse_stage_config(stage_config)
     client = s3.client_for_bucket(bucket)
     files = list_selected_files(client, bucket, root_prefix, paths)
+    require_stageable(files, root_prefix)
     total_bytes = sum(files.values())
     targets = {key: local_path_for(key, root_prefix, local_root) for key in files}
     require_free_disk(local_root, total_bytes)
