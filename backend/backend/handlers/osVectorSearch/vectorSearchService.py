@@ -38,6 +38,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError, ConnectTimeoutError, EndpointConnectionError, ReadTimeoutError
 
 from common.apiRoutes import API_SEARCH_NLP
+from common.auditSearchText import search_text_parameters
 from common.databaseAccess import DatabaseAccessManager
 from common.resourceNames import ResourceKeys, get_table_name
 from common.vectorsearch import fileClassIntent
@@ -718,12 +719,35 @@ def _parse_request(event) -> NlpSearchRequestModel:
     return parse(body, model=NlpSearchRequestModel)
 
 
+# The request fields that hold text the caller typed. As keyword search records its own
+# (osSemanticSearch/search.py _SEARCH_TEXT_FIELDS, #1544), they go under the redacted searchText key and each
+# filter's query_string with them; the ids, options and paging of the request stay as they are.
+_SEARCH_TEXT_FIELDS = ("query", "metadataQuery", "tags")
+
+
+def _search_request_parameters(request: NlpSearchRequestModel) -> Dict[str, Any]:
+    """The request a natural-language search asked, under its API field names, with every free-text field
+    moved under the redacted searchText key (common.auditSearchText)."""
+    parameters = request.dict(by_alias=True, exclude_none=True)
+    text: Dict[str, Any] = {}
+    for name in _SEARCH_TEXT_FIELDS:
+        value = parameters.pop(name, None)
+        if value:
+            text[name] = value
+    filters = parameters.pop("filters", None)
+    if isinstance(filters, list):
+        text["filters"] = [item.get("query_string") for item in filters if isinstance(item, dict)]
+        if filters:
+            parameters["filterCount"] = len(filters)
+    return search_text_parameters(parameters, text)
+
+
 def _log_search(event, request: NlpSearchRequestModel, hits_returned: int) -> None:
     """Record the search as keyword search does (osSemanticSearch/search.py ``_log_search``): the request as
-    asked, under its API field names, and the number of hits returned. Never the hits, the query vector or
-    a score."""
+    asked, under its API field names and with the typed text redacted, and the number of hits returned.
+    Never the hits, the query vector or a score."""
     log_action(event, "search", item_count=hits_returned,
-               request_parameters=request.dict(by_alias=True, exclude_none=True))
+               request_parameters=_search_request_parameters(request))
 
 
 def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:

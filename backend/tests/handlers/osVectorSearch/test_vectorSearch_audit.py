@@ -4,7 +4,8 @@
 """The vector search handlers' audit records.
 
 A natural-language search (POST /search/nlp) records the action `search` as keyword search does: the request
-as asked and the number of hits returned, never the hits, a vector or a score. The vector reindexer records
+as asked, its typed text under the redacted `searchText` key (#1544), and the number of hits returned, never
+the hits, a vector or a score. The vector reindexer records
 each invocation as the system's `searchReindex`, with what it was asked, what it did and its run id. The
 vector indexer and the system-workflow launcher record no action but open the audit context, and their
 partial-batch failure reports come back through it unchanged.
@@ -20,6 +21,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from backend.backend.customLogging.logger import REDACTED, mask_sensitive_data
 from tests.common.test_audit_action_records import (  # noqa: F401 -- claims and clients are fixtures
     LAMBDA_CONTEXT,
     auditLogging as real_audit,
@@ -76,7 +78,8 @@ class TestNaturalLanguageSearchRecord:
         assert recorder.call_args.args == (event, "search")
         kwargs = recorder.call_args.kwargs
         assert kwargs["item_count"] == 1, "the hits returned on the page, not the matches counted"
-        assert kwargs["request_parameters"]["query"] == "pump housing"
+        assert "query" not in kwargs["request_parameters"], "the typed text is not a top-level parameter"
+        assert kwargs["request_parameters"]["searchText"] == {"query": "pump housing"}
         assert kwargs["request_parameters"]["size"] == 1
         assert kwargs["request_parameters"]["fileExtensions"] == ["glb"]
         assert "secret-hit" not in json.dumps(kwargs, default=str), "the hits are never recorded"
@@ -98,6 +101,38 @@ class TestNaturalLanguageSearchRecord:
         recorder.assert_not_called()
 
 
+_TYPED = ("query-typed-marker", "meta-typed-marker", "tag-typed-marker", "filter-typed-marker",
+          "field-typed-marker")
+
+
+@pytest.mark.unit
+class TestNaturalLanguageSearchTextIsRedacted:
+    """#1544's rule for a search record: the text the caller typed sits under the one redacted searchText key."""
+
+    def _recorded(self, svc, body):  # noqa: F811
+        return mask_sensitive_data(svc._search_request_parameters(svc.NlpSearchRequestModel(**body)))
+
+    def test_every_typed_field_is_recorded_redacted(self, svc):  # noqa: F811
+        recorded = self._recorded(svc, {
+            "query": "query-typed-marker", "metadataQuery": "meta-typed-marker", "tags": ["tag-typed-marker"],
+            "filters": [{"query_string": {"query": "filter-typed-marker", "default_field": "field-typed-marker"}}],
+            "databaseIds": ["db1"], "fileExtensions": ["glb"], "size": 7})
+        assert recorded["searchText"] == REDACTED
+        assert not [marker for marker in _TYPED if marker in json.dumps(recorded)]
+        assert recorded["searchTextFields"] == ["query", "metadataQuery", "tags", "filters"]
+        assert recorded["searchTextLength"] == sum(len(marker) for marker in _TYPED)
+        assert recorded["filterCount"] == 1
+        assert recorded["databaseIds"] == ["db1"] and recorded["fileExtensions"] == ["glb"]
+        assert recorded["size"] == 7
+        assert not {"query", "metadataQuery", "tags", "filters"} & set(recorded)
+
+    def test_the_text_is_present_before_redaction_only_under_the_one_key(self, svc):  # noqa: F811
+        # Control: the redaction, not a drop, is what removes the text.
+        raw = svc._search_request_parameters(svc.NlpSearchRequestModel(query="query-typed-marker"))
+        assert raw["searchText"] == {"query": "query-typed-marker"}
+        assert "query-typed-marker" not in json.dumps({k: v for k, v in raw.items() if k != "searchText"})
+
+
 @pytest.mark.unit
 class TestNaturalLanguageSearchRecordWritten:
     """Through the production decorator and writer: one record per request, in the record contract."""
@@ -116,7 +151,10 @@ class TestNaturalLanguageSearchRecordWritten:
         record = records[0]
         assert record["action"] == "search" and record["outcome"] == "success"
         assert record["itemCount"] == 1
-        assert record["requestParameters"]["query"] == "pump housing"
+        assert record["requestParameters"]["searchText"] == REDACTED
+        assert "pump housing" not in json.dumps(record), "the typed text is never written in clear"
+        assert record["requestParameters"]["searchTextFields"] == ["query"]
+        assert record["requestParameters"]["searchTextLength"] == len("pump housing")
         assert record["request"]["route"] == "/search/nlp" and record["request"]["method"] == "POST"
         assert record["actor"]["userId"] == USER
         assert "changes" not in record and "previous" not in record
