@@ -150,8 +150,8 @@ class TestStagingStaysInsideTheAssetAndTheFolder:
             staging.local_path_for(key, _ROOT, str(tmp_path / "assets"))
 
     def test_a_name_longer_than_the_file_system_holds_fails_before_any_download(self, tmp_path):
-        objects = {_ROOT + "Isaac/" + "n" * 256 + ".usd": b"x", _ROOT + "Isaac/ok.usd": b"y"}
-        with pytest.raises(ValueError, match="longer than 255 bytes"):
+        objects = {_ROOT + "Isaac/" + "n" * 247 + ".usd": b"x", _ROOT + "Isaac/ok.usd": b"y"}
+        with pytest.raises(ValueError, match="longer than 246 bytes"):
             _stage(tmp_path, ["Isaac/"], objects=objects)
         assert not os.path.exists(tmp_path / "assets")
 

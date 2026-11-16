@@ -204,8 +204,26 @@ class TestStagePathList:
     def test_paths_over_the_total_length_are_rejected_before_any_listing(self):
         mod = _load()
         paths = ["a" * 1023 + "/", "b" * 1023 + "/", "c"]
-        with pytest.raises(ValueError, match="total 2049 characters; at most 2048 are allowed"):
+        with pytest.raises(ValueError, match="take 2049 characters in the job's command .*at most 2048 are allowed"):
             mod.stage_asset_paths({"stageAssetPaths": paths})
+
+    @pytest.mark.parametrize("paths, encoded", [
+        (["é" * 341 + "/"], 2047),            # each character outside ASCII becomes a 6-character escape
+        (["é" * 342 + "/"], 2053),
+        (["日本" * 171], 2052),
+        (["😀" * 170], 2040),                 # a character outside the BMP becomes two escapes
+        (["😀" * 171], 2052),
+        (['"' * 1000], 2000),                 # a quote becomes \"
+        (['"' * 1000, "b" * 49], 2049),
+    ])
+    def test_the_total_counts_the_paths_as_the_job_command_carries_them(self, paths, encoded):
+        mod = _load()
+        assert mod.encoded_length(paths) == encoded
+        if encoded <= mod.MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH:
+            assert mod.stage_asset_paths({"stageAssetPaths": paths}) == paths
+        else:
+            with pytest.raises(ValueError, match=f"take {encoded} characters"):
+                mod.stage_asset_paths({"stageAssetPaths": paths})
 
     def test_the_total_counts_the_paths_as_validated(self):
         # Leading slashes and surrounding blanks are not sent to the job, so they do not count:
@@ -239,16 +257,23 @@ class TestFilesTheContainerCannotWrite:
         assert "cannot be staged: its path has a '.', '..' or empty segment" in str(result)
         sfn.send_task_failure.assert_called_once()
 
-    @pytest.mark.parametrize("name", ["n" * 256, "é" * 128])
-    def test_a_name_longer_than_the_file_system_holds_fails_before_a_job_is_submitted(self, name):
+    @pytest.mark.parametrize("name", ["n" * 247, "é" * 124, "é" * 127 + "e", "n" * 256])
+    def test_a_name_longer_than_the_container_can_write_fails_before_a_job_is_submitted(self, name):
         result, sfn = _stage_definition_with({f"Isaac/{name}": 1}, ["Isaac/"])
         assert isinstance(result, ValueError)
-        assert "longer than 255 bytes" in str(result)
+        assert "longer than 246 bytes" in str(result)
         sfn.send_task_failure.assert_called_once()
 
-    def test_a_name_of_255_bytes_is_staged(self):
-        definition, _ = _stage_definition_with({"Isaac/" + "n" * 255: 1}, ["Isaac/"])
+    @pytest.mark.parametrize("name", ["n" * 246, "é" * 123])
+    def test_a_name_of_246_bytes_is_staged(self, name):
+        definition, _ = _stage_definition_with({"Isaac/" + name: 1}, ["Isaac/"])
         assert definition["stageAssetFiles"]["fileCount"] == 5
+
+    def test_a_key_holding_a_nul_character_fails_before_a_job_is_submitted(self):
+        result, sfn = _stage_definition_with({"Isaac/a\x00b.usd": 1}, ["Isaac/"])
+        assert isinstance(result, ValueError)
+        assert "NUL character" in str(result)
+        sfn.send_task_failure.assert_called_once()
 
     def test_a_file_and_a_folder_of_the_same_path_fail_before_a_job_is_submitted(self):
         # A bare path names the file and the folder of that name, so both are selected.
@@ -423,8 +448,9 @@ _PARITY_PATHS = [
 
 # Asset-relative file paths both layers must judge alike.
 _PARITY_RELATIVE_FILES = [
-    "Isaac/Robots/a.usd", "a", "Isaac/" + "n" * 255, "Isaac/" + "n" * 256, "Isaac/" + "é" * 127 + "e",
-    "Isaac/" + "é" * 128, "Isaac/../a", "Isaac/./a", "Isaac//a", "../a", "./a", "/a", "a/", "",
+    "Isaac/Robots/a.usd", "a", "Isaac/" + "n" * 246, "Isaac/" + "n" * 247, "Isaac/" + "é" * 123,
+    "Isaac/" + "é" * 123 + "e", "Isaac/" + "é" * 127 + "e", "Isaac/a\x00b.usd",
+    "Isaac/../a", "Isaac/./a", "Isaac//a", "../a", "./a", "/a", "a/", "",
 ]
 
 
@@ -458,7 +484,8 @@ class TestTheContainerAppliesTheSameLimits:
 
     def test_both_layers_bound_the_total_path_length_alike(self):
         mod, container = _load(), _container_staging()
-        for paths in (["a" * 1023 + "/", "b" * 1023 + "/"], ["a" * 1023 + "/", "b" * 1023 + "/", "c"]):
+        for paths in (["a" * 1023 + "/", "b" * 1023 + "/"], ["a" * 1023 + "/", "b" * 1023 + "/", "c"],
+                      ["é" * 341 + "/"], ["é" * 342 + "/"]):
             lambda_side = _outcome(mod.stage_asset_paths, {"stageAssetPaths": paths})
             container_side = _outcome(container.parse_stage_config,
                                       {"rootS3Uri": f"s3://{_BUCKET}/{_ROOT}", "paths": paths})

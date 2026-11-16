@@ -16,6 +16,7 @@ re-validated here and every local path is confirmed to stay inside the staging f
 """
 
 import itertools
+import json
 import os
 import re
 import shutil
@@ -36,8 +37,9 @@ MAX_STAGE_ASSET_PATH_LENGTH = 1024
 MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH = 2048
 MAX_STAGED_ASSET_FILES = 10000
 MAX_STAGED_ASSET_BYTES = 50 * 1024 ** 3
-# The longest file or folder name a Linux file system holds (NAME_MAX), in bytes.
-MAX_STAGED_NAME_BYTES = 255
+# NAME_MAX (255) less the 9-byte temporary suffix the boto3 downloader adds while a file downloads,
+# which it cuts by characters rather than bytes.
+MAX_STAGED_NAME_BYTES = 246
 
 PREVIEW_FILE_MARKER = ".previewFile."
 
@@ -97,12 +99,17 @@ def parse_stage_config(stage_config: dict):
     if not isinstance(paths, list) or not paths or len(paths) > MAX_STAGE_ASSET_PATHS:
         raise ValueError(f"stageAssetFiles.paths must list 1 to {MAX_STAGE_ASSET_PATHS} paths")
     paths = [normalize_stage_asset_path(p) for p in paths]
-    total_length = sum(len(path) for path in paths)
+    total_length = encoded_length(paths)
     if total_length > MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH:
         raise ValueError(
-            f"stageAssetPaths entries total {total_length} characters; at most "
-            f"{MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH} are allowed")
+            f"stageAssetPaths entries take {total_length} characters in the job's command (a character "
+            f"outside ASCII takes 6 or 12); at most {MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH} are allowed")
     return parsed.netloc, root_prefix, paths
+
+
+def encoded_length(paths) -> int:
+    """Characters the paths take in the Batch job's command, which carries them JSON-encoded."""
+    return sum(len(json.dumps(path)) - 2 for path in paths)
 
 
 def list_selected_files(client, bucket: str, root_prefix: str, paths: list) -> dict:
@@ -154,6 +161,8 @@ def unstageable_reason(relative: str):
     segments = relative.split("/")
     if any(segment in ("", ".", "..") for segment in segments):
         return "its path has a '.', '..' or empty segment"
+    if "\x00" in relative:
+        return "its path holds a NUL character"
     if any(len(segment.encode("utf-8")) > MAX_STAGED_NAME_BYTES for segment in segments):
         return f"a name in its path is longer than {MAX_STAGED_NAME_BYTES} bytes"
     return None

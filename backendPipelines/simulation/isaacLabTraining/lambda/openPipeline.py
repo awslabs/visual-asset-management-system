@@ -75,12 +75,15 @@ MAX_STEPS_PER_EPISODE = 100000
 MAX_STAGE_ASSET_PATHS = 50
 MAX_STAGE_ASSET_PATH_LENGTH = 1024
 # The validated paths travel in the Batch job's command beside the task tokens and the run's S3
-# paths; their total keeps the container overrides well inside AWS Batch's size limits.
+# paths, JSON-encoded (a character outside ASCII becomes a 6- or 12-character escape); their total
+# as encoded keeps the container overrides well inside AWS Batch's size limits.
 MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH = 2048
 MAX_STAGED_ASSET_FILES = 10000
 MAX_STAGED_ASSET_BYTES = 50 * 1024 ** 3
-# The longest file or folder name a Linux file system holds (NAME_MAX), in bytes.
-MAX_STAGED_NAME_BYTES = 255
+# The longest file or folder name the container can stage, in bytes: NAME_MAX (255) less the
+# 9-byte temporary suffix the boto3 downloader adds while a file downloads, which it cuts by
+# characters rather than bytes.
+MAX_STAGED_NAME_BYTES = 246
 
 # A VAMS file preview (`<file>.previewFile.<ext>`) belongs to the file it previews, not to the task.
 PREVIEW_FILE_MARKER = ".previewFile."
@@ -571,12 +574,17 @@ def stage_asset_paths(training_config) -> list:
         path = normalize_stage_asset_path(entry)
         if path not in paths:
             paths.append(path)
-    total_length = sum(len(path) for path in paths)
+    total_length = encoded_length(paths)
     if total_length > MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH:
         raise ValueError(
-            f"stageAssetPaths entries total {total_length} characters; at most "
-            f"{MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH} are allowed")
+            f"stageAssetPaths entries take {total_length} characters in the job's command (a character "
+            f"outside ASCII takes 6 or 12); at most {MAX_STAGE_ASSET_PATHS_TOTAL_LENGTH} are allowed")
     return paths
+
+
+def encoded_length(paths) -> int:
+    """Characters the paths take in the Batch job's command, which carries them JSON-encoded."""
+    return sum(len(json.dumps(path)) - 2 for path in paths)
 
 
 def _is_staged_key(key: str, root_prefix: str) -> bool:
@@ -644,10 +652,12 @@ def list_stage_asset_files(bucket: str, root_prefix: str, paths: list) -> dict:
 def unstageable_reason(relative: str):
     """Why an asset file at ``relative``, its path under the asset root, cannot be written under the
     staging folder, or ``None`` when it can. S3 keys are opaque, so a key may hold a ``.``, ``..``
-    or empty segment, or a name longer than a Linux file system holds."""
+    or empty segment, a NUL character, or a name longer than the container can write."""
     segments = relative.split("/")
     if any(segment in ("", ".", "..") for segment in segments):
         return "its path has a '.', '..' or empty segment"
+    if "\x00" in relative:
+        return "its path holds a NUL character"
     if any(len(segment.encode("utf-8")) > MAX_STAGED_NAME_BYTES for segment in segments):
         return f"a name in its path is longer than {MAX_STAGED_NAME_BYTES} bytes"
     return None
