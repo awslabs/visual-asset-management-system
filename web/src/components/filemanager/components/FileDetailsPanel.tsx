@@ -45,7 +45,7 @@ import PreviewModal from "./PreviewModal";
 import FileViewerModal from "../modals/FileViewerModal";
 import FileMetadata from "../../metadata/FileMetadata";
 import "./FileDetailsPanel.css";
-import { previewFileFormats } from "../../../common/constants/fileFormats";
+import { isSelfPreviewable, previewFileFormats } from "../../../common/constants/fileFormats";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
 import { ViewerMode } from "../../../visualizerPlugin/core/PluginRegistry";
 import Synonyms from "../../../synonyms";
@@ -1653,9 +1653,10 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     // If file format is previewable, show preview section
                                     if (isPreviewFormat) {
                                         // Check if file size is less than 5MB
-                                        const isSizeOk =
-                                            selectedItem.size !== undefined &&
-                                            selectedItem.size < 5 * 1024 * 1024;
+                                        const isSizeOk = isSelfPreviewable(
+                                            fileName,
+                                            selectedItem.size
+                                        );
 
                                         return (
                                             <div className="file-info-item">

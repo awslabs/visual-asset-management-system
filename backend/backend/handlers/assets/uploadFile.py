@@ -34,6 +34,7 @@ from common.s3MetadataKeys import (
 from common.s3PathPatterns import (
     PREVIEW_FILE_PATTERN,
     ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    PREVIEW_FILE_SIZE_LIMIT_BYTES,
     TEMPORARY_UPLOAD_PREFIX,
     PREVIEW_PREFIX,
 )
@@ -89,7 +90,8 @@ logger = safeLogger(service_name="UploadFile")
 # Constants
 UPLOAD_EXPIRATION_DAYS = 7  # TTL for upload records and S3 multipart uploads
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
-MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
+# Maximum size of an uploaded preview file (5 MiB, the shared limit; a preview of exactly that size is accepted)
+MAX_PREVIEW_FILE_SIZE = PREVIEW_FILE_SIZE_LIMIT_BYTES
 MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 20
 LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024   # 1GB threshold for asynchronous processing
 MAX_PARTS_PER_FILE = 10000  # S3 hard limit on parts per multipart upload object

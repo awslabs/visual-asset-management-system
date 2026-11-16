@@ -32,6 +32,7 @@ from common.s3MetadataKeys import (
 from common.s3PathPatterns import (
     PREVIEW_FILE_PATTERN,
     ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    PREVIEW_FILE_SIZE_LIMIT_BYTES,
 )
 from models.common import VAMSGeneralErrorResponse
 
@@ -50,7 +51,8 @@ lambda_client = boto3.client('lambda', config=retry_config)
 logger = safeLogger(service_name="SqsUploadFileLarge")
 
 # Constants
-MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
+# Maximum size of an uploaded preview file (5 MiB, the shared limit; a preview of exactly that size is accepted)
+MAX_PREVIEW_FILE_SIZE = PREVIEW_FILE_SIZE_LIMIT_BYTES
 # uploadIdS3 sentinels. "zero-byte" marks a file the processor must materialize itself;
 # "external" marks a file an external producer already wrote in full at the temporary key,
 # so neither has a real S3 multipart upload to complete or abort.

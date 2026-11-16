@@ -158,7 +158,39 @@ PREVIEW_FILE_PATTERN = ".previewFile."
 
 EXCLUDED_FILE_PATH_PATTERNS: Tuple[str, ...] = (PREVIEW_FILE_PATTERN,)
 
-ALLOWED_PREVIEW_FILE_EXTENSIONS: Tuple[str, ...] = (".png", ".jpg", ".jpeg", ".svg", ".gif")
+ALLOWED_PREVIEW_FILE_EXTENSIONS: Tuple[str, ...] = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".svg",
+    ".gif",
+    ".webp",
+    ".bmp",
+)
+
+# The size limit of a preview file, in bytes (5 MiB). Three places use it and must agree:
+#   - the upload handlers reject a preview file LARGER than this;
+#   - the web shows a file as its own preview only when its size is STRICTLY UNDER this
+#     (``isSelfPreviewable`` in web/src/common/constants/fileFormats.ts);
+#   - the media preview pipeline writes only previews STRICTLY UNDER this and writes none for an image
+#     the web already shows as its own preview (backendPipelines/preview/3dThumbnail).
+# A drift test reads the web constant, and another reads the container's.
+PREVIEW_FILE_SIZE_LIMIT_BYTES: int = 5 * 1024 * 1024
+
+
+def is_self_previewable(file_name: str, size: Optional[int]) -> bool:
+    """True when the web shows ``file_name`` as its own preview: its extension is an allowed
+    preview extension and its size is known and strictly under PREVIEW_FILE_SIZE_LIMIT_BYTES.
+
+    Mirrors ``isSelfPreviewable`` in web/src/common/constants/fileFormats.ts. A file with an unknown
+    size is not self-previewable.
+    """
+    if size is None or isinstance(size, bool) or not isinstance(size, (int, float)):
+        return False
+    dot = file_name.rfind(".")
+    if dot < 0:
+        return False
+    return file_name[dot:].lower() in ALLOWED_PREVIEW_FILE_EXTENSIONS and size < PREVIEW_FILE_SIZE_LIMIT_BYTES
 
 
 # ---------------------------------------------------------------------------
