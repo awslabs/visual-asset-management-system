@@ -48,12 +48,14 @@ _SHAPE_SCAN_CHARS = 16384
 # private use (Co), line and paragraph separator (Zl, Zp) and every space other than U+0020 (Zs:
 # no-break, ideographic and the typographic spaces), plus the characters that draw nothing but are
 # not in those categories: the combining grapheme joiner, Hangul and Braille fillers, the Khmer
-# inherent vowels, the Mongolian and general variation selectors, and the non-characters.
+# inherent vowels, the Mongolian and general variation selectors, the non-characters, and the
+# unassigned default-ignorable code points (U+2065, U+FFF0-FFF8 and the unassigned parts of the tag and
+# variation selector supplement block, so the whole U+E0000-E0FFF block is covered).
 # ``tests/common/auditSearch/test_audit_search_redaction_export_matcher.py`` checks that the class
 # covers every code point of those categories in the running Unicode database, so a character a newer
 # Unicode release adds to a category fails the test instead of passing through.
 _UNSAFE_CHARS = re.compile(
-    r"[\u0000-\u001f\u007f-\u00a0\u00ad\u034f\u0600-\u0605\u061c\u06dd\u070f\u0890-\u0891\u08e2\u115f-\u1160\u1680\u17b4-\u17b5\u180b-\u180f\u2000-\u200f\u2028-\u202f\u205f-\u206f\u2800\u3000\u3164\ud800-\uf8ff\ufdd0-\ufdef\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\ufffe-\uffff\U000110bd\U000110cd\U00013430-\U0001343f\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U0001fffe-\U0001ffff\U0002fffe-\U0002ffff\U0003fffe-\U0003ffff\U0004fffe-\U0004ffff\U0005fffe-\U0005ffff\U0006fffe-\U0006ffff\U0007fffe-\U0007ffff\U0008fffe-\U0008ffff\U0009fffe-\U0009ffff\U000afffe-\U000affff\U000bfffe-\U000bffff\U000cfffe-\U000cffff\U000dfffe-\U000dffff\U000e0001\U000e0020-\U000e007f\U000e0100-\U000e01ef\U000efffe-\U0010ffff]"
+    r"[\u0000-\u001f\u007f-\u00a0\u00ad\u034f\u0600-\u0605\u061c\u06dd\u070f\u0890-\u0891\u08e2\u115f-\u1160\u1680\u17b4-\u17b5\u180b-\u180f\u2000-\u200f\u2028-\u202f\u205f-\u206f\u2800\u3000\u3164\ud800-\uf8ff\ufdd0-\ufdef\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb\ufffe-\uffff\U000110bd\U000110cd\U00013430-\U0001343f\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U0001fffe-\U0001ffff\U0002fffe-\U0002ffff\U0003fffe-\U0003ffff\U0004fffe-\U0004ffff\U0005fffe-\U0005ffff\U0006fffe-\U0006ffff\U0007fffe-\U0007ffff\U0008fffe-\U0008ffff\U0009fffe-\U0009ffff\U000afffe-\U000affff\U000bfffe-\U000bffff\U000cfffe-\U000cffff\U000dfffe-\U000dffff\U000e0000-\U000e0fff\U000efffe-\U0010ffff]"
 )
 UNSAFE_CHARS = _UNSAFE_CHARS
 

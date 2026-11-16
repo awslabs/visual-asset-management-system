@@ -402,6 +402,14 @@ class TestInvisibleCharacters:
                    and not redaction.UNSAFE_CHARS.match(chr(code))]
         assert missing == []
 
+    def test_the_rule_covers_the_unassigned_default_ignorable_code_points(self):
+        # Unicode DerivedCoreProperties: Default_Ignorable_Code_Point includes these unassigned ranges.
+        ranges = [(0x2065, 0x2065), (0xFFF0, 0xFFF8), (0xE0000, 0xE0000), (0xE0002, 0xE001F),
+                  (0xE0080, 0xE00FF), (0xE01F0, 0xE0FFF)]
+        missing = [hex(code) for first, last in ranges for code in range(first, last + 1)
+                   if not redaction.UNSAFE_CHARS.match(chr(code))]
+        assert missing == []
+
     @pytest.mark.parametrize("text", ["plain ascii 123 ~!@#", "caf\u00e9 \u00fcber \u65e5\u672c\u8a9e \u0645\u0631\u062d\u0628\u0627",
                                       "emoji \U0001f600 \u2603", "a b"])
     def test_ordinary_text_and_the_plain_space_are_unchanged(self, text):
