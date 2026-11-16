@@ -29,6 +29,12 @@ jest.mock("@cloudscape-design/components", () => ({
 }));
 
 jest.mock("./routes", () => ({ AppRoutes: () => <div data-testid="app-routes" /> }));
+// The profile menu's pages come from the web-route check; this shell allows the API keys page.
+jest.mock("./services/webRoutesCheck", () => ({
+    checkWebRoutesAllowed: jest.fn(async (routes: any[]) =>
+        routes.filter((route) => route.route__path === "/auth/api-keys")
+    ),
+}));
 jest.mock("./authenticator/Footer", () => ({
     PageFooter: () => <div data-testid="page-footer" />,
 }));
@@ -126,6 +132,33 @@ describe("App shell", () => {
             error.mockRestore();
             log.mockRestore();
         }
+    });
+
+    it("lists the user's allowed pages in the profile menu, with Sign out last", async () => {
+        localStorage.setItem("user", JSON.stringify({ username: "u1" }));
+
+        render(<App />);
+
+        await waitFor(() => {
+            const userMenu = mockUtilities.find((utility) => utility.text === "u1");
+            expect(userMenu.items[0].items[0].href).toBe("#/auth/api-keys/?mode=user");
+        });
+        const userMenu = mockUtilities.find((utility) => utility.text === "u1");
+        expect(userMenu.iconName).toBe("user-profile");
+        expect(userMenu.ariaLabel).toBeUndefined();
+        expect(userMenu.items[userMenu.items.length - 1]).toEqual({
+            id: "signout",
+            text: "Sign out",
+        });
+        // The theme stays in its own Settings menu.
+        expect(JSON.stringify(userMenu.items)).not.toContain("theme-");
+    });
+
+    it("names the profile menu trigger when there is no user name to show", () => {
+        render(<App />);
+
+        const userMenu = mockUtilities.find((utility) => utility.iconName === "user-profile");
+        expect(userMenu.ariaLabel).toBe("Profile menu");
     });
 
     describe("header sign-out order", () => {

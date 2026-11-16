@@ -577,3 +577,21 @@ class TestActionsOnASkipRecord:
         assert delete_rows.call_args.args[0] == es.workflow_execution_inputs_table
         assert {"workflowExecutionId": SKIP_ID,
                 "workflowDatabaseId:workflowId": f"{WF_DB}:{WF_ID}"} in deleted
+
+    def test_permanent_delete_removes_the_runs_ingest_ledger(self):
+        """The end-state step's ingest ledger (#1271) lives in the output-files table under the run's
+        own partition, which no per-pipeline delete reaches."""
+        with patch(f"{SVC}.get_execution_main_row", return_value=dict(SKIP_ROW)), \
+                patch(f"{SVC}.get_workflow_execution_configuration_row", return_value={}), \
+                patch(f"{SVC}.authorize_abort", return_value=(True, "")), \
+                patch(f"{SVC}.get_pipeline_execution_rows", return_value=[]), \
+                patch(f"{SVC}._delete_all_rows") as delete_rows, \
+                patch.object(es.dynamodb, "Table", return_value=MagicMock()), \
+                patch(f"{SVC}.sfn"), \
+                patch(f"{SVC}.log_actions"):
+            response = es.permanent_delete_execution({}, SKIP_ID)
+        assert response["statusCode"] == 200
+        ledger_calls = [c for c in delete_rows.call_args_list
+                        if c.args[0] == es.pipeline_execution_output_files_table]
+        assert len(ledger_calls) == 1
+        assert ledger_calls[0].args[1].get_expression()["values"][1] == es.eo.ingest_ledger_partition(SKIP_ID)

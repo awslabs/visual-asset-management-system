@@ -37,8 +37,22 @@ jest.mock("@cloudscape-design/components/app-layout", () => ({
 }));
 
 jest.mock("./layout/Navigation", () => ({
-    Navigation: () => <div data-testid="side-navigation" />,
+    Navigation: ({ activeHref }: any) => (
+        <div data-testid="side-navigation" data-active-href={activeHref} />
+    ),
 }));
+
+// Stands in for a page that picks its own highlighted side link (the API keys page does, from its
+// resolved mode).
+jest.mock("./pages/auth/ApiKeys", () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { useActiveNavHref } = require("./layout/activeNavHref");
+    function MockApiKeysPage() {
+        useActiveNavHref("#/auth/api-keys/?mode=admin");
+        return <div data-testid="api-keys-page" />;
+    }
+    return { __esModule: true, default: MockApiKeysPage };
+});
 
 let mockLandingThrows = false;
 jest.mock("./pages/LandingPage", () => ({
@@ -409,6 +423,32 @@ describe("AppRoutes", () => {
             consoleError.mockRestore();
             consoleWarn.mockRestore();
         }
+    });
+
+    it("highlights the side link a page chooses from its own state", async () => {
+        allowRoutes("/auth/api-keys");
+
+        renderAt("/auth/api-keys");
+
+        await waitFor(() => expect(screen.getByTestId("api-keys-page")).toBeInTheDocument());
+        await waitFor(() =>
+            expect(screen.getByTestId("side-navigation")).toHaveAttribute(
+                "data-active-href",
+                "#/auth/api-keys/?mode=admin"
+            )
+        );
+    });
+
+    it("positive control: a page that chooses nothing keeps its route's active href", async () => {
+        allowRoutes("/pipelines");
+
+        renderAt("/pipelines");
+
+        await waitFor(() => expect(screen.getByTestId("pipelines-page")).toBeInTheDocument());
+        expect(screen.getByTestId("side-navigation")).toHaveAttribute(
+            "data-active-href",
+            "#/pipelines/"
+        );
     });
 
     it("positive control: no error panel when the page renders normally", async () => {

@@ -474,9 +474,20 @@ VAMS deployments and unrelated workloads that share the account and Region.
 
 The role is explicitly named. A CDK aspect names every IAM role in the stack, producing a fixed name of
 the form `<unique>CloudWatchRole<suffix>-<region>`, so the name embeds the configuration and base stack
-name and two co-resident VAMS deployments do not collide on it. A retained orphan does, however,
-conflict with the role that a redeploy of **the same** configuration into the same account and Region
-creates.
+name and two co-resident VAMS deployments do not collide on it.
+
+**This step is optional when you redeploy the same configuration.** A new deployment checks, while
+CloudFormation creates its core stack, whether a role with its CloudWatch role name already exists. If
+it does, the deployment points the account setting at that role and does not create one, so a redeploy
+after an uninstall, or after a first deployment that failed and rolled back, succeeds with the role in
+place. The reused role then stays outside that deployment's stack, is still retained when the deployment
+is removed, and is reused again by the next redeploy. A deployment that already exists keeps its own
+role when you update it.
+
+Before VAMS 2.7.0, a redeploy of the same configuration into the same account and Region failed on the
+retained role, and this step was required first.
+
+Delete the role only when no deployment of this configuration will run in that account and Region again:
 
 ```bash
 # Find the retained role for this deployment
@@ -492,17 +503,19 @@ aws iam delete-role --role-name "<ROLE_NAME>"
 ```
 
 :::warning[Check the account setting before deleting]
-Delete this role only when redeploying the same configuration into the same account and Region, and
-only after confirming that `aws apigateway get-account` does not point at it — or that no other REST
-API in that account and Region relies on log delivery. If the setting still names the role you delete,
-re-point it by redeploying VAMS or by setting `cloudwatchRoleArn` to a valid role.
+Delete this role only after confirming that `aws apigateway get-account` does not point at it, or that
+no other REST API in that account and Region relies on log delivery. A redeployed VAMS stack that reused
+the role depends on it as long as it runs. If the setting still names the role you delete, re-point it
+by redeploying VAMS or by setting `cloudwatchRoleArn` to a valid role.
 :::
 
-### How a missed orphan surfaces on the next deployment
+### How a name conflict surfaces on the next deployment
 
 CloudFormation runs pre-deployment validation before it provisions anything, and an explicitly named
-resource that already exists is reported as a name conflict. A redeploy that skipped this step therefore
-fails while the change set is still being created — no resource is created and nothing is rolled back:
+resource that already exists is reported as a name conflict. A redeploy that finds a retained resource of
+this kind (another resource this page lists as explicitly named, or this role on a VAMS release before
+2.7.0) therefore fails while the change set is still being created. No resource is created and nothing
+is rolled back:
 
 ```
 Failed to create change set cdk-deploy-change-set:
