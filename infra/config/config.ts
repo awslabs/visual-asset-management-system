@@ -1236,7 +1236,10 @@ export function getConfig(app: cdk.App): Config {
                 );
             }
         }
-        for (const key of ["autoRegisterAutoTriggerOnFileUpload", "downscaleSelfPreviewableImages"]) {
+        for (const key of [
+            "autoRegisterAutoTriggerOnFileUpload",
+            "downscaleSelfPreviewableImages",
+        ]) {
             if (media[key] === true && media.enabled !== true) {
                 throw new Error(
                     `Configuration Error: pipelines.usePreview3dThumbnail.mediaPreviews.${key} ` +

@@ -21,12 +21,7 @@
             "type": "enum",
             "required": false,
             "default": "auto",
-            "enumValues": [
-                "auto",
-                "gif",
-                "jpg",
-                "png"
-            ],
+            "enumValues": ["auto", "gif", "jpg", "png"],
             "label": "Thumbnail format",
             "description": "The preview file format. auto writes a JPG for an image and an animated GIF for a video or a large animated GIF/WebP; jpg and png write a still (the middle frame of a video); gif writes an animated GIF for a video or animated image, and a JPG for a still image."
         },
@@ -35,11 +30,7 @@
             "type": "enum",
             "required": false,
             "default": "auto",
-            "enumValues": [
-                "auto",
-                "standard",
-                "large"
-            ],
+            "enumValues": ["auto", "standard", "large"],
             "label": "Compute tier",
             "description": "The AWS Fargate size the job runs on. auto runs inputs at or above the deployment's large-tier threshold (2 GiB by default) on the large tier and smaller inputs on the standard tier; standard and large run that tier for every input."
         }

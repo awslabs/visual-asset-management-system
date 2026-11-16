@@ -160,9 +160,9 @@ describe("media previews on", () => {
     test("the container is told the option on both tiers", () => {
         const asl = parseAsl(singleStateMachine(template));
         for (const state of STATES) {
-            expect(containerEnvironment(asl.States[state])[PREVIEW_DOWNSCALE_ENVIRONMENT_VARIABLE]).toBe(
-                "false"
-            );
+            expect(
+                containerEnvironment(asl.States[state])[PREVIEW_DOWNSCALE_ENVIRONMENT_VARIABLE]
+            ).toBe("false");
         }
     });
 
@@ -189,7 +189,10 @@ describe("media previews on", () => {
     });
 
     test("the option reaches openPipeline and the container when it is on", () => {
-        const on = synth("MediaOnDownscale", { enabled: true, downscaleSelfPreviewableImages: true });
+        const on = synth("MediaOnDownscale", {
+            enabled: true,
+            downscaleSelfPreviewableImages: true,
+        });
         expect(openPipelineEnv(on).DOWNSCALE_SELF_PREVIEWABLE_IMAGES).toBe("true");
         const asl = parseAsl(singleStateMachine(on));
         expect(
@@ -294,7 +297,8 @@ describe("the shared lists and the limit", () => {
             "config.template.govcloud.json",
             "config.template.eusovereign.json",
         ]) {
-            const block = JSON.parse(read("infra/config", name)).app.pipelines.usePreview3dThumbnail;
+            const block = JSON.parse(read("infra/config", name)).app.pipelines
+                .usePreview3dThumbnail;
             expect(block.mediaPreviews).toEqual({
                 enabled: true,
                 autoRegisterAutoTriggerOnFileUpload: block.autoRegisterAutoTriggerOnFileUpload,

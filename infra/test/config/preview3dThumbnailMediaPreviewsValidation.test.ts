@@ -38,10 +38,12 @@ function config(mutate: (thumbnail: any) => void, pipelineEnabled = true): any {
 }
 
 function resolve(c: any): () => Config.Config {
-    (fs.readFileSync as unknown as jest.Mock).mockImplementation((p: string, ...rest: unknown[]) => {
-        if (typeof p === "string" && p.endsWith("config.json")) return JSON.stringify(c);
-        return realReadFileSync(p, ...rest);
-    });
+    (fs.readFileSync as unknown as jest.Mock).mockImplementation(
+        (p: string, ...rest: unknown[]) => {
+            if (typeof p === "string" && p.endsWith("config.json")) return JSON.stringify(c);
+            return realReadFileSync(p, ...rest);
+        }
+    );
     return () => Config.getConfig(newTestApp());
 }
 
@@ -106,7 +108,9 @@ describe("media previews validation", () => {
         (key) => {
             for (const bad of ["true", 1, "yes", [], {}]) {
                 const c = config((t) => (t.mediaPreviews = { enabled: true, [key]: bad }));
-                expect(resolve(c)).toThrow(new RegExp(`mediaPreviews\\.${key} must be true or false`));
+                expect(resolve(c)).toThrow(
+                    new RegExp(`mediaPreviews\\.${key} must be true or false`)
+                );
                 expect(builderViolations(c)).toContain(`preview3dthumbnail-media-${key}-boolean`);
             }
         }

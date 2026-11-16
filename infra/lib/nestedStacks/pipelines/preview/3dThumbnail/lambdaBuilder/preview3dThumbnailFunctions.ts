@@ -159,7 +159,9 @@ export function buildOpenPipelineFunction(
                 ? {
                       SELF_PREVIEWABLE_FILEEXTENSIONS: media.selfPreviewableFileExtensions,
                       PREVIEW_FILE_SIZE_LIMIT_BYTES: String(media.previewFileSizeLimitBytes),
-                      DOWNSCALE_SELF_PREVIEWABLE_IMAGES: String(media.downscaleSelfPreviewableImages),
+                      DOWNSCALE_SELF_PREVIEWABLE_IMAGES: String(
+                          media.downscaleSelfPreviewableImages
+                      ),
                   }
                 : {}),
         },
