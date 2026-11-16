@@ -5,16 +5,19 @@
 
 openpyxl's read-only reader loads a workbook's whole shared-strings table (every distinct text value) into memory
 before the first row is read, so a workbook of tens of millions of strings ran the MEDIA function out of time. The
-extractor now streams the table only as far as the rows it reads need, takes a sheet's row count from its declared
-dimension (a scan bounded by XLSX_MAX_ROWS_COUNTED when there is none), reads a sheet only as far as its sample,
-count and text need, and does not read a shared-strings part over XLSX_SHARED_STRINGS_MAX_BYTES at all (its size
-comes from the ZIP directory): the sheet is then described without its text cells, and sys_data says so.
+extractor now streams the table only as far as the rows it reads need and never past
+XLSX_SHARED_STRINGS_READ_MAX_BYTES of the part, takes a sheet's row count from its declared dimension (a scan bounded
+by XLSX_MAX_ROWS_COUNTED when there is none), and reads a sheet only as far as its sample, count and text need. The
+strings sit in order of first use, so a part over the bound still gives the header names and the sample rows' text;
+a text cell whose string lies past the bound reads as blank, and sys_data says so ("partial").
 
 The large parts here are built by hand: a small workbook's sharedStrings.xml with filler strings appended (the
-strings its cells reference come first, as a writer stores them), and a generated sheet of numeric rows.
+strings its cells reference come first, as a writer stores them) or inserted before a later row's strings, and a
+generated sheet of numeric rows.
 """
 
 import io
+import re
 import time
 import tracemalloc
 import zipfile
@@ -34,7 +37,7 @@ _MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 # Bounds the extraction must stay inside, whatever the part's size: peak Python allocation and wall time.
 _PEAK_BYTES_BOUND = 32 * 1024 * 1024
 _SECONDS_BOUND = 5.0
-# The shared-strings read bound, pinned: a part over it is not read.
+# The shared-strings read bound, pinned: no more of the part is read.
 _STRINGS_CAP = 64 * 1024 * 1024
 
 _PARTS_ROWS = [["name", "qty", "price", "site"]] + [
@@ -104,6 +107,40 @@ def _padded(data, filler_count, filler="<si><t>x</t></si>"):
 
 def _strings_part_size(data):
     return zipfile.ZipFile(io.BytesIO(data)).getinfo(_STRINGS_PART).file_size
+
+
+_STRING_REF = re.compile(r'(t="s"><v>)(\d+)(</v>)')
+
+
+def _string_index(part, text):
+    return part[:part.index(f"<si><t>{text}</t></si>")].count("</si>")
+
+
+def _moved_past(data, first_moved, filler, filler_count):
+    """The package with ``filler_count`` unreferenced ``filler`` strings inserted before the string
+    ``first_moved``, every cell reference from it on shifted to match."""
+    package = zipfile.ZipFile(io.BytesIO(data))
+    part = package.read(_STRINGS_PART).decode("utf-8")
+    moved = _string_index(part, first_moved)
+    at = part.index(f"<si><t>{first_moved}</t></si>")
+
+    def shifted(match):
+        index = int(match.group(2))
+        return f"{match.group(1)}{index + filler_count if index >= moved else index}{match.group(3)}"
+
+    replacements = {_STRINGS_PART: (part[:at] + filler * filler_count + part[at:]).encode("utf-8")}
+    for name in package.namelist():
+        if name.startswith("xl/worksheets/sheet"):
+            replacements[name] = _STRING_REF.sub(shifted, package.read(name).decode("utf-8")).encode("utf-8")
+    return _rewritten(data, replacements)
+
+
+def _referencing(data, text, index):
+    """The package with the first sheet's reference to the string ``text`` replaced by ``index``."""
+    package = zipfile.ZipFile(io.BytesIO(data))
+    old = _string_index(package.read(_STRINGS_PART).decode("utf-8"), text)
+    sheet = package.read(_SHEET_PART).decode("utf-8").replace(f't="s"><v>{old}</v>', f't="s"><v>{index}</v>')
+    return _rewritten(data, {_SHEET_PART: sheet.encode("utf-8")})
 
 
 def _numeric_sheet(rows, dimension=True):
@@ -182,36 +219,59 @@ class TestSharedStringsAreStreamed:
 
 
 @pytest.mark.unit
-class TestSharedStringsOverTheCap:
-    def test_the_cap_is_fixed(self):
-        assert office.XLSX_SHARED_STRINGS_MAX_BYTES == _STRINGS_CAP
+class TestSharedStringsReadBound:
+    def test_the_read_bound_is_fixed(self):
+        assert office.XLSX_SHARED_STRINGS_READ_MAX_BYTES == _STRINGS_CAP
 
-    def test_a_part_over_the_cap_is_not_read_and_sys_data_says_so(self, tmp_path):
+    @pytest.mark.parametrize("capture_full_text", [False, True], ids=["sample", "full-text"])
+    def test_a_part_over_the_bound_still_gives_header_names_and_string_samples(self, tmp_path, capture_full_text):
         small = _shared_strings_workbook()
         large = _padded(small, 4_000_000)
         assert _strings_part_size(large) > _STRINGS_CAP
-        expected = _extract(tmp_path, "small.xlsx", small).attributes["sys_data"]
-        result, peak, elapsed = _bounded_extract(tmp_path, "large.xlsx", large)
+        expected = _extract(tmp_path, "small.xlsx", small, capture_full_text=capture_full_text)
+        result, peak, elapsed = _bounded_extract(tmp_path, "large.xlsx", large, capture_full_text=capture_full_text)
+        assert peak < _PEAK_BYTES_BOUND, f"peak {peak:,} bytes"
+        assert elapsed < _SECONDS_BOUND, f"{elapsed:.1f} s"
+        assert _comparable(result) == _comparable(expected)
+        sys_data = result.attributes["sys_data"]
+        assert sys_data["columns"] == ["name", "qty", "price", "site"] and sys_data["rowCount"] == 12
+        assert sys_data["sampleRows"][0] == ["part-01", "10", "0.25", "north"] and "stringValues" not in sys_data
+        assert result.warnings == []
+
+    def test_a_cell_past_the_read_bound_is_blank_with_the_partial_note(self, tmp_path, monkeypatch):
+        bound = 1024 * 1024
+        monkeypatch.setattr(office, "XLSX_SHARED_STRINGS_READ_MAX_BYTES", bound)
+        # 70,000 strings of 1,000 characters (70 MB) sit between part-03 and part-04: read whole, they would hold
+        # far more memory than the test allows.
+        data = _moved_past(_shared_strings_workbook(), "part-04", "<si><t>" + "y" * 1000 + "</t></si>", 70_000)
+        part = zipfile.ZipFile(io.BytesIO(data)).read(_STRINGS_PART)
+        result, peak, elapsed = _bounded_extract(tmp_path, "far.xlsx", data, capture_full_text=True)
         assert peak < _PEAK_BYTES_BOUND, f"peak {peak:,} bytes"
         assert elapsed < _SECONDS_BOUND, f"{elapsed:.1f} s"
         sys_data = result.attributes["sys_data"]
-        assert sys_data["stringValues"] == "skipped"
-        assert f"{_strings_part_size(large):,} bytes" in sys_data["stringValuesNote"]
-        # The counts stand; text cells are blank and numbers keep their values.
-        for key in ("sheetCount", "sheetNames", "columnCount", "rowCount", "rowCountExact"):
-            assert sys_data[key] == expected[key], key
-        assert sys_data["columns"] == ["", "", "", ""]
-        assert sys_data["sampleRows"] == [["", row[1], row[2], ""] for row in expected["sampleRows"]]
-        assert any("text cell values not read" in warning for warning in result.warnings)
+        assert sys_data["columns"] == ["name", "qty", "price", "site"] and sys_data["rowCount"] == 12
+        assert sys_data["sampleRows"] == [["part-01", "10", "0.25", "north"], ["part-02", "20", "0.5", "south"],
+                                          ["part-03", "30", "0.75", "north"], ["", "40", "1.0", "south"],
+                                          ["", "50", "1.25", "north"]]
+        # The captured text uses the same table: the second sheet's strings lie past the bound too.
+        assert "Sheet: Q1\n\t\n\t100\n\t140" in result.full_text
+        read = part[:bound].count(b"</si>")
+        assert sys_data["stringValues"] == "partial"
+        note = sys_data["stringValuesNote"]
+        assert f"{len(part):,} bytes uncompressed" in note and f"first {bound:,} bytes (the read bound)" in note
+        assert f"text cells after string {read:,} read as blank" in note and "captured text" in note
+        assert any("text cell values partly read" in warning for warning in result.warnings)
 
-    def test_the_cap_is_read_from_the_zip_directory(self, tmp_path, monkeypatch):
-        data = _shared_strings_workbook()
-        monkeypatch.setattr(office, "XLSX_SHARED_STRINGS_MAX_BYTES", _strings_part_size(data) - 1)
-        sys_data = _extract(tmp_path, "parts.xlsx", data, capture_full_text=True).attributes["sys_data"]
-        assert sys_data["stringValues"] == "skipped" and sys_data["rowCount"] == 12
-        monkeypatch.setattr(office, "XLSX_SHARED_STRINGS_MAX_BYTES", _strings_part_size(data))
+    @pytest.mark.parametrize("slack, partial", [(0, False), (-1, True)], ids=["fits-exactly", "one-byte-over"])
+    def test_the_bound_counts_the_uncompressed_bytes_of_the_part(self, tmp_path, monkeypatch, slack, partial):
+        # A cell that names a string past the end of the part reads the whole part: one that fits the bound
+        # exactly ends at the part's end with no note; one byte more and the bound stops the read.
+        data = _referencing(_shared_strings_workbook(), "part-03", 999)
+        monkeypatch.setattr(office, "XLSX_SHARED_STRINGS_READ_MAX_BYTES", _strings_part_size(data) + slack)
         sys_data = _extract(tmp_path, "parts.xlsx", data).attributes["sys_data"]
-        assert "stringValues" not in sys_data and sys_data["columns"][0] == "name"
+        assert sys_data["sampleRows"][2] == ["", "30", "0.75", "north"]
+        assert sys_data["columns"] == ["name", "qty", "price", "site"]
+        assert (sys_data.get("stringValues") == "partial") is partial
 
     def test_a_sheet_of_inline_strings_and_numbers_reads_as_before(self, tmp_path):
         data = _rewritten(_shared_strings_workbook(), {_SHEET_PART: _numeric_sheet(8)})

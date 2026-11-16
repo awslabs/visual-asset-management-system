@@ -46,12 +46,14 @@ _PROPERTY_MAX_CHARS = 500
 _SHEET_NAMES_MAX = 50
 # Rows counted per sheet; the count stops here so a million-row workbook is not read to its end for a number.
 XLSX_MAX_ROWS_COUNTED = 200_000
-# The largest shared-strings part (its uncompressed size in the ZIP directory) whose string values are read. The
-# part holds every distinct text value of the workbook; a larger one is not read at all, and the sheets are
-# described without their text cells (blank in the columns, the samples and the text), which sys_data says.
-XLSX_SHARED_STRINGS_MAX_BYTES = 64 * 1024 * 1024
+# The most of a workbook's shared-strings part (uncompressed bytes of the member) that is read. The part holds every
+# distinct text value in order of first use, so a sheet's header and first rows sit at its start; the part is read
+# as a stream only as far as the rows read need, and never past this bound, which also bounds the strings kept in
+# memory. A text cell whose string lies past the bound reads as blank, and sys_data says so (stringValues
+# "partial" with a note naming the strings read and the bound).
+XLSX_SHARED_STRINGS_READ_MAX_BYTES = 64 * 1024 * 1024
 _SHARED_STRING_TAG = "{%s}si" % SHEET_MAIN_NS
-XLSX_STRING_VALUES_SKIPPED = "skipped"
+XLSX_STRING_VALUES_PARTIAL = "partial"
 # Slides and sheets of the captured full text are joined with a blank line; page offsets point at each part's
 # first character.
 _PAGE_SEPARATOR = "\n\n"
@@ -274,22 +276,54 @@ def _cell(value) -> str:
     return str(value)[:DATA_CELL_MAX_CHARS]
 
 
-class _StreamedSharedStrings:
-    """A workbook's shared-strings table read as a stream, only as far as the highest index a cell has looked up:
-    each `<si>` element's text is taken (as openpyxl's own table reader takes it) and the element is cleared from
-    the tree, so a sample of the first rows reads the first few strings of the part, not the whole part. With
-    ``skip`` (the part is over XLSX_SHARED_STRINGS_MAX_BYTES) nothing is read. A lookup the part does not reach
-    (skipped, past its end, or past a point it stops parsing at) is None, which the sheet reads as a blank cell."""
+class _ReadBoundReached(Exception):
+    """The shared-strings stream was asked for bytes past its read bound."""
 
-    def __init__(self, archive: zipfile.ZipFile, name: str, skip: bool):
+
+class _BoundedRead:
+    """A read-only view of a zip member's uncompressed stream that hands out at most ``limit`` bytes: once they are
+    read, a further read returns end of stream when the member has no more bytes and raises _ReadBoundReached when
+    it has (one byte is read to tell the two apart). ``bytes_read`` counts what it handed out."""
+
+    def __init__(self, raw, limit: int):
+        self._raw = raw
+        self._limit = int(limit)
+        self.bytes_read = 0
+
+    def read(self, size: int = -1) -> bytes:
+        room = self._limit - self.bytes_read
+        if room <= 0:
+            if self._raw.read(1):
+                raise _ReadBoundReached()
+            return b""
+        if size is None or size < 0 or size > room:
+            size = room
+        data = self._raw.read(size)
+        self.bytes_read += len(data)
+        return data
+
+    def close(self) -> None:
+        self._raw.close()
+
+
+class _StreamedSharedStrings:
+    """A workbook's shared-strings table read as a stream, only as far as the highest index a cell has looked up
+    and never past XLSX_SHARED_STRINGS_READ_MAX_BYTES of the part: each `<si>` element's text is taken (as
+    openpyxl's own table reader takes it) and the element is cleared from the tree, so a sample of the first rows
+    reads the first few strings of the part, not the whole part. A lookup the read does not reach (past the bound,
+    past the part's end, or past a point it stops parsing at) is None, which the sheet reads as a blank cell;
+    ``bounded`` records that the bound stopped the read."""
+
+    def __init__(self, archive: zipfile.ZipFile, name: str, read_max_bytes: int):
         self._archive = archive
         self._name = name
+        self._read_max_bytes = read_max_bytes
         self._strings: List[str] = []
-        self._source = None
+        self._source: Optional[_BoundedRead] = None
         self._events = None
         self._root = None
-        self.skipped = skip
-        self.done = skip
+        self.done = False
+        self.bounded = False
         self.error: Optional[str] = None
 
     def __getitem__(self, index: int) -> Optional[str]:
@@ -302,7 +336,7 @@ class _StreamedSharedStrings:
 
     def _read_next(self) -> None:
         if self._events is None:
-            self._source = self._archive.open(self._name)
+            self._source = _BoundedRead(self._archive.open(self._name), self._read_max_bytes)
             self._events = ElementTree.iterparse(self._source, events=("start", "end"))
         try:
             for event, node in self._events:
@@ -315,6 +349,10 @@ class _StreamedSharedStrings:
                     # The root keeps no finished element, so memory stays flat however far the part is read.
                     self._root.clear()
                     return
+        except _ReadBoundReached:
+            # Every element that ended inside the bytes read has been taken: iterparse hands out the events of
+            # the data it was fed before it asks the stream for more.
+            self.bounded = True
         except (ParseError, DefusedXmlException) as exc:
             self.error = f"{type(exc).__name__}: {exc}"
         self.done = True
@@ -342,8 +380,7 @@ class _StreamingWorkbookReader(ExcelReader):
             return
         name = part.PartName[1:]
         self.shared_strings_bytes = self.archive.getinfo(name).file_size
-        self.shared_strings = _StreamedSharedStrings(
-            self.archive, name, skip=self.shared_strings_bytes > XLSX_SHARED_STRINGS_MAX_BYTES)
+        self.shared_strings = _StreamedSharedStrings(self.archive, name, XLSX_SHARED_STRINGS_READ_MAX_BYTES)
 
 
 def _open_workbook(path: str) -> _StreamingWorkbookReader:
@@ -367,7 +404,7 @@ def _declared_data_rows(sheet) -> Optional[int]:
 def extract_xlsx(path: str, ctx: ExtractContext) -> BranchResult:
     """sys_data for a workbook: sheet names, the first sheet's columns, row count and sample rows, and the text of
     each sheet when the context captures it. The read is bounded: the shared strings are streamed only as far as
-    the rows read need them (none when the part is over XLSX_SHARED_STRINGS_MAX_BYTES); a sheet's row count comes
+    the rows read need them and never past XLSX_SHARED_STRINGS_READ_MAX_BYTES of the part; a sheet's row count comes
     from its declared dimension, or from a scan that stops at XLSX_MAX_ROWS_COUNTED; and a sheet is read only as
     far as its sample rows, its count and its share of the text need."""
     result = BranchResult(file_class=CLASS_DATA)
@@ -440,13 +477,15 @@ def extract_xlsx(path: str, ctx: ExtractContext) -> BranchResult:
         "rowCountExact": not first_capped,
         "sampleRows": first_sample,
     }
-    if isinstance(strings, _StreamedSharedStrings) and strings.skipped:
-        note = (f"the shared-strings part is {reader.shared_strings_bytes:,} bytes uncompressed, over the "
-                f"{XLSX_SHARED_STRINGS_MAX_BYTES:,}-byte read bound, so it was not read: text cells are blank in "
-                "the columns, the sample rows and the text; the counts and the numeric values stand")
-        sys_data["stringValues"] = XLSX_STRING_VALUES_SKIPPED
+    if isinstance(strings, _StreamedSharedStrings) and strings.bounded:
+        read = len(strings)
+        note = (f"the shared-strings part is {reader.shared_strings_bytes:,} bytes uncompressed and its first "
+                f"{XLSX_SHARED_STRINGS_READ_MAX_BYTES:,} bytes (the read bound) were read, {read:,} strings: text "
+                f"cells after string {read:,} read as blank in the columns, the sample rows and the captured text; "
+                "the counts and the numeric values stand")
+        sys_data["stringValues"] = XLSX_STRING_VALUES_PARTIAL
         sys_data["stringValuesNote"] = note
-        result.warnings.append(f"{ctx.file_name}: text cell values not read: {note}")
+        result.warnings.append(f"{ctx.file_name}: text cell values partly read: {note}")
     elif isinstance(strings, _StreamedSharedStrings) and strings.error:
         result.warnings.append(f"{ctx.file_name}: the shared-strings part stopped parsing after {len(strings):,} "
                                f"strings ({strings.error}); later text cells read as blank")
