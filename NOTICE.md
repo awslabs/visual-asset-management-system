@@ -67,14 +67,14 @@ This software includes third party software subject to the following copyrights:
 | axios                               | ^1.6.0        | MIT                     |
 | buffer                              | ^6.0.3        | MIT                     |
 | dompurify                           | ^3.4.17       | (MPL-2.0 OR Apache-2.0) |
-| fast-xml-parser                     | ^5.9.0        | MIT                     |
+| fast-xml-parser                     | ^5.12.0       | MIT                     |
 | fcs                                 | ^0.1.3        | MIT                     |
 | jodit                               | 4.13.10       | MIT                     |
 | jodit-react                         | ^5.3.21       | MIT                     |
 | localforage                         | ^1.10.0       | Apache-2.0              |
 | maplibre-gl                         | ^6.9.0        | BSD-3-Clause            |
 | papaparse                           | ^5.7.0        | MIT                     |
-| postcss                             | ^8.5.32       | MIT                     |
+| postcss                             | ^8.4.47       | MIT                     |
 | prop-types                          | ^15.8.1       | MIT                     |
 | react                               | ^18.3.1       | MIT                     |
 | react-data-grid                     | 7.0.0-beta.16 | MIT                     |
@@ -94,7 +94,7 @@ This software includes third party software subject to the following copyrights:
 | tailwindcss                         | ^3.4.14       | MIT                     |
 | tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
 | typescript                          | ^5.0.0        | Apache-2.0              |
-| vite                                | ^8.3.7        | MIT                     |
+| vite                                | 8.3.5         | MIT                     |
 | zod                                 | ^4.6.7        | MIT                     |
 
 `jodit` is not declared directly — it arrives with `jodit-react` and the version shown is the one resolved in the lockfile. `fast-xml-parser` is carried transitively and pinned by the `overrides` block in `web/package.json`.

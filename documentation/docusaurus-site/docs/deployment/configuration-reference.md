@@ -824,8 +824,6 @@ aws bedrock get-foundation-model --region <region> \
 -   **AWS GovCloud (US) (`aws-us-gov`):** use a `us-gov.` inference profile or a foundation-model id offered in the deployment Region. Configuration validation rejects the commercial `global.` and `us.` prefixes.
 -   **AWS European Sovereign Cloud (`aws-eusc`):** use an inference profile or a foundation-model id that `list-inference-profiles` or `list-foundation-models` returns in `eusc-de-east-1`. Configuration validation rejects the commercial `global.` and `us.` prefixes. Of the three pipelines, only the GenAI CAD STEP agent on its `fargate` runtime runs in this partition.
 
-For GenAI 3D Metadata Labeling, choose a `global.` profile or a foundation-model id offered on demand in the deployment Region. Its IAM grant covers the model in the deployment Region and the global profile's model only, so a geographic profile (`us.`, `eu.`, `apac.`, `us-gov.`) can be refused when a request is routed to another Region ([#1390](https://github.com/awslabs/visual-asset-management-system/issues/1390)).
-
 The model also has to accept image input for the GenAI metadata labeling and Video SOP/BOM extraction pipelines, and tool use for the GenAI CAD STEP agent and Video SOP/BOM extraction pipelines.
 
 ### 3D basic conversion (`app.pipelines.useConversion3dBasic`)
@@ -1580,7 +1578,7 @@ The boundary ARN must be an IAM managed policy ARN in the partition you deploy t
 
 Adding, changing, or removing the boundary on an existing deployment updates each role in place; no role is replaced. The policy must allow everything VAMS grants its roles, because a boundary limits a role to the intersection of the boundary and the role's own policies. Use the IAM policy report (see [VAMS stack role customization](#vams-stack-role-customization-vamsstacks)) to list those permissions.
 
-Setting, changing, or removing `IamRoleNamePrefix` on an existing deployment renames, and so replaces, each IAM role in the core stack and its nested stacks. The REST API moves to a new deployment that uses the renamed authorizer role in the same update.
+Setting, changing, or removing `IamRoleNamePrefix` on an existing deployment renames, and so replaces, each IAM role in the core stack and its nested stacks. The REST API moves to a new deployment that uses the renamed authorizer role in the same update. The API Gateway account CloudWatch role is retained by design, so the update creates the renamed role and leaves the old one in the account, outside any stack. Delete the old role only when `aws apigateway get-account` in that Region no longer names it, as [Step 7 of the uninstall guide](uninstall.md#step-7-delete-the-api-gateway-account-cloudwatch-role) describes. Each workflow's state machine keeps the workflow role it was built with, so save every workflow again with its pipeline list after the rename, as [Renaming the IAM roles](update-the-solution.md#v267-and-later-renaming-the-iam-roles) describes.
 
 :::warning[Role name length limit]
 The total IAM role name character count limit is 64 characters. Long prefixes may affect role name uniqueness and cause deployment failures. Prefixes of 8 characters or fewer are recommended.
@@ -1635,6 +1633,8 @@ Any field left empty keeps the corresponding CDK default. ARNs may use the `${AW
 :::tip[Simpler middle ground]
 If your only concern is that the CloudFormation execution role gets `AdministratorAccess` by default, you do not need this feature. Instead bootstrap with `npx cdk bootstrap --cloudformation-execution-policies <your-managed-policy-arns>` and/or `--custom-permissions-boundary <name>`.
 :::
+
+A scoped CloudFormation execution role needs `cloudwatch:PutMetricAlarm`, `cloudwatch:DescribeAlarms`, `cloudwatch:DeleteAlarms`, `cloudwatch:TagResource`, `cloudwatch:ListTagsForResource` and `cloudwatch:UntagResource` for the VAMS dead-letter queue alarms, `logs:PutResourcePolicy`, `logs:DescribeResourcePolicies` and `logs:DeleteResourcePolicy` for the orchestration bus audit log group policy, and `iam:PutRolePermissionsBoundary` when `PermissionBoundaryArn` is set. In the commercial partition and the AWS European Sovereign Cloud, where VAMS sets the recursive loop setting of the created-events bucket-sync Lambda to `Allow`, it also needs `lambda:PutFunctionRecursionConfig` and `lambda:GetFunctionRecursionConfig`. Without those two, the update that first sets it fails at that function, and its rollback fails there too and leaves the core stack in `UPDATE_ROLLBACK_FAILED`; [Updating the solution](update-the-solution.md#v267-and-later-scoped-aws-cloudformation-execution-role) describes the recovery. These actions cover the resources and settings named here; the role also needs the permissions it already uses for each other resource type VAMS deploys.
 
 ### VAMS stack role customization (`vamsStacks`)
 
