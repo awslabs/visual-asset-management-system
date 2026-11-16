@@ -164,6 +164,7 @@ from common.auditActionTypes import (
     route_entries,
     spec,
 )
+from common.auditLogGroups import action_target_group_keys
 from common.addonAuditActions import (
     ADDON_AUDIT_EXEMPT,
     ADDON_AUDIT_ROUTE_ACTIONS,
@@ -587,6 +588,9 @@ def _merge_exempt() -> Dict[RouteMethod, str]:
             merged.setdefault(key, value)
     return merged
 
+
+# The groups log_action may write to, derived from the merged group registry (common/auditLogGroups.py).
+AUDIT_GROUPS = action_target_group_keys()
 
 AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = _merge_route_actions()
 AUDIT_EXEMPT: Dict[RouteMethod, str] = _merge_exempt()
