@@ -55,7 +55,9 @@ _IMPLICIT_RESOLUTION = 24
 # MDL material families whose base colour is read from the shader's inputs, by the lower-case file
 # name prefix of the module (OmniPBR.mdl, OmniPBR_ClearCoat.mdl, OmniSurface.mdl, OmniSurfaceLite.mdl):
 # (diffuse texture input, base colour constant input, tint input or None). The texture replaces the
-# constant; the tint multiplies either. Another MDL module defines its colour inside the .mdl file.
+# constant; the tint multiplies either. Other MDL modules name and combine their colour inputs in their
+# own way (for example AlbedoTexture blended with ColorAlbedo in Unreal Engine exports, #1559) and are
+# not read.
 _MDL_DIFFUSE_INPUTS = (
     ("omnipbr", "diffuse_texture", "diffuse_color_constant", "diffuse_tint"),
     ("omnisurface", "diffuse_reflection_color_image", "diffuse_reflection_color", None),
@@ -636,7 +638,7 @@ def _read_mdl_diffuse(material, context):
     module = os.path.basename(_mdl_source_asset(shader))
     family = next((inputs for inputs in _MDL_DIFFUSE_INPUTS if module.lower().startswith(inputs[0])), None)
     if family is None:
-        return _unread(context, material, f"{module!r}, colour defined inside the module")
+        return _unread(context, material, f"{module!r}, colour inputs of this MDL module are not read")
     _, texture_name, constant_name, tint_name = family
     texture = _input_value(shader, texture_name)
     if not getattr(texture, "path", ""):

@@ -202,7 +202,7 @@ class TestOtherMaterials:
             rgb = _rgb(usd_handler.load(path))
         assert rgb[:6] == [list(usd_handler.NEUTRAL_RGB)] * 6
         assert rgb[6:] == [[255, 0, 0]] * 3
-        why = [line for line in caplog.text.splitlines() if "colour defined inside the module" in line]
+        why = [line for line in caplog.text.splitlines() if "colour inputs of this MDL module are not read" in line]
         assert len(why) == 2, why  # the first material's line, and the stage summary
         assert "/Custom:" in why[0] and "'MI_WallB_01.mdl'" in why[0]
         assert "2 prims are not coloured by their MDL material: 2 with 'MI_WallB_01.mdl'" in why[1]
