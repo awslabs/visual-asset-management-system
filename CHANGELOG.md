@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
+-   **Security** Dependency update to resolve a security advisory: `fast-xml-parser` 5.12.0 (`web/` and the ThatOpen IFC BIM viewer install); `infra/` no longer depends on it after `@aws-sdk/xml-builder` moves to 3.972.42. ([#1546](https://github.com/awslabs/visual-asset-management-system/issues/1546))
+
 ### Known Outstanding Issues
 
 ### Troubleshooting
