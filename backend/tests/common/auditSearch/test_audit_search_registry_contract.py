@@ -89,7 +89,7 @@ class TestDescriptorCompleteness:
 
     def test_a_descriptor_with_an_invalid_constraint_value_fails_the_check(self):
         problems = registryCheck.descriptor_problems([_fake_group(key="audit-fake")], _FakeKeys)
-        assert any("auditLog constraint value" in p for p in problems)
+        assert any("group key token" in p for p in problems)
 
     def test_a_descriptor_without_a_resource_key_fails_the_check(self):
         problems = registryCheck.descriptor_problems([_fake_group(resource_key_name="AUDIT_LOG_MISSING")], _FakeKeys)

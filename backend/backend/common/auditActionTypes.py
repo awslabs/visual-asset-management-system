@@ -31,8 +31,8 @@ class AuditLogGroup(NamedTuple):
     """One audit log group: the descriptor the writer and the audit search read.
 
     ``key`` is the public group key, the last segment of the group's resource parameter key
-    (``auditActions``), and the value of an ``auditLogGroup`` constraint. ``resource_key_name`` is the
-    attribute of ``common.resourceNames.ResourceKeys`` that resolves the group's CloudWatch name
+    (``auditActions``), and the planned value of an ``auditLogGroup`` constraint. ``resource_key_name`` is the
+    attribute of ``ResourceKeys`` (or ``AddonResourceKeys`` or ``CustomResourceKeys``, in that order) that resolves the group's CloudWatch name
     (``AUDIT_LOG_ACTIONS``); it is held as a name so this module stays import-light. ``prefix`` is the
     record prefix label (``ACTIONS``). ``has_type_segment`` says whether ``log_action`` writes a
     ``[type: ...]`` segment (the file groups' records carry none). ``legacy_parser`` names the adapter

@@ -5,8 +5,8 @@
 The completeness check of the audit log group registry.
 
 An audit group is readable by the search only when its descriptor has everything the search needs: a
-key that is a valid ``auditLog`` constraint value, a label, a record prefix, a parser, and a
-``ResourceKeys`` entry that resolves its CloudWatch log group. :func:`descriptor_problems` lists what is
+key that is a valid token (the planned ``auditLog`` constraint value), a label, a record prefix, a parser, and a
+resource key (core, add-on or custom) that resolves its CloudWatch log group. :func:`descriptor_problems` lists what is
 missing; the registry contract test (``tests/common/auditSearch/test_audit_search_registry_contract.py``)
 fails when it returns anything for the merged registry, so a group added without its parser, label or
 authorization mapping fails a test instead of reaching a deployment.
@@ -39,7 +39,7 @@ def descriptor_problems(groups: Iterable[AuditLogGroup], resource_keys: Optional
     for group in groups:
         name = str(getattr(group, "key", "?"))
         if not isinstance(group.key, str) or not AUDIT_LOG_GROUP_KEY_PATTERN.match(group.key):
-            problems.append(f"{name}: key is not a valid auditLog constraint value")
+            problems.append(f"{name}: key is not a valid group key token")
         if group.key in seen_keys:
             problems.append(f"{name}: key is registered twice")
         seen_keys.add(group.key)
