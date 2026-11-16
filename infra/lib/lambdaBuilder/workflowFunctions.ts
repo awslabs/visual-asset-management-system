@@ -203,12 +203,6 @@ const EXECUTION_AUTHORIZATION_READS: Partial<Record<ExecutionTableTarget, string
 };
 
 /**
- * Construct id of the customer managed policy that carries the end-state handler's PutEvents on the
- * orchestration bus (the workflow.execution.completed event).
- */
-export const PROCESS_OUTPUT_EVENTS_POLICY_ID = "OrchestrationEventsPolicy";
-
-/**
  * Every DynamoDB call each route set makes, by table and by the one index ARN of each index it
  * queries (never `index/*`), with only the actions it calls. The lock table's calls are in the lock
  * policy (executionLockDeleteStatements). backend/tests/handlers/workflows/
@@ -463,20 +457,15 @@ function newExecutionServiceFunction(
 }
 
 /**
- * Attaches statements to a handler's role as a customer managed policy, which IAM does not count against
- * the role's 10,240-character inline policy quota (each managed policy has its own 6,144). The role's
- * ManagedPolicyArns names the policy, so CloudFormation creates and attaches it before the role and its
- * default policy update; statements moving out of the default policy are therefore never missing on
- * upgrade. The function waits for it as well.
+ * Adds statements to a handler's role as inline statements of its default policy. VAMS grants
+ * Lambda roles inline only (#1499): a statement that does not fit the role's inline budget is
+ * narrowed, or the route moves to a function of its own, rather than held in a customer managed
+ * policy (infra/CLAUDE.md, IAM Inline Policy Budget).
  */
-function attachManagedHandlerPolicy(
-    fun: lambda.Function,
-    id: string,
-    statements: iam.PolicyStatement[]
-) {
-    const policy = new iam.ManagedPolicy(fun, id, { statements });
-    fun.role!.addManagedPolicy(policy);
-    fun.node.defaultChild!.node.addDependency(policy);
+function addHandlerStatements(fun: lambda.Function, statements: iam.PolicyStatement[]) {
+    for (const statement of statements) {
+        fun.addToRolePolicy(statement);
+    }
 }
 
 /**
@@ -1072,10 +1061,8 @@ export function buildProcessWorkflowExecutionOutputFunction(
 
     fileUploadLambdaFunction.grantInvoke(fun);
     metadataServiceFunction.grantInvoke(fun);
-    // This role is a named exception to the IAM inline policy budget (its execution table grants), so
-    // the completion event's PutEvents sits in a customer managed policy of its own rather than
-    // adding to the inline total (infra/CLAUDE.md, IAM Inline Policy Budget).
-    attachManagedHandlerPolicy(fun, PROCESS_OUTPUT_EVENTS_POLICY_ID, [
+    // The completion event's PutEvents on the orchestration bus, inline like every VAMS grant (#1499).
+    addHandlerStatements(fun, [
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["events:PutEvents"],

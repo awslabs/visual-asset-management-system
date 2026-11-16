@@ -30,6 +30,15 @@ import { inlinePolicies, managedPolicies, nestedTemplateKeyFor } from "../suppor
 
 jest.setTimeout(900_000);
 
+/** CDK's generated overflow policy of a role (#1499 allows only those as managed policies). */
+const isOverflow = (id: string) => /OverflowPolicy\d+[0-9A-F]{8}$/.test(id);
+
+/** A role's own statements: its inline documents and CDK's overflow policies of it (#1499). */
+const roleDocs = (synth: SynthResult, role: string, stack: string): [string, any][] => [
+    ...inlinePolicies(synth, role, stack),
+    ...managedPolicies(synth, role, stack).filter(([id]) => isOverflow(id)),
+];
+
 /** Construct id of each table, keyed by the logical name the backend tests use. */
 const TABLES: Record<string, string> = {
     main: "WorkflowExecutionsStorageTableV2",
@@ -259,10 +268,13 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
     );
 
     test.each(Object.keys(ROUTE_SET_GRANTS))(
-        "%s carries its grants inline, with no managed policy",
+        "%s carries its grants on its role, with no hand-written managed policy",
         (construct) => {
             const role = roleId(synth, stack, construct);
-            expect(managedPolicies(synth, role, stack)).toEqual([]);
+            // Inline, or in CDK's overflow of the role (#1499); never a policy of our own.
+            expect(managedPolicies(synth, role, stack).filter(([id]) => !isOverflow(id))).toEqual(
+                []
+            );
             // The role names only the AWS managed Lambda execution policies.
             const roleResource = synth.ofType("AWS::IAM::Role").find((r) => r.logicalId === role)!;
             const named = ((roleResource.properties.ManagedPolicyArns ?? []) as any[]).map((arn) =>
@@ -277,7 +289,7 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
 
     test("only the abort holds the stop calls and only the re-run invokes the launch", () => {
         const actionsOf = (construct: string) =>
-            inlinePolicies(synth, roleId(synth, stack, construct), stack)
+            roleDocs(synth, roleId(synth, stack, construct), stack)
                 .flatMap(([, doc]) => (doc?.Statement ?? []) as any[])
                 .flatMap((st) => ([] as string[]).concat(st.Action ?? []));
         const stops = (construct: string) =>
@@ -300,7 +312,7 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
         // The full log-read scope is on the logs function only; the reconciling reads capture from the
         // shared workflow log group and the config-name groups.
         const logReads = (construct: string) =>
-            inlinePolicies(synth, roleId(synth, stack, construct), stack)
+            roleDocs(synth, roleId(synth, stack, construct), stack)
                 .flatMap(([, doc]) => (doc?.Statement ?? []) as any[])
                 .filter((st) =>
                     ([] as string[]).concat(st.Action ?? []).includes("logs:FilterLogEvents")
@@ -320,7 +332,7 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
 
     test("the permanent-delete function can put, update, stop or invoke nothing", () => {
         const role = roleId(synth, stack, "executionPermanentDelete");
-        const actions = inlinePolicies(synth, role, stack)
+        const actions = roleDocs(synth, role, stack)
             .flatMap(([, doc]) => (doc?.Statement ?? []) as any[])
             .flatMap((st) => ([] as string[]).concat(st.Action ?? []));
         expect(actions.filter((a) => /^dynamodb:(PutItem|UpdateItem)$/.test(a))).toEqual([]);
@@ -328,7 +340,7 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
             "states:DescribeExecution",
         ]);
         expect(actions.filter((a) => /^(lambda|batch|sagemaker|deadline):/.test(a))).toEqual([]);
-        expect(managedPolicies(synth, role, stack)).toEqual([]);
+        expect(managedPolicies(synth, role, stack).filter(([id]) => !isOverflow(id))).toEqual([]);
     });
 
     test("the execute handler holds exactly the calls its launch makes", () => {

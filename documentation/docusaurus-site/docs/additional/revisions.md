@@ -157,6 +157,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **No customer managed IAM policies of its own** — Roles are granted inline, and CDK's generated overflow policies hold what does not fit an inline policy, so every role stays within IAM's inline policy limit in every partition (#1499).
 -   **Needle USD viewer error messages are readable** — The error panel shows its whole message at any panel width; the 3D canvas no longer stays above the text and pushes it out of view. (issue #1234)
 -   **Picked and dragged folders land at the same path** — A single folder added on its own on Create Asset becomes the asset's contents, and every other folder keeps its name, including every folder added to an existing asset. (issue #1471)
 -   **Refused tag writes answer 403** — Creating, editing or deleting a tag that the caller's role does not allow on that tag answers `403 Not Authorized` instead of `500`. (issue #1452)
@@ -319,6 +320,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Text Diff version hint on its own line** — In a side's notice, "Pick another version above to compare it instead." starts on a new line instead of running on from the message. (issue #1237)
 -   **SVG files display in the Image Viewer** — Download and stream links for a `.svg` file return it as `image/svg+xml` with an attachment disposition, so the Image Viewer and asset previews render it and opening the link directly downloads it. Stored files are unchanged. (issue #1201)
 -   **Three.js Viewer PLY point clouds and colours** — A PLY file with no faces draws as a point cloud instead of grey streaks, and a PLY's per-vertex colours are used for points and meshes; a PLY without colours stays grey. (issue #1257)
+-   **Redeploy after an uninstall or a failed first deploy** — A new deployment reuses the API Gateway account CloudWatch role that an earlier deployment of the same configuration left behind, instead of failing because the role already exists. An existing deployment keeps its own role on upgrade. (issue #1218)
 -   **Denied execution shows its error at once** — A deep link to an execution the role may not read shows "Error Loading Execution / Not Authorized" as soon as the API answers, without re-sending the request; on the pipelines, workflows and executions pages a 403, 404 or other final 4xx answer is never retried, and network errors, 429 and 5xx answers are still retried once. (issue #1270)
 -   **More than 10 deployments per Region** — The orchestration bus audit log group carries its own resource policy instead of adding an account-level Amazon CloudWatch Logs resource policy per deployment, which limited an account to 10 VAMS deployments per Region. The update removes the old policy. A provisioned Amazon OpenSearch Service domain still adds one account-level policy for its logs. (issue #1266)
 -   **Three.js Viewer point cloud selection** — A point cloud selected in the panel or the 3D view is drawn in the highlight green and returns to its own colours when deselected. Wireframe Mode applies to meshes only and says so. (issue #1275)
