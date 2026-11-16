@@ -201,8 +201,7 @@ class TestPipelineFingerprint:
 
     def test_workflow_map_is_keyed_by_pipeline_composite(self):
         prints = wa.workflow_pipeline_fingerprints([_pipeline("p1"), _pipeline("p2", "GLOBAL")])
-        # Plus the reserved definition-schema key (#1290), which no pipeline id can collide with.
-        assert set(prints) == {"db1:p1", "GLOBAL:p2", wa.ASL_SCHEMA_FINGERPRINT_KEY}
+        assert set(prints) == {"db1:p1", "GLOBAL:p2"}
 
     def test_a_record_without_a_version_never_matches(self):
         workflow = {"pipelineFingerprints": wa.workflow_pipeline_fingerprints([_pipeline()])}

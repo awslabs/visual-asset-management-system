@@ -175,10 +175,6 @@ class _Env:
             patch.object(sq, "validateS3AssetExtensionsAndContentType", return_value=self.extension_ok),
             patch.object(sq, "update_asset_after_file_processing", MagicMock()),
             patch.object(sq, "update_asset_preview_location", MagicMock()),
-            # A workflow-run output takes a copy claim on the ledger (#1271); these tests cover the
-            # retry and dead-letter paths, not the claim, so the claim is always granted.
-            patch.object(sq.eo, "acquire_copy_claim", MagicMock(return_value=sq.eo.CLAIM_ACQUIRED)),
-            patch.object(sq.eo, "finish_copy_claim", MagicMock()),
         ]
         for p in self._patches:
             p.start()
