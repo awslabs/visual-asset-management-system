@@ -14,7 +14,7 @@
             "name": "ALLOWED_GROUPS",
             "required": true,
             "default": ".*",
-            "description": "A regular expression matched against the whole audit log group key (for example authorization, or (authorization|api)) The default .* allows every group, including groups added later."
+            "description": "A regular expression matched against the whole audit log group key (for example authorization, or (authorization|api)). The default .* allows every group, including groups added later."
         }
     ],
     "constraints": [
@@ -125,21 +125,13 @@
                 {
                     "field": "auditLogGroup",
                     "operator": "equals",
-                    "value": "{{ALLOWED_GROUPS}}"
+                    "value": "(?:{{ALLOWED_GROUPS}})"
                 }
             ],
             "criteriaOr": [],
             "groupPermissions": [
                 {
                     "action": "GET",
-                    "type": "allow"
-                },
-                {
-                    "action": "POST",
-                    "type": "allow"
-                },
-                {
-                    "action": "DELETE",
                     "type": "allow"
                 }
             ]

@@ -25,12 +25,13 @@ from tests.handlers.authz import shipped_constraints
 
 USER_ID = "audit-user"
 ACTIONS = ("GET", "PUT", "POST", "DELETE")
-READER_ACTIONS = ("GET", "POST", "DELETE")
+READER_ACTIONS = ("GET",)
 TEMPLATE = "audit-reader.json"
 AUDIT_API_ROUTES = ("/audit", "/audit/search", "/audit/saved/abc")
 AUDIT_WEB_ROUTE = "/auth/audit-log-search"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 TEMPLATES_DIR = REPO_ROOT / "documentation" / "permissionsTemplates"
+TEMPLATE_PATH = TEMPLATES_DIR / TEMPLATE
 
 
 def _audit(group, **extra):
@@ -123,7 +124,8 @@ class TestTheAuditReaderTemplate:
             TEMPLATE, "reader", {"ALLOWED_GROUPS": "authorization"})})
         for action in READER_ACTIONS:
             assert enforcer.enforce(_audit("authorization"), action) is True, action
-        assert enforcer.enforce(_audit("authorization"), "PUT") is False
+        for action in ("PUT", "POST", "DELETE"):
+            assert enforcer.enforce(_audit("authorization"), action) is False, action
         for other in ("api", "authorization-extra", "preauthorization", "", "unknown-group"):
             for action in ACTIONS:
                 assert enforcer.enforce(_audit(other), action) is False, (other, action)
@@ -134,6 +136,20 @@ class TestTheAuditReaderTemplate:
         assert enforcer.enforce(_audit("authorization"), "GET") is True
         assert enforcer.enforce(_audit("api"), "GET") is True
         assert enforcer.enforce(_audit("assets"), "GET") is False
+
+    def test_an_unparenthesised_list_of_groups_does_not_over_grant(self, build_enforcer):
+        enforcer = build_enforcer({"reader": _template_constraints(
+            TEMPLATE, "reader", {"ALLOWED_GROUPS": "authorization|api"})})
+        assert enforcer.enforce(_audit("authorization"), "GET") is True
+        assert enforcer.enforce(_audit("api"), "GET") is True
+        for other in ("authorization-extra", "apix", "xapi", "preauthorization", "assets"):
+            assert enforcer.enforce(_audit(other), "GET") is False, other
+
+    def test_the_group_value_is_wrapped_so_the_variable_cannot_escape_the_anchors(self):
+        constraints = json.loads((TEMPLATE_PATH.read_text(encoding="utf-8")))["constraints"]
+        audit = [c for c in constraints if c["objectType"] == "auditLog"]
+        assert [c["value"] for crit in audit for c in crit["criteriaAnd"]] == ["(?:{{ALLOWED_GROUPS}})"]
+        assert [p["action"] for c in audit for p in c["groupPermissions"]] == ["GET"]
 
     def test_the_default_pattern_reads_every_group_including_one_registered_later(self, build_enforcer):
         enforcer = build_enforcer({"reader": _template_constraints(
@@ -269,3 +285,20 @@ class TestTheRoutingEnforcerWalksOnlyTheAuditLogLines:
         for object_type, lines in routes.by_type.items():
             if object_type != "auditLog":
                 assert not [line for line in lines if line in audit_lines], object_type
+
+
+@pytest.mark.unit
+class TestACheckWithoutAGroupKey:
+
+    @pytest.mark.parametrize("attributes", [
+        {"object__type": "auditLog"},
+        {"object__type": "auditLog", "auditLogGroup": ""},
+    ])
+    def test_a_missing_or_empty_group_matches_an_allow_all_role_and_a_restricted_role_denies_it(
+            self, build_enforcer, attributes):
+        enforcer = build_enforcer({
+            "wide": _template_constraints(TEMPLATE, "wide", {"ALLOWED_GROUPS": ".*"})})
+        assert enforcer.enforce(attributes, "GET") is True
+        restricted = build_enforcer({
+            "narrow": _template_constraints(TEMPLATE, "narrow", {"ALLOWED_GROUPS": "authorization"})})
+        assert restricted.enforce(attributes, "GET") is False

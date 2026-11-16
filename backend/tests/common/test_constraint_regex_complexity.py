@@ -69,7 +69,7 @@ SHIPPED_CRITERION_VALUES = [
     '/audit',
     '/audit/',
     '/auth/audit-log-search',
-    '{{ALLOWED_GROUPS}}',
+    '(?:{{ALLOWED_GROUPS}})',
     '/assetIngestion',
     '/assets',
     '/auth/api-keys',
