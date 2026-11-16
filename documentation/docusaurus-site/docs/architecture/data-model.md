@@ -381,8 +381,10 @@ rather than pointing at definitions that may since have moved.
 
 **Main row** (`WorkflowExecutionsStorageTableV2`) — identity and status only: `executionStatus`,
 `executionStartDate` / `executionStopDate`, `triggerType`, `triggeredByUserId`, `executionGroupId`,
-`executionError`, the full `executionLog`, the Step Functions ARNs, and `lastSfnSyncCheckDate` (which
-bounds how often a status read polls Step Functions). Deliberately carries no output-target or
+`executionError`, the full `executionLog`, the Step Functions ARNs, `lastSfnSyncCheckDate` (which
+bounds how often a status read polls Step Functions), and `isSystem` (the launched workflow's flag,
+copied at launch; the execution lists hide `true` rows by default, and a row written before the flag
+existed has no attribute and is listed as a user run). Deliberately carries no output-target or
 configuration fields — those live on the configuration rows below, so a status list never pays to read
 them.
 
@@ -471,6 +473,15 @@ only one of them pins a version:
 `preview`), `relativeFilePath`, `s3Bucket`, `s3Key`, `s3VersionId`, size and content type; `Output*Metadata`
 and `Output*Results` records carry metadata written back to the asset and results text from a results-only
 run. `PipelineExecutionLogsStorageTable` holds the per-step result and error logs.
+
+The same output-files table also holds each run's **ingest ledger**, under the partition
+`ingest#{workflowExecutionId}` rather than a `pipelineExecutionId`, so no output listing reads it. The
+end-state step writes one row per output it hands to ingestion (`ingestState` `moving`, then `ingested`),
+which lets a retried step record outputs an earlier attempt already moved into the asset. The large-file
+worker keeps a copy claim per output in the same partition (sort key `copy:{destination key}`,
+`claimHolder`, `claimedAt`, `claimState`), so two queued copies of one output never both write it. A claim
+whose holder stopped is taken over after 20 minutes. Permanently deleting an execution deletes the
+partition.
 
 ### Workflow Execution Locks Storage Table
 

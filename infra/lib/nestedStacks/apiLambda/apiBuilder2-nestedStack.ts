@@ -30,6 +30,7 @@ import {
     buildAssetHistoryFunction,
     buildLargeObjectCopyEngine,
     grantLargeObjectCopyCoordination,
+    grantLargeObjectCopyProgressRead,
     grantLargeObjectCopyViaEngine,
 } from "../../lambdaBuilder/assetFunctions";
 import {
@@ -40,6 +41,8 @@ import {
     buildWorkflowTriggerDispatchFunction,
     buildImportGlobalPipelineWorkflowFunction,
     buildExecutionServiceFunction,
+    buildExecutionDetailsFunction,
+    buildExecutionLogsFunction,
     buildExecutionPermanentDeleteFunction,
     buildProcessWorkflowExecutionOutputFunction,
     buildInterimPipelineTrackingFunction,
@@ -293,8 +296,9 @@ export class ApiBuilder2NestedStack extends NestedStack {
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
 
-        // Execution service: asset-scoped + global list, details/traceability, paged detail
-        // metadata, logs, abort, abort-by-group, re-run. Permanent delete has its own function below.
+        // The execution service handler runs as four functions, each on a role holding only the calls
+        // its routes make (EXECUTION_SERVICE_ROUTES, workflowFunctions.ts). The execution service:
+        // asset-scoped + global list, abort, abort-by-group, re-run.
         const executionServiceFunction = buildExecutionServiceFunction(
             this,
             lambdaCommonBaseLayer,
@@ -320,31 +324,6 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.DELETE,
             registry: registry,
         });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/details",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/details/metadata",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/details/files",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/details/results",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/logs",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
         // Global execution ops on the same handler: asset-less list, re-run.
         attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/workflows/executions",
@@ -354,6 +333,43 @@ export class ApiBuilder2NestedStack extends NestedStack {
         attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/workflows/executions/{executionId}/rerun",
             method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        // Details/traceability and its paged metadata, files and results.
+        const executionDetailsFunction = buildExecutionDetailsFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            workflowsLogGroup,
+            config,
+            vpc,
+            subnets
+        );
+        for (const routePath of [
+            "/workflows/executions/{executionId}/details",
+            "/workflows/executions/{executionId}/details/metadata",
+            "/workflows/executions/{executionId}/details/files",
+            "/workflows/executions/{executionId}/details/results",
+        ]) {
+            attachFunctionToApi(this, executionDetailsFunction, {
+                routePath,
+                method: apigateway.HttpMethod.GET,
+                registry: registry,
+            });
+        }
+        // Execution logs.
+        const executionLogsFunction = buildExecutionLogsFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            workflowsLogGroup,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, executionLogsFunction, {
+            routePath: "/workflows/executions/{executionId}/logs",
+            method: apigateway.HttpMethod.GET,
             registry: registry,
         });
         // Permanent delete runs the same handler on its own function and role, the only one that can
@@ -438,10 +454,21 @@ export class ApiBuilder2NestedStack extends NestedStack {
         grantLargeObjectCopyCoordination(handleExecutionErrorFunction, storageResources, config, {
             handsOffTo: largeObjectCopyEngine.engineFunction,
         });
-        // The details read also hands the engine a copy whose execution ended unreported.
+        // The abort route (and the status change push) stops a run's copies and hands the engine the
+        // ones it stopped. Since the execution routes run on four functions (#1255), the details
+        // read's backstop for a copy whose execution ended unreported is granted to the details
+        // function only (grantLargeObjectCopyProgressRead).
         grantLargeObjectCopyCoordination(executionServiceFunction, storageResources, config, {
-            reconcileWith: largeObjectCopyEngine.engineFunction,
+            handsOffTo: largeObjectCopyEngine.engineFunction,
+            // Its abort grant already covers the copy executions (states:StopExecution on execution:*).
+            stopCoveredByCallerGrant: true,
         });
+        grantLargeObjectCopyProgressRead(
+            executionDetailsFunction,
+            storageResources,
+            config,
+            largeObjectCopyEngine.engineFunction
+        );
 
         // Pipeline sub-process registration lambda + its standing EventBridge rule on the
         // orchestration bus (pipelines optionally PutEvents to register sub-SFN / log ARNs).

@@ -467,7 +467,7 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         });
         // A resource-based permission on the engine, not an identity statement on the role.
         expect(enginePermitsRole(roleIdOf(fn))).toBe(true);
-        expect(inlineDocsOf(roleIdOf(fn)).some(invokesEngine)).toBe(false);
+        expect(roleDocsOf(roleIdOf(fn)).some(invokesEngine)).toBe(false);
     });
 
     // #1123 D6: every function that runs the cancel path signs its abort for the asset bucket's
@@ -478,7 +478,7 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         ["sfn.handleExecutionError.lambda_handler", "the error handler"],
     ])("%s (%s) may query the asset buckets table's bucket-name index", (handler) => {
         const [, fn] = functionByHandler(handler);
-        const docs = inlineDocsOf(roleIdOf(fn));
+        const docs = roleDocsOf(roleIdOf(fn));
         const queriesBucketIndex = (doc: any) =>
             (doc.Statement as any[]).some(
                 (s) =>
@@ -597,7 +597,7 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         ["sfn.handleExecutionError.lambda_handler", "the error handler"],
     ])("%s (%s) may start the delayed sweep on the copy state machine only", (handler) => {
         const [, fn] = functionByHandler(handler);
-        expect(inlineDocsOf(roleIdOf(fn)).some(startsOnlyTheCopyMachine)).toBe(true);
+        expect(roleDocsOf(roleIdOf(fn)).some(startsOnlyTheCopyMachine)).toBe(true);
     });
 
     test("the engine may start the delayed sweep on its own state machine only", () => {
@@ -648,7 +648,7 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
 
     test("the output step holds no copy grant: the engine does its copy work", () => {
         const [, fn] = functionByHandler("sfn.processWorkflowExecutionOutput.lambda_handler");
-        const statements = inlineDocsOf(roleIdOf(fn)).flatMap((d: any) => d.Statement as any[]);
+        const statements = roleDocsOf(roleIdOf(fn)).flatMap((d: any) => d.Statement as any[]);
         const text = JSON.stringify(statements);
         expect(text).not.toContain("LargeObjectCopyJobsStorageTable");
         expect(text).not.toContain("LargeObjectCopy-");
@@ -661,7 +661,7 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
 
     test("the engine can stop its own executions and reconcile them (the output step's cancel)", () => {
         const roleId = roleIdOf(engineFunction);
-        const stops = inlineDocsOf(roleId)
+        const stops = roleDocsOf(roleId)
             .flatMap((d: any) => d.Statement as any[])
             .filter((st) => [st.Action].flat().includes("states:StopExecution"));
         expect(stops).toHaveLength(1);

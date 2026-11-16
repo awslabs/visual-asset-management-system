@@ -793,7 +793,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 const pathSegments = fileKey.split("/");
                 const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
                 const encodedFileKey = encodedSegments.join("/");
-                let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                let assetUrl = `${config.api}database/${databaseId}/assets/${encodeURIComponent(
+                    assetId
+                )}/download/stream/${encodedFileKey}`;
 
                 // Version resolution:
                 // - assetVersionId: used for ALL files (main + dependencies) to fetch from a specific asset version

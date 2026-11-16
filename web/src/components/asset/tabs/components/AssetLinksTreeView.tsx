@@ -137,7 +137,7 @@ function TreeItem({ item }: TreeItemProps) {
             if (databaseId && assetId) {
                 // Open asset page in new window
                 window.open(
-                    `#/databases/${databaseId}/assets/${assetId}`,
+                    `#/databases/${databaseId}/assets/${encodeURIComponent(assetId)}`,
                     "_blank",
                     "noopener,noreferrer"
                 );
@@ -275,7 +275,9 @@ function SearchResults() {
                             if (databaseId && assetId) {
                                 // Open asset page in new window
                                 window.open(
-                                    `#/databases/${databaseId}/assets/${assetId}`,
+                                    `#/databases/${databaseId}/assets/${encodeURIComponent(
+                                        assetId
+                                    )}`,
                                     "_blank",
                                     "noopener,noreferrer"
                                 );

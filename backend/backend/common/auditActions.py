@@ -16,11 +16,10 @@ custom entry never replaces a core one (the registry tests fail on a repeated ro
 repeated action name that disagrees on group, kind or legacy type).
 
 Adding a route: add its entry here (or in the add-on or custom list), call ``log_action`` from the
-handler after the write succeeds (``workflowService.py`` is the reference placement), and remove the
-action from ``AUDIT_PENDING_ACTIONS`` if it was listed there.
+handler after the write succeeds (``workflowService.py`` is the reference placement).
 """
 
-from typing import Dict, FrozenSet, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from common.apiRoutes import (
     ALL_API_ROUTES,
@@ -615,15 +614,6 @@ def _actions_by_name() -> Dict[str, AuditSpec]:
 
 
 AUDIT_ACTIONS: Dict[str, AuditSpec] = _actions_by_name()
-
-# Registered actions no handler records yet. Each is removed when its handler starts calling
-# log_action; tests/common/test_audit_registry.py fails for an action listed here that a handler
-# already records, and for an action that is neither recorded nor listed. The list empties as the
-# handlers are covered.
-AUDIT_PENDING_ACTIONS: FrozenSet[str] = frozenset({
-    "apiKeyGet", "apiKeyList", "cognitoUserList", "constraintGet", "constraintList", "roleList", "userRoleList",
-})
-
 
 def audit_spec_for_route(route_path: Optional[str], method: Optional[str]) -> Optional[AuditSpec]:
     """The spec registered for a route template and method, or None."""

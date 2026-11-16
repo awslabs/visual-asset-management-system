@@ -36,7 +36,11 @@ jest.setTimeout(900_000);
 
 /** 90% of the IAM limit. */
 const INLINE_POLICY_BUDGET = 9216;
-/** 90% of IAM's per-managed-policy limit, for the customer managed policies these roles carry. */
+/**
+ * 90% of IAM's per-managed-policy limit, for a managed policy still on one of these roles. VAMS creates
+ * none (noCustomerManagedPolicies.test.ts); the one left is CDK's overflow policy on the asset service
+ * role, a waived exception (#1264) named there in WAIVED_OVERFLOW_POLICIES.
+ */
 const MANAGED_POLICY_BUDGET = 5530;
 
 interface Cell {
@@ -83,32 +87,11 @@ const API_STACKS = ["ApiBuilder", "ApiBuilder2"];
  * with a reason the reviewer accepts; MAX_EXCEPTIONS pins its length.
  */
 const BUDGET_EXCEPTIONS: Record<string, { ceiling: number; reason: string }> = {
-    processWorkflowExecutionOutputServiceRole: {
-        ceiling: 9550,
-        reason:
-            "The workflow end-state handler writes the output records of every pipeline, so its role " +
-            "reads and writes most execution tables; above the budget in the GovCloud and EU Sovereign " +
-            "templates only. To be narrowed the way the execution service's role was.",
-    },
-    assetServiceServiceRole: {
-        ceiling: 9300,
-        reason:
-            "The asset service reads and writes the asset, version and link tables and every asset " +
-            "bucket; above the budget in the GovCloud template only. To be narrowed the way the " +
-            "execution service's role was.",
-    },
-    handleExecutionErrorServiceRole: {
-        ceiling: 9251,
-        reason:
-            "The workflow error handler stops a failed run's large output copies (#1123: the copy " +
-            "jobs table, the copy sweep start and the asset buckets' multipart abort) and publishes " +
-            "the run's completion event, on top of the execution, pipeline, lock and log grants it " +
-            "already held. Above the budget in the worst-case commercial template only, after its " +
-            "configuration-table grant was narrowed to the table ARN. Owner decision 2026-11-13: a " +
-            "named exception at the measured maximum, shrink-only.",
-    },
+    // Empty since #1499: with the ARN size estimate in cdk.json, CDK moves what does not fit a role's
+    // inline budget into its generated overflow policies, so the end-state handler (was 9,550) and the
+    // asset service (was 9,300) are back under the budget in every cell.
 };
-const MAX_EXCEPTIONS = 3;
+const MAX_EXCEPTIONS = 0;
 
 const synthCell = (cell: Cell): SynthResult =>
     cell.mutate

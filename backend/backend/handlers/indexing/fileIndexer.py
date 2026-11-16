@@ -20,6 +20,8 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.batchItemFailures import failed_records_log_line
+from common.eventLogSummary import event_log_summary, exception_log_summary
 from common.indexerEvents import s3_records_from_indexer_message
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
@@ -272,7 +274,7 @@ def normalize_metadata_value(value: str, value_type: Optional[str] = None) -> An
         base_datetime = match.group(1)
         timezone = match.group(3)
         normalized = f"{base_datetime}{timezone}"
-        logger.debug(f"Normalized datetime from '{value}' to '{normalized}'")
+        logger.debug("Normalized a datetime metadata value (fractional seconds removed)")
         return normalized
     
     # 2. Try boolean detection
@@ -968,6 +970,7 @@ def index_file_document(document: FileDocumentModel) -> bool:
     including MD_ / AB_ metadata -- still lands in the index. The bad geometry
     is logged so it can be cleaned up.
     """
+    doc_id = None
     try:
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
@@ -1003,10 +1006,10 @@ def index_file_document(document: FileDocumentModel) -> bool:
             # Drop the geo field and retry so a single malformed shape doesn't
             # also wipe out the rest of the document's metadata fields.
             if _is_invalid_geo_shape_error(e) and "geo_MD_location" in doc_dict:
-                bad_geo = doc_dict.pop("geo_MD_location", None)
+                doc_dict.pop("geo_MD_location", None)
                 logger.warning(
-                    f"OpenSearch rejected geo_MD_location for {doc_id}: {e}. "
-                    f"Retrying without the geo field. Bad shape: {bad_geo}"
+                    f"OpenSearch rejected geo_MD_location for {doc_id}: {exception_log_summary(e)}. "
+                    "Retrying without the geo field"
                 )
                 response = opensearch_operation_with_retry(
                     lambda: client.index(
@@ -1023,7 +1026,7 @@ def index_file_document(document: FileDocumentModel) -> bool:
         return response.get('result') in ['created', 'updated']
 
     except Exception as e:
-        logger.exception(f"Error indexing file document: {e}")
+        logger.error(f"Error indexing file document {doc_id}: {exception_log_summary(e)}")
         return False
 
 def delete_file_document(database_id: str, asset_id: str, file_path: str) -> bool:
@@ -1051,7 +1054,7 @@ def delete_file_document(database_id: str, asset_id: str, file_path: str) -> boo
         return True
         
     except Exception as e:
-        logger.exception(f"Error deleting file document: {e}")
+        logger.error(f"Error deleting file document {database_id}#{asset_id}#{file_path}: {exception_log_summary(e)}")
         return False
 
 
@@ -1142,7 +1145,7 @@ def delete_file_documents_by_asset_and_path(asset_id: str, file_path: str,
 
         return deleted
     except Exception as e:
-        logger.exception(f"Error deleting orphaned file documents for {asset_id}{file_path}: {e}")
+        logger.error(f"Error deleting orphaned file documents for {asset_id}{file_path}: {exception_log_summary(e)}")
         return 0
 
 #######################
@@ -1308,7 +1311,8 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
         # URL decode the S3 key
         import urllib.parse
         s3_key = urllib.parse.unquote_plus(s3_key)
-        
+        logger.info(f"Processing S3 {event_name} event for file: {s3_key}")
+
         # Skip folder markers
         if s3_key.endswith('/'):
             logger.info(f"Skipping folder marker: {s3_key}")
@@ -1974,6 +1978,8 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                 operation="skip"
             )
         
+        logger.info(f"Processing {event_name} metadata event for file: {database_id}/{asset_id}{file_path}")
+
         # Get asset details to determine bucket and S3 key
         asset_details = get_asset_details(database_id, asset_id)
         if not asset_details:
@@ -2076,7 +2082,7 @@ def with_batch_item_failures(response, event, failures: List[Dict[str, str]]):
     """
     if isinstance(event, dict) and 'Records' in event:
         if failures:
-            logger.warning(f"Reporting {len(failures)} failed record(s) for redrive")
+            logger.warning(failed_records_log_line(failures))
         response['batchItemFailures'] = failures
     return response
 
@@ -2087,7 +2093,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     global claims_and_roles
 
     try:
-        logger.info(f"Processing file indexing event: {json.dumps(event, default=str)}")
+        logger.info(f"Processing file indexing event: {event_log_summary(event)}")
 
         results = []
         batch_item_failures: List[Dict[str, str]] = []

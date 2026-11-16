@@ -63,6 +63,9 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
     # run launched by a marked cross-call (also handed to the first step's manifest); never projected
     # by the list or details APIs.
     systemExecutionContext: Optional[str] = ""
+    # Copied from the launched workflow's isSystem at launch. A row written before the flag existed
+    # has no attribute and reads as a user run; the execution lists hide system runs by default.
+    isSystem: Optional[bool] = False
     # Skip-record attributes, present only on the SKIPPED row of a fileUpload trigger launch a
     # concurrency restriction refused (one row per blocking run and lock key; see
     # common.workflows.executionRecords.build_skip_record_update). Rows written before skip records
