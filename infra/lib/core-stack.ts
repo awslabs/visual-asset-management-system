@@ -5,6 +5,8 @@
  */
 
 import * as cdk from "aws-cdk-lib";
+import { AspectPriority } from "aws-cdk-lib";
+import { OverflowPolicyNagSuppressionAspect } from "./aspects/overflow-policy-nag.aspect";
 import * as cloudTrail from "aws-cdk-lib/aws-cloudtrail";
 import * as logs from "aws-cdk-lib/aws-logs";
 import { ApiBuilderNestedStack } from "./nestedStacks/apiLambda/apiBuilder-nestedStack";
@@ -15,6 +17,8 @@ import { RouteRegistry } from "./nestedStacks/apiLambda/apiRouteRegistry";
 import { ResourceNameRegistry } from "./nestedStacks/resourceNames/resourceNameRegistry";
 import { ResourceNamesBuilderNestedStack } from "./nestedStacks/resourceNames/resourceNamesBuilder-nestedStack";
 import { ApiNestedStack } from "./nestedStacks/apiLambda/api-nestedStack";
+import { RestApiGatewayConstruct } from "./nestedStacks/apiLambda/constructs/rest-api-gateway-construct";
+import { configureApiCloudWatchRoleReuse } from "./nestedStacks/apiLambda/constructs/api-cloudwatch-role-reuse";
 import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
 import { CustomFeatureEnabledConfigNestedStack } from "./nestedStacks/featureEnabled/custom-featureEnabled-config-nestedStack";
@@ -96,6 +100,12 @@ export class CoreVAMSStack extends cdk.Stack {
 
         // Apply the aspect to set log retention for all Log Groups in this stack
         Aspects.of(this).add(new LogRetentionAspect(logs.RetentionDays.ONE_YEAR));
+
+        // CDK's overflow policies carry the cdk-nag suppressions of the role they are split from
+        // (#1499). Mutating priority, so it runs on each overflow policy before cdk-nag checks it.
+        Aspects.of(this).add(new OverflowPolicyNagSuppressionAspect(), {
+            priority: AspectPriority.MUTATING,
+        });
 
         //Setup GovCloud Feature Enabled
         if (props.config.app.govCloud.enabled) {
@@ -390,6 +400,15 @@ export class CoreVAMSStack extends cdk.Stack {
                 wafArn: props.ssmWafArnRegional,
                 apiOriginVerifySecret: props.apiOriginVerifySecret,
             });
+            // A fresh deploy reuses a retained API Gateway account CloudWatch role of the same
+            // name instead of failing on it; a stack that already exists keeps its own role.
+            if (apiNestedStack.apiImplementation instanceof RestApiGatewayConstruct) {
+                configureApiCloudWatchRoleReuse(
+                    this,
+                    apiNestedStack.apiImplementation.restApi,
+                    awsEnv ? awsEnv["IamRoleNamePrefix"] : undefined
+                );
+            }
             apiNestedStack.addStackDependency(storageResourcesNestedStack);
             apiNestedStack.addStackDependency(authBuilderNestedStack);
             apiNestedStack.addStackDependency(apiBuilderNestedStack);

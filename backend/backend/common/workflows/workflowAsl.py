@@ -39,8 +39,11 @@ from common.workflows.stepfunctions_builder import (
 logger = safeLogger()
 
 # ASL schema version stamped on the workflow record. A workflow deployed with an older version is
-# redeployed by its next launch (deployment_matches); 2 adds the wait for large outputs.
-ASL_SCHEMA_VERSION = 2
+# redeployed by its next launch or pipeline refresh (deployment_matches -> asl_schema_current, which
+# compares the stored aslSchemaVersion). Bump it, together with workflowAslBuilder.ASL_SCHEMA_VERSION,
+# whenever the builders change every definition. 2 adds the wait for large outputs (#1123); 3 adds the
+# process-output retry of Sandbox.Timedout and EarlierIngestionInProgress (#1290, #1271).
+ASL_SCHEMA_VERSION = 3
 
 # Published versions kept per workflow state machine. Step Functions caps a state machine at 1000
 # versions; older ones are deleted after each deploy. A launch reads the newest from the workflow
@@ -143,7 +146,8 @@ def pipeline_asl_fingerprint(pipeline_record):
 
 
 def workflow_pipeline_fingerprints(pipeline_records):
-    """{"pipelineDatabaseId:pipelineId": fingerprint} for the pipelines a workflow references."""
+    """{"pipelineDatabaseId:pipelineId": fingerprint} for the pipelines a workflow references. The
+    definition schema is compared separately (asl_schema_current), so this map stays per pipeline."""
     return {
         f"{rec.get('databaseId', '')}:{rec.get('pipelineId', '')}": pipeline_asl_fingerprint(rec)
         for rec in pipeline_records or []

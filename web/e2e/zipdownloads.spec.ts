@@ -8,6 +8,8 @@ import {
     apiContext,
     collectPageErrors,
     featureSwitches,
+    openProfileMenu,
+    profileMenuLink,
     findAssetsWithFiles,
     openFileManager,
     selectTreePath,
@@ -193,9 +195,17 @@ test.describe("Download as Zip", () => {
             const rows = page.locator("table tbody tr");
             const empty = page.getByText("No download jobs");
             await expect(rows.first().or(empty).first()).toBeVisible({ timeout: 45_000 });
-            await expect(
-                page.getByRole("link", { name: "My Download Queue" }).first()
-            ).toBeVisible();
+            // The page's link is in the top-bar profile menu (the navigation registry's profile
+            // entry), not the side navigation.
+            await expect(page.getByRole("link", { name: "My Download Queue" })).toHaveCount(0);
+            await openProfileMenu(page);
+            // On its own page the entry is the menu's checked current-page item (#1232), not a link.
+            const current = page
+                .getByRole("menuitemcheckbox", { name: "My Download Queue" })
+                .filter({ visible: true });
+            await expect(current).toBeVisible();
+            await expect(current).toHaveAttribute("aria-checked", "true");
+            await page.keyboard.press("Escape");
             // The search and the refresh button sit together in the table's filter row.
             const search = page.getByRole("searchbox", { name: "Search download jobs" });
             const refresh = page.getByRole("button", { name: "Refresh download queue" });
@@ -215,6 +225,9 @@ test.describe("Download as Zip", () => {
                     .or(page.getByText("You do not have access to this page"))
             ).toBeVisible({ timeout: 45_000 });
             await expect(page.getByRole("link", { name: "My Download Queue" })).toHaveCount(0);
+            await openProfileMenu(page);
+            await expect(profileMenuLink(page, "#/zipdownloads/")).toHaveCount(0);
+            await page.keyboard.press("Escape");
             const api = await apiCaller(page);
             if (api) {
                 const res = await api.get("/download/zip");

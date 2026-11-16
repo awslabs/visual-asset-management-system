@@ -146,8 +146,8 @@ class UploadStatusNotFoundError(APIError):
 
 
 class InvalidRequestPathError(APIError):
-    """Raised before any request when an endpoint path has an empty, '.' or '..' segment, which would
-    address another route."""
+    """Raised before any request when an endpoint path has an empty, '.' or '..' segment, a control
+    character, '?' or '#', which would address another route."""
     pass
 
 

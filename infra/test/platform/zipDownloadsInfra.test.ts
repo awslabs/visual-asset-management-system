@@ -258,6 +258,7 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         expect(env.PRESIGNED_URL_TIMEOUT_SECONDS).toBe("900");
         expect(env.EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME).toBeUndefined();
         expect(env.EXECUTION_SERVICE_FUNCTION_NAME).toBeUndefined();
+        expect(env.EXECUTION_DETAILS_FUNCTION_NAME).toBeUndefined();
         const invoke = roleStatements(synth, service).filter((s) =>
             actionsOf(s).includes("lambda:InvokeFunction")
         );
@@ -383,6 +384,8 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         expect(env.ZIP_DOWNLOAD_MAX_ACTIVE_PER_USER).toBe("5");
         expect(env.EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME).toBeDefined();
         expect(env.EXECUTION_SERVICE_FUNCTION_NAME).toBeDefined();
+        // The run check's details read goes to the details function (the four-function split, #1255).
+        expect(env.EXECUTION_DETAILS_FUNCTION_NAME).toBeDefined();
     });
 
     test("one zip Lambda serves the routes and the sweep; its S3 writes stay prefix-scoped", () => {
@@ -392,20 +395,23 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         );
     });
 
-    test("the service may invoke exactly the execute and execution service functions", () => {
+    test("the service may invoke exactly the execute, execution service and execution details functions", () => {
         const service = functionByHandler(synth, SERVICE_HANDLER);
         const invoke = roleStatements(synth, service).filter((s) =>
             actionsOf(s).includes("lambda:InvokeFunction")
         );
         expect(invoke).toHaveLength(1);
         const resources = [].concat(invoke[0].Resource);
-        expect(resources).toHaveLength(2);
+        expect(resources).toHaveLength(3);
         const executeId = functionByHandler(
             synth,
             "handlers.workflows.executeWorkflow.lambda_handler"
         ).logicalId;
         const flattened = resources.map((r) => SynthResult.flatten(r));
         expect(flattened.some((r) => r.includes(executeId))).toBe(true);
+        for (const construct of ["executionService", "executionDetails"]) {
+            expect(flattened.some((r) => new RegExp(`${construct}[0-9A-F]{8}`).test(r))).toBe(true);
+        }
         for (const r of flattened) {
             expect(r).not.toContain("*");
         }

@@ -804,14 +804,14 @@ class TestLostStatusEventBackstop:
         return request_id, row
 
     def _details_reads(self, env):
-        return [c for c in env.lam.calls if c[0] == "executionServiceFn"
+        return [c for c in env.lam.calls if c[0] == "executionDetailsFn"
                 and c[2]["requestContext"]["http"]["method"] == "GET"]
 
     def _stopped_outside_vams(self, env):
-        # What the execution service's details read writes once Step Functions reports the stop.
+        # What the execution details function's read writes once Step Functions reports the stop.
         def effect(_event):
             env.executions.items[MAIN_KEY]["executionStatus"] = "ABORTED"
-        env.lam.effects["executionServiceFn"] = effect
+        env.lam.effects["executionDetailsFn"] = effect
 
     def test_idle_job_is_finalized_from_the_details_read(self, env):
         request_id, _ = self._idle_running(env)
@@ -824,6 +824,10 @@ class TestLostStatusEventBackstop:
         event = reads[0][2]
         assert event["requestContext"]["http"]["path"] == "/workflows/executions/exec-1/details"
         assert event["lambdaCrossCall"] == {"userName": "SYSTEM_USER"}
+        # The four-function split (#1255): the service function answers the details route 404.
+        assert env.lam.calls, "control: the run check made a call"
+        assert not [c for c in env.lam.calls if c[0] == "executionServiceFn"
+                    and c[2]["requestContext"]["http"]["method"] == "GET"]
 
     def test_released_cap_slot(self, env):
         request_id, _ = self._idle_running(env)
@@ -853,7 +857,7 @@ class TestLostStatusEventBackstop:
 
     def test_failed_details_read_leaves_the_job_for_the_next_read(self, env):
         request_id, _ = self._idle_running(env)
-        env.lam.responses["executionServiceFn"] = (403, {"message": "Not Authorized"})
+        env.lam.responses["executionDetailsFn"] = (403, {"message": "Not Authorized"})
         assert h.body_of(_job_route(env, "GET", request_id))["status"] == "RUNNING"
 
     def test_terminal_main_row_needs_no_check(self, env):

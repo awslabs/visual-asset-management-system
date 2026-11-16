@@ -427,6 +427,16 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
             ).includes(`"${id}"`);
             return viaPolicy || viaRole;
         });
+    /** A role's managed policies other than CDK's generated overflow of it (#1499 allows only those). */
+    const handWrittenManagedPoliciesOf = (roleId: string) =>
+        managedPoliciesOf(roleId).filter(([id]) => !/OverflowPolicy\d+[0-9A-F]{8}$/.test(id));
+    /** The role's own statements: its inline documents and CDK's overflow policies of it. */
+    const roleDocsOf = (roleId: string) => [
+        ...inlineDocsOf(roleId),
+        ...managedPoliciesOf(roleId)
+            .filter(([id]) => /OverflowPolicy\d+[0-9A-F]{8}$/.test(id))
+            .map(([, r]: [string, any]) => r.Properties.PolicyDocument),
+    ];
     const inlineDocsOf = (roleId: string) =>
         Object.values(resources)
             .filter(
@@ -457,7 +467,7 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         });
         // A resource-based permission on the engine, not an identity statement on the role.
         expect(enginePermitsRole(roleIdOf(fn))).toBe(true);
-        expect(inlineDocsOf(roleIdOf(fn)).some(invokesEngine)).toBe(false);
+        expect(roleDocsOf(roleIdOf(fn)).some(invokesEngine)).toBe(false);
     });
 
     // #1123 D6: every function that runs the cancel path signs its abort for the asset bucket's
@@ -468,7 +478,7 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         ["sfn.handleExecutionError.lambda_handler", "the error handler"],
     ])("%s (%s) may query the asset buckets table's bucket-name index", (handler) => {
         const [, fn] = functionByHandler(handler);
-        const docs = inlineDocsOf(roleIdOf(fn));
+        const docs = roleDocsOf(roleIdOf(fn));
         const queriesBucketIndex = (doc: any) =>
             (doc.Statement as any[]).some(
                 (s) =>
@@ -587,7 +597,7 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         ["sfn.handleExecutionError.lambda_handler", "the error handler"],
     ])("%s (%s) may start the delayed sweep on the copy state machine only", (handler) => {
         const [, fn] = functionByHandler(handler);
-        expect(inlineDocsOf(roleIdOf(fn)).some(startsOnlyTheCopyMachine)).toBe(true);
+        expect(roleDocsOf(roleIdOf(fn)).some(startsOnlyTheCopyMachine)).toBe(true);
     });
 
     test("the engine may start the delayed sweep on its own state machine only", () => {
@@ -625,19 +635,20 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         const roleId = roleIdOf(fn);
         // The read is covered by the resource-name grant every VAMS function holds: the role gains
         // no statement for it.
-        const ssmStatements = inlineDocsOf(roleId)
+        const ssmStatements = roleDocsOf(roleId)
             .flatMap((d: any) => d.Statement as any[])
             .filter((st) => JSON.stringify(st.Action).includes("ssm:"));
         expect(ssmStatements).toHaveLength(1);
         expect(JSON.stringify(ssmStatements[0].Resource)).toContain("/resourceNames/*");
         expect(enginePermitsRole(roleId)).toBe(true);
-        expect(managedPoliciesOf(roleId)).toEqual([]);
+        // No hand-written managed policy; CDK's overflow of the role may hold its statements.
+        expect(handWrittenManagedPoliciesOf(roleId)).toEqual([]);
         expect(JSON.stringify(engineFunction)).toContain(fnId);
     });
 
     test("the output step holds no copy grant: the engine does its copy work", () => {
         const [, fn] = functionByHandler("sfn.processWorkflowExecutionOutput.lambda_handler");
-        const statements = inlineDocsOf(roleIdOf(fn)).flatMap((d: any) => d.Statement as any[]);
+        const statements = roleDocsOf(roleIdOf(fn)).flatMap((d: any) => d.Statement as any[]);
         const text = JSON.stringify(statements);
         expect(text).not.toContain("LargeObjectCopyJobsStorageTable");
         expect(text).not.toContain("LargeObjectCopy-");
@@ -650,7 +661,7 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
 
     test("the engine can stop its own executions and reconcile them (the output step's cancel)", () => {
         const roleId = roleIdOf(engineFunction);
-        const stops = inlineDocsOf(roleId)
+        const stops = roleDocsOf(roleId)
             .flatMap((d: any) => d.Statement as any[])
             .filter((st) => [st.Action].flat().includes("states:StopExecution"));
         expect(stops).toHaveLength(1);
@@ -688,8 +699,9 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         for (const roleId of roles) {
             const managed = managedPoliciesOf(roleId).map(([id]) => id);
             // The system pipeline callback policy comes from #1122, the execution lock policies are
-            // AWS::IAM::Policy resources; nothing named for the copy engine, no overflow.
-            expect(managed.filter((id) => /LargeObjectCopy|OverflowPolicy/.test(id))).toEqual([]);
+            // AWS::IAM::Policy resources; nothing named for the copy engine (CDK's overflow of a role
+            // may hold its statements, #1499).
+            expect(managed.filter((id) => /LargeObjectCopy/.test(id))).toEqual([]);
         }
         const copyManaged = Object.entries(resources).filter(
             ([id, r]: [string, any]) =>

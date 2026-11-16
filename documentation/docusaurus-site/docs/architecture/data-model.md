@@ -474,6 +474,16 @@ only one of them pins a version:
 and `Output*Results` records carry metadata written back to the asset and results text from a results-only
 run. `PipelineExecutionLogsStorageTable` holds the per-step result and error logs.
 
+The same output-files table also holds each run's **ingest ledger**, under the partition
+`ingest#{workflowExecutionId}` rather than a `pipelineExecutionId`, so no output listing reads it. The
+end-state step writes one row per output it hands to ingestion (`ingestState` `moving`, then `ingested`),
+which lets a retried step record outputs an earlier attempt already moved into the asset. An output over
+1 GiB handed to the large object copy engine is `engine-copying` with its copy job's id (`engineJobId`)
+until the run's finalize step reads the job's outcome: `ingested` when the copy landed, the row removed
+when it did not. A `moving` row whose attempt stopped is taken over after 20 minutes; an `engine-copying`
+row is never taken over or handed to ingestion again. Permanently deleting an execution deletes the
+partition.
+
 ### Workflow Execution Locks Storage Table
 
 Holds one row per lock a running execution took under its workflow's `concurrencyRestriction`: `perAsset`, `perInputFile`, or `perInputFileVersion`. A launch writes its rows with conditional puts before the state machine starts; the execution's release deletes them, conditional on the holder, when it ends. The time-to-live attribute covers a release that never ran.

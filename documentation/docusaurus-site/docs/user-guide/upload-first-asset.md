@@ -26,7 +26,7 @@ Assets in VAMS are organized into databases. If your administrator has already c
 
 4. Select **Create Database**.
 
-![Database listing page with databases](/img/database_page_20260323_v2.5.png)
+![Database listing page with databases](/img/database_page_20261109_v2.7.png)
 
 :::tip
 Choose a descriptive database name that reflects the type of assets it will contain, such as `building-models` or `site-scans-2024`. The name becomes part of asset URLs and cannot be changed later.
@@ -39,7 +39,7 @@ Choose a descriptive database name that reflects the type of assets it will cont
 1. In the side navigation, select **Create Asset**.
 2. The upload wizard opens with the first step: **Asset Details**.
 
-![Create Asset page showing the Asset Details wizard step](/img/create_asset_first_20260323_v2.5.png)
+![Create Asset page showing the Asset Details wizard step](/img/create_asset_first_20261109_v2.7.png)
 
 ---
 
@@ -181,7 +181,7 @@ The **Review and Upload** step displays a summary of everything you have configu
 1. Review all information carefully. To make changes, select the **Edit** button next to any section or use the **Previous** button to go back to a specific step.
 2. When satisfied, select **Upload Object** to begin the upload.
 
-![Upload progress showing file upload status](/img/upload_asset_finalprogress_20260323_v2.5.png)
+![Upload progress showing file upload status](/img/upload_asset_finalprogress_20261109_v2.7.png)
 
 ---
 
@@ -219,7 +219,7 @@ After the upload completes:
     - The **File Manager** tab displays your uploaded files in a directory tree.
     - The **Metadata** section at the bottom shows your key-value pairs.
 
-![Asset detail page showing metadata, files, and properties](/img/view_asset_page_20260323_v2.5.png)
+![Asset detail page showing metadata, files, and properties](/img/view_asset_page_20261109_v2.7.png)
 
 ---
 

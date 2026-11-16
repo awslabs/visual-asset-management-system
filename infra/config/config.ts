@@ -37,7 +37,7 @@ dotenv.config({ quiet: true });
 // CloudFormation receives.
 // ============================================================================================
 
-export const VAMS_VERSION = "2.6.6";
+export const VAMS_VERSION = "2.6.7";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_22_X;
@@ -123,11 +123,12 @@ export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
 export const COSMOS3_NANO_GPU_COUNT = 4;
 export const COSMOS3_SUPER_GPU_COUNT = 8;
 
-// CloudWatch log-group name patterns the executionService Lambda may read registered sub-process logs
-// from when app.pipelines.executionLogReadPrefixes is absent. Each entry is used verbatim as an IAM
-// log-group resource name (a trailing `*` is a prefix match; none is an exact group). IAM matching is
-// case-sensitive, so both state-machine casings the pipeline constructs use are listed. The shared
-// workflow log group and the config-name pattern are granted by the builder regardless of this list.
+// CloudWatch log-group name patterns the executionLogs Lambda (the execution logs view) may read
+// registered sub-process logs from when app.pipelines.executionLogReadPrefixes is absent. Each entry is
+// used verbatim as an IAM log-group resource name (a trailing `*` is a prefix match; none is an exact
+// group). IAM matching is case-sensitive, so both state-machine casings the pipeline constructs use are
+// listed. The shared workflow log group and the config-name pattern are granted by the builder
+// regardless of this list.
 export const DEFAULT_EXECUTION_LOG_READ_PREFIXES: readonly string[] = [
     "/aws/vendedlogs/VAMSStateMachine-*",
     "/aws/vendedlogs/VAMSstateMachine-*",
@@ -284,6 +285,11 @@ export const ZIP_DOWNLOADS_DEFAULTS = {
     useCodeBuild: false,
 };
 
+// External OAuth: the token claims the authorizer compares with lambdaAuthorizorJWTAudience and
+// additionalTokenAudiences when lambdaAuthorizorJWTAudienceClaims is not set. getConfig() assigns
+// it and the authorizer environment reads it.
+export const EXTERNAL_OAUTH_DEFAULT_JWT_AUDIENCE_CLAIMS = ["aud"];
+
 // ============================================================================================
 // Constants used only to check configuration
 //
@@ -326,6 +332,18 @@ export const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
 // Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
+
+// External OAuth: the token claims the authorizer may compare with lambdaAuthorizorJWTAudience
+// (lambdaAuthorizorJWTAudienceClaims); the default list is declared in the deployment section above.
+// An Amazon Cognito user pool access token,
+// for one, carries client_id and no aud. Mirrored by SUPPORTED_JWT_AUDIENCE_CLAIMS in
+// backend/backend/common/auth/authorizerCore.py.
+export const EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS = ["aud", "client_id"];
+
+// External OAuth: a token claim name for lambdaAuthorizorJWTUserIdClaim, not under the reserved
+// `vams:` prefix (the authorizer ignores every such token claim). Mirrored by
+// JWT_USER_ID_CLAIM_PATTERN in backend/backend/common/auth/authorizerCore.py.
+export const EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN = /^(?!vams:)[A-Za-z0-9_:.-]+$/i;
 
 // The taskTimeout the Video SOP/BOM Extraction pipeline's vamsSchema declares
 // (backendPipelines/genAi/videoSopBom/vamsSchema/pipeline.json). The parent workflow waits this long
@@ -1548,7 +1566,8 @@ export function getConfig(app: cdk.App): Config {
         config.env.account
     );
 
-    // Log-group name patterns the executionService Lambda may read registered sub-process logs from.
+    // Log-group name patterns the executionLogs Lambda (the execution logs view) may read registered
+    // sub-process logs from.
     // Used verbatim as IAM resource names, so the list is an allow-list and `*`, `/` and anything
     // outside `/aws/` are rejected.
     if (config.app.pipelines.executionLogReadPrefixes == undefined) {
@@ -1883,6 +1902,23 @@ export function getConfig(app: cdk.App): Config {
         config.app.authProvider.useExternalOAuthIdp.idpDisplayName = "SSO";
     }
 
+    // External OAuth claim settings when config.json omits them. The user id claim "" means not
+    // set: the authorizer and the web application use the first of cognito:username, username and
+    // sub. The audience claims default to ["aud"].
+    if (config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim == undefined) {
+        config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim = "";
+    }
+    // An empty list is "not set" as well, like null and an absent field.
+    const configuredAudienceClaims = config.app.authProvider.useExternalOAuthIdp
+        .lambdaAuthorizorJWTAudienceClaims as unknown;
+    if (
+        configuredAudienceClaims == undefined ||
+        (Array.isArray(configuredAudienceClaims) && configuredAudienceClaims.length === 0)
+    ) {
+        config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims = [
+            ...EXTERNAL_OAUTH_DEFAULT_JWT_AUDIENCE_CLAIMS,
+        ];
+    }
     // Additional token audiences. Absent means none: the API accepts tokens issued to the web app
     // client (Cognito) or to lambdaAuthorizorJWTAudience (external IdP) only.
     if (config.app.authProvider.useCognito.additionalTokenAudiences == undefined) {
@@ -3851,6 +3887,42 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    // External OAuth claim settings, read only in external OAuth mode (both are optional; the
+    // defaults are filled above). lambdaAuthorizorJWTUserIdClaim names the token claim whose value
+    // is the VAMS user id ("" = not set). lambdaAuthorizorJWTAudienceClaims lists the claims the
+    // authorizer compares with lambdaAuthorizorJWTAudience, in order.
+    if (config.app.authProvider.useExternalOAuthIdp.enabled) {
+        const userIdClaim = config.app.authProvider.useExternalOAuthIdp
+            .lambdaAuthorizorJWTUserIdClaim as unknown;
+        if (
+            typeof userIdClaim !== "string" ||
+            (userIdClaim !== "" && !EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN.test(userIdClaim))
+        ) {
+            throw new Error(
+                `Configuration Error: app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim must be "" (not set) or a token claim name of letters, digits, '_', ':', '.' and '-' that does not start with the reserved prefix 'vams:'. Got: ${JSON.stringify(
+                    userIdClaim
+                )}`
+            );
+        }
+
+        const audienceClaims = config.app.authProvider.useExternalOAuthIdp
+            .lambdaAuthorizorJWTAudienceClaims as unknown;
+        if (
+            !Array.isArray(audienceClaims) ||
+            audienceClaims.some(
+                (claim) =>
+                    typeof claim !== "string" || !EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS.includes(claim)
+            ) ||
+            new Set(audienceClaims).size !== audienceClaims.length
+        ) {
+            throw new Error(
+                `Configuration Error: app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims must be a list of distinct claim names from [${EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS.map(
+                    (claim) => `"${claim}"`
+                ).join(", ")}]. Got: ${JSON.stringify(audienceClaims)}`
+            );
+        }
+    }
+
     //API Configuration Error Checks
 
     // API type: only API Gateway REST is supported today.
@@ -4593,7 +4665,7 @@ export function validateAdditionalTokenAudiences(
 
 /**
  * Validates app.pipelines.executionLogReadPrefixes: a non-empty array of distinct log-group name
- * patterns under `/aws/`, each used verbatim as an IAM resource name on the executionService
+ * patterns under `/aws/`, each used verbatim as an IAM resource name on the executionLogs
  * log-read grant. Throws a Configuration Error on any violation. Exported for unit testing.
  */
 export function validateExecutionLogReadPrefixes(prefixes: string[]): void {
@@ -5322,6 +5394,12 @@ export interface ConfigPublic {
                 idpAuthProviderDiscoveryEndpoint: string;
                 lambdaAuthorizorJWTIssuerUrl: string;
                 lambdaAuthorizorJWTAudience: string;
+                // Token claims compared with lambdaAuthorizorJWTAudience and additionalTokenAudiences, in order; the first one
+                // present must name one of them. "aud" and/or "client_id". Default ["aud"].
+                lambdaAuthorizorJWTAudienceClaims: string[];
+                // Token claim whose value is the VAMS user id, for the authorizer and the web
+                // application. "" (default) = not set: cognito:username, then username, then sub.
+                lambdaAuthorizorJWTUserIdClaim: string;
                 // Extra `aud` values the API accepts from the external IdP, alongside
                 // lambdaAuthorizorJWTAudience. Empty (the default) accepts that audience only.
                 additionalTokenAudiences?: string[];

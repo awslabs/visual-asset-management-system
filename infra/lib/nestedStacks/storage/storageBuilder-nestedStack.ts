@@ -2284,10 +2284,10 @@ export function storageResourcesBuilder(
             name: "assetLinkId",
             type: dynamodb.AttributeType.STRING,
         },
-        // The old image is what a REMOVE record carries: the compliance trigger reads the
-        // assets of a deleted row from it (and, for a metadata row, whether a workflow
-        // execution deleted it). The stream relay drops it from INSERT and MODIFY records,
-        // so their messages are no larger than before.
+        // The old image is what a REMOVE record carries: the compliance trigger, the search indexer
+        // and the Garnet indexer read the assets of a deleted link from it (the table's key names
+        // only the link). The stream relay drops it from INSERT and MODIFY records, so their
+        // messages are no larger than before.
         stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
     });
 

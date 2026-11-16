@@ -578,6 +578,16 @@ export function buildIngestAssetFunction(
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
+    // The complete stage reads one upload record by key (GetItem) before it creates a missing asset:
+    // exactly that action, on the table only (no index, no Scan or Query). The deployment key's
+    // decrypt permission comes from kmsKeyLambdaPermissionAddToResourcePolicy below.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem"],
+            resources: [storageResources.dynamo.assetUploadsStorageTable.tableArn],
+        })
+    );
     uploadFileLambdaFunction.grantInvoke(fun);
     createAssetLambdaFunction.grantInvoke(fun);
 
@@ -853,16 +863,27 @@ export function grantLargeObjectCopyCoordination(
     options: {
         reconcileWith?: lambda.IFunction;
         handsOffTo?: lambda.IFunction;
+        /**
+         * The caller's role already holds `states:StopExecution` on every execution of this account
+         * and Region (the execution service's abort grant on `execution:*`), which covers the copy
+         * executions, so the narrower statement would only repeat it (owner decision 2026-11-11, the
+         * role's inline-size budget). Nothing is widened: the grant is omitted, not replaced.
+         */
+        stopCoveredByCallerGrant?: boolean;
     }
 ) {
     addEnvironment(fun, largeObjectCopyEnvironment(config));
     const statements = [
         jobsTableStatement(storage, ["GetItem", "UpdateItem", "Query"], true),
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: ["states:StopExecution"],
-            resources: [largeObjectCopyExecutionArnPattern(config)],
-        }),
+        ...(options.stopCoveredByCallerGrant
+            ? []
+            : [
+                  new iam.PolicyStatement({
+                      effect: iam.Effect.ALLOW,
+                      actions: ["states:StopExecution"],
+                      resources: [largeObjectCopyExecutionArnPattern(config)],
+                  }),
+              ]),
         // After its abort the stopper starts the job's delayed sweep (the copy state machine's sweep
         // branch, backend loc.schedule_delayed_sweep): an abort's immediate answer is not final
         // (#1123 D5). Only that one state machine.
@@ -920,6 +941,38 @@ export function grantLargeObjectCopyCoordination(
         permitEngineInvoke(engine, fun, `LargeObjectCopyInvokeBy${fun.node.id}`);
     }
     addRoleStatements(fun, statements);
+}
+
+/**
+ * The execution details read's view of a run's large output copies (backend executionService
+ * `_ingestion_file_progress` and `_reconcile_ended_copies`): it lists the run's copy jobs from the
+ * jobs table's execution index, and, as the backstop for a missed status change event of the copy
+ * state machine, describes a job's copy execution and hands one that already ended to the engine's
+ * reconcile with an asynchronous invoke (a resource-based permission on the engine). It stops,
+ * starts and writes no copy: those are the abort route's (grantLargeObjectCopyCoordination on the
+ * execution service). The run's main row stamp is the details role's own main-table update.
+ */
+export function grantLargeObjectCopyProgressRead(
+    fun: lambda.Function,
+    storage: storageResources,
+    config: Config.Config,
+    engine: lambda.IFunction
+) {
+    const table = storage.dynamo.largeObjectCopyJobsStorageTable;
+    addRoleStatements(fun, [
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:Query"],
+            resources: [`${table.tableArn}/index/${LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX}`],
+        }),
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["states:DescribeExecution"],
+            resources: [largeObjectCopyExecutionArnPattern(config)],
+        }),
+    ]);
+    fun.addEnvironment("LARGE_OBJECT_COPY_FUNCTION_NAME", engine.functionName);
+    permitEngineInvoke(engine, fun, `LargeObjectCopyInvokeBy${fun.node.id}`);
 }
 
 /** Fixed name of the SSM parameter holding the copy engine function name. */
@@ -1907,15 +1960,17 @@ export function buildZipDownloadServiceFunction(
 /**
  * With app.pipelines.useZipDownloads on: the service launches the zipArchive workflow through the execute function
  * and aborts a cancelled job's run through the execution service, both as SYSTEM_USER cross-calls.
- * The same execution service grant serves the run check of an idle job (a details read that records
- * a run ended outside VAMS whose status change event was lost; zipDownloadService._check_run_ended).
- * Each grant names the exact unqualified function ARN (no `:*`), like the re-run grant on the
- * execution service. Not called with the feature off, so neither name nor grant is deployed then.
+ * The run check of an idle job (a details read that records a run ended outside VAMS whose status
+ * change event was lost; zipDownloadService._check_run_ended) goes to the execution details
+ * function, which serves the details route since the execution routes run on four functions
+ * (#1255). Each grant names the exact unqualified function ARN (no `:*`), like the re-run grant on
+ * the execution service. Not called with the feature off, so neither name nor grant is deployed then.
  */
 export function grantZipDownloadLaunch(
     zipDownloadService: lambda.Function,
     executeWorkflowV2: lambda.IFunction,
-    executionService: lambda.IFunction
+    executionService: lambda.IFunction,
+    executionDetails: lambda.IFunction
 ): void {
     zipDownloadService.addEnvironment(
         "EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME",
@@ -1925,11 +1980,19 @@ export function grantZipDownloadLaunch(
         "EXECUTION_SERVICE_FUNCTION_NAME",
         executionService.functionName
     );
+    zipDownloadService.addEnvironment(
+        "EXECUTION_DETAILS_FUNCTION_NAME",
+        executionDetails.functionName
+    );
     zipDownloadService.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["lambda:InvokeFunction"],
-            resources: [executeWorkflowV2.functionArn, executionService.functionArn],
+            resources: [
+                executeWorkflowV2.functionArn,
+                executionService.functionArn,
+                executionDetails.functionArn,
+            ],
         })
     );
 }

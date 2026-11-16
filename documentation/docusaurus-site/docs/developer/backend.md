@@ -201,12 +201,14 @@ def get_single_item(event, item_id):
 
 ### 5. Error Handling Hierarchy
 
-| Exception                    | Response Function       | HTTP Status |
-| ---------------------------- | ----------------------- | ----------- |
-| `ValidationError` (Pydantic) | `validation_error()`    | 400         |
-| `VAMSGeneralErrorResponse`   | `general_error()`       | 400         |
-| Authorization failure        | `authorization_error()` | 403         |
-| `Exception` (catch-all)      | `internal_error()`      | 500         |
+| Exception                                                        | Response Function                                                                             | HTTP Status        |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------ |
+| `ValidationError` (Pydantic)                                     | `validation_error()`                                                                          | 400                |
+| `VAMSGeneralErrorResponse`                                       | `general_error()`                                                                             | 400                |
+| `VAMSAuthorizationDeniedResponse` (object-level refusal)         | `authorization_error()` on a route that catches it before `VAMSGeneralErrorResponse`          | 403; 400 elsewhere |
+| `VAMSAssetNotFoundResponse` (missing asset, after authorization) | `general_error(status_code=404)` on a route that catches it before `VAMSGeneralErrorResponse` | 404; 400 elsewhere |
+| Authorization failure                                            | `authorization_error()`                                                                       | 403                |
+| `Exception` (catch-all)                                          | `internal_error()`                                                                            | 500                |
 
 All response functions accept an optional `event=` parameter for audit logging. Always pass the event when available.
 
@@ -551,6 +553,7 @@ The logger automatically redacts sensitive fields at all nesting levels, in both
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`
 -   `apiKey`, `apiKeySecret`, `rawKey`
 -   the `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization`, `X-Amz-Security-Token` and `x-vams-origin-verify` headers, in any letter case
+-   `vams:originVerifyDigest`, the authorizer context key that carries the digest of the accepted origin verification value
 -   `configBody`, `templateTags`, `tagValues` -- caller-authored template content, also filtered inside a JSON-string request `body`
 
 Redaction is driven by the field name, so a message that interpolates a payload value into a formatted string is written as-is. Log identifiers, counts, and flags rather than rendered bodies or tag values.

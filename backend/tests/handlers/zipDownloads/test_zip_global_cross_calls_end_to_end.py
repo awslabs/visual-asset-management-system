@@ -191,15 +191,21 @@ def test_a_selection_the_registered_workflow_refuses_answers_400(env):
 # ------------------------------------------------------------------------------------------------ #
 
 class _ExecutionServiceLambda:
-    """The zip service's Lambda client for the execution service: runs the REAL handler."""
+    """The zip service's Lambda client for the execution functions: runs the REAL handler under the
+    route set of the function named (the four-function split, #1255), so a cross-call sent to the
+    function that does not serve its route answers 404 as it does when deployed."""
+
+    ROUTE_SETS = {"executionServiceFn": le.ROUTE_SET_SERVICE,
+                  "executionDetailsFn": le.ROUTE_SET_DETAILS}
 
     def __init__(self):
         self.responses = []
 
     def invoke(self, FunctionName, InvocationType, Payload):  # noqa: N803 - mirrors boto3
-        assert FunctionName == "executionServiceFn" and InvocationType == "RequestResponse"
+        assert FunctionName in self.ROUTE_SETS and InvocationType == "RequestResponse"
         event = json.loads(Payload.decode("utf-8"))
-        response = le.lambda_handler(json.loads(json.dumps(event)), MagicMock())
+        with patch.dict("os.environ", {le.EXECUTION_SERVICE_ROUTES_ENV: self.ROUTE_SETS[FunctionName]}):
+            response = le.lambda_handler(json.loads(json.dumps(event)), MagicMock())
         self.responses.append(response)
         return {"Payload": io.BytesIO(json.dumps(response).encode("utf-8"))}
 

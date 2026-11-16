@@ -30,7 +30,7 @@ When the selection includes an archived or deleted file or folder, the dialog li
 
 ## The Download Queue
 
-The Download Queue lists your download jobs. Archive jobs from Download as Zip are the only kind today. Each asset has a **Download Queue** tab that lists your jobs for that asset. The **My Download Queue** page under **User** in the side navigation (`#/zipdownloads`) lists them across every asset, and shows only your own jobs.
+The Download Queue lists your download jobs. Archive jobs from Download as Zip are the only kind today. Each asset has a **Download Queue** tab that lists your jobs for that asset. The **My Download Queue** page in the profile menu (the menu with your user name in the top bar; `#/zipdownloads`) lists them across every asset, and shows only your own jobs.
 
 ### Your jobs and every user's jobs
 

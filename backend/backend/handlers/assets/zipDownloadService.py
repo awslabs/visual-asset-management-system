@@ -152,6 +152,9 @@ ARCHIVE_WORKFLOW_DATABASE_ID = os.environ.get("ZIP_ARCHIVE_WORKFLOW_DATABASE_ID"
 ZIP_ARCHIVE_WORKFLOW_ID = os.environ.get("ZIP_ARCHIVE_WORKFLOW_ID", zd.ZIP_ARCHIVE_WORKFLOW_ID_DEFAULT)
 EXECUTE_FUNCTION = os.environ.get("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME", "")
 EXECUTION_SERVICE_FUNCTION = os.environ.get("EXECUTION_SERVICE_FUNCTION_NAME", "")
+# The execution routes run on four functions, each serving only its own routes (#1255): the abort is
+# the execution service's, the details read the execution details function's.
+EXECUTION_DETAILS_FUNCTION = os.environ.get("EXECUTION_DETAILS_FUNCTION_NAME", "")
 PRESIGNED_URL_TIMEOUT_SECONDS = _env_int("PRESIGNED_URL_TIMEOUT_SECONDS", 900)
 
 # Create-time pre-scan of current-files folder / whole-asset entries. Beyond either bound the archive
@@ -781,9 +784,10 @@ def _check_run_ended(execution_id):
     slot of the per-user cap, until it expires. The details read, made as SYSTEM_USER through the
     same cross-call as the abort, writes the end under the shared terminal guard and settles the
     run's locks and pipeline rows, exactly as when someone opens the run; the caller then re-reads
-    the main row and finalizes the job from it (finalize_ended_run). Best-effort: False when the
-    read did not answer 200."""
-    if not execution_id or not EXECUTION_SERVICE_FUNCTION:
+    the main row and finalizes the job from it (finalize_ended_run). The read goes to the execution
+    details function, the one that serves the details route. Best-effort: False when the read did
+    not answer 200."""
+    if not execution_id or not EXECUTION_DETAILS_FUNCTION:
         return False
     invoke_event = {
         "requestContext": {"http": {"method": "GET",
@@ -793,7 +797,7 @@ def _check_run_ended(execution_id):
         "lambdaCrossCall": {"userName": sp.SYSTEM_PIPELINE_USER_NAME},
     }
     try:
-        response = _invoke_request_response(EXECUTION_SERVICE_FUNCTION, invoke_event)
+        response = _invoke_request_response(EXECUTION_DETAILS_FUNCTION, invoke_event)
         payload = response.get("Payload")
         inner = json.loads(payload.read().decode("utf-8")) if payload else {}
         if inner.get("statusCode") != 200:

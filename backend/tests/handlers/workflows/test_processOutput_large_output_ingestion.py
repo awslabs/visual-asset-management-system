@@ -428,7 +428,11 @@ class TestMainRowPhase:
                 output_metadata=[], output_results=[], result_log="", execution_log="",
                 log_group_arn="", log_stream_name="", execution_status="SUCCEEDED")
         main = [u for u in updates if "executionStopDate" in u.get("UpdateExpression", "")]
-        assert main and main[-1]["UpdateExpression"].endswith("REMOVE executionPhase, outputIngestion")
+        # One REMOVE clause: the ingestion phase, and (a SUCCEEDED over an end-state FAILED, #1271) the
+        # end-state failure mark and its error.
+        expression = main[-1]["UpdateExpression"] if main else ""
+        assert expression.count("REMOVE") == 1
+        assert expression.endswith("REMOVE executionPhase, outputIngestion, executionFailedBy, executionError")
 
 
 @pytest.mark.unit

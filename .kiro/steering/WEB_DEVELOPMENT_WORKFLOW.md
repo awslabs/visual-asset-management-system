@@ -30,7 +30,7 @@ web/
   e2e/                      # Playwright specs against a deployed stack
   customInstalls/           # Viewer plugin custom install scripts
   src/
-    App.tsx                 # Root app shell, HashRouter, TopNavigation
+    App.tsx                 # Root app shell, HashRouter, TopNavigation (Settings menu, profile menu)
     routes.tsx              # Centralized route table (core + add-on + custom), lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
@@ -81,11 +81,11 @@ web/
       addons/               # Add-on API calls (physnaAPIService.ts)
 
     addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts
-                            #   (add-on feature-switch names) — see WEB_FRONTEND.md 7.5
+                            #   (add-on feature-switch names) — see WEB_FRONTEND.md 7.5, 7.6
       edh/                  #   EDH Workstations add-on module (Tailwind + Radix, pages/ route shells)
                             #   — see .kiro/steering/ADDON_EDH_WORKSTATIONS.md
     custom/                 # FORK EXTENSION POINT (shipped empty): customRoutes.tsx, customNavigation.ts,
-                            #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5
+                            #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5, 7.6
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
@@ -161,12 +161,15 @@ web/
     hooks/                  # usePageTitle.ts, useThemeSettings.ts,
                             #   useAssetPageAccess.ts (may the caller open an assets/asset page)
     layout/
-      Navigation.tsx        # Left sidebar navigation
+      navigationRegistry.ts # The one navigation registry: core + add-on + custom, side/profile placement
+      Navigation.tsx        # Left sidebar navigation (side entries)
+      useProfileMenuItems.ts # Top-bar profile menu items (profile entries, current page checked, then Sign out)
     utils/
       apiEndpoint.ts        # Resolves the API base URL
       chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload
-      authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
+      authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader, resolveExternalUserId
       sessionManager.ts     # Idle/expiry session handling
+      queryRetry.ts         # createAppQueryClient, shouldRetryQuery: a final 4xx is never retried
     styles/
       theme.css             # CSS custom properties for dark/light theming
       tailwind.css          # Tailwind entry (scoped content glob; preflight disabled)
@@ -212,7 +215,7 @@ web/
 -   [ ] **Create thin page wrapper**: In `src/pages/`
 -   [ ] **Add lazy import**: `lazyWithRetry(() => import("./pages/MyPage"))` in `routes.tsx`
 -   [ ] **Add to routeTable**: With `path`, `Page`, and `active` properties
--   [ ] **Add navigation item**: In `src/layout/Navigation.tsx` if needed
+-   [ ] **Add navigation entry**: In `src/layout/navigationRegistry.ts` if needed (`placement: "profile"` for a page of the signed-in user)
 
 ### **Phase 3: Quality Assurance**
 
@@ -567,6 +570,8 @@ A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `is
 
 A request whose response the browser never saw rejects with a `TypeError` ("Failed to fetch"). `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `apiClient.ts`) in its place, with no status, so the page says the service could not be reached and can offer Retry instead of a "not found" or permission message.
 
+A TanStack Query hook never retries a final answer. The app's query client (`createAppQueryClient` in `utils/queryRetry.ts`) retries a failed query once, except when the error carries a 4xx status other than 408 or 429: a 403 is the API's authorization decision and a 404 says the object is not there, so the page shows the error at once. `toTuple` / `toTupleWithWarnings` tag a failed tuple with the call's status (`failureStatus(result)`, non-enumerable, so the tuple still destructures and compares as `[false, message]`), and the hooks in `features/orchestration/api/queries.ts` throw through `callService`, which raises a `ServiceCallError` carrying it. A hook that throws on a tuple itself goes through `callService` too, or its 403 is re-sent (#1270). A service that rebuilds its tuple drops the status and keeps the old retry-once behaviour
+
 ### **Authentication: Dual-Mode System**
 
 The app supports Cognito and External OAuth2 modes. The auth orchestrator is `src/FedAuth/Auth.tsx`:
@@ -648,11 +653,12 @@ global page `#/zipdownloads` (**My Download Queue**) list the caller's jobs and 
 The user-facing names come from `DOWNLOAD_QUEUE_PAGE_TITLE` / `DOWNLOAD_QUEUE_TAB_LABEL` and do not say "zip", so other kinds of
 download job can join the queue; the route, the tab id, the API routes and the CLI/MCP names keep `zip`. Both lists search the
 rows already loaded (`filterZipJobs`: asset ID, asset name, request ID, archive name) with the refresh button beside the
-search; the API pages the list, so **Load more** adds older jobs, which the search then covers. The asset tab offers **Show all users** (a `SegmentedControl` right-aligned in the table's filter row through the `pagination` slot, default **My jobs**) only when `useAllowedRoutes().can("GET", ZIP_ROUTES.allUsers)` allows the all-users route; that view lists `fetchAssetZipDownloadsAllUsers` and shows **Download** and **Cancel**/**Delete** only from the row flags the API returns (`canDownload`, `canRemove`), never from a role or ownership rule in the client. The My jobs views (the asset tab's default and the **My Download Queue** page) get the same flags on their rows: a finished job with `canDownload: false` (a quarantined asset) offers no **Download**, and `canRemove: false` greys **Cancel**/**Delete**; the role's route decisions still gate the controls, and a response without the flags is read as before (#1125 D37). A created job's success message links to the asset's own **Download Queue** tab: `assetDownloadQueueLink()` sets the asset page's `?tab=zipDownloads` query (`ASSET_TAB_QUERY_PARAM`) and keeps its other parameters, and `ViewAsset` hands `?tab=` to `TabbedContainer` (`requestedTabId`), which switches tabs in place without remounting and reports a tab the user picks back to the query (`onTabChange`; File Manager drops it). **My Download Queue** stays in the side navigation's User section.
+search; the API pages the list, so **Load more** adds older jobs, which the search then covers. The asset tab offers **Show all users** (a `SegmentedControl` right-aligned in the table's filter row through the `pagination` slot, default **My jobs**) only when `useAllowedRoutes().can("GET", ZIP_ROUTES.allUsers)` allows the all-users route; that view lists `fetchAssetZipDownloadsAllUsers` and shows **Download** and **Cancel**/**Delete** only from the row flags the API returns (`canDownload`, `canRemove`), never from a role or ownership rule in the client. The My jobs views (the asset tab's default and the **My Download Queue** page) get the same flags on their rows: a finished job with `canDownload: false` (a quarantined asset) offers no **Download**, and `canRemove: false` greys **Cancel**/**Delete**; the role's route decisions still gate the controls, and a response without the flags is read as before (#1125 D37). A created job's success message links to the asset's own **Download Queue** tab: `assetDownloadQueueLink()` sets the asset page's `?tab=zipDownloads` query (`ASSET_TAB_QUERY_PARAM`) and keeps its other parameters, and `ViewAsset` hands `?tab=` to `TabbedContainer` (`requestedTabId`), which switches tabs in place without remounting and reports a tab the user picks back to the query (`onTabChange`; File Manager drops it).
 
 Files: `src/components/zipDownloads/` (`zipDownloads.ts` rules and route templates, `CreateZipDownloadModal.tsx`,
 `ZipDownloadsTable.tsx`), `src/components/asset/tabs/ZipDownloadsTab.tsx` (tab id `ZIP_DOWNLOADS_TAB_ID` in
-`TabbedContainer.tsx`), `src/pages/ZipDownloadsPage.tsx`, and the nav entry in `src/layout/Navigation.tsx`.
+`TabbedContainer.tsx`), `src/pages/ZipDownloadsPage.tsx`, and the profile-menu entry in `src/layout/navigationRegistry.ts`
+(`featuresEnabledRestriction: [ZIPDOWNLOADS]`).
 
 A surface that stays mounted across a login (the side navigation) or that gates whole pages reads the flags through `useFeaturesEnabled()` from `context/RuntimeConfigContext.ts` instead: the cached config carries no `featuresEnabled` until the secure config lands after the first login, and only the context re-renders a mounted consumer when it does.
 
@@ -677,6 +683,7 @@ Any side-navigation entry (a section, link or group in the core, add-on or custo
 | Upload service       | `src/services/AssetUploadService.ts`              |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |
 | Synonyms config      | `src/synonyms.tsx`                                |
+| Navigation registry  | `src/layout/navigationRegistry.ts`                |
 | Navigation           | `src/layout/Navigation.tsx`                       |
 | App shell            | `src/App.tsx`                                     |
 
@@ -688,7 +695,7 @@ Any side-navigation entry (a section, link or group in the core, add-on or custo
 
 Every top-level page (a route in `src/routes.tsx`, `src/addons/addonRoutes.tsx` or `src/custom/customRoutes.tsx`) sets its own outer padding and heading. The `AppLayout` in `routes.tsx` runs with `disableContentPaddings` while the side navigation is open, so a page whose root is a bare `Table` or `Container` sits flush against the navigation and the header. A page opens with one of two page shells:
 
--   **Cloudscape pages:** the root is `<Box padding={{ top: "m", horizontal: "l" }}>`; inside it, the page `h1` in a `TextContent` in its own `Grid` row, then the content (a `variant="container"` `Table` or a `Container`) in the next `Grid` row, then `<div style={{ paddingBottom: "20px" }} />`. References: `src/pages/auth/ApiKeys.tsx` (a list in the side navigation's User section, with search, refresh and Load more), `src/pages/ListPageNoDatabase.tsx` (Roles, Constraints, Tags) and `src/pages/ZipDownloadsPage.tsx`. A page that opens with a breadcrumb uses a smaller top (`"s"`, or `"xs"` as on the asset page) and keeps `horizontal: "l"`.
+-   **Cloudscape pages:** the root is `<Box padding={{ top: "m", horizontal: "l" }}>`; inside it, the page `h1` in a `TextContent` in its own `Grid` row, then the content (a `variant="container"` `Table` or a `Container`) in the next `Grid` row, then `<div style={{ paddingBottom: "20px" }} />`. References: `src/pages/auth/ApiKeys.tsx` (a list opened from the profile menu, with search, refresh and Load more), `src/pages/ListPageNoDatabase.tsx` (Roles, Constraints, Tags) and `src/pages/ZipDownloadsPage.tsx`. A page that opens with a breadcrumb uses a smaller top (`"s"`, or `"xs"` as on the asset page) and keeps `horizontal: "l"`.
 -   **Tailwind pages (orchestration module, add-ons):** the root element carries `className="orchestration-root orchestration-page ..."` (`src/styles/tailwind.css`, matched to the Cloudscape shell). Reference: `src/features/orchestration/pipelines/PipelinesPage.tsx`.
 
 The page also calls `usePageTitle`. A feature component that renders both as a page and inside an asset tab (such as `ZipDownloadsTable`) has no outer padding of its own; the page adds the shell around it. A list table searches like the other VAMS tables: a Cloudscape `TextFilter` in the table's `filter` slot with the refresh icon button beside it, not in the header actions (`ApiKeys.tsx`, `components/list/TableList.tsx`).
@@ -972,7 +979,7 @@ npm run prettier-fix
 3. Lay out the toolbar and wire the column sorting per `WEB_FRONTEND.md` section 7.6 (search and refresh on the left, filters on the right; every sortable column sorts)
 4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
 5. Add lazy import + route in `src/routes.tsx`
-6. Add navigation item in `src/layout/Navigation.tsx`
+6. Add a navigation entry in `src/layout/navigationRegistry.ts` (`placement: "profile"` for a page of the signed-in user)
 
 ### **Adding a new API call**
 

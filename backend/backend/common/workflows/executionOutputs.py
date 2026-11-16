@@ -348,6 +348,281 @@ def record_pipeline_output_files(dynamo, output_files_table, pipeline_execution_
             ))
 
 
+# ---------------------------------------------------------------------------
+# Per-run output ingest ledger
+# ---------------------------------------------------------------------------
+#
+# The end-state step moves each output into the asset (copy, then delete of the staged source) before
+# it records the run's output rows, and its state is retried on States.Timeout and transient Lambda
+# faults. A retried attempt lists only what is still staged, so it needs a durable record of what an
+# earlier attempt already handed to ingestion. The ledger is that record: one row per output, written
+# to the PipelineExecutionOutputFiles table under a partition of its own,
+# `ingest#<workflowExecutionId>`, with the row's usual `fileType:relativeFilePath` sort key. No reader
+# of the run's output rows queries that partition (they query by pipelineExecutionId), so ledger rows
+# never show as outputs; the permanent execution delete removes the partition with the run's other rows.
+#
+# States: `moving` is written BEFORE an output is handed to ingestion (the outcome is not yet known),
+# `ingested` once the ingestion response says it landed. A failed output's row is dropped, so a later
+# attempt ingests it afresh.
+
+INGEST_LEDGER_PARTITION_PREFIX = "ingest#"
+INGEST_STATE_MOVING = "moving"
+INGEST_STATE_INGESTED = "ingested"
+# Handed to the large object copy engine (#1123): the row carries the copy job's id (`engineJobId`).
+# Not `moving`, so no attempt waits on it or takes it over (the engine copy is bounded by the run's
+# maximum output-ingestion wait, not by an attempt's time) and no claim succeeds over it, so it is never
+# handed to ingestion again. FinalizeOutputs (settle_engine_rows) makes it `ingested` once the copy
+# landed, or releases it when the copy did not. Its staged version is the one the job pinned: the job
+# deletes it after landing, so the end-state step's staged-version delete (#1291) never runs for it.
+INGEST_STATE_ENGINE_COPYING = "engine-copying"
+INGEST_LEDGER_SORT_KEY = "fileType:relativeFilePath"
+# Upper bound on the ledger rows one read returns: twice the output-file recording cap, so a run whose
+# output was truncated at the cap still reads every row it wrote.
+MAX_INGEST_LEDGER_ROWS = 20000
+
+
+def ingest_ledger_partition(workflow_execution_id):
+    """The PipelineExecutionOutputFiles partition holding a run's ingest ledger. The prefix keeps it
+    apart from every pipelineExecutionId partition."""
+    return f"{INGEST_LEDGER_PARTITION_PREFIX}{workflow_execution_id}"
+
+
+def ingest_ledger_sort_key(descriptor):
+    """The ledger sort-key value of an output descriptor; the same value its output row carries."""
+    return f"{descriptor.get('fileType', 'file')}:{descriptor.get('relativeFilePath', '')}"
+
+
+def write_ingest_ledger(dynamo, output_files_table, workflow_execution_id, descriptors, state,
+                        upload_id=""):
+    """Write (or overwrite) one ledger row per output descriptor in `state`, batched. `upload_id` names
+    the external upload record the outputs were handed to, so a later attempt can wait for that
+    ingestion to finish before it lists the staged outputs again."""
+    if not workflow_execution_id or not descriptors:
+        return
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    with table.batch_writer(overwrite_by_pkeys=["pipelineExecutionId", INGEST_LEDGER_SORT_KEY]) as batch:
+        for d in descriptors:
+            item = er.build_output_file_record(
+                pipeline_execution_id=partition,
+                file_type=d.get("fileType", "file"),
+                relative_file_path=d.get("relativeFilePath", ""),
+                s3_bucket=d.get("s3Bucket", ""), s3_key=d.get("s3Key", ""),
+                file_size=d.get("fileSize", 0), content_type=d.get("contentType", ""),
+                s3_version_id=d.get("s3VersionId", ""),
+            )
+            item["ingestState"] = state
+            if upload_id:
+                item["uploadId"] = upload_id
+            batch.put_item(Item=item)
+
+
+# A `moving` row names the attempt that wrote it (`ingestHolder`, the attempt's Lambda request id)
+# and when (`movingSince`, epoch seconds). Another attempt may take the row over only when it is older
+# than INGEST_TAKEOVER_SECONDS (the end-state step's 15-minute timeout plus a margin: no attempt that
+# old is alive), when it predates these fields, or when the reader saw that its upload finished and
+# the row is still exactly as it read it (`takeover`). A row already `ingested` is never taken.
+INGEST_TAKEOVER_SECONDS = 15 * 60 + 5 * 60
+INGEST_CLAIM_WORKERS = 16
+
+
+def is_live_moving_row(row, holder, now_epoch):
+    """Whether `row` is held `moving` by another attempt that may still be running."""
+    if not row or row.get("ingestState") != INGEST_STATE_MOVING:
+        return False
+    other = row.get("ingestHolder")
+    since = row.get("movingSince")
+    if not other or other == holder or since is None:
+        return False
+    return int(now_epoch) - int(since) < INGEST_TAKEOVER_SECONDS
+
+
+def claim_ingest_rows(dynamo, output_files_table, workflow_execution_id, descriptors, holder, upload_id,
+                      now_epoch, takeover=None):
+    """Mark each output `moving` for `holder`, each with a conditional put, and return the descriptors
+    this holder now holds; only those may be handed to ingestion.
+
+    The put succeeds when the output has no row, when the row is `moving` and this holder's already,
+    stale (older than INGEST_TAKEOVER_SECONDS or written before holders were recorded), or unchanged
+    since the reader saw its upload finish (`takeover`: {sort key: (holder, movingSince)}). It never
+    succeeds over an `ingested` row or over a live attempt's `moving` row, so two attempts never hand
+    the same output to ingestion."""
+    if not workflow_execution_id or not descriptors:
+        return []
+    from concurrent.futures import ThreadPoolExecutor
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    takeover = takeover or {}
+    now = int(now_epoch)
+
+    def _claim(d):
+        sort_key = ingest_ledger_sort_key(d)
+        item = er.build_output_file_record(
+            pipeline_execution_id=partition,
+            file_type=d.get("fileType", "file"),
+            relative_file_path=d.get("relativeFilePath", ""),
+            s3_bucket=d.get("s3Bucket", ""), s3_key=d.get("s3Key", ""),
+            file_size=d.get("fileSize", 0), content_type=d.get("contentType", ""),
+            s3_version_id=d.get("s3VersionId", ""),
+        )
+        item.update({"ingestState": INGEST_STATE_MOVING, "ingestHolder": holder, "movingSince": now})
+        if upload_id:
+            item["uploadId"] = upload_id
+        condition = ("attribute_not_exists(ingestState) OR (ingestState = :moving AND ("
+                     "ingestHolder = :me OR attribute_not_exists(movingSince) OR movingSince < :stale")
+        values = {":moving": INGEST_STATE_MOVING, ":me": holder, ":stale": now - INGEST_TAKEOVER_SECONDS}
+        if sort_key in takeover:
+            old_holder, old_since = takeover[sort_key]
+            condition += " OR (ingestHolder = :old AND movingSince = :since)"
+            values.update({":old": old_holder, ":since": old_since})
+        condition += "))"
+        try:
+            table.put_item(Item=item, ConditionExpression=condition, ExpressionAttributeValues=values)
+            return d
+        except Exception as e:
+            if is_conditional_check_failure(e):
+                return None
+            raise
+
+    with ThreadPoolExecutor(max_workers=min(INGEST_CLAIM_WORKERS, len(descriptors))) as executor:
+        return [d for d in executor.map(_claim, descriptors) if d is not None]
+
+
+def drop_ingest_ledger_rows(dynamo, output_files_table, workflow_execution_id, descriptors, holder=None):
+    """Delete the ledger rows of outputs whose ingestion failed. With `holder`, each delete is
+    conditional on the row still being that holder's `moving` row, so a row another attempt took over
+    or settled is left alone."""
+    if not workflow_execution_id or not descriptors:
+        return
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    if holder is None:
+        with table.batch_writer(overwrite_by_pkeys=["pipelineExecutionId", INGEST_LEDGER_SORT_KEY]) as batch:
+            for d in descriptors:
+                batch.delete_item(Key={"pipelineExecutionId": partition,
+                                       INGEST_LEDGER_SORT_KEY: ingest_ledger_sort_key(d)})
+        return
+    for d in descriptors:
+        try:
+            table.delete_item(
+                Key={"pipelineExecutionId": partition, INGEST_LEDGER_SORT_KEY: ingest_ledger_sort_key(d)},
+                ConditionExpression="ingestState = :moving AND ingestHolder = :me",
+                ExpressionAttributeValues={":moving": INGEST_STATE_MOVING, ":me": holder})
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+
+
+def mark_engine_copying(dynamo, output_files_table, workflow_execution_id, descriptors, job_ids, holder):
+    """Move `holder`'s `moving` rows of outputs handed to copy jobs to `engine-copying` with each job
+    id. Conditional on the row being `holder`'s `moving` row, or already `engine-copying` with the
+    same job (a repeated hand-off). A row another attempt took over meanwhile is left to it."""
+    if not workflow_execution_id or not descriptors:
+        return
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    for d, job_id in zip(descriptors, job_ids):
+        try:
+            table.update_item(
+                Key={"pipelineExecutionId": partition, INGEST_LEDGER_SORT_KEY: ingest_ledger_sort_key(d)},
+                UpdateExpression="SET ingestState = :engine, engineJobId = :job REMOVE movingSince",
+                ConditionExpression=("(ingestState = :moving AND ingestHolder = :me) OR "
+                                     "(ingestState = :engine AND engineJobId = :job)"),
+                ExpressionAttributeValues={":engine": INGEST_STATE_ENGINE_COPYING, ":job": job_id,
+                                           ":moving": INGEST_STATE_MOVING, ":me": holder})
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+            logger.warning("An output's ledger row changed before its engine hand-off was recorded")
+
+
+def settle_engine_rows(dynamo, output_files_table, workflow_execution_id, ledger, status_by_job,
+                       succeeded_status, jobs_by_source_key=None, terminal_statuses=()):
+    """Settle the run's rows of outputs the copy engine copied, from their jobs' outcomes. Returns
+    (ingested, released) counts.
+
+    - Every `engine-copying` row: `ingested` when its job ended `succeeded_status`, released (deleted)
+      otherwise, conditional on the row still naming that job.
+    - A `moving` row whose staged key is the source of one of this run's copy jobs
+      (`jobs_by_source_key`: {source key: (job id, status)}): the attempt that handed it to the
+      engine died before it recorded the hand-off (#1271 + #1123, combined smoke D1). Settled the same
+      way, but only once the job has ended (`terminal_statuses`), and conditional on the row being
+      exactly as read (same holder and `movingSince`). A `moving` row no job reads from is a small-file
+      move, possibly by a live attempt, and is never touched."""
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    jobs_by_source_key = jobs_by_source_key or {}
+    ingested = released = 0
+    for sort_key, row in (ledger or {}).items():
+        state = row.get("ingestState")
+        key = {"pipelineExecutionId": partition, INGEST_LEDGER_SORT_KEY: sort_key}
+        if state == INGEST_STATE_ENGINE_COPYING:
+            job_id = row.get("engineJobId", "")
+            status = status_by_job.get(job_id)
+            condition = "ingestState = :state AND engineJobId = :job"
+            values = {":state": INGEST_STATE_ENGINE_COPYING, ":job": job_id}
+        elif state == INGEST_STATE_MOVING and row.get("s3Key") in jobs_by_source_key:
+            job_id, status = jobs_by_source_key[row["s3Key"]]
+            if status not in terminal_statuses:
+                continue
+            condition = "ingestState = :state AND ingestHolder = :holder AND movingSince = :since"
+            values = {":state": INGEST_STATE_MOVING, ":holder": row.get("ingestHolder", ""),
+                      ":since": row.get("movingSince")}
+        else:
+            continue
+        try:
+            if status == succeeded_status:
+                table.update_item(Key=key, UpdateExpression="SET ingestState = :ingested, engineJobId = :jid",
+                                  ConditionExpression=condition,
+                                  ExpressionAttributeValues={**values, ":ingested": INGEST_STATE_INGESTED,
+                                                             ":jid": job_id})
+                ingested += 1
+            else:
+                table.delete_item(Key=key, ConditionExpression=condition, ExpressionAttributeValues=values)
+                released += 1
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+    return ingested, released
+
+
+def read_ingest_ledger(dynamo, output_files_table, workflow_execution_id):
+    """The run's ledger rows as {sort key: row}, at most MAX_INGEST_LEDGER_ROWS (a longer ledger is
+    logged and read up to the bound). Empty for a run that wrote none, including a run whose earlier
+    attempts ran before the ledger existed."""
+    ledger = {}
+    if not workflow_execution_id:
+        return ledger
+    table = dynamo.Table(output_files_table)
+    kwargs = {'KeyConditionExpression': _key_eq(
+        'pipelineExecutionId', ingest_ledger_partition(workflow_execution_id))}
+    resp = table.query(**kwargs)
+    while True:
+        for row in resp.get('Items', []):
+            ledger[row.get(INGEST_LEDGER_SORT_KEY, '')] = row
+        if 'LastEvaluatedKey' not in resp:
+            break
+        if len(ledger) >= MAX_INGEST_LEDGER_ROWS:
+            logger.warning(f"Ingest ledger read stopped at the {MAX_INGEST_LEDGER_ROWS}-row bound")
+            break
+        kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
+        resp = table.query(**kwargs)
+    return ledger
+
+
+def ledger_row_descriptor(row):
+    """The output descriptor (the shape the end-state step collects) a ledger row records."""
+    return {
+        "fileType": row.get("fileType", "file"),
+        "relativeFilePath": row.get("relativeFilePath", ""),
+        "s3Bucket": row.get("s3Bucket", ""),
+        "s3Key": row.get("s3Key", ""),
+        "fileSize": int(row.get("fileSize", 0) or 0),
+        "contentType": row.get("contentType", ""),
+        "s3VersionId": row.get("s3VersionId", ""),
+    }
+
+
 def is_conditional_check_failure(error):
     """Whether a DynamoDB write error is a ConditionalCheckFailedException (the row already holds a
     terminal status), as opposed to a real failure that must surface."""
@@ -380,18 +655,43 @@ def not_terminal_condition(values):
             + ", ".join(terminal_names) + ")")
 
 
+# Marks a FAILED the end-state step wrote (`executionFailedBy`). Attempts of that step can overlap, and
+# one can record FAILED (it saw outputs vanish mid-move) before the attempt that moved them records
+# SUCCEEDED; that SUCCEEDED may replace a FAILED carrying this marker. A FAILED or ABORTED the error
+# handler or the abort path wrote carries no marker and is never replaced.
+END_STATE_FAILURE_SOURCE = "endStateStep"
+
+
+def end_state_status_write(values, status):
+    """The (SET/REMOVE clause additions, ConditionExpression) of an end-state status write. FAILED is
+    marked END_STATE_FAILURE_SOURCE; SUCCEEDED is allowed over a FAILED with that mark and clears it
+    (and its error). Adds the placeholders to `values`."""
+    condition = not_terminal_condition(values)
+    values[":failedBy"] = END_STATE_FAILURE_SOURCE
+    if status == "FAILED":
+        return ", executionFailedBy = :failedBy", "", condition
+    values[":failedStatus"] = "FAILED"
+    condition = f"({condition}) OR (executionStatus = :failedStatus AND executionFailedBy = :failedBy)"
+    return "", " REMOVE executionFailedBy, executionError", condition
+
+
 def set_pipeline_status(dynamo, pipeline_executions_table, pipeline_execution_id,
-                        workflow_execution_id, status, stop_date=None):
+                        workflow_execution_id, status, stop_date=None, end_state=False):
     """Set a pipeline-execution row's status (and stop date when terminal), conditioned on the row not
     already being terminal so a still-in-flight writer (the interim tracking lambda) cannot regress a
-    row the abort/error path already finished. A row that is already terminal is left untouched."""
+    row the abort/error path already finished. A row that is already terminal is left untouched, except
+    that with `end_state` a SUCCEEDED replaces a FAILED the end-state step wrote (end_state_status_write)."""
     table = dynamo.Table(pipeline_executions_table)
     expr = "SET executionStatus = :st"
     values = {":st": status}
     if stop_date:
         expr += ", executionStopDate = :s"
         values[":s"] = stop_date
-    condition = not_terminal_condition(values)
+    if end_state:
+        set_extra, remove_extra, condition = end_state_status_write(values, status)
+        expr += set_extra + remove_extra.replace(", executionError", "")
+    else:
+        condition = not_terminal_condition(values)
     try:
         table.update_item(
             Key={"pipelineExecutionId": pipeline_execution_id,

@@ -190,6 +190,10 @@ The endpoint runs in two stages against the same path, distinguished by the pres
 
 Both stages require `PUT` permission on the asset (`objectType: "asset"`) in addition to route access.
 
+When the complete stage finds no asset, it checks the upload before it creates the asset: an `uploadId` that is unknown, already completed, initialized for another asset or database, or expired is refused with `400` and nothing is created.
+
+Likewise, when the initialize stage finds no asset, it checks the file names first: a file with a blocked extension, an extension the database does not allow, or a `.previewFile.` file with a disallowed extension is refused with `400` and the asset is not created.
+
 #### Initialize request body
 
 | Field             | Type          | Required | Description                                                                                                          |
@@ -301,13 +305,13 @@ Repeat the asset fields from the initialize request, and add:
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                               |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, or a failure creating the asset or the upload. |
-| `403`  | Not authorized to write this asset, or the upload step refused the request.                                                                                               |
-| `404`  | The upload step reported its target as not found.                                                                                                                         |
-| `429`  | Rate limit exceeded: more than 20 upload initializations by the user in one minute. The response carries a `Retry-After` header (seconds).                                |
-| `500`  | Internal server error.                                                                                                                                                    |
+| Status | Description                                                                                                                                                                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, a file the upload step refuses for its name (initialize), an upload that cannot be completed (complete; no asset is created in either case), or a failure creating the asset or the upload. |
+| `403`  | Not authorized to write this asset, or the upload step refused the request.                                                                                                                                                                                                                                            |
+| `404`  | The upload step reported its target as not found.                                                                                                                                                                                                                                                                      |
+| `429`  | Rate limit exceeded: more than 20 upload initializations by the user in one minute. The response carries a `Retry-After` header (seconds).                                                                                                                                                                             |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                 |
 
 ---
 

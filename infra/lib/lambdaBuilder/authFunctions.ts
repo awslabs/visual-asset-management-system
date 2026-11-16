@@ -396,6 +396,16 @@ export function buildApiGatewayAuthorizerRestFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl;
         environment.JWT_AUDIENCE =
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
+        // The claims compared with JWT_AUDIENCE, in order (JSON array), and the claim whose value
+        // is the user id ("" = cognito:username, then username, then sub). Both validated and
+        // defaulted by getConfig(); parsed by backend/backend/common/auth/authorizerCore.py.
+        environment.JWT_AUDIENCE_CLAIMS = JSON.stringify(
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims ??
+                Config.EXTERNAL_OAUTH_DEFAULT_JWT_AUDIENCE_CLAIMS
+        );
+        environment.JWT_USER_ID_CLAIM =
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim ?? "";
+
         // Extra audiences the API accepts from the external IdP. Set only when the list is non-empty.
         const additionalAudiences =
             config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences;

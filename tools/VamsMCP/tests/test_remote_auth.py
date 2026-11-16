@@ -220,3 +220,65 @@ def test_a_missing_file_names_the_setup_command(tmp_path):
 def test_settings_round_trip_through_the_file_format():
     settings = _settings()
     assert RemoteAuthSettings.from_dict(settings.to_dict()) == settings
+
+
+def _external_settings(**overrides):
+    return _settings(provider="external", **overrides)
+
+
+def test_a_file_without_the_claim_settings_uses_the_defaults():
+    settings = _external_settings()
+    assert (settings.audience_claims, settings.user_id_claim) == (("aud",), None)
+    assert "audienceClaims" not in settings.to_dict() and "userIdClaim" not in settings.to_dict()
+
+
+@pytest.mark.parametrize("provider", ["external", "cognito"])
+def test_null_or_blank_claim_settings_are_the_defaults_and_unknown_keys_are_ignored(provider):
+    """A file from an earlier or a later version keeps loading: version stays 1, nothing is required."""
+    plain = _settings(provider=provider)
+    settings = _settings(
+        provider=provider, audienceClaims=None, userIdClaim="", someFutureKey={"x": 1}
+    )
+    assert settings == plain
+    assert (settings.audience_claims, settings.user_id_claim) == (("aud",), None)
+    assert settings.to_dict()["version"] == 1
+
+
+def test_the_claim_settings_round_trip_through_the_file_format():
+    settings = _external_settings(audienceClaims=["client_id", "aud"], userIdClaim="email")
+    assert RemoteAuthSettings.from_dict(settings.to_dict()) == settings
+
+
+@pytest.mark.parametrize("overrides, fragment", [
+    ({"audienceClaims": []}, "audienceClaims"),
+    ({"audienceClaims": ["sub"]}, "audienceClaims"),
+    ({"audienceClaims": ["aud", "aud"]}, "audienceClaims"),
+    ({"audienceClaims": "aud"}, "audienceClaims"),
+    ({"userIdClaim": "vams:tokens"}, "userIdClaim"),
+    ({"userIdClaim": "VAMS:tokens"}, "userIdClaim"),
+    ({"userIdClaim": "has space"}, "userIdClaim"),
+    ({"userIdClaim": 5}, "userIdClaim"),
+])
+def test_invalid_claim_settings_stop_the_server(overrides, fragment):
+    with pytest.raises(ConfigError, match=fragment):
+        _external_settings(**overrides)
+
+
+def test_claim_settings_in_a_cognito_file_are_refused():
+    with pytest.raises(ConfigError, match="external"):
+        _settings(userIdClaim="email")
+    with pytest.raises(ConfigError, match="external"):
+        _settings(audienceClaims=["client_id"])
+
+
+def test_an_external_access_token_with_client_id_only_verifies_when_configured(external):
+    token = external.token("alice", extra={"client_id": REMOTE_CLIENT_ID}, drop=("aud",))
+    assert _verifier(external).verify(token) is None
+    verifier = _verifier(external, audienceClaims=["client_id"])
+    assert verifier.verify(token).user_id == "alice"
+
+
+def test_the_configured_user_id_claim_names_the_user(external):
+    token = external.token("alice", extra={"sub": "alice", "email": "alice@example.com"})
+    assert _verifier(external, userIdClaim="email").verify(token).user_id == "alice@example.com"
+    assert _verifier(external, userIdClaim="department").verify(token) is None

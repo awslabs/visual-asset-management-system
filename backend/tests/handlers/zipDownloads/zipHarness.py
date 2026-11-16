@@ -379,6 +379,7 @@ def load_handlers(enabled=True, env=None):
     environ = {"ZIPDOWNLOADS_ENABLED": "true" if enabled else "false",
                "EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME": "executeFn",
                "EXECUTION_SERVICE_FUNCTION_NAME": "executionServiceFn",
+               "EXECUTION_DETAILS_FUNCTION_NAME": "executionDetailsFn",
                "PRESIGNED_URL_TIMEOUT_SECONDS": "900",
                "ZIP_DOWNLOAD_MAX_ACTIVE_PER_USER": "5"}
     environ.update(env or {})
