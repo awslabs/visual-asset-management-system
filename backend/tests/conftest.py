@@ -206,6 +206,17 @@ _ixe_module = _s3mk_importlib_util.module_from_spec(_ixe_spec)
 _ixe_spec.loader.exec_module(_ixe_module)
 sys.modules['common.indexerEvents'] = _ixe_module
 sys.modules['common'].indexerEvents = _ixe_module
+# eventLogSummary describes an event for a log line from its shape alone (stdlib only). The indexers,
+# the bucket sync and the Garnet add-on indexers import it at module level, so it is registered for
+# the same reason as indexerEvents.
+_els_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.eventLogSummary',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'eventLogSummary.py')
+)
+_els_module = _s3mk_importlib_util.module_from_spec(_els_spec)
+_els_spec.loader.exec_module(_els_module)
+sys.modules['common.eventLogSummary'] = _els_module
+sys.modules['common'].eventLogSummary = _els_module
 # assetProvenance builds the asset-row change-provenance attributes (stdlib + the s3MetadataKeys
 # constants). The upload and large-file completion handlers import it at module level.
 _apv_spec = _s3mk_importlib_util.spec_from_file_location(
@@ -216,6 +227,16 @@ _apv_module = _s3mk_importlib_util.module_from_spec(_apv_spec)
 _apv_spec.loader.exec_module(_apv_module)
 sys.modules['common.assetProvenance'] = _apv_module
 sys.modules['common'].assetProvenance = _apv_module
+# assetUploads holds the record-level upload completion checks (stdlib only). The upload completion
+# and the ingest-asset handler import it at module level.
+_aup_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.assetUploads',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'assetUploads.py')
+)
+_aup_module = _s3mk_importlib_util.module_from_spec(_aup_spec)
+_aup_spec.loader.exec_module(_aup_module)
+sys.modules['common.assetUploads'] = _aup_module
+sys.modules['common'].assetUploads = _aup_module
 # metadataSchemaValidation owns `extract_file_extension`, which the compliance evaluation engine
 # imports at module level to apply a metadata schema's fileKeyTypeRestriction exactly as the metadata
 # write path does. Registered for the same reason as indexerEvents. tests/handlers/metadata/conftest.py

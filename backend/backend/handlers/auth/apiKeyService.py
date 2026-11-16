@@ -36,7 +36,7 @@ from models.apiKeys import (
     USER_API_KEY_MAX_EXPIRATION_DAYS, parse_iso8601_datetime,
 )
 from common.dynamodb import to_update_expr
-from customLogging.auditLogging import log_auth_changes, audited_handler
+from customLogging.auditLogging import log_action, log_auth_changes, audited_handler
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
@@ -382,6 +382,9 @@ def list_api_keys(event, user_scope=False):
         for item in items:
             item.pop('apiKeyHash', None)
 
+        log_action(event, "apiKeyList", item_count=len(items), request_parameters=dict(query_params),
+                   details={"scope": "user"} if user_scope else None)
+
         result = {'Items': items}
         if next_key:
             # More keys remain. Reported as both a token and a flag, so a caller that does
@@ -417,6 +420,8 @@ def get_api_key(event, api_key_id, user_scope=False):
             return general_error(body={'message': 'API key not found'}, event=event)
 
         item.pop('apiKeyHash', None)
+        log_action(event, "apiKeyGet", entity_id=api_key_id, apiKeyId=api_key_id,
+                   details={"scope": "user"} if user_scope else None)
         return success(body=item)
     except Exception as e:
         logger.exception(f"Error getting API key: {e}")
@@ -492,6 +497,11 @@ def create_api_key(event):
             "userId": request.userId,
             "expiresAt": request.expiresAt or '',
             "operation": "create"
+        }, entity_id=api_key_id, ids={"targetUserId": request.userId}, changes={
+            "apiKeyName": request.apiKeyName,
+            "userId": request.userId,
+            "description": request.description,
+            "expiresAt": request.expiresAt,
         })
 
         # Return the key only once — remove hash from response, add plaintext key
@@ -591,6 +601,11 @@ def create_user_api_key(event):
             "expiresAt": request.expiresAt,
             "operation": "create",
             "scope": "user"
+        }, entity_id=api_key_id, ids={"targetUserId": user_id}, changes={
+            "apiKeyName": request.apiKeyName,
+            "userId": user_id,
+            "description": request.description,
+            "expiresAt": request.expiresAt,
         })
 
         # Return the key only once — remove hash from response, add plaintext key
@@ -665,7 +680,9 @@ def update_api_key(event, api_key_id, user_scope=False):
             "apiKeyId": api_key_id,
             "updatedFields": list(update_fields.keys()),
             "operation": "update"
-        })
+        }, entity_id=api_key_id, ids={"targetUserId": item.get('userId')},
+            changes=dict(update_fields),
+            previous={field: item[field] for field in update_fields if field in item})
 
         # Return updated item
         updated = api_key_table.get_item(Key={'apiKeyId': api_key_id})
@@ -704,7 +721,9 @@ def delete_api_key(event, api_key_id, user_scope=False):
             "apiKeyName": item.get('apiKeyName', ''),
             "userId": item.get('userId', ''),
             "operation": "delete"
-        })
+        }, entity_id=api_key_id, ids={"targetUserId": item.get('userId')},
+            previous={field: item[field] for field in ('apiKeyName', 'userId', 'description', 'expiresAt',
+                                                         'isActive') if field in item})
 
         return success(body={'message': f"API key '{api_key_id}' deleted successfully"})
     except Exception as e:

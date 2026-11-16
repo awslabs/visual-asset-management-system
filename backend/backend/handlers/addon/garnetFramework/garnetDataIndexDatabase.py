@@ -38,6 +38,7 @@ from common.syncTracking import (
     write_outbound_sync_record,
 )
 from common.validators import validate
+from common.eventLogSummary import event_log_summary
 from common.dynamodb import query_all_items
 from models.common import VAMSGeneralErrorResponse
 
@@ -447,8 +448,11 @@ def send_to_garnet_ingestion_queue(ngsi_ld_entity: Dict[str, Any]) -> bool:
         True if successful, False otherwise
     """
     try:
-        # Log the entity being sent (use decimal_to_number for logging)
-        logger.info(f"Sending NGSI-LD entity to Garnet ingestion queue: {json.dumps(ngsi_ld_entity, indent=2, default=decimal_to_number)}")
+        # Name the entity, never its attribute values: they are the asset's field and metadata values
+        logger.info(
+            f"Sending NGSI-LD entity {ngsi_ld_entity.get('id')} ({ngsi_ld_entity.get('type')}, "
+            f"{len(ngsi_ld_entity)} field(s)) to Garnet ingestion queue"
+        )
         
         # Send NGSI-LD entity directly to SQS queue (use decimal_to_number for serialization)
         response = sqs.send_message(
@@ -648,7 +652,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     Processes SQS events containing SNS messages with DynamoDB stream records.
     """
     try:
-        logger.info(f"Processing database indexing event: {json.dumps(event, default=str)}")
+        logger.info(f"Processing database indexing event: {event_log_summary(event)}")
         
         successful_records = 0
         failed_records = 0

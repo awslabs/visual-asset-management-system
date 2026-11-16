@@ -256,7 +256,7 @@ web/
     utils/
       apiEndpoint.ts        # Resolves the API base URL
       chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload
-      authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
+      authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader, resolveExternalUserId
       sessionManager.ts     # Idle/expiry session handling
       fileExtensionValidation.ts
       fileHandleCompat.ts
@@ -626,6 +626,8 @@ POST   /auth/routes                                 # Check allowed routes
 GET    /secure-config                               # Get runtime config
 ```
 
+**An id in a URL keeps every character it has (#1476).** An asset id may end in `#` or `%`. `apiClient.buildUrl` percent-encodes any `#` or `?` in a path before `new URL()`, which would read either as the start of a fragment or a query, and any `%` that does not start an escape (a `%` followed by two hex digits is kept, because callers pass segments they encoded themselves), so service paths interpolate ids as they are and pass query parameters in `queryStringParameters`, never inline. A URL built outside `apiClient` (a viewer's `${config.api}database/.../download/stream/...`) and every in-app link to an asset route wrap the asset id in `encodeURIComponent`; the router decodes route parameters, so the page receives the id as it is. `src/__tests__/assetIdInUrls.test.ts` fails on a raw asset id in either.
+
 ---
 
 ## 5. Authentication System
@@ -695,6 +697,16 @@ There is no separate `email` key. Nothing writes one and nothing reads one — t
 identity comes from the `user` entry above. Storing it a second time under its own key put a user
 identifier in `localStorage` for no consumer, and wrote the literal string `"undefined"` when there
 was no signed-in user.
+
+In external OAuth mode `user.username` is the user id the API authorizer resolves from the access
+token (`resolveExternalUserId` in `src/utils/authTokenUtils.ts`). With amplify-config
+`externalOAuthIdpUserIdClaim` set, a token without that claim opens no session: storing it throws
+`MissingUserIdClaimError` (sign-in, refresh, page load, amplify-config refresh), the app signs out,
+and the sign-in page names the claim from `MISSING_USER_ID_CLAIM_KEY`.
+
+amplify-config also carries `externalOAuthIdpAudienceClaims` (the claim names the authorizer reads
+the audience from). The web app does not read it: the API alone decides whether a token's audience
+is accepted, and `vams-mcp setup-remote` is its consumer.
 
 ---
 
