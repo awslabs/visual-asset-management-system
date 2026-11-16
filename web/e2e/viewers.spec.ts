@@ -409,6 +409,11 @@ interface RenderCase {
      * green, then deselect it and check the green goes again (#1275).
      */
     selectInPanel?: boolean;
+    /**
+     * Abort every request for the TIFF/TGA decode worker's script, as a blocked or stale file would
+     * be: the viewer must decode on the page and draw real content (#1551).
+     */
+    blockDecodeWorker?: boolean;
 }
 
 /** Whether the deployment serves `path` as JavaScript (the SPA answers a missing file with HTML). */
@@ -560,6 +565,21 @@ const renderCases: RenderCase[] = [
     { sample: "tiff-cmyk-jpeg", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
     { sample: "tiff-multipage", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
     { sample: "tiff-large-8mp", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
+    {
+        sample: "tga-rgb-rle-small",
+        viewer: "TIFF/TGA Image Viewer",
+        kind: "canvas",
+        blockDecodeWorker: true,
+        // The browser logs the aborted script request; nothing else may be logged.
+        consoleAllowed: [/Failed to load resource/i, /net::ERR_FAILED/i],
+    },
+    {
+        sample: "tiff-lzw-rgb",
+        viewer: "TIFF/TGA Image Viewer",
+        kind: "canvas",
+        blockDecodeWorker: true,
+        consoleAllowed: [/Failed to load resource/i, /net::ERR_FAILED/i],
+    },
     { sample: "tiff-orientation-6", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
     { sample: "tga-truncated-rle", viewer: "TIFF/TGA Image Viewer", kind: "raster-notice" },
     { sample: "webp", viewer: "Image Viewer", kind: "image" },
@@ -656,7 +676,11 @@ const seeded = viewerSamples();
 
 test.describe("viewer render proof (seeded samples)", () => {
     for (const c of renderCases) {
-        const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
+        const label = c.withoutFeature
+            ? `${c.sample} without ${c.withoutFeature}`
+            : c.blockDecodeWorker
+            ? `${c.sample} with the decode worker blocked`
+            : c.sample;
         test(`${c.viewer} ${c.kind === "refused" ? "refuses" : "renders"} ${label}`, async ({
             page,
         }) => {
@@ -671,6 +695,9 @@ test.describe("viewer render proof (seeded samples)", () => {
                 `the seed fixture has no ${c.sample} sample; re-run the seed script`
             );
 
+            if (c.blockDecodeWorker) {
+                await page.route("**/assets/rasterWorker-*.js", (route) => route.abort());
+            }
             // Watchers go in before the first navigation so they see the app's first document.
             const csp = await watchCspViolations(page);
             const hosts = watchRequestHosts(page);

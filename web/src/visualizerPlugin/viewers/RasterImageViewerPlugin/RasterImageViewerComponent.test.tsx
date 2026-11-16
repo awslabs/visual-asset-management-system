@@ -27,6 +27,20 @@ beforeAll(() => {
     HTMLCanvasElement.prototype.getContext = (() => ({ putImageData })) as any;
 });
 
+/** Makes a stand-in worker report `ready` once the session installs its first message handler. */
+function announceReady(worker: any) {
+    let handler: any = null;
+    Object.defineProperty(worker, "onmessage", {
+        configurable: true,
+        get: () => handler,
+        set: (fn) => {
+            const first = handler === null;
+            handler = fn;
+            if (first && fn) setTimeout(() => handler({ data: { type: "ready" } }), 0);
+        },
+    });
+}
+
 function respond(bytes: ArrayBuffer | Uint8Array, status = 200) {
     const body = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     return {
@@ -260,6 +274,7 @@ describe("RasterImageViewerComponent", () => {
                 }, 0);
             },
         };
+        announceReady(fake);
         mockCreateWorker.mockReturnValue(fake);
         (global as any).fetch = jest.fn().mockResolvedValue(respond(tga));
         const view = render(<RasterImageViewerComponent {...baseProps} assetKey="/w.tga" />);
@@ -275,6 +290,7 @@ describe("RasterImageViewerComponent", () => {
                 setTimeout(() => dying.onerror({ preventDefault() {} }), 0);
             },
         };
+        announceReady(dying);
         mockCreateWorker.mockReturnValue(dying);
         const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
         render(<RasterImageViewerComponent {...baseProps} assetKey="/x.tga" />);

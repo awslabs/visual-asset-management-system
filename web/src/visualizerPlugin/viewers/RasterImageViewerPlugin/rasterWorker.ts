@@ -10,7 +10,7 @@
  * is only fetched when the viewer opens. The worker is same-origin (`worker-src 'self'`), so no CSP
  * change is needed.
  *
- * Protocol (`rasterSession.ts`): `{id, type: "open", buffer, kind, limits}` answers `{id, ok, pages}`;
+ * Protocol (`rasterSession.ts`): the worker first posts `{type: "ready"}`; then `{id, type: "open", buffer, kind, limits}` answers `{id, ok, pages}`;
  * `{id, type: "decode", index}` answers `{id, ok, width, height, data, conversion}`; a failure
  * answers `{id, ok: false, reason, message}`.
  */
@@ -64,3 +64,7 @@ scope.onmessage = (event: MessageEvent) => {
         });
     }
 };
+
+// Last statement: tells the page the script loaded and the decoders are ready. The page sends the
+// file only after this, so a worker that fails to start leaves the bytes with the page.
+scope.postMessage({ type: "ready" });
