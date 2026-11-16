@@ -38,6 +38,7 @@ from common.syncTracking import (
     write_outbound_sync_record,
 )
 from common.validators import validate
+from common.eventLogSummary import event_log_summary
 from common.dynamodb import query_all_items, query_has_match
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from models.common import VAMSGeneralErrorResponse
@@ -871,8 +872,11 @@ def send_to_garnet_ingestion_queue(ngsi_ld_entity: Dict[str, Any]) -> bool:
         True if successful, False otherwise
     """
     try:
-        # Log the entity being sent (use decimal_to_number for logging)
-        logger.info(f"Sending NGSI-LD entity to Garnet ingestion queue: {json.dumps(ngsi_ld_entity, indent=2, default=decimal_to_number)}")
+        # Name the entity, never its attribute values: they are the asset's field and metadata values
+        logger.info(
+            f"Sending NGSI-LD entity {ngsi_ld_entity.get('id')} ({ngsi_ld_entity.get('type')}, "
+            f"{len(ngsi_ld_entity)} field(s)) to Garnet ingestion queue"
+        )
         
         # Send NGSI-LD entity directly to SQS queue (use decimal_to_number for serialization)
         response = sqs.send_message(
@@ -1127,38 +1131,29 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[bool]:
     Handle DynamoDB asset links table stream for Garnet indexing.
     Uses same pattern as OpenSearch assetIndexer.py handle_asset_links_stream().
     
-    Creates asset link entity AND updates both connected assets.
+    Creates or updates the asset link entity (not for a removed link) AND updates both connected
+    assets.
     
     Args:
         event_record: DynamoDB stream record
         
     Returns:
-        List of success booleans (one for link, two for assets)
+        List of success booleans (one for the link unless it was removed, one per asset found)
     """
     try:
         event_name = event_record.get('eventName', '')
         dynamodb_data = event_record.get('dynamodb', {})
         
-        # Extract asset link information
-        asset_link_id = None
-        from_asset_key = None
-        to_asset_key = None
-        
-        if event_name == 'REMOVE':
-            # For REMOVE events, use Keys
-            keys = dynamodb_data.get('Keys', {})
-            asset_link_id = keys.get('assetLinkId', {}).get('S')
-            from_asset_key = keys.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
-            to_asset_key = keys.get('toAssetDatabaseId:toAssetId', {}).get('S')
-        else:
-            # For INSERT/MODIFY events, use NewImage
-            record_data = dynamodb_data.get('NewImage', {})
-            asset_link_id = record_data.get('assetLinkId', {}).get('S')
-            from_asset_key = record_data.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
-            to_asset_key = record_data.get('toAssetDatabaseId:toAssetId', {}).get('S')
+        # The table is keyed on assetLinkId alone, so a REMOVE record's Keys do not name the
+        # two assets; its OldImage (the deleted row) does.
+        record_data = dynamodb_data.get('OldImage' if event_name == 'REMOVE' else 'NewImage', {})
+        asset_link_id = record_data.get('assetLinkId', {}).get('S')
+        from_asset_key = record_data.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
+        to_asset_key = record_data.get('toAssetDatabaseId:toAssetId', {}).get('S')
         
         if not asset_link_id or not from_asset_key or not to_asset_key:
-            logger.warning("Missing asset link information in stream")
+            logged_link_id = asset_link_id or dynamodb_data.get('Keys', {}).get('assetLinkId', {}).get('S')
+            logger.warning(f"Missing asset link information in {event_name} stream record for asset link {logged_link_id}")
             return [True]  # Skip, not an error
         
         # Parse asset keys
@@ -1169,16 +1164,10 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[bool]:
         
         results = []
         
-        # Handle the asset link entity itself
-        if event_name == 'REMOVE':
-            # Delete the asset link entity
-            ngsi_ld_entity = {
-                "id": f"urn:vams:assetlink:{asset_link_id}",
-                "type": "VAMSAssetLink"
-            }
-            success = send_to_garnet_ingestion_queue(ngsi_ld_entity)
-            results.append(success)
-        else:
+        # A removed link sends nothing for the link entity: the ingestion queue upserts with
+        # options=update and cannot remove an entity, so a send would only create a bare link entity
+        # for a link Garnet never held. Both assets are refreshed below either way.
+        if event_name != 'REMOVE':
             # Create/update the asset link entity
             asset_link_details = get_asset_link_details(asset_link_id)
             if asset_link_details:
@@ -1282,7 +1271,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     Processes SQS events containing SNS messages with DynamoDB stream records.
     """
     try:
-        logger.info(f"Processing asset indexing event: {json.dumps(event, default=str)}")
+        logger.info(f"Processing asset indexing event: {event_log_summary(event)}")
         
         successful_records = 0
         failed_records = 0

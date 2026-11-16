@@ -2,7 +2,7 @@
 
 VAMS writes an audit record for every action a user, an API key or the system takes: each create, update and delete, each read, search, download and export, and each pipeline run. You can use these records to answer who did what to which data, and to attribute storage, transfer and pipeline use to users, databases and assets.
 
-One exception remains for now: the reads of the API key, role, user role, constraint and Amazon Cognito user pages are not yet recorded, and changes to those items keep their earlier record format. Both move to the format described here with [#1434](https://github.com/awslabs/visual-asset-management-system/issues/1434).
+Changes to roles, user roles, constraints, API keys and Amazon Cognito users, and the reads of those pages, are recorded in the same format, in their own auth change and auth other logs. Every authorization decision names the action it was made for, its outcome and the request, so a denied attempt can be matched to the request it stopped.
 
 ---
 

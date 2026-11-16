@@ -199,7 +199,9 @@ class TestClaimEdges:
         with mock_aws(), ExitStack() as stack:
             env = _Env(stack)
             stack.enter_context(patch.object(large, "copy_s3_object", return_value=False))
-            assert large.validate_and_move_large_file(_file_info(), _ids("m1")) is False
+            # A failed copy is a retryable error (#587): it is raised so the message is redelivered.
+            with pytest.raises(RuntimeError):
+                large.validate_and_move_large_file(_file_info(), _ids("m1"))
             assert "claimHolder" not in env.claim()
             assert env.s3.list_objects_v2(Bucket=RUN_BUCKET)["KeyCount"] == 1
 

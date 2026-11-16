@@ -49,7 +49,7 @@ tools/VamsMCP/
                              # (the server's own token check, before any tool runs)
     http_app.py              # remote mode: RemoteGate (RFC 9728 metadata, the 401 challenge, token
                              # check, per-request identity) in front of the SDK's streamable HTTP app
-    setup_remote.py          # `vams-mcp setup-remote`: writes the auth file from /api/amplify-config
+    setup_remote.py          # `vams-mcp setup-remote`: writes the auth file from /api/amplify-config (incl. the published externalOAuthIdpAudienceClaims / UserIdClaim and the relative externalOAuthIdpDiscoveryEndpoint path joined to the provider URL, --issuer as fallback and required when the provider URL serves no discovery document, e.g. a Cognito hosted UI domain; --audience-claim overrides)
     annotations.py           # the MCP ToolAnnotations constant of each gate tier (Mandatory Rule 12)
     results.py               # typed results of the most-used reads -> outputSchema (Rule 13)
     client.py                # VamsClient: wraps vamscli APIClient + ProfileManager; remote mode's
@@ -94,6 +94,7 @@ tools/VamsMCP/
                              # bad tokens, per-user results under concurrency, fail closed, no token
                              # in logs or on disk, DNS rebinding, body limit
     test_remote_auth.py      # TokenVerifier rules (Cognito, external IdP, keys) and the auth file
+    test_remote_auth_parity.py  # shared token cases (tests/parity/) also run against the API authorizer
     test_remote_mode.py      # remote start-up rules, per-request client, CLI log silenced, budget
     test_setup_remote.py     # `vams-mcp setup-remote`
     api_coverage.py          # COVERAGE MANIFEST: every public APIClient method -> the tools that call
@@ -468,7 +469,13 @@ asymmetry other callers rely on):
     - **The server verifies the token before any tool or resource runs.** `http_app.RemoteGate`
       checks every request except the RFC 9728 metadata routes with `remote_auth.TokenVerifier`
       (RS256 against the issuer's JWKS, `iss`, an audience in the auth file, `exp`, `token_use`, a
-      named user, the machine-token rules of the API authorizer). No token or a bad one: `401` with
+      named user, the machine-token rules of the API authorizer). For an external IdP the verifier
+      mirrors `authorizerCore.py`: the audience is read through the auth file's `audienceClaims`
+      (default `aud`; first claim present decides) and the user through `userIdClaim` (default the
+      chain `cognito:username`, `username`, `sub`). Keep both in step with the authorizer:
+      `tests/parity/external_token_cases.json` is run through each side
+      (`tests/test_remote_auth_parity.py`, `backend/tests/common/auth/test_authorizerCore_remote_mcp_parity.py`),
+      so change a rule in both places and add a case to the file. No token or a bad one: `401` with
       `WWW-Authenticate: Bearer resource_metadata="..."`. Keys that cannot be read: `503`, nothing
       passes. Detecting a header is not verifying it; never add a path around the gate, and never a
       test bypass (the tests sign real tokens with keys a loopback fake issuer serves).

@@ -120,7 +120,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     "userId": pathUserId,
                     "operation": "create_update",
                     "selfAccess": True
-                })
+                }, entity_id=pathUserId, ids={"targetUserId": pathUserId}, changes={"email": email})
                 return success(body=profile)
 
             # GET
@@ -131,7 +131,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 "userId": pathUserId,
                 "operation": "get",
                 "selfAccess": True
-            })
+            }, entity_id=pathUserId, ids={"targetUserId": pathUserId})
             return success(body=profile)
 
         # ADMINISTRATION ROUTE (viewing another user) is not implemented yet.
