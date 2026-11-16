@@ -441,7 +441,8 @@ class TestEndStateRefresh:
                 patch.object(po, "record_execution_outputs",
                              side_effect=lambda **kw: order.append(("record", kw["execution_log"]))), \
                 patch.object(po, "_refresh_execution_log",
-                             side_effect=lambda *a: order.append(("refresh",) + a)):
+                             # context= is the attempt's Lambda context (#1271 D4: skipped near the deadline)
+                             side_effect=lambda *a, **_k: order.append(("refresh",) + a)):
             po._process_results_only({"workflowExecutionId": EXEC, "endStatePipelineExecutionId": "p1",
                                       "workflowDatabaseId": "db", "workflowId": "wf"})
 

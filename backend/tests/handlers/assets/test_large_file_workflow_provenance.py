@@ -150,7 +150,11 @@ class TestLargeFileChangeMetadataResolution:
         with patch.object(sq, 'validateS3AssetExtensionsAndContentType', return_value=True), \
                 patch.object(sq, 'copy_s3_object', return_value=True) as mock_copy, \
                 patch.object(sq, 'delete_s3_object', MagicMock()), \
-                patch.object(sq, 'update_asset_after_file_processing', MagicMock()):
+                patch.object(sq, 'update_asset_after_file_processing', MagicMock()), \
+                patch.object(sq.eo, 'acquire_copy_claim', return_value=sq.eo.CLAIM_ACQUIRED), \
+                patch.object(sq.eo, 'finish_copy_claim'):
+            # A workflow output is copied under its copy claim (#1271); the claim itself is covered
+            # by test_sqsUploadFileLarge_copy_claim.py.
             assert sq.validate_and_move_large_file(file_info, {}) is True
 
         change_metadata = mock_copy.call_args.kwargs['change_metadata']
