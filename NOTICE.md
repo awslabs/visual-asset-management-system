@@ -74,7 +74,7 @@ This software includes third party software subject to the following copyrights:
 | axios                               | ^1.6.0        | MIT                     |
 | buffer                              | ^6.0.3        | MIT                     |
 | dompurify                           | ^3.4.17       | (MPL-2.0 OR Apache-2.0) |
-| fast-xml-parser                     | ^5.9.0        | MIT                     |
+| fast-xml-parser                     | ^5.12.0       | MIT                     |
 | fcs                                 | ^0.1.2        | MIT                     |
 | file-system-access                  | 1.0.4         | MIT                     |
 | geojson                             | ^0.5.0        | MIT                     |
