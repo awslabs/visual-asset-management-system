@@ -1,0 +1,1 @@
+"use strict";(globalThis.webpackChunkdocusaurus_site=globalThis.webpackChunkdocusaurus_site||[]).push([[3192],{13192(s,e,u){u.d(e,{createArchitectureServices:()=>c.S});var c=u(84549);u(80184)}}]);
