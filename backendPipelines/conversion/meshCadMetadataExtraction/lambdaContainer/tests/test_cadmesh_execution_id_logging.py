@@ -84,8 +84,9 @@ def _cadquery_stub():
     module = types.ModuleType("cadquery")
     module.Shape = object
     module.Workplane = object
-    module.importers = SimpleNamespace(importStep=lambda path: _UnreadableSolid(),
-                                       importDXF=MagicMock())
+    module.importers = SimpleNamespace(
+        importStep=lambda path: SimpleNamespace(vals=lambda: [_UnreadableSolid()]),
+        importDXF=MagicMock())
     return module
 
 
