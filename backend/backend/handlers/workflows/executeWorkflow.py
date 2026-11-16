@@ -2182,7 +2182,7 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
                      output_location_type=OUTPUT_LOCATION_TYPE_ASSET, output_extension="/",
                      filtered_inputs_by_composite=None, metadata_source_assets=None,
                      metadata_source_database_id="", metadata_source_databases=None,
-                     run_prefix="", reindex_slot_keys=None, system_execution_context=""):
+                     run_prefix="", system_slot_keys=None, system_execution_context=""):
     """Build the first-pipeline manifest, start the Step Functions execution, and persist all V2
     records.
 
@@ -2386,16 +2386,15 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
             el.lock_ttl_seconds(pipeline_records),
             stranded_after_seconds=_launch_timeout_seconds() + el.LOCK_TAKEOVER_MARGIN_SECONDS,
             holder_has_record=_holder_has_execution_record(workflow_database_id, workflow_id))
-    # A reindex launch also claims one of the workflow's reindex slots, so at most
-    # app.vectorSearch.indexingConcurrency reindex runs hold one at a time. With every candidate held,
-    # the locks just taken are released and ReindexSlotsBusy tells the launcher to wait. The slot then
-    # travels with the locks: released from memory below, or by the terminal steps through the holder
-    # index.
-    if reindex_slot_keys:
+    # A system-pipeline launch that asked for a concurrency slot also claims one of the workflow's slots,
+    # so at most the count it named of such runs hold one at a time. With every candidate held, the locks
+    # just taken are released and SystemSlotsBusy tells the launcher to wait. The slot then travels with
+    # the locks: released from memory below, or by the terminal steps through the holder index.
+    if system_slot_keys:
         try:
-            slot_key = el.acquire_reindex_slot(
-                dynamodb.Table(workflow_execution_locks_table), reindex_slot_keys, execution_id,
-                el.reindex_slot_ttl_seconds(pipeline_records),
+            slot_key = el.acquire_system_slot(
+                dynamodb.Table(workflow_execution_locks_table), system_slot_keys, execution_id,
+                el.system_slot_ttl_seconds(pipeline_records),
                 stranded_after_seconds=_launch_timeout_seconds() + el.LOCK_TAKEOVER_MARGIN_SECONDS,
                 holder_has_record=_holder_still_running(workflow_database_id, workflow_id))
         except Exception:
@@ -2547,7 +2546,7 @@ _HOLDER_ENDED_STATUSES = frozenset({"SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT
 
 
 def _holder_still_running(workflow_database_id, workflow_id):
-    """For the reindex slot acquire: whether a slot holder of this workflow may still be running. False
+    """For the system slot acquire: whether a slot holder of this workflow may still be running. False
     when it wrote no main execution row, when the row is in an ended status, or when its state machine
     has ended (a run stopped outside VAMS). A failed read answers True, so the slot is not taken."""
     main_table = dynamodb.Table(workflow_execution_database_v2)
@@ -2572,37 +2571,32 @@ def _holder_still_running(workflow_database_id, workflow_id):
     return _running
 
 
-def _reindex_slot_wait_response():
-    """The 429 a reindex launch gets when every reindex slot is held: the launcher's cue to send it
-    again later. No outcome of the launch, so it writes no audit record of any group (the handler marks
-    it with skip_route_outcome for the actions group, and does not go through general_error, which
-    writes one to the errors group)."""
+def _system_slot_wait_response():
+    """The 429 a system-pipeline launch gets when every concurrency slot it named is held: the launcher's
+    cue to send it again later. No outcome of the launch, so it writes no audit record of any group (the
+    handler marks it with skip_route_outcome for the actions group, and does not go through
+    general_error, which writes one to the errors group)."""
     return APIGatewayProxyResponseV2(
         isBase64Encoded=False,
         statusCode=429,
         headers=commonHeaders(),
-        body=json.dumps({"message": el.REINDEX_SLOTS_BUSY_MESSAGE}),
+        body=json.dumps({"message": el.SYSTEM_SLOTS_BUSY_MESSAGE}),
     )
 
 
-def _reindex_slot_keys_for(event, request_model, workflow_database_id, workflow_id):
-    """The slot keys a reindex launch may claim, in the order to try them; None for any other launch.
+def _system_slot_keys_for(event, workflow_database_id, workflow_id):
+    """The slot keys a system-pipeline launch may claim, in the order to try them; None for any other launch.
 
-    Only the reindex launcher's cross-call as SYSTEM_USER with trigger type systemReindex names a slot
-    count, in ``lambdaCrossCall.reindexSlots`` (``count``, and the ``candidates`` it found free), which
-    API Gateway cannot set. Candidates outside the count are ignored; with none, every slot is tried."""
-    if request_model.triggerType != "systemReindex" or not _is_system_cross_call(event):
+    Only a marked system-pipeline cross-call names slots, in ``systemExecution.concurrencySlots``
+    (``count``, and the ``candidates`` it found free), which API Gateway cannot set
+    (systemPipelines.resolve_concurrency_slots validates both and raises SystemExecutionError for a
+    malformed field). With no candidates the first MAX_SYSTEM_SLOT_CANDIDATES slots are tried."""
+    slots = sp.resolve_concurrency_slots(event)
+    if slots is None:
         return None
-    slots = event["lambdaCrossCall"].get("reindexSlots")
-    if not isinstance(slots, dict):
-        return None
-    count = slots.get("count")
-    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= el.MAX_REINDEX_SLOTS:
-        return None
-    candidates = [index for index in (slots.get("candidates") or [])
-                  if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < count]
-    order = candidates or list(range(count))
-    return [el.reindex_slot_key(workflow_database_id, workflow_id, index) for index in order]
+    count, candidates = slots
+    order = candidates or list(range(min(count, el.MAX_SYSTEM_SLOT_CANDIDATES)))
+    return [el.system_slot_key(workflow_database_id, workflow_id, index) for index in order]
 
 
 def _stop_started_execution(workflow_execution_arn):
@@ -3017,6 +3011,9 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
     #    None here, whatever its body or event says, so the public request can never reach either.
     try:
         system_execution = sp.resolve_system_execution(event)
+        # The concurrency slots it may ask for (systemExecution.concurrencySlots), validated here too, so
+        # a malformed request is refused before any read; None for every launch that names none.
+        system_slot_keys = _system_slot_keys_for(event, workflow_database_id, workflow_id)
     except sp.SystemExecutionError as se:
         logger.error(f"Refused a system-pipeline launch of {workflow_database_id}:{workflow_id}: {se}")
         return validation_error(body={"message": sp.SYSTEM_EXECUTION_INVALID_MESSAGE}, event=event)
@@ -3302,19 +3299,19 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
             metadata_source_assets=metadata_source_assets,
             metadata_source_database_id=metadata_source_database_id,
             metadata_source_databases=metadata_source_databases,
-            reindex_slot_keys=_reindex_slot_keys_for(event, request_model, workflow_database_id, workflow_id),
+            system_slot_keys=system_slot_keys,
             system_execution_context=system_execution_context)
-    except el.ReindexSlotsBusy:
-        # Not a refusal: the reindex launcher puts the message back and tries again later. So it is no
-        # outcome of the launch either: the attempt that claims a slot records workflowExecute, and one
-        # refused for good (a 400) records its failure, so a backfill that waits writes no failed record
-        # per wait (skip_route_outcome).
+    except el.SystemSlotsBusy:
+        # Not a refusal: the launcher puts its message back and tries again later. So it is no outcome of
+        # the launch either: the attempt that claims a slot records workflowExecute, and one refused for
+        # good (a 400) records its failure, so a run of launches that waits writes no failed record per
+        # wait (skip_route_outcome).
         # The answer is built here rather than by general_error, which would write an errors-group
         # record with the request's action and outcome failed for every wait (D103); the INFO line
-        # above is the wait's only trace.
-        logger.info(f"Reindex launch of workflow {workflow_database_id}:{workflow_id} waits for a slot")
+        # below is the wait's only trace.
+        logger.info(f"System launch of workflow {workflow_database_id}:{workflow_id} waits for a slot")
         skip_route_outcome(event)
-        return _reindex_slot_wait_response()
+        return _system_slot_wait_response()
     except el.ExecutionLockConflict as conflict:
         # The key and the holder are for the log; the caller gets a fixed body naming only the scope
         # (asset / file / file version). The trigger dispatcher drops a 400, which for a repeated delivery
@@ -3400,9 +3397,9 @@ def handle_post_request(event):
             body = raw
 
     request_model = parse(body, model=ExecuteWorkflowRequestV2Model)
-    # A trigger type records why a run started, and fileUpload / systemReindex are set only by the system
-    # launchers (the upload trigger dispatcher and the vector-search reindex launcher), which invoke this
-    # handler as SYSTEM_USER. Anyone else's request may only be a manual run.
+    # A trigger type records why a run started, and fileUpload is set only by the upload trigger
+    # dispatcher, which invokes this handler as SYSTEM_USER. Anyone else's request may only be a manual
+    # run. A system trigger value is never a request value (common.workflows.systemPipelines).
     if request_model.triggerType != "manual" and not _is_system_cross_call(event):
         logger.warning("Refused an execute request naming a system trigger type outside a system launch")
         return validation_error(body={"message": SYSTEM_TRIGGER_TYPE_MESSAGE}, event=event)

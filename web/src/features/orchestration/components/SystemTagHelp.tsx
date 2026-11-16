@@ -41,7 +41,7 @@ const SYSTEM_TAG_GROUPS: TagGroup[] = [
             { tag: "workflowDatabaseId", desc: "The workflow's database id." },
             {
                 tag: "triggerType",
-                desc: "How the run started: Manual, File-Upload, or System-Reindex (the stored trigger vocabulary).",
+                desc: "How the run started: Manual, File-Upload, or a system trigger value such as System-Reindex (the stored trigger vocabulary).",
             },
             { tag: "executingUserName", desc: "User id that launched the run." },
         ],

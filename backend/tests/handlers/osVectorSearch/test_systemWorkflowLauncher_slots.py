@@ -3,10 +3,12 @@
 
 """systemWorkflowLauncher: at most REINDEX_SLOT_COUNT reindex runs at once, and waiting is not failure.
 
-Before calling executeWorkflow the launcher reads the slot rows. With none free it does not call it: it
-sends the message again, delayed, with its wait count raised, and lets the original be deleted, so the
-wait never reaches the dead-letter queue. With some free it passes them as candidates, and a 429 (another
-launch took them first) is the same wait."""
+Before calling executeWorkflow the launcher reads the slot rows: the generic `{workflow}|systemSlot|{n}`
+rows, and the `{workflow}|reindexSlot|{n}` rows an earlier release wrote, which a run launched before the
+upgrade holds until it ends. With none free it does not call it: it sends the message again, delayed, with
+its wait count raised, and lets the original be deleted, so the wait never reaches the dead-letter queue.
+With some free it passes them as candidates in the marked call's `systemExecution.concurrencySlots`, and a
+429 (another launch took them first) is the same wait."""
 
 import json
 from unittest.mock import MagicMock
@@ -24,9 +26,10 @@ def _iso(epoch):
     return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _slot_row(m, index, holder, acquired=NOW - 60, expires=NOW + 3600):
-    return {"lockKey": m.el.reindex_slot_key("GLOBAL", "system-genai-metadata", index),
-            "workflowExecutionId": holder, "acquiredAt": _iso(acquired), "expiresAt": expires}
+def _slot_row(m, index, holder, acquired=NOW - 60, expires=NOW + 3600, legacy=False):
+    key = (m.legacy_slot_key(index) if legacy
+           else m.el.system_slot_key("GLOBAL", "system-genai-metadata", index))
+    return {"lockKey": key, "workflowExecutionId": holder, "acquiredAt": _iso(acquired), "expiresAt": expires}
 
 
 @pytest.fixture
@@ -55,8 +58,8 @@ def _run(m, message=None):
     return m.lambda_handler({"Records": [_sqs("m1", message or MESSAGE)]}, MagicMock())
 
 
-def _cross_call(m):
-    return json.loads(m.lambda_client.invoke.call_args.kwargs["Payload"])["lambdaCrossCall"]
+def _slots(m):
+    return json.loads(m.lambda_client.invoke.call_args.kwargs["Payload"])["systemExecution"]["concurrencySlots"]
 
 
 @pytest.mark.unit
@@ -65,22 +68,60 @@ class TestTheLaunchCarriesFreeSlots:
         _rows(launcher, [_slot_row(launcher, 1, "E-b")])
         response = _run(launcher)
         assert response.get("batchItemFailures", []) == []
-        slots = _cross_call(launcher)["reindexSlots"]
+        slots = _slots(launcher)
         assert slots["count"] == 3 and sorted(slots["candidates"]) == [0, 2]
         launcher.sqs_client.send_message.assert_not_called()
 
     def test_an_expired_slot_counts_as_free(self, launcher):
         _rows(launcher, [_slot_row(launcher, index, f"E{index}", expires=NOW - 1) for index in range(3)])
         _run(launcher)
-        assert sorted(_cross_call(launcher)["reindexSlots"]["candidates"]) == [0, 1, 2]
+        assert sorted(_slots(launcher)["candidates"]) == [0, 1, 2]
 
     def test_an_unprocessed_key_is_read_as_held(self, launcher):
-        key = launcher.el.reindex_slot_key("GLOBAL", "system-genai-metadata", 0)
+        key = launcher.el.system_slot_key("GLOBAL", "system-genai-metadata", 0)
         launcher.dynamodb.batch_get_item.return_value = {
             "Responses": {launcher.workflow_execution_locks_table_name: [_slot_row(launcher, 1, "E-b")]},
             "UnprocessedKeys": {launcher.workflow_execution_locks_table_name: {"Keys": [{"lockKey": key}]}}}
         _run(launcher)
-        assert _cross_call(launcher)["reindexSlots"]["candidates"] == [2]
+        assert _slots(launcher)["candidates"] == [2]
+
+    def test_both_key_shapes_of_every_slot_are_read(self, launcher):
+        _run(launcher)
+        keys = [key["lockKey"] for call in launcher.dynamodb.batch_get_item.call_args_list
+                for key in call.kwargs["RequestItems"][launcher.workflow_execution_locks_table_name]["Keys"]]
+        assert sorted(keys) == sorted(
+            [f"GLOBAL:system-genai-metadata|systemSlot|{i}" for i in range(3)]
+            + [f"GLOBAL:system-genai-metadata|reindexSlot|{i}" for i in range(3)])
+
+
+@pytest.mark.unit
+class TestAnUpgradeKeepsTheCap:
+    """A run launched before the upgrade holds a slot under the earlier key until it ends."""
+
+    def test_an_earlier_releases_held_row_keeps_its_slot_held(self, launcher):
+        _rows(launcher, [_slot_row(launcher, 0, "E-before", legacy=True), _slot_row(launcher, 1, "E-b")])
+        _run(launcher)
+        assert _slots(launcher)["candidates"] == [2]
+
+    def test_every_slot_held_under_either_key_is_a_wait(self, launcher):
+        _rows(launcher, [_slot_row(launcher, 0, "E-before", legacy=True),
+                         _slot_row(launcher, 1, "E-b"), _slot_row(launcher, 2, "E-c", legacy=True)])
+        _run(launcher)
+        launcher.lambda_client.invoke.assert_not_called()
+        assert json.loads(launcher.sqs_client.send_message.call_args.kwargs["MessageBody"])["slotWaits"] == 1
+
+    def test_an_expired_earlier_row_is_free(self, launcher):
+        _rows(launcher, [_slot_row(launcher, index, f"E{index}", expires=NOW - 1, legacy=True) for index in range(3)])
+        _run(launcher)
+        assert sorted(_slots(launcher)["candidates"]) == [0, 1, 2]
+
+    def test_an_old_earlier_row_whose_holder_ended_is_nominated(self, launcher):
+        old = NOW - launcher.RECLAIM_MIN_AGE_SECONDS - 10
+        _rows(launcher, [_slot_row(launcher, 0, "E-done", acquired=old, legacy=True),
+                         _slot_row(launcher, 1, "E-a"), _slot_row(launcher, 2, "E-b")])
+        launcher.workflow_executions_table.get_item.return_value = {"Item": {"executionStatus": "SUCCEEDED"}}
+        _run(launcher)
+        assert _slots(launcher)["candidates"] == [0]
 
 
 @pytest.mark.unit
@@ -134,14 +175,14 @@ class TestAnEndedHolderIsNominated:
         launcher.workflow_executions_table.get_item.side_effect = lambda **kw: {
             "Item": {"executionStatus": "SUCCEEDED" if kw["Key"]["workflowExecutionId"] == "E-done" else "RUNNING"}}
         _run(launcher)
-        assert _cross_call(launcher)["reindexSlots"]["candidates"] == [0]
+        assert _slots(launcher)["candidates"] == [0]
 
     def test_a_holder_with_no_record_is_a_candidate_and_a_young_slot_is_not_read(self, launcher):
         _rows(launcher, [_slot_row(launcher, 0, "E-gone", acquired=NOW - 7200),
                          _slot_row(launcher, 1, "E-a"), _slot_row(launcher, 2, "E-b")])
         launcher.workflow_executions_table.get_item.return_value = {}
         _run(launcher)
-        assert _cross_call(launcher)["reindexSlots"]["candidates"] == [0]
+        assert _slots(launcher)["candidates"] == [0]
         assert launcher.workflow_executions_table.get_item.call_count == 1
 
 

@@ -43,11 +43,6 @@ METADATA_SCHEMA_VERSION_GROUPED = 2
 # Constant PK for the by-date global-list GSI (newest-first query, not a table scan).
 ALL_EXECUTIONS_LIST_PARTITION = "execution"
 
-# Prefix of the execution group the vector-search reindexer gives its launches of the SYSTEM GenAI metadata
-# workflow (osVectorSearch.systemWorkflowLauncher: vec-<reindexRunId>-<chunk>). Every member is a system run,
-# so the execution lists show a listing narrowed to such a group with its system runs by default.
-REINDEX_EXECUTION_GROUP_PREFIX = "vec-"
-
 # Payload-safety budget for the /details/results endpoint, which returns the FULL concatenated
 # result text of a run, counted in bytes AS SENT (after JSON escaping, where one CJK character costs
 # 7 bytes and a quote 4), not raw UTF-8. The AWS Lambda-proxy synchronous response limit is 6 MB; 5 MiB

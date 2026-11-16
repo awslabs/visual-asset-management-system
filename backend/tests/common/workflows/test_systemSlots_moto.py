@@ -1,9 +1,11 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reindex slots against moto's DynamoDB: more launches than slots never hold more slots than there
-are, a terminal release frees a slot through the holder index, a lost holder's slot is claimable once
-it expires, and a stranded or ended holder's slot is taken over once it is old enough."""
+"""Concurrency slots of a system-pipeline launch against moto's DynamoDB: more launches than slots never hold
+more slots than there are, a terminal release frees a slot through the holder index (a row an earlier
+release wrote under its old scope name included, so an upgrade with runs in flight frees their slots), a
+lost holder's slot is claimable once it expires, and a stranded or ended holder's slot is taken over once
+it is old enough."""
 
 import os
 import threading
@@ -22,16 +24,16 @@ from backend.tests.common.workflows.test_executionLocks_moto import (
 REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
 NOW = 1_800_000_000
 STRANDED_AFTER = 900 + el.LOCK_TAKEOVER_MARGIN_SECONDS
-TTL = el.reindex_slot_ttl_seconds([{"executionConfig": {"taskTimeout": "18000"}}])
+TTL = el.system_slot_ttl_seconds([{"executionConfig": {"taskTimeout": "18000"}}])
 
 
 def _keys(count):
-    return el.reindex_slot_keys("GLOBAL", "system-genai-metadata", count)
+    return el.system_slot_keys("GLOBAL", "system-genai-metadata", count)
 
 
 def _held(table):
     return sorted(item["workflowExecutionId"] for item in table.scan()["Items"]
-                  if item["lockScope"] == el.LOCK_SCOPE_REINDEX_SLOT and int(item["expiresAt"]) >= NOW)
+                  if item["lockScope"] == el.LOCK_SCOPE_SYSTEM_SLOT and int(item["expiresAt"]) >= NOW)
 
 
 @pytest.fixture
@@ -47,8 +49,8 @@ class TestNeverMoreThanTheSlotCount:
         claimed, busy = [], 0
         for index in range(10):
             try:
-                claimed.append(el.acquire_reindex_slot(table, _keys(3), f"E{index}", TTL, now=NOW))
-            except el.ReindexSlotsBusy:
+                claimed.append(el.acquire_system_slot(table, _keys(3), f"E{index}", TTL, now=NOW))
+            except el.SystemSlotsBusy:
                 busy += 1
         assert sorted(claimed) == _keys(3) and busy == 7
         assert _held(table) == ["E0", "E1", "E2"]
@@ -59,8 +61,8 @@ class TestNeverMoreThanTheSlotCount:
 
         def _launch(index):
             try:
-                results.append(el.acquire_reindex_slot(table, _keys(4), f"E{index}", TTL, now=NOW))
-            except el.ReindexSlotsBusy:
+                results.append(el.acquire_system_slot(table, _keys(4), f"E{index}", TTL, now=NOW))
+            except el.SystemSlotsBusy:
                 results.append(None)
 
         threads = [threading.Thread(target=_launch, args=(index,)) for index in range(12)]
@@ -73,11 +75,11 @@ class TestNeverMoreThanTheSlotCount:
 
     def test_a_freed_slot_is_claimed_by_the_next_launch(self, ddb):
         table = _lock_table(ddb)
-        first = [el.acquire_reindex_slot(table, _keys(2), f"E{index}", TTL, now=NOW) for index in range(2)]
-        with pytest.raises(el.ReindexSlotsBusy):
-            el.acquire_reindex_slot(table, _keys(2), "E2", TTL, now=NOW)
+        first = [el.acquire_system_slot(table, _keys(2), f"E{index}", TTL, now=NOW) for index in range(2)]
+        with pytest.raises(el.SystemSlotsBusy):
+            el.acquire_system_slot(table, _keys(2), "E2", TTL, now=NOW)
         assert el.release_locks(table, [first[0]], "E0") == 1
-        assert el.acquire_reindex_slot(table, _keys(2), "E2", TTL, now=NOW) == first[0]
+        assert el.acquire_system_slot(table, _keys(2), "E2", TTL, now=NOW) == first[0]
         assert _held(table) == ["E1", "E2"]
 
 
@@ -90,7 +92,7 @@ class TestTheTerminalReleaseFreesTheSlot:
         locks = _lock_table(ddb)
         _workflow_table(ddb)
         _inputs_table(ddb)
-        slot = el.acquire_reindex_slot(locks, _keys(2), "E-run", TTL, now=NOW)
+        slot = el.acquire_system_slot(locks, _keys(2), "E-run", TTL, now=NOW)
         released = el.release_locks_for_execution(
             ddb, locks_table_name="t-locks", workflow_table_name="t-workflows", inputs_table_name="t-inputs",
             workflow_execution_id="E-run", workflow_database_id="GLOBAL", workflow_id="system-genai-metadata")
@@ -111,38 +113,56 @@ class TestTheTerminalReleaseFreesTheSlot:
                 inputs_table_name="t-inputs", workflow_execution_id=execution_id,
                 workflow_database_id="GLOBAL", workflow_id="system-genai-metadata")
 
-        slot = el.acquire_reindex_slot(locks, _keys(1), "E-run", TTL, now=NOW)
+        slot = el.acquire_system_slot(locks, _keys(1), "E-run", TTL, now=NOW)
         assert release("E-run") == 1
-        assert el.acquire_reindex_slot(locks, _keys(1), "E-next", TTL, now=NOW) == slot
+        assert el.acquire_system_slot(locks, _keys(1), "E-next", TTL, now=NOW) == slot
         assert release("E-run") == 0
         assert _held(locks) == ["E-next"]
+
+    def test_an_in_flight_run_holding_an_earlier_releases_slot_row_frees_it_after_the_upgrade(self, ddb):
+        """A run launched before the upgrade holds a slot row under the earlier scope name
+        ({workflow}|reindexSlot|{n}, written with its holder as the old code wrote it). Its terminal step
+        runs the new release, which finds the row through the holder index and deletes it."""
+        locks = _lock_table(ddb)
+        _workflow_table(ddb)
+        _inputs_table(ddb)
+        old_key = "GLOBAL:system-genai-metadata|reindexSlot|0"
+        locks.put_item(Item={"lockKey": old_key, "workflowExecutionId": "E-before", "lockScope": "reindexSlot",
+                             "acquiredAt": "2026-11-16T00:00:00Z", "expiresAt": NOW + TTL})
+        released = el.release_locks_for_execution(
+            ddb, locks_table_name="t-locks", workflow_table_name="t-workflows", inputs_table_name="t-inputs",
+            workflow_execution_id="E-before", workflow_database_id="GLOBAL", workflow_id="system-genai-metadata")
+        assert released == 1 and "Item" not in locks.get_item(Key={"lockKey": old_key})
+        # The new launch's row is the generic one, never the earlier name.
+        assert el.acquire_system_slot(locks, _keys(1), "E-after", TTL, now=NOW) == (
+            "GLOBAL:system-genai-metadata|systemSlot|0")
 
 
 @pytest.mark.unit
 class TestALostHolderIsReclaimed:
     def test_an_expired_slot_is_claimed_by_a_plain_put(self, ddb):
         table = _lock_table(ddb)
-        el.acquire_reindex_slot(table, _keys(1), "E-lost", TTL, now=NOW)
-        with pytest.raises(el.ReindexSlotsBusy):
-            el.acquire_reindex_slot(table, _keys(1), "E-next", TTL, now=NOW + TTL)
-        assert el.acquire_reindex_slot(table, _keys(1), "E-next", TTL, now=NOW + TTL + 1) == _keys(1)[0]
+        el.acquire_system_slot(table, _keys(1), "E-lost", TTL, now=NOW)
+        with pytest.raises(el.SystemSlotsBusy):
+            el.acquire_system_slot(table, _keys(1), "E-next", TTL, now=NOW + TTL)
+        assert el.acquire_system_slot(table, _keys(1), "E-next", TTL, now=NOW + TTL + 1) == _keys(1)[0]
         assert el.slot_is_free(None, NOW) and not el.slot_is_free({"expiresAt": NOW + 5}, NOW)
 
     @pytest.mark.parametrize("still_running, taken", [(False, True), (True, False)])
     def test_an_old_slot_is_taken_over_only_when_its_holder_ended(self, ddb, still_running, taken):
         table = _lock_table(ddb)
-        el.acquire_reindex_slot(table, _keys(1), "E-old", TTL, now=NOW)
+        el.acquire_system_slot(table, _keys(1), "E-old", TTL, now=NOW)
         later = NOW + STRANDED_AFTER + 1
         kwargs = {"stranded_after_seconds": STRANDED_AFTER, "holder_has_record": lambda holder: still_running}
         if taken:
-            assert el.acquire_reindex_slot(table, _keys(1), "E-new", TTL, now=later, **kwargs) == _keys(1)[0]
+            assert el.acquire_system_slot(table, _keys(1), "E-new", TTL, now=later, **kwargs) == _keys(1)[0]
         else:
-            with pytest.raises(el.ReindexSlotsBusy):
-                el.acquire_reindex_slot(table, _keys(1), "E-new", TTL, now=later, **kwargs)
+            with pytest.raises(el.SystemSlotsBusy):
+                el.acquire_system_slot(table, _keys(1), "E-new", TTL, now=later, **kwargs)
 
     def test_a_young_slot_is_never_taken_over(self, ddb):
         table = _lock_table(ddb)
-        el.acquire_reindex_slot(table, _keys(1), "E-young", TTL, now=NOW)
-        with pytest.raises(el.ReindexSlotsBusy):
-            el.acquire_reindex_slot(table, _keys(1), "E-new", TTL, now=NOW + 60,
-                                    stranded_after_seconds=STRANDED_AFTER, holder_has_record=lambda h: False)
+        el.acquire_system_slot(table, _keys(1), "E-young", TTL, now=NOW)
+        with pytest.raises(el.SystemSlotsBusy):
+            el.acquire_system_slot(table, _keys(1), "E-new", TTL, now=NOW + 60,
+                                   stranded_after_seconds=STRANDED_AFTER, holder_has_record=lambda h: False)

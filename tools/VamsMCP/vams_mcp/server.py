@@ -1829,10 +1829,11 @@ def list_executions(
     use list_workflow_executions().
 
     Equality filters: status (RUNNING, SUCCEEDED, FAILED, ABORTED, SKIPPED), workflow_id,
-    workflow_database_id, trigger_type ('manual', 'fileUpload' or 'systemReindex'), group_id,
-    triggered_by_user_id; exclude_status drops statuses (e.g. "SKIPPED"). A SKIPPED row is not a
-    run: do not count it. System runs are hidden unless include_system=true or both workflow ids
-    name one (`includeSystem`, `systemRunsHint`; `isSystem`).
+    workflow_database_id, trigger_type ('manual', 'fileUpload', or a system trigger value such as
+    'System-Reindex', the vector-search reindex runs), group_id, triggered_by_user_id; exclude_status
+    drops statuses (e.g. "SKIPPED"). A SKIPPED row is not a run: do not count it. System runs are hidden
+    unless include_system=true, both workflow ids name one, or trigger_type is a system trigger value or
+    group_id is set (`includeSystem`, `systemRunsHint`; `isSystem`).
 
     `filterStartDate` is the applied window (90 days by default); widen it with filter_start_date /
     filter_end_date (UTC "YYYY-MM-DDTHH:MM:SSZ"). A run is listed only when the user can read its

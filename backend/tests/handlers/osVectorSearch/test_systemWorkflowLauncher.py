@@ -5,8 +5,10 @@
 
 The launcher invokes executeWorkflowV2 once per message (botocore retries off: the call is not
 idempotent; the launcher itself repeats only a connection failure, see TestConnectionRetry), as
-SYSTEM_USER, with `triggerType: "systemReindex"` and `executionGroupId: vec-{runId}-{chunk}`, using the
-system workflow's fileUpload trigger defaults so a reindex run selects the template an upload run would.
+a marked system-pipeline call (#1135: SYSTEM_USER plus the vamsSystemPipeline source, and a top-level
+systemExecution naming the System-Reindex trigger value, the run's context and its slot request), with an
+ordinary manual body carrying `executionGroupId: vec-{runId}-{chunk}` and the system workflow's fileUpload
+trigger defaults, so a reindex run selects the template an upload run would.
 A 400 (the per-file-version lock or a validation refusal) is dropped; a throttle, a 5xx or an invocation
 fault is reported so SQS redelivers and, after three attempts, dead-letters the message.
 """
@@ -89,7 +91,7 @@ class TestLaunchBody:
             "inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/part.glb", "versionId": ""}],
             "outputAssetId": "a1", "outputDatabaseId": "db1",
             "pipelineExecutionParameters": {"system-genai-metadata": {"templateId": "system-genai-metadata-default"}},
-            "triggerType": "systemReindex", "executionGroupId": "vec-abc123def456-3",
+            "triggerType": "manual", "executionGroupId": "vec-abc123def456-3",
         }
 
     def test_trigger_row_is_read_by_composite_key_and_cached_per_container(self, launcher):
@@ -106,7 +108,7 @@ class TestLaunchBody:
     def test_missing_trigger_row_launches_template_less(self, launcher):
         launcher.workflow_triggers_table.query.return_value = {"Items": []}
         body = launcher.build_launch_body(dict(MESSAGE))
-        assert body["pipelineExecutionParameters"] == {} and body["triggerType"] == "systemReindex"
+        assert body["pipelineExecutionParameters"] == {} and body["triggerType"] == "manual"
 
 
 @pytest.mark.unit
@@ -120,13 +122,18 @@ class TestInvoke:
         assert kwargs["FunctionName"] == launcher.execute_workflow_v2_function
         assert kwargs["InvocationType"] == "RequestResponse"
         event = json.loads(kwargs["Payload"])
-        assert event["lambdaCrossCall"]["userName"] == "SYSTEM_USER"
-        slots = event["lambdaCrossCall"]["reindexSlots"]
+        assert event["lambdaCrossCall"] == {"userName": "SYSTEM_USER", "source": "vamsSystemPipeline"}
+        system = event["systemExecution"]
+        assert system["triggerType"] == "System-Reindex"
+        assert system["context"] == {"reindexRunId": MESSAGE["reindexRunId"], "chunk": MESSAGE["chunk"]}
+        slots = system["concurrencySlots"]
         assert slots["count"] == launcher.reindex_slot_count
+        assert len(json.dumps(system["context"])) < 4096
         assert event["requestContext"]["http"] == {"method": "POST", "path": "/workflows/GLOBAL/system-genai-metadata/execute"}
         assert event["pathParameters"] == {"workflowDatabaseId": "GLOBAL", "workflowId": "system-genai-metadata"}
         assert event["queryStringParameters"] == {}
-        assert json.loads(event["body"])["triggerType"] == "systemReindex"
+        assert json.loads(event["body"])["triggerType"] == "manual"
+        assert "systemExecution" not in json.loads(event["body"]), "the system object is never in the body"
 
     def test_the_invoke_client_delivers_exactly_one_attempt(self, launcher):
         assert launcher.invoke_config.retries == {"total_max_attempts": 1}

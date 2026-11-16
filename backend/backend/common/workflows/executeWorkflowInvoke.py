@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The synchronous executeWorkflowV2 Invoke of the system launchers (the file-upload trigger dispatcher
-and the reindex launcher), repeated only when its connection failed before the call was delivered.
+and any system-pipeline launcher), repeated only when its connection failed before the call was
+delivered.
 
 The Invoke is NOT idempotent: each delivered request can start an execution. The callers' Lambda clients
 therefore make one attempt (`retries={"total_max_attempts": 1}`), because botocore's retries would also
@@ -15,7 +16,7 @@ most CONNECTION_RETRIES times, only the failures that come before executeWorkflo
   attempt opens a new one.
 
 In the rare case a closed connection did deliver the request, the repeat is a second launch of the same
-input. Under a concurrency restriction the workflow's execution lock refuses it with a 400 (the reindex
+input. Under a concurrency restriction the workflow's execution lock refuses it with a 400 (a system-pipeline
 launcher drops it; the dispatcher logs it as skipped, and executeWorkflow records it as a SKIPPED
 execution); a workflow without a restriction runs it a second time.
 

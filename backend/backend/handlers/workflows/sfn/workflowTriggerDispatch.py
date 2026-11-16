@@ -312,7 +312,7 @@ def _invoke_execute(workflow_database_id, workflow_id, body):
             "lambdaCrossCall": {"userName": "SYSTEM_USER"},
         }
         # A connection that failed before delivery is tried again at once (common/workflows/
-        # executeWorkflowInvoke.py, shared with the reindex launcher); its last failure, like any other,
+        # executeWorkflowInvoke.py, shared with the system-pipeline launchers); its last failure, like any other,
         # is logged below and the launch reported failed.
         response = ewi.invoke_execute_workflow(
             lambda_client, execute_workflow_v2_function, json.dumps(invoke_event).encode("utf-8"), logger)

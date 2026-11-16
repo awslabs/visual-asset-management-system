@@ -505,13 +505,13 @@ partition.
 
 ### Workflow Execution Locks Storage Table
 
-Holds one row per lock a running execution took under its workflow's `concurrencyRestriction`: `perAsset`, `perInputFile`, or `perInputFileVersion`. A launch writes its rows with conditional puts before the state machine starts; the execution's release deletes them, conditional on the holder, when it ends. The time-to-live attribute covers a release that never ran.
+Holds one row per lock a running execution took under its workflow's `concurrencyRestriction`: `perAsset`, `perInputFile`, or `perInputFileVersion`. A launch writes its rows with conditional puts before the state machine starts; the execution's release deletes them, conditional on the holder, when it ends. The time-to-live attribute covers a release that never ran. A system pipeline launch that asks for one of N concurrency slots of its workflow also holds one slot row, `{workflowDatabaseId}:{workflowId}|systemSlot|{n}` (`lockScope` `systemSlot`), for the run's whole life; at most N such runs of the workflow hold one at a time.
 
 | Attribute             | Type   | Key           | Notes                                                                                                                  |
 | --------------------- | ------ | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `lockKey`             | String | Partition Key | `{workflowDatabaseId}:{workflowId}\|{lockScope}\|{scopeKey}`: the asset, the file, or the file version the lock covers |
 | `workflowExecutionId` | String |               | The execution holding the lock; partition key of `WorkflowExecutionLocksByHolderGSI`                                   |
-| `lockScope`           | String |               | `asset`, `assetFile`, or `assetFileVersion`: the restriction the row was taken under                                   |
+| `lockScope`           | String |               | `asset`, `assetFile`, or `assetFileVersion`: the restriction the row was taken under; `systemSlot` for a slot row      |
 | `acquiredAt`          | String |               | ISO-8601 acquisition time                                                                                              |
 | `expiresAt`           | Number |               | Epoch seconds; the table's time-to-live attribute, so a lock whose release never ran expires on its own                |
 

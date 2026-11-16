@@ -54,9 +54,8 @@ const SEARCH_LABEL = "Search";
 /**
  * URL query parameter (inside the HashRouter location) holding the "Show system runs" choice, and the
  * list query parameter it is sent as. Absent means "the server's default": system workflow runs are
- * hidden, except on a list scoped to one system workflow or to the reindexer's runs (the System-Reindex
- * trigger, a vec- execution group), where the server shows them and says so in
- * the response's `includeSystem`.
+ * hidden, except on a list scoped to one system workflow, a system trigger value (System-<Identifier>)
+ * or an execution group, where the server shows them and says so in the response's `includeSystem`.
  */
 export const INCLUDE_SYSTEM_PARAM = "includeSystem";
 
@@ -831,9 +830,10 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
                         onChange={(e) => setTriggerFilter(e.target.value)}
                         className={control}
                     >
-                        {/* Values are the stored trigger vocabulary ("Manual"/"File-Upload"/
-                            "System-Reindex"), which is what the server-side triggerType filter
-                            compares against. */}
+                        {/* Values are the stored trigger vocabulary ("Manual"/"File-Upload") and the
+                            system trigger value of the vector-search reindex runs ("System-Reindex",
+                            which this board offers; the server keys on the System- format and names no
+                            value), which is what the server-side triggerType filter compares against. */}
                         <option value="">All triggers</option>
                         <option value="Manual">Manual</option>
                         <option value="File-Upload">File upload</option>

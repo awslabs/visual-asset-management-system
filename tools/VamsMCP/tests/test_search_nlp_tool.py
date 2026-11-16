@@ -123,9 +123,13 @@ def test_readme_lists_search_nlp_and_keeps_it_out_of_autoapprove():
 
 
 def test_the_execution_listings_name_the_system_reindex_trigger_type():
-    """The backfill's runs carry the systemReindex trigger type. list_executions names the three wire
-    values; list_workflow_executions points to it rather than repeating them (Mandatory Rule 11)."""
-    assert "'manual', 'fileUpload' or 'systemReindex'" in " ".join(_docstring_of("list_executions").split())
+    """The backfill's runs carry the system trigger value System-Reindex (#1135). list_executions names the
+    request values and that stored value, and says a system trigger value or a group shows system runs;
+    list_workflow_executions points to it rather than repeating them (Mandatory Rule 11)."""
+    text = " ".join(_docstring_of("list_executions").split())
+    assert "'manual', 'fileUpload', or a system trigger value such as 'System-Reindex'" in text
+    assert "trigger_type is a system trigger value or group_id is set" in text
+    assert "systemReindex" not in text, "the earlier request value is refused by the API"
     per_asset = " ".join(_docstring_of("list_workflow_executions").split())
     assert "Filters, SKIPPED rows and system runs: as on list_executions" in per_asset
-    assert "systemReindex" not in per_asset
+    assert "System-Reindex" not in per_asset

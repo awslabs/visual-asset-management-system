@@ -12,7 +12,11 @@ describe("SystemTagHelp", () => {
         // templateRender.py copies the execution row's triggerType into the tag, and executions
         // store the hyphenated vocabulary — not the request-side "fileUpload".
         render(<SystemTagHelp defaultOpen />);
-        expect(screen.getByText(/Manual, File-Upload, or System-Reindex/)).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                /Manual, File-Upload, or a system trigger value such as System-Reindex/
+            )
+        ).toBeInTheDocument();
         expect(screen.queryByText(/Manual \/ fileUpload/)).toBeNull();
     });
 });

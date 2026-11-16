@@ -23,7 +23,7 @@ logger = safeLogger()
 # (common.workflows.systemPipelines.is_system_trigger: a fixed prefix plus a safe identifier), set only
 # by a marked system-pipeline cross-call; the public execute request accepts EXECUTE_TRIGGER_TYPES below,
 # which does not include them.
-TRIGGER_TYPES = ("Manual", "File-Upload", "System-Reindex")
+TRIGGER_TYPES = ("Manual", "File-Upload")
 
 
 class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_field_name=True):
@@ -365,18 +365,14 @@ class WorkflowExecutionConfigurationRecord(
 #######################
 
 # Trigger types on the execute request. The storage layer records the canonical stored values
-# "Manual"/"File-Upload"/"System-Reindex" (TRIGGER_TYPES above); the request accepts the lowercase forms
-# and the handler maps them (TRIGGER_TYPE_TO_STORED). "fileUpload" is set by the upload trigger
-# dispatcher and "systemReindex" by the vector-search reindex launcher; both invoke the execute handler
-# directly as SYSTEM_USER, and the handler refuses either value on any other request (400). The
-# workflow trigger KIND set (models.workflows.TRIGGER_TYPES) is a separate
-# vocabulary: a reindex launch is not a workflow trigger.
-EXECUTE_TRIGGER_TYPES = ("manual", "fileUpload", "systemReindex")
-TRIGGER_TYPE_TO_STORED = {
-    "manual": "Manual",
-    "fileUpload": "File-Upload",
-    "systemReindex": "System-Reindex",
-}
+# "Manual"/"File-Upload" (TRIGGER_TYPES above); the request accepts the lowercase forms and the
+# handler maps them (TRIGGER_TYPE_TO_STORED). "fileUpload" is set by the upload trigger dispatcher,
+# which invokes the execute handler directly as SYSTEM_USER; the handler refuses it on any other
+# request (400). The system trigger values are deliberately absent: a request naming one is refused
+# here, whoever sends it. The workflow trigger KIND set (models.workflows.TRIGGER_TYPES) is a separate
+# vocabulary.
+EXECUTE_TRIGGER_TYPES = ("manual", "fileUpload")
+TRIGGER_TYPE_TO_STORED = {"manual": "Manual", "fileUpload": "File-Upload"}
 
 # Upper bound on the input-file selection per execute request. Bounds the per-request S3 existence
 # checks + metadata-service fan-out; matches the asset-upload request's MAX_FILES_PER_UPLOAD_REQUEST.

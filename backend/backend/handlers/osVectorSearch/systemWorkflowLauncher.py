@@ -3,15 +3,22 @@
 
 """System-workflow launcher: one execution of the system GenAI metadata workflow per launch message.
 
-The vector reindexer enqueues one message per latest live file. Each message becomes one synchronous
-executeWorkflowV2 cross-call as SYSTEM_USER with `triggerType: "systemReindex"` and
-`executionGroupId: vec-{reindexRunId}-{chunk}`, so the executions of a run are listable and abortable
-as groups.
+The vector reindexer enqueues one message per latest live file (and the vector indexer one per
+unarchived file that has no vector). Each message becomes one synchronous executeWorkflowV2 cross-call:
+a system-pipeline launch (common/workflows/systemPipelines.py, #1135), marked with `SYSTEM_USER` and the
+`vamsSystemPipeline` source, whose top-level `systemExecution` names the system trigger value
+`System-Reindex`, a small context (the reindex run id and chunk) and the concurrency slot request. Its
+body is an ordinary manual request with `executionGroupId: vec-{reindexRunId}-{chunk}`, so the
+executions of a run are listable and abortable as groups. A reindex run is a system run: it is never
+re-run (a reindex is launched again by running the reindex again).
 
 At most `app.vectorSearch.indexingConcurrency` (REINDEX_SLOT_COUNT) reindex runs are running at once:
-each holds one of the workflow's reindex slot rows in the execution locks table from its launch to its
-end (`common/workflows/executionLocks`, "Reindex slots"). Before it calls executeWorkflow the launcher
-reads the slot rows (one BatchGetItem per 100 slots). With none free it does not call it: the message
+each holds one of the workflow's concurrency slot rows in the execution locks table from its launch to
+its end (`systemExecution.concurrencySlots`; `common/workflows/executionLocks`, "Concurrency slots").
+Before it calls executeWorkflow the launcher reads the slot rows (one BatchGetItem per 100 keys), the
+rows earlier releases wrote under the `reindexSlot` scope included: a run launched before the upgrade
+holds one of those until it ends (its terminal step releases it through the holder index), so an index
+is free only when neither row is held. With none free it does not call it: the message
 is sent again with a delay that grows with each wait (30 s doubling to 900 s) and the original is
 deleted, so a wait never counts toward the queue's dead-letter threshold. With some free it passes them
 as candidates; executeWorkflow claims one with a conditional write, and answers 429 when another launch
@@ -47,8 +54,9 @@ from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.workflows import executeWorkflowInvoke as ewi
 from common.workflows import executionLocks as el
+from common.workflows import systemPipelines as sp
 from common.workflows import triggerMatching as tm
-from common.workflows.executionRecords import REINDEX_EXECUTION_GROUP_PREFIX, workflow_composite_key
+from common.workflows.executionRecords import workflow_composite_key
 from customLogging.auditLogging import audited_handler
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success
@@ -66,8 +74,16 @@ lambda_client = boto3.client("lambda", config=invoke_config)
 sqs_client = boto3.client("sqs", config=retry_config)
 logger = safeLogger(service_name="SystemWorkflowLauncher")
 
-TRIGGER_TYPE_SYSTEM_REINDEX = "systemReindex"
+# The system trigger value a reindex run is recorded under (common/workflows/systemPipelines.py format).
+SYSTEM_TRIGGER_REINDEX = "System-Reindex"
+# The request form of an ordinary run: the stored trigger is the system value above.
+TRIGGER_TYPE_MANUAL = "manual"
 TRIGGER_TYPE_FILE_UPLOAD = "fileUpload"
+# The execution group a reindex run's launches share: vec-{reindexRunId}-{chunk}.
+EXECUTION_GROUP_PREFIX = "vec-"
+# The slot rows earlier releases wrote for reindex runs ({workflow}|reindexSlot|{n}), read so the cap holds
+# while a run launched before the upgrade still holds one.
+LEGACY_SLOT_SCOPE = "reindexSlot"
 REQUIRED_MESSAGE_KEYS = ("databaseId", "assetId", "relativeFileKey", "reindexRunId", "chunk")
 LAUNCHED = "launched"
 DROPPED = "dropped"
@@ -147,30 +163,69 @@ def _parse_message(record: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_launch_body(message: Dict[str, Any]) -> Dict[str, Any]:
+    """The execute request body: the upload trigger's selection and templates, as an ordinary manual
+    request (the stored trigger value comes from the marked call's systemExecution, never the body)."""
     body = tm.build_trigger_execute_body(
         _system_upload_trigger_row(), message["databaseId"], message["assetId"],
         message["relativeFileKey"], version_id=message.get("versionId") or "")
-    body["triggerType"] = TRIGGER_TYPE_SYSTEM_REINDEX
-    body["executionGroupId"] = f"{REINDEX_EXECUTION_GROUP_PREFIX}{message['reindexRunId']}-{message['chunk']}"
+    body["triggerType"] = TRIGGER_TYPE_MANUAL
+    body["executionGroupId"] = f"{EXECUTION_GROUP_PREFIX}{message['reindexRunId']}-{message['chunk']}"
     return body
 
 
-def _slot_rows() -> Dict[int, Dict[str, Any]]:
-    """The workflow's slot rows by index (absent slots left out), read with BatchGetItem. A key the
-    service returns unprocessed is read as held, so a partial read never overstates what is free."""
-    keys = el.reindex_slot_keys(system_workflow_database_id, system_workflow_id, reindex_slot_count)
+def build_system_execution(message: Dict[str, Any], candidates: List[int]) -> Dict[str, Any]:
+    """The marked call's systemExecution: the System-Reindex trigger value, the run's context (its reindex
+    run id and chunk; nothing secret, far below the 4,096-byte bound) and the slot request."""
+    return {
+        "triggerType": SYSTEM_TRIGGER_REINDEX,
+        "context": {"reindexRunId": str(message["reindexRunId"]), "chunk": message["chunk"]},
+        sp.SYSTEM_EXECUTION_SLOTS_KEY: {"count": reindex_slot_count, "candidates": list(candidates)},
+    }
+
+
+def build_launch_event(message: Dict[str, Any], candidates: List[int]) -> Dict[str, Any]:
+    """The executeWorkflowV2 cross-call: a system-pipeline launch (SYSTEM_USER plus the vamsSystemPipeline
+    source marker, and the top-level systemExecution object), which no API request can carry."""
+    return {
+        "requestContext": {
+            "http": {"method": "POST",
+                     "path": f"/workflows/{system_workflow_database_id}/{system_workflow_id}/execute"},
+        },
+        "pathParameters": {"workflowDatabaseId": system_workflow_database_id,
+                           "workflowId": system_workflow_id},
+        "queryStringParameters": {},
+        "body": json.dumps(build_launch_body(message)),
+        "lambdaCrossCall": {"userName": sp.SYSTEM_PIPELINE_USER_NAME,
+                            "source": sp.SYSTEM_PIPELINE_SOURCE_MARKER},
+        sp.SYSTEM_EXECUTION_EVENT_KEY: build_system_execution(message, candidates),
+    }
+
+
+def legacy_slot_key(index: int) -> str:
+    """The key an earlier release gave slot `index` (LEGACY_SLOT_SCOPE)."""
+    return f"{system_workflow_database_id}:{system_workflow_id}|{LEGACY_SLOT_SCOPE}|{int(index)}"
+
+
+def _slot_rows() -> Dict[int, List[Dict[str, Any]]]:
+    """The workflow's slot rows by index (absent rows left out), the current key and the earlier release's
+    key of every slot, read with BatchGetItem. A key the service returns unprocessed is read as held, so a
+    partial read never overstates what is free."""
+    keys = el.system_slot_keys(system_workflow_database_id, system_workflow_id, reindex_slot_count)
     index_of = {key: index for index, key in enumerate(keys)}
-    rows: Dict[int, Dict[str, Any]] = {}
-    for start in range(0, len(keys), _BATCH_GET_KEYS):
+    index_of.update({legacy_slot_key(index): index for index in range(len(keys))})
+    all_keys = list(index_of)
+    rows: Dict[int, List[Dict[str, Any]]] = {}
+    for start in range(0, len(all_keys), _BATCH_GET_KEYS):
         request = {workflow_execution_locks_table_name: {
-            "Keys": [{el.LOCK_KEY_ATTRIBUTE: key} for key in keys[start:start + _BATCH_GET_KEYS]],
+            "Keys": [{el.LOCK_KEY_ATTRIBUTE: key} for key in all_keys[start:start + _BATCH_GET_KEYS]],
             "ConsistentRead": True}}
         response = dynamodb.batch_get_item(RequestItems=request)
         for item in (response.get("Responses") or {}).get(workflow_execution_locks_table_name, []):
-            rows[index_of[item[el.LOCK_KEY_ATTRIBUTE]]] = item
+            rows.setdefault(index_of[item[el.LOCK_KEY_ATTRIBUTE]], []).append(item)
         for key in ((response.get("UnprocessedKeys") or {}).get(workflow_execution_locks_table_name) or {}).get(
                 "Keys", []):
-            rows[index_of[key[el.LOCK_KEY_ATTRIBUTE]]] = {el.EXPIRES_AT_ATTRIBUTE: _HELD_FOREVER}
+            rows.setdefault(index_of[key[el.LOCK_KEY_ATTRIBUTE]], []).append(
+                {el.EXPIRES_AT_ATTRIBUTE: _HELD_FOREVER})
     return rows
 
 
@@ -191,19 +246,25 @@ def _holder_has_ended(holder: str) -> bool:
 
 def slot_candidates(now: float = None) -> List[int]:
     """The slots a launch may try: every free one (in random order, so concurrent launches spread out),
-    or with none free the held ones old enough to take over whose holder has ended. Empty means wait."""
+    or with none free the held ones old enough to take over whose holders have ended. An index is free
+    when neither its row nor the earlier release's row is held. Empty means wait."""
     now_epoch = int(time.time() if now is None else now)
     rows = _slot_rows()
-    free = [index for index in range(reindex_slot_count) if el.slot_is_free(rows.get(index), now_epoch)]
+    held = {index: [row for row in rows.get(index, []) if not el.slot_is_free(row, now_epoch)]
+            for index in range(reindex_slot_count)}
+    free = [index for index, blocking in held.items() if not blocking]
     if free:
         random.shuffle(free)
-        return free[:el.MAX_REINDEX_SLOT_CANDIDATES]
+        return free[:el.MAX_SYSTEM_SLOT_CANDIDATES]
     old = []
-    for index, row in rows.items():
-        acquired = el.slot_acquired_epoch(row)
-        if acquired is not None and now_epoch - acquired > RECLAIM_MIN_AGE_SECONDS and row.get(el.HOLDER_ATTRIBUTE):
-            old.append((acquired, index, row[el.HOLDER_ATTRIBUTE]))
-    return [index for _acquired, index, holder in sorted(old)[:RECLAIM_CHECKS] if _holder_has_ended(holder)]
+    for index, blocking in held.items():
+        acquired = [el.slot_acquired_epoch(row) for row in blocking]
+        holders = [row.get(el.HOLDER_ATTRIBUTE) for row in blocking]
+        if (all(a is not None and now_epoch - a > RECLAIM_MIN_AGE_SECONDS for a in acquired)
+                and all(holders)):
+            old.append((min(acquired), index, holders))
+    return [index for _acquired, index, holders in sorted(old)[:RECLAIM_CHECKS]
+            if all(_holder_has_ended(holder) for holder in holders)]
 
 
 def wait_delay_seconds(waits: int) -> int:
@@ -233,19 +294,7 @@ def launch(message: Dict[str, Any]) -> str:
     if not candidates:
         requeue(message)
         return WAITED
-    body = build_launch_body(message)
-    invoke_event = {
-        "requestContext": {
-            "http": {"method": "POST",
-                     "path": f"/workflows/{system_workflow_database_id}/{system_workflow_id}/execute"},
-        },
-        "pathParameters": {"workflowDatabaseId": system_workflow_database_id,
-                           "workflowId": system_workflow_id},
-        "queryStringParameters": {},
-        "body": json.dumps(body),
-        "lambdaCrossCall": {"userName": "SYSTEM_USER",
-                            "reindexSlots": {"count": reindex_slot_count, "candidates": candidates}},
-    }
+    invoke_event = build_launch_event(message, candidates)
     # A connection that failed before delivery is tried again at once (common/workflows/
     # executeWorkflowInvoke.py). If a closed connection did deliver the call, the system workflow's
     # per-input-file-version lock, taken before a reindex slot is claimed, refuses the repeat with a 400,

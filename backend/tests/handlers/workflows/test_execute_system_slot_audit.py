@@ -1,14 +1,15 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""What a reindex launch writes to the audit log, through executeWorkflow's request outcome.
+"""What a system-pipeline launch that asks for a concurrency slot writes to the audit log, through
+executeWorkflow's request outcome.
 
-The reindex launcher looks at the slot rows and calls executeWorkflow only when one looks free; when another
-launch claims it first, executeWorkflow answers 429 and the launcher sends the message again with a delay,
-up to 2,000 times per file. That 429 is a wait, not an outcome: it writes no failed workflowExecute, so a
-backfill that waits does not fill the audit log with failures of launches that later run. The launch that
-claims a slot writes its workflowExecute record, and a launch refused for good (the per-file-version lock,
-a 400) writes its failure once.
+A system-pipeline launcher looks at the slot rows and calls executeWorkflow only when one looks free; when
+another launch claims it first, executeWorkflow answers 429 and the launcher sends its message again with
+a delay, possibly thousands of times per file. That 429 is a wait, not an outcome: it writes no failed
+workflowExecute, so a run of launches that waits does not fill the audit log with failures of launches that
+later run. The launch that claims a slot writes its workflowExecute record, and a launch refused for good
+(the per-file-version lock, a 400) writes its failure once.
 
 executeWorkflow is driven through the perInputFileVersion suite's harness, with the production audit
 decorator, context and writer in place of the test tree's stand-in (as test_vectorSearch_audit does), and
@@ -27,7 +28,7 @@ from tests.common.test_audit_action_records import (  # noqa: F401 -- claims and
     parse,
 )
 from tests.handlers.workflows.test_execute_per_input_file_version_lock import KEY_F, _LockTable, _run, ewv2
-from tests.handlers.workflows.test_execute_reindex_slots import SLOT, _cross_call
+from tests.handlers.workflows.test_execute_system_slots import SLOT, _system_call as _cross_call
 
 
 @pytest.fixture
