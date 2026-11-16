@@ -19,6 +19,7 @@ from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler, log_action, log_actions
 from common.auditSearchText import search_text_parameters
 from common.dynamodb import validate_pagination_info, batch_get_items
@@ -5622,7 +5623,7 @@ def handle_get_request(event):
     if event.get('body'):
         try:
             body = json.loads(event['body'])
-            logger.info(f"Request body: {body}")
+            logger.info(f"Request body parsed ({len(body) if isinstance(body, dict) else 0} field(s))")
         except json.JSONDecodeError as e:
             logger.exception(f"Invalid JSON in request body: {e}")
             return validation_error(body={'message': 'Invalid JSON in request body'}, event=event)
@@ -6701,7 +6702,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     DELETE /workflows/executions/{executionId}       -> abort a running execution (or ?groupId= group).
     DELETE /workflows/executions/{executionId}/permanent -> permanent delete of the DynamoDB rows."""
     global claims_and_roles
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     # Normalize the REST (v1) proxy event before the first requestContext.http /
     # queryStringParameters access (coerces null params to {} and injects the
     # v2-style http block the dispatch below reads).

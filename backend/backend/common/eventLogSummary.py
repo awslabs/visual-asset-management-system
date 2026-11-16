@@ -17,7 +17,10 @@ from collections import Counter
 from typing import Any
 
 # Identifier fields of a direct (non event-source) invocation that are safe to name in a log line.
-DIRECT_INVOCATION_ID_FIELDS = ("operation", "databaseId", "assetId", "filePath", "s3Key")
+DIRECT_INVOCATION_ID_FIELDS = (
+    "operation", "databaseId", "assetId", "filePath", "s3Key",
+    "executionId", "workflowId", "pipelineId", "workflowDatabaseId", "pipelineDatabaseId",
+)
 
 # Distinct event sources named in one line; more are counted, not listed.
 MAX_LISTED_SOURCES = 5
@@ -52,6 +55,26 @@ def exception_log_summary(error: BaseException) -> str:
     return f"{name} (HTTP {status})" if isinstance(status, int) else name
 
 
+def _api_request_summary(event: dict) -> str:
+    """Describe an API Gateway request by route template and the size of what it carried.
+
+    Names the route template (never the concrete path, which can hold a file key), the NAMES of
+    the path parameters, and counts the query parameters and body characters. Their values (typed
+    search text, filter patterns, comment text) are never repeated.
+    """
+    http = (event.get("requestContext") or {}).get("http") or {}
+    method = _label(http.get("method") or event.get("httpMethod") or "unknown")
+    route = _label(event.get("routeKey") or event.get("resource") or "unknown")
+    path_names = sorted(_label(name) for name in (event.get("pathParameters") or {}))
+    query = event.get("queryStringParameters") or {}
+    body = event.get("body")
+    body_size = len(body) if isinstance(body, (str, bytes)) else (0 if body is None else 1)
+    return (
+        f"api request ({method} route={route}, pathParameters={path_names}, "
+        f"queryParameters={len(query) if isinstance(query, dict) else 0}, body={body_size} char(s))"
+    )
+
+
 def event_log_summary(event: Any) -> str:
     """Describe `event` by record count and event source, or by the ids of a direct invocation.
 
@@ -69,9 +92,57 @@ def event_log_summary(event: Any) -> str:
             listed += f", {others} more source(s)"
         return f"{len(records)} record(s) [{listed}]" if records else "0 record(s)"
 
+    if isinstance(event.get("requestContext"), dict) and (
+        "routeKey" in event or "httpMethod" in event or "http" in event["requestContext"]
+    ):
+        return _api_request_summary(event)
+
+    trigger = event.get("triggerSource")
+    if isinstance(trigger, str) and isinstance(event.get("request"), dict):
+        return f"identity provider trigger ({_label(trigger)})"
+
     ids = [
         f"{field}={_label(event[field])}"
         for field in DIRECT_INVOCATION_ID_FIELDS
         if event.get(field) not in (None, "")
     ]
     return f"direct invocation ({', '.join(ids)})" if ids else f"direct invocation ({len(event)} field(s))"
+
+
+# A key of a search query that names a clause (bool, match, term, wildcard, ...) is one of these
+# shapes; every other key is a field name or a value and is only counted, never named.
+_QUERY_CONTAINER_KEYS = ("bool", "must", "should", "must_not", "filter", "nested", "query", "dis_max", "queries")
+
+
+def query_clause_log_summary(clause: Any) -> str:
+    """Describe a search query clause by clause kinds, counts and size, never its values.
+
+    A simple-search clause holds every term the caller typed (names, file keys, metadata keys
+    and values, free text), so a log line names the clause kinds the builder used, how many
+    nodes and leaf clauses it has, and its serialized size.
+    """
+    kinds: Counter = Counter()
+    nodes = 0
+
+    def walk(node: Any) -> None:
+        nonlocal nodes
+        if isinstance(node, dict):
+            nodes += 1
+            for key, child in node.items():
+                if isinstance(key, str) and key in _QUERY_CONTAINER_KEYS:
+                    kinds[key] += 1
+                elif isinstance(child, dict) and key in (
+                    "match", "match_phrase", "multi_match", "term", "terms", "wildcard", "prefix",
+                    "query_string", "simple_query_string", "exists", "range", "match_all", "regexp",
+                ):
+                    kinds[key] += 1
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(clause)
+    # A serialized size reveals nothing of the values but the total length; len(str()) avoids a dump.
+    size = len(str(clause))
+    listed = ", ".join(f"{kind}={count}" for kind, count in sorted(kinds.items())) or "none"
+    return f"{nodes} node(s), {size} char(s) [{listed}]"

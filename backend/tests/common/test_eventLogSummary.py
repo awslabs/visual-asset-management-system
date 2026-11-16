@@ -69,3 +69,38 @@ class TestExceptionLogSummary:
         error = ValueError("x")
         error.status_code = "not-a-number"
         assert exception_log_summary(error) == "ValueError"
+
+
+@pytest.mark.unit
+class TestRequestSummaries:
+    """An API request and a search clause are described by shape; typed text never appears (#1552)."""
+
+    def test_api_request_names_route_and_sizes_only(self):
+        from common.eventLogSummary import event_log_summary as summarize
+
+        event = {
+            "routeKey": "POST /database/{databaseId}/assets/{assetId}/comments",
+            "requestContext": {"http": {"method": "POST", "path": "/database/db1/assets/a1/comments"}},
+            "pathParameters": {"databaseId": "db1", "assetId": "a1"},
+            "queryStringParameters": {"filterPattern": SECRET_VALUE},
+            "body": json.dumps({"commentBody": SECRET_VALUE}),
+        }
+        summary = summarize(event)
+        assert summary.startswith("api request (POST route=POST /database/{databaseId}/assets/{assetId}/comments")
+        assert "queryParameters=1" in summary
+        assert SECRET_VALUE not in summary and "db1" not in summary
+
+    def test_identity_provider_trigger_names_the_source_only(self):
+        summary = event_log_summary({"triggerSource": "TokenGeneration_Authentication",
+                                     "request": {"userAttributes": {"email": SECRET_VALUE}}})
+        assert summary == "identity provider trigger (TokenGeneration_Authentication)"
+
+    def test_query_clause_summary_has_no_values(self):
+        from common.eventLogSummary import query_clause_log_summary
+
+        clause = {"bool": {"must": [{"query_string": {"query": f"*{SECRET_VALUE}*"}},
+                                    {"match": {"str_assetname": SECRET_VALUE}}],
+                           "filter": [{"terms": {"str_databaseid": ["db1"]}}]}}
+        summary = query_clause_log_summary(clause)
+        assert SECRET_VALUE not in summary
+        assert "bool=1" in summary and "query_string=1" in summary and "match=1" in summary

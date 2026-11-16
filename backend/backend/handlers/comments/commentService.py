@@ -16,6 +16,7 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import get_asset_object_from_id, asset_authorization_object
 from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler, log_action
 from common.dynamodb import (
     validate_pagination_info,
@@ -518,7 +519,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     """
     normalize_event(event)
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     pathParameters = event.get("pathParameters", {})
     queryParameters = event.get("queryStringParameters", {})
 

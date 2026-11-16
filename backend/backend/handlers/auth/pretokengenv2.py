@@ -3,13 +3,14 @@
 
 import json
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 
 logger = safeLogger(service="PreTokenGen")
 
 
 def lambda_handler(event, context):
 
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
 
     try:
         email = event['request']['userAttributes']['email']

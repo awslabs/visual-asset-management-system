@@ -25,6 +25,7 @@ from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVAL
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
@@ -2386,7 +2387,7 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
             revertMetadata=body.get('revertMetadata', False)
         )
         
-        logger.info(f"Parsed request model - revertMetadata: {request_model.revertMetadata}, comment: {request_model.comment}")
+        logger.info(f"Parsed request model - revertMetadata: {request_model.revertMetadata}, comment provided: {bool(request_model.comment)}")
         
         # Process request
         response = revert_asset_version(
@@ -2944,8 +2945,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
         # Log incoming request
         logger.info(f"Asset versions lambda handler invoked: {method} {path}")
-        logger.debug(f"Event path parameters: {event.get('pathParameters', {})}")
-        logger.debug(f"Event query parameters: {event.get('queryStringParameters', {})}")
+        logger.debug(f"Event: {event_log_summary(event)}")
         
         # Route to appropriate handler based on the master API route definitions
         if method == 'POST' and API_CREATE_ASSET_VERSION.matches(path):

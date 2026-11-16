@@ -157,6 +157,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Function logs keep typed text out** — The Lambda function logs no longer carry the text a user typed. Simple search logs the shape of its generated query (clause kinds, counts, size) instead of the clause with every search term, and the handlers that logged their whole request event at entry (comments, databases, pipelines, workflows, executions and the identity provider triggers) log the route, the parameter names and the sizes of the query string and body instead. Error logs keep the exception class, status and IDs. ([#1552](https://github.com/awslabs/visual-asset-management-system/issues/1552))
 -   **Search text is not recorded in the audit log** — A search or text-filter read writes the text a user typed as `<redacted>` under `searchText`, with the names of the fields that held it and their total length. (issue #1542)
 -   **Compliance pipeline rules after a superseded failure** — A workflow run that reports failed and then succeeded replaces the rule's failed result with the success, and the evaluation is decided again (#1504).
 -   **No customer managed IAM policies of its own** — Roles are granted inline, and CDK's generated overflow policies hold what does not fit an inline policy, so every role stays within IAM's inline policy limit in every partition (#1499).
