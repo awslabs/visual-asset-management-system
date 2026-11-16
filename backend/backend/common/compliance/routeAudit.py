@@ -19,6 +19,7 @@ many, never their ids.
 import json
 from typing import Any, Dict, Iterable, Optional
 
+from common.auditSearchText import search_text_parameters
 from customLogging.auditLogging import (
     OUTCOME_DENIED, OUTCOME_FAILED, OUTCOME_SUCCESS, audit_records_reads,
 )
@@ -101,15 +102,19 @@ def created_value(response: Any, key: str) -> Optional[Any]:
 
 def request_parameters(params: Optional[Dict[str, Any]], keys: Iterable[str]) -> Dict[str, Any]:
     """The given query or body parameters that were sent, by name. A continuation token is recorded
-    only as having been sent (``startingTokenSent``), never its value."""
+    only as having been sent (``startingTokenSent``), never its value. The ``text`` filter is the
+    caller's own typed text, so it is recorded under the redacted ``searchText`` key."""
     params = params or {}
     picked: Dict[str, Any] = {}
+    text: Dict[str, Any] = {}
     for key in keys:
         value = params.get(key)
         if value in (None, ""):
             continue
         if key in ("startingToken", "NextToken"):
             picked["startingTokenSent"] = True
+        elif key == "text":
+            text[key] = value
         else:
             picked[key] = value
-    return picked
+    return search_text_parameters(picked, text)
