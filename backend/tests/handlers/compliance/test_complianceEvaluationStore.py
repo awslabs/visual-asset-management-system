@@ -164,15 +164,22 @@ class FakeEvaluationTable:
         if ConditionExpression is not None and not self._holds(
                 row, ConditionExpression, ExpressionAttributeNames, ExpressionAttributeValues):
             raise conditional_check_failure()
-        for clause in UpdateExpression.replace("SET ", "", 1).split(", "):
+        set_part, _, remove_part = UpdateExpression.replace("SET ", "", 1).partition(" REMOVE ")
+        for clause in set_part.split(", "):
             name_token, value_token = clause.split(" = ", 1)
             row[ExpressionAttributeNames[name_token]] = ExpressionAttributeValues[value_token]
+        for name_token in filter(None, (t.strip() for t in remove_part.split(","))):
+            row.pop(ExpressionAttributeNames[name_token], None)
         row["evaluationId"] = Key["evaluationId"]
         self.rows[Key["evaluationId"]] = row
         return {}
 
-    @staticmethod
-    def _holds(row, expression, names, values):
+    @classmethod
+    def _holds(cls, row, expression, names, values):
+        # An AND of clauses (the supersede path's conditions) holds when every clause does; each
+        # clause is an OR of `name = value` / `attribute_not_exists(name)` terms, as before.
+        if " AND " in expression:
+            return all(cls._holds(row, part, names, values) for part in expression.split(" AND "))
         for clause in expression.split(" OR "):
             clause = clause.strip()
             if clause.startswith("attribute_not_exists("):
