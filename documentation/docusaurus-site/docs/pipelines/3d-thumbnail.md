@@ -69,7 +69,7 @@ An XGRIDS `.lcc` or `.lcc2` scene holds several levels of detail; the preview re
 | USDC   | `.usdc`   | OpenUSD (pxr) |
 | USDZ   | `.usdz`   | OpenUSD (pxr) |
 
-A USD stage is rendered as composed: instanced prims and point instancers are drawn at every instance, invisible prims and `guide` or `proxy` purpose prims are skipped, and implicit shapes (cube, sphere, cylinder, cone, capsule) are drawn. Colour comes from the diffuse texture or constant `diffuseColor` of the bound `UsdPreviewSurface`, else `displayColor`; an uncoloured prim is drawn in neutral grey. MaterialX materials are not read.
+A USD stage is rendered as composed: instanced prims and point instancers are drawn at every instance, invisible prims and `guide` or `proxy` purpose prims are skipped, and implicit shapes (cube, sphere, cylinder, cone, capsule) are drawn. Colour comes from the diffuse texture or constant `diffuseColor` of the bound `UsdPreviewSurface`. A material with no `UsdPreviewSurface` whose MDL shader is NVIDIA `OmniPBR` or `OmniSurface`, as in NVIDIA Isaac Sim and Omniverse assets, colours its prims with its diffuse texture, else its base colour, times the `OmniPBR` colour tint. Otherwise colour comes from `displayColor`, and an uncoloured prim is drawn in neutral grey. A custom MDL material defines its colour inside its `.mdl` file, which is not read, so its prims keep `displayColor` or the neutral grey, and the job log names its module. MaterialX materials are not read.
 
 ## Architecture
 

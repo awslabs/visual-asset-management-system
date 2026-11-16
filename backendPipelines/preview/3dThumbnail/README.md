@@ -239,12 +239,21 @@ The USD handler walks the composed stage with `Usd.PrimRange(..., Usd.TraverseIn
 
 ### USD Colour and Texture Support
 
-Each prim's colour comes from, in order: the diffuse texture of the `UsdUVTexture` connected to the bound `UsdPreviewSurface`'s `diffuseColor`; that input's constant value; the `displayColor` primvar (indices applied; constant, uniform, vertex/varying and faceVarying interpolation averaged onto vertices). A prim with no colour in a stage where others are coloured gets a neutral grey. Other textures of the material (normal, roughness, occlusion) are never used as colour.
+Each prim's colour comes from, in order: the diffuse texture of the `UsdUVTexture` connected to the bound `UsdPreviewSurface`'s `diffuseColor`; that input's constant value; when the bound material has no `UsdPreviewSurface`, its NVIDIA MDL shader (below); the `displayColor` primvar (indices applied; constant, uniform, vertex/varying and faceVarying interpolation averaged onto vertices). A prim with no colour in a stage where others are coloured gets a neutral grey. Other textures of the material (normal, roughness, occlusion) are never used as colour.
 
 1. Extracts UV coordinates from the primvar the texture's `UsdPrimvarReader` names, else a common name (`st`, `UVMap`, `st0`, `texCoord_0`, `Texture_uv`, `uv`)
 2. Traverses `MaterialBindingAPI` -> `UsdPreviewSurface` -> `diffuseColor` -> `UsdUVTexture` to find the texture file
 3. Loads the texture from the path USD resolved against the layer that authored it, only from inside the input's local asset directory, or from inside a USDZ archive (zip extraction)
 4. Bakes texture colors to per-vertex RGB data for rendering
+
+NVIDIA Omniverse and Isaac Sim assets bind MDL materials instead: a shader with `info:mdl:sourceAsset` (usually connected to the material's `outputs:mdl:surface`). Its inputs are read, followed through connections to the material's own interface inputs, for two module families, chosen by the module's file name:
+
+| Module                                                             | Texture                          | Else constant              | Times          |
+| :----------------------------------------------------------------- | :------------------------------- | :------------------------- | :------------- |
+| `OmniPBR*.mdl` (`OmniPBR.mdl`, `OmniPBR_ClearCoat.mdl`, ...)       | `diffuse_texture`                | `diffuse_color_constant`   | `diffuse_tint` |
+| `OmniSurface*.mdl` (`OmniSurface.mdl`, `OmniSurfaceLite.mdl`, ...) | `diffuse_reflection_color_image` | `diffuse_reflection_color` | —              |
+
+The texture is sampled at the mesh's UVs (the common names above, `st` first) and read through the same path and asset-root check as a `UsdUVTexture`; an implicit gprim has no UVs and takes the constant. A texture that cannot be read falls back to the constant, as the MDL module does. Only authored values count: a material that sets neither the texture nor the constant takes `displayColor` or the neutral grey, not the module's default. Other `OmniPBR` adjustments (albedo brightness, add and desaturation, texture tiling, offset and rotation) are not applied. Any other MDL module (a custom `MI_*.mdl` from an Unreal Engine export, for example) defines its colour inside the `.mdl` file, which the preview does not read: its prims take `displayColor` or the neutral grey. The job log names each such module once, with the first material that uses it, and ends the load with one line counting the prims per module.
 
 MaterialX materials are not read (the `usd-core` build has no MaterialX plugin); their prims render in the default colour.
 

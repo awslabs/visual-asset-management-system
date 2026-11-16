@@ -19,8 +19,10 @@ The composed stage is walked the way a renderer sees it:
 * values are read at the stage's start time code when it has one, else at the earliest time
   sample, so a time-sampled-only attribute still has a value;
 * colour per prim comes from the diffuse texture of the ``UsdUVTexture`` connected to the bound
-  ``UsdPreviewSurface``'s ``diffuseColor``, else that input's constant value, else ``displayColor``
-  (indexed primvars flattened; constant, uniform, vertex/varying and faceVarying interpolation).
+  ``UsdPreviewSurface``'s ``diffuseColor``, else that input's constant value; when the bound material
+  has no ``UsdPreviewSurface``, from its NVIDIA ``OmniPBR`` or ``OmniSurface`` MDL shader (diffuse
+  texture, else base colour constant, times the OmniPBR tint); else ``displayColor`` (indexed
+  primvars flattened; constant, uniform, vertex/varying and faceVarying interpolation).
   A prim with no colour in a stage where others have one gets a neutral grey instead of dropping
   every prim's colour.
 
@@ -49,6 +51,15 @@ NEUTRAL_RGB = (190, 190, 190)
 MAX_POINTS = 30_000_000
 _RENDERED_PURPOSES = ("default", "render")
 _IMPLICIT_RESOLUTION = 24
+
+# MDL material families whose base colour is read from the shader's inputs, by the lower-case file
+# name prefix of the module (OmniPBR.mdl, OmniPBR_ClearCoat.mdl, OmniSurface.mdl, OmniSurfaceLite.mdl):
+# (diffuse texture input, base colour constant input, tint input or None). The texture replaces the
+# constant; the tint multiplies either. Another MDL module defines its colour inside the .mdl file.
+_MDL_DIFFUSE_INPUTS = (
+    ("omnipbr", "diffuse_texture", "diffuse_color_constant", "diffuse_tint"),
+    ("omnisurface", "diffuse_reflection_color_image", "diffuse_reflection_color", None),
+)
 
 
 def can_handle(extension: str) -> bool:
@@ -97,6 +108,10 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
 
     if not parts:
         raise ValueError("No valid mesh geometry found in USD stage")
+    if any(context.mdl_unread.values()):
+        logger.info(f"{sum(context.mdl_unread.values())} prims are not coloured by their MDL material: "
+                    + "; ".join(f"{count} with {reason}" for reason, count in context.mdl_unread.items()
+                                if count))
 
     # A backdrop (a ground or environment plane) is dropped before the parts are merged, so the
     # prims kept take their colours as a stage holding them alone would.
@@ -117,6 +132,9 @@ class _LoadContext:
         self.asset_root = os.path.realpath(asset_root)
         self.time = time
         self.textures = {}
+        self.mdl_materials = {}
+        # Prims drawn without their material's colour, by the reason it could not be read.
+        self.mdl_unread = {}
         self.points_total = 0
 
 
@@ -194,6 +212,8 @@ def _mesh_geometry(prim, context):
     colours = _texture_colours(prim, topology, context)
     if colours is None:
         colours = _material_base_colour(prim, len(points))
+    if colours is None:
+        colours = _mdl_colours(prim, topology, context, len(points))
     if colours is None:
         colours = _primvar_colours(prim, "displayColor", topology, time)
     logger.info(f"  Prim {prim.GetPath()}: {len(points)} vertices, {len(triangles)} triangles")
@@ -281,6 +301,8 @@ def _implicit_geometry(prim, context):
     points = np.asarray(shape.points, dtype=np.float64)
     triangles = np.asarray(shape.faces).reshape(-1, 4)[:, 1:].astype(np.int64)
     colours = _material_base_colour(prim, len(points))
+    if colours is None:
+        colours = _mdl_colours(prim, None, context, len(points))
     if colours is None:
         colours = _constant_primvar_colour(prim, "displayColor", len(points), time)
     logger.info(f"  Prim {prim.GetPath()}: implicit {prim.GetTypeName()}, {len(points)} vertices")
@@ -420,9 +442,9 @@ def _constant_primvar_colour(prim, name, n_points, time):
     return None if rgb is None else np.tile(rgb, (n_points, 1))
 
 
-def _preview_surface_diffuse(prim):
-    """The diffuseColor input of the UsdPreviewSurface bound to ``prim``, or None."""
-    from pxr import Usd, UsdShade
+def _bound_material(prim):
+    """The material bound to ``prim``, or None."""
+    from pxr import UsdShade
 
     try:
         material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()
@@ -430,10 +452,24 @@ def _preview_surface_diffuse(prim):
         return None
     if not material or not material.GetPrim().IsValid():
         return None
+    return material
+
+
+def _is_preview_surface(shader):
+    id_attr = shader.GetIdAttr() if shader else None
+    return bool(id_attr) and id_attr.Get() == "UsdPreviewSurface"
+
+
+def _preview_surface_diffuse(prim):
+    """The diffuseColor input of the UsdPreviewSurface bound to ``prim``, or None."""
+    from pxr import Usd, UsdShade
+
+    material = _bound_material(prim)
+    if material is None:
+        return None
     for desc in Usd.PrimRange(material.GetPrim()):
         shader = UsdShade.Shader(desc)
-        id_attr = shader.GetIdAttr() if shader else None
-        if id_attr and id_attr.Get() == "UsdPreviewSurface":
+        if _is_preview_surface(shader):
             diffuse = shader.GetInput("diffuseColor")
             if diffuse:
                 return diffuse
@@ -501,8 +537,19 @@ def _texture_colours(prim, topology, context):
     """Per-vertex colours sampled from the diffuse texture, or None."""
     try:
         asset_path, uv_name = _diffuse_texture(prim)
-        if asset_path is None:
-            return None
+    except Exception as e:
+        logger.debug(f"    Texture extraction failed: {e}")
+        return None
+    if asset_path is None:
+        return None
+    sampled = _sample_texture(prim, asset_path, uv_name, topology, context)
+    return None if sampled is None else _to_rgb8(sampled)
+
+
+def _sample_texture(prim, asset_path, uv_name, topology, context):
+    """Per-vertex RGB in 0..1 sampled from the texture ``asset_path`` names at the prim's UVs, or None
+    (no UVs, or the texture is not readable from inside the asset root)."""
+    try:
         uvs, interpolation = _uv_primvar(prim, uv_name, context.time)
         if uvs is None:
             return None
@@ -518,10 +565,148 @@ def _texture_colours(prim, topology, context):
         if mapped is None:
             return None
         logger.info(f"    Baked texture colors from {os.path.basename(_asset_path_text(asset_path))}")
-        return _to_rgb8(mapped)
+        return mapped
     except Exception as e:
         logger.debug(f"    Texture extraction failed: {e}")
         return None
+
+
+class _MdlDiffuse:
+    """The base colour inputs of an OmniPBR or OmniSurface MDL shader, as authored. ``unread`` names
+    why a material's colour is not read (its module and the reason), with no inputs set."""
+
+    def __init__(self, texture=None, constant=None, tint=None, unread=None):
+        self.texture = texture
+        self.constant = constant
+        self.tint = tint
+        self.unread = unread
+
+
+def _mdl_colours(prim, topology, context, n_points):
+    """Per-vertex colours from the OmniPBR or OmniSurface MDL shader of the material bound to
+    ``prim``: its diffuse texture sampled at the prim's UVs (not for an implicit gprim, which has none,
+    ``topology`` None), else its base colour constant, times the OmniPBR tint. None when the material
+    has a UsdPreviewSurface (that path owns it), has no such shader, or sets neither input."""
+    diffuse = _mdl_diffuse(prim, context)
+    if diffuse is None:
+        return None
+    if diffuse.unread is not None:
+        context.mdl_unread[diffuse.unread] = context.mdl_unread.get(diffuse.unread, 0) + 1
+        return None
+    colours = None
+    if diffuse.texture is not None and topology is not None:
+        colours = _sample_texture(prim, diffuse.texture, None, topology, context)
+    if colours is None and diffuse.constant is not None:
+        colours = np.tile(diffuse.constant, (n_points, 1))
+    if colours is None:
+        return None
+    if diffuse.tint is not None:
+        colours = colours * diffuse.tint
+    return _to_rgb8(colours)
+
+
+def _mdl_diffuse(prim, context):
+    """The ``_MdlDiffuse`` of the material bound to ``prim``, read once per material, or None."""
+    material = _bound_material(prim)
+    if material is None:
+        return None
+    material_prim = material.GetPrim()
+    if material_prim.IsInstanceProxy():
+        material_prim = material_prim.GetPrimInPrototype()
+    key = str(material_prim.GetPath())
+    if key not in context.mdl_materials:
+        context.mdl_materials[key] = _read_mdl_diffuse(material, context)
+    return context.mdl_materials[key]
+
+
+def _read_mdl_diffuse(material, context):
+    """The base colour inputs of ``material``'s MDL surface shader when its module is OmniPBR or
+    OmniSurface and the material has no UsdPreviewSurface; else None, or an ``unread`` entry when the
+    colour is there but the preview cannot read it. Each such reason is logged once per MDL module,
+    naming the first material, so a scene with hundreds of materials logs a line per module."""
+    from pxr import Usd, UsdShade
+
+    shaders = [UsdShade.Shader(desc) for desc in Usd.PrimRange(material.GetPrim())]
+    shaders = [shader for shader in shaders if shader]
+    if any(_is_preview_surface(shader) for shader in shaders):
+        return None
+    shader = _mdl_surface_shader(material, shaders)
+    if shader is None:
+        return None
+    module = os.path.basename(_mdl_source_asset(shader))
+    family = next((inputs for inputs in _MDL_DIFFUSE_INPUTS if module.lower().startswith(inputs[0])), None)
+    if family is None:
+        return _unread(context, material, f"{module!r}, colour defined inside the module")
+    _, texture_name, constant_name, tint_name = family
+    texture = _input_value(shader, texture_name)
+    if not getattr(texture, "path", ""):
+        texture = None
+    constant = _colour_value(_input_value(shader, constant_name))
+    tint = _colour_value(_input_value(shader, tint_name)) if tint_name else None
+    if texture is None and constant is None:
+        return _unread(context, material, f"{module!r}, neither {texture_name} nor {constant_name} set")
+    return _MdlDiffuse(texture, constant, tint)
+
+
+def _unread(context, material, reason):
+    """Record why ``material``'s colour is not read; the first material per reason is logged."""
+    if reason not in context.mdl_unread:
+        logger.info(f"    MDL material {material.GetPath()}: {reason}, which the preview does not "
+                    f"read; prims with a material like it take their displayColor or the default colour")
+        context.mdl_unread[reason] = 0
+    return _MdlDiffuse(unread=reason)
+
+
+def _mdl_surface_shader(material, shaders):
+    """The shader ``material``'s ``outputs:mdl:surface`` connects to, else its first shader with an
+    MDL source asset, or None."""
+    from pxr import UsdShade
+
+    try:
+        output = material.GetSurfaceOutput("mdl")
+        source = output.GetConnectedSource() if output and output.HasConnectedSource() else None
+        shader = UsdShade.Shader(source[0].GetPrim()) if source and source[0] else None
+        if shader and _mdl_source_asset(shader):
+            return shader
+    except Exception as e:
+        logger.debug(f"    MDL surface output of {material.GetPath()} not read: {e}")
+    return next((shader for shader in shaders if _mdl_source_asset(shader)), None)
+
+
+def _mdl_source_asset(shader):
+    """The file name an MDL shader's ``info:mdl:sourceAsset`` authors, or ''."""
+    try:
+        source = shader.GetSourceAsset("mdl")
+    except Exception:
+        return ""
+    return getattr(source, "path", "") or ""
+
+
+def _input_value(shader, name):
+    """The value of a shader input, followed through connections to the material's interface inputs
+    (an input connected to another shader's output has none here), or None."""
+    from pxr import UsdShade
+
+    shader_input = shader.GetInput(name)
+    if not shader_input:
+        return None
+    for attribute in shader_input.GetValueProducingAttributes():
+        if UsdShade.Input.IsInput(attribute):
+            value = attribute.Get()
+            if value is not None:
+                return value
+    return None
+
+
+def _colour_value(value):
+    """An authored colour as a float (3,) array, or None."""
+    if value is None:
+        return None
+    try:
+        rgb = np.asarray(value, dtype=np.float64).reshape(-1)
+    except (TypeError, ValueError):
+        return None
+    return rgb[:3] if len(rgb) >= 3 and np.all(np.isfinite(rgb[:3])) else None
 
 
 def _asset_path_text(asset_path):
