@@ -196,10 +196,13 @@ class _SelectiveClient:
         return {"result": "updated"}
 
 
-def _lookup_stubs(module, os_client, links_table=None, metadata_table=None):
-    """Patch the whole lookup chain process_asset_index_request walks."""
+def _lookup_stubs(module, os_client, links_table=None, metadata_table=None, missing_assets=()):
+    """Patch the whole lookup chain process_asset_index_request walks.
+
+    An asset id in `missing_assets` reads back as absent, as a permanently deleted asset does.
+    """
     assets = MagicMock()
-    assets.get_item.side_effect = lambda Key: {
+    assets.get_item.side_effect = lambda Key: {} if Key["assetId"] in missing_assets else {
         "Item": {
             "databaseId": Key["databaseId"],
             "assetId": Key["assetId"],
@@ -228,9 +231,10 @@ def _lookup_stubs(module, os_client, links_table=None, metadata_table=None):
     ]
 
 
-def _invoke(module, event, os_client, links_table=None, metadata_table=None):
+def _invoke(module, event, os_client, links_table=None, metadata_table=None, missing_assets=()):
     with ExitStack() as stack:
-        for context in _lookup_stubs(module, os_client, links_table, metadata_table):
+        for context in _lookup_stubs(module, os_client, links_table, metadata_table,
+                                     missing_assets):
             stack.enter_context(context)
         return module.lambda_handler(event, MagicMock())
 
@@ -261,6 +265,35 @@ def _link_record(message_id, from_asset_id, to_asset_id):
             "fromAssetDatabaseId:fromAssetId": {"S": f"{DATABASE_ID}:{from_asset_id}"},
             "toAssetDatabaseId:toAssetId": {"S": f"{DATABASE_ID}:{to_asset_id}"},
         }},
+    }
+    return {
+        "messageId": message_id,
+        "eventSource": "aws:sqs",
+        "body": json.dumps({"Type": "Notification",
+                            "Message": json.dumps(stream_record)}),
+    }
+
+
+def _link_remove_record(message_id, from_asset_id, to_asset_id, with_old_image=True):
+    """An SQS record carrying an SNS-wrapped asset-links REMOVE record, as the stream relay
+    publishes it: `Keys` names the link only (the table is keyed on `assetLinkId`), and the
+    deleted row, with both of its assets, is the `OldImage`."""
+    dynamodb_data = {"Keys": {"assetLinkId": {"S": "l1"}}}
+    if with_old_image:
+        dynamodb_data["OldImage"] = {
+            "assetLinkId": {"S": "l1"},
+            "fromAssetDatabaseId": {"S": DATABASE_ID},
+            "fromAssetId": {"S": from_asset_id},
+            "toAssetDatabaseId": {"S": DATABASE_ID},
+            "toAssetId": {"S": to_asset_id},
+            "fromAssetDatabaseId:fromAssetId": {"S": f"{DATABASE_ID}:{from_asset_id}"},
+            "toAssetDatabaseId:toAssetId": {"S": f"{DATABASE_ID}:{to_asset_id}"},
+            "relationshipType": {"S": "parentChild"},
+        }
+    stream_record = {
+        "eventSourceARN": "arn:aws:dynamodb:us-east-1:1:table/test-links-table/stream/x",
+        "eventName": "REMOVE",
+        "dynamodb": dynamodb_data,
     }
     return {
         "messageId": message_id,
@@ -419,4 +452,74 @@ class TestPagedLookupsReachTheIndexedDocument:
         assert body["bool_has_asset_children"] is False
         assert body["bool_has_asset_parents"] is False
         assert body["bool_has_assets_related"] is False
+        assert _identifiers(response) == []
+
+
+#######################
+# #1532: a removed link re-indexes both of its assets
+#######################
+
+
+@pytest.mark.unit
+class TestRemovedLinkReindexesBothAssets:
+    """The links table is keyed on `assetLinkId`, so a REMOVE record's `Keys` do not name the
+    two assets; only its `OldImage` does. Reading them from `Keys` re-indexed neither asset and
+    left both relationship flags set in search after the link was deleted."""
+
+    def test_link_delete_reindexes_both_assets_with_cleared_flags(self, asset_indexer):
+        m = asset_indexer
+        client = _SelectiveClient()
+        # The link is gone from the table, so every relationship read comes back empty.
+        response = _invoke(m, {"Records": [_link_remove_record("msg-del", "parent1", "child1")]},
+                           client)
+
+        assert [doc_id for doc_id, _ in client.indexed] == \
+            [f"{DATABASE_ID}#parent1", f"{DATABASE_ID}#child1"]
+        for _, body in client.indexed:
+            assert body["bool_has_asset_children"] is False
+            assert body["bool_has_asset_parents"] is False
+            assert body["bool_has_assets_related"] is False
+        assert _identifiers(response) == []
+
+    def test_permanent_asset_delete_reindexes_the_surviving_asset(self, asset_indexer):
+        """Permanently deleting an asset removes each of its links; each removal is a REMOVE
+        record whose old image names the deleted asset and the asset at the other end. The
+        survivor is re-indexed; the deleted asset reads back absent and is skipped, not
+        reported for redrive."""
+        m = asset_indexer
+        client = _SelectiveClient()
+        response = _invoke(m, {"Records": [_link_remove_record("msg-cascade", "parent1",
+                                                               "deleted1")]},
+                           client, missing_assets={"deleted1"})
+
+        (doc_id, body), = client.indexed
+        assert doc_id == f"{DATABASE_ID}#parent1"
+        assert body["bool_has_asset_children"] is False
+        assert _identifiers(response) == []
+
+    def test_remaining_link_keeps_its_flag(self, asset_indexer):
+        """Positive control: the flags are recomputed from the links that remain, not cleared
+        because a link was removed. The parent still has another child."""
+        m = asset_indexer
+        client = _SelectiveClient()
+        links = _link_pages({
+            ("fromAssetGSI", "parentChild"): _pages([{"assetLinkId": "other-child"}]),
+        })
+        _invoke(m, {"Records": [_link_remove_record("msg-del", "parent1", "child1")]},
+                client, links_table=links)
+
+        bodies = dict(client.indexed)
+        assert bodies[f"{DATABASE_ID}#parent1"]["bool_has_asset_children"] is True
+
+    def test_remove_without_old_image_is_skipped(self, asset_indexer):
+        """A REMOVE record from a stream that carries the new image only has nothing to name
+        the assets by. It is skipped as before, and not reported for redrive, since a retry
+        cannot add the image."""
+        m = asset_indexer
+        client = _SelectiveClient()
+        response = _invoke(m, {"Records": [_link_remove_record("msg-old", "parent1", "child1",
+                                                               with_old_image=False)]},
+                           client)
+
+        assert client.indexed == []
         assert _identifiers(response) == []

@@ -30,6 +30,7 @@ backend/
       addonConstants.py              # Add-on object types, constraint fields and blocklist entries
       addonApiRoutes.py              # Add-on API routes
       addonResourceNames.py          # Add-on SSM resource-name keys (AddonResourceKeys)
+      downloadEligibility.py         # Checks a file passes before its content is handed out (asset, key, version pin, blocklist)
       dynamodb.py                    # DynamoDB helpers (to_update_expr, get_asset_object_from_id)
       validators.py                  # Input validation regex patterns and validate() dispatcher
       s3.py                          # S3 file validation (extension + MIME type checks)
@@ -200,12 +201,14 @@ def get_single_item(event, item_id):
 
 ### 5. Error Handling Hierarchy
 
-| Exception                    | Response Function       | HTTP Status |
-| ---------------------------- | ----------------------- | ----------- |
-| `ValidationError` (Pydantic) | `validation_error()`    | 400         |
-| `VAMSGeneralErrorResponse`   | `general_error()`       | 400         |
-| Authorization failure        | `authorization_error()` | 403         |
-| `Exception` (catch-all)      | `internal_error()`      | 500         |
+| Exception                                                        | Response Function                                                                             | HTTP Status        |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------ |
+| `ValidationError` (Pydantic)                                     | `validation_error()`                                                                          | 400                |
+| `VAMSGeneralErrorResponse`                                       | `general_error()`                                                                             | 400                |
+| `VAMSAuthorizationDeniedResponse` (object-level refusal)         | `authorization_error()` on a route that catches it before `VAMSGeneralErrorResponse`          | 403; 400 elsewhere |
+| `VAMSAssetNotFoundResponse` (missing asset, after authorization) | `general_error(status_code=404)` on a route that catches it before `VAMSGeneralErrorResponse` | 404; 400 elsewhere |
+| Authorization failure                                            | `authorization_error()`                                                                       | 403                |
+| `Exception` (catch-all)                                          | `internal_error()`                                                                            | 500                |
 
 All response functions accept an optional `event=` parameter for audit logging. Always pass the event when available.
 
