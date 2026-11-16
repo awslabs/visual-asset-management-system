@@ -70,24 +70,38 @@ describe("Navigation", () => {
         expect(findNavLink(container, "#/databases/")).toBeFalsy();
     });
 
-    it("renders the User section with API Key Management when allowed", async () => {
-        allowRoutes("/auth/api-keys");
-        const container = await renderNavigation();
-
-        await waitFor(() => {
-            expect(findNavLink(container, "#/auth/api-keys/")).toBeTruthy();
-        });
-    });
-
-    it("hides the User section when API Key Management is not allowed", async () => {
-        allowRoutes("/databases");
+    it("never lists API Key Management in the side navigation, and has no User section", async () => {
+        allowRoutes("/databases", "/auth/api-keys");
         const container = await renderNavigation();
 
         await waitFor(() => {
             expect(findNavLink(container, "#/databases/")).toBeTruthy();
         });
         expect(findNavLink(container, "#/auth/api-keys/")).toBeFalsy();
+        expect(findNavLink(container, "#/auth/api-keys/?mode=user")).toBeFalsy();
+        expect(screen.queryByText("API Key Management")).not.toBeInTheDocument();
         expect(screen.queryByText("User")).not.toBeInTheDocument();
+    });
+
+    it("points to the profile menu when the role's only pages are profile pages", async () => {
+        allowRoutes("/auth/api-keys");
+        await renderNavigation();
+
+        await waitFor(() => {
+            expect(screen.getByText("Your pages are in the profile menu")).toBeInTheDocument();
+        });
+        expect(screen.queryByText("No Access")).not.toBeInTheDocument();
+        expect(createWrapper(document.body).findSideNavigation()).toBeFalsy();
+    });
+
+    it("checks the side and profile routes in one call", async () => {
+        allowRoutes("/databases");
+        await renderNavigation();
+
+        expect(mockCheckWebRoutesAllowed).toHaveBeenCalledTimes(1);
+        const checked = mockCheckWebRoutesAllowed.mock.calls[0][0].map((r) => r.route__path);
+        expect(checked).toContain("/databases");
+        expect(checked).toContain("/auth/api-keys");
     });
 
     it("checks the same route paths the router checks, without a trailing slash", async () => {
@@ -112,6 +126,8 @@ describe("Navigation", () => {
         await waitFor(() => {
             expect(screen.getByText(/don't have access/i)).toBeInTheDocument();
         });
+        expect(screen.getByText("No Access")).toBeInTheDocument();
+        expect(screen.queryByText("Your pages are in the profile menu")).not.toBeInTheDocument();
     });
 
     it("shows a could-not-load message with Retry when the permission check fails", async () => {

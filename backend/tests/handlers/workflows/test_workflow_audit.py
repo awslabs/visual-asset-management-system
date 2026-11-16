@@ -112,6 +112,16 @@ class TestExecutionReadRecord:
         assert recorder.call_args.kwargs["request_parameters"] == {"pageSize": "5"}
         assert "returned-content" not in json.dumps(recorder.call_args.kwargs, default=str)
 
+    def test_the_log_search_term_is_recorded_under_the_redacted_key(self, monkeypatch):
+        recorder = MagicMock()
+        monkeypatch.setattr(execution_svc, "log_action", recorder)
+        event = {"pathParameters": {"executionId": "exec-01"},
+                 "queryStringParameters": {"pageSize": "5", "filterPattern": "typed-term-marker"}}
+        execution_svc._log_execution_read(event, "workflowExecutionLogsGet", {"statusCode": 200})
+        parameters = recorder.call_args.kwargs["request_parameters"]
+        assert parameters == {"pageSize": "5", "searchText": {"filterPattern": "typed-term-marker"},
+                              "searchTextFields": ["filterPattern"], "searchTextLength": len("typed-term-marker")}
+
     @pytest.mark.parametrize("status", [403, 404, 500])
     def test_a_failed_read_records_nothing(self, monkeypatch, status):
         recorder = MagicMock()

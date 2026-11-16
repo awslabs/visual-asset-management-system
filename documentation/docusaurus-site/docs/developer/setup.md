@@ -113,14 +113,14 @@ pip install -r requirements-dev.txt
 
 ### Key Dependencies
 
-| Package                 | Version | Purpose                   |
-| ----------------------- | ------- | ------------------------- |
-| `aws-lambda-powertools` | 2.36.0  | Logger, Parser, BaseModel |
-| `boto3`                 | 1.43.45 | AWS SDK                   |
-| `pydantic`              | 1.10.13 | Data validation (v1 only) |
-| `casbin`                | 1.36.0  | ABAC/RBAC authorization   |
-| `moto`                  | 5.1.0   | AWS service mocking (dev) |
-| `pytest`                | 9.0.3   | Test framework (dev)      |
+| Package                 | Version  | Purpose                   |
+| ----------------------- | -------- | ------------------------- |
+| `aws-lambda-powertools` | 2.36.0   | Logger, Parser, BaseModel |
+| `boto3`                 | 1.43.126 | AWS SDK                   |
+| `pydantic`              | 1.10.13  | Data validation (v1 only) |
+| `casbin`                | 1.36.0   | ABAC/RBAC authorization   |
+| `moto`                  | 5.2.5    | AWS service mocking (dev) |
+| `pytest`                | 9.2.0    | Test framework (dev)      |
 
 :::warning[Pydantic Version]
 VAMS uses Pydantic **v1** (1.10.x). Never install or use Pydantic v2 APIs such as `model_validator`, `model_dump`, or `ConfigDict`. These will fail at Lambda import time. See the [Backend Development](backend.md) guide for correct patterns.
@@ -128,7 +128,7 @@ VAMS uses Pydantic **v1** (1.10.x). Never install or use Pydantic v2 APIs such a
 
 ### Managing Python Dependencies
 
-The backend and Lambda layer projects manage their Python dependencies with [Poetry](https://python-poetry.org/). Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a generated artifact exported from `poetry.lock`, so it must always match the lock. The backend test environment installs `backend/requirements-dev.txt` directly. The Lambda layer bundling process does not read the committed file: it runs `poetry export` inside the build container, installs that export, and writes it over the layer directory's `requirements.txt`, so a layer ships what its `poetry.lock` resolves to. Poetry-managed projects are `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, and `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`.
+The backend and Lambda layer projects manage their Python dependencies with [Poetry](https://python-poetry.org/). Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a generated artifact exported from `poetry.lock`, so it must always match the lock. The backend test environment installs `backend/requirements-dev.txt` directly. The Lambda layer bundling process does not read the committed file: it runs `poetry export` inside the build container, installs that export, and writes it over the layer directory's `requirements.txt`, so a layer ships what its `poetry.lock` resolves to. Poetry-managed projects are `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, `backendAddons/edh/rootKeySync/lambdaLayer/`, and `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`.
 
 To change a dependency version, edit the constraint in `pyproject.toml` (only needed when the existing constraint excludes the target version), re-resolve the lock, and re-export the requirements file:
 

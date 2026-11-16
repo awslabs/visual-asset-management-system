@@ -409,6 +409,7 @@ def _deploy_fields(database_id, workflow_id, ref_records, item=None):
         "jobNames": job_names or [],
         "pipelineFingerprints": workflowAsl.workflow_pipeline_fingerprints(
             [rec for _ref, rec in ref_records]),
+        "aslSchemaVersion": str(workflowAsl.ASL_SCHEMA_VERSION),
         "deploymentRevision": int(item.get("deploymentRevision") or 0) + 1,
         "deploymentStale": False,
         "deploymentStaleReason": "",

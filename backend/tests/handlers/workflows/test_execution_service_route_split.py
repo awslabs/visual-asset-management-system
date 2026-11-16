@@ -1,12 +1,13 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The execution service module runs as two functions with two roles, and each role holds exactly the
+"""The execution service module runs as four functions with four roles, and each role holds exactly the
 DynamoDB calls its routes make.
 
-The execution service serves every execution route but permanent delete; the permanent-delete function
-serves that one route and is the only role granted to delete execution rows. EXECUTION_SERVICE_ROUTES
-selects the set (unset serves every route). The two inventories below are what the CDK grants in
+The execution service serves the lists, abort, abort by group and re-run; the details function the
+details view and its paged collections; the logs function the logs view; and the permanent-delete
+function permanent delete, the only role granted to delete execution rows. EXECUTION_SERVICE_ROUTES
+selects the set (unset serves every route). The inventories below are what the CDK grants in
 infra/lib/lambdaBuilder/workflowFunctions.ts are written from, and
 infra/test/security/executionServiceRouteSplitGrants.test.ts pins those grants to the same lists: a new
 DynamoDB call on either path fails here first, naming the grant to add.
@@ -62,12 +63,58 @@ GROUP_ID = "g1"
 # What each role may call. Logical table names, resolved against the module's own names below.
 # --------------------------------------------------------------------------------------------------
 
-#: Every write the execution service routes make: the read-path and abort reconcile of the main row and
-#: of the pipeline rows, and the lock release on abort and on a run observed stopped outside VAMS.
-EXECUTION_SERVICE_WRITES = {
-    ("main", "UpdateItem"),
-    ("pipelineExecutions", "UpdateItem"),
-    ("locks", "DeleteItem"),
+#: The authorization reads every route set but permanent delete makes: the main row, the run's input
+#: and configuration rows, its assets (batched, then one by one) and the workflow definition.
+AUTHORIZATION_READS = {
+    ("main", "Query"),
+    ("inputs", "Query"),
+    ("configuration", "GetItem"),
+    ("asset", "BatchGetItem"),
+    ("asset", "Query"),
+    ("workflow", "GetItem"),
+}
+#: The lock release (lock policy) of the abort and of a read that finds a run stopped outside VAMS.
+LOCK_RELEASE = {("locks", "DeleteItem"), ("locks/index/WorkflowExecutionLocksByHolderGSI", "Query")}
+#: The status reconcile of the main row and the pipeline rows.
+RECONCILE_WRITES = {("main", "UpdateItem"), ("pipelineExecutions", "UpdateItem")}
+PIPELINE_ROWS = ("pipelineExecutions/index/PipelineExecByWorkflowExecGSI", "Query")
+
+#: Every call each route set's role is granted, by (logical table or index, IAM action).
+ROUTE_SET_CALLS = {
+    "service": AUTHORIZATION_READS | LOCK_RELEASE | RECONCILE_WRITES | {
+        ("main/index/WorkflowExecutionsByWorkflowGSI", "Query"),
+        ("main/index/WorkflowExecutionsByGroupGSI", "Query"),
+        ("main/index/WorkflowExecutionsByDateGSI", "Query"),
+        ("inputs/index/WorkflowExecInputsByAssetGSI", "Query"),
+        ("configuration/index/WorkflowExecConfigByOutputAssetGSI", "Query"),  # pragma: allowlist secret
+        PIPELINE_ROWS,
+        ("pipeline", "GetItem"),
+        ("pipelineInputConfiguration", "Query"),
+    },
+    "details": AUTHORIZATION_READS | LOCK_RELEASE | RECONCILE_WRITES | {
+        PIPELINE_ROWS,
+        ("pipeline", "BatchGetItem"),
+        ("pipeline", "GetItem"),
+        ("pipelineInputConfiguration", "Query"),
+        ("pipelineInputMetadata", "Query"),
+        ("pipelineOutputFiles", "Query"),
+        ("pipelineOutputMetadata", "BatchGetItem"),
+        ("pipelineOutputMetadata", "Query"),
+        ("pipelineOutputResults", "Query"),
+        ("fileVersionHistory/index/WorkflowExecutionIdIndex", "Query"),
+    },
+    "logs": AUTHORIZATION_READS | {
+        PIPELINE_ROWS,
+        ("pipelineLogs", "Query"),
+    },
+}
+
+#: The routes each route set serves (keys of ROUTES below).
+ROUTE_SET_ROUTES = {
+    "service": ("assetList", "assetListByWorkflow", "globalList", "rerun", "abort"),
+    "details": ("details", "detailsMetadata", "detailsFiles", "detailsResults"),
+    "logs": ("logs",),
+    "permanentDelete": ("permanentDelete",),
 }
 
 #: Every call the permanent-delete route makes, reads included: the main row and the configuration
@@ -91,23 +138,10 @@ PERMANENT_DELETE_CALLS = {
       for action in ("Query", "BatchWriteItem")},
 }
 
-#: The tables and indexes the execution service reads (GetItem, BatchGetItem, Query), as its managed
-#: table-read policy grants them; the lock table's holder index is in its lock policy.
-EXECUTION_SERVICE_READ_INDEXES = {
-    "main": {"WorkflowExecutionsByWorkflowGSI", "WorkflowExecutionsByGroupGSI",
-             "WorkflowExecutionsByDateGSI"},
-    "inputs": {"WorkflowExecInputsByAssetGSI"},
-    "configuration": {"WorkflowExecConfigByOutputAssetGSI"},  # pragma: allowlist secret
-    "pipelineExecutions": {"PipelineExecByWorkflowExecGSI"},
-    "fileVersionHistory": {"WorkflowExecutionIdIndex"},
-}
-EXECUTION_SERVICE_READS = {
-    "asset", "main", "inputs", "configuration", "pipelineExecutions", "pipelineInputMetadata",
-    "pipelineInputConfiguration", "pipelineOutputFiles", "pipelineOutputMetadata",
-    "pipelineOutputResults", "pipelineLogs", "workflow", "pipeline", "fileVersionHistory",
-    *{f"{table}/index/{index}" for table, indexes in EXECUTION_SERVICE_READ_INDEXES.items()
-      for index in indexes},
-    "locks/index/WorkflowExecutionLocksByHolderGSI",
+#: The indexes each set's code names; a query on an index outside them fails AccessDenied.
+ROUTE_SET_INDEXES = {
+    route_set: {target.split("/index/")[1] for target, _action in calls if "/index/" in target}
+    for route_set, calls in ROUTE_SET_CALLS.items()
 }
 READ_ACTIONS = {"GetItem", "BatchGetItem", "Query"}
 
@@ -180,30 +214,34 @@ def _dispatched(route, monkeypatch, route_set):
 
 @pytest.mark.unit
 class TestTheRouteGate:
-    @pytest.mark.parametrize("route", [r for r in ROUTES if r != "permanentDelete"])
-    def test_the_execution_service_serves_every_route_but_permanent_delete(self, route, monkeypatch):
-        assert _dispatched(route, monkeypatch, le.ROUTE_SET_SERVICE) == (299, True)
+    def test_every_route_belongs_to_exactly_one_route_set(self):
+        served = [route for routes in ROUTE_SET_ROUTES.values() for route in routes]
+        assert sorted(served) == sorted(ROUTES)
+        assert set(ROUTE_SET_ROUTES) == set(le.ROUTE_SETS)
 
-    def test_the_execution_service_answers_permanent_delete_with_404(self, monkeypatch):
-        assert _dispatched("permanentDelete", monkeypatch, le.ROUTE_SET_SERVICE) == (404, False)
-
-    def test_the_permanent_delete_function_serves_permanent_delete(self, monkeypatch):
-        assert _dispatched("permanentDelete", monkeypatch,
-                           le.ROUTE_SET_PERMANENT_DELETE) == (299, True)
-
-    @pytest.mark.parametrize("route", [r for r in ROUTES if r != "permanentDelete"])
-    def test_the_permanent_delete_function_answers_every_other_route_with_404(self, route, monkeypatch):
-        assert _dispatched(route, monkeypatch, le.ROUTE_SET_PERMANENT_DELETE) == (404, False)
+    @pytest.mark.parametrize("route_set,route", [
+        (route_set, route) for route_set in ROUTE_SET_ROUTES for route in ROUTES])
+    def test_each_function_serves_its_routes_and_answers_every_other_with_404(
+            self, route_set, route, monkeypatch):
+        expected = (299, True) if route in ROUTE_SET_ROUTES[route_set] else (404, False)
+        assert _dispatched(route, monkeypatch, route_set) == expected
 
     def test_abort_by_group_is_an_execution_service_route(self, monkeypatch):
         event = _gate_event("DELETE", f"/workflows/executions/{RUNNING_ID}")
         event["queryStringParameters"] = {"groupId": GROUP_ID}
-        for route_set, expected in ((le.ROUTE_SET_SERVICE, 299), (le.ROUTE_SET_PERMANENT_DELETE, 404)):
+        for route_set in le.ROUTE_SETS:
+            expected = 299 if route_set == le.ROUTE_SET_SERVICE else 404
             monkeypatch.setenv(le.EXECUTION_SERVICE_ROUTES_ENV, route_set)
             with patch(f"{MOD}.abort_group", return_value={"statusCode": 299, "body": "{}"}), \
                     patch(f"{MOD}._enforce_api", return_value=True), \
                     patch(f"{MOD}.request_to_claims", return_value={"tokens": ["u1"]}):
-                assert le.lambda_handler(event, MagicMock())["statusCode"] == expected
+                assert le.lambda_handler(event, MagicMock())["statusCode"] == expected, route_set
+
+    def test_a_method_other_than_get_on_a_details_or_logs_path_stays_on_the_service(self):
+        # Only the GET of a details or logs path moves; anything else answers on the service, which
+        # refuses it as before ("Method not allowed").
+        for path in (f"/workflows/executions/{FINISHED_ID}/details", f"/workflows/executions/{FINISHED_ID}/logs"):
+            assert le._route_set_of(_gate_event("POST", path)) == le.ROUTE_SET_SERVICE
 
     @pytest.mark.parametrize("route", list(ROUTES))
     def test_unset_serves_every_route(self, route, monkeypatch):
@@ -213,9 +251,12 @@ class TestTheRouteGate:
     def test_an_unknown_route_set_serves_nothing(self, route, monkeypatch):
         assert _dispatched(route, monkeypatch, "everything") == (404, False)
 
-    def test_a_refused_route_reads_no_identity_and_no_table(self, monkeypatch):
-        monkeypatch.setenv(le.EXECUTION_SERVICE_ROUTES_ENV, le.ROUTE_SET_SERVICE)
-        method, path, _ = ROUTES["permanentDelete"]
+    @pytest.mark.parametrize("route_set,route", [
+        (le.ROUTE_SET_SERVICE, "permanentDelete"), (le.ROUTE_SET_SERVICE, "details"),
+        (le.ROUTE_SET_DETAILS, "logs"), (le.ROUTE_SET_LOGS, "abort")])
+    def test_a_refused_route_reads_no_identity_and_no_table(self, route_set, route, monkeypatch):
+        monkeypatch.setenv(le.EXECUTION_SERVICE_ROUTES_ENV, route_set)
+        method, path, _ = ROUTES[route]
         with patch(f"{MOD}.request_to_claims") as claims, patch(f"{MOD}.dynamodb") as ddb:
             response = le.lambda_handler(_gate_event(method, path), MagicMock())
         assert response["statusCode"] == 404
@@ -393,10 +434,10 @@ def _event(route, **overrides):
 class _Clients:
     """Stand-ins for every non-DynamoDB client, answering as a finished Step Functions execution does."""
 
-    def __init__(self):
+    def __init__(self, sfn_status="SUCCEEDED"):
         stopped = datetime.now(timezone.utc) - timedelta(minutes=1)
         self.sfn = MagicMock()
-        self.sfn.describe_execution.return_value = {"status": "SUCCEEDED", "stopDate": stopped,
+        self.sfn.describe_execution.return_value = {"status": sfn_status, "stopDate": stopped,
                                                     "startDate": stopped - timedelta(minutes=5)}
         self.sfn.get_execution_history.return_value = {"events": []}
         self.sfn.describe_state_machine.return_value = {"loggingConfiguration": {}}
@@ -417,10 +458,11 @@ def _allow_all():
     return enforcer
 
 
-def _drive(ddb, events, monkeypatch, route_set):
-    """Run each event through lambda_handler against `ddb`; returns (responses, recorded calls)."""
+def _drive(ddb, events, monkeypatch, route_set, sfn_status="SUCCEEDED"):
+    """Run each event through lambda_handler against `ddb`, every Step Functions execution reporting
+    `sfn_status`; returns (responses, recorded calls)."""
     monkeypatch.setenv(le.EXECUTION_SERVICE_ROUTES_ENV, route_set)
-    clients = _Clients()
+    clients = _Clients(sfn_status)
     recorder = _Recorder(ddb.meta.client)
     responses = []
     with patch.object(le, "dynamodb", ddb), \
@@ -440,48 +482,141 @@ def _drive(ddb, events, monkeypatch, route_set):
     return responses, set(recorder.calls)
 
 
-def _service_events():
-    return [
-        _event("assetList"),
-        _event("assetListByWorkflow"),
-        _event("globalList"),
-        _event("details"),
-        _event("detailsMetadata", queryStringParameters={"collection": "input"}),
-        _event("detailsFiles", queryStringParameters={"collection": "output"}),
-        _event("detailsResults"),
-        _event("logs"),
-        _event("logs", queryStringParameters={"mode": "full"}),
-        _event("rerun", body=json.dumps({})),
-        _event("abort"),
-        _event("abort", queryStringParameters={"groupId": GROUP_ID}),
-    ]
+def _route_set_events(route_set):
+    """Every route of one route set, the abort also by group, and each read route on the running
+    execution too, whose Step Functions execution has finished: that read reconciles the run."""
+    def running(route, **overrides):
+        event = _event(route, **overrides)
+        event["requestContext"]["http"]["path"] = event["requestContext"]["http"]["path"].replace(
+            FINISHED_ID, RUNNING_ID)
+        event["pathParameters"]["executionId"] = RUNNING_ID
+        return event
+
+    return {
+        le.ROUTE_SET_SERVICE: lambda: [
+            _event("assetList"),
+            _event("assetListByWorkflow"),
+            _event("globalList"),
+            _event("rerun", body=json.dumps({})),
+            _event("abort"),
+            _event("abort", queryStringParameters={"groupId": GROUP_ID}),
+        ],
+        le.ROUTE_SET_DETAILS: lambda: [
+            _event("details"),
+            _event("detailsMetadata", queryStringParameters={"collection": "input"}),
+            _event("detailsMetadata", queryStringParameters={"collection": "output"}),
+            _event("detailsFiles", queryStringParameters={"collection": "input"}),
+            _event("detailsFiles", queryStringParameters={"collection": "output"}),
+            _event("detailsResults"),
+            running("details"),
+        ],
+        le.ROUTE_SET_LOGS: lambda: [
+            _event("logs"),
+            _event("logs", queryStringParameters={"mode": "full"}),
+            running("logs"),
+        ],
+    }[route_set]()
+
+
+def _recorded(route_set, monkeypatch, sfn_status="SUCCEEDED"):
+    """(responses, recorded calls, row counts of the execution tables afterwards) for one route set."""
+    import boto3
+    from moto import mock_aws
+    with mock_aws():
+        ddb = boto3.resource("dynamodb", region_name="us-east-1")
+        _create_tables(ddb)
+        _seed(ddb)
+        responses, calls = _drive(ddb, _route_set_events(route_set), monkeypatch, route_set, sfn_status)
+        counts = {table: ddb.Table(table).scan()["Count"] for table in (
+            le.workflow_execution_database_v2, le.workflow_execution_inputs_table,
+            le.workflow_execution_configuration_table, le.pipeline_executions_table)}
+    return responses, calls, counts
+
+
+#: Module-level table names (and the two table handles) the code refers to, by logical table.
+_MODULE_TABLES = {
+    "asset_storage_table_name": "asset", "asset_table": "asset",
+    "workflow_execution_database_v2": "main", "workflow_execution_inputs_table": "inputs",
+    "workflow_execution_configuration_table": "configuration",
+    "pipeline_executions_table": "pipelineExecutions",
+    "pipeline_execution_input_files_table": "pipelineInputFiles",
+    "pipeline_execution_input_metadata_table": "pipelineInputMetadata",
+    "pipeline_execution_input_configuration_table": "pipelineInputConfiguration",
+    "pipeline_execution_output_files_table": "pipelineOutputFiles",
+    "pipeline_execution_output_metadata_table": "pipelineOutputMetadata",
+    "pipeline_execution_output_results_table": "pipelineOutputResults",
+    "pipeline_execution_logs_table": "pipelineLogs",
+    "workflow_execution_locks_table": "locks",
+    "workflow_database": "workflow", "pipeline_database": "pipeline",
+    "asset_file_version_history_table": "fileVersionHistory",
+}
+
+#: The handler functions each route set dispatches to.
+_ROUTE_SET_HANDLERS = {
+    "service": ("handle_get_request", "handle_global_list_request", "handle_rerun_request",
+                "handle_delete_request", "abort_group"),
+    "details": ("handle_details_request", "handle_details_metadata_request",
+                "handle_details_files_request", "handle_details_results_request"),
+    "logs": ("handle_logs_request",),
+}
+
+
+def _tables_reached(handlers):
+    """Every logical table a module-level function reachable from `handlers` names: a static reach over
+    the module's own call graph (a function passed as a value counts as called), so a branch the
+    recorded routes do not take is covered too."""
+    import ast
+    with open(le.__file__, encoding="utf-8") as source:
+        tree = ast.parse(source.read())
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    names = {name: {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+             for name, node in functions.items()}
+    seen, stack = set(), list(handlers)
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        stack.extend(n for n in names[name] if n in functions)
+    return {_MODULE_TABLES[n] for name in seen for n in names[name] if n in _MODULE_TABLES}
 
 
 @pytest.mark.unit
 class TestEachRoleHoldsTheCallsItsRoutesMake:
 
     @pytest.mark.aws
-    def test_the_execution_service_routes_write_only_what_its_role_grants(self, monkeypatch):
-        import boto3
-        from moto import mock_aws
-        with mock_aws():
-            ddb = boto3.resource("dynamodb", region_name="us-east-1")
-            _create_tables(ddb)
-            _seed(ddb)
-            responses, calls = _drive(ddb, _service_events(), monkeypatch, le.ROUTE_SET_SERVICE)
+    @pytest.mark.parametrize("sfn_status", ["SUCCEEDED", "FAILED"])
+    @pytest.mark.parametrize("route_set", [le.ROUTE_SET_SERVICE, le.ROUTE_SET_DETAILS, le.ROUTE_SET_LOGS])
+    def test_each_route_set_makes_only_the_calls_its_role_grants(self, route_set, sfn_status, monkeypatch):
+        # A run found FAILED outside VAMS also marks its pipeline rows (a SUCCEEDED one leaves them).
+        responses, calls, _counts = _recorded(route_set, monkeypatch, sfn_status)
         # Control: every route was served, so the recorded set is the routes' and not a 4xx/5xx short cut.
         assert [r["statusCode"] for r in responses] == [200] * len(responses), [
             (r["statusCode"], r.get("body", "")[:200]) for r in responses]
         assert calls, "no DynamoDB call was recorded"
-        writes = {(table, action) for table, action in calls if action in WRITE_ACTIONS}
-        assert writes <= EXECUTION_SERVICE_WRITES, sorted(writes - EXECUTION_SERVICE_WRITES)
-        assert {action for _table, action in calls} <= READ_ACTIONS | WRITE_ACTIONS
-        reads = {table for table, action in calls if action in READ_ACTIONS}
-        assert reads <= EXECUTION_SERVICE_READS, sorted(reads - EXECUTION_SERVICE_READS)
-        # Control: the reconcile and the abort really wrote, so the subset above is not vacuous.
-        assert ("main", "UpdateItem") in writes
-        assert ("pipelineExecutions", "UpdateItem") in writes
-        assert ("locks", "DeleteItem") in writes
+        assert calls <= ROUTE_SET_CALLS[route_set], sorted(calls - ROUTE_SET_CALLS[route_set])
+
+    @pytest.mark.aws
+    @pytest.mark.parametrize("route_set", [le.ROUTE_SET_SERVICE, le.ROUTE_SET_DETAILS])
+    def test_the_reconciling_route_sets_really_write(self, route_set, monkeypatch):
+        # Control for the subset above: the reconcile (and on the service the abort) wrote the main and
+        # pipeline rows and released the run's lock.
+        _responses, calls, _counts = _recorded(route_set, monkeypatch, "FAILED")
+        assert RECONCILE_WRITES | {("locks", "DeleteItem")} <= calls
+
+    @pytest.mark.parametrize("route_set", list(_ROUTE_SET_HANDLERS))
+    def test_each_route_set_reaches_only_tables_its_role_names(self, route_set):
+        reached = _tables_reached(_ROUTE_SET_HANDLERS[route_set])
+        granted = {target.split("/index/")[0] for target, _action in ROUTE_SET_CALLS[route_set]}
+        assert reached <= granted, sorted(reached - granted)
+        # Control: the reach is not empty and finds the per-set tables.
+        assert {"main", "asset", "workflow"} <= reached
+
+    def test_the_static_reach_separates_the_route_sets(self):
+        # The three sets differ in the tables they reach, which is what lets each role drop the rest.
+        assert "pipelineLogs" in _tables_reached(_ROUTE_SET_HANDLERS["logs"])
+        assert "pipelineLogs" not in _tables_reached(_ROUTE_SET_HANDLERS["details"])
+        assert "pipelineOutputResults" not in _tables_reached(_ROUTE_SET_HANDLERS["service"])
 
     def test_every_index_the_module_queries_is_granted(self):
         # The recorded routes do not reach every listing branch, so the index names the module spells
@@ -490,22 +625,17 @@ class TestEachRoleHoldsTheCallsItsRoutesMake:
             text = source.read()
         named = set(re.findall(r"""['"]IndexName['"]\s*:\s*['"](\w+)['"]""", text))
         named |= set(re.findall(r"""IndexName\s*=\s*['"](\w+)['"]""", text))
-        granted = {index for indexes in EXECUTION_SERVICE_READ_INDEXES.values() for index in indexes}
+        # The lock table's holder index is queried by common.workflows.executionLocks, in the lock policy.
+        granted = set().union(*ROUTE_SET_INDEXES.values()) - {"WorkflowExecutionLocksByHolderGSI"}
         assert named == granted
 
     @pytest.mark.aws
-    def test_the_execution_service_routes_delete_and_put_no_execution_row(self, monkeypatch):
-        import boto3
-        from moto import mock_aws
-        with mock_aws():
-            ddb = boto3.resource("dynamodb", region_name="us-east-1")
-            _create_tables(ddb)
-            _seed(ddb)
-            _responses, calls = _drive(ddb, _service_events(), monkeypatch, le.ROUTE_SET_SERVICE)
-            for table in (le.workflow_execution_database_v2, le.workflow_execution_inputs_table,
-                          le.workflow_execution_configuration_table, le.pipeline_executions_table):
-                assert ddb.Table(table).scan()["Count"] == 2, f"{table} lost or gained a row"
-        assert ("main", "UpdateItem") in calls, "the recorded routes made no write at all"
+    @pytest.mark.parametrize("route_set", [le.ROUTE_SET_SERVICE, le.ROUTE_SET_DETAILS, le.ROUTE_SET_LOGS])
+    def test_no_route_set_but_permanent_delete_deletes_or_puts_an_execution_row(self, route_set, monkeypatch):
+        _responses, calls, counts = _recorded(route_set, monkeypatch)
+        assert set(counts.values()) == {2}, counts
+        # Control: the routes ran against the tables, so the two checks below are not vacuous.
+        assert ("main", "Query") in calls, "the recorded routes read no execution row"
         assert not {c for c in calls if c[1] in {"PutItem", "BatchWriteItem", "TransactWriteItems"}}
         assert not {c for c in calls if c[1] == "DeleteItem" and c[0] != "locks"}
 

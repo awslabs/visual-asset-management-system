@@ -179,6 +179,8 @@ mcp = _ToolSetServer("vams", instructions=SERVER_INSTRUCTIONS)
 
 # The workflow-executions endpoint rejects a larger page size (Step Functions throttling).
 WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE = 50
+# Query parameter the execution lists read to include system workflow runs (hidden by default).
+EXECUTION_LIST_INCLUDE_SYSTEM_PARAM = "includeSystem"
 
 # The paged execution-detail metadata endpoint clamps a larger page size to this.
 EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE = 500
@@ -628,6 +630,34 @@ def _bounded_message_list(
     return result
 
 
+def _include_system_param(include_system: Optional[bool]) -> Dict[str, str]:
+    """The includeSystem query parameter for an execution list, or nothing when unset so the server's
+    default applies (system workflow runs hidden; shown for a listing scoped to one system workflow).
+    The name is held here rather than imported, so an older installed vamscli keeps working; a test
+    pins it to the CLI constant, which a CLI contract test pins to the backend's."""
+    if include_system is None:
+        return {}
+    return {EXECUTION_LIST_INCLUDE_SYSTEM_PARAM: "true" if include_system else "false"}
+
+
+def _note_unscoped_workflow_filter(
+    result: Dict[str, Any], workflow_id: Optional[str], workflow_database_id: Optional[str]
+) -> Dict[str, Any]:
+    """Add `systemRunsHint` when a workflow_id without its workflow_database_id left system runs hidden.
+
+    The server shows a system workflow's runs by default only for a list scoped to ONE workflow, which
+    takes both halves of its key. A workflow_id alone is not that scope, so an empty result there can
+    mean "a system workflow's hidden runs" rather than "no runs"; the hint names both ways to reach
+    them."""
+    if workflow_id and not workflow_database_id and result.get("includeSystem") is False:
+        result["systemRunsHint"] = (
+            "System workflow runs were hidden. Pass workflow_database_id with workflow_id to scope "
+            "the list to that one workflow (a system workflow's runs then show by default), or set "
+            "include_system=true."
+        )
+    return result
+
+
 def _paginate_with_page_metadata(
     fetch_page: Callable[[Dict[str, Any]], Any],
     passthrough_keys: tuple = (),
@@ -652,8 +682,10 @@ def _paginate_with_page_metadata(
                 if warning not in warnings:
                     warnings.append(warning)
             for key in passthrough_keys:
-                if key not in echoes and payload.get(key):
-                    echoes[key] = payload[key]
+                # A boolean echo (includeSystem) is carried when False too; it is the answer.
+                value = payload.get(key)
+                if key not in echoes and (value or value is False):
+                    echoes[key] = value
         # Returned untouched: paginate() reads the items off the same page itself.
         return page
 
@@ -1343,6 +1375,7 @@ def list_workflow_executions(
     trigger_type: Optional[str] = None,
     group_id: Optional[str] = None,
     triggered_by_user_id: Optional[str] = None,
+    include_system: Optional[bool] = None,
     filter_start_date: Optional[str] = None,
     filter_end_date: Optional[str] = None,
     max_items: Optional[int] = None,
@@ -1351,9 +1384,8 @@ def list_workflow_executions(
     """Use to see the workflow runs of ONE asset (list_executions covers every asset). A workflow id
     is unique across every database; workflow_database_id is a narrowing filter (a wrong one empties it).
 
-    `filterStartDate` is the applied window (90 days by default), so an asset processed before it
-    lists nothing: widen it with filter_start_date (UTC "YYYY-MM-DDTHH:MM:SSZ"). Other filters match as
-    on list_executions; a SKIPPED row is not a run.
+    `filterStartDate` is the applied window (90 days by default); widen it with filter_start_date
+    (UTC "YYYY-MM-DDTHH:MM:SSZ"). Filters, SKIPPED rows and system runs: as on list_executions.
 
     `warnings` means the page WITHHELD rows and the result is `truncated`: do not report a count or
     conclude a run does not exist. Also BOUNDED: pass `NextToken` as `starting_token`."""
@@ -1370,6 +1402,7 @@ def list_workflow_executions(
         )
         if value
     }
+    extra.update(_include_system_param(include_system))
 
     def _call(params: Dict[str, Any]) -> Dict[str, Any]:
         return CLIENT.api.list_workflow_executions(
@@ -1380,14 +1413,15 @@ def list_workflow_executions(
             params={**params, **extra},
         )
 
-    return _paginate_with_page_metadata(
+    result = _paginate_with_page_metadata(
         _call,
-        passthrough_keys=("filterStartDate", "filterEndDate"),
+        passthrough_keys=("filterStartDate", "filterEndDate", "includeSystem"),
         max_items=max_items,
         # The executions endpoint caps pageSize at 50 to avoid Step Functions throttling.
         page_size=min(CONFIG.page_size, WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE),
         starting_token=starting_token,
     )
+    return _note_unscoped_workflow_filter(result, workflow_id, workflow_database_id)
 
 
 @mcp.tool(title="List tags", annotations=READ)
@@ -1668,6 +1702,7 @@ def list_executions(
     trigger_type: Optional[str] = None,
     group_id: Optional[str] = None,
     triggered_by_user_id: Optional[str] = None,
+    include_system: Optional[bool] = None,
     filter_start_date: Optional[str] = None,
     filter_end_date: Optional[str] = None,
     max_items: Optional[int] = None,
@@ -1679,13 +1714,15 @@ def list_executions(
     Equality filters: status (RUNNING, SUCCEEDED, FAILED, ABORTED, SKIPPED), workflow_id,
     workflow_database_id, trigger_type ('manual' or 'fileUpload'), group_id, triggered_by_user_id;
     exclude_status drops statuses (e.g. "SKIPPED"). A SKIPPED row is not a run: do not count it.
+    System runs are hidden unless include_system=true or both workflow ids name one
+    (`includeSystem`, `systemRunsHint`; `isSystem`).
 
-    `filterStartDate` is the applied window (90 days by default): older runs are absent by design;
-    widen it with filter_start_date / filter_end_date (UTC "YYYY-MM-DDTHH:MM:SSZ"). A run is listed
-    only when the user can read its workflow, its inputs and the asset it wrote to.
+    `filterStartDate` is the applied window (90 days by default); widen it with filter_start_date /
+    filter_end_date (UTC "YYYY-MM-DDTHH:MM:SSZ"). A run is listed only when the user can read its
+    workflow, its inputs and the asset it wrote to.
 
-    `warnings` means rows were WITHHELD (a cap on distinct assets checked, or a work budget) and the
-    result is `truncated`: do not report a count or conclude a run does not exist; narrow the filters.
+    `warnings` means rows were WITHHELD (a distinct assets cap or a work budget), `truncated`: do
+    not report a count or conclude a run does not exist; narrow the filters.
     Also BOUNDED: pass `NextToken` as `starting_token`. `outputTypes` containing "Result" means
     get_execution_results() has text. Next: get_execution_details(workflowExecutionId)."""
     extra = {
@@ -1703,18 +1740,20 @@ def list_executions(
         )
         if value
     }
+    extra.update(_include_system_param(include_system))
 
     def _call(params: Dict[str, Any]) -> Dict[str, Any]:
         return CLIENT.api.list_executions(params={**params, **extra})
 
-    return _paginate_with_page_metadata(
+    result = _paginate_with_page_metadata(
         _call,
-        passthrough_keys=("filterStartDate", "filterEndDate"),
+        passthrough_keys=("filterStartDate", "filterEndDate", "includeSystem"),
         max_items=max_items,
         # Same Step Functions throttling cap the per-asset listing respects.
         page_size=min(CONFIG.page_size, WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE),
         starting_token=starting_token,
     )
+    return _note_unscoped_workflow_filter(result, workflow_id, workflow_database_id)
 
 
 # The description names only what an agent needs to reach a conclusion (Mandatory Rule 11).
