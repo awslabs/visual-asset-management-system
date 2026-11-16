@@ -195,10 +195,18 @@ class TestTessellateAndMeasure:
             "solids": 2, "shells": 2, "faces": 12, "wires": 12, "edges": 24, "vertices": 16}
 
     def test_geometry_from_the_bounding_box_and_mass_properties(self, monkeypatch):
+        """The volume and centre of mass come from the solids (two here, each 100 with its centre at
+        (5, 0, 2.5)); the surface area from the whole shape."""
         _install_fake_ocp(monkeypatch)
         assert cad_handler.shape_geometry("shape") == {
             "boundsMin": [0.0, -1.0, 0.0], "boundsMax": [10.0, 1.0, 5.0], "dimensions": [10.0, 2.0, 5.0],
-            "volume": 100.0, "surfaceArea": 130.0, "centerOfMass": [5.0, 0.0, 2.5]}
+            "volume": 200.0, "surfaceArea": 130.0, "centerOfMass": [5.0, 0.0, 2.5]}
+
+    def test_a_shape_without_a_solid_has_no_volume(self, monkeypatch):
+        _install_fake_ocp(monkeypatch, kinds={"SHELL": 1, "FACE": 6})
+        geometry = cad_handler.shape_geometry("surface model")
+        assert geometry["volume"] is None and geometry["surfaceArea"] == 130.0
+        assert geometry["centerOfMass"] == [5.0, 0.0, 2.5]
 
 
 @pytest.mark.unit

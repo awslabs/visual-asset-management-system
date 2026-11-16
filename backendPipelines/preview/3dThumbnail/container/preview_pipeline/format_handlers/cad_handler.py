@@ -504,29 +504,51 @@ def shape_statistics(shape) -> dict:
 
 
 def shape_geometry(shape) -> dict:
-    """Axis-aligned bounds, dimensions, volume, surface area and centre of mass in the file's units."""
+    """Axis-aligned bounds, dimensions, volume, surface area and centre of mass in the file's units.
+
+    The volume is the volume of the shape's solids, None when it has none: OCCT's volume integral over a
+    shell or a face that bounds no solid is not a volume (a closed surface model reads as the volume it
+    encloses, a loose face beside a solid adds a sliver that depends on where the face lies). The centre
+    of mass is the solids' when there are any, else the surfaces'."""
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
     from OCP.BRepGProp import BRepGProp
     from OCP.GProp import GProp_GProps
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
 
     box = Bnd_Box()
     BRepBndLib.Add_s(shape, box, True)
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
 
-    volume_props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, volume_props)
-    centre = volume_props.CentreOfMass()
+    volume = 0.0
+    weighted = [0.0, 0.0, 0.0]
+    solids = 0
+    explorer = TopExp_Explorer(shape, TopAbs_SOLID)
+    while explorer.More():
+        solid_props = GProp_GProps()
+        BRepGProp.VolumeProperties_s(explorer.Current(), solid_props)
+        mass = float(solid_props.Mass())
+        centre = solid_props.CentreOfMass()
+        volume += mass
+        weighted = [weighted[0] + mass * centre.X(), weighted[1] + mass * centre.Y(), weighted[2] + mass * centre.Z()]
+        solids += 1
+        explorer.Next()
     surface_props = GProp_GProps()
     BRepGProp.SurfaceProperties_s(shape, surface_props)
+    if solids and volume:
+        centre_of_mass = [value / volume for value in weighted]
+    else:
+        surface_centre = surface_props.CentreOfMass()
+        centre_of_mass = [float(surface_centre.X()), float(surface_centre.Y()), float(surface_centre.Z())]
 
     return {
         "boundsMin": [float(xmin), float(ymin), float(zmin)],
         "boundsMax": [float(xmax), float(ymax), float(zmax)],
         "dimensions": [float(xmax - xmin), float(ymax - ymin), float(zmax - zmin)],
-        "volume": float(volume_props.Mass()),
+        "volume": volume if solids else None,
         "surfaceArea": float(surface_props.Mass()),
-        "centerOfMass": [float(centre.X()), float(centre.Y()), float(centre.Z())],
+        "centerOfMass": centre_of_mass,
     }
 
 
