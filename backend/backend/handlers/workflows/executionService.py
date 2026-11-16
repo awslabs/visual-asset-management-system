@@ -20,6 +20,7 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, log_action, log_actions
+from common.auditSearchText import search_text_parameters
 from common.dynamodb import validate_pagination_info, batch_get_items
 from common.logRedaction import redact_log_text, redact_log_events
 from common.workflows import executionRecords as er
@@ -66,14 +67,18 @@ from models.executions import (
 
 logger = safeLogger(service="ExecutionService")
 
-# This module is deployed as two functions with different roles: the execution service, which serves
-# every route but permanent delete, and the permanent-delete function, which serves only that route and
-# is the only one granted to delete execution rows. EXECUTION_SERVICE_ROUTES names the set a function
-# serves; a route outside it answers 404 before any read. Unset serves every route (unit tests, local
-# runs); any other value serves none.
+# This module is deployed as four functions, each on a role holding only the calls its routes make:
+# the execution service (the asset and global lists, abort, abort by group and re-run), the details
+# function (the details view and its paged metadata, files and results), the logs function (the logs
+# view) and the permanent-delete function, the only one granted to delete execution rows.
+# EXECUTION_SERVICE_ROUTES names the set a function serves; a route outside it answers 404 before any
+# read. Unset serves every route (unit tests, local runs); any other value serves none.
 EXECUTION_SERVICE_ROUTES_ENV = "EXECUTION_SERVICE_ROUTES"
 ROUTE_SET_SERVICE = "service"
+ROUTE_SET_DETAILS = "details"
+ROUTE_SET_LOGS = "logs"
 ROUTE_SET_PERMANENT_DELETE = "permanentDelete"
+ROUTE_SETS = (ROUTE_SET_SERVICE, ROUTE_SET_DETAILS, ROUTE_SET_LOGS, ROUTE_SET_PERMANENT_DELETE)
 
 # Claims/roles for the current request (set per-invocation in lambda_handler).
 claims_and_roles = {}
@@ -6389,8 +6394,9 @@ def permanent_delete_execution(event, execution_id):
     """Permanently delete an execution's DynamoDB rows across all sub-tables (admin-gated at the
     route/permission level; not-in-progress guarded here). Does NOT touch Step Functions history.
 
-    Removes: main row, workflow inputs, workflow configuration, output index, and — per pipeline —
-    the PipelineExecutions row plus its input/output/log/config sub-rows."""
+    Removes: main row, workflow inputs, workflow configuration, output index, the end-state step's
+    ingest ledger, and — per pipeline — the PipelineExecutions row plus its input/output/log/config
+    sub-rows."""
     main_item = get_execution_main_row(execution_id)
     if not main_item:
         return validation_error(status_code=404, body={"message": "Execution not found"}, event=event)
@@ -6462,7 +6468,11 @@ def permanent_delete_execution(event, execution_id):
         dynamodb.Table(pipeline_executions_table).delete_item(
             Key={"pipelineExecutionId": pexec_id, "workflowExecutionId": execution_id})
 
-    # Workflow-level rows.
+    # Workflow-level rows. The end-state step's ingest ledger is output-files rows under the run's own
+    # partition (common.workflows.executionOutputs.ingest_ledger_partition).
+    _delete_all_rows(pipeline_execution_output_files_table,
+                     Key("pipelineExecutionId").eq(eo.ingest_ledger_partition(execution_id)),
+                     ["pipelineExecutionId", "fileType:relativeFilePath"])
     _delete_all_rows(workflow_execution_inputs_table,
                      Key("workflowExecutionId").eq(execution_id),
                      ["workflowExecutionId", "databaseId:assetId:inputAssetFileKey"])
@@ -6645,20 +6655,38 @@ def handle_permanent_delete_request(event):
     return permanent_delete_execution(event, execution_id)
 
 
+def _route_set_of(event):
+    """The route set the request's route belongs to (see EXECUTION_SERVICE_ROUTES_ENV)."""
+    http = (event.get("requestContext") or {}).get("http") or {}
+    method, path = http.get("method"), http.get("path", "")
+    if method == "DELETE" and API_WORKFLOW_EXECUTION_PERMANENT.matches(path):
+        return ROUTE_SET_PERMANENT_DELETE
+    if method == "GET" and any(route.matches(path) for route in (
+            API_WORKFLOW_EXECUTION_DETAILS, API_WORKFLOW_EXECUTION_DETAILS_METADATA,
+            API_WORKFLOW_EXECUTION_DETAILS_FILES, API_WORKFLOW_EXECUTION_DETAILS_RESULTS)):
+        return ROUTE_SET_DETAILS
+    if method == "GET" and API_WORKFLOW_EXECUTION_LOGS.matches(path):
+        return ROUTE_SET_LOGS
+    return ROUTE_SET_SERVICE
+
+
 def _route_served_here(event):
     """Whether this function's EXECUTION_SERVICE_ROUTES set includes the request's route."""
     route_set = os.environ.get(EXECUTION_SERVICE_ROUTES_ENV, "")
     if not route_set:
         return True
-    http = (event.get("requestContext") or {}).get("http") or {}
-    is_permanent_delete = (http.get("method") == "DELETE"
-                           and API_WORKFLOW_EXECUTION_PERMANENT.matches(http.get("path", "")))
-    if route_set == ROUTE_SET_SERVICE:
-        return not is_permanent_delete
-    if route_set == ROUTE_SET_PERMANENT_DELETE:
-        return is_permanent_delete
-    logger.error(f"Unknown {EXECUTION_SERVICE_ROUTES_ENV} value {route_set!r}; serving no route")
-    return False
+    if route_set not in ROUTE_SETS:
+        logger.error(f"Unknown {EXECUTION_SERVICE_ROUTES_ENV} value {route_set!r}; serving no route")
+        return False
+    return _route_set_of(event) == route_set
+
+
+def _execution_read_parameters(query_parameters):
+    """The query an execution read asked. The log search term (filterPattern) is text the caller typed,
+    so it is recorded under the redacted searchText key."""
+    parameters = dict(query_parameters or {})
+    term = parameters.pop('filterPattern', None)
+    return search_text_parameters(parameters, {'filterPattern': term})
 
 
 def _log_execution_read(event, action, response):
@@ -6673,7 +6701,7 @@ def _log_execution_read(event, action, response):
                asset_id=path_parameters.get('assetId') or held.get('asset_id'),
                workflowId=path_parameters.get('workflowId'),
                executionId=path_parameters.get('executionId'),
-               request_parameters=dict(event.get('queryStringParameters') or {}))
+               request_parameters=_execution_read_parameters(event.get('queryStringParameters')))
     return response
 
 

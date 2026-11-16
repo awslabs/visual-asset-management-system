@@ -344,7 +344,8 @@ sys.modules['common.apiRoutes'] = _apir_module
 # The audit action registry is pure constants over the route list, so load the REAL modules by path
 # for the same reason: the route type module first, then the add-on lane and the merged registry
 # (which imports the fork-owned custom/customAuditActions.py by name).
-for _audit_reg in ('auditActionTypes', 'addonAuditActions', 'auditActions'):
+# common.auditSearchText (the redacted searchText key of a search record) is pure Python and joins them.
+for _audit_reg in ('auditActionTypes', 'addonAuditActions', 'auditActions', 'auditSearchText'):
     _audit_reg_spec = _s3mk_importlib_util.spec_from_file_location(
         f'common.{_audit_reg}',
         os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', f'{_audit_reg}.py')

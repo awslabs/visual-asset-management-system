@@ -27,6 +27,8 @@ import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-
 import {
     buildExecuteWorkflowV2Function,
     buildExecutionServiceFunction,
+    buildExecutionDetailsFunction,
+    buildExecutionLogsFunction,
     buildHandleExecutionErrorFunction,
     buildInterimPipelineTrackingFunction,
     buildProcessWorkflowExecutionOutputFunction,
@@ -385,42 +387,54 @@ describe("executionService environment", () => {
  * history on any CDK-named pipeline state machine, the Batch container group every Batch pipeline
  * writes to by default, and the Batch job a self-submitting pipeline registers by id. A missing grant
  * surfaces as an UNKNOWN stage or a `denied` log source, never as a failed request, so it is the
- * grant that has to be asserted.
+ * grant that has to be asserted. The details view runs on executionDetails and the logs view on
+ * executionLogs; the abort (executionService) stops what they read.
  */
-describe("executionService sub-execution read grants", () => {
-    const synthed = () =>
+describe("execution service sub-execution grants", () => {
+    const build = (builder: typeof buildExecutionServiceFunction) => () =>
         synthWorkflowLambda((scope, layer, resources, extra, config) =>
-            buildExecutionServiceFunction(
-                scope,
-                layer,
-                resources,
-                extra.workflowsLogGroup,
-                config,
-                undefined as any,
-                []
-            )
+            builder(scope, layer, resources, extra.workflowsLogGroup, config, undefined as any, [])
         );
-    const STATES_ACTIONS = [
+    const service = build(buildExecutionServiceFunction);
+    const details = build(buildExecutionDetailsFunction);
+    const logs = build(buildExecutionLogsFunction);
+    const READERS: [string, () => ReturnType<typeof service>][] = [
+        ["executionDetails", details],
+        ["executionLogs", logs],
+    ];
+    const READ_STATES_ACTIONS = [
         "states:DescribeExecution",
-        "states:StopExecution",
         "states:GetExecutionHistory",
         "states:DescribeStateMachine",
     ];
     const LOGS_ACTIONS = ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"];
 
-    test("keeps the four Step Functions actions on every state machine and execution", () => {
+    test.each(READERS)("%s reads every state machine and execution", (lambdaId, synthed) => {
         const { template } = synthed();
-        for (const action of STATES_ACTIONS) {
-            const entries = resourceEntries(template, "executionService", action);
+        for (const action of READ_STATES_ACTIONS) {
+            const entries = resourceEntries(template, lambdaId, action);
             expect(entries).toContain("arn:aws:states:us-east-1:123456789012:stateMachine:*");
             expect(entries).toContain("arn:aws:states:us-east-1:123456789012:execution:*");
         }
+        expect(actionsOnRole(template, lambdaId)).not.toContain("states:StopExecution");
     });
 
-    test("reads the Batch default container log group and its streams", () => {
-        const { template } = synthed();
+    test("the execution service describes and stops executions, and reads no history", () => {
+        const { template } = service();
+        for (const action of ["states:DescribeExecution", "states:StopExecution"]) {
+            expect(resourceEntries(template, "executionService", action)).toContain(
+                "arn:aws:states:us-east-1:123456789012:execution:*"
+            );
+        }
+        const actions = actionsOnRole(template, "executionService");
+        expect(actions).not.toContain("states:GetExecutionHistory");
+        expect(actions).not.toContain("states:DescribeStateMachine");
+    });
+
+    test("the logs view reads the Batch default container log group and its streams", () => {
+        const { template } = logs();
         for (const action of LOGS_ACTIONS) {
-            const entries = resourceEntries(template, "executionService", action);
+            const entries = resourceEntries(template, "executionLogs", action);
             expect(entries).toContain(
                 "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job"
             );
@@ -434,24 +448,50 @@ describe("executionService sub-execution read grants", () => {
         }
     });
 
-    test("grants batch:DescribeJobs on the account-wide resource the action forces", () => {
-        const { template } = synthed();
-        expect(actionsOnRole(template, "executionService")).toContain("batch:DescribeJobs");
-        expect(resourceEntries(template, "executionService", "batch:DescribeJobs")).toEqual(["*"]);
-        // The abort grant it sits beside is unchanged.
+    test.each([
+        ["executionService", service],
+        ["executionDetails", details],
+    ] as [string, () => ReturnType<typeof service>][])(
+        "%s reads only the groups the reconcile's log capture reads",
+        (lambdaId, synthed) => {
+            const { template } = synthed();
+            const entries = resourceEntries(template, lambdaId, "logs:FilterLogEvents");
+            expect(entries.filter((e) => e.includes("WorkflowsLogGroup"))).toHaveLength(2);
+            expect(entries.filter((e) => !e.includes("WorkflowsLogGroup")).sort()).toEqual([
+                "arn:aws:logs:us-east-1:123456789012:log-group:*vams*",
+                "arn:aws:logs:us-east-1:123456789012:log-group:*vams*:*",
+            ]);
+            const actions = actionsOnRole(template, lambdaId);
+            expect(actions).not.toContain("logs:GetLogEvents");
+            expect(actions).not.toContain("logs:DescribeLogStreams");
+        }
+    );
+
+    test.each(READERS)(
+        "%s holds batch:DescribeJobs on the account-wide resource the action forces",
+        (lambdaId, synthed) => {
+            const { template } = synthed();
+            expect(resourceEntries(template, lambdaId, "batch:DescribeJobs")).toEqual(["*"]);
+            expect(actionsOnRole(template, lambdaId)).not.toContain("batch:TerminateJob");
+        }
+    );
+
+    test("the abort keeps batch:TerminateJob on the account-wide resource", () => {
+        const { template } = service();
         expect(resourceEntries(template, "executionService", "batch:TerminateJob")).toEqual(["*"]);
+        expect(actionsOnRole(template, "executionService")).not.toContain("batch:DescribeJobs");
     });
 
     // A SageMaker training job or pipeline execution a pipeline registered is stopped on abort and
-    // described for the details view. Both carry a run-time name, so the scope is the account and
-    // Region's training-job and pipeline-execution namespaces — never a bare `*`, and never another
-    // account or Region.
+    // described for the details and logs views. Both carry a run-time name, so the scope is the
+    // account and Region's training-job and pipeline-execution namespaces — never a bare `*`, and
+    // never another account or Region.
     const SAGEMAKER_RESOURCES = [
         "arn:aws:sagemaker:us-east-1:123456789012:training-job/*",
         "arn:aws:sagemaker:us-east-1:123456789012:pipeline/*/execution/*",
     ].sort();
-    test("grants the two SageMaker Stop and two Describe actions on this account's namespaces", () => {
-        const { template } = synthed();
+    test("the abort holds the two SageMaker Stop and two Describe actions on this account's namespaces", () => {
+        const { template } = service();
         for (const action of [
             "sagemaker:StopTrainingJob",
             "sagemaker:StopPipelineExecution",
@@ -463,6 +503,24 @@ describe("executionService sub-execution read grants", () => {
             );
         }
     });
+
+    test.each(READERS)(
+        "%s holds the two SageMaker Describe actions and no Stop",
+        (lambdaId, synthed) => {
+            const { template } = synthed();
+            for (const action of [
+                "sagemaker:DescribeTrainingJob",
+                "sagemaker:DescribePipelineExecution",
+            ]) {
+                expect(resourceEntries(template, lambdaId, action).sort()).toEqual(
+                    SAGEMAKER_RESOURCES
+                );
+            }
+            expect(
+                actionsOnRole(template, lambdaId).filter((a) => a.startsWith("sagemaker:Stop"))
+            ).toEqual([]);
+        }
+    );
 });
 
 /**
@@ -957,6 +1015,18 @@ describe("concurrency lock table grants", () => {
                 []
             )
         );
+    const executionDetails = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildExecutionDetailsFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
     const interim = () =>
         synthWorkflowLambda((scope, layer, resources, extra, config) =>
             buildInterimPipelineTrackingFunction(
@@ -989,6 +1059,7 @@ describe("concurrency lock table grants", () => {
         ],
         ["handleExecutionError", handleError, ["dynamodb:DeleteItem", "dynamodb:Query"]],
         ["executionService", executionService, ["dynamodb:DeleteItem", "dynamodb:Query"]],
+        ["executionDetails", executionDetails, ["dynamodb:DeleteItem", "dynamodb:Query"]],
     ])("%s holds exactly the lock actions it calls", (lambdaId, build, expected) => {
         const synthed = (build as () => SynthedLambda)();
         expect(
@@ -1024,6 +1095,7 @@ describe("concurrency lock table grants", () => {
         ["processWorkflowExecutionOutput", processOutput],
         ["handleExecutionError", handleError],
         ["executionService", executionService],
+        ["executionDetails", executionDetails],
     ])("%s queries the lock table's holder index only", (lambdaId, build) => {
         const synthed = build();
         const lockId = synthed.logicalIdOf("workflowExecutionLocksStorageTable");
@@ -1059,37 +1131,36 @@ describe("concurrency lock table grants", () => {
         }
     );
 
-    test("executionService gains no second grant on the tables it already reads", () => {
-        // Its inline policy is close to the size limit, and a statement pushed into an overflow
-        // policy loses the role's cdk-nag suppressions (a GovCloud synth then fails on them).
+    test("executionService names the tables the lock release reads only once", () => {
+        // The release reads the workflow row and the input rows, which the service's own grants already
+        // cover, so the lock policy adds only the lock-table calls: each table stays one ARN in one
+        // statement, which keeps the role inside IAM's inline policy quota.
         const synthed = executionService();
-        const workflowId = synthed.logicalIdOf("workflowStorageTableV2");
-        const inputsId = synthed.logicalIdOf("workflowExecutionInputsStorageTable");
-        const statementsNaming = (logicalId: string) =>
-            statementsOnRole(synthed.template, "executionService").filter((s) =>
-                JSON.stringify(s.Resource ?? "").includes(logicalId)
+        for (const field of [
+            "workflowStorageTableV2",
+            "workflowExecutionInputsStorageTable",
+        ] as const) {
+            const id = synthed.logicalIdOf(field);
+            const naming = statementsOnRole(synthed.template, "executionService").filter((s) =>
+                ([] as any[])
+                    .concat(s.Resource ?? [])
+                    .some(
+                        (r) => JSON.stringify(r) === JSON.stringify({ "Fn::GetAtt": [id, "Arn"] })
+                    )
             );
-        expect(statementsNaming(workflowId).length).toBeGreaterThan(0);
-        expect(
-            statementsNaming(workflowId).filter(
-                (s) => JSON.stringify(s.Action) === JSON.stringify("dynamodb:GetItem")
-            )
-        ).toEqual([]);
-        expect(
-            statementsNaming(inputsId).filter(
-                (s) => JSON.stringify(s.Action) === JSON.stringify("dynamodb:Query")
-            )
-        ).toEqual([]);
+            expect([field, naming.length]).toEqual([field, 1]);
+        }
     });
 
     test("the lock-table grants need the shared key, which each lock handler already holds", () => {
         // table.grant() adds no key permissions, so the customer managed key must come from the
-        // handler's own KMS statement; pin it on all four so a refactor that drops it is caught here.
+        // handler's own KMS statement; pin it on all five so a refactor that drops it is caught here.
         for (const [lambdaId, build] of [
             ["executeWorkflow", executeWorkflow],
             ["processWorkflowExecutionOutput", processOutput],
             ["handleExecutionError", handleError],
             ["executionService", executionService],
+            ["executionDetails", executionDetails],
         ] as const) {
             const actions = actionsOnRole(build().template, lambdaId);
             expect(actions).toEqual(
@@ -1136,6 +1207,7 @@ describe("concurrency lock table grants", () => {
             ],
         ],
         ["executionService", executionService, ["workflowExecutionLocksStorageTable"]],
+        ["executionDetails", executionDetails, ["workflowExecutionLocksStorageTable"]],
     ])(
         "%s holds its lock statements in a policy of their own, never its default or overflow policy",
         (lambdaId, build, lockFields) => {
@@ -1163,6 +1235,7 @@ describe("concurrency lock table grants", () => {
         ["processWorkflowExecutionOutput", processOutput],
         ["handleExecutionError", handleError],
         ["executionService", executionService],
+        ["executionDetails", executionDetails],
     ])("%s is deployed after its lock policy", (lambdaId, build) => {
         const { template } = build();
         const [policyId] = Object.keys(template.findResources("AWS::IAM::Policy")).filter((id) =>
