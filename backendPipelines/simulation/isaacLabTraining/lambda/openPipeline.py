@@ -68,6 +68,21 @@ MAX_MAX_ITERATIONS = 100000
 MAX_NUM_EPISODES = 10000
 MAX_STEPS_PER_EPISODE = 100000
 
+# Bounds for trainingConfig.stageAssetPaths, the executing asset's files and folders the container
+# downloads before Isaac Lab starts. Counting them here rejects an oversized selection before a GPU
+# node is provisioned; container/utils/aws/staging.py holds a second copy and re-checks what the
+# asset holds when the job starts. lambda/tests/test_isaaclab_stage_assets.py asserts the two agree.
+MAX_STAGE_ASSET_PATHS = 50
+MAX_STAGE_ASSET_PATH_LENGTH = 1024
+MAX_STAGED_ASSET_FILES = 10000
+MAX_STAGED_ASSET_BYTES = 50 * 1024 ** 3
+
+# A VAMS file preview (`<file>.previewFile.<ext>`) belongs to the file it previews, not to the task.
+PREVIEW_FILE_MARKER = ".previewFile."
+
+_STAGE_PATH_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+_STAGE_PATH_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
+
 
 def abort_external_workflow(error, task_token):
     """Fail the VAMS workflow's waitForCallback task token so a failure here does not leave the
@@ -494,6 +509,169 @@ def resolve_custom_environment_path(event, training_config) -> str:
         require_asset_bucket("customEnvironmentS3Uri", resolved, event))
 
 
+def _shown(value) -> str:
+    """``value`` quoted for an error message, cut short so a long value cannot fill the message."""
+    text = repr(value)
+    return text if len(text) <= 120 else text[:117] + "..."
+
+
+def normalize_stage_asset_path(value) -> str:
+    """One ``stageAssetPaths`` entry as a path relative to the asset root.
+
+    Returns ``""`` for the whole asset (``/``), the folder path with a trailing ``/`` for a folder,
+    and the bare path otherwise, which names that file or the folder of that name. The value is
+    operator-supplied (a template body or a JSON input file), so it is accepted only as a relative
+    path that stays inside the asset: no URI scheme, no backslash, no control character, no ``.``,
+    ``..`` or empty segment, and at most ``MAX_STAGE_ASSET_PATH_LENGTH`` characters.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"stageAssetPaths entries must be non-blank strings (received {_shown(value)})")
+    path = value.strip()
+    if len(path) > MAX_STAGE_ASSET_PATH_LENGTH:
+        raise ValueError(
+            f"stageAssetPaths entries must be at most {MAX_STAGE_ASSET_PATH_LENGTH} characters "
+            f"(received one of {len(path)})")
+    if _STAGE_PATH_CONTROL_CHARACTERS.search(path) or "\\" in path or _STAGE_PATH_SCHEME.match(path):
+        raise ValueError(
+            f"stageAssetPaths entries must be paths within the asset, not URIs, and must not hold "
+            f"backslashes or control characters (received {_shown(value)})")
+    path = path.lstrip("/")
+    if not path:
+        return ""
+    segments = path.rstrip("/").split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        raise ValueError(
+            f"stageAssetPaths entries must stay inside the asset: no '.', '..' or empty path "
+            f"segment (received {_shown(value)})")
+    return "/".join(segments) + ("/" if path.endswith("/") else "")
+
+
+def stage_asset_paths(training_config) -> list:
+    """The validated, de-duplicated ``stageAssetPaths`` of a run, in the order given.
+
+    A list of paths, or one path as a string; absent, null or blank stages nothing.
+    """
+    value = training_config.get("stageAssetPaths")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return []
+    entries = [value] if isinstance(value, str) else value
+    if not isinstance(entries, list):
+        raise ValueError(
+            f"stageAssetPaths must be a list of paths within the asset (received {_shown(value)})")
+    if len(entries) > MAX_STAGE_ASSET_PATHS:
+        raise ValueError(
+            f"stageAssetPaths names {len(entries)} paths; at most {MAX_STAGE_ASSET_PATHS} are allowed")
+    paths = []
+    for entry in entries:
+        path = normalize_stage_asset_path(entry)
+        if path not in paths:
+            paths.append(path)
+    return paths
+
+
+def _is_staged_key(key: str, root_prefix: str) -> bool:
+    """Whether an object under the asset root is an asset file the run stages: not the root or a
+    folder marker (a key ending in ``/``) and not a VAMS file preview."""
+    if key.endswith("/") or len(key) <= len(root_prefix):
+        return False
+    return PREVIEW_FILE_MARKER not in key.rsplit("/", 1)[-1]
+
+
+def list_stage_asset_files(bucket: str, root_prefix: str, paths: list) -> dict:
+    """``{key: size}`` of the files the ``stageAssetPaths`` selections name under the asset root.
+
+    A path without a trailing ``/`` names the file of that name when one exists, and the folder of
+    that name otherwise or as well; its siblings that merely share the prefix (``Isaac2/`` for
+    ``Isaac``) are not listed. A selection that names no file is rejected, and the listing stops as
+    soon as the total passes ``MAX_STAGED_ASSET_FILES`` or ``MAX_STAGED_ASSET_BYTES``, so a whole
+    bucket is never walked to find out it is too large.
+    """
+    client = _s3_client_for_bucket(bucket)
+    paginator = client.get_paginator("list_objects_v2")
+    files = {}
+    total_bytes = 0
+
+    def add(key, size):
+        nonlocal total_bytes
+        if key in files or not _is_staged_key(key, root_prefix):
+            return False
+        files[key] = size
+        total_bytes += size
+        if len(files) > MAX_STAGED_ASSET_FILES:
+            raise ValueError(
+                f"stageAssetPaths selects more than {MAX_STAGED_ASSET_FILES} files; at most "
+                f"{MAX_STAGED_ASSET_FILES} are staged")
+        if total_bytes > MAX_STAGED_ASSET_BYTES:
+            raise ValueError(
+                f"stageAssetPaths selects more than {MAX_STAGED_ASSET_BYTES // 1024 ** 3} GiB of files; "
+                f"at most {MAX_STAGED_ASSET_BYTES // 1024 ** 3} GiB are staged")
+        return True
+
+    for path in paths:
+        matched = False
+        if path and not path.endswith("/"):
+            exact = root_prefix + path
+            # The exact key, when it exists, is the first key S3 lists under itself as a prefix.
+            response = client.list_objects_v2(Bucket=bucket, Prefix=exact, MaxKeys=1)
+            first = (response.get("Contents") or [{}])[0]
+            if first.get("Key") == exact:
+                add(exact, int(first.get("Size") or 0))
+                matched = _is_staged_key(exact, root_prefix)
+            folder = exact + "/"
+        else:
+            folder = root_prefix + path
+        for page in paginator.paginate(Bucket=bucket, Prefix=folder):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if _is_staged_key(key, root_prefix):
+                    matched = True
+                    add(key, int(obj.get("Size") or 0))
+        if not matched:
+            raise ValueError(f"stageAssetPaths entry {_shown(path or '/')} names no file in the asset")
+    return files
+
+
+def resolve_stage_asset_files(event, training_config) -> dict:
+    """The executing asset's files the container stages before the run, or ``{}`` for none.
+
+    Paths resolve against the asset root the workflow manifest names (``bucketAsset`` +
+    ``inputAssetLocationKey``), never against a location the run configuration supplies, so a run
+    stages only files of the asset it executes against. They are counted here, before a GPU node is
+    provisioned. The container receives the root and the validated paths rather than the file list,
+    which could pass the Batch command's size limit; it lists them again and re-applies the limits.
+    """
+    paths = stage_asset_paths(training_config)
+    if not paths:
+        return {}
+
+    bucket = event.get("bucketAsset", "")
+    asset_location_key = event.get("inputAssetLocationKey", "")
+    if not bucket or not asset_location_key:
+        raise ValueError(
+            "Cannot resolve stageAssetPaths: pipeline is missing bucketAsset or inputAssetLocationKey. "
+            "Ensure vamsExecute passes these through from the workflow.")
+
+    root_prefix = asset_location_key if asset_location_key.endswith("/") else asset_location_key + "/"
+    files = list_stage_asset_files(bucket, root_prefix, paths)
+    total_bytes = sum(files.values())
+    logger.info(f"stageAssetPaths {paths}: {len(files)} files, {total_bytes} bytes")
+    return {
+        "rootS3Uri": f"s3://{bucket}/{root_prefix}",
+        "paths": paths,
+        "fileCount": len(files),
+        "totalBytes": total_bytes,
+    }
+
+
+def with_stage_asset_files(job_config, event, training_config):
+    """``job_config`` with its ``stageAssetFiles`` block when the run stages asset files; a run that
+    stages none keeps the job configuration it had without the setting."""
+    stage = resolve_stage_asset_files(event, training_config)
+    if stage:
+        job_config["stageAssetFiles"] = stage
+    return job_config
+
+
 def build_training_config(event, training_config, task, rl_library):
     """Build configuration for training mode."""
     num_envs = whole_number("numEnvs", training_config.get("numEnvs"),
@@ -509,7 +687,7 @@ def build_training_config(event, training_config, task, rl_library):
     # Resolve custom environment path (relative or absolute)
     custom_env_s3_uri = resolve_custom_environment_path(event, training_config)
 
-    return {
+    job_config = {
         "jobName": job_name,
         "trainingConfig": {
             "mode": "train",
@@ -526,6 +704,7 @@ def build_training_config(event, training_config, task, rl_library):
         "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }
+    return with_stage_asset_files(job_config, event, training_config)
 
 
 def build_evaluation_config(event, training_config, task, rl_library):
@@ -600,7 +779,7 @@ def build_evaluation_config(event, training_config, task, rl_library):
     # Resolve custom environment path (relative or absolute)
     custom_env_s3_uri = resolve_custom_environment_path(event, training_config)
 
-    return {
+    job_config = {
         "jobName": job_name,
         "trainingConfig": {
             "mode": "evaluate",
@@ -619,3 +798,4 @@ def build_evaluation_config(event, training_config, task, rl_library):
         "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }
+    return with_stage_asset_files(job_config, event, training_config)
