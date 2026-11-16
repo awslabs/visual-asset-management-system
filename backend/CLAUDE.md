@@ -316,16 +316,23 @@ backend/
 │   │   │                                           #   STATE_WRITE_ATTEMPTS tries, never blind; audit
 │   │   │                                           #   from ALL_OLD). A release / exception grant made after an
 │   │   │                                           #   evaluation began (manualDecision/-At) outranks
-│   │   │                                           #   its outcome (D159). complianceNotifications
+│   │   │                                           #   its outcome (D159). A SUCCEEDED of the same
+│   │   │                                           #   execution supersedes a recorded FAILED pipeline
+│   │   │                                           #   rule (supersede_pipeline_rule_outcome, #1504:
+│   │   │                                           #   reopen on the finalization read, replace only the
+│   │   │                                           #   FAILED of that executionId, finalize again; never
+│   │   │                                           #   SUCCEEDED->FAILED, never a closed evaluation).
+│   │   │                                           #   complianceNotifications
 │   │   ├── pipelines/                              # Pipeline CRUD (pipelineService = full CRUD;
 │   │   │                                           #   pipelineTemplateService = templates + tagSchema)
 │   │   ├── workflows/                              # Step Functions workflow mgmt. API-facing:
 │   │   │                                           #   workflowService (CRUD), executeWorkflow
 │   │   │                                           #   (asset-less multi-file execute), executionService
-│   │   │                                           #   (list/abort/details/logs/rerun/permanent; two
-│   │   │                                           #   functions: EXECUTION_SERVICE_ROUTES=service
-│   │   │                                           #   serves all but permanent delete, =permanentDelete
-│   │   │                                           #   only that route, on the one role that deletes rows),
+│   │   │                                           #   (list/abort/details/logs/rerun/permanent; four
+│   │   │                                           #   functions, EXECUTION_SERVICE_ROUTES: service =
+│   │   │                                           #   lists/abort/rerun, details = details + its pages,
+│   │   │                                           #   logs = logs, permanentDelete = that route on the
+│   │   │                                           #   one role that deletes rows; other routes 404),
 │   │   │                                           #   workflowTriggerService, importGlobalPipelineWorkflow.
 │   │   │                                           #   sfn/ (SFN/EventBridge-invoked): interimPipelineTracking,
 │   │   │                                           #   handleExecutionError, processWorkflowExecutionOutput,

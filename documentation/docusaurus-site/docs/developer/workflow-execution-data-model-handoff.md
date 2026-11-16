@@ -84,7 +84,7 @@ expecting a root entry in `PipelineExecChainGSI`.
 The main row carries `executionStopDate` and `lastSfnSyncCheckDate`, and the end-state
 `processWorkflowExecutionOutput` Lambda function writes the stop date and terminal status directly when the
 final pipeline completes — so a normal run reaches a terminal state in the table without any polling.
-`executionService` calls the AWS Step Functions `DescribeExecution` API only when the row has **no** stop
+The execution list and details reads (`executionService`, `executionDetails`) call the AWS Step Functions `DescribeExecution` API only when the row has **no** stop
 date **and** its `lastSfnSyncCheckDate` is older than `SFN_SYNC_MIN_INTERVAL_SECONDS` (30 seconds); each
 poll re-stamps `lastSfnSyncCheckDate`. This keeps direct Step Functions calls off the common path while
 still detecting an execution cancelled or aborted directly in Step Functions, outside VAMS.
@@ -97,7 +97,7 @@ a row that already reached one of those untouched.
 
 The main row captures the full CloudWatch log for the run in `executionLog` on **every** terminal
 completion, success or failure — the end-state Lambda function writes it on the normal path, and an
-`executionService` poll writes it for any terminal status it reconciles out of band, and the error-handler
+`executionService` or `executionDetails` read writes it for any terminal status it reconciles out of band, and the error-handler
 Lambda function writes it for a run that fails. Each reads the run's
 events from its start date onward, following the log's continuation token, and stores at most 256 KB of
 redacted text: the newest events are kept, with a first line giving the number left out and a last line
@@ -192,8 +192,8 @@ uses — but it is what makes two capabilities work:
     the execution-scope terms only when the stream starts with a prefix registered on the same pipeline
     execution or was itself registered with that stream.
 -   **Stage status is derived, never stored.** `registeredSubExecutions` holds locators only. When a details
-    request carries `includeSubExecutions=true`, `executionService` describes the registered state machine
-    (memoised per invocation), walks its definition into an ordered stage frame, and attributes the execution
+    request carries `includeSubExecutions=true`, `executionDetails` (and `executionLogs` for a logs
+    request) describes the registered state machine (memoised per invocation), walks its definition into an ordered stage frame, and attributes the execution
     history's events to those stages to produce `subExecutions[].stages` with a status per stage. The reads
     are bounded (definition ≤ 256 KiB, ≤ 50 stages, depth ≤ 3, ≤ 5 history pages per sub-execution and 20
     per request) and best-effort — a Step Functions or AWS Batch error yields `UNKNOWN` plus a
