@@ -1439,7 +1439,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         from ..constants import API_UPLOAD_STATUS
 
         try:
-            endpoint = API_UPLOAD_STATUS.format(uploadId=upload_id)
+            endpoint = route_path(API_UPLOAD_STATUS, uploadId=upload_id)
             # raise_http_errors: the status code reaches the mapping below instead of becoming a
             # generic APIError in _make_request.
             response = self.get(endpoint, include_auth=True,
@@ -4501,7 +4501,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When the API call fails, including a launch failure (500) or a transient
                 launch condition to try again (503)
         """
-        endpoint = API_ZIP_DOWNLOADS_ASSET.format(databaseId=database_id, assetId=asset_id)
+        endpoint = route_path(API_ZIP_DOWNLOADS_ASSET, databaseId=database_id, assetId=asset_id)
         return self._zip_request('POST', endpoint, "create the zip download",
                                  database_id, asset_id, json=request_data)
 
@@ -4551,10 +4551,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         if starting_token:
             params['startingToken'] = starting_token
         if database_id and all_users:
-            endpoint = API_ZIP_DOWNLOADS_ASSET_ALL_USERS.format(databaseId=database_id,
-                                                                assetId=asset_id)
+            endpoint = route_path(API_ZIP_DOWNLOADS_ASSET_ALL_USERS,
+                                 databaseId=database_id, assetId=asset_id)
         elif database_id:
-            endpoint = API_ZIP_DOWNLOADS_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_ZIP_DOWNLOADS_ASSET, databaseId=database_id, assetId=asset_id)
         else:
             endpoint = API_ZIP_DOWNLOADS_GLOBAL
         return self._zip_request('GET', endpoint, "list zip downloads",
@@ -4573,7 +4573,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             ZipDownloadNotFoundError: When the job does not exist, has expired, or is not the caller's
             APIError: When the API call fails
         """
-        endpoint = API_ZIP_DOWNLOADS_ASSET_REQUEST.format(
+        endpoint = route_path(
+            API_ZIP_DOWNLOADS_ASSET_REQUEST,
             databaseId=database_id, assetId=asset_id, requestId=request_id)
         return self._zip_request('GET', endpoint, "get the zip download", database_id, asset_id)
 
@@ -4597,7 +4598,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             InvalidZipDownloadRequestError: When the asset is no longer distributable
             APIError: When the API call fails
         """
-        endpoint = API_ZIP_DOWNLOADS_ASSET_REQUEST_URL.format(
+        endpoint = route_path(
+            API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
             databaseId=database_id, assetId=asset_id, requestId=request_id)
         return self._zip_request('POST', endpoint, "issue the zip download URL",
                                  database_id, asset_id, url_request=True, json={})
@@ -4605,7 +4607,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def _delete_zip_download_request(self, database_id: str, asset_id: str,
                                      request_id: str, action: str,
                                      cancel_intent: bool = False) -> Dict[str, Any]:
-        endpoint = API_ZIP_DOWNLOADS_ASSET_REQUEST.format(
+        endpoint = route_path(
+            API_ZIP_DOWNLOADS_ASSET_REQUEST,
             databaseId=database_id, assetId=asset_id, requestId=request_id)
         kwargs: Dict[str, Any] = {}
         if cancel_intent:
