@@ -2779,6 +2779,8 @@ A file can hold several `<file>.previewFile.<ext>` objects (a pipeline re-run in
 
 ## 🔍 **Code Review Checklist**
 
+`PREVIEW_FILE_SIZE_LIMIT_BYTES` (5 MiB) and `is_self_previewable(name, size)` in `s3PathPatterns.py` are the one backend definition of "the web shows this file as its own preview": an allowed preview extension (`.webp` and `.bmp` included, `.tga`/`.tif`/`.tiff` never) and a size STRICTLY under the limit. The upload handlers' `MAX_PREVIEW_FILE_SIZE` takes the same value and still rejects a preview LARGER than it (a preview of exactly 5 MiB can be uploaded). The web (`fileFormats.ts`) and the 3D thumbnail container (`image_utils.MAX_FILE_SIZE_BYTES`) mirror both; drift tests read those files.
+
 ### **Backend Handler Compliance**
 
 -   [ ] Follows `assetService.py` gold standard patterns

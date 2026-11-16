@@ -1224,6 +1224,17 @@ clients. It is scoped to `backendPipelines/`; the separate ratchet for `backend/
 this tree, which is how 137 bare clients across 68 files sat invisible behind a green "59 → 0" for the
 API handlers.
 
+## Decoding Untrusted Images and Video
+
+The 3D thumbnail container also writes previews for images, TGA/TIFF and video (`preview_pipeline/media_preview.py`, handlers `format_handlers/image_handler.py` and `video_handler.py`), registered as a second pipeline and workflow, **Media Preview Thumbnail**, from `preview/3dThumbnail/vamsSchemaMedia/` behind `app.pipelines.usePreview3dThumbnail.mediaPreviews` (a missing block is off). The rules a media decoder follows:
+
+-   **Check the header before decoding.** The pixel count comes from the file header and is checked against `resources.image_pixel_budget` (derived from the task's memory) before any raster is allocated; Pillow's own bomb check is switched off only for `Image.open` (it raises before the size can be read) and back on at the budget for the decode. A JPEG decodes at reduced size (`draft`) when only a thumbnail is wanted. A refusal names the file type and the limit.
+-   **One reader per risk.** Pillow reads what it can; a TIFF it cannot read (16-bit colour, float samples) falls back to `tifffile`. Pillow's TIFF reader applies the Orientation tag itself, every other format is turned upright from EXIF in `load_raster`, so never apply it twice.
+-   **Video opens as a local file through an allowlist.** `av.open(..., format=<name from an allowlist>, options={"protocol_whitelist": "file"})`: no network, no probing for `concat`, `hls`, `image2` or devices. Frames come from seeks at evenly spaced timestamps within a time limit and a frame cap. The image installs no Debian `ffmpeg`: PyAV's wheels carry the (LGPL) FFmpeg libraries, so the licence notice and the lock cover them.
+-   **A preview is strictly under the limit.** `image_utils.MAX_FILE_SIZE_BYTES` (5 MiB) is the same limit as `PREVIEW_FILE_SIZE_LIMIT_BYTES` in `backend/backend/common/s3PathPatterns.py` and `web/src/common/constants/fileFormats.ts`; every size check is `<`, and drift tests (`tests/test_thumbnail_media_drift.py`, `backend/tests/common/test_s3PathPatterns_preview_rule.py`, `infra/test/pipelines/preview3dThumbnailMediaPreviews.test.ts`) keep the lists and the limit equal. An image the web already shows as its own preview (extension in the shared list, size strictly under the limit) gets no preview: `openPipeline.py` ends such a run with `SendTaskSuccess` before the state machine starts, from the HEAD it already makes for the compute tier. `.tga`, `.tif` and `.tiff` are never in the preview lists.
+-   **Fixtures are generated in the test** (`tests/media_samples.py`): Pillow, `tifffile` and PyAV write every image and video, so nothing binary is committed.
+-   **Off means unchanged.** The Lambda environment, the Batch states' environment and the registrations carry nothing about media when `mediaPreviews.enabled` is not `true`; a test compares them.
+
 ## Test Conventions
 
 Pipeline tests run with pytest's defaults — there is no `pytest.ini` anywhere under `backendPipelines/`,

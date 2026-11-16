@@ -457,6 +457,7 @@ export interface ConfigPublic {
         // optional bucketAccountId/bucketRegion/bucketKmsKeyArn),
         // presignedUrlNetworkRestrictions (allowedIpRanges/allowedVpceIds; mutually exclusive;
         // non-empty list adds a presigned-only bucket policy Deny to the created asset + auxiliary buckets)
+        // pipelines.usePreview3dThumbnail.mediaPreviews: {enabled, autoRegisterAutoTriggerOnFileUpload, downscaleSelfPreviewableImages}. A missing block or key is off; booleans only; the trigger and the option need enabled; deploys only with the pipeline. Nothing about media reaches the Lambda or the Batch states when off.
         // pipelines.externalPipelineBridges: [{accountId, roleArnPattern, invokeTargets?}] — one
         // events:PutEvents statement per entry on the orchestration bus resource policy (bridge account
         // root + aws:PrincipalArn condition on the pattern) and the exact invokeTargets ARNs on the shared

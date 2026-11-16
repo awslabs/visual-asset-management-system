@@ -232,23 +232,25 @@ This software includes third party software subject to the following copyrights:
 
 **Preview 3D Thumbnail Pipeline Dependencies** (versions as pinned by `container/requirements.lock`, which the image installs)
 
-| Name     | Version | License                                          | Notes                                          |
-| :------- | :------ | :----------------------------------------------- | :--------------------------------------------- |
-| pyvista  | 0.49.0  | MIT                                              | 3D rendering and visualization                 |
-| vtk      | 9.6.2   | BSD-3-Clause                                     | Visualization Toolkit (rendering backend)      |
-| trimesh  | 5.1.0   | MIT                                              | Mesh loading (GLB, GLTF, OBJ, PLY, STL, OFF)   |
-| numpy    | 2.5.3   | BSD-3-Clause                                     | Numerical computing                            |
-| scipy    | 1.18.1  | BSD-3-Clause                                     | Scientific computing (used by trimesh)         |
-| laspy    | 2.7.0   | BSD-3-Clause                                     | LAS/LAZ point cloud format support             |
-| lazrs    | 0.8.2   | MIT                                              | LAZ decompression used by laspy                |
-| pye57    | 0.4.19  | MIT                                              | E57 point cloud format support                 |
-| cadquery | 2.8.0   | Apache-2.0/LGPL-2.1                              | STEP/STP CAD file tessellation                 |
-| imageio  | 2.37.4  | BSD-2-Clause                                     | GIF/image I/O                                  |
-| Pillow   | 12.3.0  | HPND                                             | Image optimization and processing              |
-| DracoPy  | 2.0.0   | Apache-2.0                                       | Draco compressed mesh (.drc) support           |
-| open3d   | 0.19.0  | MIT                                              | PCD point clouds and FBX meshes                |
-| usd-core | 26.8    | TOST-1.0 (Apache-2.0 with a different Section 6) | OpenUSD Python bindings for USD/USDA/USDC/USDZ |
-| boto3    | 1.43.93 | Apache-2.0                                       | AWS SDK for Python                             |
+| Name      | Version    | License                                                 | Notes                                             |
+| :-------- | :--------- | :------------------------------------------------------ | :------------------------------------------------ |
+| pyvista   | 0.49.0     | MIT                                                     | 3D rendering and visualization                    |
+| vtk       | 9.6.2      | BSD-3-Clause                                            | Visualization Toolkit (rendering backend)         |
+| trimesh   | 5.1.0      | MIT                                                     | Mesh loading (GLB, GLTF, OBJ, PLY, STL, OFF)      |
+| numpy     | 2.5.3      | BSD-3-Clause                                            | Numerical computing                               |
+| scipy     | 1.18.1     | BSD-3-Clause                                            | Scientific computing (used by trimesh)            |
+| laspy     | 2.7.0      | BSD-3-Clause                                            | LAS/LAZ point cloud format support                |
+| lazrs     | 0.8.2      | MIT                                                     | LAZ decompression used by laspy                   |
+| pye57     | 0.4.19     | MIT                                                     | E57 point cloud format support                    |
+| cadquery  | 2.8.0      | Apache-2.0/LGPL-2.1                                     | STEP/STP CAD file tessellation                    |
+| imageio   | 2.37.4     | BSD-2-Clause                                            | GIF/image I/O                                     |
+| Pillow    | 12.3.0     | HPND                                                    | Image optimization and processing                 |
+| tifffile  | 2026.11.12 | BSD-3-Clause                                            | TIFF variants Pillow cannot read (media previews) |
+| av (PyAV) | 19.0.2     | BSD-3-Clause (wheels bundle LGPL-2.1+ FFmpeg libraries) | Video decoding (media previews)                   |
+| DracoPy   | 2.0.0      | Apache-2.0                                              | Draco compressed mesh (.drc) support              |
+| open3d    | 0.19.0     | MIT                                                     | PCD point clouds and FBX meshes                   |
+| usd-core  | 26.8       | TOST-1.0 (Apache-2.0 with a different Section 6)        | OpenUSD Python bindings for USD/USDA/USDC/USDZ    |
+| boto3     | 1.43.93    | Apache-2.0                                              | AWS SDK for Python                                |
 
 **Preview 3D Thumbnail Pipeline transitive dependencies with weak-copyleft licenses** (pinned by `container/requirements.lock`; installed because a package above requires them, or compiled into one)
 
