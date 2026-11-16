@@ -251,6 +251,10 @@ MAX_WORKFLOW_EXECUTION_PAGE_SIZE = 50
 MAX_GLOBAL_EXECUTION_PAGE_SIZE = 100
 # Page ceiling for --auto-paginate on the execution list (rows are filtered after the page limit).
 MAX_EXECUTION_AUTO_PAGINATE_PAGES = 200
+# Query parameter both execution lists accept to include runs of system workflows, which they hide by
+# default (shown by default only when the list is scoped to one system workflow). Mirrors
+# INCLUDE_SYSTEM_PARAM in backend/backend/handlers/workflows/executionService.py.
+EXECUTION_LIST_INCLUDE_SYSTEM_PARAM = "includeSystem"
 # Paged execution-detail metadata: the collections the endpoint serves, and its page-size cap
 # (the handler clamps larger values rather than rejecting them).
 EXECUTION_DETAIL_METADATA_COLLECTIONS = ('input', 'inputDatabase', 'output')

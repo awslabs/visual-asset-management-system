@@ -14,8 +14,14 @@ import "@aws-amplify/ui-react/styles.css";
 import { useThemeSettings } from "./hooks/useThemeSettings";
 import { PageFooter } from "./authenticator/Footer";
 import config from "./config";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { createAppQueryClient } from "./utils/queryRetry";
 import { ToastProvider } from "./features/orchestration/components/ToastProvider";
+import {
+    PAGE_ITEM_ID_PREFIX,
+    SIGN_OUT_ITEM_ID,
+    useProfileMenuItems,
+} from "./layout/useProfileMenuItems";
 import {
     clearLocalStore,
     clearStoredSession,
@@ -23,14 +29,7 @@ import {
     revokeSession,
 } from "./utils/sessionManager";
 
-const queryClient = new QueryClient({
-    defaultOptions: {
-        queries: {
-            staleTime: 30000,
-            retry: 1,
-        },
-    },
-});
+const queryClient = createAppQueryClient();
 
 const HeaderPortal = ({ children }: { children: any }) => {
     const domNode = document.querySelector("#headerWrapper");
@@ -65,6 +64,9 @@ function App() {
     }, [navigationOpen]);
 
     const menuText = user?.username;
+    // The user's own pages (navigation registry, `placement: "profile"`) the API allowed, then
+    // Sign out. Page items are links: following one navigates the hash router.
+    const profileMenuItems = useProfileMenuItems();
 
     const signOut = async () => {
         // Amplify revokes the refresh token from the stored tokens, so it runs before any clear.
@@ -120,10 +122,17 @@ function App() {
                                 text: menuText,
                                 description: menuText,
                                 iconName: "user-profile",
+                                // Without a user name the trigger shows only the icon, so it
+                                // still needs a name for assistive technologies.
+                                ariaLabel: menuText ? undefined : "Profile menu",
                                 onItemClick: (e) => {
-                                    if (e?.detail?.id === "signout") void signOut();
+                                    const id = e?.detail?.id;
+                                    if (id === SIGN_OUT_ITEM_ID) void signOut();
+                                    // The current page's item is a checkbox item (no href).
+                                    else if (id?.startsWith(PAGE_ITEM_ID_PREFIX))
+                                        window.location.hash = id.slice(PAGE_ITEM_ID_PREFIX.length);
                                 },
-                                items: [{ id: "signout", text: "Sign out" }],
+                                items: profileMenuItems,
                             },
                         ]}
                         i18nStrings={{
