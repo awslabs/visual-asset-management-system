@@ -12835,8 +12835,8 @@ components:
                     description: >-
                         Type of object this constraint applies to. The core types are database,
                         asset, api, web, tag, tagType, role, userRole, pipeline, workflow,
-                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade
-                        and complianceBinding; a deployment can register more (permission object types in
+                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade,
+                        complianceBinding and auditLog; a deployment can register more (permission object types in
                         the fork or add-on constants files), so the set is not fixed. GET
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.
@@ -12911,8 +12911,8 @@ components:
                     description: >-
                         Type of object this constraint applies to. The core types are database,
                         asset, api, web, tag, tagType, role, userRole, pipeline, workflow,
-                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade
-                        and complianceBinding; a deployment can register more (permission object types in
+                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade,
+                        complianceBinding and auditLog; a deployment can register more (permission object types in
                         the fork or add-on constants files), so the set is not fixed. GET
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.

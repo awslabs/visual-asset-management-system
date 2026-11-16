@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.8.0] (Upcoming)
+
+### Major Change Summary:
+
+-   New `auditLog` permission object type: a role's access to audit log records is set per audit log group. The seeded `admin` role holds it for every group, and no other role gets it unless an administrator adds a constraint or imports the new Audit Reader permission template. ([#1536](https://github.com/awslabs/visual-asset-management-system/issues/1536))
+
+### Features
+
+-   **Backend/CDK** New `auditLog` permission object type with one constraint field, `auditLogGroup` (the audit log group key), and a seeded `admin` allow-all constraint. The type and field appear in the constraint editor with no other change. ([#1536](https://github.com/awslabs/visual-asset-management-system/issues/1536))
+    -   Note: Existing roles and templates are unchanged and nothing is granted to any role other than `admin`. A custom role that mirrors `admin` by listing each object type does not get audit access until a constraint on `auditLog` is added to it.
+-   **Docs** New Audit Reader permission template (`audit-reader.json`) for the audit log pages and routes, limited by the `ALLOWED_GROUPS` pattern (every group by default). ([#1536](https://github.com/awslabs/visual-asset-management-system/issues/1536))
+
 ## [2.7.0] (2026-11-20)
 
 ### Major Change Summary:
