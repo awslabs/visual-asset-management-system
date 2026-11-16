@@ -17,7 +17,7 @@ from ..constants import (
 from ..utils.decorators import (
     requires_setup_and_auth, get_profile_manager_from_context, invoked_from_another_command
 )
-from ..utils.api_client import APIClient
+from ..utils.api_client import APIClient, route_path
 from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info
 from ..utils.confirmation import confirm_destructive_action
 from ..utils.exceptions import (
@@ -876,7 +876,7 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, pa
             max_items = None
         
         if database_id:
-            endpoint = API_DATABASE_ASSETS.format(databaseId=database_id)
+            endpoint = route_path(API_DATABASE_ASSETS, databaseId=database_id)
             status_msg = f"Listing assets in database '{database_id}'..."
         else:
             endpoint = API_ASSETS

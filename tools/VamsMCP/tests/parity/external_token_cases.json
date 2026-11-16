@@ -1,0 +1,311 @@
+{
+    "issuer": "https://idp.example.com",
+    "webAudience": "vams-web",
+    "audiences": ["vams-mcp", "vams-mcp-2"],
+    "cases": [
+        {
+            "name": "aud string, username",
+            "claims": {
+                "aud": "vams-mcp",
+                "username": "alice"
+            },
+            "expectUser": "alice"
+        },
+        {
+            "name": "aud list holding the audience",
+            "claims": {
+                "aud": ["other", "vams-mcp"],
+                "username": "alice"
+            },
+            "expectUser": "alice"
+        },
+        {
+            "name": "aud list holding a non-string",
+            "claims": {
+                "aud": ["vams-mcp", 5],
+                "username": "alice"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "aud names another audience",
+            "claims": {
+                "aud": "other",
+                "username": "alice"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "second configured audience",
+            "claims": {
+                "aud": "vams-mcp-2",
+                "username": "alice"
+            },
+            "expectUser": "alice"
+        },
+        {
+            "name": "client_id only, default claims",
+            "claims": {
+                "client_id": "vams-mcp",
+                "username": "alice"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "client_id only, client_id claim",
+            "claims": {
+                "client_id": "vams-mcp",
+                "username": "alice"
+            },
+            "expectUser": "alice",
+            "audienceClaims": ["client_id"]
+        },
+        {
+            "name": "client_id claim, aud ignored",
+            "claims": {
+                "aud": "vams-mcp",
+                "client_id": "other",
+                "username": "alice"
+            },
+            "expectUser": null,
+            "audienceClaims": ["client_id"]
+        },
+        {
+            "name": "aud then client_id, aud decides and mismatches",
+            "claims": {
+                "aud": "other",
+                "client_id": "vams-mcp",
+                "username": "alice"
+            },
+            "expectUser": null,
+            "audienceClaims": ["aud", "client_id"]
+        },
+        {
+            "name": "aud then client_id, no aud falls to client_id",
+            "claims": {
+                "client_id": "vams-mcp",
+                "username": "alice"
+            },
+            "expectUser": "alice",
+            "audienceClaims": ["aud", "client_id"]
+        },
+        {
+            "name": "aud then client_id, aud matches",
+            "claims": {
+                "aud": "vams-mcp",
+                "client_id": "other",
+                "username": "alice"
+            },
+            "expectUser": "alice",
+            "audienceClaims": ["aud", "client_id"]
+        },
+        {
+            "name": "client_id as a list is malformed",
+            "claims": {
+                "client_id": ["vams-mcp"],
+                "username": "alice"
+            },
+            "expectUser": null,
+            "audienceClaims": ["client_id"]
+        },
+        {
+            "name": "user id claim used",
+            "claims": {
+                "aud": "vams-mcp",
+                "username": "alice",
+                "email": "alice@example.com"
+            },
+            "expectUser": "alice@example.com",
+            "userIdClaim": "email"
+        },
+        {
+            "name": "user id claim missing, no fallback",
+            "claims": {
+                "aud": "vams-mcp",
+                "username": "alice"
+            },
+            "expectUser": null,
+            "userIdClaim": "email"
+        },
+        {
+            "name": "user id claim blank",
+            "claims": {
+                "aud": "vams-mcp",
+                "username": "alice",
+                "email": "  "
+            },
+            "expectUser": null,
+            "userIdClaim": "email"
+        },
+        {
+            "name": "user id claim not a string",
+            "claims": {
+                "aud": "vams-mcp",
+                "username": "alice",
+                "email": 7
+            },
+            "expectUser": null,
+            "userIdClaim": "email"
+        },
+        {
+            "name": "user id claim equal to the client identifier",
+            "claims": {
+                "aud": "vams-mcp",
+                "azp": "alice@example.com",
+                "email": "alice@example.com"
+            },
+            "expectUser": null,
+            "userIdClaim": "email"
+        },
+        {
+            "name": "chain prefers cognito:username",
+            "claims": {
+                "aud": "vams-mcp",
+                "cognito:username": "cu",
+                "username": "un",
+                "sub": "s"
+            },
+            "expectUser": "cu"
+        },
+        {
+            "name": "chain falls to username",
+            "claims": {
+                "aud": "vams-mcp",
+                "username": "un",
+                "sub": "s"
+            },
+            "expectUser": "un"
+        },
+        {
+            "name": "chain falls to sub",
+            "claims": {
+                "aud": "vams-mcp",
+                "sub": "s"
+            },
+            "expectUser": "s"
+        },
+        {
+            "name": "no identity at all",
+            "claims": {
+                "aud": "vams-mcp"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "blank identity",
+            "claims": {
+                "aud": "vams-mcp",
+                "username": "  ",
+                "sub": "s"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "identity equals client_id",
+            "claims": {
+                "aud": "vams-mcp",
+                "sub": "app-client",
+                "client_id": "app-client"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "identity equals azp",
+            "claims": {
+                "aud": "vams-mcp",
+                "sub": "app-client",
+                "azp": "app-client"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "identity equals cid",
+            "claims": {
+                "aud": "vams-mcp",
+                "sub": "app-client",
+                "cid": "app-client"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "auth0 client credentials marker",
+            "claims": {
+                "aud": "vams-mcp",
+                "sub": "abc@clients",
+                "gty": "client-credentials"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "entra app-only marker",
+            "claims": {
+                "aud": "vams-mcp",
+                "sub": "abc",
+                "idtyp": "app"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "keycloak service account",
+            "claims": {
+                "aud": "vams-mcp",
+                "sub": "abc",
+                "preferred_username": "service-account-x"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "keycloak user name is fine",
+            "claims": {
+                "aud": "vams-mcp",
+                "sub": "abc",
+                "preferred_username": "alice"
+            },
+            "expectUser": "abc"
+        },
+        {
+            "name": "blank cognito:username does not fall through to username",
+            "claims": {
+                "aud": "vams-mcp",
+                "cognito:username": " ",
+                "username": "alice"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "aud null",
+            "claims": {
+                "aud": null,
+                "username": "alice"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "aud empty list",
+            "claims": {
+                "aud": [],
+                "username": "alice"
+            },
+            "expectUser": null
+        },
+        {
+            "name": "client_id number, aud then client_id, valid aud decides",
+            "claims": {
+                "aud": "vams-mcp",
+                "client_id": 5,
+                "username": "alice"
+            },
+            "expectUser": "alice",
+            "audienceClaims": ["aud", "client_id"]
+        },
+        {
+            "name": "client_id number, client_id claim",
+            "claims": {
+                "client_id": 5,
+                "username": "alice"
+            },
+            "expectUser": null,
+            "audienceClaims": ["client_id"]
+        }
+    ]
+}
