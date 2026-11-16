@@ -135,25 +135,109 @@ def upload(bucket_name, object_key, file_path):
     return object_key
 
 
+# The longest metadata value the asset metadata write-back accepts, in characters
+# (MAX_METADATA_VALUE_LENGTH in backend/backend/models/metadata.py). One longer value fails the whole
+# update, so every value is fitted to it before the attribute file is written.
+MAX_METADATA_VALUE_LENGTH = 400000
+# The key that marks a value shortened to fit MAX_METADATA_VALUE_LENGTH.
+TRUNCATED_MARKER_KEY = "_truncated"
+
+
+def _largest_fitting_count(total, serialize, limit):
+    """The largest n in [0, total] whose serialize(n) is at most ``limit`` characters, or None."""
+    if len(serialize(0)) > limit:
+        return None
+    low, high = 0, total
+    while low < high:
+        middle = (low + high + 1) // 2
+        if len(serialize(middle)) <= limit:
+            low = middle
+        else:
+            high = middle - 1
+    return low
+
+
+def _fit_list(items, limit):
+    """The JSON of ``items`` cut to its first entries, ending with a marker entry, or None."""
+    def serialize(count):
+        return json.dumps(items[:count] + [
+            {TRUNCATED_MARKER_KEY: {"limit": limit, "shown": count, "total": len(items)}}])
+
+    count = _largest_fitting_count(len(items), serialize, limit)
+    return None if count is None else serialize(count)
+
+
+def _fit_dict(value, limit):
+    """The JSON of ``value`` with its list members cut, longest first, and a marker key, or None."""
+    fitted = dict(value)
+    shortened = {}
+    list_fields = sorted((key for key, member in value.items() if isinstance(member, list)),
+                         key=lambda key: len(json.dumps(value[key])), reverse=True)
+    for field in list_fields:
+        items = value[field]
+
+        def serialize(count, field=field, items=items):
+            candidate = dict(fitted)
+            candidate[field] = items[:count]
+            fields = dict(shortened)
+            fields[field] = {"shown": count, "total": len(items)}
+            candidate[TRUNCATED_MARKER_KEY] = {"limit": limit, "fields": fields}
+            return json.dumps(candidate)
+
+        count = _largest_fitting_count(len(items), serialize, limit)
+        if count is not None:
+            return serialize(count)
+        fitted[field] = []
+        shortened[field] = {"shown": 0, "total": len(items)}
+    return None
+
+
+def fit_metadata_value(key, value, limit=MAX_METADATA_VALUE_LENGTH):
+    """The metadata value string for one extracted value, at most ``limit`` characters long.
+
+    A value that fits is serialized unchanged: a dict or list as JSON, anything else with ``str``.
+    A longer list keeps its first items and ends with a ``{"_truncated": {"limit", "shown",
+    "total"}}`` item. A longer dict keeps its first items of each list member, longest member first,
+    and gains a ``"_truncated": {"limit", "fields": {<member>: {"shown", "total"}}}`` key. A dict or
+    list that still does not fit becomes ``{"_truncated": {"limit", "originalLength"}}``, and a longer
+    string is cut and ends with a ``[truncated: ...]`` note.
+    """
+    is_json = isinstance(value, (dict, list))
+    value_str = json.dumps(value) if is_json else str(value)
+    if len(value_str) <= limit:
+        return value_str
+
+    fitted = None
+    if isinstance(value, list):
+        fitted = _fit_list(value, limit)
+    elif isinstance(value, dict):
+        fitted = _fit_dict(value, limit)
+    if fitted is None and is_json:
+        fitted = json.dumps({TRUNCATED_MARKER_KEY: {"limit": limit, "originalLength": len(value_str)}})
+    if fitted is None:
+        note = f" [truncated: {len(value_str)} characters, limit {limit}]"
+        fitted = value_str[:limit - len(note)] + note
+    logger.warning(f"Attribute {key} is {len(value_str)} characters, over the {limit}-character "
+                   f"metadata value limit; it is written shortened to {len(fitted)} characters")
+    return fitted
+
+
 def transform_to_attribute_format(metadata_dict):
     """
     Transform extracted metadata to new attribute format.
-    
+
     Args:
         metadata_dict: Dictionary of extracted metadata
-        
+
     Returns:
-        Dictionary with type, updateType, and metadata array
+        Dictionary with type, updateType, and metadata array; each value is at most
+        MAX_METADATA_VALUE_LENGTH characters (see fit_metadata_value)
     """
     metadata_array = []
-    
+
     for key, value in metadata_dict.items():
-        # Convert value to string if not already
-        if isinstance(value, dict) or isinstance(value, list):
-            value_str = json.dumps(value)
-        else:
-            value_str = str(value)
-        
+        value_str = fit_metadata_value(key, value)
+
         metadata_array.append({
             "metadataKey": key,
             "metadataValue": value_str,

@@ -55,6 +55,8 @@ The pipeline accepts an input S3 URI to a CAD or mesh file and outputs a JSON me
 
 The pipeline generates a JSON file containing the extracted metadata, named after the input file's path within its asset with `.attribute.json` appended (`parts/housing/pump.stl.attribute.json`). The write-back step reads that name and applies the contents to that file as file-level attributes.
 
+Each value is at most `MAX_METADATA_VALUE_LENGTH` (400,000) characters, the limit the write-back step enforces on every value; one longer value would fail the whole update. `fit_metadata_value` in `lambda.py` shortens a longer value and marks it with `_truncated`: a list keeps its first items, an object cuts its longest list members, and text is cut with a note.
+
 ## Implementation
 
 The pipeline uses:
