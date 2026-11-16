@@ -35,11 +35,11 @@ class AuditLogGroup(NamedTuple):
     attribute of ``common.resourceNames.ResourceKeys`` that resolves the group's CloudWatch name
     (``AUDIT_LOG_ACTIONS``); it is held as a name so this module stays import-light. ``prefix`` is the
     record prefix label (``ACTIONS``). ``has_type_segment`` says whether ``log_action`` writes a
-    ``[type: ...]`` segment (the file groups' records carry none). ``legacy_parser`` names the adapter that reads a record written without
-    ``auditVersion`` (``common/auditSearch/parsers``). ``action_target`` says whether ``log_action``
-    may write action records to the group. ``sensitivity`` tags the group's content
-    (``containsPii``). ``addon_feature`` names the add-on feature the group belongs to, when it
-    belongs to one.
+    ``[type: ...]`` segment (the file groups' records carry none). ``legacy_parser`` names the adapter
+    that reads a record written without ``auditVersion`` (``common/auditSearch/parsers``).
+    ``action_target`` says whether ``log_action`` may write action records to the group.
+    ``sensitivity`` tags the group's content (``containsPii``). ``addon_feature`` names the add-on
+    feature the group belongs to, when it belongs to one.
     """
 
     key: str
