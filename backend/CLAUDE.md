@@ -48,6 +48,7 @@ backend/
 │   │   │                                           #   (validated filters -> Logs Insights query), containsFilter, parsers/ (contractV1 +
 │   │   │                                           #   legacy adapters by auditVersion), rowModel, recordMatcher (recheck on parsed rows),
 │   │   │                                           #   redaction, exportEncoding, registryCheck. Tests: tests/common/auditSearch/
+│   │   │                                           #   API layer: the internal codes groupUnknown and groupNotAllowed must give ONE generic error response (no group-existence leak)
 │   │   ├── auditSearchText.py                      # search_text_parameters(): the typed text of a search or text-filter
 │   │   │                                           #   read (query, metadata text, filter options, typed tags) goes under the redacted `searchText` request
 │   │   │                                           #   parameter; `tests/common/test_audit_search_text.py` pins the limits of its scan

@@ -462,3 +462,41 @@ class TestMoreCredentialShapes:
         for text in hostile:
             redaction.redact_string_shapes(text)
         assert time.monotonic() - started < 3
+
+
+@pytest.mark.unit
+class TestBasicCredentialDecode:
+    @pytest.mark.parametrize("value", [
+        "dXNlcjEyMzpwYXNzMTIz",  # user123:pass123, letters and digits
+        "dXNlcjpwYXNz",  # user:pass, letters only, no padding
+        "dXNlcjpwYXNzd29yZA",  # unpadded
+        "dXNlcjpwYXNzd29yZA==",  # padded
+        "YWRtaW46c2VjcmV0cGFzcw",  # admin:secretpass, unpadded
+        "dXNlcjpwYXNzfj4_",  # url-safe alphabet
+    ])
+    def test_credentials_are_redacted_with_or_without_digits_and_padding(self, value):
+        out = redaction.redact_string_shapes("Authorization: Basic " + value + " end")
+        assert value.rstrip("=") not in out
+        assert "Basic <redacted>" in out
+
+    @pytest.mark.parametrize("text", [
+        "Basic information", "Basic information about the asset", "Basic authentication is used",
+        "Basic Configuration Guide", "Basic abcdefghijklmnop", "Basic Administration",
+    ])
+    def test_plain_words_stay_readable(self, text):
+        assert redaction.redact_string_shapes(text) == text
+
+    def test_non_ascii_and_garbage_never_raise(self):
+        for text in ["Basic \u00e9\u00e8\u00ea\u00eb\u00ec\u00ed\u00ee\u00ef\u00f0\u00f1\u00f2\u00f3",
+                     "Basic \udcff\udcfe garbage", "Basic ____----____----", "Basic AAAA" + "\u0000" * 20,
+                     "Basic ////////////", "Basic ============"]:
+            assert isinstance(redaction.redact_string_shapes(text), str)
+
+    def test_long_hostile_inputs_stay_fast(self):
+        import time
+        hostile = ["Basic " + "Zm9v" * 40000, "Basic " + "a" * 100000, "Basic aaaa " * 20000,
+                   "Basic " + "dXNlcjpwYXNz" * 5000 + "!" * 100]
+        started = time.monotonic()
+        for text in hostile:
+            redaction.redact_string_shapes(text)
+        assert time.monotonic() - started < 3

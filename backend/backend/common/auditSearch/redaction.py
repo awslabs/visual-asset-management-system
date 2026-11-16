@@ -22,6 +22,7 @@ look like a credential whatever its key. Per value, in order:
 Nothing here raises on hostile input: a value that cannot be processed is replaced by ``<redacted>``.
 """
 
+import base64
 import json
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -59,7 +60,34 @@ _UNSAFE_CHARS = re.compile(
 )
 UNSAFE_CHARS = _UNSAFE_CHARS
 
-_SHAPE_PATTERNS: Tuple[Tuple["re.Pattern[str]", str], ...] = (
+_BASIC_PATTERN = re.compile(r"(?i)\bBasic[ \t]+([A-Za-z0-9+/_-]{12,512})(={0,2})")
+
+
+def _looks_like_basic_credential(value: str, padding: str) -> bool:
+    """True when the base64 text decodes to ``user:password``, or carries a digit, ``+``, ``/`` or ``=``.
+
+    The word "Basic" alone is common ("Basic information"), so a plain word is kept. The decode accepts
+    the standard and the url-safe alphabet and missing padding, is bounded by the pattern's length cap
+    and never raises.
+    """
+    try:
+        text = value.replace("-", "+").replace("_", "/")
+        text += "=" * (-len(text) % 4)
+        decoded = base64.b64decode(text, validate=True).decode("utf-8")
+        if ":" in decoded and decoded.isprintable():
+            return True
+    except Exception:  # noqa: BLE001 - not base64 or not text: fall through to the character test
+        pass
+    return bool(padding) or any(ch.isdigit() or ch in "+/" for ch in value)
+
+
+def _redact_basic(match: "re.Match[str]") -> str:
+    if _looks_like_basic_credential(match.group(1), match.group(2)):
+        return "Basic " + REDACTED
+    return match.group(0)
+
+
+_SHAPE_PATTERNS: Tuple[Tuple["re.Pattern[str]", Any], ...] = (
     (re.compile(r"eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*"), REDACTED),
     (re.compile(r"(?i)\bBearer[ \t]+[^\s\"']+"), "Bearer " + REDACTED),
     (re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"), REDACTED),
@@ -70,9 +98,8 @@ _SHAPE_PATTERNS: Tuple[Tuple["re.Pattern[str]", str], ...] = (
     (re.compile(r"\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])"), REDACTED),
     (re.compile(r"\b[sr]k_live_[A-Za-z0-9]{16,200}"), REDACTED),
     (re.compile(r"\bnpm_[A-Za-z0-9]{36}(?![A-Za-z0-9])"), REDACTED),
-    # HTTP Basic credentials: the base64 of ``user:password``. The word "Basic" alone is common, so a
-    # value must be 12 or more base64 characters with a digit, ``+``, ``/`` or ``=`` in it.
-    (re.compile(r"(?i)\bBasic[ \t]+(?=[A-Za-z0-9+/_-]*[0-9+/=])[A-Za-z0-9+/_-]{12,512}={0,2}"), "Basic " + REDACTED),
+    # HTTP Basic credentials: the base64 of ``user:password``; see _redact_basic.
+    (_BASIC_PATTERN, _redact_basic),
     # A password inside a URL: ``scheme://user:password@host``.
     (re.compile(r"(?i)\b([a-z][a-z0-9+.-]{1,20}://[^\s/:@\"']{1,256}):[^\s/@\"']{1,256}@"), r"\1:" + REDACTED + "@"),
     # A PEM private key block, to its end line or the end of the scanned text.
