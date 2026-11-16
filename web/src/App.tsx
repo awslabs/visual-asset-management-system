@@ -14,7 +14,8 @@ import "@aws-amplify/ui-react/styles.css";
 import { useThemeSettings } from "./hooks/useThemeSettings";
 import { PageFooter } from "./authenticator/Footer";
 import config from "./config";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { createAppQueryClient } from "./utils/queryRetry";
 import { ToastProvider } from "./features/orchestration/components/ToastProvider";
 import {
     clearLocalStore,
@@ -23,14 +24,7 @@ import {
     revokeSession,
 } from "./utils/sessionManager";
 
-const queryClient = new QueryClient({
-    defaultOptions: {
-        queries: {
-            staleTime: 30000,
-            retry: 1,
-        },
-    },
-});
+const queryClient = createAppQueryClient();
 
 const HeaderPortal = ({ children }: { children: any }) => {
     const domNode = document.querySelector("#headerWrapper");
