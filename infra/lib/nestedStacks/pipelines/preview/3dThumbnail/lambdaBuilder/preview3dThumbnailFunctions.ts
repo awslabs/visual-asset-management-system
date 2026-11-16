@@ -22,6 +22,7 @@ import {
 } from "../../../../../helper/security";
 import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { NagSuppressions } from "cdk-nag";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
@@ -98,6 +99,14 @@ export interface OpenPipelineBatchLogProps {
 }
 
 /**
+ * The result document a run records when it writes no preview (the Lambda for an image the web shows as
+ * its own preview, the container for the other no-preview outcomes). It must equal NO_PREVIEW_RESULT_FILENAME
+ * in backendPipelines/preview/3dThumbnail/lambda/openPipeline.py and container/preview_pipeline/media_preview.py;
+ * a drift test reads both.
+ */
+export const NO_PREVIEW_RESULT_FILENAME = "preview-not-generated.json";
+
+/**
  * Media previews settings for openPipeline: the image extensions the web shows as their own preview,
  * the size limit under which they are (strictly), and whether a smaller JPEG is still written for them.
  * Always set: one deployment serves both the 3D and the media workflow.
@@ -167,24 +176,41 @@ export function buildOpenPipelineFunction(
     grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     // An image the web shows as its own preview ends its run here, and the Lambda records why as one
-    // small result document under the execution's results folder (pipelines/<...>/results/), so the
-    // grant is a put on that prefix of the auxiliary bucket and nothing else.
-    assetAuxiliaryBucket.grantPut(fun, "pipelines/*");
+    // small result document in the execution's results folder. That folder is in the RUN bucket, which
+    // is the default asset bucket (executeWorkflow.py resolves the manifest's outputs against it), at
+    // <baseAssetsPrefix>pipelines/<pipeline>/<job>/output/<execution>/results/ -- not in the auxiliary
+    // bucket. So the grant is s3:PutObject on exactly that document name, under that results path of
+    // each asset bucket (the run bucket is one of them), and nothing else: no abort, legal hold,
+    // retention, tagging or delete.
+    const resultsDocumentKey = (prefix: string) =>
+        `${prefix.replace(/^\/+/, "")}pipelines/*/output/*/results/${NO_PREVIEW_RESULT_FILENAME}`;
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["s3:PutObject"],
+            resources: s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
+                const prefix = record.prefix || "/";
+                const normalized = prefix.endsWith("/") ? prefix : prefix + "/";
+                return `${record.bucket.bucketArn}/${resultsDocumentKey(normalized)}`;
+            }),
+        })
+    );
     NagSuppressions.addResourceSuppressions(
         fun,
         [
             {
                 id: "AwsSolutions-IAM5",
                 reason:
-                    "The no-preview result is written under the execution's results folder, whose key " +
-                    "(pipelines/<pipeline>/<job>/output/<execution>/results/) embeds identifiers that exist only " +
-                    "once a run starts. The write grant is therefore the auxiliary bucket's pipelines/ prefix, the " +
-                    "prefix every pipeline output of this solution lives under, and it is put-only: this Lambda " +
-                    "cannot write outside it or delete anything.",
+                    "s3:PutObject only, on one fixed document name (" +
+                    NO_PREVIEW_RESULT_FILENAME +
+                    ") in the results folder of an execution, " +
+                    "<baseAssetsPrefix>pipelines/<pipeline>/<job>/output/<execution>/results/ of an asset bucket. " +
+                    "The pipeline, job and execution segments are generated when a run starts, so they cannot be " +
+                    "named at deploy time; the wildcards stand for those segments only. The Lambda cannot read, " +
+                    "list, delete, tag or write any other object through this statement.",
                 appliesTo: [
                     {
                         // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                        regex: "/^Resource::<.*AssetAuxiliaryBucket.*\\.Arn>/pipelines/\\*$/g",
+                        regex: "/^Resource::.*\\/pipelines\\/\\*\\/output\\/\\*\\/results\\/preview-not-generated\\.json$/g",
                     },
                 ],
             },

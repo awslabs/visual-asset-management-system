@@ -17,6 +17,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { Template } from "aws-cdk-lib/assertions";
 import * as Config from "../../config/config";
+import { NO_PREVIEW_RESULT_FILENAME } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/lambdaBuilder/preview3dThumbnailFunctions";
 import {
     Preview3dThumbnailConstruct,
     PREVIEW_DOWNSCALE_ENVIRONMENT_VARIABLE,
@@ -193,7 +194,7 @@ describe("one deployment serves both workflows", () => {
         expect(openPipelineEnv(off).DOWNSCALE_SELF_PREVIEWABLE_IMAGES).toBe("false");
     });
 
-    test("openPipeline may write only the no-preview result, under pipelines/ of the auxiliary bucket", () => {
+    test("openPipeline may put only the no-preview result document, in the asset bucket's results folders", () => {
         const template = synth("NoWrite", false, { enabled: true });
         const policies = Object.values(template.findResources("AWS::IAM::Policy")) as any[];
         const open = policies.filter((p) =>
@@ -205,16 +206,54 @@ describe("one deployment serves both workflows", () => {
             Array.isArray(st.Action) ? st.Action : [st.Action];
         const allActions = statements.flatMap(actionsOf);
         expect(allActions).toContain("states:SendTaskSuccess");
-        expect(allActions.filter((a: string) => /^s3:Delete/.test(a))).toEqual([]);
+        // no delete, abort, legal hold, retention or tagging anywhere in the role
+        expect(
+            allActions.filter((a: string) =>
+                /^s3:(Delete|Abort|PutObject[A-Z]|PutObject\*)/.test(a)
+            )
+        ).toEqual([]);
         const writers = statements.filter((st: any) =>
             actionsOf(st).some((a) => /^s3:Put/.test(a))
         );
-        expect(writers.length).toBeGreaterThan(0);
-        for (const st of writers) {
-            const resources = Array.isArray(st.Resource) ? st.Resource : [st.Resource];
-            for (const r of resources) {
-                expect(JSON.stringify(r)).toMatch(/\/pipelines\/\*/);
-            }
+        expect(writers).toHaveLength(1);
+        expect(actionsOf(writers[0])).toEqual(["s3:PutObject"]);
+        // the resource is the asset (run) bucket, NOT the auxiliary bucket, and only the results document
+        const resource = JSON.stringify(writers[0].Resource);
+        expect(resource).toContain("AssetBucket");
+        expect(resource).not.toContain("AssetAuxiliaryBucket");
+        expect(resource).toContain("/pipelines/*/output/*/results/preview-not-generated.json");
+    });
+
+    test("the granted key pattern matches the results key a real run writes, and nothing else", () => {
+        const glob = (pattern: string) =>
+            new RegExp(
+                "^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$"
+            );
+        const pattern = `pipelines/*/output/*/results/${NO_PREVIEW_RESULT_FILENAME}`;
+        // executeWorkflow.py: <baseAssetsPrefix>pipelines/<pipeline>/<job>/output/<execution>/results/
+        const runKey = `pipelines/preview-media-thumbnail/Preview_1/output/E1a2b3/results/${NO_PREVIEW_RESULT_FILENAME}`;
+        expect(glob(pattern).test(runKey)).toBe(true);
+        expect(glob(`base/${pattern}`).test(`base/${runKey}`)).toBe(true);
+        // not an asset file, a preview, or another results document
+        for (const other of [
+            "xid/pics/photo.png",
+            "xid/photo.png.previewFile.jpg",
+            "pipelines/p/J/output/E1/files/preview-not-generated.json",
+            "pipelines/p/J/output/E1/results/execution.status.json",
+        ]) {
+            expect(glob(pattern).test(other)).toBe(false);
+        }
+    });
+
+    test("the results document name is the one the Lambda and the container write", () => {
+        const read = (p: string) => fs.readFileSync(path.join(REPO, p), "utf-8");
+        for (const file of [
+            "backendPipelines/preview/3dThumbnail/lambda/openPipeline.py",
+            "backendPipelines/preview/3dThumbnail/container/preview_pipeline/media_preview.py",
+        ]) {
+            expect(read(file)).toContain(
+                `NO_PREVIEW_RESULT_FILENAME = "${NO_PREVIEW_RESULT_FILENAME}"`
+            );
         }
     });
 

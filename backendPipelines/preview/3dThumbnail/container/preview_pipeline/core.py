@@ -288,9 +288,8 @@ def _run_preview_stage(
                 and image_handler.is_self_previewable(declared_ext or key_ext, file_size)
                 and not media_preview.downscale_option_enabled()):
             name = os.path.basename(stage_input.objectKey)
-            return _complete_without_preview(
-                stage, results_location, name, media_preview.self_preview_message(name),
-                media_preview.REASON_SELF_PREVIEWABLE)
+            message, reason = media_preview.skip_statement(name, file_size)
+            return _complete_without_preview(stage, results_location, name, message, reason)
 
         # A line-oriented point cloud is read straight from S3 and sampled as it streams, so it needs
         # no local copy and is not limited by the work volume.
@@ -556,17 +555,23 @@ def _complete_without_preview(stage: PipelineStage, results_location: dict, name
     (``media_preview.NO_PREVIEW_RESULT_FILENAME`` under the results folder, recorded on the execution as
     an ordinary result). Best effort: a run with no results location, or a write that fails, still
     completes, with the message in the job log and the stage."""
+    failure = None
     if results_location:
         key = results_location["objectDir"] + media_preview.NO_PREVIEW_RESULT_FILENAME
         try:
             body = media_preview.no_preview_result_document(name, message, reason)
             if s3.put_json(results_location["bucketName"], key, body) is None:
-                logger.warning("Could not write the no-preview result; the message is in the job log")
+                failure = "S3 refused the write"
         except Exception as e:
-            logger.warning(f"Could not write the no-preview result ({type(e).__name__}); the message "
-                           f"is in the job log")
+            failure = type(e).__name__
     else:
         logger.info("No results location for this run; the no-preview message is in the job log only")
+    if failure:
+        # The run still succeeds (the file simply has no preview), but the record of why is missing, so
+        # it is logged as an error and named in the run's own message rather than dropped.
+        logger.error(f"The no-preview result {media_preview.NO_PREVIEW_RESULT_FILENAME} could not be "
+                     f"written under {results_location['objectDir']}: {failure}")
+        message = f"{message} The result record could not be written ({failure})."
     return _success_response(stage, message)
 
 

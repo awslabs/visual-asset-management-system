@@ -1163,7 +1163,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         # Validate the extension of an asset preview and of a .previewFile. file
         if uploadType == "assetPreview" or is_preview_file(file.relativeKey):
             if not validate_preview_file_extension(file.relativeKey):
-                raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+                raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp")
 
         # Validate file size for preview files
         if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
@@ -1412,7 +1412,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         relativeKey=file.relativeKey,
                         uploadIdS3="external",
                         success=False,
-                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp"
                     ))
                     has_failures = True
                     continue
@@ -2024,7 +2024,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 name_check_error = "File contains a potentially malicious executable type object"
             elif (uploadType == "assetPreview" or is_preview_file(file.relativeKey)) \
                     and not validate_preview_file_extension(file.relativeKey):
-                name_check_error = "Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                name_check_error = "Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp"
             
             if name_check_error:
                 # AUDIT LOG: upload denied on the file name before any object was created
@@ -2357,7 +2357,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp"
                     ))
                     has_failures = True
                     continue
@@ -2373,7 +2373,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp"
                     ))
                     has_failures = True
                     continue

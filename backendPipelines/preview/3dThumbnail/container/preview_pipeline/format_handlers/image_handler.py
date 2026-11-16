@@ -17,6 +17,7 @@ CMYK, YCbCr and LAB are converted to RGB (through the embedded ICC profile when 
 
 import io
 import os
+import re
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -167,10 +168,15 @@ def to_rgb8(img: Image.Image) -> Image.Image:
         return img
     if mode in ("L", "1"):
         return img.convert("RGB")
-    if mode in ("LA", "La", "RGBa"):
+    if mode in ("LA", "La", "RGBa", "PA"):
+        # Pillow cannot convert an associated-alpha gray image (La) to RGBA directly: it goes through
+        # LA, which also un-premultiplies. Transparency is composited on white when the preview is
+        # written (image_utils.flatten_on_white).
+        if mode == "La":
+            img = img.convert("LA")
         return img.convert("RGBA")
-    if mode in ("P", "PA"):
-        return img.convert("RGBA" if (mode == "PA" or "transparency" in img.info) else "RGB")
+    if mode == "P":
+        return img.convert("RGBA" if "transparency" in img.info else "RGB")
     if mode == "CMYK":
         return _icc_to_srgb(img) or img.convert("RGB")
     if mode == "LAB":
@@ -258,6 +264,41 @@ def _array_to_image(array: np.ndarray, photometric: str, colormap=None) -> Image
     return Image.fromarray(np.ascontiguousarray(samples[..., :4]), "RGBA")
 
 
+# Bytes a tifffile decode holds per sample beyond the decoded array itself: the float32 working copy
+# that percentile scaling makes, the copy nan_to_num makes of it, and the 8-bit result.
+_TIFFFILE_EXTRA_BYTES_PER_SAMPLE = 4 + 4 + 1
+
+
+def _check_tiffile_decode_memory(page, max_pixels: int) -> None:
+    """Refuse a TIFF whose tifffile decode would hold more than the memory share the image budget stands
+    for. check_pixels counts pixels (the budget assumes about 24 bytes a pixel, which covers 8-bit
+    colour); a float32 or float64 image with several samples a pixel needs more, so the decoded array
+    and the scaling copies are counted in bytes here, from the header, before anything is decoded."""
+    from .. import resources
+    samples = max(1, int(getattr(page, "samplesperpixel", 1) or 1))
+    itemsize = max(1, int(getattr(page.dtype, "itemsize", 1) or 1))
+    need = int(page.imagewidth) * int(page.imagelength) * samples * (itemsize + _TIFFFILE_EXTRA_BYTES_PER_SAMPLE)
+    allowed = int(max_pixels) * resources.BYTES_PER_IMAGE_PIXEL
+    if need > allowed:
+        raise ImageTooLarge(
+            f"The TIFF image is {page.imagewidth} x {page.imagelength} with {samples} sample(s) of "
+            f"{itemsize * 8} bits, which needs about {need / 1024 ** 3:.1f} GiB to decode, more than the "
+            f"{allowed / 1024 ** 3:.1f} GiB this task can use. Reduce the image size or use a larger "
+            f"compute size.")
+
+
+def _codec_message(error: Exception) -> Optional[str]:
+    """A message for a TIFF compression tifffile cannot decode without its optional codec package, or
+    None when the error is something else."""
+    text = str(error)
+    if "imagecodecs" not in text:
+        return None
+    name = re.search(r"<COMPRESSION\.(\w+)", text) or re.search(r"COMPRESSION\.(\w+)", text)
+    return ("The TIFF file uses " + (f"{name.group(1)} " if name else "a ") + "compression, or a sample "
+            "layout, that this pipeline cannot decode. Re-save it uncompressed or with deflate (zip) "
+            "compression.")
+
+
 def _load_with_tifffile(path: str, max_pixels: int) -> Image.Image:
     import tifffile
     with tifffile.TiffFile(path) as tif:
@@ -270,6 +311,7 @@ def _load_with_tifffile(path: str, max_pixels: int) -> Image.Image:
         page = page if page is not None else tif.pages[0]
         height, width = page.imagelength, page.imagewidth
         check_pixels(width, height, max_pixels, ".tif")
+        _check_tiffile_decode_memory(page, max_pixels)
         array = page.asarray()
         photometric = getattr(page.photometric, "name", str(page.photometric))
         image = _array_to_image(array, photometric, getattr(page, "colormap", None))
@@ -299,7 +341,7 @@ def load_raster(path: str, ext: str, max_pixels: int, draft_edge: Optional[int] 
             except ImageTooLarge:
                 raise
             except Exception as tiff_error:
-                raise MediaError(_read_failure(ext, tiff_error)) from tiff_error
+                raise MediaError(_codec_message(tiff_error) or _read_failure(ext, tiff_error)) from tiff_error
     finally:
         Image.MAX_IMAGE_PIXELS = previous
 

@@ -245,15 +245,73 @@ class TestNoPreviewResultDocument:
                         "already shown as its own preview."),
         }
 
-    def test_a_failed_write_still_ends_the_run_successfully(self):
+    def test_a_failed_write_ends_the_run_successfully_but_is_logged_and_surfaced(self):
         mod = _load(MEDIA_ENV)
         s3 = _s3(10)
-        s3.put_object.side_effect = Exception("AccessDenied")
+
+        class _Denied(Exception):
+            response = {"Error": {"Code": "AccessDenied"}}
+
+        s3.put_object.side_effect = _Denied("denied")
+        mod.logger = MagicMock()
         response, start, success, failure = _run(mod, _event("photo.png"), s3)
         assert response["statusCode"] == 200
-        success.assert_called_once()
         failure.assert_not_called()
         start.assert_not_called()
+        # logged at ERROR, named in the task output and in the response
+        mod.logger.error.assert_called()
+        assert "AccessDenied" in mod.logger.error.call_args.args[0]
+        output = json.loads(success.call_args.kwargs["output"])
+        assert output["resultDocumentError"] == "AccessDenied"
+        assert "The result record could not be written (AccessDenied)." in output["message"]
+        assert "The result record could not be written (AccessDenied)." in response["body"]["message"]
+
+    def test_a_clean_write_adds_no_error_field(self):
+        mod = _load(MEDIA_ENV)
+        _, _, success, _ = _run(mod, _event("photo.png"), _s3(10))
+        assert "resultDocumentError" not in json.loads(success.call_args.kwargs["output"])
+
+    def test_the_document_goes_to_the_run_bucket_at_the_results_key_the_workflow_builds(self):
+        """executeWorkflow.py resolves the manifest's outputs against the RUN bucket (the default asset
+        bucket) as <baseAssetsPrefix>pipelines/<pipeline>/<job>/output/<execution>/results/, and the vendored
+        manifestHelper hands that to this Lambda as outputS3AssetResultsPath. The document lands there, in
+        that bucket, not in the auxiliary bucket."""
+        mod = _load(MEDIA_ENV)
+        s3 = _s3(10)
+        event = _event("photo.png")
+        event["outputS3AssetResultsPath"] = (
+            "s3://run-asset-bucket/base/pipelines/preview-media-thumbnail/Job_1/output/E9/results/")
+        event["inputS3AssetFilePath"] = "s3://run-asset-bucket/base/xid/pics/photo.png"
+        _run(mod, event, s3)
+        call = s3.put_object.call_args.kwargs
+        assert call["Bucket"] == "run-asset-bucket"
+        assert call["Key"] == ("base/pipelines/preview-media-thumbnail/Job_1/output/E9/results/"
+                               "preview-not-generated.json")
+        # the shape the CDK grant allows: <prefix>pipelines/*/output/*/results/<document>
+        import fnmatch
+        assert fnmatch.fnmatchcase(call["Key"], "base/pipelines/*/output/*/results/preview-not-generated.json")
+
+    def test_a_bucket_in_another_region_is_written_with_a_client_for_that_region(self):
+        mod = _load(MEDIA_ENV)
+        s3 = _s3(10)
+        regional = _s3(10)
+        event = _event("photo.png")
+        event["outputBucketRegion"] = "eu-west-1"
+        with patch.object(mod.computeTier.manifestHelper, "s3_client_for_region",
+                          MagicMock(return_value=regional)):
+            _run(mod, event, s3)
+        regional.put_object.assert_called_once()
+        assert regional.put_object.call_args.kwargs["Bucket"] == "abkt"
+
+    def test_a_zero_byte_image_is_reported_as_empty(self):
+        mod = _load(MEDIA_ENV)
+        s3 = _s3(0)
+        response, start, success, _ = _run(mod, _event("empty.png"), s3)
+        start.assert_not_called()
+        document = json.loads(s3.put_object.call_args.kwargs["Body"].decode("utf-8"))
+        assert document["reason"] == "emptyFile"
+        assert document["message"] == "No preview was generated for 'empty.png': the file is empty (0 bytes)."
+        assert json.loads(success.call_args.kwargs["output"])["message"] == document["message"]
 
     def test_no_results_path_writes_nothing(self):
         mod = _load(MEDIA_ENV)

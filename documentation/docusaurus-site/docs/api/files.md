@@ -612,7 +612,7 @@ For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.ph
 :::
 
 :::info[Preview File Extensions]
-An `assetPreview` file, and any file-level preview companion (a `relativeKey` containing `.previewFile.`) inside an `assetFile` upload, must carry one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`. For a companion the extension is everything after the `.previewFile.` marker, so `model.gltf.previewFile.p.png` is read as `.p.png` and refused. One offending file rejects the entire request with `400`; no multipart upload is created for any file in it.
+An `assetPreview` file, and any file-level preview companion (a `relativeKey` containing `.previewFile.`) inside an `assetFile` upload, must carry one of `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, or `.bmp`. For a companion the extension is everything after the `.previewFile.` marker, so `model.gltf.previewFile.p.png` is read as `.p.png` and refused. One offending file rejects the entire request with `400`; no multipart upload is created for any file in it.
 :::
 
 ---

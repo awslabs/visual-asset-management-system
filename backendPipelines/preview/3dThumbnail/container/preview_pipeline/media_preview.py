@@ -49,6 +49,7 @@ REASON_SELF_PREVIEWABLE = "alreadyShownAsOwnPreview"
 REASON_NO_SMALLER_PREVIEW = "noSmallerPreview"
 REASON_ANIMATED_LEFT_ALONE = "animatedImageLeftAlone"
 REASON_NO_VIDEO_STREAM = "noVideoStream"
+REASON_EMPTY_FILE = "emptyFile"
 
 
 @dataclass
@@ -80,6 +81,20 @@ def self_preview_message(name: str) -> str:
     """The result statement of an image the web already shows as its own preview."""
     return (f"No preview was generated for '{name}': the file is under 5 MiB and is already shown as "
             f"its own preview.")
+
+
+def empty_file_message(name: str) -> str:
+    """The result statement of a zero-byte file: it is under the size limit, but there is nothing in it
+    to show, so it is not described as its own preview."""
+    return f"No preview was generated for '{name}': the file is empty (0 bytes)."
+
+
+def skip_statement(name: str, size: Optional[int]):
+    """The (message, reason) of an image the pipeline skips because the web shows it as its own preview;
+    a zero-byte file gets its own statement."""
+    if size == 0:
+        return empty_file_message(name), REASON_EMPTY_FILE
+    return self_preview_message(name), REASON_SELF_PREVIEWABLE
 
 
 def no_preview_result_document(name: str, message: str, reason: str) -> bytes:
@@ -145,6 +160,8 @@ def _image_preview(path, ext, output_type, output_dir, basename, pixel_budget, o
                 f"No preview was generated for '{basename}': the animated image is under 5 MiB and is "
                 f"already shown as its own preview (a JPEG would drop the animation).",
                 REASON_ANIMATED_LEFT_ALONE)
+        if original_size == 0:
+            return MediaResult(None, empty_file_message(basename), REASON_EMPTY_FILE)
         if not downscale_self_previewable:
             return MediaResult(None, self_preview_message(basename), REASON_SELF_PREVIEWABLE)
         return _downscaled_self_preview(path, ext, output_dir, basename, pixel_budget, original_size)

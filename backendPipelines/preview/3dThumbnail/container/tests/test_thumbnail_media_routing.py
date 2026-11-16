@@ -50,12 +50,12 @@ class _Run:
     """One run of the stage with S3 stubbed: ``source`` is the local file the 'download' copies."""
 
     def __init__(self, tmp_path, source, key, size=None, params=None, existing=None, version=None,
-                 environ=None, upload_fails=False):
+                 environ=None, upload_fails=False, put_json=None):
         self.tmp_path = tmp_path
         self.download = MagicMock(side_effect=lambda bucket, k, path, **kw: shutil.copyfile(source, path)
                                   or path)
         self.upload = MagicMock(side_effect=lambda bucket, k, path: None if upload_fails else k)
-        self.put_json = MagicMock(side_effect=lambda bucket, k, body: k)
+        self.put_json = put_json or MagicMock(side_effect=lambda bucket, k, body: k)
         self.uploaded_bytes = {}
         # size: None = the file's own size, "unknown" = a HEAD that reports none
         self.head = MagicMock(return_value=None if size == "unknown" else
@@ -306,11 +306,37 @@ class TestNoPreviewResultDocument:
         run = _Run(tmp_path, _png(tmp_path, LIMIT + 1), "xid/big.png")
         run.put_json.assert_not_called()
 
-    def test_a_failed_write_still_completes_the_run(self, tmp_path):
+    def test_a_failed_write_still_completes_the_run_but_is_logged_and_named(self, tmp_path, caplog):
         source = _png(tmp_path)
-        with patch.object(core.s3, "put_json", MagicMock(return_value=None)):
-            run = _Run(tmp_path, source, "xid/photo.png")
+        caplog.set_level(logging.INFO)
+        run = _Run(tmp_path, source, "xid/photo.png", put_json=MagicMock(return_value=None))
         assert run.result.status == PipelineStatus.COMPLETE
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any("preview-not-generated.json could not be written" in r.getMessage() for r in errors)
+        assert "The result record could not be written" in caplog.text
+
+    def test_a_write_that_raises_is_logged_and_named_too(self, tmp_path, caplog):
+        source = _png(tmp_path)
+        caplog.set_level(logging.INFO)
+        run = _Run(tmp_path, source, "xid/photo.png", put_json=MagicMock(side_effect=RuntimeError("boom")))
+        assert run.result.status == PipelineStatus.COMPLETE
+        assert any(r.levelno >= logging.ERROR and "RuntimeError" in r.getMessage() for r in caplog.records)
+
+    def test_the_result_goes_to_the_results_location_it_was_given(self, tmp_path):
+        run = _Run(tmp_path, _png(tmp_path), "xid/photo.png")
+        bucket, key, _ = run.put_json.call_args.args
+        assert (bucket, key) == ("run-bucket", RESULTS["objectDir"] + "preview-not-generated.json")
+
+    def test_a_zero_byte_image_says_it_is_empty(self, tmp_path):
+        source = tmp_path / "src.png"
+        source.write_bytes(b"")
+        run = _Run(tmp_path, str(source), "xid/empty.png")
+        assert run.result.status == PipelineStatus.COMPLETE
+        run.download.assert_not_called()
+        import json
+        document = json.loads(run.put_json.call_args.args[2].decode("utf-8"))
+        assert document["reason"] == "emptyFile"
+        assert document["message"] == "No preview was generated for 'empty.png': the file is empty (0 bytes)."
 
     def test_no_results_location_completes_the_run(self, tmp_path):
         source = _png(tmp_path)

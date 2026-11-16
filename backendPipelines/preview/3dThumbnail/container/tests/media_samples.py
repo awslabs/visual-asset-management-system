@@ -220,3 +220,60 @@ def write_audio_only(path):
         for packet in stream.encode():
             container.mux(packet)
     return path
+
+
+def write_tiff_gray_alpha(path, associated=True, compression="tiff_lzw", width=64, height=48, alpha=200):
+    """A gray+alpha TIFF. With ``associated`` the ExtraSamples tag says the alpha is associated
+    (premultiplied), which Pillow reads as mode ``La``; Pillow writes only unassociated alpha, so the tag
+    of a file it wrote is patched in place (a SHORT stored in the IFD entry)."""
+    import struct
+    gray = np.linspace(0, 255, width * height, dtype=np.uint8).reshape(height, width)
+    alpha_plane = np.full((height, width), alpha, np.uint8)
+    Image.fromarray(np.dstack([gray, alpha_plane]), "LA").save(path, "TIFF", compression=compression)
+    if associated:
+        data = bytearray(open(path, "rb").read())
+        offset = struct.unpack("<I", data[4:8])[0]
+        count = struct.unpack("<H", data[offset:offset + 2])[0]
+        for index in range(count):
+            entry = offset + 2 + 12 * index
+            if struct.unpack("<H", data[entry:entry + 2])[0] == 338:  # ExtraSamples
+                data[entry + 8:entry + 10] = struct.pack("<H", 1)
+        open(path, "wb").write(bytes(data))
+    return path
+
+
+def write_tiff_mode(path, mode, compression=None, width=64, height=48):
+    """A TIFF of Pillow mode ``mode`` (1, L, P, RGBA, CMYK, YCbCr, I, F, I;16) holding a gradient."""
+    gray = np.linspace(0, 255, width * height, dtype=np.uint8).reshape(height, width)
+    if mode == "1":
+        image = Image.fromarray(gray > 100)
+    elif mode == "L":
+        image = Image.fromarray(gray)
+    elif mode == "P":
+        image = Image.fromarray(gray).convert("P")
+    elif mode == "RGBA":
+        image = Image.fromarray(np.dstack([gray, gray[::-1], gray, np.full_like(gray, 180)]), "RGBA")
+    elif mode == "CMYK":
+        image = Image.fromarray(np.dstack([gray, gray, gray, gray]), "CMYK")
+    elif mode == "YCbCr":
+        image = Image.fromarray(np.dstack([gray, gray, gray])).convert("YCbCr")
+    elif mode == "I":
+        image = Image.fromarray(gray.astype(np.int32), "I")
+    elif mode == "F":
+        image = Image.fromarray(gray.astype(np.float32), "F")
+    elif mode == "I;16":
+        image = Image.fromarray(gray.astype(np.uint16) * 257)
+    else:
+        raise ValueError(mode)
+    image.save(path, "TIFF", compression=compression)
+    return path
+
+
+def write_tiff_gray16_alpha(path, width=64, height=48):
+    """A 16-bit gray+alpha TIFF, which Pillow cannot open (tifffile reads it)."""
+    import tifffile
+    gray = np.linspace(0, 255, width * height, dtype=np.uint8).reshape(height, width).astype(np.uint16) * 257
+    alpha_plane = np.full((height, width), 200 * 257, np.uint16)
+    tifffile.imwrite(path, np.dstack([gray, alpha_plane]), photometric="minisblack",
+                     extrasamples=["unassalpha"])
+    return path

@@ -65,9 +65,9 @@ class TestSelfPreviewableImages:
         assert result.path is not None and result.path.endswith("exactly.png.previewFile.jpg")
         assert os.path.getsize(result.path) < LIMIT
 
-    def test_a_zero_byte_image_is_not_decoded_when_self_previewable(self, tmp_path):
-        """Size 0 is under the limit and the extension displayable: the web treats it as its own
-        preview, so the run writes nothing (the file is then simply broken in the viewer)."""
+    def test_a_zero_byte_image_is_not_decoded(self, tmp_path):
+        """Size 0 is under the limit and the extension displayable, so the run writes nothing; its
+        result says the file is empty (TestEmptyFile)."""
         path = tmp_path / "empty.png"
         path.write_bytes(b"")
         assert _generate(str(path), tmp_path).path is None
@@ -361,3 +361,110 @@ class TestSizeLimitIsStrict:
         assert returned != out or os.path.getsize(returned) < exact
         assert os.path.getsize(returned) < exact
         assert image_utils.ensure_under_size_limit(frames, out, max_bytes=exact + 1) == out
+
+
+@pytest.mark.unit
+class TestTiffColourModes:
+    """Every TIFF sample layout the reviewers' mode matrix names: each loads to 8-bit RGB (or RGBA when
+    it carries alpha) and previews as a JPEG with transparency on white."""
+
+    @pytest.mark.parametrize("compression", [None, "tiff_lzw", "tiff_adobe_deflate"])
+    @pytest.mark.parametrize("associated", [True, False])
+    def test_gray_plus_alpha_in_any_compression(self, tmp_path, associated, compression):
+        path = samples.write_tiff_gray_alpha(str(tmp_path / "ga.tif"), associated=associated,
+                                             compression=compression)
+        with Image.open(path) as probe:
+            assert probe.mode == ("La" if associated else "LA")
+        image = image_handler.load_raster(path, ".tif", BUDGET)
+        assert image.mode == "RGBA" and image.size == (64, 48)
+        result = _generate(path, tmp_path)
+        assert result.path.endswith(".previewFile.jpg") and os.path.getsize(result.path) < LIMIT
+        # alpha 200 of 255 over white lightens the gray ramp: no pixel is darker than 255 * (1 - 200/255)
+        with Image.open(result.path) as jpeg:
+            assert int(np.asarray(jpeg.convert("L")).min()) >= 40
+
+    def test_associated_alpha_is_unpremultiplied_before_it_goes_on_white(self, tmp_path):
+        image = Image.new("La", (4, 4), (100, 128))
+        converted = image_handler.to_rgb8(image)
+        assert converted.mode == "RGBA"
+        flat = image_utils.flatten_on_white(converted)
+        assert flat.mode == "RGB" and flat.getpixel((1, 1))[0] > 100
+
+    @pytest.mark.parametrize("mode", ["LA", "La", "PA", "RGBa", "RGBA", "P", "1", "L", "CMYK", "YCbCr",
+                                      "I", "F", "I;16", "RGB"])
+    def test_to_rgb8_handles_every_pillow_mode(self, mode):
+        if mode == "PA":
+            image = Image.new("P", (4, 4)).convert("PA")
+        elif mode == "I;16":
+            image = Image.fromarray(np.full((4, 4), 4000, np.uint16))
+        else:
+            image = Image.new(mode, (4, 4))
+        converted = image_handler.to_rgb8(image)
+        assert converted.mode in ("RGB", "RGBA")
+        image_utils.flatten_on_white(converted)  # and it composites without error
+
+    @pytest.mark.parametrize("mode,compression", [
+        ("1", None), ("1", "tiff_lzw"), ("L", "tiff_lzw"), ("P", None), ("P", "tiff_lzw"),
+        ("RGBA", None), ("RGBA", "tiff_lzw"), ("CMYK", "tiff_lzw"), ("YCbCr", None),
+        ("I", None), ("F", None), ("I;16", None),
+    ])
+    def test_tiff_in_each_mode_previews(self, tmp_path, mode, compression):
+        path = samples.write_tiff_mode(str(tmp_path / "m.tif"), mode, compression)
+        result = _generate(path, tmp_path)
+        assert result.path.endswith("m.tif.previewFile.jpg") and os.path.getsize(result.path) < LIMIT
+
+    def test_a_16_bit_gray_alpha_tiff_reads_through_tifffile(self, tmp_path):
+        path = samples.write_tiff_gray16_alpha(str(tmp_path / "ga16.tif"))
+        image = image_handler.load_raster(path, ".tif", BUDGET)
+        assert image.size == (64, 48) and image.mode in ("RGB", "RGBA")
+
+    def test_a_compression_only_tifffile_with_a_codec_package_could_read_fails_with_its_name(self, tmp_path):
+        """A 16-bit TIFF in a compression tifffile reads only with imagecodecs (here LZW): the failure
+        names the compression and the way out, not a package import error."""
+        import tifffile
+        path = str(tmp_path / "rgb16_zlib.tif")
+        samples.write_tiff_16bit_rgb(path)
+        # rewrite the Compression tag (259) of the raw file as LZW (5): the strips are not LZW data,
+        # but the codec is looked up before any strip is read
+        import struct
+        data = bytearray(open(path, "rb").read())
+        offset = struct.unpack("<I", data[4:8])[0]
+        count = struct.unpack("<H", data[offset:offset + 2])[0]
+        for index in range(count):
+            entry = offset + 2 + 12 * index
+            if struct.unpack("<H", data[entry:entry + 2])[0] == 259:
+                data[entry + 8:entry + 10] = struct.pack("<H", 5)
+        open(path, "wb").write(bytes(data))
+        try:
+            tifffile.TiffFile(path).pages[0].asarray()
+        except Exception as e:
+            if "imagecodecs" not in str(e):
+                pytest.skip("this tifffile decodes LZW without imagecodecs")
+        with pytest.raises(MediaError) as caught:
+            image_handler.load_raster(path, ".tif", BUDGET)
+        text = str(caught.value)
+        assert "TIFF" in text and "LZW" in text and "cannot decode" in text and "imagecodecs" not in text
+
+    def test_tifffile_decode_memory_counts_float_samples(self):
+        class _Page:
+            imagewidth, imagelength, samplesperpixel = 4000, 4000, 4
+
+            class dtype:  # noqa: N801
+                itemsize = 8
+
+        # 16 M pixels fit the 200 M pixel budget, but 16 M x 4 samples x (8 + 9) bytes = 1.1 GB
+        # does not fit a budget of 24 bytes for each of 20 M pixels (480 MB)
+        image_handler._check_tiffile_decode_memory(_Page, 100_000_000)  # 2.4 GB allowed: fine
+        with pytest.raises(ImageTooLarge) as caught:
+            image_handler._check_tiffile_decode_memory(_Page, 20_000_000)
+        assert "TIFF" in str(caught.value) and "GiB" in str(caught.value)
+
+
+@pytest.mark.unit
+class TestEmptyFile:
+    def test_a_zero_byte_png_is_reported_as_empty_not_as_its_own_preview(self, tmp_path):
+        path = tmp_path / "empty.png"
+        path.write_bytes(b"")
+        result = _generate(str(path), tmp_path)
+        assert result.path is None and result.reason == media_preview.REASON_EMPTY_FILE
+        assert result.message == "No preview was generated for 'empty.png': the file is empty (0 bytes)."

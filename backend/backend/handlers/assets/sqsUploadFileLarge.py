@@ -955,7 +955,7 @@ def _validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Di
         if upload_type == "assetPreview":
             # Validate preview file extension
             if not validate_preview_file_extension(relative_key):
-                logger.error(f"Preview file {relative_key} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+                logger.error(f"Preview file {relative_key} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp")
                 # Delete the uploaded file
                 delete_s3_object(source_bucket, temp_s3_key)
                 return False
@@ -964,7 +964,7 @@ def _validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Di
         if upload_type == "assetFile" and is_preview_file(relative_key):
             # Validate preview file extension
             if not validate_preview_file_extension(relative_key):
-                logger.error(f"Preview file {relative_key} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+                logger.error(f"Preview file {relative_key} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp")
                 # Delete the uploaded file
                 delete_s3_object(source_bucket, temp_s3_key)
                 return False
