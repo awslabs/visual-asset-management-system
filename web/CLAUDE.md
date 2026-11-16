@@ -33,7 +33,7 @@ web/
   customInstalls/           # Per-viewer custom install scripts (one dir per viewer)
   e2e/                      # Playwright specs against a deployed stack — see e2e/CLAUDE.md (11.5)
   src/
-    App.tsx                 # Root app shell, HashRouter, TopNavigation
+    App.tsx                 # Root app shell, HashRouter, TopNavigation (Settings menu, profile menu)
     routes.tsx              # Centralized route table (core + add-on + custom), lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
@@ -104,14 +104,14 @@ web/
       ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
-      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
+      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx, Navigation, profile menu
       addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
 
     addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts (add-on feature-switch names)
       edh/                  #   EDH Workstations add-on module (Tailwind + Radix, pages/ route shells) — see addons/edh/CLAUDE.md
     custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
       customRoutes.tsx      #   customRouteTable, appended to routeTable in routes.tsx
-      customNavigation.ts   #   customNavSections, appended to the side navigation
+      customNavigation.ts   #   customNavSections, appended by layout/navigationRegistry.ts
       customFeatures.ts     #   names of the fork's feature switches
       services/             #   fork API calls (may import apiClient)
       pages/                #   fork pages
@@ -249,13 +249,16 @@ web/
     constants/uploadLimits.ts
     hooks/                  # usePageTitle.ts, useThemeSettings.ts,
                             #   useAssetPageAccess.ts (may the caller open an assets/asset page)
-    layout/Navigation.tsx   # Left sidebar navigation
+    layout/navigationRegistry.ts  # The one navigation registry: core + add-on + custom, side/profile placement
+    layout/Navigation.tsx   # Left sidebar navigation (side entries)
+    layout/useProfileMenuItems.ts # Top-bar profile menu items (profile entries, current page checked, then Sign out)
 
     utils/
       apiEndpoint.ts        # Resolves the API base URL
       chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload
       authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader, resolveExternalUserId
       sessionManager.ts     # Idle/expiry session handling
+      queryRetry.ts         # createAppQueryClient, shouldRetryQuery: a final 4xx is never retried
       fileExtensionValidation.ts
       fileHandleCompat.ts
       maplibreWorker.ts     # setWorkerUrl() for maplibre-gl's bundled worker; import for side effect before a map mounts
@@ -574,6 +577,7 @@ Key patterns to follow:
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
 5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`fetchAssetWithStatus`, `fetchFileInfo`, `downloadAsset`, `deleteAssetLink`, `deleteComment`)
 6. A request whose response the browser never saw (a network failure, or a cross-origin preflight a web ACL blocked) is not an API answer: `fetch` rejects with a `TypeError` whose text ("Failed to fetch") means nothing to a user. `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `apiClient.ts`) in its place, with no status, so the page can say the service could not be reached and offer Retry rather than a "not found" or permission message (`fetchAssetWithStatus`, `fetchFileInfo`, `fetchFileVersions`, `fetchMetadata`; the asset and file pages)
+7. A TanStack Query hook never retries a final answer. The app's query client (`createAppQueryClient` in `utils/queryRetry.ts`) retries a failed query once, except when the error carries a 4xx status other than 408 or 429: a 403 is the API's authorization decision and a 404 says the object is not there, so the page shows the error at once. `toTuple` / `toTupleWithWarnings` tag a failed tuple with the call's status (`failureStatus(result)`, non-enumerable, so the tuple still destructures and compares as `[false, message]`), and the hooks in `features/orchestration/api/queries.ts` throw through `callService`, which raises a `ServiceCallError` carrying it. A hook that throws on a tuple itself goes through `callService` too, or its 403 is re-sent (#1270). A service that rebuilds its tuple drops the status and keeps the old retry-once behaviour
 
 ### 4.2 Consuming API Results
 
@@ -777,6 +781,8 @@ A **navigational surface** is the exception: the execution detail page's Logs ta
 
 **System records** (`isSystem: true` on a pipeline or workflow, `types.ts`) are graded the same way, from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page (`PipelineForm`, `WorkflowBuilder`, `TemplateForm`, `TriggersEditor`), where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu. Every other action the API would refuse stays listed, disabled with its reason from `permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which opens above the control, stays inside the viewport at any width, and Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` are what enforce it.
 
+**System workflow runs** are hidden by the execution list APIs unless the request carries `includeSystem`. `ExecutionsBoard` (global page, workflow-scoped page and asset Executions tab) keeps the **Show system runs** choice in the URL query (`INCLUDE_SYSTEM_PARAM`, read and written with `useSearchParams`, other query keys preserved), sends it only when the user chose, and otherwise ticks the box from the response's `includeSystem` echo: the server alone decides the default (shown for a list scoped to one system workflow). Rows with `isSystem: true` carry the same **System** badge as system records.
+
 **Busy controls and focus.** A control whose own request is in flight is a `BusyButton` or `BusyInput` (`components/BusyControls.tsx`: `aria-disabled` and the busy look, not `disabled`, which drops keyboard focus to the page body), a dialog whose footer sent the request passes `busy`, a control the answer removes hands focus on (`LoadMoreButton`, `useFocusHandOff`), and a dialog returns focus to the control that opened it as it closes (`Dialog` and `Drawer` do this through `useReturnFocus`; a dialog opened from a row's menu passes `returnFocusTo`, naming the row's actions button or, once the action removed the row, a control the list keeps).
 
 ---
@@ -959,7 +965,13 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 
 An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream functionality goes in the add-on lane when it integrates an external solution, depends on an AWS service outside the tier-1 set, or implements a use-case lens for an industry; viewers and pipelines keep their own lanes, and a fork uses the custom lane. The tier-1 services, the exemptions and the toggle rule: root `CLAUDE.md` "Core, add-on and custom". Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
-A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavMainSections` for the main menu, spliced in after "Orchestrate & Automate"; `addonNavAdminSections` for the admin area, spliced in after the core "Admin - ..." sections and before "User"), upstream-owned, hold an add-on's pages, and `src/addons/addonFeatures.ts` (`addonFeaturesEnabled`) names the add-ons' feature switches. An add-on route carries its add-on's switches in `featuresEnabledRestriction`, as its navigation entries do: without them `routeTableFor()` (`routes.tsx`) leaves it out, so its URL reaches the not-found panel, the web-route check is not sent it, and the Create Constraint editor does not offer it (`src/addons/addonFeatureRoutes.test.tsx`). `AppRoutes` runs the web-route check again when the switches change (they can land after the first check) and on Retry, and uses only the latest check's answer: an earlier check that answers or fails after it is ignored, and a successful latest check clears the could-not-check panel. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), with the fork's sections after every core and add-on section, so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+A fork adds pages without editing `routes.tsx` or `layout/navigationRegistry.ts`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavMainSections` for the main menu, placed after "Orchestrate & Automate"; `addonNavAdminSections` for the admin area, placed after the core "Admin - ..." sections), upstream-owned, hold an add-on's pages, and `src/addons/addonFeatures.ts` (`addonFeaturesEnabled`) names the add-ons' feature switches. An add-on route carries its add-on's switches in `featuresEnabledRestriction`, as its navigation entries do (see 7.6): without them `routeTableFor()` (`routes.tsx`) leaves it out, so its URL reaches the not-found panel, the web-route check is not sent it, and the Create Constraint editor does not offer it (`src/addons/addonFeatureRoutes.test.tsx`). `AppRoutes` runs the web-route check again when the switches change (they can land after the first check) and on Retry, and uses only the latest check's answer: an earlier check that answers or fails after it is ignored, and a successful latest check clears the could-not-check panel. The merge order is core, add-on, custom for the route table and, within each placement, for the navigation (`src/addons/addonLanes.test.tsx`), with the fork's entries after every core and add-on entry, so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its navigation entry in `customNavSections` (`src/custom/customNavigation.ts`; side navigation by default, or `placement: "profile"` for the top-bar profile menu, see 7.6), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
+### 7.6 Navigation Placement
+
+Every page link is declared in one registry, `src/layout/navigationRegistry.ts`, which `allNavEntries()` composes from the core entries (`coreNavEntries()`, a function because `window.DISABLE_COGNITO` is read at runtime), the two add-on lists and `customNavSections`. A top-level entry's optional `placement` decides where it renders: `side` (the default) in the side navigation (`layout/Navigation.tsx`), `profile` in the top-bar profile menu (`layout/useProfileMenuItems.ts`, rendered by `App.tsx` before Sign out, which is always last). The side navigation runs core main menu, `addonNavMainSections`, divider, core admin sections, `addonNavAdminSections`, then the fork's entries; the profile menu runs the core profile entries, then the add-on entries of both lists, then the fork's. A profile entry is a `link` or a `section` of links (a menu group headed by its `text`); other shapes are skipped with a console warning. Any entry may carry `featuresEnabledRestriction: string[]`, the deployment's feature switches (`useFeaturesEnabled()`) that must all be on: an entry whose switches are off is dropped and its route is not checked, and both placements check again when the switches arrive after mount (only the latest check's answer is used). `entriesFor(placement, enabledFeatures)` returns one placement in registry order and strips the registry-only fields (`placement`, `requiresApiRoute`, `featuresEnabledRestriction`) before Cloudscape sees them.
+
+Both placements use the same `checkWebRoutesAllowed` check and share its one batched `auth/routes` call. They fail closed: the profile menu lists no page links while the check is loading or after it failed (it retries on the next `hashchange`, as the top bar sits outside the HashRouter and has no Retry), and Sign out always works. The page the user is on is shown as current: Cloudscape's public menu items have no current-page state or `aria-current`, so `toMenuItems(entries, currentPath)` renders the item whose route path (`normaliseHref`, so the query is ignored: `#/auth/api-keys/?mode=user` matches `/auth/api-keys`) equals `currentRoutePath()` as a checked `itemType: "checkbox"` item (check mark, `aria-checked`, still selectable) and every other page as a link. A checkbox item takes no `href`, so `App.tsx` follows an item whose id starts with `PAGE_ITEM_ID_PREFIX` (`page:`) by setting `window.location.hash`. The hook re-renders on every `hashchange`, so the mark follows navigation. It applies to every `placement: "profile"` entry (core, add-on and custom lanes). When the side navigation is empty but profile pages are allowed, it says the pages are in the profile menu instead of "No Access". A link may also set `requiresApiRoute: { method, path }`: it is then shown only when the cached API allowed-routes listing (`isApiRouteAllowed`) allows that route, and hidden while the listing is unknown or failed. It is advisory; the API still enforces every call. Core uses it for Admin - Auth's "API Keys (all users)" (`#/auth/api-keys/?mode=admin`, needs `GET /auth/api-keys`), while the profile menu's "API Key Management" opens `?mode=user`; `pages/auth/ApiKeys.tsx` treats `?mode=` as a preference validated against the modes the listing allowed, so a URL never opens admin mode for a role the listing does not allow. `normaliseHref` drops a `?query` before the route check. A route's `active` href is static, so a page serving several views may override the highlighted side link with `useActiveNavHref(href)` (`layout/activeNavHref.tsx`; `null` keeps the route's value, `""` highlights nothing, cleared on unmount); `ApiKeys.tsx` passes the Admin - Auth href only when its resolved mode is admin.
 
 ### 7.6 List Toolbar: Search, Refresh and Filters
 
@@ -1441,6 +1453,7 @@ When in doubt about patterns, reference these well-structured files:
 | File operations      | `src/services/FileOperationsService.ts`           |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |
 | Synonyms config      | `src/synonyms.tsx`                                |
+| Navigation registry  | `src/layout/navigationRegistry.ts`                |
 | Navigation           | `src/layout/Navigation.tsx`                       |
 | App shell            | `src/App.tsx`                                     |
 | List page and table  | `src/components/list/TableList.tsx`               |
@@ -1492,7 +1505,7 @@ export const myServiceFunction = async ({ databaseId }) => {
 3. Lay out the toolbar and wire the column sorting per section 7.6
 4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
 5. Add lazy import + route in `src/routes.tsx`
-6. Add navigation item in `src/layout/Navigation.tsx`
+6. Add a navigation entry in `src/layout/navigationRegistry.ts` (`placement: "profile"` for a page of the signed-in user)
 
 ### Adding a new API call
 

@@ -340,3 +340,26 @@ class TestCustomConstantsContract:
         # Control: the parser used above returns members for a populated enum of the same shape.
         sample = 'export enum CUSTOM_APP_FEATURES {\n    CUSTOM_WIDGETS = "CUSTOM_WIDGETS",\n}\n'
         assert _enum_members(sample, "CUSTOM_APP_FEATURES") == {"CUSTOM_WIDGETS"}
+
+
+BACKEND_EXECUTION_SERVICE = REPO_ROOT / "backend/backend/handlers/workflows/executionService.py"
+
+
+def _backend_string_constant(path: Path, name: str):
+    """The value of a top-level string constant assigned in a backend module's source."""
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            if any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                return node.value.value
+    return None
+
+
+class TestExecutionListIncludeSystemParam:
+    """The CLI sends the include-system query parameter by the name the list handler reads (#1121). A
+    rename on either side would make the flag a silent no-op: the service would keep hiding system
+    runs while the CLI reported having asked for them."""
+
+    def test_the_cli_parameter_name_matches_the_backend(self):
+        backend_value = _backend_string_constant(BACKEND_EXECUTION_SERVICE, "INCLUDE_SYSTEM_PARAM")
+        assert backend_value is not None, "INCLUDE_SYSTEM_PARAM not found in executionService.py"
+        assert constants.EXECUTION_LIST_INCLUDE_SYSTEM_PARAM == backend_value

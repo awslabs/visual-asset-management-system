@@ -121,6 +121,7 @@ class TestTheExtractorsReportTheNameTheyAreGiven:
         # or with a different one, must not change which importer runs.
         mod = _load_extractor("cad_extractor")
         mod.extract_step_metadata = MagicMock(return_value={"AB_x": {}})
+        mod.step_shape = MagicMock(side_effect=lambda imported: imported)
         step = MagicMock(return_value=MagicMock())
         dxf = MagicMock(side_effect=AssertionError("the DXF importer ran for a .step file"))
 
