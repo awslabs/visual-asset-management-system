@@ -20,6 +20,7 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, log_action, log_actions
+from common.auditSearchText import search_text_parameters
 from common.dynamodb import validate_pagination_info, batch_get_items
 from common.logRedaction import redact_log_text, redact_log_events
 from common.workflows import executionRecords as er
@@ -6537,6 +6538,14 @@ def _route_served_here(event):
     return False
 
 
+def _execution_read_parameters(query_parameters):
+    """The query an execution read asked. The log search term (filterPattern) is text the caller typed,
+    so it is recorded under the redacted searchText key."""
+    parameters = dict(query_parameters or {})
+    term = parameters.pop('filterPattern', None)
+    return search_text_parameters(parameters, {'filterPattern': term})
+
+
 def _log_execution_read(event, action, response):
     """Record a successful execution read (the path ids and query it asked, never what it returned)
     and hand the response back."""
@@ -6549,7 +6558,7 @@ def _log_execution_read(event, action, response):
                asset_id=path_parameters.get('assetId') or held.get('asset_id'),
                workflowId=path_parameters.get('workflowId'),
                executionId=path_parameters.get('executionId'),
-               request_parameters=dict(event.get('queryStringParameters') or {}))
+               request_parameters=_execution_read_parameters(event.get('queryStringParameters')))
     return response
 
 

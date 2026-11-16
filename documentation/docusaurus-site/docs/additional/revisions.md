@@ -154,6 +154,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Search text is not recorded in the audit log** — A search or text-filter read writes the text a user typed as `<redacted>` under `searchText`, with the names of the fields that held it and their total length. (issue #1542)
 -   The API authorizer's audit record for an allowed request names the signed-in user, their roles and MFA state instead of `unknown`; denied requests still show `unknown`. (issue #1437)
 -   **Needle USD viewer error messages are readable** — The error panel shows its whole message at any panel width; the 3D canvas no longer stays above the text and pushes it out of view. (issue #1234)
 -   **Picked and dragged folders land at the same path** — A single folder added on its own on Create Asset becomes the asset's contents, and every other folder keeps its name, including every folder added to an existing asset. (issue #1471)

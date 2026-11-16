@@ -171,6 +171,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend/Audit** Search and text-filter reads no longer record the text a user typed in the audit log: the text is written as `<redacted>` under `searchText`, with the names of the fields that held it and their total length. ([#1542](https://github.com/awslabs/visual-asset-management-system/issues/1542))
 -   **Backend/Audit** The API authorizer's audit record for an allowed request names the signed-in user (and their roles and MFA state) instead of `unknown`; denied requests still show `unknown`. ([#1437](https://github.com/awslabs/visual-asset-management-system/issues/1437))
 -   **Web** The Needle USD viewer's error panel shows its whole message at any panel width; the 3D canvas no longer stays above the text and pushes it out of view. ([#1234](https://github.com/awslabs/visual-asset-management-system/issues/1234))
 -   **Web** A folder lands at the same path whether it is picked or dragged: a single folder added on its own on Create Asset becomes the asset's contents, and every other folder keeps its name, including every folder added to an existing asset. ([#1471](https://github.com/awslabs/visual-asset-management-system/issues/1471))

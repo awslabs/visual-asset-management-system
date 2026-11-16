@@ -15,7 +15,7 @@ Each action record names:
 -   **Which data** -- the database, asset, file, version, pipeline, workflow or execution the action touched.
 -   **How much** -- a size or count when VAMS already knows it: the bytes of a file written directly to the bucket, the number of files a folder operation or export touched, the number of items a list or search returned, and the duration of a pipeline run.
 
-What a write wrote or changed is recorded with its new values, and with the values it replaced when VAMS had already read them. A read, search or download records what was asked, never what was returned. Credentials, tokens, keys and pipeline template bodies are never recorded.
+What a write wrote or changed is recorded with its new values, and with the values it replaced when VAMS had already read them. A read, search or download records what was asked, never what was returned, and the text typed into a search is recorded as `<redacted>`. Credentials, tokens, keys and pipeline template bodies are never recorded.
 
 :::note[Your administrator decides whether reads are recorded]
 Reads are recorded by default. An administrator can turn read records off with the `app.auditLogging.recordReads` setting; writes, denials, failures, downloads and exports are recorded either way. See the [configuration reference](../deployment/configuration-reference.md#audit-logging-appauditlogging).
