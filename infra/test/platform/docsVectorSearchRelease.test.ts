@@ -223,6 +223,8 @@ const ATTRIBUTE_GENAI_KEYS = [
     "genai_generated_at",
     "genai_source_modalities",
     "genai_complexity",
+    // The digest of the asset text the analysis was given, beside the provenance; a seeded run compares it.
+    "genai_context_digest",
     "genai_content_chunk_count",
     // Key reuse's digest record of the file keys the run wrote (keyReuse.FILE_DIGEST_KEY), written to the
     // attribute file beside the provenance rows; the asset's record, genai_asset_written, is metadata.
