@@ -202,7 +202,8 @@ class TestOtherMaterials:
             rgb = _rgb(usd_handler.load(path))
         assert rgb[:6] == [list(usd_handler.NEUTRAL_RGB)] * 6
         assert rgb[6:] == [[255, 0, 0]] * 3
-        why = [line for line in caplog.text.splitlines() if "colour inputs of this MDL module are not read" in line]
+        why = [line for line in caplog.text.splitlines()
+               if "which authors no colour input the preview reads" in line]
         assert len(why) == 2, why  # the first material's line, and the stage summary
         assert "/Custom:" in why[0] and "'MI_WallB_01.mdl'" in why[0]
         assert "2 prims are not coloured by their MDL material: 2 with 'MI_WallB_01.mdl'" in why[1]
@@ -213,3 +214,69 @@ class TestOtherMaterials:
             data = usd_handler.load(path)
         assert _rgb(data) is None
         assert "'OmniPBR.mdl', neither diffuse_texture nor diffuse_color_constant set" in caplog.text
+
+
+@pytest.mark.unit
+@requires_real("pxr", "pyvista", "vtk", "PIL")
+class TestUnrealExportMdl:
+    """Other MDL modules, read by the input names an Unreal Engine export authors (#1559). The Isaac Sim
+    warehouse's MI_*.mdl materials set AlbedoTexture with ColorAlbedo or BaseColor_Tint on the shader."""
+
+    def test_the_albedo_texture_colours_the_mesh(self, tmp_path):
+        _texture(tmp_path / "Textures" / "T_Floor_D.png")
+        path = _stage(tmp_path, _mesh() + _mdl_material(
+            "        asset inputs:AlbedoTexture = @./Textures/T_Floor_D.png@\n"
+            "        float4 inputs:ColorAlbedo = (0, 0, 1, 0)", module="MI_Floor_01.mdl"))
+        assert _rgb(usd_handler.load(path)) == [list(_RED)] * 3
+
+    def test_the_albedo_colour_is_used_without_a_texture(self, tmp_path):
+        path = _stage(tmp_path, _mesh() + _mdl_material(
+            "        float4 inputs:ColorAlbedo = (0, 0, 1, 0)", module="MI_CeilingA_06b.mdl"))
+        assert _rgb(usd_handler.load(path)) == [[0, 0, 255]] * 3
+
+    def test_the_base_colour_tint_multiplies_the_texture(self, tmp_path):
+        _texture(tmp_path / "tex.png", rgb=(200, 200, 200))
+        path = _stage(tmp_path, _mesh() + _mdl_material(
+            "        asset inputs:AlbedoTexture = @tex.png@\n"
+            "        float4 inputs:BaseColor_Tint = (1, 0.5, 0, 1)", module="M_WallBoard_01.mdl"))
+        _assert_close(_rgb(usd_handler.load(path)), [[200, 100, 0]] * 3)
+
+    def test_a_base_colour_texture_is_read_too(self, tmp_path):
+        _texture(tmp_path / "0001.png")
+        path = _stage(tmp_path, _mesh() + _mdl_material(
+            "        asset inputs:BaseColor_Texture = @0001.png@", module="MI_Barcode_0001.mdl"))
+        assert _rgb(usd_handler.load(path)) == [list(_RED)] * 3
+
+    def test_a_texture_outside_the_asset_root_falls_back_to_the_albedo_colour(self, tmp_path):
+        asset = tmp_path / "asset"
+        asset.mkdir()
+        _texture(tmp_path / "outside.png")
+        path = _stage(asset, _mesh() + _mdl_material(
+            "        asset inputs:AlbedoTexture = @../outside.png@\n"
+            "        float4 inputs:ColorAlbedo = (0, 1, 0, 0)", module="MI_WallB_01.mdl"))
+        assert _rgb(usd_handler.load(path, asset_root=str(asset))) == [[0, 255, 0]] * 3
+
+    def test_the_approximation_is_logged_once_per_module_with_a_summary(self, tmp_path, caplog):
+        body = (_mesh("A", "/One") + _mesh("B", "/Two")
+                + _mdl_material("        float4 inputs:ColorAlbedo = (1, 0, 0, 0)", module="MI_FrameA_01.mdl",
+                                name="One")
+                + _mdl_material("        float4 inputs:ColorAlbedo = (0, 0, 1, 0)", module="MI_FrameA_01.mdl",
+                                name="Two"))
+        path = _stage(tmp_path, body)
+        with caplog.at_level("INFO"):
+            rgb = _rgb(usd_handler.load(path))
+        assert rgb == [[255, 0, 0]] * 3 + [[0, 0, 255]] * 3
+        lines = [line for line in caplog.text.splitlines() if "coloured by an approximation" in line
+                 or "an approximation, since" in line]
+        assert len(lines) == 2, lines  # the first material's line, and the stage summary
+        assert "/One:" in lines[0] and "'MI_FrameA_01.mdl' coloured from ColorAlbedo" in lines[0]
+        assert "2 prims are coloured by an approximation of their MDL module's colour: " \
+               "2 with 'MI_FrameA_01.mdl'" in lines[1]
+
+    def test_omni_pbr_inputs_are_not_read_by_name(self, tmp_path):
+        # An OmniPBR shader that happens to author an AlbedoTexture keeps its own family's rule.
+        _texture(tmp_path / "tex.png")
+        path = _stage(tmp_path, _mesh() + _mdl_material(
+            "        asset inputs:AlbedoTexture = @tex.png@\n"
+            "        color3f inputs:diffuse_color_constant = (0, 0, 1)"))
+        assert _rgb(usd_handler.load(path)) == [[0, 0, 255]] * 3

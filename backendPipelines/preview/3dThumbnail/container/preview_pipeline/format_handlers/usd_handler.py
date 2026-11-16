@@ -21,7 +21,9 @@ The composed stage is walked the way a renderer sees it:
 * colour per prim comes from the diffuse texture of the ``UsdUVTexture`` connected to the bound
   ``UsdPreviewSurface``'s ``diffuseColor``, else that input's constant value; when the bound material
   has no ``UsdPreviewSurface``, from its NVIDIA ``OmniPBR`` or ``OmniSurface`` MDL shader (diffuse
-  texture, else base colour constant, times the OmniPBR tint); else ``displayColor`` (indexed
+  texture, else base colour constant, times the OmniPBR tint), or from another MDL module's inputs
+  named like an Unreal Engine export's (``AlbedoTexture``, ``ColorAlbedo``, ``BaseColor_Tint``; an
+  approximation); else ``displayColor`` (indexed
   primvars flattened; constant, uniform, vertex/varying and faceVarying interpolation).
   A prim with no colour in a stage where others have one gets a neutral grey instead of dropping
   every prim's colour.
@@ -55,13 +57,18 @@ _IMPLICIT_RESOLUTION = 24
 # MDL material families whose base colour is read from the shader's inputs, by the lower-case file
 # name prefix of the module (OmniPBR.mdl, OmniPBR_ClearCoat.mdl, OmniSurface.mdl, OmniSurfaceLite.mdl):
 # (diffuse texture input, base colour constant input, tint input or None). The texture replaces the
-# constant; the tint multiplies either. Other MDL modules name and combine their colour inputs in their
-# own way (for example AlbedoTexture blended with ColorAlbedo in Unreal Engine exports, #1559) and are
-# not read.
+# constant; the tint multiplies either.
 _MDL_DIFFUSE_INPUTS = (
     ("omnipbr", "diffuse_texture", "diffuse_color_constant", "diffuse_tint"),
     ("omnisurface", "diffuse_reflection_color_image", "diffuse_reflection_color", None),
 )
+# Any other MDL module, such as the MI_*.mdl materials of an Unreal Engine export (OmniUe4Base), is
+# read by these input names, first match wins (#1559). Such a module combines them in its own
+# expression (MI_CeilingA_06b.mdl: lerp(ColorAlbedo, AlbedoTexture, MaskSelection)), which is not
+# evaluated, so the colour is an approximation: the texture, else the constant, times the tint.
+_MDL_NAMED_TEXTURES = ("AlbedoTexture", "BaseColor_Texture", "BaseColorTexture", "DiffuseTexture")
+_MDL_NAMED_CONSTANTS = ("ColorAlbedo", "BaseColor", "DiffuseColor")
+_MDL_NAMED_TINTS = ("BaseColor_Tint", "AlbedoTint")
 
 
 def can_handle(extension: str) -> bool:
@@ -114,6 +121,11 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
         logger.info(f"{sum(context.mdl_unread.values())} prims are not coloured by their MDL material: "
                     + "; ".join(f"{count} with {reason}" for reason, count in context.mdl_unread.items()
                                 if count))
+    if any(context.mdl_approximated.values()):
+        logger.info(f"{sum(context.mdl_approximated.values())} prims are coloured by an approximation of "
+                    "their MDL module's colour: "
+                    + "; ".join(f"{count} with {module!r}"
+                                for module, count in context.mdl_approximated.items() if count))
 
     # A backdrop (a ground or environment plane) is dropped before the parts are merged, so the
     # prims kept take their colours as a stage holding them alone would.
@@ -137,6 +149,8 @@ class _LoadContext:
         self.mdl_materials = {}
         # Prims drawn without their material's colour, by the reason it could not be read.
         self.mdl_unread = {}
+        # Prims coloured by an approximation of their MDL module's colour, by module (#1559).
+        self.mdl_approximated = {}
         self.points_total = 0
 
 
@@ -574,14 +588,16 @@ def _sample_texture(prim, asset_path, uv_name, topology, context):
 
 
 class _MdlDiffuse:
-    """The base colour inputs of an OmniPBR or OmniSurface MDL shader, as authored. ``unread`` names
-    why a material's colour is not read (its module and the reason), with no inputs set."""
+    """The base colour inputs of an MDL shader, as authored. ``unread`` names why a material's colour
+    is not read (its module and the reason), with no inputs set; ``approximated`` names the module when
+    the inputs were found by name in a module whose own colour expression is not evaluated (#1559)."""
 
-    def __init__(self, texture=None, constant=None, tint=None, unread=None):
+    def __init__(self, texture=None, constant=None, tint=None, unread=None, approximated=None):
         self.texture = texture
         self.constant = constant
         self.tint = tint
         self.unread = unread
+        self.approximated = approximated
 
 
 def _mdl_colours(prim, topology, context, n_points):
@@ -604,6 +620,9 @@ def _mdl_colours(prim, topology, context, n_points):
         return None
     if diffuse.tint is not None:
         colours = colours * diffuse.tint
+    if diffuse.approximated is not None:
+        module = diffuse.approximated
+        context.mdl_approximated[module] = context.mdl_approximated.get(module, 0) + 1
     return _to_rgb8(colours)
 
 
@@ -622,10 +641,11 @@ def _mdl_diffuse(prim, context):
 
 
 def _read_mdl_diffuse(material, context):
-    """The base colour inputs of ``material``'s MDL surface shader when its module is OmniPBR or
-    OmniSurface and the material has no UsdPreviewSurface; else None, or an ``unread`` entry when the
-    colour is there but the preview cannot read it. Each such reason is logged once per MDL module,
-    naming the first material, so a scene with hundreds of materials logs a line per module."""
+    """The base colour inputs of ``material``'s MDL surface shader when the material has no
+    UsdPreviewSurface: by family for OmniPBR and OmniSurface, by input name for any other module;
+    else None, or an ``unread`` entry when the colour is there but the preview cannot read it. Each such
+    reason is logged once per MDL module, naming the first material, so a scene with hundreds of
+    materials logs a line per module."""
     from pxr import Usd, UsdShade
 
     shaders = [UsdShade.Shader(desc) for desc in Usd.PrimRange(material.GetPrim())]
@@ -638,7 +658,7 @@ def _read_mdl_diffuse(material, context):
     module = os.path.basename(_mdl_source_asset(shader))
     family = next((inputs for inputs in _MDL_DIFFUSE_INPUTS if module.lower().startswith(inputs[0])), None)
     if family is None:
-        return _unread(context, material, f"{module!r}, colour inputs of this MDL module are not read")
+        return _read_named_mdl_diffuse(shader, material, module, context)
     _, texture_name, constant_name, tint_name = family
     texture = _input_value(shader, texture_name)
     if not getattr(texture, "path", ""):
@@ -648,6 +668,38 @@ def _read_mdl_diffuse(material, context):
     if texture is None and constant is None:
         return _unread(context, material, f"{module!r}, neither {texture_name} nor {constant_name} set")
     return _MdlDiffuse(texture, constant, tint)
+
+
+def _first_input(shader, names, convert):
+    """(name, converted value) of the first of ``names`` the shader authors with a usable value, or
+    (None, None)."""
+    for name in names:
+        value = convert(_input_value(shader, name))
+        if value is not None:
+            return name, value
+    return None, None
+
+
+def _asset_value(value):
+    """An authored asset path with a non-empty path, or None."""
+    return value if getattr(value, "path", "") else None
+
+
+def _read_named_mdl_diffuse(shader, material, module, context):
+    """The base colour inputs of an MDL module outside ``_MDL_DIFFUSE_INPUTS``, found by the input
+    names an Unreal Engine export authors (``_MDL_NAMED_*``), or an ``unread`` entry when it has none.
+    The module's own colour expression is not evaluated; the first material per module is logged."""
+    texture_name, texture = _first_input(shader, _MDL_NAMED_TEXTURES, _asset_value)
+    constant_name, constant = _first_input(shader, _MDL_NAMED_CONSTANTS, _colour_value)
+    tint_name, tint = _first_input(shader, _MDL_NAMED_TINTS, _colour_value)
+    if texture is None and constant is None:
+        return _unread(context, material, f"{module!r}, which authors no colour input the preview reads")
+    if module not in context.mdl_approximated:
+        used = [name for name in (texture_name, constant_name, tint_name) if name]
+        logger.info(f"    MDL material {material.GetPath()}: {module!r} coloured from {', '.join(used)}; "
+                    f"an approximation, since the module's own colour expression is not evaluated")
+        context.mdl_approximated[module] = 0
+    return _MdlDiffuse(texture, constant, tint, approximated=module)
 
 
 def _unread(context, material, reason):
