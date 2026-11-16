@@ -143,8 +143,9 @@ describe("compliance trigger without OpenSearch", () => {
 
     test("the tables whose REMOVE the trigger maps to assets stream the old image", () => {
         // A REMOVE record carries only the keys unless the stream holds the old image, and the keys of
-        // an asset-link row do not name its assets; for a metadata row the old image also says whether
-        // a workflow execution deleted it.
+        // an asset-link row do not name its assets (the search and Garnet indexers read them from the
+        // old image too); for a metadata row the old image also says whether a workflow execution
+        // deleted it.
         const viewType = (prefix: string) => {
             const tables = synth.where("AWS::DynamoDB::Table", (r) =>
                 r.logicalId.startsWith(prefix)
