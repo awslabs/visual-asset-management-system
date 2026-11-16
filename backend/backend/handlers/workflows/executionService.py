@@ -959,8 +959,8 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
     `filterStartDate`. A caller `filterEndDate` adds the upper bound and is echoed back when set.
     A `warnings` entry means the MAX_EXECUTIONS_INSPECTED cap withheld rows from this page.
     Runs of system workflows are left out unless `includeSystem=true`, or unless the listing is scoped
-    to one system workflow (see _resolve_include_system); the applied value is echoed as
-    `includeSystem`.
+    to one system workflow or to the reindexer's runs (see _resolve_include_system); the applied value
+    is echoed as `includeSystem`.
     """
     include_system_valid, include_system_explicit = _parse_include_system(query_params)
     if not include_system_valid:
@@ -1452,7 +1452,8 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                                        or extra_filters["workflowDatabaseId"])
         include_system = _resolve_include_system(
             include_system_explicit, casbin_enforcer,
-            scoped_workflow_database_id or '', scoped_workflow_id or '')
+            scoped_workflow_database_id or '', scoped_workflow_id or '',
+            trigger_type=extra_filters["triggerType"], group_id=extra_filters["groupId"])
         if not include_system:
             extra_filters["excludeSystem"] = True
         # The walk excluded on the STORED status; a row this request's reconcile moved into an
@@ -5725,7 +5726,8 @@ def _parse_include_system(query_params):
     return False, None
 
 
-def _resolve_include_system(explicit, casbin_enforcer, workflow_database_id, workflow_id):
+def _resolve_include_system(explicit, casbin_enforcer, workflow_database_id, workflow_id,
+                            trigger_type="", group_id=""):
     """Whether this listing returns system runs.
 
     An explicit includeSystem wins. Otherwise system runs are hidden, except when the listing is scoped
@@ -5735,10 +5737,19 @@ def _resolve_include_system(explicit, casbin_enforcer, workflow_database_id, wor
     per-row workflow GET anyway), and the definition read is the one the per-row authorization memoizes
     for the same enforcer. Any failure falls back to hiding system runs, which never hides a user run.
 
+    For the same reason a listing narrowed to the System-Reindex trigger (``trigger_type``, in its stored
+    spelling) or to a reindex execution group (``group_id`` starting with REINDEX_EXECUTION_GROUP_PREFIX)
+    shows system runs by default: only the vector-search reindexer starts such runs, each of the SYSTEM
+    GenAI metadata workflow, so with them hidden the listing could only ever be empty.
+
     Presentation only: this decides which rows a page includes, never whether a caller may see a row —
     every row still passes the same per-row visibility check."""
     if explicit is not None:
         return explicit
+    if trigger_type == TRIGGER_TYPE_TO_STORED["systemReindex"]:
+        return True
+    if (group_id or "").startswith(er.REINDEX_EXECUTION_GROUP_PREFIX):
+        return True
     if not workflow_database_id or not workflow_id or casbin_enforcer is None:
         return False
     try:
@@ -5970,6 +5981,7 @@ def get_global_executions(event, query_params):
     _arm_authz_entity_budget()
     page_enforcer = CasbinEnforcer(claims_and_roles) if claims_and_roles.get("tokens") else None
     # System runs are hidden unless asked for, or unless the listing is scoped to one system workflow
+    # or to the reindexer's runs
     # (_resolve_include_system). Hidden server-side as one more FilterExpression term on the walked
     # index — `attribute_not_exists(isSystem) OR isSystem <> true`, so a legacy row with no flag and any
     # row whose flag is not exactly true stay listed — and again by the Python safety net. A row the
@@ -5979,7 +5991,8 @@ def get_global_executions(event, query_params):
     # continuation semantics and the token format are unchanged.
     include_system = _resolve_include_system(
         include_system_explicit, page_enforcer,
-        filters["workflowDatabaseId"], filters["workflowId"])
+        filters["workflowDatabaseId"], filters["workflowId"],
+        trigger_type=filters["triggerType"], group_id=filters["groupId"])
     if not include_system:
         filters["excludeSystem"] = True
         system_cond = Attr("isSystem").not_exists() | Attr("isSystem").ne(True)

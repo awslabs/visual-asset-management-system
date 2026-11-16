@@ -43,6 +43,11 @@ METADATA_SCHEMA_VERSION_GROUPED = 2
 # Constant PK for the by-date global-list GSI (newest-first query, not a table scan).
 ALL_EXECUTIONS_LIST_PARTITION = "execution"
 
+# Prefix of the execution group the vector-search reindexer gives its launches of the SYSTEM GenAI metadata
+# workflow (osVectorSearch.systemWorkflowLauncher: vec-<reindexRunId>-<chunk>). Every member is a system run,
+# so the execution lists show a listing narrowed to such a group with its system runs by default.
+REINDEX_EXECUTION_GROUP_PREFIX = "vec-"
+
 # Payload-safety budget for the /details/results endpoint, which returns the FULL concatenated
 # result text of a run, counted in bytes AS SENT (after JSON escaping, where one CJK character costs
 # 7 bytes and a quote 4), not raw UTF-8. The AWS Lambda-proxy synchronous response limit is 6 MB; 5 MiB
@@ -998,7 +1003,7 @@ def is_skip_record(main_item) -> bool:
 
 def build_skip_record_update(execution_id, workflow_database_id, workflow_id, workflow_arn,
                              skipped_at, skip_scope, skip_reason, blocking_execution_id,
-                             first_skipped_at=None):
+                             first_skipped_at=None, is_system=False):
     """The UpdateItem arguments (minus the table) that create or extend a skip record's main row.
 
     One atomic call: every attribute a launched run's main row carries is SET only if absent
@@ -1010,13 +1015,17 @@ def build_skip_record_update(execution_id, workflow_database_id, workflow_id, wo
 
     first_skipped_at is the start and stop date the record keeps (the date its configuration and input
     rows were first written with, so all of the record's rows agree); skipped_at, the time of THIS
-    refusal, is lastSkippedDate. It defaults to skipped_at."""
+    refusal, is lastSkippedDate. It defaults to skipped_at.
+
+    is_system is the refused workflow's stored isSystem flag, recorded as a launched run's main row
+    records it (build_workflow_execution_record), so the lists hide a system workflow's skipped launches
+    with its runs. Like the record's identity, the first skip sets it."""
     first_skipped_at = first_skipped_at or skipped_at
     base = build_workflow_execution_record(
         execution_id=execution_id, workflow_database_id=workflow_database_id, workflow_id=workflow_id,
         workflow_arn=workflow_arn or "", workflow_execution_arn="", execution_start_date=first_skipped_at,
         execution_status=EXECUTION_STATUS_SKIPPED, triggered_by_user_id="SYSTEM_USER",
-        trigger_type="File-Upload", execution_log_group_arn="")
+        trigger_type="File-Upload", execution_log_group_arn="", is_system=is_system)
     # Terminal from the first write: the stop date is the first skip, like the start date.
     base["executionStopDate"] = first_skipped_at
     base["skipScope"] = skip_scope or ""

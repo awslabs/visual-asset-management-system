@@ -54,7 +54,8 @@ const SEARCH_LABEL = "Search";
 /**
  * URL query parameter (inside the HashRouter location) holding the "Show system runs" choice, and the
  * list query parameter it is sent as. Absent means "the server's default": system workflow runs are
- * hidden, except on a list scoped to one system workflow, where the server shows them and says so in
+ * hidden, except on a list scoped to one system workflow or to the reindexer's runs (the System-Reindex
+ * trigger, a vec- execution group), where the server shows them and says so in
  * the response's `includeSystem`.
  */
 export const INCLUDE_SYSTEM_PARAM = "includeSystem";

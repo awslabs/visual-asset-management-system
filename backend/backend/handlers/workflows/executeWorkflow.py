@@ -2723,7 +2723,10 @@ def _record_skipped_launch(workflow, conflict, selected_inputs, asset_records,
             execution_id=skip_id, workflow_database_id=workflow["databaseId"],
             workflow_id=workflow["workflowId"], workflow_arn=workflow.get("workflow_arn", ""),
             skipped_at=skipped_at, skip_scope=conflict.scope, skip_reason=conflict.message,
-            blocking_execution_id=holder, first_skipped_at=first_skip)
+            blocking_execution_id=holder, first_skipped_at=first_skip,
+            # A system workflow's skipped launch is hidden with its runs (the workflow row's isSystem,
+            # read strongly consistent at launch, as _persist_execution_records stamps a run).
+            is_system=workflow.get("isSystem") is True)
         row = dynamodb.Table(workflow_execution_database_v2).update_item(**update).get(
             "Attributes", {}) or {}
         logger.info(f"Recorded skipped trigger launch on skip record {skip_id} (refusal "

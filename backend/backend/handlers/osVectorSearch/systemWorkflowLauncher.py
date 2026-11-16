@@ -48,7 +48,7 @@ from common.resourceNames import ResourceKeys, get_table_name
 from common.workflows import executeWorkflowInvoke as ewi
 from common.workflows import executionLocks as el
 from common.workflows import triggerMatching as tm
-from common.workflows.executionRecords import workflow_composite_key
+from common.workflows.executionRecords import REINDEX_EXECUTION_GROUP_PREFIX, workflow_composite_key
 from customLogging.auditLogging import audited_handler
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success
@@ -151,7 +151,7 @@ def build_launch_body(message: Dict[str, Any]) -> Dict[str, Any]:
         _system_upload_trigger_row(), message["databaseId"], message["assetId"],
         message["relativeFileKey"], version_id=message.get("versionId") or "")
     body["triggerType"] = TRIGGER_TYPE_SYSTEM_REINDEX
-    body["executionGroupId"] = f"vec-{message['reindexRunId']}-{message['chunk']}"
+    body["executionGroupId"] = f"{REINDEX_EXECUTION_GROUP_PREFIX}{message['reindexRunId']}-{message['chunk']}"
     return body
 
 
