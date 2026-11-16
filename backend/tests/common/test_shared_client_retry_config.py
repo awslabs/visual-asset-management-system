@@ -107,6 +107,9 @@ DELIBERATE_DEPARTURES = {
     # The output step's file completion and metadata service RequestResponse invokes are not safe
     # to repeat: a botocore retry after its read timeout sent a running completion again (#1205).
     ("handlers/workflows/sfn/processWorkflowExecutionOutput.py", "invoke_config"),
+    # The zip service's launch of the zipArchive workflow is not idempotent: a retry would start a
+    # second run the job row never records (#1125 D8). Its abort and details read share the client.
+    ("handlers/assets/zipDownloadService.py", "invoke_config"),
     # One apiKeyService Invoke per EDH session key: a retried create would mint a second key that no
     # session row names, so the single attempt is bounded by its own timeouts instead.
     ("handlers/addon/edh/common/edhSessionBootstrap.py", "cross_call_config"),

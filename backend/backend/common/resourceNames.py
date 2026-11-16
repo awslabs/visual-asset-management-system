@@ -83,6 +83,8 @@ class ResourceKeys:
     WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE = ResourceParamKey("dynamoTables/workflowExecutionLocksStorage", ("WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME",))
     # Large object copy engine: one row per copy job, plus one per workflow ingestion batch
     LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE = ResourceParamKey("dynamoTables/largeObjectCopyJobsStorage", ("LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE_NAME",))
+    # Download as Zip jobs: one row per prepared download, owned by its requester (TTL expiresAt)
+    ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE = ResourceParamKey("dynamoTables/zipDownloadRequestsStorage", ("ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE_NAME",))
     # Compliance tables
     COMPLIANCE_SCHEMA_STORAGE_TABLE = ResourceParamKey("dynamoTables/complianceSchemaStorage", ("COMPLIANCE_SCHEMA_STORAGE_TABLE_NAME",))
     COMPLIANCE_ASSET_STATE_STORAGE_TABLE = ResourceParamKey("dynamoTables/complianceAssetStateStorage", ("COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME",))

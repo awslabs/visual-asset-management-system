@@ -6022,7 +6022,7 @@ def _resolve_include_system(explicit, casbin_enforcer, workflow_database_id, wor
 def _global_list_matches_filters(main_item, filters):
     """Apply the optional global-list query filters to a main row. Supported filters (all AND-ed):
     workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId, excludeStatus
-    (a list of statuses a row must not carry; absent or empty excludes nothing), plus excludeSystem
+    (a list of statuses a row must not carry; absent or empty excludes nothing), and excludeSystem
     (set when system runs are hidden: drops a row whose isSystem is exactly True)."""
     if filters.get("excludeSystem") and er.execution_row_is_system(main_item):
         return False

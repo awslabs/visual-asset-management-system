@@ -42,6 +42,7 @@ from backend.backend.common.apiRoutes import (  # noqa: E402
     API_ARCHIVE_FILE,
     API_DATABASE_METADATA,
     API_UNARCHIVE_ASSET,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST,
     DELETE,
     POST,
     PUT,
@@ -240,10 +241,12 @@ class TestDatabaseUserTemplate:
             if route.path.startswith("/database/{databaseId}") and DELETE in route.methods
             and user.enforce(_api(_concrete_path(route.path)), DELETE)
         )
+        # The zip download DELETE cancels or deletes the caller's own job; it removes no asset data.
         assert reached == sorted([
             "/database/{databaseId}/assets/{assetId}/archiveAsset",
             API_ARCHIVE_FILE.path,
             API_DATABASE_METADATA.path,
+            API_ZIP_DOWNLOADS_ASSET_REQUEST.path,
         ])
 
 

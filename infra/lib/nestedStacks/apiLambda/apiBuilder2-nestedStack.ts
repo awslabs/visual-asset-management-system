@@ -32,6 +32,10 @@ import {
     grantLargeObjectCopyCoordination,
     grantLargeObjectCopyProgressRead,
     grantLargeObjectCopyViaEngine,
+    buildZipDownloadServiceFunction,
+    buildZipDownloadSweep,
+    grantZipDownloadLaunch,
+    ZIP_DOWNLOAD_ROUTES,
 } from "../../lambdaBuilder/assetFunctions";
 import {
     buildDeadlineCloudJobCallbackFunction,
@@ -421,6 +425,32 @@ export class ApiBuilder2NestedStack extends NestedStack {
             subnets
         );
 
+        // Download as Zip: one function, the zip download service, serves the seven routes and the
+        // delayed sweep's passes. It deploys whatever app.pipelines.useZipDownloads.enabled says, so turning the
+        // feature off keeps existing jobs readable and the routes answering 404. Only with it on is
+        // it given the sweep state machine and granted its launch and abort cross-calls (below, once
+        // executeWorkflowV2 exists). It registers no terminal callback: a job follows its run by the
+        // stored execution id and the service's read-time reconcile.
+        const zipDownloadServiceFunction = buildZipDownloadServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        for (const route of ZIP_DOWNLOAD_ROUTES) {
+            attachFunctionToApi(this, zipDownloadServiceFunction, {
+                routePath: route.routePath,
+                method: route.method,
+                registry: registry,
+            });
+        }
+        if (config.app.pipelines.useZipDownloads.enabled) {
+            // The delayed sweep of a stopped job's archive upload (#1125 D16).
+            buildZipDownloadSweep(this, zipDownloadServiceFunction, storageResources, config);
+        }
+
         // A run that ends outside VAMS (stopped from the console or API, timed out or failed at the
         // state machine level) is reconciled when Step Functions reports it, through the execution
         // service's read-path reconcile, so its execution row does not wait for a read. A feature that
@@ -640,6 +670,15 @@ export class ApiBuilder2NestedStack extends NestedStack {
                 resources: [executeWorkflowV2.functionArn],
             })
         );
+
+        if (config.app.pipelines.useZipDownloads.enabled) {
+            grantZipDownloadLaunch(
+                zipDownloadServiceFunction,
+                executeWorkflowV2,
+                executionServiceFunction,
+                executionDetailsFunction
+            );
+        }
 
         // Keep workflow state machines current with their pipelines: a pipeline save schedules an
         // asynchronous redeploy of every referencing workflow, and a launch redeploys a stale workflow

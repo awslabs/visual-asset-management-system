@@ -18,6 +18,7 @@ import * as events from "aws-cdk-lib/aws-events";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
+import * as apigateway from "aws-cdk-lib/aws-apigatewayv2";
 import { NagSuppressions } from "cdk-nag";
 import {
     generateUniqueNameHash,
@@ -36,6 +37,9 @@ import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import {
     LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX,
+    PREPARED_DOWNLOADS_PREFIX,
+    ZIP_DOWNLOAD_ASSET_INDEX,
+    ZIP_DOWNLOAD_USER_ASSET_INDEX,
     storageResources,
 } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import * as kms from "aws-cdk-lib/aws-kms";
@@ -1733,5 +1737,398 @@ function buildCopyStateMachine(
         evaluationPeriods: 1,
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
+    return stateMachine;
+}
+
+// ---------------------------------------------------------------------------
+// Download as Zip (app.pipelines.useZipDownloads)
+// ---------------------------------------------------------------------------
+
+/**
+ * Download as Zip (app.pipelines.useZipDownloads): one function, the zip download service
+ * (backend handlers/assets/zipDownloadService.py), serves the six `/download/zip` routes and the
+ * passes of the delayed sweep. Its handler dispatches on the event envelope: an API Gateway event (it
+ * always has `requestContext`) takes the API path with the authorizer and Casbin checks; a sweep pass
+ * is a direct invoke no route can reach. No terminal callback reaches it: a job follows its
+ * zipArchive run by the stored execution id, and the service's read-time reconcile finalizes it
+ * from the run's execution row on the next read.
+ *
+ * The function deploys whatever `app.pipelines.useZipDownloads.enabled` says, so a deployment that turns the
+ * feature off keeps its job table readable and its routes answering (404 "not enabled"). With the
+ * feature on, `grantZipDownloadLaunch` adds the two cross-calls the service makes (launch and abort),
+ * and `buildZipDownloadSweep` adds the sweep state machine that invokes it.
+ */
+
+/** The zipArchive system workflow every zip download job runs (database GLOBAL). */
+export const ZIP_ARCHIVE_WORKFLOW_DATABASE_ID = "GLOBAL";
+export const ZIP_ARCHIVE_WORKFLOW_ID = "utility-zip-archive";
+
+/** Lifetime of the presigned URL the zip download service returns for a finished archive. */
+export const ZIP_DOWNLOAD_PRESIGNED_URL_TIMEOUT_SECONDS = 900;
+
+/**
+ * The seven routes the zip download service serves (backend common/apiRoutes.py ZIP_DOWNLOAD_ROUTES;
+ * test/api/apiRouteBackendCdkParity.test.ts holds the two lists equal).
+ */
+export const ZIP_DOWNLOAD_ROUTES: ReadonlyArray<{
+    routePath: string;
+    method: apigateway.HttpMethod;
+}> = [
+    {
+        routePath: "/database/{databaseId}/assets/{assetId}/download/zip",
+        method: apigateway.HttpMethod.POST,
+    },
+    {
+        routePath: "/database/{databaseId}/assets/{assetId}/download/zip",
+        method: apigateway.HttpMethod.GET,
+    },
+    { routePath: "/download/zip", method: apigateway.HttpMethod.GET },
+    {
+        routePath: "/database/{databaseId}/assets/{assetId}/download/zip-all-users",
+        method: apigateway.HttpMethod.GET,
+    },
+    {
+        routePath: "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}",
+        method: apigateway.HttpMethod.GET,
+    },
+    {
+        routePath: "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}",
+        method: apigateway.HttpMethod.DELETE,
+    },
+    {
+        routePath: "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url",
+        method: apigateway.HttpMethod.POST,
+    },
+];
+
+/** The zip download service's environment from app.pipelines.useZipDownloads (names read by zipDownloadService.py). */
+export function zipDownloadServiceEnvironment(config: Config.Config): Record<string, string> {
+    const zip = config.app.pipelines.useZipDownloads;
+    return {
+        ZIPDOWNLOADS_ENABLED: zip.enabled ? "true" : "false",
+        ZIP_DOWNLOAD_MAX_FILES_PER_REQUEST: zip.maxFilesPerRequest.toString(),
+        ZIP_DOWNLOAD_MAX_TOTAL_BYTES_PER_REQUEST: zip.maxTotalBytesPerRequest.toString(),
+        ZIP_DOWNLOAD_MAX_ACTIVE_PER_USER: zip.maxActiveRequestsPerUser.toString(),
+        ZIP_ARCHIVE_WORKFLOW_DATABASE_ID: ZIP_ARCHIVE_WORKFLOW_DATABASE_ID,
+        ZIP_ARCHIVE_WORKFLOW_ID: ZIP_ARCHIVE_WORKFLOW_ID,
+        // 15 minutes, or the deployment's presigned URL lifetime when that is shorter.
+        PRESIGNED_URL_TIMEOUT_SECONDS: Math.min(
+            ZIP_DOWNLOAD_PRESIGNED_URL_TIMEOUT_SECONDS,
+            config.app.authProvider.presignedUrlTimeoutSeconds
+        ).toString(),
+    };
+}
+
+/** `<auxiliary bucket ARN>/vams.preparedDownloads/*`: every object a zip download job owns. */
+function preparedDownloadsObjectArn(storageResources: storageResources): string {
+    return `${storageResources.s3.assetAuxiliaryBucket.bucketArn}/${PREPARED_DOWNLOADS_PREFIX}*`;
+}
+
+function inVpc(config: Config.Config): boolean {
+    return config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
+}
+
+/**
+ * The zip download service: create, list (asset and global), get, cancel/delete and presigned URL,
+ * one function for all seven routes, plus the delayed sweep's passes (abort a stopped job's recorded
+ * uploads). Its own job table and its auxiliary-bucket prefix are granted as exact statements (the
+ * actions the handler calls, the read-time reconcile's and the sweep's included), the asset data read the way downloadAsset
+ * reads it, and the execution row read by GetItem only (read-time reconcile).
+ */
+export function buildZipDownloadServiceFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "zipDownloadService";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc: inVpc(config) ? vpc : undefined,
+        vpcSubnets: inVpc(config) ? { subnets: subnets } : undefined,
+        environment: {
+            ...zipDownloadServiceEnvironment(config),
+            // Compliance's quarantine block covers zip downloads like every other download route
+            // (common/compliance/quarantineGuard.py); the asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
+        },
+    });
+
+    if (config.app.compliance.quarantineBlocksDownload) {
+        // check_quarantine_block reads one asset-state row by key, at create and at URL time.
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["dynamodb:GetItem"],
+                resources: [storageResources.dynamo.complianceAssetStateStorageTable.tableArn],
+            })
+        );
+    }
+
+    const zipTable = storageResources.dynamo.zipDownloadRequestsStorageTable;
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+                "dynamodb:DeleteItem",
+                "dynamodb:Query",
+            ],
+            resources: [
+                zipTable.tableArn,
+                `${zipTable.tableArn}/index/${ZIP_DOWNLOAD_USER_ASSET_INDEX}`,
+                `${zipTable.tableArn}/index/${ZIP_DOWNLOAD_ASSET_INDEX}`,
+            ],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem"],
+            resources: [storageResources.dynamo.workflowExecutionsStorageTableV2.tableArn],
+        })
+    );
+    // The asset, its bucket record, and (for an asset-version pin) its version snapshot, as the
+    // download function reads them.
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+
+    // The job's own objects: manifest write, archive head and presign, cancel/delete cleanup, and the
+    // read-time reconcile's working-object cleanup (common/zipDownloads.delete_working_objects,
+    // confined by the handler to one job's keys).
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                "s3:PutObject",
+                "s3:GetObject",
+                "s3:DeleteObject",
+                "s3:DeleteObjectVersion",
+                "s3:AbortMultipartUpload",
+                // ListParts confirms an aborted upload is gone (#1125 D16, abort_until_gone).
+                "s3:ListMultipartUploadParts",
+            ],
+            resources: [preparedDownloadsObjectArn(storageResources)],
+        })
+    );
+    // s3:ListBucket also makes S3 answer a HeadObject on a missing archive key with 404, not 403: the
+    // read-time reconcile and the delayed sweep decide by the landed archive (#1125 D21).
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["s3:ListBucket", "s3:ListBucketVersions"],
+            resources: [storageResources.s3.assetAuxiliaryBucket.bucketArn],
+            conditions: { StringLike: { "s3:prefix": [`${PREPARED_DOWNLOADS_PREFIX}*`] } },
+        })
+    );
+    // ListMultipartUploads takes no s3:prefix condition key; the handler confines every listing to
+    // one job's prefix.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["s3:ListBucketMultipartUploads"],
+            resources: [storageResources.s3.assetAuxiliaryBucket.bucketArn],
+        })
+    );
+    // Selection checks (HeadObject, ListObjectVersions) on the asset buckets.
+    grantReadPermissionsToAllAssetBuckets(fun);
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    // Scoped to this function (not the stack): applied to the stack, it would restamp the suppression
+    // metadata on every construct the stack already holds, changing their templates.
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+
+    return fun;
+}
+
+/**
+ * With app.pipelines.useZipDownloads on: the service launches the zipArchive workflow through the execute function
+ * and aborts a cancelled job's run through the execution service, both as SYSTEM_USER cross-calls.
+ * The run check of an idle job (a details read that records a run ended outside VAMS whose status
+ * change event was lost; zipDownloadService._check_run_ended) goes to the execution details
+ * function, which serves the details route since the execution routes run on four functions
+ * (#1255). Each grant names the exact unqualified function ARN (no `:*`), like the re-run grant on
+ * the execution service. Not called with the feature off, so neither name nor grant is deployed then.
+ */
+export function grantZipDownloadLaunch(
+    zipDownloadService: lambda.Function,
+    executeWorkflowV2: lambda.IFunction,
+    executionService: lambda.IFunction,
+    executionDetails: lambda.IFunction
+): void {
+    zipDownloadService.addEnvironment(
+        "EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME",
+        executeWorkflowV2.functionName
+    );
+    zipDownloadService.addEnvironment(
+        "EXECUTION_SERVICE_FUNCTION_NAME",
+        executionService.functionName
+    );
+    zipDownloadService.addEnvironment(
+        "EXECUTION_DETAILS_FUNCTION_NAME",
+        executionDetails.functionName
+    );
+    zipDownloadService.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["lambda:InvokeFunction"],
+            resources: [
+                executeWorkflowV2.functionArn,
+                executionService.functionArn,
+                executionDetails.functionArn,
+            ],
+        })
+    );
+}
+
+/**
+ * Waits of the zip download delayed sweep (#1125 D16, the #1123 D5 rule): the first pass about 5
+ * minutes after the stop, the last one 10 minutes later (15 minutes after the stop). Unlike the copy
+ * engine's sweep, no task timeout sets this bound: the container is the only writer of parts, uploads
+ * no part after it sees the stop (stopRequestedAt, or AWS Batch's SIGTERM, with SIGKILL 30 s later)
+ * and aborts again after its last part. The passes cover what S3 lists again after those aborts (2 to
+ * 8 minutes later on demo21). The service's sweep branch only aborts, so its 15-minute function
+ * timeout does not bound it either. Same values as backend common/zipDownloads.py
+ * SWEEP_FIRST_WAIT_SECONDS / SWEEP_SECOND_WAIT_SECONDS.
+ */
+export const ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS = { first: 300, second: 600 };
+
+/** Fixed name of the zip download sweep state machine (<= 80 characters). */
+export function zipDownloadSweepStateMachineName(config: Config.Config): string {
+    return `ZipDownloadSweep-${config.env.coreStackName}`.substring(0, 80);
+}
+
+/** Its ARN, built from the fixed name (the functions it invokes cannot reference it: a cycle). */
+export function zipDownloadSweepStateMachineArn(config: Config.Config): string {
+    return Service.IAMArn(zipDownloadSweepStateMachineName(config)).statemachine;
+}
+
+/** Retrier of a sweep pass (a Lambda fault or a failed S3 check), then the pass is given up. */
+export const ZIP_DOWNLOAD_SWEEP_RETRY = {
+    intervalSeconds: 10,
+    backoffRate: 2,
+    maxAttempts: 5,
+    maxDelaySeconds: 120,
+};
+
+/**
+ * With app.pipelines.useZipDownloads on: the delayed sweep of a stopped zip download job (#1125 D16). An abort's
+ * immediate answer is not final (on demo21 an upload whose abort had answered, and whose ListParts
+ * then answered NoSuchUpload, was listed again minutes later with a part accepted before the stop),
+ * so every stopper also starts this Standard state machine, once per job (backend
+ * common/zipDownloads.schedule_delayed_sweep): Wait, a sweep pass, Wait, a last pass. Each pass is the
+ * zip download service's `sweep` action (common/zipDownloads.sweep_recorded_uploads), which aborts only
+ * the archive uploads the job row recorded at its exact archive key, unless its archive landed. A
+ * failed first pass still runs the second. Bounded history: two waits and two tasks of at most
+ * 5 + 3 x 5 events each.
+ *
+ * The service gets the ARN (built from the fixed name) and StartExecution on it; the state machine
+ * invokes the service with the sweep payload. Not built with the feature off.
+ */
+export function buildZipDownloadSweep(
+    scope: Construct,
+    zipDownloadService: lambda.Function,
+    storageResources: storageResources,
+    config: Config.Config
+): sfn.StateMachine {
+    const pass = (id: string, final: boolean) => {
+        const task = new tasks.LambdaInvoke(scope, id, {
+            lambdaFunction: zipDownloadService,
+            payload: sfn.TaskInput.fromObject({
+                action: "sweep",
+                zipSweep: sfn.JsonPath.objectAt("$.zipSweep"),
+                final,
+            }),
+            resultPath: sfn.JsonPath.DISCARD,
+            retryOnServiceExceptions: false,
+            taskTimeout: sfn.Timeout.duration(Duration.minutes(5)),
+        });
+        task.addRetry({
+            errors: [sfn.Errors.ALL],
+            interval: Duration.seconds(ZIP_DOWNLOAD_SWEEP_RETRY.intervalSeconds),
+            backoffRate: ZIP_DOWNLOAD_SWEEP_RETRY.backoffRate,
+            maxAttempts: ZIP_DOWNLOAD_SWEEP_RETRY.maxAttempts,
+            maxDelay: Duration.seconds(ZIP_DOWNLOAD_SWEEP_RETRY.maxDelaySeconds),
+            jitterStrategy: sfn.JitterType.FULL,
+        });
+        return task;
+    };
+    const firstWait = new sfn.Wait(scope, "ZipDownloadSweepFirstWait", {
+        time: sfn.WaitTime.duration(Duration.seconds(ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS.first)),
+    });
+    const first = pass("ZipDownloadSweepFirst", false);
+    const secondWait = new sfn.Wait(scope, "ZipDownloadSweepSecondWait", {
+        time: sfn.WaitTime.duration(Duration.seconds(ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS.second)),
+    });
+    const final = pass("ZipDownloadSweepFinal", true);
+    first.addCatch(secondWait, { errors: [sfn.Errors.ALL], resultPath: "$.sweepError" });
+    const swept = new sfn.Succeed(scope, "ZipDownloadSwept", {
+        comment: "The delayed sweep of a stopped zip download ended.",
+    });
+
+    const logGroup = new logs.LogGroup(scope, "ZipDownloadSweepStateMachineLogGroup", {
+        logGroupName:
+            "/aws/vendedlogs/VAMSStateMachine-ZipDownloadSweep" +
+            generateUniqueNameHash(
+                config.env.coreStackName,
+                config.env.account,
+                "ZipDownloadSweepStateMachineLogGroup",
+                10
+            ),
+        encryptionKey: storageResources.encryption.kmsKey,
+        retention: logs.RetentionDays.ONE_YEAR,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    const stateMachine = new sfn.StateMachine(scope, "ZipDownloadSweepStateMachine", {
+        stateMachineName: zipDownloadSweepStateMachineName(config),
+        stateMachineType: sfn.StateMachineType.STANDARD,
+        definitionBody: sfn.DefinitionBody.fromChainable(
+            firstWait.next(first).next(secondWait).next(final).next(swept)
+        ),
+        timeout: Duration.hours(2),
+        logs: {
+            destination: logGroup,
+            // The input carries ids and an object key only; level ALL satisfies AwsSolutions-SF1.
+            includeExecutionData: false,
+            level: sfn.LogLevel.ALL,
+        },
+        tracingEnabled: true,
+    });
+    NagSuppressions.addResourceSuppressions(
+        stateMachine,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Invokes the zip download service function (its sweep action) and its versions; writes its own log group.",
+            },
+        ],
+        true
+    );
+
+    const arn = zipDownloadSweepStateMachineArn(config);
+    zipDownloadService.addEnvironment("ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN", arn);
+    zipDownloadService.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["states:StartExecution"],
+            resources: [arn],
+        })
+    );
     return stateMachine;
 }
