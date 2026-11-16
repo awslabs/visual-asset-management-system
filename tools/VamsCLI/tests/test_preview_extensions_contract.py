@@ -28,7 +28,13 @@ def _backend_preview_extensions():
 class TestPreviewExtensionList:
     def test_cli_list_holds_the_displayable_image_types(self):
         assert set(ALLOWED_PREVIEW_EXTENSIONS) == {
-            ".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp", ".bmp",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".svg",
+            ".gif",
+            ".webp",
+            ".bmp",
         }
 
     def test_cli_list_excludes_tga_and_tiff(self):
