@@ -127,8 +127,8 @@ def test_the_execution_listings_name_the_system_reindex_trigger_type():
     request values and that stored value, and says a system trigger value or a group shows system runs;
     list_workflow_executions points to it rather than repeating them (Mandatory Rule 11)."""
     text = " ".join(_docstring_of("list_executions").split())
-    assert "'manual', 'fileUpload', or a system trigger value such as 'System-Reindex'" in text
-    assert "trigger_type is a system trigger value or group_id is set" in text
+    assert "'manual', 'fileUpload', or a system value such as 'System-Reindex'" in text
+    assert "or a system trigger_type or group_id is given" in text
     assert "systemReindex" not in text, "the earlier request value is refused by the API"
     per_asset = " ".join(_docstring_of("list_workflow_executions").split())
     assert "Filters, SKIPPED rows and system runs: as on list_executions" in per_asset
