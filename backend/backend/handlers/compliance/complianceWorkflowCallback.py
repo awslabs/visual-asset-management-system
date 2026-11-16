@@ -190,6 +190,37 @@ def process_completed_execution(execution_id: str, execution_status: str,
         return {"statusCode": 200, "body": "Not a compliance execution"}
     evaluation, rule_name = resolved
 
+    # A SUCCEEDED of the same execution that already reported FAILED replaces that outcome (#1504:
+    # overlapping end-state attempts, #1271), on a pending or finalized evaluation alike. A FAILED
+    # never replaces a SUCCEEDED, and another execution's announcement never reaches this rule.
+    if execution_status == "SUCCEEDED" and store.superseded_failure(
+            evaluation, rule_name, execution_id):
+        removed = store.asset_removal_reason(evaluation["databaseId"], evaluation["assetId"])
+        if not removed:
+            pending_rules = engine.pipeline_rules_from_json(
+                evaluation.get("pipelineRulesPending", "[]"))
+            rule = pending_rules.get(rule_name)
+            compliance_output = read_compliance_output(
+                execution_id, rule.pipelineRef.pipelineId if rule else "")
+            outcome = store.supersede_pipeline_rule_outcome(
+                evaluation, rule_name, execution_id, compliance_output, started_at, completed_at)
+            logger.info(f"Evaluation {evaluation.get('evaluationId')} rule '{rule_name}': the "
+                        f"SUCCEEDED of execution {execution_id} superseded its FAILED "
+                        f"(superseded={outcome.get('superseded')}, "
+                        f"finalized={outcome.get('finalized')})")
+            _record("compliancePipelineRuleComplete", database_id=evaluation.get("databaseId"),
+                    asset_id=evaluation.get("assetId"),
+                    evaluationId=evaluation.get("evaluationId"), executionId=execution_id,
+                    changes=({"complianceState": outcome.get("complianceState")}
+                             if outcome.get("finalized") and outcome.get("complianceState")
+                             else None),
+                    details={"ruleName": rule_name, "executionStatus": execution_status,
+                             "supersededExecutionStatus": "FAILED",
+                             "superseded": bool(outcome.get("superseded")),
+                             "finalized": bool(outcome.get("finalized")),
+                             "verdict": outcome.get("verdict")})
+            return {"statusCode": 200, "body": json.dumps(outcome)}
+
     if evaluation.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
         # A retry after a delivery that finalized the evaluation but failed before the asset state
         # was written completes that write; otherwise the redelivery is a no-op.

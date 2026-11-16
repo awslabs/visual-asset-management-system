@@ -64,7 +64,7 @@ To create multiple metadata entries at once:
 
 The bulk operation response indicates how many items succeeded and failed, with detailed error messages for any failures.
 
-![Asset detail page showing metadata section with key-value pairs](/img/view_asset_page_20260323_v2.5.png)
+![Asset detail page showing metadata section with key-value pairs](/img/view_asset_page_20261109_v2.7.png)
 
 ## Editing metadata
 
@@ -143,7 +143,7 @@ Each schema targets one entity type:
 5. Add one or more schema fields.
 6. Choose **Create Schema**.
 
-![Metadata schema editor showing field definitions and value types](/img/edit_schema_management_20260323_v2.5.png)
+![Metadata schema editor showing field definitions and value types](/img/edit_schema_management_20261109_v2.7.png)
 
 ### File type restriction matching
 

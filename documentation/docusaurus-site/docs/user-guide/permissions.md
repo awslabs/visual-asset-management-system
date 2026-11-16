@@ -78,7 +78,7 @@ separate role with its own constraints.
 A newly created role has no constraints and grants no permissions. You must add constraints to the role before it provides any access.
 :::
 
-![Roles page showing role definitions and management](/img/roles_page_20260323_v2.5.png)
+![Roles page showing role definitions and management](/img/roles_page_20261109_v2.7.png)
 
 ## Constraints
 
@@ -130,7 +130,7 @@ The authorization engine evaluates all constraints for a user. If any constraint
 5. Optionally assign to specific users in the **User Permissions** section.
 6. Choose **Create**.
 
-![Access control constraints page showing constraint definitions](/img/access_constraints_page_20260323_v2.5.png)
+![Access control constraints page showing constraint definitions](/img/access_constraints_page_20261109_v2.7.png)
 
 ![Constraint editor showing object type, criteria, and group permissions](/img/access_constraints_20260323_v2.5.png)
 
@@ -148,7 +148,7 @@ The ability to create and edit constraints lets a role define the authorization 
 
 A user can have multiple roles assigned. The effective permissions are the union of all constraints from all assigned roles, with deny effects taking precedence.
 
-![Users in Roles page showing user-role assignments](/img/users_in_role_page_20260323_v2.5.png)
+![Users in Roles page showing user-role assignments](/img/users_in_role_page_20261109_v2.7.png)
 
 ## MFA-required roles
 
