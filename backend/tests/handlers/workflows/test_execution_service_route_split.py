@@ -42,6 +42,7 @@ for _name, _value in [
     ("WORKFLOW_STORAGE_TABLE_NAME", "t-workflows"),
     ("PIPELINE_STORAGE_TABLE_NAME", "t-pipelines"),
     ("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME", "t-execv2"),
+    ("LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE_NAME", "t-copy-jobs"),
 ]:
     os.environ.setdefault(_name, _value)
 
@@ -78,10 +79,27 @@ LOCK_RELEASE = {("locks", "DeleteItem"), ("locks/index/WorkflowExecutionLocksByH
 #: The status reconcile of the main row and the pipeline rows.
 RECONCILE_WRITES = {("main", "UpdateItem"), ("pipelineExecutions", "UpdateItem")}
 PIPELINE_ROWS = ("pipelineExecutions/index/PipelineExecByWorkflowExecGSI", "Query")
+#: The abort route (and the status change push) stops the run's unfinished large object copy jobs:
+#: it lists them, marks them CANCELLED and resolves an asset bucket's Region for a job row without
+#: destRegion (grantLargeObjectCopyCoordination on the execution service, #1123 D6). The index is
+#: queried by common.largeObjectCopy, not spelled in this module.
+COPY_STOP = {
+    ("copyJobs", "GetItem"),
+    ("copyJobs", "UpdateItem"),
+    ("copyJobs", "Query"),
+    ("copyJobs/index/WorkflowExecutionIdIndex", "Query"),
+    ("buckets/index/bucketNameGSI", "Query"),
+}
+#: The details read lists a RUNNING ingesting run's copy jobs for its progress, and stamps the run's
+#: main row (its own main-table update) before handing an ended copy to the engine
+#: (grantLargeObjectCopyProgressRead on the execution details function).
+COPY_PROGRESS_READ = {("copyJobs/index/WorkflowExecutionIdIndex", "Query")}
+#: Indexes the granted calls name that this module does not spell out (queried by common modules).
+INDEXES_QUERIED_ELSEWHERE = {"WorkflowExecutionLocksByHolderGSI", "bucketNameGSI"}
 
 #: Every call each route set's role is granted, by (logical table or index, IAM action).
 ROUTE_SET_CALLS = {
-    "service": AUTHORIZATION_READS | LOCK_RELEASE | RECONCILE_WRITES | {
+    "service": AUTHORIZATION_READS | LOCK_RELEASE | RECONCILE_WRITES | COPY_STOP | {
         ("main/index/WorkflowExecutionsByWorkflowGSI", "Query"),
         ("main/index/WorkflowExecutionsByGroupGSI", "Query"),
         ("main/index/WorkflowExecutionsByDateGSI", "Query"),
@@ -91,7 +109,7 @@ ROUTE_SET_CALLS = {
         ("pipeline", "GetItem"),
         ("pipelineInputConfiguration", "Query"),
     },
-    "details": AUTHORIZATION_READS | LOCK_RELEASE | RECONCILE_WRITES | {
+    "details": AUTHORIZATION_READS | LOCK_RELEASE | RECONCILE_WRITES | COPY_PROGRESS_READ | {
         PIPELINE_ROWS,
         ("pipeline", "BatchGetItem"),
         ("pipeline", "GetItem"),
@@ -166,6 +184,7 @@ def _logical_names():
         le.pipeline_database: "pipeline",
         le.asset_storage_table_name: "asset",
         "t-file-version-history": "fileVersionHistory",
+        "t-copy-jobs": "copyJobs",
     }
 
 
@@ -336,6 +355,10 @@ def _create_tables(ddb):
     _create(ddb, le.asset_storage_table_name, "databaseId", "assetId")
     _create(ddb, "t-file-version-history", "databaseId:assetId:filePath", "versionId", gsis=[
         _gsi("WorkflowExecutionIdIndex", "changeWorkflowExecutionId", "databaseId:assetId:filePath")])
+    _create(ddb, "t-copy-jobs", "jobId", gsis=[
+        {"IndexName": "WorkflowExecutionIdIndex",
+         "KeySchema": [{"AttributeName": "workflowExecutionId", "KeyType": "HASH"}],
+         "Projection": {"ProjectionType": "ALL"}}])
 
 
 def _main_row(execution_id, status, minutes_ago):
@@ -625,8 +648,9 @@ class TestEachRoleHoldsTheCallsItsRoutesMake:
             text = source.read()
         named = set(re.findall(r"""['"]IndexName['"]\s*:\s*['"](\w+)['"]""", text))
         named |= set(re.findall(r"""IndexName\s*=\s*['"](\w+)['"]""", text))
-        # The lock table's holder index is queried by common.workflows.executionLocks, in the lock policy.
-        granted = set().union(*ROUTE_SET_INDEXES.values()) - {"WorkflowExecutionLocksByHolderGSI"}
+        # The lock table's holder index is queried by common.workflows.executionLocks, in the lock policy;
+        # the buckets index by common.s3 (the copy abort's Region lookup).
+        granted = set().union(*ROUTE_SET_INDEXES.values()) - INDEXES_QUERIED_ELSEWHERE
         assert named == granted
 
     @pytest.mark.aws

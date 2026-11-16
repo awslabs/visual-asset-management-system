@@ -71,6 +71,8 @@ WRITE_TOOLS = (
     "create_user_api_key",
     "update_api_key",
     "update_user_api_key",
+    "create_zip_download",
+    "get_zip_download_url",
     "create_compliance_schema",
     "update_compliance_schema",
     "bind_compliance_schema",
@@ -110,6 +112,8 @@ DESTRUCTIVE_TOOLS = (
     "delete_metadata_schema",
     "delete_api_key",
     "delete_user_api_key",
+    "cancel_zip_download",
+    "delete_zip_download",
     "delete_compliance_schema",
 )
 

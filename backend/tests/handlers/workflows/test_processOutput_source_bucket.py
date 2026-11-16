@@ -40,7 +40,7 @@ def test_process_external_upload_forwards_source_bucket():
         captured["payload"] = json.loads(Payload.decode("utf-8"))
         return {"Payload": _Payload()}
 
-    with patch.object(po, "client") as m_client:
+    with patch.object(po, "invoke_client") as m_client:
         m_client.invoke.side_effect = _invoke
         po.process_external_upload(
             "upl-1", "asset1", "db1", "assetFile", ["pipelines/p/out/files/model.glb"],
@@ -62,7 +62,7 @@ def test_process_external_upload_omits_source_bucket_when_unset():
         captured["payload"] = json.loads(Payload.decode("utf-8"))
         return {"Payload": _Payload()}
 
-    with patch.object(po, "client") as m_client:
+    with patch.object(po, "invoke_client") as m_client:
         m_client.invoke.side_effect = _invoke
         po.process_external_upload(
             "upl-1", "asset1", "db1", "assetFile", ["a/model.glb"], "a/",
@@ -86,14 +86,14 @@ def test_process_external_upload_authorizes_as_cross_call():
         captured["payload"] = json.loads(Payload.decode("utf-8"))
         return {"Payload": _Payload()}
 
-    with patch.object(po, "client") as m_client:
+    with patch.object(po, "invoke_client") as m_client:
         m_client.invoke.side_effect = _invoke
         # No change_user_id -> SYSTEM_USER
         po.process_external_upload(
             "upl-1", "asset1", "db1", "assetFile", ["a/model.glb"], "a/", {"http": {}})
     assert captured["payload"]["lambdaCrossCall"]["userName"] == "SYSTEM_USER"
 
-    with patch.object(po, "client") as m_client:
+    with patch.object(po, "invoke_client") as m_client:
         m_client.invoke.side_effect = _invoke
         # Explicit executing user is preserved for provenance/authorization.
         po.process_external_upload(
