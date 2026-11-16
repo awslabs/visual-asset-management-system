@@ -64,6 +64,7 @@ export class SplatToolboxConstruct extends Construct {
     /** Upstream container sources, pinned to a commit. */
     public static readonly GITHUB_REPO_LINK =
         "https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws.git";
+    // pragma: allowlist nextline secret
     public static readonly GITHUB_REPO_COMMIT_HASH = "73133959c04fb0f9f002e95b4d2a722de2d18722";
 
     /** Marker file recording which upstream commit the local container directory was synced from. */

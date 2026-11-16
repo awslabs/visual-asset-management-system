@@ -46,6 +46,7 @@ from vamscli.constants import (  # noqa: E402,F401
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
 )
 from vamscli.utils.api_client import APIClient  # noqa: E402
+from vamscli.utils.request_paths import route_path  # noqa: E402,F401
 from vamscli.utils.exceptions import SearchDisabledError  # noqa: E402,F401
 from vamscli.utils.features import is_feature_enabled  # noqa: E402
 from vamscli.utils.profile import ProfileManager  # noqa: E402

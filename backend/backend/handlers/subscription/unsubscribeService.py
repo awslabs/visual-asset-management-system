@@ -199,7 +199,7 @@ def lambda_handler(event, context):
             },
             'entityId': {
                 'value': event['body']['entityId'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
             'subscribers': {
                 'value': event['body']['subscribers'],

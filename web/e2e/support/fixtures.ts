@@ -22,7 +22,7 @@ export function orchestrationRoot(page: Page): Locator {
     return page.locator(".orchestration-root");
 }
 
-/** The orchestration filter-bar search input. Labelled (no placeholder) and NOT the global search. */
+/** The orchestration filter-bar search input, found by its label (not its placeholder); NOT the global search. */
 export function searchBox(page: Page): Locator {
     return orchestrationRoot(page).getByLabel("Search", { exact: true }).first();
 }
@@ -131,6 +131,69 @@ export async function expectTableRendered(page: Page): Promise<number> {
         )
         .toBe(true);
     return rows.count();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Responsive layout
+// ---------------------------------------------------------------------------------------------
+
+/** The widths the layout specs check: a phone, a tablet, and two common laptop widths. */
+export const VIEWPORTS = {
+    phone: { width: 390, height: 844 },
+    tablet: { width: 768, height: 1024 },
+    laptop: { width: 1280, height: 800 },
+    desktop: { width: 1440, height: 900 },
+} as const;
+
+/**
+ * How far the document is wider than its viewport, in pixels (0 when it fits). `clientWidth`
+ * excludes a vertical scrollbar, so a page that only scrolls vertically reads 0.
+ */
+export async function pageOverflowX(page: Page): Promise<number> {
+    return page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+}
+
+/**
+ * Assert the page does not scroll sideways. The failure message names the widest element so a
+ * regression points at its cause rather than at the page.
+ */
+export async function expectNoPageOverflowX(page: Page, where: string): Promise<void> {
+    const overflow = await pageOverflowX(page);
+    if (overflow > 0) {
+        const widest = await page.evaluate(() => {
+            const limit = document.documentElement.clientWidth;
+            let found = "";
+            let right = limit;
+            document.querySelectorAll("body *").forEach((el) => {
+                const r = el.getBoundingClientRect();
+                if (r.right > right + 0.5 && r.width > 0) {
+                    right = r.right;
+                    const cls = typeof el.className === "string" ? el.className : "";
+                    found = `${el.tagName.toLowerCase()}.${cls.split(/\s+/).slice(0, 4).join(".")}`;
+                }
+            });
+            return `${found} ends at ${Math.round(right)}px`;
+        });
+        expect(
+            overflow,
+            `${where}: page is ${overflow}px wider than the viewport (${widest})`
+        ).toBe(0);
+    }
+}
+
+/** Scroll a control into view and assert it then lies fully inside the viewport. */
+export async function expectReachable(target: Locator, what: string): Promise<void> {
+    await target.scrollIntoViewIfNeeded();
+    const box = await target.boundingBox();
+    const viewport = target.page().viewportSize();
+    expect(box, `${what} has no box`).not.toBeNull();
+    expect(viewport).not.toBeNull();
+    expect(box!.x, `${what} starts left of the viewport`).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, `${what} ends right of the viewport`).toBeLessThanOrEqual(
+        viewport!.width + 0.5
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -243,6 +306,81 @@ export async function openAssetFile(
     });
     await clickWhenActionable(view, "the View File button");
     await page.waitForLoadState("networkidle").catch(() => undefined);
+}
+
+/**
+ * Land on an asset's File Manager tab with its tree rendered. The first half of {@link openAssetFile};
+ * on its own for specs that select files in the tree (multi-select, the detail panel's viewer icons)
+ * rather than opening one in the File Visualizer.
+ */
+export async function openFileManager(
+    page: Page,
+    databaseId: string,
+    assetId: string
+): Promise<void> {
+    await page.goto(`/#/databases/${databaseId}/assets/${assetId}`, {
+        waitUntil: "domcontentloaded",
+    });
+    try {
+        await expect(page.getByRole("heading", { level: 2 }).first()).toBeVisible({
+            timeout: 60_000,
+        });
+    } catch (err) {
+        if (await page.getByText(/Something went wrong on this page/i).count()) {
+            throw new Error(
+                `the asset detail page hit its error boundary for ${databaseId}/${assetId}. The ` +
+                    `shell survived, but a component threw during render — React error boundaries ` +
+                    `do not surface as 'pageerror', so check the console transcript and network log.`
+            );
+        }
+        throw err;
+    }
+    await page.waitForLoadState("networkidle").catch(() => undefined);
+
+    const tab = page.getByRole("tab", { name: /file manager/i }).first();
+    if ((await tab.count()) && (await tab.getAttribute("aria-selected")) !== "true") {
+        await tab.click();
+    }
+
+    // Wait for the tree itself, not just the network. `networkidle` resolves before the File Manager
+    // has rendered its nodes, so clicking straight after it races an empty tree — which surfaces as
+    // "<file> is not listed" and looks like missing data.
+    await expect
+        .poll(async () => await page.getByText(/Hold Ctrl or Shift to select/i).count(), {
+            timeout: 60_000,
+        })
+        .toBeGreaterThan(0);
+}
+
+/**
+ * Select a file in the File Manager tree by its asset-relative path, expanding folders on the way.
+ * A file inside a folder is not visible until its folder is expanded, so walk the path segments and
+ * click each one; passing "tileset/tileset.json" as a single label matches nothing. Pass
+ * `modifiers: ["Control"]` to ADD the file to the current selection (multi-select).
+ */
+export async function selectTreePath(
+    page: Page,
+    filename: string,
+    options: { modifiers?: Array<"Control" | "Shift"> } = {}
+): Promise<void> {
+    const segments = filename.split("/").filter(Boolean);
+    for (const segment of segments) {
+        const node = treeNode(page, segment);
+        await expect(node, `${segment} is not listed in the file tree`).toBeVisible({
+            timeout: 60_000,
+        });
+        const isLeaf = segment === segments[segments.length - 1];
+        if (isLeaf && options.modifiers?.length) {
+            await node.scrollIntoViewIfNeeded().catch(() => undefined);
+            await node.click({ modifiers: options.modifiers, timeout: 8_000 });
+        } else {
+            await clickWhenActionable(node, `tree node "${segment}"`);
+        }
+        if (!isLeaf) {
+            // Give the tree a moment to render the newly revealed children.
+            await page.waitForTimeout(1200);
+        }
+    }
 }
 
 /**
@@ -584,4 +722,61 @@ export async function findNestedAssetFile(
         }
     }
     return null;
+}
+
+/**
+ * Up to `count` distributable assets, each with one live top-level file, or null when the running
+ * app exposes no API context. Assets are taken in listing order across databases and the scan is
+ * bounded like `findAssetFiles`, so fewer than `count` come back when the environment has fewer.
+ */
+export async function findAssetsWithFiles(
+    page: Page,
+    count: number,
+    options: Pick<FindAssetFilesOptions, "maxDatabases" | "maxAssetsPerDatabase"> = {}
+): Promise<AssetFileRef[] | null> {
+    const ctx = await apiContext(page);
+    if (!ctx) return null;
+    const headers = { Authorization: `Bearer ${ctx.token}` };
+    const asJson = async (path: string) => {
+        const r = await page.request.get(`${ctx.base}${path}`, { headers });
+        if (!r.ok()) return null;
+        const b = await r.json().catch(() => null);
+        return b?.message ?? b ?? null;
+    };
+    const itemsOf = (body: any): any[] => {
+        const items = body?.Items ?? body?.items ?? body ?? [];
+        return Array.isArray(items) ? items : [];
+    };
+
+    const found: AssetFileRef[] = [];
+    const databases = itemsOf(await asJson("/database"));
+    for (const db of databases.slice(0, options.maxDatabases ?? 8)) {
+        const databaseId = db?.databaseId;
+        if (!databaseId) continue;
+        const assets = itemsOf(await asJson(`/database/${databaseId}/assets`));
+        for (const asset of assets.slice(0, options.maxAssetsPerDatabase ?? 20)) {
+            if (found.length >= count) return found;
+            const assetId = asset?.assetId;
+            if (!assetId || asset.isDistributable !== true) continue;
+            const files = itemsOf(
+                await asJson(`/database/${databaseId}/assets/${assetId}/listFiles?basic=true`)
+            );
+            const file = files.find((f) => {
+                const relative: string = f?.relativePath ?? "";
+                return (
+                    relative &&
+                    !f.isFolder &&
+                    !f.isArchived &&
+                    !relative.endsWith("/") &&
+                    relative.replace(/^\/+/, "").split("/").length === 1
+                );
+            });
+            if (file) {
+                const relative: string = file.relativePath;
+                const key = relative.startsWith("/") ? relative : `/${relative}`;
+                found.push({ databaseId, assetId, key });
+            }
+        }
+    }
+    return found;
 }

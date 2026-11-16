@@ -185,6 +185,20 @@ def build_control_blocks(control_types_raw, control_paths_raw, control_weights_r
     return blocks, control_sources
 
 
+def describe_definition_source(definition_source: str) -> str:
+    """How the pipeline definition was passed, for the job log: inline JSON or a file path, and its
+    length. The text itself is not logged."""
+    kind = "inline JSON" if definition_source.lstrip().startswith("{") else "file path"
+    return f"{kind}, {len(definition_source)} characters"
+
+
+def describe_definition(definition) -> str:
+    """The parsed pipeline definition as the job log shows it: its top-level keys, not their values."""
+    if isinstance(definition, dict):
+        return f"keys {list(definition)}"
+    return f"a JSON {type(definition).__name__}"
+
+
 def load_pipeline_definition() -> Dict:
     definition_source = None
     if len(sys.argv) > 1:
@@ -193,16 +207,21 @@ def load_pipeline_definition() -> Dict:
         definition_source = os.environ["PIPELINE_DEFINITION"]
     else:
         raise ValueError("No pipeline definition provided via command line or PIPELINE_DEFINITION env var")
-    logger.info(f"Loading pipeline definition from: {definition_source[:100]}...")
+    logger.info(f"Loading pipeline definition: {describe_definition_source(definition_source)}")
     try:
         return json.loads(definition_source)
     except json.JSONDecodeError:
         pass
     definition_path = Path(definition_source)
-    if definition_path.exists():
+    try:
+        is_file = definition_path.exists()
+    except OSError:
+        # Text longer than a path name can be is not a file; the lookup raises instead of returning False.
+        is_file = False
+    if is_file:
         with open(definition_path, "r") as f:
             return json.load(f)
-    raise ValueError(f"Could not parse pipeline definition: {definition_source}")
+    raise ValueError(f"Could not parse pipeline definition ({describe_definition_source(definition_source)})")
 
 
 def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
@@ -271,7 +290,7 @@ def main():
         logger.info("=" * 80)
 
         definition = load_pipeline_definition()
-        logger.info(f"Pipeline definition loaded: {json.dumps(definition, indent=2)}")
+        logger.info(f"Pipeline definition loaded: {describe_definition(definition)}")
 
         variant = definition.get("modelVariant") or os.environ.get("MODEL_VARIANT", "nano")
         task_mode = definition.get("taskMode") or os.environ.get("TASK_MODE", "")

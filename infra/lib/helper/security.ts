@@ -167,16 +167,22 @@ function mergeCSPSources(existingSources: string[], additionalSources?: string[]
  * Used by globalLambdaEnvironmentsAndPermissions() to apply the SSM parameter
  * wildcard suppression only once per stack, since many Lambda functions in the
  * same stack share the SSM policy grant.
+ *
+ * Keyed by the Stack object, not by `node.addr`: the address is derived from the
+ * construct path, so a second app in the same process (every Jest file that
+ * synthesizes the same template twice) has stacks with the SAME addresses, and an
+ * address-keyed set skipped their suppression.
  */
-const ssmLookupSuppressedStacks = new Set<string>();
+const ssmLookupSuppressedStacks = new WeakSet<Stack>();
 
 /**
  * Module-level set to guard against duplicate audit log group stack suppressions.
  * Used by setupSecurityAndLoggingEnvironmentAndPermissions() to apply the audit
  * log group wildcard suppression only once per stack, since many Lambda functions
- * in the same stack share the audit logging policy grant.
+ * in the same stack share the audit logging policy grant. Keyed by the Stack object
+ * for the reason given on ssmLookupSuppressedStacks.
  */
-const auditLogSuppressedStacks = new Set<string>();
+const auditLogSuppressedStacks = new WeakSet<Stack>();
 
 /**
  * Whether the API Gateway authorizer Lambda can reach Amazon Cognito to perform the
@@ -220,8 +226,8 @@ export function globalLambdaEnvironmentsAndPermissions(
     // suppressions are applied. Only add once per stack (many Lambdas in the same stack share
     // the SSM policy grant).
     const lambdaStack = Stack.of(lambdaFunction);
-    if (!ssmLookupSuppressedStacks.has(lambdaStack.node.addr)) {
-        ssmLookupSuppressedStacks.add(lambdaStack.node.addr);
+    if (!ssmLookupSuppressedStacks.has(lambdaStack)) {
+        ssmLookupSuppressedStacks.add(lambdaStack);
         NagSuppressions.addStackSuppressions(lambdaStack, [
             {
                 id: "AwsSolutions-IAM5",
@@ -286,8 +292,8 @@ export function setupSecurityAndLoggingEnvironmentAndPermissions(
     // suppressions are applied. Only add once per stack (many Lambdas in the same stack
     // share the audit logging policy grant).
     const lambdaStack = Stack.of(lambdaFunction);
-    if (!auditLogSuppressedStacks.has(lambdaStack.node.addr)) {
-        auditLogSuppressedStacks.add(lambdaStack.node.addr);
+    if (!auditLogSuppressedStacks.has(lambdaStack)) {
+        auditLogSuppressedStacks.add(lambdaStack);
         NagSuppressions.addStackSuppressions(lambdaStack, [
             {
                 id: "AwsSolutions-IAM5",

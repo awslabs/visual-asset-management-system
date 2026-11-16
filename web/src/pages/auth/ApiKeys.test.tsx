@@ -122,7 +122,7 @@ describe("ApiKeys mode resolution", () => {
 describe("ApiKeys server-side paging", () => {
     const key = (id: string) => ({
         apiKeyId: id,
-        apiKeyName: `name-${id}`,
+        apiKeyName: `name-${id}`, // pragma: allowlist secret
         userId: "u1",
         isActive: "true",
     });
@@ -250,8 +250,8 @@ describe("ApiKeys status column", () => {
         mockFetchApiKeys.mockResolvedValue({
             Items: [
                 {
-                    apiKeyId: "k1",
-                    apiKeyName: "old-key",
+                    apiKeyId: "k1", // pragma: allowlist secret
+                    apiKeyName: "old-key", // pragma: allowlist secret
                     userId: "u1",
                     isActive: "true",
                     expiresAt: "2020-01-01T00:00:00Z",

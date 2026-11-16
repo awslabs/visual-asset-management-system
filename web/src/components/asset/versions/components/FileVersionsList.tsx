@@ -220,7 +220,9 @@ export const FileVersionsList: React.FC = () => {
 
         const encodedPath = encodeURIComponent(file.relativeKey);
         const assetVersionId = selectedVersion?.Version;
-        let url = `/databases/${databaseId}/assets/${assetId}/file/${encodedPath}`;
+        let url = `/databases/${databaseId}/assets/${encodeURIComponent(
+            String(assetId)
+        )}/file/${encodedPath}`;
         if (assetVersionId) {
             url += `?assetVersion=${encodeURIComponent(assetVersionId)}`;
         } else if (file.versionId) {

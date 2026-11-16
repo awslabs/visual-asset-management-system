@@ -648,19 +648,22 @@ function ViewFileForAsset() {
         const encodedPath = encodeURIComponent(relativePath);
 
         // Build the new URL with version query parameter
-        const newUrl = `/databases/${databaseId}/assets/${assetId}/file/${encodedPath}?version=${encodeURIComponent(
-            singleFileInfo.versionId
-        )}`;
+        const newUrl = `/databases/${databaseId}/assets/${encodeURIComponent(
+            String(assetId)
+        )}/file/${encodedPath}?version=${encodeURIComponent(singleFileInfo.versionId)}`;
 
         // Get current URL path and query
         const currentPath = location.pathname;
 
         // Only update if the URL has changed (to avoid infinite loops)
         // Compare the expected URL structure
-        const expectedPathBase = `/databases/${databaseId}/assets/${assetId}/file/`;
+        const expectedPathBase = `/databases/${databaseId}/assets/${encodeURIComponent(
+            String(assetId)
+        )}/file/`;
         if (
             currentPath.startsWith(expectedPathBase) ||
-            currentPath === `/databases/${databaseId}/assets/${assetId}/file`
+            currentPath ===
+                `/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}/file`
         ) {
             const currentVersion = getVersionFromQuery();
             if (currentVersion !== singleFileInfo.versionId) {
@@ -748,7 +751,11 @@ function ViewFileForAsset() {
                                         {directPathError}
                                         <br />
                                         <br />
-                                        <Link href={`#/databases/${databaseId}/assets/${assetId}`}>
+                                        <Link
+                                            href={`#/databases/${databaseId}/assets/${encodeURIComponent(
+                                                assetId
+                                            )}`}
+                                        >
                                             {`Return to ${Synonyms.asset}`}
                                         </Link>
                                     </Alert>
@@ -775,7 +782,10 @@ function ViewFileForAsset() {
                                         {
                                             text: asset?.assetName || "",
                                             href:
-                                                "#/databases/" + databaseId + "/assets/" + assetId,
+                                                "#/databases/" +
+                                                databaseId +
+                                                "/assets/" +
+                                                encodeURIComponent(assetId),
                                         },
                                         { text: getBreadcrumbText(), href: "#" },
                                     ]}

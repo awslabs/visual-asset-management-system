@@ -25,6 +25,7 @@ tools/VamsCLI/
 │   └── utils/               # Shared utilities
 │       ├── __init__.py
 │       ├── api_client.py    # HTTP client and API methods
+│       ├── request_paths.py # route_path(): one path segment per value; imports nothing from the package
 │       ├── profile.py       # Configuration and profile management
 │       └── exceptions.py    # Custom exception hierarchy
 ├── tests/                   # Test files (mirror command structure)
@@ -180,7 +181,7 @@ Three consumers sit **downstream of the CLI** and must be carried through in the
 -   [ ] **Verify Placement and Uniqueness**: The tools are plain module-level `def`s, so both ways placement goes wrong leave a valid, importable module. A repeated tool name silently shadows the earlier definition, and a `def` past the `if __name__` entrypoint or outside its gate block is simply never executed — in both cases the tool is missing at run time with no error. `tests/test_server_tools.py` asserts against the source layout for exactly this; keep those checks passing.
 -   [ ] **Update MCP Docs**: Add the tool to the `tools/VamsMCP/README.md` tool list, and to the `autoApprove` array of that README's sample MCP host config if it is a safe read — never a tool that returns a credential (`create_api_key`, `create_user_api_key` hand back the one-time key value; the presigned-URL tools hand back bearer URLs), one that returns credential inventory (the API-key reads), or one that starts or stops compute. Document a new environment variable in `tools/VamsMCP/.env.example` **and** in the README's `env` sample. That file is a reference list, not a dotenv template: nothing in the package loads a `.env` (and a cwd-upward search would not reliably find it, since a host spawns the console script from an arbitrary directory), so never write documentation telling a reader to copy it — a `.env` beside the server is silently ignored and the usual next step is to delete the gate guard in source. A tool whose parameters or response fields change also needs its README paragraph updated — that list is the only place the parameter set is documented outside the docstring.
 -   [ ] **Roll the MCP Version**: When the server's contract with the CLI changes, bump both `tools/VamsMCP/pyproject.toml` and `tools/VamsMCP/vams_mcp/__init__.py` alongside `tools/VamsCLI/vamscli/version.py`.
--   [ ] **Run MCP Tests**: `cd tools/VamsMCP && pytest`, using the server's own virtual environment (tests mock the client; no live deployment needed). The `mcp` SDK requires Pydantic v2 while the VAMS backend requires v1, so installing this server into a shared environment breaks the entire backend test suite at collection. Assert the params that reach the `APIClient`, not just that the call happened — a dropped optional parameter is a silent server-default that no assertion on the return value catches.
+-   [ ] **Run MCP Tests**: `cd tools/VamsMCP && pytest`, using the server's own virtual environment (tests mock the client; no live deployment needed). CI runs the same suite in the `vamsmcp-test` job. The `mcp` SDK requires Pydantic v2 while the VAMS backend requires v1, so installing this server into a shared environment breaks the entire backend test suite at collection. Assert the params that reach the `APIClient`, not just that the call happened — a dropped optional parameter is a silent server-default that no assertion on the return value catches.
 
 **External connectors** — required whenever a command name, subcommand, option/flag, or `--json-output` response shape changes. Nothing catches connector drift at build or import time: a renamed flag fails at connector runtime with a non-zero CLI exit, and a renamed or removed JSON key silently yields a blank field, which is worse.
 
@@ -221,11 +222,13 @@ def get_user_assets(self):
 # ✅ CORRECT - Import from constants
 from ..constants import API_LOGIN_PROFILE, API_USER_ASSETS
 
-# ✅ CORRECT - Use constants in methods
+# ✅ CORRECT - Use constants in methods; a value joined onto a prefix constant is one segment
 def call_login_profile(self, user_id: str):
-    endpoint = f"{API_LOGIN_PROFILE}/{user_id}"
+    endpoint = f"{API_LOGIN_PROFILE}/{_path_segment(user_id)}"
     return self.get(endpoint)
 ```
+
+Before anything is sent, `_make_request` refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded), a control character (raw or percent-encoded), or a raw `?` or `#` with `InvalidRequestPathError`, an `APIError`: the URL join drops or resolves such a segment and changes a path that contains a control character, and a `?` or `#` ends the path, so a path value carrying one would address another route. Query parameters go in `params=`. Endpoints are built with `route_path(API_X, name=value)`, never `API_X.format(...)`, which percent-encodes a `/`, `?`, `#` or `%` in each value (`tests/test_api_request_path.py`; VamsMCP's `tests/test_path_value_encoding.py` holds `vams_mcp` to the same rule). `route_path` lives in `utils/request_paths.py`; `api_client` re-exports it.
 
 ### **Command Implementation Standards**
 
@@ -1949,7 +1952,7 @@ def call_new_endpoint(self, param: str) -> Dict[str, Any]:
         APIError: When API call fails
     """
     try:
-        endpoint = f"{API_NEW_ENDPOINT}/{param}"
+        endpoint = f"{API_NEW_ENDPOINT}/{_path_segment(param)}"
         response = self.get(endpoint, include_auth=True)
         return response.json()
 

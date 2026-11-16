@@ -24,6 +24,10 @@ jest.mock("../../services/APIService", () => ({
     fetchBuckets: jest.fn(),
 }));
 
+jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({ loading: false, can: () => true }),
+}));
+
 const { fetchBuckets } = jest.requireMock("../../services/APIService");
 
 const LENGTH_MESSAGE = "Between 4 and 63 characters";

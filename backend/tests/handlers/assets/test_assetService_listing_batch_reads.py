@@ -33,7 +33,7 @@ BUCKETS = {
     "bucket-a": {"bucketId": "bucket-a", "bucketName": "vams-assets-a", "baseAssetsPrefix": "a/"},
     "bucket-b": {"bucketId": "bucket-b", "bucketName": "vams-assets-b", "baseAssetsPrefix": "/b"},
 }
-NEXT_TOKEN = "eyJkYXRhYmFzZUlkIjogeyJTIjogImRiMSJ9fQ=="
+NEXT_TOKEN = "eyJkYXRhYmFzZUlkIjogeyJTIjogImRiMSJ9fQ=="  # pragma: allowlist secret
 
 
 def _version_key(asset):

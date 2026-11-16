@@ -375,7 +375,11 @@ export function AssetLinksDetailsPanel({
                             selectedNode.assetData.assetId && (
                                 <div style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
                                     <Link
-                                        href={`#/databases/${selectedNode.assetData.databaseId}/assets/${selectedNode.assetData.assetId}`}
+                                        href={`#/databases/${
+                                            selectedNode.assetData.databaseId
+                                        }/assets/${encodeURIComponent(
+                                            selectedNode.assetData.assetId
+                                        )}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         fontSize="body-s"

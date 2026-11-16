@@ -19,7 +19,7 @@ from backend.tests.mocks.handlers.indexing.streams \
 example_event = {
     "Records": [
         {
-            "eventID": "f33f76a1c323cd5c40ba06d06c9f84f7",
+            "eventID": "f33f76a1c323cd5c40ba06d06c9f84f7",  # pragma: allowlist secret
             "eventName": "MODIFY",
             "eventVersion": "1.1",
             "eventSource": "aws:dynamodb",
@@ -73,7 +73,7 @@ example_event = {
 }
 
 example_event_delete = {
-    "eventID": "230ef08216a12978bfcc1d5195683492",
+    "eventID": "230ef08216a12978bfcc1d5195683492",  # pragma: allowlist secret
     "eventName": "REMOVE",
     "eventVersion": "1.1",
     "eventSource": "aws:dynamodb",
@@ -98,7 +98,7 @@ example_event_delete = {
 example_event_delete_records = {
     "Records": [
         {
-            "eventID": "230ef08216a12978bfcc1d5195683492",
+            "eventID": "230ef08216a12978bfcc1d5195683492",  # pragma: allowlist secret
             "eventName": "REMOVE",
             "eventVersion": "1.1",
             "eventSource": "aws:dynamodb",
@@ -235,7 +235,7 @@ def test_deserializer():
 def test_deserialize_null_values():
 
     item = {
-        'eventID': '9697e06bba16c95689f2ed60bd7a0fc0',
+        'eventID': '9697e06bba16c95689f2ed60bd7a0fc0',  # pragma: allowlist secret
         'eventName': 'INSERT',
         'eventVersion': '1.1',
         'eventSource': 'aws:dynamodb',
@@ -417,7 +417,7 @@ def test_index_handler_asset_remove():
     remove_event = {
         'Records': [
             {
-                'eventID': '4632eec4faa504159db149ab3707bdbc',
+                'eventID': '4632eec4faa504159db149ab3707bdbc',  # pragma: allowlist secret
                 'eventName': 'REMOVE',
                 'eventVersion': '1.1',
                 'eventSource': 'aws:dynamodb',
@@ -687,7 +687,7 @@ def test_delete_s3_object():
             },
             'object': {
                 'key': key,
-                'eTag': 'd41d8cd98f00b204e9800998ecf8427e',
+                'eTag': 'd41d8cd98f00b204e9800998ecf8427e',  # pragma: allowlist secret
             }
         }
     }
@@ -745,7 +745,7 @@ def test_object_copied_to_glacier():
             'object': {
                 'key': key,
                 'size': 1024,
-                'eTag': 'dc87e6561fce52a5226125e4e6907d38',
+                'eTag': 'dc87e6561fce52a5226125e4e6907d38',  # pragma: allowlist secret
                 'versionId': '...',
                 'sequencer': '...'
             }

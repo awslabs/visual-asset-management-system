@@ -21,12 +21,12 @@
  */
 
 import * as fs from "fs";
-import * as path from "path";
 import * as Config from "../../config/config";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import govcloudTemplate from "../../config/config.template.govcloud.json";
 import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import { newTestApp } from "../support/testApp";
+import { readCommittedFile } from "../support/committedFile";
 import { makeDefaultConfig } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/defaults";
 import { evaluateRules } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
 
@@ -146,14 +146,19 @@ describe("the shipped configuration files", () => {
         expect((template as any).app.authProvider.useCognito[FIELD]).toBe(false);
     });
 
-    test("the tracked config.json sets false, which a new deployment needs", () => {
-        // An existing deployment keeps `true`; the update guide and the breaking-change note tell it to.
-        const configJson = JSON.parse(
-            realReadFileSync(path.join(__dirname, "../../config/config.json"), "utf8")
-        );
-        expect(configJson.app.authProvider.useCognito.enabled).toBe(true);
-        expect(configJson.app.authProvider.useCognito[FIELD]).toBe(false);
-    });
+    // The COMMITTED config.json, not the working copy: an existing deployment keeps `true` there, as
+    // the update guide and the breaking-change note tell it to, and that edit must not fail its tests.
+    const committed = readCommittedFile("infra/config/config.json");
+    const committedConfigJson = committed.content;
+    if (committed.skipReason) console.warn(`config.json default: ${committed.skipReason}`);
+    (committedConfigJson === undefined ? test.skip : test)(
+        "the committed config.json sets false, which a new deployment needs",
+        () => {
+            const configJson = JSON.parse(committedConfigJson as string);
+            expect(configJson.app.authProvider.useCognito.enabled).toBe(true);
+            expect(configJson.app.authProvider.useCognito[FIELD]).toBe(false);
+        }
+    );
 });
 
 const RULE_ID = "cognito-legacy-groups-attribute-unset-warn";

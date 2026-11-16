@@ -12,6 +12,8 @@ The 3D/media viewer system uses a plugin-based architecture:
 -   **viewerConfig.json** (`config/viewerConfig.json`) — JSON configuration for all plugins
 -   **manifest.ts** (`viewers/manifest.ts`) — Vite static-analysis paths for dynamic imports
 -   **StylesheetManager** (`core/StylesheetManager.ts`) — Per-plugin CSS lifecycle management
+-   **viewerLayers.ts** (`core/viewerLayers.ts`) — `VIEWER_LAYER`, the stacking scale for what a viewer draws over its scene (see "Stacking Over the Scene")
+-   **useOverlap.ts** (`core/useOverlap.ts`) — `useOverlap(a, b)`, whether two elements overlap on screen, and `useInfoBoxClearOfPanel()`, which leaves a viewer's info box out while its open panel overlaps it (see "Stacking Over the Scene")
 -   **types.ts** (`core/types.ts`) — Shared `ViewerPluginProps` and config interfaces
 
 Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below maps to a directory of that form (e.g. `potree-viewer` → `viewers/PotreeViewerPlugin/`). Per-viewer custom-install scripts live in `web/customInstalls/` (one dir per viewer, plus a shared `utility/` helper dir) and are executed by the `postinstall` chain in `web/package.json`.
@@ -147,6 +149,49 @@ export const VIEWER_COMPONENTS = {
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
 | `enabled`                    | boolean           | Whether the plugin is active                         |
 | `customParameters`           | object?           | Viewer-specific configuration                        |
+
+---
+
+## Stacking Over the Scene
+
+`core/viewerLayers.ts` holds the one stacking scale for what a viewer draws over its scene,
+`VIEWER_LAYER`, lowest first: `info` (1000, the read-only box with the viewer name, controls hint and
+scene stats), `panel` (1010, the side panel with its tabs, buttons, scene tree and resize handle, and the
+Panel button that shows it again), `notice` (1020, dismissible notices across the top, such as
+files that failed to load) and `cover` (1030, the shared `LoadingSpinner` and a message that replaces the
+scene). A viewer with a side panel takes each such element's `zIndex` from it and writes no number of
+its own; at an equal z-index the element later in the document is drawn above. The scale mirrors
+`features/orchestration/components/zLayers.ts`.
+
+-   **Local to the viewer.** `DynamicViewer` mounts every viewer inside `.visualizer-container-canvases`,
+    whose `transform` (`web/src/styles/index.scss`) makes it a stacking context and the containing block
+    of a panel's `position: fixed`. The values order one viewer's elements only: they cannot rise above
+    the application header (1002), toasts (4000) or Cloudscape modals, and the host's wide and fullscreen
+    controls (`.visualizer-footer`, painted after that container) stay above the whole viewer. Do not
+    raise a viewer value to win against something outside the viewer.
+-   **Inside a panel.** The panel is a stacking context of its own, so a menu opened in it (the material
+    dropdown in `ObjectMaterialAssignment.tsx` / `NeedleUSDObjectMaterialAssignment.tsx`) is ordered
+    within the panel and keeps its own value.
+-   **The info box beside the open panel.** On a narrow container the open panel covers the info box,
+    whose text would show through the panel's translucent background. `useInfoBoxClearOfPanel()`
+    (`core/useOverlap.ts`) measures the two elements' rectangles (after every render of the viewer, when
+    either element or its container changes size, and when the window does) and gives the info box
+    `visibility: hidden` while they overlap: it keeps its place in the layout, so it is still measured,
+    and takes no clicks. It shows when there is room beside the panel (a wide window, wide or fullscreen
+    mode) and while the panel is hidden. A viewer passes `panelRef` to its panel's root element, and
+    `infoBoxRef` and `infoBoxVisibility` to its info box. `useOverlap(a, b)` is the measurement on its own.
+-   **Who uses it.** The Three.js, Needle USD, BabylonJS and PlayCanvas Gaussian splat, ThatOpen IFC and
+    VEERUM viewers, and `LoadingSpinner`. `core/viewerLayers.test.ts` fails when one of those files writes
+    a z-index number; each of the six viewers' `*ViewerComponent.stacking.test.tsx` renders it with its
+    real panel and checks the rendered order and the info box beside the open panel. A new viewer with
+    a side panel uses the scale and `useInfoBoxClearOfPanel()`, gets a stacking test, and joins that
+    list. The Cesium viewer still writes its own values: its controls hint
+    and measurement instructions sit over the bottom of its panel at every width, and its picked-feature
+    box, which has a Close button, overlaps the panel on a narrow window, so it needs a layout decision
+    rather than a z-index. The Potree, VNTANA and Online 3D viewers have no side panel and info box pair.
+-   **Prove it with a click.** A z-index alone does not prove an element is clickable (`web/e2e/CLAUDE.md`
+    Rule 4): hit-test the target with `document.elementFromPoint` at a narrow width (414 px) as well as a
+    wide one.
 
 ---
 

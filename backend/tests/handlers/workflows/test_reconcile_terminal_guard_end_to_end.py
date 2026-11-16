@@ -106,7 +106,7 @@ def _create_tables(ddb):
             {"AttributeName": "outputDatabaseId:outputAssetId", "AttributeType": "S"},
             {"AttributeName": "executionStartDate", "AttributeType": "S"}],
         GlobalSecondaryIndexes=[{
-            "IndexName": "WorkflowExecConfigByOutputAssetGSI",
+            "IndexName": "WorkflowExecConfigByOutputAssetGSI",  # pragma: allowlist secret
             "KeySchema": [{"AttributeName": "outputDatabaseId:outputAssetId", "KeyType": "HASH"},
                           {"AttributeName": "executionStartDate", "KeyType": "RANGE"}],
             "Projection": {"ProjectionType": "ALL"}}],

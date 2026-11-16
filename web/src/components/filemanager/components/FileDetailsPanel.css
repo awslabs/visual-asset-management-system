@@ -9,6 +9,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    width: 100%;
     padding: 10px 0;
     border-bottom: 1px solid var(--vams-border-default);
     margin-bottom: 10px;
@@ -24,9 +25,44 @@
     margin-left: 0;
 }
 
+.file-info-title {
+    flex-shrink: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-right: 16px;
+    max-width: 50%;
+}
+
 .file-actions {
     display: flex;
     flex-direction: row;
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+    min-width: fit-content;
+}
+
+/*
+ * Phone widths (below Cloudscape's xs breakpoint, where ResizableSplitter stacks the panes): the
+ * toolbar no longer fits beside the title, and a nowrap row pushes its last buttons off screen. Put
+ * the toolbar on its own line and let its buttons wrap so every control stays fully visible.
+ */
+@media (max-width: 687px) {
+    .file-info-header {
+        flex-wrap: wrap;
+        row-gap: 8px;
+    }
+
+    .file-info-title {
+        max-width: 100%;
+        margin-right: 0;
+    }
+
+    .file-actions {
+        flex-shrink: 1;
+        flex-wrap: wrap;
+        min-width: 0;
+        max-width: 100%;
+    }
 }
 
 .file-info-content {

@@ -251,7 +251,7 @@ const COMMERCIAL: ConfigShape = {
             },
             useGenAiMetadata3dLabeling: {
                 enabled: false,
-                bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                bedrockModelId: "global.anthropic.claude-sonnet-5-5",
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: false,
             },

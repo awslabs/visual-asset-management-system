@@ -29,6 +29,11 @@ from ..utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError,
 )
 
+# The API's 400 for a trigger type it does not support (backend workflowTriggerService.py) starts with
+# this text. Only that 400 gets the trigger-type hint; every other 400 is shown as the API wrote it.
+UNSUPPORTED_TRIGGER_TYPE_PREFIX = "Unsupported trigger type"
+TRIGGER_TYPE_HINT = "Only the 'fileUpload' trigger type is currently supported."
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -337,9 +342,9 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
 
     Examples:
         vamscli workflow create -d my-db -n "Convert + Label" \\
-            --pipeline global:conversion-3d-basic:to-glb --pipeline my-db:my-labeler
+            --pipeline global:conversion-3d-basic:convert-to-glb --pipeline my-db:my-labeler
         vamscli workflow create -d my-db -n "Convert for web" \\
-            --pipeline global:conversion-3d-basic:to-glb:convert-for-web
+            --pipeline global:conversion-3d-basic:convert-to-glb:convert-for-web
         vamscli workflow create -d my-db -n "Label only" \\
             --pipeline global:metadata-3d-labeling::label-step
         vamscli workflow create -d my-db -n "WF" --specified-pipelines-file pipes.json
@@ -683,7 +688,8 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
         raise click.ClickException(str(e))
     except InvalidWorkflowTriggerDataError as e:
         output_error(e, json_output, error_type="Invalid Trigger Data",
-                     helpful_message="Only the 'fileUpload' trigger type is currently supported.")
+                     helpful_message=TRIGGER_TYPE_HINT
+                     if str(e).startswith(UNSUPPORTED_TRIGGER_TYPE_PREFIX) else None)
         raise click.ClickException(str(e))
 
 

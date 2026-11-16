@@ -22,6 +22,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config as BotoConfig
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
+from common.eventLogSummary import event_log_summary
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -1119,6 +1120,15 @@ def update_s3_metadata(bucket_name: str, object_key: str, database_id: str, asse
         logger.exception(f"Error updating S3 metadata: {e}")
         return False
 
+def is_init_marker(object_key: str) -> bool:
+    """
+    Whether the key is an import marker: an object named exactly `init`, or a folder
+    marker named `init/`, at any depth. Matching is case-sensitive.
+    """
+    return (object_key in ('init', 'init/')
+            or object_key.endswith('/init')
+            or object_key.endswith('/init/'))
+
 def delete_s3_object(bucket_name: str, object_key: str, versioning_enabled: bool) -> bool:
     """
     Delete S3 object and all its versions if versioning is enabled
@@ -1133,26 +1143,28 @@ def delete_s3_object(bucket_name: str, object_key: str, versioning_enabled: bool
     """
     try:
         if versioning_enabled:
-            # List all versions of the object
-            versions = s3_client.list_object_versions(
-                Bucket=bucket_name,
-                Prefix=object_key
-            )
-            
-            # Delete all versions
-            for version in versions.get('Versions', []):
+            # The listing for Prefix=object_key also returns longer keys (`init.txt`, `init/...`).
+            # Keys come back in ascending order and the exact key sorts first, so the object's own
+            # versions and delete markers end at the first entry for another key. All of them are
+            # collected before any is deleted, so the continuation markers stay valid.
+            # Not common.s3.list_all_object_versions: it reads the whole prefix, folder contents
+            # included, and its cap counts entries, not keys.
+            own_version_ids = []
+            list_kwargs = {'Bucket': bucket_name, 'Prefix': object_key}
+            while True:
+                page = s3_client.list_object_versions(**list_kwargs)
+                entries = (page.get('Versions') or []) + (page.get('DeleteMarkers') or [])
+                own_version_ids.extend(e['VersionId'] for e in entries if e.get('Key') == object_key)
+                if any(e.get('Key') != object_key for e in entries) or page.get('IsTruncated') is not True:
+                    break
+                list_kwargs['KeyMarker'] = page.get('NextKeyMarker')
+                list_kwargs['VersionIdMarker'] = page.get('NextVersionIdMarker')
+
+            for version_id in own_version_ids:
                 s3_client.delete_object(
                     Bucket=bucket_name,
                     Key=object_key,
-                    VersionId=version['VersionId']
-                )
-                
-            # Delete any delete markers
-            for marker in versions.get('DeleteMarkers', []):
-                s3_client.delete_object(
-                    Bucket=bucket_name,
-                    Key=object_key,
-                    VersionId=marker['VersionId']
+                    VersionId=version_id
                 )
         else:
             # Delete the object
@@ -1804,8 +1816,8 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                     logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
                     return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"
         
-        # 3. Check if the object key ends with "init" - If so delete and skip indexing
-        if object_key.endswith('init') or object_key.endswith('init/'):
+        # 3. Check if the object is an "init" import marker - If so delete and skip indexing
+        if is_init_marker(object_key):
             # Check if versioning is enabled
             versioning_enabled = is_versioning_enabled(bucket_id)
             
@@ -1881,7 +1893,7 @@ def on_storage_event_created(event):
                indicating if processing completed without hard errors, and successful_records
                is a list of records that were successfully processed
     """
-    logger.info(f"Processing storage event: {json.dumps(event)}")
+    logger.info(f"Processing storage event: {event_log_summary(event)}")
     
     success_count = 0
     error_count = 0
@@ -2029,7 +2041,9 @@ def parse_event(event):
                     if 'Records' in message:
                         s3_events.append(message)
                 except json.JSONDecodeError as e:
-                    logger.warning(f"SNS Message field is not valid JSON: {e}. Message content: {record['Sns']['Message']}")
+                    logger.warning(
+                        f"SNS Message field is not valid JSON ({len(record['Sns']['Message'])} characters): {e}"
+                    )
                     # If Message contains S3 event data in a non-standard format, try to extract it
                     if 's3' in record['Sns']['Message'] or 'bucket' in record['Sns']['Message']:
                         logger.info("Attempting to process SNS Message as raw S3 event data")
@@ -2080,7 +2094,7 @@ def lambda_handler_created(event, context):
         reach the file indexer topic (every message when the invocation failed unexpectedly);
         an empty list when all of them did.
     """
-    logger.info(f"File creation event received: {json.dumps(event)}")
+    logger.info(f"File creation event received: {event_log_summary(event)}")
 
     failures = []
 
@@ -2151,7 +2165,7 @@ def lambda_handler_deleted(event, context):
         reach the file indexer topic (every message when the invocation failed unexpectedly);
         an empty list when all of them did.
     """
-    logger.info(f"File deletion event received: {json.dumps(event)}")
+    logger.info(f"File deletion event received: {event_log_summary(event)}")
 
     failures = []
 
@@ -2179,8 +2193,8 @@ def lambda_handler_deleted(event, context):
                 raw_object_key = record['s3']['object']['key']
                 object_key = decode_s3_event_key(raw_object_key)
 
-                # Skip init files entirely (both processing and indexing)
-                if object_key.endswith('init') or object_key.endswith('init/'):
+                # Skip init import markers entirely (both processing and indexing)
+                if is_init_marker(object_key):
                     logger.info(f"Skipping init file: {object_key}")
                     continue
 

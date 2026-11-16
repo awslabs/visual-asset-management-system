@@ -30,6 +30,8 @@ interface DataTableProps<T> {
     pageSize?: number;
     sorting?: boolean;
     filtering?: boolean;
+    // Placeholder for the table's own search box (shown when filtering); none when omitted.
+    searchPlaceholder?: string;
     // Rendered under the table while a column sort is active. Supply it when the rows are only part
     // of the set (a server-paged caller), so a sort that covers the loaded window is not read as
     // covering everything.
@@ -57,6 +59,7 @@ function DataTable<T>({
     pageSize = 10,
     sorting = true,
     filtering = true,
+    searchPlaceholder,
     sortScopeNote,
     paginate = true,
     flush = false,
@@ -99,6 +102,7 @@ function DataTable<T>({
                     <SearchInput
                         value={globalFilter ?? ""}
                         onChange={(e) => setGlobalFilter(e.target.value)}
+                        placeholder={searchPlaceholder}
                     />
                 </div>
             )}

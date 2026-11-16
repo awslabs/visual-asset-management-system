@@ -1790,9 +1790,9 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 # Log the error but continue with deletion process
                 logger.warning(f"Error deleting subscription record for asset {assetId}: {e}")
 
-        #send email for asset file change
-        send_subscription_email(databaseId, assetId)
-        
+        # Subscribers are notified when the asset is archived. A permanent delete sends no
+        # email: its topic and subscription record are already gone at this point.
+
         original_db_id = databaseId.replace("#deleted", "")
 
         # 1. Delete all S3 objects (assets files and preview)

@@ -192,12 +192,14 @@ def get_single_item(event, item_id):
 
 ### 5. Error Handling Hierarchy
 
-| Exception                    | Response Function       | HTTP Status |
-| ---------------------------- | ----------------------- | ----------- |
-| `ValidationError` (Pydantic) | `validation_error()`    | 400         |
-| `VAMSGeneralErrorResponse`   | `general_error()`       | 400         |
-| Authorization failure        | `authorization_error()` | 403         |
-| `Exception` (catch-all)      | `internal_error()`      | 500         |
+| Exception                                                        | Response Function                                                                             | HTTP Status        |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------ |
+| `ValidationError` (Pydantic)                                     | `validation_error()`                                                                          | 400                |
+| `VAMSGeneralErrorResponse`                                       | `general_error()`                                                                             | 400                |
+| `VAMSAuthorizationDeniedResponse` (object-level refusal)         | `authorization_error()` on a route that catches it before `VAMSGeneralErrorResponse`          | 403; 400 elsewhere |
+| `VAMSAssetNotFoundResponse` (missing asset, after authorization) | `general_error(status_code=404)` on a route that catches it before `VAMSGeneralErrorResponse` | 404; 400 elsewhere |
+| Authorization failure                                            | `authorization_error()`                                                                       | 403                |
+| `Exception` (catch-all)                                          | `internal_error()`                                                                            | 500                |
 
 All response functions accept an optional `event=` parameter for audit logging. Always pass the event when available.
 
@@ -537,6 +539,8 @@ The logger automatically redacts sensitive fields at all nesting levels, in both
 -   `authorization`
 -   `idJwtToken`
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`
+-   `apiKey`, `apiKeySecret`, `rawKey`
+-   the `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization` and `X-Amz-Security-Token` headers, in any letter case
 -   `configBody`, `templateTags`, `tagValues` -- caller-authored template content, also filtered inside a JSON-string request `body`
 
 Redaction is driven by the field name, so a message that interpolates a payload value into a formatted string is written as-is. Log identifiers, counts, and flags rather than rendered bodies or tag values.
@@ -720,7 +724,7 @@ def customAuthClaimsCheckOverride(claims_and_roles, lambdaRequest):
 
 ## Notification Subscriptions
 
-`handlers/subscription/subscriptionService.py` records who is notified when an asset changes. Each entry is keyed on the event name and the entity (`Asset#{assetId}`) and holds a `subscribers` list; the handler resolves each subscriber to an email address and creates an Amazon SNS `email` subscription on the asset's own topic (`AssetTopic{databaseId}-{assetId}`). Notification content is the asset name and its current version identifier, sent by `handlers/sendEmail/sendEmail.py`.
+`handlers/subscription/subscriptionService.py` records who is notified when an asset changes. Each entry is keyed on the event name and the entity (`Asset#{assetId}`) and holds a `subscribers` list; the handler resolves each subscriber to an email address and creates an Amazon SNS `email` subscription on the asset's own topic. `common/snsTopicNames.py` names that topic `AssetTopic{databaseId}-{assetId}-{hash}`: characters SNS does not allow in the asset ID become `-`, `{hash}` is the first 16 hex characters of the asset ID's SHA-256, and the name is shortened before the hash to stay within the 256-character SNS limit. Notification content is the asset name and its current version identifier, sent by `handlers/sendEmail/sendEmail.py`.
 
 How a subscriber value becomes an email address:
 

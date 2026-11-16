@@ -45,7 +45,7 @@ def _install_client_fakes(monkeypatch, *, tokens, api_results):
     monkeypatch.setattr(
         pc,
         "_load_physna_credentials",
-        lambda: {"clientId": "test-client", "clientSecret": "test-secret"},
+        lambda: {"clientId": "test-client", "clientSecret": "test-secret"},  # pragma: allowlist secret
     )
 
     token_iter = iter(tokens)
@@ -269,7 +269,7 @@ class TestCredentialCacheRefresh:
         first = pc._load_physna_credentials()
         second = pc._load_physna_credentials()
 
-        assert first == second == {"clientId": "client-1", "clientSecret": "secret-1"}
+        assert first == second == {"clientId": "client-1", "clientSecret": "secret-1"}  # pragma: allowlist secret
         assert reads["n"] == 1
 
     def test_cached_token_is_reused_without_touching_the_secret(self, monkeypatch):

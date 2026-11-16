@@ -49,7 +49,7 @@ class TestObjectSideScrub:
 
     def test_scrub_noop_for_unknown_type(self):
         svc = _service()
-        obj = {"object__type": "apiKey", "apiKeyId": "k1", "extra": "v"}
+        obj = {"object__type": "apiKey", "apiKeyId": "k1", "extra": "v"}  # pragma: allowlist secret
         assert svc._scrub_object_fields(obj) == obj
 
     def test_scrub_noop_when_no_object_type(self):

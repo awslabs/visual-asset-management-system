@@ -12,7 +12,6 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3not from "aws-cdk-lib/aws-s3-notifications";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as events from "aws-cdk-lib/aws-events";
-import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as cdk from "aws-cdk-lib";
 import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
@@ -30,6 +29,7 @@ import * as s3AssetBuckets from "../../helper/s3AssetBuckets";
 import { createPopulateS3AssetBucketsTableCustomResource } from "./customResources/populateS3AssetBucketsTable";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -763,19 +763,21 @@ export function storageResourcesBuilder(
         cfnBus.kmsKeyIdentifier = kmsEncryptionKey.keyArn;
     }
 
-    // Audit log group for the orchestration bus
+    // Audit log group for the orchestration bus. The name is a synth-time literal so the log group's own
+    // resource policy below can name it without a Ref to itself.
+    const orchestrationBusAuditLogGroupName =
+        "/aws/vendedlogs/VAMSOrchestrationBusAudit-" +
+        generateUniqueNameHash(
+            config.env.coreStackName,
+            config.env.account,
+            "VAMSOrchestrationBusAudit",
+            10
+        );
     const orchestrationBusAuditLogGroup = new logs.LogGroup(
         scope,
         "OrchestrationBusAuditLogGroup",
         {
-            logGroupName:
-                "/aws/vendedlogs/VAMSOrchestrationBusAudit-" +
-                generateUniqueNameHash(
-                    config.env.coreStackName,
-                    config.env.account,
-                    "VAMSOrchestrationBusAudit",
-                    10
-                ),
+            logGroupName: orchestrationBusAuditLogGroupName,
             retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
@@ -790,9 +792,49 @@ export function storageResourcesBuilder(
         },
     });
 
-    orchestrationBusAuditRule.addTarget(
-        new targets.CloudWatchLogGroup(orchestrationBusAuditLogGroup)
-    );
+    // EventBridge needs a CloudWatch Logs resource policy to write to the audit log group. The CDK
+    // aws-events-targets CloudWatchLogGroup target creates an ACCOUNT-level policy per stack
+    // (Custom::CloudwatchLogResourcePolicy), and an account holds at most 10 of those per Region, which
+    // capped VAMS at 10 deployments per Region (#1266). Instead, the grant is the log group's own resource
+    // policy (AWS::Logs::LogGroup ResourcePolicyDocument): it does not count against the account-level
+    // limit and is created, updated and deleted with the log group, so one stack's uninstall never touches
+    // another stack's grant. The target is bound by ARN so no account-level policy is created. The source
+    // rule is matched by the deployment-unique bus name (rule/<bus>/*), not by the rule's own ARN, which
+    // would make the log group depend on the rule that already depends on it.
+    const auditStack = cdk.Stack.of(scope);
+    const orchestrationBusAuditLogGroupArn = auditStack.formatArn({
+        service: "logs",
+        resource: "log-group",
+        arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+        resourceName: orchestrationBusAuditLogGroupName,
+    });
+    const cfnOrchestrationBusAuditLogGroup = orchestrationBusAuditLogGroup.node
+        .defaultChild as logs.CfnLogGroup;
+    cfnOrchestrationBusAuditLogGroup.resourcePolicyDocument = new iam.PolicyDocument({
+        statements: [
+            new iam.PolicyStatement({
+                sid: "OrchestrationBusAuditRuleWrite",
+                effect: iam.Effect.ALLOW,
+                principals: [Service("EVENTS").Principal],
+                actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+                resources: [`${orchestrationBusAuditLogGroupArn}:*`],
+                conditions: {
+                    StringEquals: { "aws:SourceAccount": auditStack.account },
+                    ArnLike: {
+                        "aws:SourceArn": auditStack.formatArn({
+                            service: "events",
+                            resource: "rule",
+                            resourceName: `${orchestrationBusName}/*`,
+                        }),
+                    },
+                },
+            }),
+        ],
+    });
+
+    orchestrationBusAuditRule.addTarget({
+        bind: (): events.RuleTargetConfig => ({ arn: orchestrationBusAuditLogGroupArn }),
+    });
 
     const assetAuxiliaryBucket = new s3.Bucket(scope, "AssetAuxiliaryBucket", {
         ...s3DefaultProps,
@@ -1357,7 +1399,7 @@ export function storageResourcesBuilder(
     // target is its only asset association. The partition attribute is written only on configuration
     // rows whose outputLocationType is 'asset', which keeps the index off results-only executions.
     workflowExecutionConfigurationStorageTable.addGlobalSecondaryIndex({
-        indexName: "WorkflowExecConfigByOutputAssetGSI",
+        indexName: "WorkflowExecConfigByOutputAssetGSI", // pragma: allowlist secret
         partitionKey: {
             name: "outputDatabaseId:outputAssetId",
             type: dynamodb.AttributeType.STRING,
@@ -2529,6 +2571,28 @@ export function storageResourcesBuilder(
         );
         bucketSyncDlqs.push(onS3ObjectCreatedDlq);
 
+        // A record in this DLQ is a file VAMS never processed: no search entry, no version-history row,
+        // no fileUpload trigger. Nothing self-heals, so the alarm is the signal to redrive the DLQ.
+        // No alarm action: VAMS has no notification topic, so operators attach their own.
+        new cloudwatch.Alarm(
+            scope,
+            "bucketSyncCreatedDLQAlarm--" + record.bucket + bucketSyncIdSuffix,
+            {
+                alarmName: `${config.name}-${config.app.baseStackName}-bucketSyncCreatedDLQ--${bucketSyncIndex}`,
+                alarmDescription:
+                    "S3 object-created events that the VAMS bucket-sync function could not process " +
+                    "are in this dead-letter queue. Redrive it to the source queue after fixing the cause.",
+                metric: onS3ObjectCreatedDlq.metricApproximateNumberOfMessagesVisible({
+                    period: Duration.minutes(5),
+                    statistic: cloudwatch.Stats.MAXIMUM,
+                }),
+                threshold: 0,
+                comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                evaluationPeriods: 1,
+                treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            }
+        );
+
         // Create SQS queue for S3 object created events
         const onS3ObjectCreatedQueue = new sqs.Queue(
             scope,
@@ -2617,6 +2681,27 @@ export function storageResourcesBuilder(
             }
         );
         bucketSyncDlqs.push(onS3ObjectDeletedDlq);
+
+        // A record in this DLQ is a delete VAMS never processed: the file's search entry and metadata
+        // stay behind for an object that no longer exists. Same alarm as the created side.
+        new cloudwatch.Alarm(
+            scope,
+            "bucketSyncDeletedDLQAlarm--" + record.bucket + bucketSyncIdSuffix,
+            {
+                alarmName: `${config.name}-${config.app.baseStackName}-bucketSyncDeletedDLQ--${bucketSyncIndex}`,
+                alarmDescription:
+                    "S3 object-deleted events that the VAMS bucket-sync function could not process " +
+                    "are in this dead-letter queue. Redrive it to the source queue after fixing the cause.",
+                metric: onS3ObjectDeletedDlq.metricApproximateNumberOfMessagesVisible({
+                    period: Duration.minutes(5),
+                    statistic: cloudwatch.Stats.MAXIMUM,
+                }),
+                threshold: 0,
+                comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                evaluationPeriods: 1,
+                treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            }
+        );
 
         // Create SQS queue for S3 object deleted events
         const onS3ObjectDeletedQueue = new sqs.Queue(

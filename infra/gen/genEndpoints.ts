@@ -108,6 +108,7 @@ function buildMasterLookup(json: any): ServiceLookup {
             // "es" is published as OpenSearch: principal/hostname use opensearchservice prefix,
             // ARN keeps the es service token.
             let principalPrefix = serviceKey;
+            // pragma: allowlist nextline secret
             if (serviceKey === "es") principalPrefix = "opensearchservice";
 
             perPartition[partitionName][serviceKey] = {
@@ -244,6 +245,7 @@ function mergeLookups(
         for (const serviceKey of Object.keys(merged)) {
             const entry = merged[serviceKey][partitionName];
             if (!entry) continue;
+            // pragma: allowlist nextline secret
             const prefix = serviceKey === "es" ? "opensearchservice" : serviceKey;
             const expected = `${prefix}.${suffix}`;
             if (entry.principal !== expected) {

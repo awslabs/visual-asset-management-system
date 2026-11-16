@@ -706,7 +706,7 @@ export default function AssetDownloadsPage() {
 
     // Handle return to asset view
     const handleReturnToAsset = () => {
-        navigate(`/databases/${databaseId}/assets/${assetId}`);
+        navigate(`/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}`);
     };
 
     // Force completion of any stuck downloads
@@ -741,7 +741,13 @@ export default function AssetDownloadsPage() {
                     </Box>
                     <Button
                         variant="primary"
-                        onClick={() => navigate(`/databases/${databaseId}/assets/${assetId}`)}
+                        onClick={() =>
+                            navigate(
+                                `/databases/${databaseId}/assets/${encodeURIComponent(
+                                    String(assetId)
+                                )}`
+                            )
+                        }
                     >
                         Go to {Synonyms.Asset}
                     </Button>
@@ -766,7 +772,11 @@ export default function AssetDownloadsPage() {
                         },
                         {
                             text: assetName || assetId || "",
-                            href: "#/databases/" + databaseId + "/assets/" + assetId,
+                            href:
+                                "#/databases/" +
+                                databaseId +
+                                "/assets/" +
+                                encodeURIComponent(String(assetId)),
                         },
                         { text: "Download", href: "" },
                     ]}

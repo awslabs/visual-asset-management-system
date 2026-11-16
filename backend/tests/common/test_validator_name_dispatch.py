@@ -69,7 +69,7 @@ LEGITIMATE_VALUES = {
     'ID': 'my-pipeline-1',
     'ASSET_ID': 'my.asset v2',
     'UUID': 'fd79afb2-f12d-4a10-809c-78c98007da91',
-    'GUID': 'fd79afb2f12d4a10809c78c98007da91',
+    'GUID': 'fd79afb2f12d4a10809c78c98007da91',  # pragma: allowlist secret
     'SAGEMAKER_NOTEBOOK_ID': 'nb-1',
     'ID_ARRAY': ['my-pipeline-1'],
     'UUID_ARRAY': ['fd79afb2-f12d-4a10-809c-78c98007da91'],

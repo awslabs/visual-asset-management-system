@@ -145,6 +145,63 @@ describe("ExecutionsBoard", () => {
         expect(screen.getAllByText("db-1").length).toBeGreaterThan(0);
     });
 
+    it.each([
+        ["an empty object", {}],
+        ["a message only", { message: "no rows" }],
+        ["a null Items", { Items: null }],
+    ])("renders an empty list, not an error, for a page with %s", (_label, page) => {
+        const { useExecutions } = require("../api/queries");
+        useExecutions.mockReturnValue({
+            data: { pages: [page], pageParams: [] },
+            isLoading: false,
+            error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionsBoard scope={{ kind: "global" }} />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.getByText("No executions found.")).toBeInTheDocument();
+    });
+
+    it("keeps the rows of the other pages when one page has no Items", () => {
+        const { useExecutions } = require("../api/queries");
+        const row: Execution = {
+            workflowExecutionId: "exec-kept",
+            workflowId: "wf-1",
+            workflowDatabaseId: "db-1",
+            executionStatus: "SUCCEEDED",
+            triggeredByUserId: "user-1",
+            triggerType: "manual",
+            executionStartDate: "2026-07-18T10:00:00Z",
+        };
+        useExecutions.mockReturnValue({
+            data: { pages: [{ Items: [row] }, {}], pageParams: [] },
+            isLoading: false,
+            error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionsBoard scope={{ kind: "global" }} />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.getByText("exec-kept")).toBeInTheDocument();
+    });
+
     it("sorts non-terminal rows (RUNNING) above terminal rows", () => {
         const { useExecutions } = require("../api/queries");
         const mockExecutions: Execution[] = [
@@ -336,6 +393,41 @@ describe("ExecutionsBoard", () => {
         await userEvent.type(screen.getByPlaceholderText("CONFIRM"), "CONFIRM");
         await userEvent.click(screen.getByRole("button", { name: /^Permanent Delete$/ }));
         expect(actions.permanentDeleteExecution.mutateAsync).toHaveBeenCalledWith("exec-1");
+    });
+
+    it("draws the row actions button as an icon and opens its menu by click and by keyboard", async () => {
+        renderBoard([
+            {
+                workflowExecutionId: "exec-1",
+                workflowId: "wf-1",
+                workflowDatabaseId: "db-1",
+                executionStatus: "SUCCEEDED",
+                executionStartDate: "2026-07-18T10:00:00Z",
+            },
+        ]);
+        const button = screen.getByRole("button", { name: "Execution actions" });
+        // An SVG icon, not a text glyph that renders blank without a font carrying it.
+        expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+        expect(button.textContent).toBe("");
+
+        const user = userEvent.setup();
+        await user.click(button);
+        expect(await screen.findByRole("menu")).toBeInTheDocument();
+        await user.keyboard("{Escape}");
+        await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+        expect(button).toHaveFocus();
+
+        await user.keyboard("{Enter}");
+        expect(await screen.findByRole("menu")).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "View results" })).toBeInTheDocument();
+    });
+
+    it("shows a placeholder in the search box", () => {
+        renderBoard([]);
+        expect(screen.getByRole("textbox", { name: "Search" })).toHaveAttribute(
+            "placeholder",
+            "Search executions"
+        );
     });
 
     it("forwards the group id when aborting an execution group", async () => {
@@ -866,7 +958,7 @@ describe("ExecutionsBoard re-run feedback", () => {
     };
 
     const clickRerun = async () => {
-        // The row's "⋯" menu (aria-label "Execution actions"), then the Re-run item. The column
+        // The row's three-dot menu (aria-label "Execution actions"), then the Re-run item. The column
         // HEADER is also called "Actions", so the label has to be exact.
         await userEvent.click(screen.getByRole("button", { name: "Execution actions" }));
         await userEvent.click(await screen.findByText("Rerun"));

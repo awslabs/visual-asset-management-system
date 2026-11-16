@@ -53,6 +53,7 @@ from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
+from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from models.assetsV3 import (
     AssetFileItemModel, ListAssetFilesRequestModel, ListAssetFilesResponseModel,
     FileInfoRequestModel, FileInfoResponseModel, MoveFileRequestModel,
@@ -228,26 +229,33 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         The asset if found and user has permissions, otherwise raises an exception
         
     Raises:
-        VAMSGeneralErrorResponse: If asset not found or user doesn't have permissions
+        VAMSAuthorizationDeniedResponse: If the user doesn't have permissions
+        VAMSAssetNotFoundResponse: If the user has permissions and the asset is not found
     """
     try:
         # Get the asset from DynamoDB
         response = asset_table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
         asset = response.get('Item', {})
         
-        if not asset:
-            raise VAMSGeneralErrorResponse("Asset not found in database.")
-        
         # An empty token list carries no authenticated identity, so authorization
         # cannot be evaluated and the request is denied.
         if len(claims_and_roles["tokens"]) == 0:
-            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+            raise VAMSAuthorizationDeniedResponse()
 
-        # Check permissions against an annotated copy, so the returned record, which callers
-        # write back, carries no object type
+        # Authorize before existence, so a refused caller gets the same answer for a missing asset
+        # as for an existing one. A found record is checked as an annotated copy, so the returned
+        # record, which callers write back, carries no object type; for a missing one the request's
+        # identifiers stand in.
+        if asset:
+            authorization_object = {**asset, 'object__type': 'asset'}
+        else:
+            authorization_object = {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce({**asset, 'object__type': 'asset'}, operation):
-            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+        if not casbin_enforcer.enforce(authorization_object, operation):
+            raise VAMSAuthorizationDeniedResponse()
+
+        if not asset:
+            raise VAMSAssetNotFoundResponse("Asset not found in database.")
 
         return asset
     except Exception as e:
@@ -914,10 +922,10 @@ def validate_cross_asset_permissions(source_asset: Dict, dest_asset: Dict, claim
     dest_allowed = casbin_enforcer.enforce({**dest_asset, 'object__type': 'asset'}, "POST")
 
     if not source_allowed:
-        raise VAMSGeneralErrorResponse("Not authorized to read from source asset")
+        raise VAMSAuthorizationDeniedResponse("Not authorized to read from source asset")
 
     if not dest_allowed:
-        raise VAMSGeneralErrorResponse("Not authorized to write to destination asset")
+        raise VAMSAuthorizationDeniedResponse("Not authorized to write to destination asset")
 
     return True
 
@@ -2597,7 +2605,7 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
 
         # Validate cross-asset permissions
         if not validate_cross_asset_permissions(source_asset, dest_asset, claims_and_roles):
-            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+            raise VAMSAuthorizationDeniedResponse()
     else:
         # Same asset, need POST permission
         dest_asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
@@ -3781,6 +3789,8 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3868,6 +3878,8 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3956,6 +3968,8 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4046,6 +4060,8 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4134,6 +4150,8 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4236,6 +4254,10 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4331,6 +4353,8 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4418,6 +4442,8 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4586,6 +4612,8 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4673,6 +4701,8 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4762,6 +4792,8 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4850,6 +4882,10 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

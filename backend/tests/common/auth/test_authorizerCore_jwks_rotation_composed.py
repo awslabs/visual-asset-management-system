@@ -262,7 +262,7 @@ class TestExpiredEntriesAreSweptBeforeLiveOnes:
     """
 
     def test_a_live_api_key_entry_survives_a_flood_of_expired_entries(self):
-        record = {"apiKeyId": "k1", "userId": "u1", "isActive": "true"}
+        record = {"apiKeyId": "k1", "userId": "u1", "isActive": "true"}  # pragma: allowlist secret
         found = _CountingTable([record])
 
         with patch.object(core, "_get_api_key_table", return_value=found), \
@@ -279,7 +279,7 @@ class TestExpiredEntriesAreSweptBeforeLiveOnes:
 
     def test_the_live_entry_is_still_served_from_cache_after_the_flood(self):
         """Control: surviving the flood is only useful if the entry is still a cache hit."""
-        record = {"apiKeyId": "k1", "userId": "u1", "isActive": "true"}
+        record = {"apiKeyId": "k1", "userId": "u1", "isActive": "true"}  # pragma: allowlist secret
         found = _CountingTable([record])
 
         with patch.object(core, "_get_api_key_table", return_value=found), \
@@ -329,7 +329,7 @@ class TestEvictionNeverDeniesAValidIdentity:
     """
 
     def test_an_evicted_api_key_entry_is_re_read_rather_than_denied(self):
-        record = {"apiKeyId": "k1", "userId": "u1", "isActive": "true"}
+        record = {"apiKeyId": "k1", "userId": "u1", "isActive": "true"}  # pragma: allowlist secret
         found = _CountingTable([record])
 
         with patch.object(core, "_get_api_key_table", return_value=found):

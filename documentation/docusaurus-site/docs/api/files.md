@@ -137,12 +137,12 @@ The `versions` list is present only when `includeVersions` is `true`. `changeWor
 
 **Error Responses:**
 
-| Status | Description                                         |
-| ------ | --------------------------------------------------- |
-| `400`  | Invalid parameters or missing `filePath` parameter. |
-| `403`  | Not authorized to view this file.                   |
-| `404`  | File not found.                                     |
-| `500`  | Internal server error.                              |
+| Status | Description                                                          |
+| ------ | -------------------------------------------------------------------- |
+| `400`  | Invalid parameters, missing `filePath` parameter, or file not found. |
+| `403`  | Not authorized to view this file.                                    |
+| `404`  | Asset not found.                                                     |
+| `500`  | Internal server error.                                               |
 
 ---
 
@@ -289,12 +289,11 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 
 **Error Responses:**
 
-| Status | Description                                                       |
-| ------ | ----------------------------------------------------------------- |
-| `400`  | Invalid parameters or `confirmPermanentDelete` not set to `true`. |
-| `403`  | Not authorized to delete files in this asset.                     |
-| `404`  | File not found.                                                   |
-| `500`  | Internal server error.                                            |
+| Status | Description                                                                        |
+| ------ | ---------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, or file not found. |
+| `403`  | Not authorized to delete files in this asset.                                      |
+| `500`  | Internal server error.                                                             |
 
 ---
 
@@ -337,12 +336,11 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 
 **Error Responses:**
 
-| Status | Description                                    |
-| ------ | ---------------------------------------------- |
-| `400`  | Invalid parameters.                            |
-| `403`  | Not authorized to archive files in this asset. |
-| `404`  | File not found.                                |
-| `500`  | Internal server error.                         |
+| Status | Description                                                |
+| ------ | ---------------------------------------------------------- |
+| `400`  | Invalid parameters, or file not found or already archived. |
+| `403`  | Not authorized to archive files in this asset.             |
+| `500`  | Internal server error.                                     |
 
 ---
 
@@ -383,12 +381,11 @@ Restores a previously archived file by copying its most recent content version f
 
 **Error Responses:**
 
-| Status | Description                                      |
-| ------ | ------------------------------------------------ |
-| `400`  | Invalid parameters.                              |
-| `403`  | Not authorized to unarchive files in this asset. |
-| `404`  | File not found or not archived.                  |
-| `500`  | Internal server error.                           |
+| Status | Description                                            |
+| ------ | ------------------------------------------------------ |
+| `400`  | Invalid parameters, or file not found or not archived. |
+| `403`  | Not authorized to unarchive files in this asset.       |
+| `500`  | Internal server error.                                 |
 
 ---
 
@@ -476,12 +473,11 @@ Reverts a file to a specific previous S3 version by copying the old version as t
 
 **Error Responses:**
 
-| Status | Description                              |
-| ------ | ---------------------------------------- |
-| `400`  | Invalid parameters or version not found. |
-| `403`  | Not authorized to revert file versions.  |
-| `404`  | File or version not found.               |
-| `500`  | Internal server error.                   |
+| Status | Description                                       |
+| ------ | ------------------------------------------------- |
+| `400`  | Invalid parameters, or file or version not found. |
+| `403`  | Not authorized to revert file versions.           |
+| `500`  | Internal server error.                            |
 
 ---
 
@@ -528,12 +524,11 @@ The file is written as a new Amazon S3 version with the same content, recorded w
 
 **Error Responses:**
 
-| Status | Description                               |
-| ------ | ----------------------------------------- |
-| `400`  | Invalid parameters.                       |
-| `403`  | Not authorized to modify file attributes. |
-| `404`  | File not found.                           |
-| `500`  | Internal server error.                    |
+| Status | Description                                        |
+| ------ | -------------------------------------------------- |
+| `400`  | Invalid parameters, or file not found or archived. |
+| `403`  | Not authorized to modify file attributes.          |
+| `500`  | Internal server error.                             |
 
 ---
 
@@ -603,7 +598,7 @@ Each entry in `files` is an object:
 
 | Status | Description                                                                                                                          |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, blocked file extension, or blocked MIME type.                                                                    |
+| `400`  | Invalid parameters, asset not found, blocked file extension, or blocked MIME type.                                                   |
 | `403`  | Not authorized to upload files to this asset.                                                                                        |
 | `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60). |
 | `500`  | Internal server error.                                                                                                               |
@@ -661,6 +656,8 @@ Completes a multipart file upload by signaling that all parts have been uploaded
 
 Each entry in `files` is an object with `relativeKey`, `uploadIdS3`, and a `parts` array of `{ "PartNumber", "ETag" }` objects. An empty `parts` array completes a file initialized as `zero-byte`. For any other file it cancels the file: the multipart upload is aborted, nothing is stored, and the file's result has `success: false`.
 
+A file over 1 GiB is processed asynchronously: its result has `success: true` and `largeFileAsynchronousHandling: true`, it counts toward `overallSuccess`, and it appears in the asset once the copy finishes.
+
 **Response:**
 
 ```json
@@ -683,10 +680,11 @@ Each entry in `files` is an object with `relativeKey`, `uploadIdS3`, and a `part
 
 **Error Responses:**
 
-| Status | Description                         |
-| ------ | ----------------------------------- |
-| `400`  | Invalid upload ID or missing parts. |
-| `500`  | Internal server error.              |
+| Status | Description                                            |
+| ------ | ------------------------------------------------------ |
+| `400`  | Invalid upload ID, upload not found, or missing parts. |
+| `403`  | Not authorized to upload files to this asset.          |
+| `500`  | Internal server error.                                 |
 
 ---
 
@@ -808,11 +806,11 @@ Deletes the asset-level preview image.
 
 **Error Responses:**
 
-| Status | Description                 |
-| ------ | --------------------------- |
-| `403`  | Not authorized.             |
-| `404`  | Asset or preview not found. |
-| `500`  | Internal server error.      |
+| Status | Description                                              |
+| ------ | -------------------------------------------------------- |
+| `400`  | Invalid parameters, or asset or asset preview not found. |
+| `403`  | Not authorized.                                          |
+| `500`  | Internal server error.                                   |
 
 ---
 
@@ -854,8 +852,8 @@ Permanently deletes auxiliary preview files (e.g., Potree viewer data) from the 
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `403`  | Not authorized.        |
-| `404`  | Asset not found.       |
-| `500`  | Internal server error. |
+| Status | Description                                                                                 |
+| ------ | ------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, asset not found, or no auxiliary preview files found for the file path. |
+| `403`  | Not authorized.                                                                             |
+| `500`  | Internal server error.                                                                      |

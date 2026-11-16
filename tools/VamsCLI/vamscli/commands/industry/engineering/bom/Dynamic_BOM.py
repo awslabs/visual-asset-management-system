@@ -77,6 +77,28 @@ def bomassemble():
     """Bill of Material assemble format commands."""
     pass
 
+TEMP_DIR_PREFIX = 'vams_bom_assembly_'
+
+
+def remove_run_temp_dir(base_temp_dir: Optional[str], json_output: bool) -> None:
+    """Remove the folder this run created with mkdtemp, and nothing else.
+
+    Only a direct child of the system temp directory whose name starts with TEMP_DIR_PREFIX is
+    removed. A failure to remove it is a warning, so it cannot hide the command's result.
+    """
+    if not base_temp_dir:
+        return
+    path = os.path.realpath(base_temp_dir)
+    if (os.path.dirname(path) != os.path.realpath(tempfile.gettempdir())
+            or not os.path.basename(path).startswith(TEMP_DIR_PREFIX)):
+        output_warning(f"Not removing {base_temp_dir}: not this command's temporary folder",
+                       json_output)
+        return
+    try:
+        shutil.rmtree(path)
+    except OSError as e:
+        output_warning(f"Could not remove temporary folder {base_temp_dir}: {e}", json_output)
+
 def parse_bom_json(json_path: str) -> Dict[str, Any]:
     """
     Parse BOM JSON file.
@@ -252,12 +274,8 @@ def download_glb_for_node(ctx: click.Context, api_client: APIClient, database_id
         
         output_status(f"Getting combined GLB for asset: {source_name}", json_output)
         
-        # Use fixed output directory for debugging
-        base_output_dir = Path.cwd() / "temp" 
-        base_output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create subdirectory for this asset's combined GLB
-        asset_temp_dir = base_output_dir / sanitize_node_name(source_name)
+        # Per-source download folder inside the command's temporary directory
+        asset_temp_dir = Path(temp_dir) / "downloads" / sanitize_node_name(source_name)
         asset_temp_dir.mkdir(parents=True, exist_ok=True)
         
         # Use glbassetcombine to get the combined GLB for this asset
@@ -578,6 +596,7 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     temp_dir = None
+    base_temp_dir = None
     
     try:
         # Step 1: Parse BOM JSON
@@ -605,7 +624,7 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
         unique_folder = f"bomassemble_{timestamp}"
         
         if not local_path:
-            base_temp_dir = tempfile.mkdtemp(prefix='vams_bom_assembly_')
+            base_temp_dir = tempfile.mkdtemp(prefix=TEMP_DIR_PREFIX)
             temp_dir = os.path.join(base_temp_dir, unique_folder)
         else:
             temp_dir = os.path.join(local_path, unique_folder)
@@ -789,9 +808,9 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                 }
                 
                 # Delete temp files if requested
-                if delete_temporary_files and temp_dir and not local_path:
+                if delete_temporary_files and not keep_temp_files and temp_dir and not local_path:
                     output_status("Cleaning up temporary files...", json_output)
-                    shutil.rmtree(temp_dir)
+                    remove_run_temp_dir(base_temp_dir, json_output)
                     temp_dir = None
                 
             except Exception as e:
@@ -804,7 +823,7 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
         # Cleanup temp files if not keeping (and not already deleted)
         if not keep_temp_files and temp_dir and not local_path and os.path.exists(temp_dir):
             output_status("Cleaning up temporary files...", json_output)
-            shutil.rmtree(temp_dir)
+            remove_run_temp_dir(base_temp_dir, json_output)
             temp_dir = None
         
         # Output result
@@ -829,10 +848,7 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
     finally:
         # Cleanup temp directory if not keeping
         if temp_dir and not keep_temp_files and not local_path and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-            except Exception:
-                pass
+            remove_run_temp_dir(base_temp_dir, json_output)
 
 
 def format_assembly_result(data: Dict[str, Any]) -> str:

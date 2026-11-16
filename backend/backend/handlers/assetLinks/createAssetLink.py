@@ -77,6 +77,17 @@ def check_existing_relationship(from_asset_id: str, from_database_id: str, to_as
     try:
         from_key = f"{from_database_id}:{from_asset_id}"
         to_key = f"{to_database_id}:{to_asset_id}"
+
+        def verify_existing_links(links):
+            verified_links = []
+            for link in links:
+                response = asset_links_table.get_item(
+                    Key={'assetLinkId': link['assetLinkId']},
+                    ConsistentRead=True
+                )
+                if 'Item' in response:
+                    verified_links.append(link)
+            return verified_links
         
         # For 'related' relationships, check both directions (aliases not applicable)
         if relationship_type == RelationshipType.RELATED:
@@ -88,6 +99,7 @@ def check_existing_relationship(from_asset_id: str, from_database_id: str, to_as
                                      Key('toAssetDatabaseId:toAssetId').eq(to_key),
                 FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.RELATED)
             )
+            forward_links = verify_existing_links(forward_links)
 
             # Check to -> from
             reverse_links = query_all_items(
@@ -97,6 +109,7 @@ def check_existing_relationship(from_asset_id: str, from_database_id: str, to_as
                                      Key('toAssetDatabaseId:toAssetId').eq(from_key),
                 FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.RELATED)
             )
+            reverse_links = verify_existing_links(reverse_links)
 
             return len(forward_links) > 0 or len(reverse_links) > 0
         
@@ -113,6 +126,7 @@ def check_existing_relationship(from_asset_id: str, from_database_id: str, to_as
                                      Key('toAssetDatabaseId:toAssetId').eq(to_key),
                 FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
             )
+            existing_links = verify_existing_links(existing_links)
 
             # Step 2: Check if any of these links have the same aliasId (or both have no alias)
             for link in existing_links:
@@ -132,6 +146,7 @@ def check_existing_relationship(from_asset_id: str, from_database_id: str, to_as
                                      Key('toAssetDatabaseId:toAssetId').eq(from_key),
                 FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
             )
+            reverse_links = verify_existing_links(reverse_links)
 
             # If any reverse relationships exist, it's bidirectional (not allowed)
             if len(reverse_links) > 0:

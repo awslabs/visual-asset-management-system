@@ -159,7 +159,12 @@ const LandingPage = (props: any) => {
                                 </Box>
                                 <Container>
                                     <div className="carousel">
-                                        <ul
+                                        {/* Not a list: three of this element's children are the
+                                            carousel's own controls (the hidden radios and the dot
+                                            strip), which the CSS needs as siblings of the slides,
+                                            and a list whose children are not list items is
+                                            announced wrongly by a screen reader. */}
+                                        <div
                                             className="slides"
                                             style={{ height: carouselHeight + "px" }}
                                         >
@@ -168,7 +173,7 @@ const LandingPage = (props: any) => {
                                                 setSlide={setSlide}
                                                 slide={slide}
                                             />
-                                            <li className="slide-container">
+                                            <div className="slide-container">
                                                 <div className="slide-image">
                                                     <img
                                                         ref={firstCarouselImageEl}
@@ -177,48 +182,48 @@ const LandingPage = (props: any) => {
                                                         onLoad={measureCarouselHeight}
                                                     />
                                                 </div>
-                                            </li>
+                                            </div>
                                             <CarouselRadio
                                                 id="img-2"
                                                 setSlide={setSlide}
                                                 slide={slide}
                                             />
-                                            <li className="slide-container">
+                                            <div className="slide-container">
                                                 <div className="slide-image">
                                                     <img
                                                         src={visualize3dVrImageSrc}
                                                         alt="Visualize in 3d & VR"
                                                     />
                                                 </div>
-                                            </li>
+                                            </div>
                                             <CarouselRadio
                                                 id="img-3"
                                                 setSlide={setSlide}
                                                 slide={slide}
                                             />
 
-                                            <li className="slide-container">
+                                            <div className="slide-container">
                                                 <div className="slide-image">
                                                     <img
                                                         src={addPipelinesImageSrc}
                                                         alt="Add Pipelines"
                                                     />
                                                 </div>
-                                            </li>
+                                            </div>
                                             <CarouselRadio
                                                 id="img-4"
                                                 setSlide={setSlide}
                                                 slide={slide}
                                             />
 
-                                            <li className="slide-container">
+                                            <div className="slide-container">
                                                 <div className="slide-image">
                                                     <img
                                                         src={buildWorkflowsImageSrc}
                                                         alt="Build Workflows"
                                                     />
                                                 </div>
-                                            </li>
+                                            </div>
                                             <div className="carousel-dots">
                                                 <label
                                                     htmlFor="img-1"
@@ -241,7 +246,7 @@ const LandingPage = (props: any) => {
                                                     id="img-dot-4"
                                                 ></label>
                                             </div>
-                                        </ul>
+                                        </div>
                                     </div>
                                 </Container>
                             </div>

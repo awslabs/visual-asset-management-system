@@ -25,7 +25,7 @@ The app mounts with `createRoot` from `react-dom/client`, so React 18 APIs such 
 ```
 web/src/
   App.tsx                 # Root shell, HashRouter, TopNavigation
-  routes.tsx              # Centralized route table with React.lazy
+  routes.tsx              # Centralized route table with lazyWithRetry
   config.ts               # Static config (APP_TITLE, APP_TITLE_PREFIX, DEV_API_ENDPOINT)
   synonyms.tsx            # Customizable display names (Asset, Database, Comment)
   index.tsx               # Entry point (createRoot)
@@ -131,11 +131,11 @@ File paths must be URL-encoded (`encodeURIComponent`). Version parameters: `?ver
 
 ### Rule 4: Lazy Load All Pages
 
-Every page component in `routes.tsx` must be lazy-loaded for route-level code splitting.
+Every page component in `routes.tsx` must be lazy-loaded for route-level code splitting, through `lazyWithRetry` from `src/utils/chunkLoadRecovery.ts`. It retries a page chunk that failed to download, then reloads the page once; if the chunk still cannot be downloaded, the page shows "This page could not be downloaded" with a Reload button.
 
 ```typescript
 // CORRECT
-const MyPage = React.lazy(() => import("./pages/MyPage"));
+const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 // WRONG -- defeats code splitting
 import MyPage from "./pages/MyPage";
@@ -523,7 +523,7 @@ The preview file pattern and allowed preview extensions are mirrored in the back
 2. Add the lazy import and route in `src/routes.tsx`:
 
     ```typescript
-    const MyPage = React.lazy(() => import("./pages/MyPage"));
+    const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
     // In routeTable array:
     {
@@ -607,7 +607,7 @@ When add-ons that embed external content are enabled, CSP is extended dynamicall
 | Import `apiClient` in components                   | Import from `APIService.ts` or other service files       |
 | Barrel import from `@cloudscape-design/components` | Use individual subpath imports                           |
 | Use `BrowserRouter`                                | Use `HashRouter`                                         |
-| Eagerly import page components                     | Use `React.lazy()` in `routes.tsx`                       |
+| Eagerly import page components                     | Use `lazyWithRetry()` in `routes.tsx`                    |
 | Add Redux, Zustand, or MobX                        | Use React Context + `useReducer`                         |
 | Use `Amplify Cache`                                | Use `appCache` from `src/services/appCache.ts`           |
 | Access Amplify Auth directly                       | Use `getDualValidAccessToken()` from `authTokenUtils.ts` |

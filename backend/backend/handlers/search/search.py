@@ -383,20 +383,9 @@ class DualIndexSearchManager:
                 if "aggregations" in file_response:
                     for agg_name, agg_data in file_response["aggregations"].items():
                         if agg_name in results["aggregations"]:
-                            # Merge buckets for same aggregation
-                            existing_buckets = results["aggregations"][agg_name].get("buckets", [])
-                            new_buckets = agg_data.get("buckets", [])
-                            
-                            # Combine and deduplicate buckets
-                            combined_buckets = {}
-                            for bucket in existing_buckets + new_buckets:
-                                key = bucket.get("key")
-                                if key in combined_buckets:
-                                    combined_buckets[key]["doc_count"] += bucket.get("doc_count", 0)
-                                else:
-                                    combined_buckets[key] = bucket
-                            
-                            results["aggregations"][agg_name]["buckets"] = list(combined_buckets.values())
+                            results["aggregations"][agg_name] = self._merge_aggregation(
+                                results["aggregations"][agg_name], agg_data
+                            )
                         else:
                             results["aggregations"][agg_name] = agg_data
                 
@@ -418,6 +407,36 @@ class DualIndexSearchManager:
         except Exception as e:
             logger.exception(f"Error executing dual-index search: {e}")
             raise VAMSGeneralErrorResponse("Error executing search query")
+
+    @classmethod
+    def _merge_aggregation(cls, existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+        """One index's aggregation combined with the other's under the same name.
+
+        Facets are filter aggregations wrapping a terms aggregation, so the buckets sit in the
+        nested ``filtered_*`` sub-aggregation; sub-aggregations both sides carry are merged at
+        every level. Bucket counts are summed per key and kept in terms order (count descending,
+        then key); document counts are summed.
+        """
+        merged = dict(existing)
+        for name, value in incoming.items():
+            current = merged.get(name)
+            if name == "buckets" and isinstance(value, list) and isinstance(current, list):
+                counts: Dict[Any, int] = {}
+                for bucket in current + value:
+                    key = bucket.get("key")
+                    counts[key] = counts.get(key, 0) + int(bucket.get("doc_count", 0) or 0)
+                merged[name] = sorted(
+                    ({"key": key, "doc_count": count} for key, count in counts.items()),
+                    key=lambda bucket: (-bucket["doc_count"], str(bucket["key"])),
+                )
+            elif name in ("doc_count", "sum_other_doc_count", "doc_count_error_upper_bound") \
+                    and isinstance(value, int) and isinstance(current, int):
+                merged[name] = current + value
+            elif isinstance(value, dict) and isinstance(current, dict):
+                merged[name] = cls._merge_aggregation(current, value)
+            elif name not in merged:
+                merged[name] = value
+        return merged
 
 #######################
 # Authorization Management

@@ -17,6 +17,8 @@ This pipeline extracts comprehensive metadata from CAD and Mesh files using CADQ
 -   GLTF/GLB (.gltf, .glb) - GL Transmission Format
 -   XYZ (.xyz) - Point cloud format
 
+The text of an OBJ, ASCII STL, XYZ or glTF file, and the JSON chunk of a GLB, must be UTF-8. A file whose text is not UTF-8 fails with a message naming the file and the first byte that is not UTF-8 (`input_text.py`); the pipeline does not guess another encoding.
+
 ## Extracted Metadata
 
 ### For CAD Files

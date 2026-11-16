@@ -441,7 +441,7 @@ class TestFileListCommand:
                         'isArchived': False,
                         'dateCreatedCurrentVersion': '2023-01-01T00:00:00Z',
                         'versionId': 'version-123',
-                        'etag': 'd41d8cd98f00b204e9800998ecf8427e',
+                        'etag': 'd41d8cd98f00b204e9800998ecf8427e',  # pragma: allowlist secret
                         'storageClass': 'STANDARD',
                         'previewFile': '/model.previewFile.png'
                     }
@@ -918,7 +918,7 @@ class TestFileInfoCommand:
                 'size': 1024,
                 'contentType': 'model/gltf+json',
                 'lastModified': '2023-01-01T00:00:00Z',
-                'etag': 'd41d8cd98f00b204e9800998ecf8427e',
+                'etag': 'd41d8cd98f00b204e9800998ecf8427e',  # pragma: allowlist secret
                 'storageClass': 'STANDARD',
                 'isArchived': False,
                 'primaryType': 'primary',

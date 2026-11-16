@@ -17,7 +17,7 @@ sequenceDiagram
     participant Casbin as CasbinEnforcer
 
     Client->>IDP: Sign in
-    IDP-->>Client: JWT (vams:tokens, email)
+    IDP-->>Client: JWT (username, email)
     Client->>APIGW: Request + Authorization header
     APIGW->>Authorizer: REQUEST authorizer event
     Authorizer->>Authorizer: Resolve client IP, check IP ranges
@@ -46,9 +46,11 @@ VAMS accepts three credential types, and the flow differs only in how the creden
 | External OAuth IDP JWT    | The configured external identity provider      | `PyJWT`, against the issuer's JWKS (OpenID Connect discovery, cached) |
 | VAMS API key (`vams_...`) | VAMS (`/auth/api-keys`, `/auth/user/api-keys`) | SHA-256 hash compared against the API key table `apiKeyHashIndex` GSI |
 
-For Amazon Cognito, a pre-token-generation Lambda trigger (`pretokengenv1.py` for the GovCloud mode, `pretokengenv2.py` otherwise) adds VAMS claims to the issued token. It populates `vams:tokens` (the user identifier VAMS authorizes against) and `email`, and leaves `vams:roles` and `vams:externalAttributes` empty. Roles are deliberately **not** resolved here — see [Where roles come from](#where-roles-come-from).
+For Amazon Cognito, a pre-token-generation Lambda trigger (`pretokengenv1.py` for the GovCloud mode, `pretokengenv2.py` otherwise) adds VAMS claims to the issued token. It populates `vams:tokens` (the user name) and `email`, and leaves `vams:roles` and `vams:externalAttributes` empty. The authorizer does not read these `vams:` claims; it sets the context values of the same names itself (Stage 2). Roles are deliberately **not** resolved here — see [Where roles come from](#where-roles-come-from).
 
-External OAuth IDP deployments have no equivalent trigger. VAMS derives the user identifier from the first available standard claim, in this order: `vams:tokens`, `cognito:username`, `username`, `sub`, `upn`, `email`.
+External OAuth IDP deployments have no equivalent trigger. For every token, the authorizer derives the user identifier from the token's username claim: the first present of `cognito:username`, `username` and `sub`. A verified token with none of them is refused. For an Amazon Cognito token this is the user name the trigger writes, so Amazon Cognito users are identified as before.
+
+The `vams:` prefix is reserved for the authorizer's own context values. The authorizer ignores every claim a token carries under that prefix (matched without regard to case). Map users to VAMS by the claim above, and assign roles to that value.
 
 ### Stage 2: The custom Lambda authorizer builds the context
 
@@ -60,13 +62,13 @@ All API Gateway routes use a single custom REQUEST-type Lambda authorizer (`hand
 4. **Resolve the caller's roles** from the user roles table.
 5. **Resolve MFA sign-in status** through the customizable `customMFATokenScopeCheckOverride` hook.
 
-The authorizer returns an IAM policy plus a flat string map of context values. The VAMS-specific entries are:
+The authorizer returns an IAM policy plus a flat string map of context values: the verified token's claims, except those under the reserved `vams:` prefix, plus the VAMS-specific entries the authorizer sets itself. On the token path `vams:tokens` names the same user the roles and the MFA status were resolved for. The VAMS-specific entries are:
 
 | Context value             | Meaning                                                           |
 | ------------------------- | ----------------------------------------------------------------- |
-| `vams:tokens`             | JSON array of user identifiers VAMS authorizes against            |
+| `vams:tokens`             | JSON array holding the user identifier VAMS authorizes against    |
 | `vams:roles`              | JSON array of the caller's role names — informational (see below) |
-| `vams:externalAttributes` | JSON array reserved for external system attributes                |
+| `vams:externalAttributes` | JSON array reserved for external system attributes (empty)        |
 | `vams:mfaEnabled`         | `"true"` / `"false"` — whether the caller signed in with MFA      |
 | `vams:apiKeyId`           | Present only on the API key path                                  |
 | `vams:authMethod`         | `"apiKey"` on the API key path                                    |
@@ -108,7 +110,7 @@ Every handler calls `request_to_claims(event)` (`handlers/auth/__init__.py`) as 
 
 ```python
 {
-    "tokens": ["userId", ...],       # from vams:tokens, or a fallback identity claim
+    "tokens": ["userId"],           # from vams:tokens, set by the authorizer
     "roles": ["admin", ...],         # from vams:roles — informational only
     "externalAttributes": [...],     # from vams:externalAttributes
     "mfaEnabled": True,              # from vams:mfaEnabled

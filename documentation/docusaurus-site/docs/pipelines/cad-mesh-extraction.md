@@ -22,6 +22,8 @@ The CAD/Mesh Metadata Extraction pipeline automatically extracts comprehensive m
 | GLB    | `.glb`    | Trimesh | Shader info, animation data, embedded textures             |
 | XYZ    | `.xyz`    | Trimesh | Point count, bounding box                                  |
 
+OBJ, ASCII STL, XYZ, and GLTF files are text, and the pipeline reads that text as UTF-8, as it does the JSON inside a GLB file. ASCII text is UTF-8, so a file without accented or other non-ASCII characters is unaffected. A file whose text is not UTF-8 -- binary data with one of these extensions, or text saved in another encoding such as Windows-1252 -- fails before its metadata is extracted, with a message naming the file and the first byte that is not UTF-8. The pipeline does not guess another encoding, because a wrong guess would change the object, group, and material names in the extracted metadata. Save the file as UTF-8 and run the extraction again. A binary STL file is read whatever its 80-byte header holds.
+
 ## Architecture
 
 ```mermaid
@@ -169,12 +171,13 @@ The Lambda container image is built during CDK deployment from `backendPipelines
 
 ## Limitations
 
-| Constraint           | Details                                                                         |
-| -------------------- | ------------------------------------------------------------------------------- |
-| Maximum file size    | Bounded by function memory, not by disk -- see the note below                   |
-| Execution timeout    | 15 minutes (Lambda maximum)                                                     |
-| Read-only extraction | The pipeline reads metadata but does not modify the source file                 |
-| Format fidelity      | Metadata depth varies by format; some formats embed richer metadata than others |
+| Constraint           | Details                                                                                                                     |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Maximum file size    | Bounded by function memory, not by disk -- see the note below                                                               |
+| Execution timeout    | 15 minutes (Lambda maximum)                                                                                                 |
+| Read-only extraction | The pipeline reads metadata but does not modify the source file                                                             |
+| Format fidelity      | Metadata depth varies by format; some formats embed richer metadata than others                                             |
+| Text encoding        | OBJ, ASCII STL, XYZ, and GLTF text, and the JSON inside a GLB, must be UTF-8 -- see [Supported Formats](#supported-formats) |
 
 Two AWS Lambda quotas bound the largest file the pipeline can read:
 

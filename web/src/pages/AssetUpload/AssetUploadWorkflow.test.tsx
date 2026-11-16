@@ -33,7 +33,7 @@ jest.mock("../../services/AssetUploadService", () => ({}));
 
 const assetDetail = { databaseId: "db-1", assetName: "model" } as any;
 
-const mount = () =>
+const mount = (isExistingAsset = false) =>
     render(
         <MemoryRouter>
             <AssetUploadWorkflow
@@ -42,9 +42,18 @@ const mount = () =>
                 fileItems={[]}
                 onComplete={jest.fn()}
                 onCancel={jest.fn()}
+                isExistingAsset={isExistingAsset}
             />
         </MemoryRouter>
     );
+
+const COMPLETION = {
+    assetId: "asset-1",
+    uploadId: "u-1",
+    message: "ok",
+    fileResults: [],
+    overallSuccess: true,
+};
 
 describe("AssetUploadWorkflow error surface", () => {
     beforeEach(() => {
@@ -102,5 +111,26 @@ describe("AssetUploadWorkflow error surface", () => {
 
         expect(screen.getByText("Upload Complete")).toBeInTheDocument();
         expect(screen.queryByText("Upload Failed")).not.toBeInTheDocument();
+    });
+});
+
+describe("AssetUploadWorkflow completion wording", () => {
+    beforeEach(() => {
+        mockManagerProps = undefined;
+    });
+
+    // The completion response carries only the internal assetId ("asset-1"); the page knows the
+    // asset's name ("model"), and that is what the rest of the app shows.
+    it.each<[string, boolean]>([
+        ["a new asset", false],
+        ["an existing asset", true],
+    ])("names the asset rather than its id, for %s", (_label, isExistingAsset) => {
+        const { container } = mount(isExistingAsset);
+        act(() => mockManagerProps.onUploadComplete(COMPLETION));
+
+        const body = createWrapper(container).findAlert()?.findContent().getElement()
+            .textContent as string;
+        expect(body).toContain("model");
+        expect(body).not.toContain("asset-1");
     });
 });

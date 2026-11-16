@@ -25,6 +25,7 @@ from common.s3 import (
     validateS3AssetExtensionsAndContentType,
     validateUnallowedFileExtensionAndContentType,
     list_all_objects,
+    presigned_get_object_params,
 )
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
@@ -395,9 +396,10 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
         if version_id:
             params['VersionId'] = version_id
 
+        # SVG keys get the image/svg+xml type and an attachment disposition (common.s3)
         url = s3.generate_presigned_url(
             'get_object',
-            Params=params,
+            Params=presigned_get_object_params(params),
             ExpiresIn=int(token_timeout)
         )
         return url, version_id
@@ -539,12 +541,13 @@ def download_asset_preview(databaseId, assetId, request_model):
     
     # Generate presigned URL
     try:
+        # SVG keys get the image/svg+xml type and an attachment disposition (common.s3)
         url = s3.generate_presigned_url(
             'get_object',
-            Params={
+            Params=presigned_get_object_params({
                 'Bucket': preview_bucket,
                 'Key': preview_key
-            },
+            }),
             ExpiresIn=int(token_timeout)
         )
         

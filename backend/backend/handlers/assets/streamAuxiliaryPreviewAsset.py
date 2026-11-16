@@ -16,7 +16,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download_streamed
-from common.s3 import validateUnallowedFileExtensionAndContentType
+from common.s3 import validateUnallowedFileExtensionAndContentType, presigned_get_object_params
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 
 # Set environment variable for S3 client configuration
@@ -431,10 +431,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     # Range and 403ing otherwise. Signing without it (SignedHeaders=host) lets the
                     # client (and range-based octree / 3D tile streaming viewers) send any Range
                     # on the follow-up request to S3, which serves partial content natively.
+                    # SVG keys also get the image/svg+xml type and an attachment disposition.
                     presigned_params = {k: v for k, v in s3_params.items() if k != 'Range'}
                     presigned_url = s3_client.generate_presigned_url(
                         'get_object',
-                        Params=presigned_params,
+                        Params=presigned_get_object_params(presigned_params),
                         ExpiresIn=int(token_timeout)
                     )
                     

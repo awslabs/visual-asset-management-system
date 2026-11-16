@@ -15,7 +15,12 @@ REDACTED = "<redacted>"
 # key name, so the api-key identifier fields (apiKeyId, apiKeyName, apiKeyHash) stay in the clear and
 # the audit trail keeps naming which key an action used.
 SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
-                  "SessionToken", "apiKey", "apiKeySecret", "rawKey")
+                  "SessionToken", "apiKey", "apiKeySecret", "rawKey",
+                  # Request and response headers that carry a credential: a client's cookies
+                  # (session cookies included), an API Gateway API key, proxy credentials, and an
+                  # AWS SigV4 session token.
+                  "cookie", "set-cookie", "x-api-key", "proxy-authorization",
+                  "x-amz-security-token")
 
 # Caller-authored payload keys - a pipeline template body or a tag value carries free-form content
 # (prompts, model configuration, file paths). The key is kept so the record still shows that the field

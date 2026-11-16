@@ -304,6 +304,8 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
         combined_glb_path, combine_stats = process_and_combine_glbs(
             export_result, temp_dir, sanitized_root_name, json_output, failed_operations
         )
+        # Read the size now: Step 5 removes the temporary folder after the upload (#1356)
+        combined_glb_size = os.path.getsize(combined_glb_path)
         
         output_status(f"Combined GLB created: {combined_glb_path}", json_output)
         
@@ -400,8 +402,8 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
             "status": "partial_success" if failed_operations else "success",
             "combined_glb_path": combined_glb_path,
             "export_json_path": json_path,
-            "combined_glb_size": os.path.getsize(combined_glb_path),
-            "combined_glb_size_formatted": format_file_size(os.path.getsize(combined_glb_path)),
+            "combined_glb_size": combined_glb_size,
+            "combined_glb_size_formatted": format_file_size(combined_glb_size),
             "root_asset_name": root_asset_name,
             "temporary_directory": temp_dir if temp_dir else "deleted",
             **combine_stats

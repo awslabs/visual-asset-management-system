@@ -52,6 +52,7 @@ import govcloudTemplate from "../../config/config.template.govcloud.json";
 import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import cdkJson from "../../cdk.json";
 import { newTestApp } from "./testApp";
+import { canonicalJson, sharedSynth, synthCacheKey } from "./synthCache";
 import { SplatToolboxConstruct } from "../../lib/nestedStacks/pipelines/3dRecon/splatToolbox/constructs/splatToolbox-construct";
 
 export type TemplateName = "commercial" | "govcloud" | "eusovereign";
@@ -69,7 +70,8 @@ const RAW: Record<TemplateName, unknown> = {
     eusovereign: eusovereignTemplate,
 };
 
-const ACCOUNT = "123456789012";
+/** The account every synthesized template is bound to; the region is each template's own. */
+export const ACCOUNT = "123456789012";
 
 export interface Resource {
     logicalId: string;
@@ -304,13 +306,41 @@ const cache = new Map<string, SynthResult>();
 /**
  * Synthesize one shipped config template and return every emitted resource.
  *
- * Results are cached per (template, mutation key) because a synth costs ~20 s. Pass `mutateKey` when
- * using `mutate`, or the cache will return a result built with different settings — a silent way to
- * assert against the wrong template.
+ * Two caches sit in front of the synth.
+ *
+ * - In memory, per test file, keyed by (template, mutation key, WAF ARNs). Pass `mutateKey` when using
+ *   `mutate`, or the cache will return a result built with different settings — a silent way to assert
+ *   against the wrong template.
+ * - On disk, per `jest` run, shared by every worker (`synthCache.ts`), keyed by a hash of the template
+ *   name, the WAF ARNs and the FULL configuration after `mutate` has run. Two files asking for the same
+ *   configuration share one synth whatever their `mutateKey`; a file whose `mutate` changes anything
+ *   gets its own.
+ *
+ * The disk key covers the configuration only. A synth also reads the source tree (fixed for the run)
+ * and process-local state. A file that mocks any `fs` function never shares (`fsIsMocked()`, detected
+ * here). A file that `jest.mock`s or `spyOn`s anything ELSE the synth consults, or that needs a
+ * genuinely fresh synth in this process, MUST pass `sharedCache: false`. A configuration that is not
+ * plain JSON data (a function, a class instance) is never shared. Run the suite with
+ * `VAMS_SYNTH_CACHE=verify` after adding such state to prove every hit equals a fresh synth.
+ *
+ * `wafArns` hands the core stack a regional and a CloudFront web ACL ARN, the way `bin/infra.ts` does
+ * when the WAF stacks exist. Without it both are empty, as in a deployment with no WAF stacks.
  */
 export function synthTemplate(
     name: TemplateName,
-    opts: { mutate?: (c: any) => void; mutateKey?: string } = {}
+    opts: {
+        mutate?: (c: any) => void;
+        mutateKey?: string;
+        wafArns?: { regional: string; cloudfront: string };
+        /** false: never read or write the per-run disk cache for this call. */
+        sharedCache?: boolean;
+        /**
+         * Top-level CDK context entries laid over the cdk.json context, for settings that live in
+         * cdk.json rather than config.json (e.g. `environments`). Each entry replaces the cdk.json
+         * entry of the same key whole. Plain JSON data only; it is part of both cache keys.
+         */
+        context?: Record<string, unknown>;
+    } = {}
 ): SynthResult {
     const key = `${name}::${opts.mutateKey ?? (opts.mutate ? "UNKEYED" : "")}`;
     if (opts.mutate && !opts.mutateKey) {
@@ -319,14 +349,120 @@ export function synthTemplate(
                 "cache entry and one of them silently asserts against the other's template."
         );
     }
-    const hit = cache.get(key);
+    const memoryKey = opts.context ? `${key}::ctx:${canonicalJson(opts.context)}` : key;
+    const hit = cache.get(memoryKey);
     if (hit) return hit;
 
+    // Built once here so the disk key is the configuration the synth will actually use.
+    let config: Config.Config | undefined = buildConfig(name, opts.mutate);
+    const canonical =
+        opts.sharedCache === false || fsIsMocked()
+            ? undefined
+            : canonicalJson({ name, wafArns: opts.wafArns ?? null, config, context: opts.context });
+
+    // The first synth uses the configuration the key was computed from; a verify-mode re-synth builds
+    // its own, so a synth that writes into its config cannot leak into the comparison.
+    const produce = (): SynthResult => {
+        const c = config ?? buildConfig(name, opts.mutate);
+        config = undefined;
+        return synthFresh(name, c, opts.wafArns, opts.context);
+    };
+
+    let result: SynthResult;
+    if (canonical === undefined) {
+        result = produce();
+    } else {
+        const keptConfig = config;
+        result = sharedSynth(
+            synthCacheKey(canonical),
+            produce,
+            (r) => JSON.stringify({ templates: r.templates, warnings: r.warnings }),
+            (text) => {
+                const payload = JSON.parse(text);
+                const t = TARGET[name];
+                return new SynthResult(
+                    name,
+                    t.partition,
+                    t.region,
+                    payload.templates,
+                    resourcesOf(payload.templates),
+                    payload.warnings
+                );
+            },
+            comparableSynth
+        );
+        // The same process-wide state a real synth leaves behind, for a test that reads it next.
+        stubDockerBundling();
+        Service.SetConfig(keptConfig);
+    }
+    cache.set(memoryKey, result);
+    return result;
+}
+
+/**
+ * A serialized synth with the values no two synths share replaced by placeholders and every object's
+ * keys sorted: what `VAMS_SYNTH_CACHE=verify` compares.
+ *
+ * Measured by diffing two synths of one configuration in two processes, and a third after another
+ * template had been synthesized first in the same process. Every differing leaf was one of:
+ *
+ * - an ISO-8601 timestamp (the `dateCreated`/`createdOn` of the seeded auth rows, the
+ *   `PopulateS3AssetBucketsTable` `timestamp`) or an epoch-millisecond one (`AOSSDeploySSMIndexSchema`);
+ * - a nested stack's `TemplateURL` asset hash, which is the hash of a nested template carrying one;
+ * - the ORDER of a nested stack's cross-stack reference `Parameters`, which follows the synth history
+ *   of the process. Resource order did not move.
+ *
+ * None of these can be asserted on without a test being flaky already.
+ */
+function comparableSynth(text: string): string {
+    const normalized = text
+        .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g, "<iso-timestamp>")
+        .replace(/\b1\d{12}\b/g, "<epoch-ms>")
+        .replace(/[0-9a-f]{64}\.json/g, "<nested-template-hash>.json");
+    return canonicalJson(JSON.parse(normalized)) ?? normalized;
+}
+
+/**
+ * True when this test file has replaced any `fs` function with a Jest mock.
+ *
+ * The synth reads repository files through `fs` (`config/csp/cspAdditionalConfig.json`, policy JSON,
+ * Lambda sources for asset hashes), and a file that mocks `fs` usually does so to serve a substitute
+ * for one of them: `albCspSizeGuard.test.ts` serves an oversized CSP file to the SAME configuration.
+ * The disk key cannot see that, so such a file never shares — it synthesizes for itself, as before.
+ */
+export function fsIsMocked(): boolean {
+    if (typeof jest === "undefined") return false;
+    return Object.values(fs).some((v) => typeof v === "function" && jest.isMockFunction(v));
+}
+
+/** Every resource of every template, in template order then logical-id order. */
+function resourcesOf(templates: Record<string, any>): Resource[] {
+    const resources: Resource[] = [];
+    for (const [stackKey, tpl] of Object.entries<any>(templates)) {
+        for (const [logicalId, raw] of Object.entries<any>(tpl.Resources ?? {})) {
+            resources.push({
+                logicalId,
+                stack: stackKey,
+                type: raw.Type,
+                properties: raw.Properties ?? {},
+                raw,
+            });
+        }
+    }
+    return resources;
+}
+
+/** One real synth of `config`, with no caching. */
+function synthFresh(
+    name: TemplateName,
+    config: Config.Config,
+    wafArns: { regional: string; cloudfront: string } | undefined,
+    context?: Record<string, unknown>
+): SynthResult {
     stubDockerBundling();
     stubSplatToolboxSourceSync();
     resetGlobalRegistries();
     const t = TARGET[name];
-    const config = buildConfig(name, opts.mutate);
     const stackName = config.env.coreStackName;
 
     const app = newTestApp({
@@ -342,6 +478,7 @@ export function synthTemplate(
             // could pass here and the behaviour still be wrong in the deployment, which is the one
             // failure mode a synth-assertion tier must not have.
             ...((cdkJson as any).context ?? {}),
+            ...(context ?? {}),
             // Skips `docker run` for asset bundling. Necessary but NOT sufficient — see the header.
             // Set AFTER the spread so it cannot be overridden by a cdk.json entry.
             [cxapi.BUNDLING_STACKS]: [],
@@ -354,8 +491,8 @@ export function synthTemplate(
     const stack = new Infra.CoreVAMSStack(app, stackName, {
         env: { account: ACCOUNT, region: t.region },
         stackName,
-        ssmWafArnRegional: "",
-        ssmWafArnCloudfront: "",
+        ssmWafArnRegional: wafArns?.regional ?? "",
+        ssmWafArnCloudfront: wafArns?.cloudfront ?? "",
         config,
         description: `T1 synth assertion stack (${name})`,
     } as any);
@@ -363,22 +500,12 @@ export function synthTemplate(
 
     const asm = app.synth();
     const templates: Record<string, any> = {};
-    const resources: Resource[] = [];
     for (const file of fs.readdirSync(asm.directory)) {
         if (!file.endsWith(".template.json")) continue;
         const stackKey = file.replace(/\.template\.json$/, "");
-        const tpl = JSON.parse(fs.readFileSync(path.join(asm.directory, file), "utf8"));
-        templates[stackKey] = tpl;
-        for (const [logicalId, raw] of Object.entries<any>(tpl.Resources ?? {})) {
-            resources.push({
-                logicalId,
-                stack: stackKey,
-                type: raw.Type,
-                properties: raw.Properties ?? {},
-                raw,
-            });
-        }
+        templates[stackKey] = JSON.parse(fs.readFileSync(path.join(asm.directory, file), "utf8"));
     }
+    const resources = resourcesOf(templates);
 
     if (resources.length === 0) {
         // A zero-resource result would satisfy every negative assertion in the suite.
@@ -414,9 +541,7 @@ export function synthTemplate(
         /* leaves a temp directory behind; never a test failure */
     }
 
-    const result = new SynthResult(name, t.partition, t.region, templates, resources, warnings);
-    cache.set(key, result);
-    return result;
+    return new SynthResult(name, t.partition, t.region, templates, resources, warnings);
 }
 
 /** All three shipped templates. Used by anything asserting a partition-wide property. */

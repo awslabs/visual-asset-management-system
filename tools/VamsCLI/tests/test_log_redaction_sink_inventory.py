@@ -35,7 +35,7 @@ PRESIGNED_URL = (
     "https://bucket.s3.amazonaws.com/a/b.glb?X-Amz-Algorithm=AWS4-HMAC-SHA256"
     "&X-Amz-Signature=deadbeefsignaturevalue0123456789&X-Amz-Security-Token=tok-abcdefghijklmnop"
 )
-API_KEY = "vams_SUPERSECRETKEYVALUE0123456789"
+API_KEY = "vams_SUPERSECRETKEYVALUE0123456789"  # pragma: allowlist secret
 
 PAYLOAD = {
     "assetId": "asset-visible-id",

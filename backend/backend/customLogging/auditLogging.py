@@ -17,6 +17,7 @@ from typing import Dict, Any, Optional, List
 from handlers.auth import request_to_claims
 from customLogging.logger import mask_sensitive_data, safeLogger
 from common.resourceNames import ResourceKeys, get_log_group_name
+from common.validators import normalize_userid
 
 # Initialize logger for audit logging module
 logger = safeLogger(service_name="AuditLogging")
@@ -157,11 +158,12 @@ def _format_log_message(event_type: str, user_context: Dict[str, Any], custom_da
             f"[mfaEnabled: {mfa_enabled}]"
         ]
         
-        # Add custom data if provided
+        # Add custom data if provided. default=str writes a value JSON cannot encode (a
+        # DynamoDB Decimal, a set) as its string form instead of falling back to str().
         if custom_data is not None:
             if isinstance(custom_data, dict):
                 try:
-                    message_parts.append(json.dumps(custom_data))
+                    message_parts.append(json.dumps(custom_data, default=str))
                 except Exception as e:
                     message_parts.append(str(custom_data))
             else:
@@ -323,8 +325,9 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
                 return
             _created_log_streams[log_group_name] = log_stream_name
 
-        #Add event at the end of each message.
-        event_suffix = f" --- [event: {json.dumps(masked_event)}]" if masked_event else ""
+        # Add event at the end of each message. default=str writes a value JSON cannot encode
+        # (a DynamoDB Decimal, a set) as its string form, so such a value cannot drop the entry.
+        event_suffix = f" --- [event: {json.dumps(masked_event, default=str)}]" if masked_event else ""
 
         # What the entries after the first carry: the echo itself while replicating it stays inside
         # AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES, a reference to the first entry's copy beyond that.
@@ -754,20 +757,63 @@ def log_errors(event: Dict[str, Any], secondary_type: str, custom_data: Optional
         logger.exception(f"Failed to log errors audit event: {e}")
 
 
-def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_reason: Optional[str] = None) -> None:
+def _gateway_user_context(verified_context: Any) -> Dict[str, Any]:
+    """
+    The prefix user context of an allowed authorizer record, from the context the authorizer built
+    out of the verified token (or API key): the user id the handlers resolve (``vams:tokens``, then
+    ``cognito:username``, ``username``, ``sub``, ``upn``, ``email``, as ``request_to_claims`` reads
+    them, normalized the same way), the roles the authorizer read and the MFA state it resolved.
+    """
+    user_context: Dict[str, Any] = {"user": "unknown", "roles": [], "mfaEnabled": False}
+    if not isinstance(verified_context, dict):
+        return user_context
+    user = None
+    tokens = verified_context.get("vams:tokens")
+    if isinstance(tokens, str):
+        try:
+            parsed = json.loads(tokens)
+            if isinstance(parsed, list) and parsed:
+                user = parsed[0]
+        except ValueError:
+            user = None
+    if not user:
+        for claim in ("cognito:username", "username", "sub", "upn", "email"):
+            if verified_context.get(claim):
+                user = verified_context[claim]
+                break
+    if user:
+        user_context["user"] = normalize_userid(str(user)) or "unknown"
+    roles = verified_context.get("vams:roles")
+    if isinstance(roles, str):
+        try:
+            parsed = json.loads(roles)
+            if isinstance(parsed, list):
+                user_context["roles"] = [str(role) for role in parsed]
+        except ValueError:
+            pass
+    mfa_value = verified_context.get("vams:mfaEnabled", "false")
+    user_context["mfaEnabled"] = mfa_value == "true" if isinstance(mfa_value, str) else bool(mfa_value)
+    return user_context
+
+
+def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_reason: Optional[str] = None,
+                              verified_context: Optional[Dict[str, Any]] = None) -> None:
     """
     Log authorization events from API Gateway authorizer with silent failure.
 
     SECURITY: This function is designed for the API Gateway authorizer which runs
-    BEFORE normal request processing. It only logs non-sensitive data:
-    - User ID (only from verified JWT claims after successful authorization)
+    BEFORE normal request processing. Its payload carries only non-sensitive data:
+    - User ID, roles and MFA state (only from the verified claims of an allowed request, the
+      ``verified_context`` the authorizer built; a denial names the user ``unknown``)
     - Authorization result (success/failure)
     - Generic failure reason (no token details or sensitive data)
     - Source IP address
+    The record's request echo is the authorizer event after mask_sensitive_data, so the
+    headers it keeps are the ones not on the credential key list.
 
     NEVER logs:
     - Raw JWT tokens
-    - Authorization headers
+    - Authorization headers, or any other header on the credential key list
     - Token signatures
     - Detailed validation errors that could expose token structure
 
@@ -775,6 +821,8 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
         event: The API Gateway authorizer event
         authorized: Whether authorization was successful
         failure_reason: Generic failure reason (optional, for failures only)
+        verified_context: The authorizer context built from the verified token or API key (allowed
+            requests only); an ignored-path allow has none and names the user ``unknown``
     """
     try:
         log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
@@ -782,22 +830,9 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
             logger.error("AUDIT_LOG_AUTHORIZATION resource name not resolved")
             return
         
-        # Extract ONLY safe user context
-        user_context = {
-            "user": "unknown",
-            "roles": [],
-            "mfaEnabled": False
-        }
-        
-        # Only extract user ID if token was successfully verified
-        # The 'context' field is only present after successful JWT verification
-        if authorized and 'context' in event:
-            context = event.get('context', {})
-            user_context["user"] = context.get('sub', 'unknown')
-            # MFA status from verified claims
-            mfa_value = context.get('mfaEnabled', 'false')
-            user_context["mfaEnabled"] = mfa_value == 'true' if isinstance(mfa_value, str) else bool(mfa_value)
-        
+        # Only the verified claims of an allowed request name the user.
+        user_context = _gateway_user_context(verified_context if authorized else None)
+
         # Get source IP (safe to log)
         source_ip = event.get('requestContext', {}).get('http', {}).get('sourceIp', 'unknown')
         

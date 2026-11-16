@@ -571,6 +571,7 @@ def test_create_api_key_payload_keys_and_optional_expiry(gated):
     mod, client = gated
     mod.create_api_key("ci", "bot@example.com", "automation")
     client.api.create_api_key.assert_called_once_with(
+        # pragma: allowlist nextline secret
         {"apiKeyName": "ci", "userId": "bot@example.com", "description": "automation"}
     )
     client.api.create_api_key.reset_mock()
@@ -585,6 +586,7 @@ def test_create_user_api_key_sends_the_required_expiry_and_no_user_id(gated):
     mod, client = gated
     mod.create_user_api_key("ci", "automation", "2026-12-31T23:59:59Z")
     client.api.create_user_api_key.assert_called_once_with(
+        # pragma: allowlist nextline secret
         {"apiKeyName": "ci", "description": "automation", "expiresAt": "2026-12-31T23:59:59Z"}
     )
     assert "userId" not in client.api.create_user_api_key.call_args.args[0]
@@ -593,9 +595,10 @@ def test_create_user_api_key_sends_the_required_expiry_and_no_user_id(gated):
 def test_create_api_key_returns_the_one_time_key_unaltered(gated):
     """The value is shown once; the tool must not strip or rename it on the way through."""
     mod, client = gated
+    # pragma: allowlist nextline secret
     client.api.create_api_key.return_value = {"apiKeyId": "k1", "apiKey": "vams_secret_once"}
     result = mod.create_api_key("ci", "bot@example.com", "automation")
-    assert result["apiKey"] == "vams_secret_once"
+    assert result["apiKey"] == "vams_secret_once"  # pragma: allowlist secret
 
 
 @pytest.mark.parametrize("tool,method", [("update_api_key", "update_api_key"),

@@ -81,6 +81,21 @@ const ALB_SECURITY_HEADERS: Record<string, string> = {
     "routing.http.response.x_frame_options.header_value": "SAMEORIGIN",
 };
 
+/** Elastic Load Balancing limit on a load balancer name. */
+const ALB_NAME_MAX_LENGTH = 32;
+
+/**
+ * The web ALB's name: `<name>-core-<baseStackName>-WebAppALB`, cut to the 32-character limit.
+ *
+ * A name must not end with a hyphen, and the cut can land on one (for example right after the
+ * `baseStackName`), so trailing hyphens left by the cut are dropped. Names that fit are unchanged.
+ */
+export function albLoadBalancerName(configName: string, baseStackName: string): string {
+    return `${configName}-core-${baseStackName}-WebAppALB`
+        .substring(0, ALB_NAME_MAX_LENGTH)
+        .replace(/-+$/, "");
+}
+
 export interface AlbS3WebsiteAlbDeployConstructProps extends cdk.StackProps {
     /**
      * The path to the build directory of the web site, relative to the project root
@@ -139,9 +154,10 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
 
         // Create an ALB
         const alb = new elbv2.ApplicationLoadBalancer(this, "WebAppDistroALB", {
-            loadBalancerName: `${
-                props.config.name + "-core-" + props.config.app.baseStackName
-            }-WebAppALB`.substring(0, 32),
+            loadBalancerName: albLoadBalancerName(
+                props.config.name,
+                props.config.app.baseStackName
+            ),
             internetFacing: props.config.app.useAlb.usePublicSubnet,
             vpc: props.vpc,
             vpcSubnets: { subnets: props.albSubnets },

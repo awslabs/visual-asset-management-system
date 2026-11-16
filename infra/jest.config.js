@@ -8,6 +8,11 @@ module.exports = {
     // Resolve TypeScript sources before any locally-compiled .js build artifacts so
     // tests always exercise the current source (e.g. config.ts, not a stale config.js).
     moduleFileExtensions: ["ts", "tsx", "js", "jsx", "json", "node"],
+    // Transpile only. tsconfig.json sets `isolatedModules: true`, so ts-jest compiles each file on its
+    // own with `transpileModule` instead of building a type-checking language service per test file
+    // (which re-checked the whole lib/ import graph in every worker). Type errors are NOT reported by
+    // jest: the CI `infra-typecheck` job runs `tsc --noEmit` once over lib, bin, config and test.
+    // Run `npx tsc --noEmit` locally before pushing.
     transform: {
         "^.+\\.tsx?$": "ts-jest",
     },
@@ -18,6 +23,12 @@ module.exports = {
     // still swept. test/support/harnessGuards.test.ts is what FAILS on such a file; this only
     // stops it leaking.
     setupFilesAfterEnv: ["aws-cdk-lib/testhelpers/jest-autoclean"],
+    // One shared, per-run synth cache: each distinct configuration `synthTemplate()` is asked for is
+    // synthesized once per `jest` invocation (each --shard is its own) instead of once per test file.
+    // The directory is created here, inherited by every worker, and removed at the end of the run.
+    // See test/support/synthCache.ts; VAMS_SYNTH_CACHE=off disables it, =verify checks every hit.
+    globalSetup: "<rootDir>/test/support/synthCacheGlobalSetup.ts",
+    globalTeardown: "<rootDir>/test/support/synthCacheGlobalTeardown.ts",
     // Worker bound, sized by MEMORY rather than by cores. A full-app synth worker sits at ~2.1 GB, and
     // 44 of these files synthesize the whole app, so Jest's default of one worker per core minus one put
     // 31 such workers (~65 GB) on a 32-core / 63 GB host: one file that takes 66 s alone took 768 s, and

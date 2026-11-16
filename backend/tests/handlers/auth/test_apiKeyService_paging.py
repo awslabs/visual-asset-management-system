@@ -50,7 +50,7 @@ def _item(api_key_id, user_id, name='a-key'):
     return {
         'apiKeyId': api_key_id,
         'apiKeyName': name,
-        'apiKeyHash': 'hash',
+        'apiKeyHash': 'hash',  # pragma: allowlist secret
         'description': 'd',
         'userId': user_id,
         'createdBy': user_id,
@@ -611,11 +611,11 @@ class TestAnUnusableStartingTokenIsRejectedNotAn500:
 
 @pytest.mark.unit
 class TestDuplicateNameCheckPagesToExhaustion:
-    ADMIN_BODY = {'apiKeyName': 'taken-name', 'userId': OTHER_USER, 'description': 'd'}
+    ADMIN_BODY = {'apiKeyName': 'taken-name', 'userId': OTHER_USER, 'description': 'd'}  # pragma: allowlist secret
 
     def _user_body(self):
         return {
-            'apiKeyName': 'taken-name',
+            'apiKeyName': 'taken-name',  # pragma: allowlist secret
             'description': 'd',
             'expiresAt': _iso(datetime.now(timezone.utc) + timedelta(days=30)),
         }
@@ -681,7 +681,7 @@ class TestDuplicateNameCheckPagesToExhaustion:
             _event('POST', '/auth/user/api-keys', body=self._user_body()), {})
 
         assert response['statusCode'] == 200
-        assert mock_env['table'].put_item.call_args[1]['Item']['apiKeyName'] == 'taken-name'
+        assert mock_env['table'].put_item.call_args[1]['Item']['apiKeyName'] == 'taken-name'  # pragma: allowlist secret
 
     def test_user_create_duplicate_check_never_reads_the_whole_table(self, mock_env):
         """The oracle is closed at the read, not only at the verdict.
@@ -705,7 +705,7 @@ class TestDuplicateNameCheckPagesToExhaustion:
         response = lambda_handler(_event('POST', '/auth/api-keys', body=self.ADMIN_BODY), {})
 
         assert response['statusCode'] == 200
-        assert mock_env['table'].put_item.call_args[1]['Item']['apiKeyName'] == 'taken-name'
+        assert mock_env['table'].put_item.call_args[1]['Item']['apiKeyName'] == 'taken-name'  # pragma: allowlist secret
 
     @pytest.mark.parametrize("path", ['/auth/api-keys', '/auth/user/api-keys'])
     def test_duplicate_check_terminates_against_an_unstubbed_reader(self, mock_env, path):

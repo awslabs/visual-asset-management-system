@@ -217,6 +217,38 @@ class TestSpatialGLBAssetCombineCommand:
             assert result.exit_code == 1
             assert 'Asset not found' in result.output
     
+    def test_glbassetcombine_asset_creation_succeeds_after_cleanup(
+            self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, monkeypatch):
+        """The default cleanup after the upload does not turn a successful run into exit 1 (#1356)."""
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+
+        def write_combined_glb(export_result, temp_dir, root_name, json_output, failed_operations):
+            path = os.path.join(temp_dir, f"{root_name}__COMBINED.glb")
+            with open(path, 'wb') as f:
+                f.write(b'0123456789')
+            return path, {'total_assets_processed': 2, 'total_glbs_combined': 1}
+
+        with spatial_command_mocks, \
+             patch('vamscli.commands.industry.spatial.glb.export_command', return_value=mock_export_result), \
+             patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs',
+                   side_effect=write_combined_glb), \
+             patch('vamscli.commands.industry.spatial.glb.create_command',
+                   return_value={'assetId': 'new-asset-id'}), \
+             patch('vamscli.commands.industry.spatial.glb.upload_command',
+                   return_value={'overall_success': True}) as mock_upload:
+            result = cli_runner.invoke(cli, [
+                'industry', 'spatial', 'glbassetcombine', '-d', 'test-db', '-a', 'root-asset',
+                '--asset-create-name', 'Combined Model', '--json-output'
+            ])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)
+        assert data['new_asset']['asset_id'] == 'new-asset-id'
+        assert data['combined_glb_size'] == 10
+        assert data['temporary_directory'] == 'deleted'
+        assert not os.path.exists(data['combined_glb_path'])
+        assert mock_upload.call_count == 2
+    
     @patch('vamscli.commands.industry.spatial.glb.export_command')
     @patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs')
     @patch('vamscli.commands.industry.spatial.glb.create_command')

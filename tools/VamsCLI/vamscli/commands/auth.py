@@ -8,7 +8,13 @@ from ..auth.cognito import CognitoAuthenticator
 from ..utils.decorators import requires_api_access, requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info, mask_url_key
-from ..utils.exceptions import AuthenticationError, ConfigurationError, OverrideTokenError, AuthRoutesError
+from ..utils.exceptions import (
+    AuthenticationError, ConfigurationError, OverrideTokenError, AuthRoutesError,
+    PermissionDeniedError, TokenExpiredError,
+)
+
+# The errors call_login_profile lets through when the API refuses the token (#817).
+LOGIN_REFUSED_ERRORS = (AuthenticationError, OverrideTokenError, TokenExpiredError, PermissionDeniedError)
 
 
 def get_authenticator(config: dict) -> CognitoAuthenticator:
@@ -279,8 +285,9 @@ def login(ctx: click.Context, username: str, password: str, password_stdin: bool
             try:
                 login_profile_result = api_client.call_login_profile(user_id)
                 output_status("User profile refreshed successfully.", json_output)
-            except AuthenticationError as e:
-                # If login profile fails with 401/403, credentials are already cleared
+            except LOGIN_REFUSED_ERRORS as e:
+                # The API refused the token: clear it and fail the login (#817)
+                profile_manager.delete_auth_profile()
                 output_error(e, json_output, error_type="Authentication Error")
                 raise click.ClickException(str(e))
             except Exception as e:
@@ -390,8 +397,9 @@ def login(ctx: click.Context, username: str, password: str, password_stdin: bool
             try:
                 login_profile_result = api_client.call_login_profile(username)
                 output_status("User profile refreshed successfully.", json_output)
-            except AuthenticationError as e:
-                # If login profile fails with 401/403, credentials are already cleared
+            except LOGIN_REFUSED_ERRORS as e:
+                # The API refused the token: clear it and fail the login (#817)
+                profile_manager.delete_auth_profile()
                 output_error(e, json_output, error_type="Authentication Error")
                 raise click.ClickException(str(e))
             except Exception as e:
@@ -1174,8 +1182,9 @@ def set_override(ctx: click.Context, user_id: str, token: str, token_stdin: bool
             login_profile_result = api_client.call_login_profile(user_id)
             output_status("User profile refreshed successfully.", json_output)
             validation_successful = True
-        except AuthenticationError as e:
-            # If login profile fails with 401/403, credentials are already cleared
+        except LOGIN_REFUSED_ERRORS as e:
+            # The API refused the token: clear it and fail the login (#817)
+            profile_manager.delete_auth_profile()
             output_error(e, json_output, error_type="Authentication Error")
             raise click.ClickException(str(e))
         except Exception as e:

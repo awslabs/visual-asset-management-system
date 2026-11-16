@@ -28,7 +28,7 @@ Folders are created implicitly when VAMS uploads the first file into each path v
 
 ## Configuration
 
-To enable the Physna Sync add-on, set `app.addons.usePhysnaSync.enabled` to `true` in `infra/config/config.json` and provide tenant and authentication details.
+To enable the Physna Sync add-on, set `app.addons.usePhysnaSync.enabled` to `true` in `infra/config/config.json` and provide tenant and authentication details. Supply the OAuth2 client credentials either through an existing AWS Secrets Manager secret (`credentialsSecretArn`, recommended) or inline (`clientId` and `clientSecret`). See [Credentials storage](#credentials-storage) for how the two compare.
 
 ```json
 {
@@ -40,36 +40,46 @@ To enable the Physna Sync add-on, set `app.addons.usePhysnaSync.enabled` to `tru
                 "apiBaseEndpoint": "https://app-api.physna.com/v3/",
                 "authTokenEndpoint": "https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token",
                 "authType": "cognito",
-                "clientId": "your-physna-client-id",
-                "clientSecret": "your-physna-client-secret"
+                "credentialsSecretArn": "arn:aws:secretsmanager:us-east-1:111122223333:secret:my-vams-physna-credentials-AbCdEf"
             }
         }
     }
 }
 ```
 
-| Field               | Required | Description                                                                                          |
-| ------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `enabled`           | Yes      | Set to `true` to deploy the Physna Sync infrastructure and Lambda consumers.                         |
-| `tenantId`          | Yes      | Physna tenant UUID. All synchronized content is written under this tenant.                           |
-| `apiBaseEndpoint`   | Yes      | Physna REST API base URL. Must end with `/`. Default: `https://app-api.physna.com/v3/`.              |
-| `authTokenEndpoint` | Yes      | OAuth2 token endpoint for Physna's Cognito user pool.                                                |
-| `authType`          | Yes      | Authentication mode. Phase 1 accepts only `cognito`. Future phases will add external IdP support.    |
-| `clientId`          | Yes      | Cognito client ID provisioned for your Physna tenant. Written to AWS Secrets Manager at deploy time. |
-| `clientSecret`      | Yes      | Cognito client secret. Written to AWS Secrets Manager at deploy time.                                |
+| Field                  | Required                                     | Description                                                                                                                                                                                                      |
+| ---------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`              | Yes                                          | Set to `true` to deploy the Physna Sync infrastructure and Lambda consumers.                                                                                                                                     |
+| `tenantId`             | Yes                                          | Physna tenant UUID. All synchronized content is written under this tenant.                                                                                                                                       |
+| `apiBaseEndpoint`      | Yes                                          | Physna REST API base URL. Must end with `/`. Default: `https://app-api.physna.com/v3/`.                                                                                                                          |
+| `authTokenEndpoint`    | Yes                                          | OAuth2 token endpoint for Physna's Cognito user pool.                                                                                                                                                            |
+| `authType`             | Yes                                          | Authentication mode. Phase 1 accepts only `cognito`. Future phases will add external IdP support.                                                                                                                |
+| `credentialsSecretArn` | Either this or `clientId` and `clientSecret` | Complete ARN of an existing Secrets Manager secret whose value is `{"clientId": "...", "clientSecret": "..."}`. When set, VAMS reads the credentials from this secret and ignores `clientId` and `clientSecret`. |
+| `clientId`             | When `credentialsSecretArn` is empty         | Cognito client ID provisioned for your Physna tenant. VAMS writes it to a Secrets Manager secret it creates at deploy time.                                                                                      |
+| `clientSecret`         | When `credentialsSecretArn` is empty         | Cognito client secret. VAMS writes it to the same Secrets Manager secret at deploy time.                                                                                                                         |
 
 :::warning
-When the add-on is enabled, validation in `infra/config/config.ts` enforces that every field is present and well-formed. Deployment will fail with a configuration error if any required field is empty or malformed.
+When the add-on is enabled, validation in `infra/config/config.ts` enforces that every required field is present and well-formed, and that credentials come from either a Secrets Manager secret ARN in `credentialsSecretArn` or both `clientId` and `clientSecret`. Deployment fails with a configuration error otherwise.
 :::
 
 ---
 
 ## Credentials storage
 
-At deploy time, the CDK stack creates a single AWS Secrets Manager secret containing the `clientId` and `clientSecret` values from the configuration. Both Lambda functions read this secret (scoped to the specific secret ARN, not `*`) on cold start and cache the parsed credentials in memory.
+The Physna sync and viewer Lambda functions read the credentials from one Secrets Manager secret, with read access scoped to that secret's ARN rather than `*`. Each function caches the credentials in memory for up to an hour, and reads the secret again sooner when Physna answers `401`, so a credential rotated in Secrets Manager is picked up without a redeploy. Where the secret comes from depends on the configuration:
 
-:::warning[Rotate after deployment]
-Because the secret is created from plaintext values in the configuration file, the first deployment writes the plaintext into the CloudFormation template during synthesis. **Rotate the Physna client secret in Secrets Manager after your first successful deployment** and remove the plaintext from `config.json`. A future phase will support referencing an existing Secrets Manager ARN directly.
+-   **`credentialsSecretArn` (recommended).** Create the secret before you deploy, in the account and Region you deploy VAMS to, with a JSON value of `{"clientId": "...", "clientSecret": "..."}`, and set `credentialsSecretArn` to the complete ARN that Secrets Manager returns, including its six-character suffix. VAMS imports the secret by ARN, so no credential passes through CDK synthesis. Encrypt the secret with the default `aws/secretsmanager` key, or with the VAMS KMS key when the deployment uses one; VAMS grants the functions no `kms:Decrypt` on another customer managed key for this secret.
+
+    ```bash
+    aws secretsmanager create-secret \
+        --name my-vams-physna-credentials \
+        --secret-string '{"clientId":"...","clientSecret":"..."}'
+    ```
+
+-   **Inline `clientId` and `clientSecret`.** VAMS creates the secret and fills it at deploy time through a custom resource whose Lambda deployment package carries the values. The values stay out of the CloudFormation template, but they are readable by any principal with `lambda:GetFunction` on that function, and they remain in the CDK assets bucket after the credential is rotated.
+
+:::warning[Inline credentials leave copies behind]
+Use `credentialsSecretArn` when the credential must be reachable only through Secrets Manager. To move a deployment off inline credentials, create the secret, set `credentialsSecretArn`, clear `clientId` and `clientSecret`, and redeploy; then revoke the old client secret in Physna, because its copy in the CDK assets bucket stays readable. See [Physna Sync](../deployment/configuration-reference.md#physna-sync-appaddonsusephysnasync) in the configuration reference for details.
 :::
 
 ---

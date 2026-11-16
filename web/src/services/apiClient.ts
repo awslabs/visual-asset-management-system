@@ -17,6 +17,20 @@ export class ApiError extends Error {
     }
 }
 
+/**
+ * Message for a request that never produced a readable response. `fetch` rejects with a
+ * TypeError ("Failed to fetch", "NetworkError when attempting to fetch resource.", "Load failed")
+ * when the network fails or the browser drops the response, for example when a web ACL also
+ * blocks a cross-origin request's CORS preflight.
+ */
+export const NETWORK_FAILURE_MESSAGE =
+    "The request could not reach the service. It may have been blocked by a firewall or the network.";
+
+/** Whether an error is a request that never reached the service or whose response was dropped. */
+export function isNetworkFailure(error: unknown): boolean {
+    return error instanceof TypeError;
+}
+
 interface ApiClientOptions {
     queryStringParameters?: Record<string, string>;
     body?: any;
@@ -119,7 +133,19 @@ class ApiClient {
         // Resolve every path relative to the stage-inclusive base (e.g. ".../api/").
         // A leading "/" would make new URL() treat the path as origin-absolute and drop
         // the base's stage segment, so strip it and always resolve relative to fullBase.
-        const relativePath = path.replace(/^\/+/, "");
+        // A '#' or '?' in the path can only come from a value placed in it (an asset id may end
+        // in '#'): new URL() would read it as the start of a fragment or a query and the request
+        // would address another resource. No API path carries either delimiter, because query
+        // parameters go in queryParams, so both are percent-encoded here. So is a '%' that does
+        // not start an escape (an asset id may also end in '%'). A '%' followed by two hex digits
+        // is kept: callers pass segments they already encoded (workflow trigger types).
+        // shortcut: a raw value holding '%' and two hex digits is sent as that escape; no id the
+        // backend accepts has one ('%' only as an asset id's last character). If one ever can,
+        // encode that value in its service instead.
+        const relativePath = path
+            .replace(/^\/+/, "")
+            .replace(/[#?]/g, (c) => encodeURIComponent(c))
+            .replace(/%(?![0-9A-Fa-f]{2})/g, "%25");
         const url = new URL(relativePath, fullBase.endsWith("/") ? fullBase : fullBase + "/");
         if (queryParams) {
             Object.entries(queryParams).forEach(([key, value]) => {

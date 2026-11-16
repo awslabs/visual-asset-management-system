@@ -63,7 +63,7 @@ os.environ['S3_ASSET_BUCKETS_STORAGE_TABLE_NAME'] = 's3AssetBucketsStorageTable'
 
 # AWS credentials for testing
 os.environ['AWS_ACCESS_KEY_ID'] = 'test-access-key'
-os.environ['AWS_SECRET_ACCESS_KEY'] = 'test-secret-key'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'test-secret-key'  # pragma: allowlist secret
 os.environ['AWS_SESSION_TOKEN'] = 'test-session-token'
 import pytest
 
@@ -246,6 +246,13 @@ def setup_mock_imports():
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'tagScope.py')
     )
     sys.modules['common.tagScope'] = tag_scope_module
+
+    # snsTopicNames is pure naming logic with no AWS dependencies; load the real module
+    sns_topic_names_module = import_module_from_path(
+        'common.snsTopicNames',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'snsTopicNames.py')
+    )
+    sys.modules['common.snsTopicNames'] = sns_topic_names_module
 
     # common.auth modules are pure logic with no AWS state dependencies - load real modules
     auth_pkg_module = import_module_from_path(

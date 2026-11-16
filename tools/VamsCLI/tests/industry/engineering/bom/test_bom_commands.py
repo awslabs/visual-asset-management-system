@@ -737,5 +737,133 @@ class TestBOMUtilityFunctions:
         assert 'Asset ID: new-asset-123' in result
 
 
+class TestBOMAssembleTempFiles:
+    """Where bomassemble writes downloads and what it leaves behind, on a real file system."""
+
+    MOCK_GLB = {
+        'json': {
+            'asset': {'version': '2.0'},
+            'scenes': [{'nodes': [0]}],
+            'nodes': [{'mesh': 0}],
+            'meshes': [{'name': 'test_mesh', 'primitives': []}],
+            'materials': [], 'textures': [], 'images': [], 'accessors': [], 'bufferViews': [],
+            'buffers': [{'byteLength': 0}]
+        },
+        'binary': b''
+    }
+
+    @pytest.fixture
+    def dirs(self, tmp_path, monkeypatch, sample_bom_json):
+        """A working folder, a system temp folder and a BOM JSON file outside both."""
+        work = tmp_path / 'work'
+        systmp = tmp_path / 'systmp'
+        work.mkdir()
+        systmp.mkdir()
+        monkeypatch.chdir(work)
+        monkeypatch.setattr(tempfile, 'tempdir', str(systmp))
+        bom_file = tmp_path / 'bom.json'
+        bom_file.write_text(json.dumps(sample_bom_json))
+        return {'work': work, 'systmp': systmp, 'bom_file': str(bom_file)}
+
+    @pytest.fixture
+    def assembly(self, bom_command_mocks):
+        """Stand-ins for the asset lookup, the per-source GLB download, asset create and upload."""
+        from vamscli.commands.industry.spatial.glb import glbassetcombine
+        from vamscli.commands.assets import create as create_command
+        from vamscli.commands.file import upload as upload_command
+
+        download_dirs = []
+
+        def fake_glbassetcombine(**kwargs):
+            local_path = kwargs['local_path']
+            download_dirs.append(local_path)
+            run_dir = os.path.join(local_path, 'glbassetcombine_run')
+            os.makedirs(run_dir, exist_ok=True)
+            glb_path = os.path.join(run_dir, f"{kwargs['asset_id']}__COMBINED.glb")
+            with open(glb_path, 'wb') as f:
+                f.write(b'glb')
+            return {'combined_glb_path': glb_path}
+
+        with bom_command_mocks as mocks, \
+             patch.object(glbassetcombine, 'callback', side_effect=fake_glbassetcombine), \
+             patch.object(create_command, 'callback', return_value={'assetId': 'new-asset-1'}), \
+             patch.object(upload_command, 'callback', return_value={'overall_success': True}), \
+             patch('vamscli.utils.glb_combiner.read_glb_file', return_value=self.MOCK_GLB):
+            mocks['api_client'].search_simple.side_effect = lambda request: {'hits': {'hits': [
+                {'_source': {'str_assetid': f"{request.get('assetName', '')}-id"}}]}}
+            yield {'download_dirs': download_dirs}
+
+    def _assemble(self, cli_runner, dirs, *extra):
+        return cli_runner.invoke(cli, [
+            'industry', 'engineering', 'bom', 'bomassemble',
+            '--json-file', dirs['bom_file'], '--database-id', 'test-db', *extra
+        ])
+
+    def test_success_leaves_nothing_behind(self, cli_runner, dirs, assembly):
+        result = self._assemble(cli_runner, dirs)
+
+        assert result.exit_code == 0, result.output
+        assert assembly['download_dirs']
+        assert os.listdir(dirs['work']) == []
+        assert os.listdir(dirs['systmp']) == []
+
+    def test_failure_leaves_nothing_behind(self, cli_runner, dirs, assembly):
+        corrupt = ValueError('corrupt GLB')
+        with patch('vamscli.utils.glb_combiner.read_glb_file', side_effect=corrupt):
+            result = self._assemble(cli_runner, dirs)
+
+        assert result.exit_code == 1
+        assert 'Failed to assemble any root nodes' in result.output
+        assert assembly['download_dirs']
+        assert os.listdir(dirs['work']) == []
+        assert os.listdir(dirs['systmp']) == []
+
+    def test_keep_temp_files_keeps_downloads_in_temp_dir(self, cli_runner, dirs, assembly):
+        result = self._assemble(cli_runner, dirs, '--keep-temp-files', '--json-output')
+
+        assert result.exit_code == 0, result.output
+        temp_dir = json.loads(result.stdout)['temporary_directory']
+        assert os.path.isdir(temp_dir)
+        assert all(os.path.commonpath([d, temp_dir]) == temp_dir for d in assembly['download_dirs'])
+        assert os.listdir(dirs['work']) == []
+
+    def test_keep_temp_files_is_honoured_with_asset_creation(self, cli_runner, dirs, assembly):
+        result = self._assemble(cli_runner, dirs, '--asset-create-name', 'Engine Assembly',
+                                '--keep-temp-files', '--json-output')
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)
+        assert data['new_asset']['asset_id'] == 'new-asset-1'
+        assert os.path.isdir(data['temporary_directory'])
+
+    def test_asset_creation_cleans_up_by_default(self, cli_runner, dirs, assembly):
+        result = self._assemble(cli_runner, dirs, '--asset-create-name', 'Engine Assembly')
+
+        assert result.exit_code == 0, result.output
+        assert os.listdir(dirs['work']) == []
+        assert os.listdir(dirs['systmp']) == []
+
+    def test_cleanup_failure_still_prints_the_result(self, cli_runner, dirs, assembly):
+        with patch('shutil.rmtree', side_effect=PermissionError('file in use')):
+            result = self._assemble(cli_runner, dirs, '--json-output')
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)['status'] == 'success'
+
+    @pytest.mark.parametrize('name', ['vams_bom_assembly_x', 'other_x'])
+    def test_cleanup_removes_only_its_own_temp_folder(self, dirs, name, tmp_path):
+        from vamscli.commands.industry.engineering.bom.Dynamic_BOM import remove_run_temp_dir
+        outside = tmp_path / 'elsewhere' / name
+        inside_wrong_prefix = dirs['systmp'] / 'other_x'
+        for folder in (outside, inside_wrong_prefix):
+            folder.mkdir(parents=True)
+
+        remove_run_temp_dir(str(outside), json_output=True)
+        remove_run_temp_dir(str(inside_wrong_prefix), json_output=True)
+
+        assert outside.is_dir()
+        assert inside_wrong_prefix.is_dir()
+
+
 if __name__ == '__main__':
     pytest.main([__file__])

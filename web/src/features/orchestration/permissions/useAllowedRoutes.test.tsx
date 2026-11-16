@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import * as APIService from "../../../services/APIService";
 import { useAllowedRoutes, __resetCache } from "./useAllowedRoutes";
 
@@ -140,6 +140,28 @@ describe("useAllowedRoutes", () => {
         const second = renderHook(() => useAllowedRoutes());
         await waitFor(() => expect(second.result.current.loading).toBe(false));
         expect(second.result.current.can("GET", "/workflows")).toBe(true);
+    });
+
+    it("reports a failed fetch and refetches on retry() in the same mount", async () => {
+        (APIService.fetchAllowedApiRoutes as jest.Mock)
+            .mockResolvedValueOnce([false, "Network error"])
+            .mockResolvedValueOnce([
+                true,
+                {
+                    routes: [{ path: "/buckets", methods: ["GET"], category: "database" }],
+                    userId: "u",
+                },
+            ]);
+
+        const { result } = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        expect(result.current.failed).toBe(true);
+        expect(result.current.can("GET", "/buckets")).toBe(false);
+
+        act(() => result.current.retry());
+        await waitFor(() => expect(result.current.can("GET", "/buckets")).toBe(true));
+        expect(result.current.failed).toBe(false);
+        expect(APIService.fetchAllowedApiRoutes).toHaveBeenCalledTimes(2);
     });
 
     it("caches a successful fetch across mounts", async () => {
