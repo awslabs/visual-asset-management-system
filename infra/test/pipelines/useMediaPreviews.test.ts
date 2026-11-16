@@ -222,6 +222,28 @@ describe("one deployment serves both workflows", () => {
         expect(resource).toContain("AssetBucket");
         expect(resource).not.toContain("AssetAuxiliaryBucket");
         expect(resource).toContain("/pipelines/*/output/*/results/preview-not-generated.json");
+        // exactly two wildcards in the key, both generated segments, and none in the file name
+        const key = resource.slice(resource.indexOf("pipelines/"));
+        expect(key.match(/\*/g)).toHaveLength(2);
+    });
+
+    test("the nag suppression states exactly what the wildcards can match", () => {
+        const source = fs.readFileSync(
+            path.join(
+                REPO,
+                "infra/lib/nestedStacks/pipelines/preview/3dThumbnail/lambdaBuilder/preview3dThumbnailFunctions.ts"
+            ),
+            "utf-8"
+        );
+        for (const phrase of [
+            "INCLUDING '/'",
+            "nothing else",
+            "the least",
+            "PutObject alone",
+            "the first pipeline of a workflow is chosen by whoever builds the workflow",
+        ]) {
+            expect(source.replace(/"\s*\+\s*"/g, "")).toContain(phrase);
+        }
     });
 
     test("the granted key pattern matches the results key a real run writes, and nothing else", () => {
@@ -234,12 +256,21 @@ describe("one deployment serves both workflows", () => {
         const runKey = `pipelines/preview-media-thumbnail/Preview_1/output/E1a2b3/results/${NO_PREVIEW_RESULT_FILENAME}`;
         expect(glob(pattern).test(runKey)).toBe(true);
         expect(glob(`base/${pattern}`).test(`base/${runKey}`)).toBe(true);
-        // not an asset file, a preview, or another results document
+        // an S3 '*' also matches '/': a deeper key of the same shape matches (documented in the nag reason)
+        expect(
+            glob(pattern).test(`pipelines/a/b/output/E1/results/${NO_PREVIEW_RESULT_FILENAME}`)
+        ).toBe(true);
+        // not an asset file, a preview, another results document, another object name, or outside pipelines/
         for (const other of [
             "xid/pics/photo.png",
             "xid/photo.png.previewFile.jpg",
             "pipelines/p/J/output/E1/files/preview-not-generated.json",
             "pipelines/p/J/output/E1/results/execution.status.json",
+            `pipelines/p/J/output/E1/results/${NO_PREVIEW_RESULT_FILENAME}.bak`,
+            `pipelines/p/J/output/E1/results/sub/other-${NO_PREVIEW_RESULT_FILENAME}`,
+            `xid/pipelines/p/J/output/E1/results/${NO_PREVIEW_RESULT_FILENAME}`,
+            `other/p/J/output/E1/results/${NO_PREVIEW_RESULT_FILENAME}`,
+            `pipelines/p/J/files/E1/results/${NO_PREVIEW_RESULT_FILENAME}`,
         ]) {
             expect(glob(pattern).test(other)).toBe(false);
         }

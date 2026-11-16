@@ -179,9 +179,10 @@ export function buildOpenPipelineFunction(
     // small result document in the execution's results folder. That folder is in the RUN bucket, which
     // is the default asset bucket (executeWorkflow.py resolves the manifest's outputs against it), at
     // <baseAssetsPrefix>pipelines/<pipeline>/<job>/output/<execution>/results/ -- not in the auxiliary
-    // bucket. So the grant is s3:PutObject on exactly that document name, under that results path of
+    // bucket. So the grant is s3:PutObject on exactly that object name, under that results path of
     // each asset bucket (the run bucket is one of them), and nothing else: no abort, legal hold,
-    // retention, tagging or delete.
+    // retention, tagging or delete. The two generated segments are '*' (which also matches '/' in an S3
+    // ARN); the nag suppression below says exactly what that can match.
     const resultsDocumentKey = (prefix: string) =>
         `${prefix.replace(/^\/+/, "")}pipelines/*/output/*/results/${NO_PREVIEW_RESULT_FILENAME}`;
     fun.addToRolePolicy(
@@ -200,13 +201,23 @@ export function buildOpenPipelineFunction(
             {
                 id: "AwsSolutions-IAM5",
                 reason:
-                    "s3:PutObject only, on one fixed document name (" +
+                    "s3:PutObject only, on one fixed object name (" +
                     NO_PREVIEW_RESULT_FILENAME +
-                    ") in the results folder of an execution, " +
-                    "<baseAssetsPrefix>pipelines/<pipeline>/<job>/output/<execution>/results/ of an asset bucket. " +
-                    "The pipeline, job and execution segments are generated when a run starts, so they cannot be " +
-                    "named at deploy time; the wildcards stand for those segments only. The Lambda cannot read, " +
-                    "list, delete, tag or write any other object through this statement.",
+                    "), at <baseAssetsPrefix>pipelines/<pipeline>/<job>/output/<execution>/results/ of an " +
+                    "asset bucket. The key has two segments that cannot be named at deploy time: " +
+                    "<pipeline>/<job>, which is the first pipeline of whichever workflow runs this step plus a " +
+                    "job id generated at launch, and <execution>, an execution id generated at launch. Each " +
+                    "is one '*'. In an S3 resource ARN a '*' matches any characters INCLUDING '/', so the " +
+                    "statement matches any key that starts with <baseAssetsPrefix>pipelines/, contains " +
+                    "'/output/' after it, and ends with '/results/" +
+                    NO_PREVIEW_RESULT_FILENAME +
+                    "'; it can match a deeper key of that shape, and nothing else: no other file name, no " +
+                    "object outside pipelines/, no asset file or preview. IAM has no narrower form for a " +
+                    "generated segment (a path-segment-only wildcard does not exist, and PutObject takes no " +
+                    "s3:prefix condition), and the generated parts are not known to this stack: the first " +
+                    "pipeline of a workflow is chosen by whoever builds the workflow. So this is the least " +
+                    "that works. The action is PutObject alone: no read, list, delete, abort, legal hold, " +
+                    "retention or tagging.",
                 appliesTo: [
                     {
                         // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
