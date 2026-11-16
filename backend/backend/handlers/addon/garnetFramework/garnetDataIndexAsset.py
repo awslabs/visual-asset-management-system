@@ -1143,23 +1143,12 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[bool]:
         event_name = event_record.get('eventName', '')
         dynamodb_data = event_record.get('dynamodb', {})
         
-        # Extract asset link information
-        asset_link_id = None
-        from_asset_key = None
-        to_asset_key = None
-        
-        if event_name == 'REMOVE':
-            # For REMOVE events, use Keys
-            keys = dynamodb_data.get('Keys', {})
-            asset_link_id = keys.get('assetLinkId', {}).get('S')
-            from_asset_key = keys.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
-            to_asset_key = keys.get('toAssetDatabaseId:toAssetId', {}).get('S')
-        else:
-            # For INSERT/MODIFY events, use NewImage
-            record_data = dynamodb_data.get('NewImage', {})
-            asset_link_id = record_data.get('assetLinkId', {}).get('S')
-            from_asset_key = record_data.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
-            to_asset_key = record_data.get('toAssetDatabaseId:toAssetId', {}).get('S')
+        # The table is keyed on assetLinkId alone, so a REMOVE record's Keys do not name the
+        # two assets; its OldImage (the deleted row) does.
+        record_data = dynamodb_data.get('OldImage' if event_name == 'REMOVE' else 'NewImage', {})
+        asset_link_id = record_data.get('assetLinkId', {}).get('S')
+        from_asset_key = record_data.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
+        to_asset_key = record_data.get('toAssetDatabaseId:toAssetId', {}).get('S')
         
         if not asset_link_id or not from_asset_key or not to_asset_key:
             logger.warning("Missing asset link information in stream")
