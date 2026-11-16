@@ -151,8 +151,7 @@ def Scope "Looks"
         _texture(tmp_path / "outside.png")
         path = _stage(asset, _mesh() + _mdl_material(
             "        asset inputs:diffuse_texture = @../outside.png@"))
-        rgb = _rgb(usd_handler.load(path, asset_root=str(asset)))
-        assert rgb is None or rgb != [list(_RED)] * 3
+        assert _rgb(usd_handler.load(path, asset_root=str(asset))) is None
 
     def test_an_implicit_gprim_takes_the_constant(self, tmp_path):
         path = _stage(tmp_path, """
@@ -280,3 +279,202 @@ class TestUnrealExportMdl:
             "        asset inputs:AlbedoTexture = @tex.png@\n"
             "        color3f inputs:diffuse_color_constant = (0, 0, 1)"))
         assert _rgb(usd_handler.load(path)) == [[0, 0, 255]] * 3
+
+
+def _chain(hops, value="(1, 0, 0)"):
+    """Material interface inputs a0 .. a<hops-1>, each connected to the next, the last holding
+    ``value``: a shader input connected to ``a0`` reaches the value in ``hops`` connections."""
+    links = "".join(f"\n    color3f inputs:a{i}.connect = </Mat.inputs:a{i + 1}>" for i in range(hops - 1))
+    return links + f"\n    color3f inputs:a{hops - 1} = {value}"
+
+
+_GREEN_DISPLAY = "\n    color3f[] primvars:displayColor = [(0, 1, 0)]"
+_CHAINED_CONSTANT = "        color3f inputs:diffuse_color_constant.connect = </Mat.inputs:a0>"
+
+
+@pytest.mark.unit
+@requires_real("pxr", "pyvista", "vtk", "PIL")
+class TestConnectionWalk:
+    """A shader input's connections are followed one at a time, at most MAX_CONNECTION_HOPS of them;
+    pxr's own recursive walk overflowed the C stack on a chain of tens of thousands of links."""
+
+    def test_a_chain_at_the_bound_is_read(self, tmp_path):
+        path = _stage(tmp_path, _mesh(extra=_GREEN_DISPLAY) + _mdl_material(
+            _CHAINED_CONSTANT, interface=_chain(usd_handler.MAX_CONNECTION_HOPS)))
+        assert _rgb(usd_handler.load(path)) == [[255, 0, 0]] * 3
+
+    def test_a_chain_past_the_bound_is_not_read_and_the_log_says_why(self, tmp_path, caplog):
+        path = _stage(tmp_path, _mesh(extra=_GREEN_DISPLAY) + _mdl_material(
+            _CHAINED_CONSTANT, interface=_chain(usd_handler.MAX_CONNECTION_HOPS + 1)))
+        with caplog.at_level("WARNING"):
+            rgb = _rgb(usd_handler.load(path))
+        assert rgb == [[0, 255, 0]] * 3
+        assert (f"Shader input /Mat/Shader.inputs:diffuse_color_constant: its connections run past "
+                f"{usd_handler.MAX_CONNECTION_HOPS} hops, so it is not read") in caplog.text
+
+    def test_a_connection_loop_is_not_read_and_the_log_says_why(self, tmp_path, caplog):
+        path = _stage(tmp_path, _mesh(extra=_GREEN_DISPLAY) + _mdl_material(
+            _CHAINED_CONSTANT, interface="\n    color3f inputs:a0.connect = </Mat.inputs:a1>"
+                                         "\n    color3f inputs:a1.connect = </Mat.inputs:a0>"))
+        with caplog.at_level("WARNING"):
+            rgb = _rgb(usd_handler.load(path))
+        assert rgb == [[0, 255, 0]] * 3
+        assert "inputs:diffuse_color_constant: its connections loop, so it is not read" in caplog.text
+
+    def test_each_reason_is_logged_once_per_stage(self, tmp_path, caplog):
+        body = _mesh("A", "/Mat") + _mesh("B", "/Two") + _mdl_material(
+            _CHAINED_CONSTANT, interface=_chain(usd_handler.MAX_CONNECTION_HOPS + 1))
+        body += _mdl_material(_CHAINED_CONSTANT.replace("/Mat.", "/Two."), name="Two",
+                              interface=_chain(usd_handler.MAX_CONNECTION_HOPS + 1).replace("/Mat.", "/Two."))
+        with caplog.at_level("WARNING"):
+            usd_handler.load(_stage(tmp_path, body))
+        assert caplog.text.count("its connections run past") == 1
+
+    def test_a_value_behind_a_node_graph_output_is_read(self, tmp_path):
+        path = _stage(tmp_path, _mesh() + _mdl_material(
+            "        color3f inputs:diffuse_color_constant.connect = </Mat/Graph.outputs:colour>",
+            interface="""
+    def NodeGraph "Graph" {
+        color3f inputs:base = (0, 0, 1)
+        color3f outputs:colour.connect = </Mat/Graph.inputs:base>
+    }"""))
+        assert _rgb(usd_handler.load(path)) == [[0, 0, 255]] * 3
+
+    def test_an_input_keeps_its_own_value_when_its_connection_has_none(self, tmp_path):
+        # As UsdShadeInput.GetValueProducingAttributes: a connection to an input with no value, or to a
+        # prim that does not exist, leaves the input's own authored value.
+        no_value = _stage(tmp_path, _mesh() + _mdl_material(
+            "        color3f inputs:diffuse_color_constant = (0, 0, 1)\n" + _CHAINED_CONSTANT,
+            interface="\n    color3f inputs:a0"), name="no_value.usda")
+        missing = _stage(tmp_path, _mesh() + _mdl_material(
+            "        color3f inputs:diffuse_color_constant = (0, 0, 1)\n"
+            "        color3f inputs:diffuse_color_constant.connect = </Nowhere.inputs:x>"), name="missing.usda")
+        assert _rgb(usd_handler.load(no_value)) == [[0, 0, 255]] * 3
+        assert _rgb(usd_handler.load(missing)) == [[0, 0, 255]] * 3
+
+    def test_an_input_connected_to_another_shaders_output_is_not_read(self, tmp_path):
+        # The output is computed when the material renders, so it has no value to read here; the input's
+        # own authored value does not apply while it is connected.
+        path = _stage(tmp_path, _mesh(extra=_GREEN_DISPLAY) + _mdl_material(
+            "        color3f inputs:diffuse_color_constant = (1, 0, 0)\n"
+            "        color3f inputs:diffuse_color_constant.connect = </Mat/Noise.outputs:out>",
+            interface="""
+    def Shader "Noise" {
+        color3f outputs:out
+    }"""))
+        assert _rgb(usd_handler.load(path)) == [[0, 255, 0]] * 3
+
+    def test_a_chain_of_fifty_thousand_links_loads_uncoloured(self, tmp_path):
+        """The load runs in a child interpreter, so a crash (the C stack overflowing in a recursive walk)
+        fails this test on the child's exit status instead of ending pytest."""
+        import os
+        import subprocess  # nosec B404 - fixed interpreter, no shell
+        import sys
+
+        import conftest
+
+        path = _stage(tmp_path, _mesh() + _mdl_material(_CHAINED_CONSTANT, interface=_chain(50_000)))
+        child = (
+            "import sys\n"
+            "from preview_pipeline.format_handlers import usd_handler\n"
+            "data = usd_handler.load(sys.argv[1])\n"
+            "print('LOADED', 'RGB' in data.point_data)\n"
+        )
+        env = dict(os.environ,
+                   PYTHONPATH=conftest._CONTAINER_DIR + os.pathsep + os.environ.get("PYTHONPATH", ""))
+        result = subprocess.run([sys.executable, "-c", child, path],  # nosec B603 - fixed args
+                                capture_output=True, text=True, timeout=600, env=env)
+        assert result.returncode == 0, (
+            f"the load did not return cleanly (returncode {result.returncode}). "
+            f"stdout={result.stdout!r} stderr={result.stderr[-500:]!r}")
+        assert "LOADED False" in result.stdout, f"stdout={result.stdout!r}"
+        assert "its connections run past" in result.stderr
+
+
+@pytest.mark.unit
+@requires_real("pxr", "pyvista", "vtk", "PIL")
+class TestColourLog:
+    """The run log says how each MDL material was drawn, after its prims were sampled, and the stage
+    summaries stay one short line however many modules a scene has."""
+
+    def test_an_unsampled_texture_with_no_constant_is_logged_as_not_coloured(self, tmp_path, caplog):
+        path = _stage(tmp_path, _mesh() + _mdl_material(
+            "        asset inputs:AlbedoTexture = @./Textures/missing.png@", module="MI_Floor_01.mdl"))
+        with caplog.at_level("INFO"):
+            rgb = _rgb(usd_handler.load(path))
+        assert rgb is None
+        assert "coloured from" not in caplog.text
+        assert ("1 prims are not coloured by their MDL material: 1 with 'MI_Floor_01.mdl', whose "
+                "AlbedoTexture could not be sampled") in caplog.text
+
+    def test_an_omni_pbr_texture_not_read_with_no_constant_is_counted(self, tmp_path, caplog):
+        path = _stage(tmp_path, _mesh() + _mdl_material("        asset inputs:diffuse_texture = @missing.png@"))
+        with caplog.at_level("INFO"):
+            usd_handler.load(path)
+        assert "1 with 'OmniPBR.mdl', whose diffuse_texture could not be sampled" in caplog.text
+
+    def test_the_approximation_names_the_inputs_that_coloured_the_prim(self, tmp_path, caplog):
+        # The texture is named but cannot be read, so the albedo colour, not the texture, colours it.
+        path = _stage(tmp_path, _mesh() + _mdl_material(
+            "        asset inputs:AlbedoTexture = @missing.png@\n"
+            "        float4 inputs:ColorAlbedo = (0, 0, 1, 0)\n"
+            "        float4 inputs:BaseColor_Tint = (1, 1, 1, 1)", module="MI_Wall_01.mdl"))
+        with caplog.at_level("INFO"):
+            rgb = _rgb(usd_handler.load(path))
+        assert rgb == [[0, 0, 255]] * 3
+        assert "'MI_Wall_01.mdl' coloured from ColorAlbedo, BaseColor_Tint; an approximation" in caplog.text
+
+    def test_the_summary_names_the_modules_with_most_prims_and_counts_the_rest(self, tmp_path, caplog):
+        limit = usd_handler.MAX_SUMMARY_ENTRIES
+        modules = limit + 3
+        body = "".join(_mesh(f"Extra{i}", "/Mat0") for i in range(2))
+        for i in range(modules):
+            body += _mesh(f"M{i}", f"/Mat{i}") + _mdl_material(
+                "        float inputs:Roughness = 0.5", module=f"MI_Part_{i:02d}.mdl", name=f"Mat{i}")
+        with caplog.at_level("INFO"):
+            usd_handler.load(_stage(tmp_path, body))
+        summary = next(line for line in caplog.text.splitlines() if "prims are not coloured" in line)
+        assert summary.count(" with 'MI_Part_") == limit
+        assert f"{modules + 2} prims are not coloured by their MDL material: 3 with 'MI_Part_00.mdl'" in summary
+        assert summary.endswith("; and 3 more (3 prims)")
+
+
+@pytest.mark.unit
+@requires_real("pxr", "pyvista", "vtk", "PIL")
+class TestMdlStageLayouts:
+    def test_a_material_inside_an_instance_is_read_once_for_every_instance(self, tmp_path, monkeypatch):
+        reads = []
+        read = usd_handler._read_mdl_diffuse
+        monkeypatch.setattr(usd_handler, "_read_mdl_diffuse",
+                            lambda material, context: reads.append(material.GetPath()) or read(material, context))
+        path = _stage(tmp_path, """
+class Xform "Proto"
+{""" + _mesh(material="/Proto/Mat") + _mdl_material(
+            "        color3f inputs:diffuse_color_constant = (1, 0, 0)").replace("/Mat/", "/Proto/Mat/") + """
+}
+def Xform "A" (
+    instanceable = true
+    references = </Proto>
+)
+{
+}
+def Xform "B" (
+    instanceable = true
+    references = </Proto>
+)
+{
+}""")
+        assert _rgb(usd_handler.load(path)) == [[255, 0, 0]] * 6
+        assert len(reads) == 1, reads
+
+    def test_an_mdl_texture_inside_a_usdz_colours_the_mesh(self, tmp_path):
+        from pxr import Sdf, UsdUtils
+
+        source = tmp_path / "source"
+        _texture(source / "Textures" / "wood.png")
+        (source / "OmniPBR.mdl").write_text("mdl 1.4;\n")  # packaged beside the layer; never opened
+        layer = _stage(source, _mesh() + _mdl_material(
+            "        asset inputs:diffuse_texture = @./Textures/wood.png@"))
+        package = tmp_path / "pallet.usdz"
+        assert UsdUtils.CreateNewUsdzPackage(Sdf.AssetPath(layer), str(package))
+        assert _rgb(usd_handler.load(str(package))) == [list(_RED)] * 3
