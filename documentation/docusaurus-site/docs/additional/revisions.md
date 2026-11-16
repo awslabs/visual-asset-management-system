@@ -435,6 +435,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **VNTANA viewer 3.0.0** — The licensed VNTANA viewer add-on builds `@vntana/viewer` 3.0.0 (from 2.2.0) for `.glb` files and still ships disabled; it shows the viewer's load-error reason, and its bundle build tools are updated within their current majors. `@vntana/viewer` is under the VNTANA Viewer Commercial License (a commercial license from VNTANA beyond a 30-day internal evaluation); see `NOTICE.md`. (issue #1174)
 -   **ThatOpen IFC BIM viewer libraries** — The IFC viewer bundle moves to `@thatopen/components`, `@thatopen/components-front` and `@thatopen/fragments` 3.6.0 and its own isolated `three` 0.184.0, keeping `web-ifc` at 0.0.77 because 0.0.78's single-threaded browser build fails every IFC import (upstream ThatOpen/engine_web-ifc#2219, fixed but not yet released); the bundle build fails when a web-ifc WASM file or the Fragments worker it copies is missing. (issue #1174)
 
+-   **Python dependency updates** — The backend, the base Lambda layer and the pipeline test environment use `boto3` and `botocore` 1.43.126; the authorizer and EDH root key sync layers use `cryptography` 50.0.2; the backend tests use `pytest` 9.2.0, `pytest-mock` 3.17.0, `coverage` 7.17.2 and `moto` 5.2.5. (PR #1556)
+
 **Known issues:**
 
 -   **Comment and subscription routes** — These routes find an asset by its ID alone, so an asset ID that is live in two databases is refused on them, except `GET /subscriptions`, which leaves that asset's subscriptions out of its list. (issue #605)

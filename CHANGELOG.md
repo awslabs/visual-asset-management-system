@@ -538,6 +538,8 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: `@vntana/viewer` is under the VNTANA Viewer Commercial License, which requires a commercial license from VNTANA beyond a 30-day internal evaluation; the terms are summarised in `NOTICE.md`.
 -   **Web** The ThatOpen IFC BIM viewer bundle moves to `@thatopen/components`, `@thatopen/components-front` and `@thatopen/fragments` 3.6.0 and its own isolated `three` 0.184.0, keeping `web-ifc` at 0.0.77 because 0.0.78's single-threaded browser build fails every IFC import ([ThatOpen/engine_web-ifc#2219](https://github.com/ThatOpen/engine_web-ifc/issues/2219), fixed upstream but not yet released); the bundle build fails when a web-ifc WASM file or the Fragments worker it copies is missing. ([#1174](https://github.com/awslabs/visual-asset-management-system/issues/1174))
 
+-   **Backend** `boto3` and `botocore` move to 1.43.126 in the backend, the base Lambda layer and the pipeline test environment, `cryptography` to 50.0.2 in the authorizer and EDH root key sync layers, and the backend test tools to `pytest` 9.2.0, `pytest-mock` 3.17.0, `coverage` 7.17.2 and `moto` 5.2.5. ([#1556](https://github.com/awslabs/visual-asset-management-system/pull/1556))
+
 ### Known Outstanding Issues
 
 -   **Backend** The comment and subscription routes find an asset by its ID alone, so an asset ID that is live in two databases is refused on those routes, except `GET /subscriptions`, which leaves that asset's subscriptions out of its list. ([#605](https://github.com/awslabs/visual-asset-management-system/issues/605))
