@@ -215,7 +215,9 @@ export function buildDependencyUrl(key: string, context: DependencyResolverConte
         .split("/")
         .map((segment) => encodeURIComponent(segment))
         .join("/");
-    let url = `${context.apiEndpoint}database/${context.databaseId}/assets/${context.assetId}/download/stream/${encodedPath}`;
+    let url = `${context.apiEndpoint}database/${context.databaseId}/assets/${encodeURIComponent(
+        context.assetId
+    )}/download/stream/${encodedPath}`;
     // A dependency is part of the same asset version as the model, so the S3 versionId of the
     // model file is never passed on; the logical asset version is.
     if (context.assetVersionId) {

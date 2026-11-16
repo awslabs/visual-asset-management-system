@@ -206,6 +206,17 @@ _ixe_module = _s3mk_importlib_util.module_from_spec(_ixe_spec)
 _ixe_spec.loader.exec_module(_ixe_module)
 sys.modules['common.indexerEvents'] = _ixe_module
 sys.modules['common'].indexerEvents = _ixe_module
+# eventLogSummary describes an event for a log line from its shape alone (stdlib only). The indexers,
+# the bucket sync and the Garnet add-on indexers import it at module level, so it is registered for
+# the same reason as indexerEvents.
+_els_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.eventLogSummary',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'eventLogSummary.py')
+)
+_els_module = _s3mk_importlib_util.module_from_spec(_els_spec)
+_els_spec.loader.exec_module(_els_module)
+sys.modules['common.eventLogSummary'] = _els_module
+sys.modules['common'].eventLogSummary = _els_module
 # assetProvenance builds the asset-row change-provenance attributes (stdlib + the s3MetadataKeys
 # constants). The upload and large-file completion handlers import it at module level.
 _apv_spec = _s3mk_importlib_util.spec_from_file_location(
@@ -216,6 +227,16 @@ _apv_module = _s3mk_importlib_util.module_from_spec(_apv_spec)
 _apv_spec.loader.exec_module(_apv_module)
 sys.modules['common.assetProvenance'] = _apv_module
 sys.modules['common'].assetProvenance = _apv_module
+# assetUploads holds the record-level upload completion checks (stdlib only). The upload completion
+# and the ingest-asset handler import it at module level.
+_aup_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.assetUploads',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'assetUploads.py')
+)
+_aup_module = _s3mk_importlib_util.module_from_spec(_aup_spec)
+_aup_spec.loader.exec_module(_aup_module)
+sys.modules['common.assetUploads'] = _aup_module
+sys.modules['common'].assetUploads = _aup_module
 # metadataSchemaValidation owns `extract_file_extension`, which the compliance evaluation engine
 # imports at module level to apply a metadata schema's fileKeyTypeRestriction exactly as the metadata
 # write path does. Registered for the same reason as indexerEvents. tests/handlers/metadata/conftest.py
@@ -323,7 +344,8 @@ sys.modules['common.apiRoutes'] = _apir_module
 # The audit action registry is pure constants over the route list, so load the REAL modules by path
 # for the same reason: the route type module first, then the add-on lane and the merged registry
 # (which imports the fork-owned custom/customAuditActions.py by name).
-for _audit_reg in ('auditActionTypes', 'addonAuditActions', 'auditActions'):
+# common.auditSearchText (the redacted searchText key of a search record) is pure Python and joins them.
+for _audit_reg in ('auditActionTypes', 'addonAuditActions', 'auditActions', 'auditSearchText'):
     _audit_reg_spec = _s3mk_importlib_util.spec_from_file_location(
         f'common.{_audit_reg}',
         os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', f'{_audit_reg}.py')
@@ -446,6 +468,19 @@ _sns_module = _s3mk_importlib_util.module_from_spec(_sns_spec)
 _sns_spec.loader.exec_module(_sns_module)
 sys.modules['common.snsTopicNames'] = _sns_module
 sys.modules['common'].snsTopicNames = _sns_module
+# downloadEligibility is the shared download-eligibility check set (downloadAsset imports it at module
+# level). It builds no client and reads no table at import -- every S3 client, getter and resolver is
+# passed in by the caller -- so load the REAL module by path. It must come after common.s3 above, which
+# it imports. Bound on the MagicMock `common` too, so `from common import downloadEligibility` resolves
+# the real module rather than a mock attribute.
+_de_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.downloadEligibility',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'downloadEligibility.py')
+)
+_de_module = _s3mk_importlib_util.module_from_spec(_de_spec)
+_de_spec.loader.exec_module(_de_module)
+sys.modules['common.downloadEligibility'] = _de_module
+sys.modules['common'].downloadEligibility = _de_module
 # handlers.assets.assetVersions is imported by assetFiles and metadataService at module load.
 # Create a minimal mock package hierarchy: handlers → handlers.assets → handlers.assets.assetVersions
 if 'handlers' not in sys.modules:

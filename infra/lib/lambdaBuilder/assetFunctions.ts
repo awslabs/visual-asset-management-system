@@ -513,6 +513,17 @@ export function buildSqsUploadFileLargeFunction(
     // when a queued message predates the bucketRegion field.
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     sendEmailFunction.grantInvoke(fun);
+    // A workflow run's output is copied under a claim on its row in the run's ingest ledger (the
+    // output-files table), so two queued copies of one output cannot both write it: a conditional
+    // UpdateItem takes, finalizes or releases the claim and a GetItem reads a refused claim's state.
+    // The table ARN only; no index is read.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+            resources: [storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.tableArn],
+        })
+    );
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -561,6 +572,16 @@ export function buildIngestAssetFunction(
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
+    // The complete stage reads one upload record by key (GetItem) before it creates a missing asset:
+    // exactly that action, on the table only (no index, no Scan or Query). The deployment key's
+    // decrypt permission comes from kmsKeyLambdaPermissionAddToResourcePolicy below.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem"],
+            resources: [storageResources.dynamo.assetUploadsStorageTable.tableArn],
+        })
+    );
     uploadFileLambdaFunction.grantInvoke(fun);
     createAssetLambdaFunction.grantInvoke(fun);
 

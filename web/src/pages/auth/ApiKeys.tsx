@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
@@ -37,6 +38,7 @@ import {
 import CreateApiKey from "./CreateApiKey";
 import UpdateApiKey from "./UpdateApiKey";
 import { usePageTitle } from "../../hooks/usePageTitle";
+import { API_KEYS_ADMIN_NAV_HREF, useActiveNavHref } from "../../layout/activeNavHref";
 
 export type ApiKeyManagementMode = "admin" | "user"; // pragma: allowlist secret
 
@@ -65,6 +67,27 @@ export function apiKeyStatus(
     return nowMs > expiryMs ? "Expired" : "Active";
 }
 
+/** The `?mode=` the URL asks for, or null when it names no known mode. */
+export function requestedApiKeyMode(search: string): ApiKeyManagementMode | null {
+    const value = new URLSearchParams(search).get("mode");
+    return value === "admin" || value === "user" ? value : null;
+}
+
+/**
+ * The mode the page opens in. `?mode=` is a preference, honoured only for a mode the API's
+ * allowed-routes listing allowed, so a URL never opens the tenant-wide admin mode for a role the
+ * listing does not allow. Otherwise admin when allowed, else the user's own keys.
+ */
+export function resolveApiKeyMode(
+    requested: ApiKeyManagementMode | null,
+    adminAllowed: boolean,
+    userAllowed: boolean
+): ApiKeyManagementMode {
+    if (requested === "admin" && adminAllowed) return "admin";
+    if (requested === "user" && userAllowed) return "user";
+    return adminAllowed ? "admin" : "user";
+}
+
 const API_KEY_STATUS_INDICATOR: Record<ApiKeyStatus, "success" | "stopped" | "error"> = {
     Active: "success",
     Inactive: "stopped",
@@ -72,7 +95,14 @@ const API_KEY_STATUS_INDICATOR: Record<ApiKeyStatus, "success" | "stopped" | "er
 };
 
 export default function ApiKeys() {
-    usePageTitle("API Keys");
+    // Matches the page's h1 and the navigation entry that opens it.
+    usePageTitle("API Key Management");
+
+    // The profile menu opens ?mode=user and Admin - Auth opens ?mode=admin; both are preferences,
+    // validated against the modes the API allowed (resolveApiKeyMode).
+    const location = useLocation();
+    const navigate = useNavigate();
+    const requestedMode = requestedApiKeyMode(location.search);
 
     // Available modes, resolved asynchronously from the allowed-API-routes
     // list. Admin mode: GET /auth/api-keys allowed. User mode:
@@ -132,7 +162,7 @@ export default function ApiKeys() {
             setPermissionsUnavailable(undeterminable);
             setShowAdminMode(adminMode);
             setShowUserMode(userMode);
-            setMode(adminMode ? "admin" : "user");
+            setMode(resolveApiKeyMode(requestedMode, adminMode, userMode));
             setModesResolved(!undeterminable);
             if (undeterminable) {
                 setLoading(false);
@@ -144,7 +174,24 @@ export default function ApiKeys() {
         return () => {
             cancelled = true;
         };
+        // The listing is resolved once per attempt; a later ?mode= change is applied by the
+        // effect below, without resolving the listing again.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [resolveAttempt]);
+
+    // Follow a later ?mode= change while the page stays mounted (for example the Admin - Auth link
+    // followed from the user view), within the allowed modes.
+    useEffect(() => {
+        if (modesResolved) {
+            setMode(resolveApiKeyMode(requestedMode, showAdminMode, showUserMode));
+        }
+    }, [requestedMode, modesResolved, showAdminMode, showUserMode]);
+
+    // Highlight Admin - Auth > "API Keys (all users)" only on the admin view, from the mode resolved
+    // against the API listing. The user view is opened from the profile menu and highlights no side
+    // link, and nothing is highlighted until the modes are known.
+    useActiveNavHref(modesResolved && mode === "admin" ? API_KEYS_ADMIN_NAV_HREF : "");
+
     const [allItems, setAllItems] = useState<any[]>([]);
     const [selectedItems, setSelectedItems] = useState<any[]>([]);
     const [createOpen, setCreateOpen] = useState(false);
@@ -390,9 +437,13 @@ export default function ApiKeys() {
                         <Box padding={{ bottom: "s" }}>
                             <SegmentedControl
                                 selectedId={mode}
-                                onChange={({ detail }) =>
-                                    setMode(detail.selectedId as ApiKeyManagementMode)
-                                }
+                                onChange={({ detail }) => {
+                                    const selected = detail.selectedId as ApiKeyManagementMode;
+                                    setMode(selected);
+                                    // Keep the URL in step, so a menu link to the other mode
+                                    // still switches the view.
+                                    navigate({ search: `?mode=${selected}` }, { replace: true });
+                                }}
                                 label="API key management mode"
                                 options={[
                                     { text: "All Keys (Admin)", id: "admin" },

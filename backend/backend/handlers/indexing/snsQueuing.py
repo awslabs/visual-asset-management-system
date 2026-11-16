@@ -46,7 +46,8 @@ def relayed_record(record: Dict[str, Any]) -> Dict[str, Any]:
     """The stream record as it is published: an INSERT or MODIFY record without its `OldImage`.
 
     The asset-link and metadata tables stream both images so that a REMOVE record carries the row
-    it deleted (`OldImage`), which the compliance trigger reads the deleted row's assets from. No
+    it deleted (`OldImage`), which the compliance trigger reads the deleted row's assets from; the
+    search and Garnet indexers read the two assets of a deleted asset link from it too. No
     consumer reads the old image of an INSERT or MODIFY, and keeping it would double the message
     size of every metadata update toward the SNS size limit, so it is dropped there. A record without
     an `OldImage` (a table that streams the new image only) is published unchanged.

@@ -121,28 +121,28 @@ global_settings:
           reason: example execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1353
-          line_end: 1353
+          line_start: 1373
+          line_end: 1373
           reason: example execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1535
-          line_end: 1535
+          line_start: 1555
+          line_end: 1555
           reason: example pipeline execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1561
-          line_end: 1561
+          line_start: 1581
+          line_end: 1581
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1571
-          line_end: 1571
+          line_start: 1591
+          line_end: 1591
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 2182
-          line_end: 2182
+          line_start: 2202
+          line_end: 2202
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-BASIC-AUTH-CREDENTIALS
           path: documentation/docusaurus-site/docs/cli/troubleshooting/network-config.md
@@ -151,8 +151,8 @@ global_settings:
           reason: username:password placeholder in a proxy URL example, not a credential
         - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/deployment/configuration-reference.md
-          line_start: 1626
-          line_end: 1627
+          line_start: 1694
+          line_end: 1695
           reason: CDK construct paths and example role names in a configuration example
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/developer/physna-integration.md

@@ -2,7 +2,7 @@
 
 VAMS writes an audit record for every action a user, an API key or the system takes: each create, update and delete, each read, search, download and export, and each pipeline run. You can use these records to answer who did what to which data, and to attribute storage, transfer and pipeline use to users, databases and assets.
 
-One exception remains for now: the reads of the API key, role, user role, constraint and Amazon Cognito user pages are not yet recorded, and changes to those items keep their earlier record format. Both move to the format described here with [#1434](https://github.com/awslabs/visual-asset-management-system/issues/1434).
+Changes to roles, user roles, constraints, API keys and Amazon Cognito users, and the reads of those pages, are recorded in the same format, in their own auth change and auth other logs. Every authorization decision names the action it was made for, its outcome and the request, so a denied attempt can be matched to the request it stopped.
 
 ---
 
@@ -15,7 +15,7 @@ Each action record names:
 -   **Which data** -- the database, asset, file, version, pipeline, workflow or execution the action touched.
 -   **How much** -- a size or count when VAMS already knows it: the bytes of a file written directly to the bucket, the number of files a folder operation or export touched, the number of items a list or search returned, and the duration of a pipeline run.
 
-What a write wrote or changed is recorded with its new values, and with the values it replaced when VAMS had already read them. A read, search or download records what was asked, never what was returned. Credentials, tokens, keys and pipeline template bodies are never recorded.
+What a write wrote or changed is recorded with its new values, and with the values it replaced when VAMS had already read them. A read, search or download records what was asked, never what was returned, and the text typed into a search is recorded as `<redacted>` in the audit log groups. The Lambda function logs are separate and can still hold request text for some handlers, so set their retention and access to match your policy. Credentials, tokens, keys and pipeline template bodies are never recorded.
 
 :::note[Your administrator decides whether reads are recorded]
 Reads are recorded by default. An administrator can turn read records off with the `app.auditLogging.recordReads` setting; writes, denials, failures, downloads and exports are recorded either way. See the [configuration reference](../deployment/configuration-reference.md#audit-logging-appauditlogging).
