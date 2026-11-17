@@ -9,7 +9,7 @@ written. Each field is coerced and range-checked while the config is parsed, bef
 starts and any GPU work is done.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 MODES = ("train", "evaluate")
@@ -147,6 +147,9 @@ class PipelineConfig:
     steps_per_episode: int = 1000
     record_video: bool = False
 
+    # Asset files staged before the run (openPipeline's stageAssetFiles block); empty stages none
+    stage_asset_files: dict = field(default_factory=dict)
+
     @classmethod
     def from_dict(cls, data: dict) -> "PipelineConfig":
         config = _section(data, "trainingConfig")
@@ -175,4 +178,5 @@ class PipelineConfig:
             steps_per_episode=_int_field(config, "stepsPerEpisode", 1000,
                                          maximum=MAX_STEPS_PER_EPISODE),
             record_video=_bool_field(config, "recordVideo", False),
+            stage_asset_files=_section(data, "stageAssetFiles"),
         )
