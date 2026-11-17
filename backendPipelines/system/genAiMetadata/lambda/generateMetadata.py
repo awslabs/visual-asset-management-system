@@ -259,11 +259,25 @@ IMAGES_LINE_BY_MODALITY = {
     MODALITY_IMAGE: "{count} image(s) of this file follow.",
     MODALITY_RENDERS: "{count} view(s) rendered from this 3D file follow.",
 }
+# The rule for a software screen, last before the images of a class that can show one (views rendered from a 3D
+# file cannot). D117: the system prompt's rule alone did not hold against asset text that names another subject.
+SCREEN_RULE_BY_MODALITY = {
+    MODALITY_KEYFRAMES: ("If they show a software screen, this video is a screen recording: say so in the title and "
+                         "the first sentence, and name the application."),
+    MODALITY_PAGES: ("If they show a software screen, say so in the title and the first sentence, and name the "
+                     "application."),
+    MODALITY_IMAGE: ("If it shows a software screen, this image is a screenshot: say so in the title and the first "
+                     "sentence, and name the application."),
+}
 
 
 def images_line(file_class, image_count):
-    """The closing line that announces ``image_count`` images of a file of ``file_class``, with FILE_IMAGES_NOTE."""
-    return (IMAGES_LINE_BY_MODALITY[image_modality(file_class)].format(count=image_count) + " " + FILE_IMAGES_NOTE)
+    """The closing line that announces ``image_count`` images of a file of ``file_class``, with FILE_IMAGES_NOTE and,
+    for a class that can show a software screen, SCREEN_RULE_BY_MODALITY."""
+    modality = image_modality(file_class)
+    rule = SCREEN_RULE_BY_MODALITY.get(modality)
+    return (IMAGES_LINE_BY_MODALITY[modality].format(count=image_count) + " " + FILE_IMAGES_NOTE
+            + (" " + rule if rule else ""))
 SYSTEM_PROMPT = (
     "You are a digital asset librarian describing one file from an asset management system so it can be "
     "searched and classified. You receive the asset's name, description and tags, the file's path and class, "
@@ -467,6 +481,8 @@ def existing_metadata_sections(existing_lines):
     return sections
 
 
+# The plain label just before the asset's name, description and tags (contextLabel), outside the guarded block.
+CONTEXT_LABEL = "Asset text (context about the upload, not a description of the file):"
 # The plain instructions of the user message that go with the asset text and the previous analysis.
 CONTENT_FIRST_INSTRUCTION = ("The asset's name, description and tags are context about the asset this file belongs "
                              "to; the title, description and keywords name what this file itself shows or contains.")
@@ -480,9 +496,11 @@ PREVIOUS_CONTEXT_ONLY_INSTRUCTION = ("A previous analysis of this file is includ
 def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
                      existing_lines, text_excerpt, image_count, images_withheld=False, previous_lines=(),
                      target_lines=(), keep_previous_wording=False):
-    """The prompt's parts by name. ``intro``, ``vocabularyOpening``, ``vocabularyClosing`` and ``closing`` are the
-    pipeline's own words; ``context``, ``identity``, ``attributes``, ``facts``, ``existing``, ``previous`` and
-    ``excerpt`` come from the file and its metadata, and ``vocabularyOptions`` from the template's operator-edited
+    """The prompt's parts by name. ``intro``, ``contextLabel`` (CONTEXT_LABEL, with any asset text),
+    ``vocabularyOpening``, ``vocabularyClosing``, ``instructions`` and ``imagesNote`` (the line that announces the
+    images, or says why none follows) are the pipeline's own words; ``context``, ``identity``, ``attributes``,
+    ``facts``, ``existing``, ``previous`` and ``excerpt`` come from the file and its metadata, and
+    ``vocabularyOptions`` from the template's operator-edited
     configuration. ``vocabulary_parts`` is the ``(opening, options, closing)`` tuple ``vocabulary_prompt_parts``
     returns. ``images_withheld`` says the file has, or would have had, rendered views the analysis model cannot
     take, so none follows. ``previous_lines`` are the ``field: value`` lines of the pipeline's earlier result for this subject.
@@ -511,16 +529,17 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
     elif images_withheld:
         closing = ("No rendered views are sent (this analysis model takes no image input); describe the file "
                    "from its name, attributes and context.")
-    closing_lines = [closing] if closing else []
+    instructions = []
     if context:
-        closing_lines.append(CONTENT_FIRST_INSTRUCTION)
+        instructions.append(CONTENT_FIRST_INSTRUCTION)
     if target_lines:
-        closing_lines.append(TARGETS_INSTRUCTION)
+        instructions.append(TARGETS_INSTRUCTION)
     if previous_lines:
-        closing_lines.append(PREVIOUS_KEEP_WORDING_INSTRUCTION if keep_previous_wording
-                             else PREVIOUS_CONTEXT_ONLY_INSTRUCTION)
+        instructions.append(PREVIOUS_KEEP_WORDING_INSTRUCTION if keep_previous_wording
+                            else PREVIOUS_CONTEXT_ONLY_INSTRUCTION)
     return {
         "intro": ["Describe and classify this file for search indexing."],
+        "contextLabel": [CONTEXT_LABEL] if context else [],
         "context": context,
         "identity": [f"Database: {database_id}", f"File: {relative_path} (class: {file_class}, extension: {file_ext})"],
         "attributes": ["File attributes (JSON): " + attributes_json[:MAX_ATTRIBUTES_CHARS]],
@@ -534,20 +553,31 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
         "previous": ([PREVIOUS_ANALYSIS_HEADER + "\n" + "\n".join(f"- {line}" for line in previous_lines)]
                      if previous_lines else []),
         "excerpt": ["File text excerpt:\n" + text_excerpt] if text_excerpt else [],
-        "closing": closing_lines,
+        "instructions": instructions,
+        "imagesNote": [closing] if closing else [],
     }
 
 
 PREVIOUS_ANALYSIS_HEADER = "Previous analysis of this file:"
-_USER_TEXT_ORDER = ("intro", "context", "identity", "attributes", "facts", "vocabularyOpening", "vocabularyOptions",
-                    "vocabularyClosing", "targets", "existing", "previous", "excerpt", "closing")
-# Every part that is not the pipeline's own words is guarded: the file-derived parts and the vocabulary's option
-# lines, which an operator edits on the template without a deploy. The vocabulary's opening and closing sentences
-# are instructions the pipeline wrote, so they stay plain: an imperative sentence inside guardContent is what a
-# prompt-attack filter is built to flag, and a hit there would fail every analysis in the deployment.
-_GUARDED_PARTS = ("context", "identity", "attributes", "facts", "vocabularyOptions", "targets", "existing",
-                  "previous", "excerpt")
-_UNGUARDED_PARTS = ("intro", "vocabularyOpening", "vocabularyClosing", "closing")
+_USER_TEXT_ORDER = ("intro", "contextLabel", "context", "identity", "attributes", "facts", "vocabularyOpening",
+                    "vocabularyOptions", "vocabularyClosing", "targets", "existing", "previous", "excerpt",
+                    "instructions", "imagesNote")
+# The request with a guardrail: text blocks in order, each (guarded, parts). Every part that is not the pipeline's
+# own words is guarded: the file-derived parts and the vocabulary's option lines, which an operator edits on the
+# template without a deploy. The vocabulary's opening and closing sentences, the asset-text label, the
+# instructions and the image note are the pipeline's own words, so they stay plain: an imperative sentence inside
+# guardContent is what a prompt-attack filter is built to flag, and a hit there would fail every analysis in the
+# deployment. The label ends the first plain block, just before the guarded asset text it names; the instructions
+# and the image note with its screen rule close the text after the guarded block, immediately before the images,
+# in the order they have without a guardrail (_USER_TEXT_ORDER). D117: with the image note and the instructions
+# before the guarded block, the asset text was the last text read before a screen recording's frames and the model
+# described the asset text instead.
+_GUARDED_LAYOUT = (
+    (False, ("intro", "vocabularyOpening", "vocabularyClosing", "contextLabel")),
+    (True, ("context", "identity", "attributes", "facts", "vocabularyOptions", "targets", "existing", "previous",
+            "excerpt")),
+    (False, ("instructions", "imagesNote")),
+)
 
 
 def build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
@@ -563,19 +593,23 @@ def build_user_content(asset_data, database_id, relative_path, file_class, file_
                        existing_lines, text_excerpt, image_count, guarded, images_withheld=False,
                        previous_lines=(), target_lines=(), keep_previous_wording=False):
     """The user message's text content blocks. Without a guardrail, one text block in prompt order. With one,
-    a text block carrying the pipeline's own instructions (the intro, the vocabulary's opening and closing
-    sentences, the render note), then a ``guardContent`` block carrying everything that comes from the file, its
-    metadata and the template's vocabulary options, so the guardrail evaluates that input and not the prompt."""
-    if not guarded:
+    the blocks of _GUARDED_LAYOUT: a plain text block with the intro, the vocabulary's sentences and the asset-text
+    label, a ``guardContent`` block carrying everything that comes from the file, its metadata and the template's
+    vocabulary options (so the guardrail evaluates that input and not the prompt), then a plain text block with the
+    instructions and the image note, which the images follow. A layout block with no lines adds no block."""
+    if not guarded or not GUARDRAIL_CONFIG:
         return [{"text": build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest,
                                          vocabulary_parts, existing_lines, text_excerpt, image_count,
                                          images_withheld, previous_lines, target_lines, keep_previous_wording)}]
     parts = _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest,
                              vocabulary_parts, existing_lines, text_excerpt, image_count, images_withheld,
                              previous_lines, target_lines, keep_previous_wording)
-    plain = "\n".join(line for name in _UNGUARDED_PARTS for line in parts[name])
-    guarded_text = "\n".join(line for name in _GUARDED_PARTS for line in parts[name])
-    return bedrockGuardrail.user_content_blocks(plain, guarded_text, GUARDRAIL_CONFIG)
+    blocks = []
+    for is_guarded, names in _GUARDED_LAYOUT:
+        text = "\n".join(line for name in names for line in parts[name])
+        if text:
+            blocks.append(bedrockGuardrail.guard_content_block(text) if is_guarded else {"text": text})
+    return blocks
 
 
 def _strip_fences(text):
