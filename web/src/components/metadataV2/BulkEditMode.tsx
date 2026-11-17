@@ -535,7 +535,6 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
                                                 iconName="add-plus"
                                                 onClick={handleAddRow}
                                                 disabled={restrictMetadata}
-                                                ariaLabel="Add new row"
                                             >
                                                 Add Row
                                             </Button>
@@ -567,7 +566,6 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
                                                 iconName="add-plus"
                                                 onClick={handleAddRow}
                                                 disabled={restrictMetadata}
-                                                ariaLabel="Add new row"
                                             >
                                                 Add Row
                                             </Button>
@@ -644,7 +642,6 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
                                         iconName="add-plus"
                                         variant="primary"
                                         onClick={handleAddRow}
-                                        ariaLabel="Add new row"
                                     >
                                         Add Row
                                     </Button>
