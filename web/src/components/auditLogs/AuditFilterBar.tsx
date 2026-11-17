@@ -146,7 +146,7 @@ export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
                 <FormField
                     label="Filters"
                     description="Choose a property, then a value. Values of one property are alternatives; different properties all apply."
-                    constraintText={`Contains: ${CONTAINS_MIN_LENGTH} to ${maxLength} characters (${CONTAINS_CHARSET_TEXT}), up to ${maxTerms} terms that must all match.`}
+                    constraintText={`Contains: ${CONTAINS_MIN_LENGTH} to ${maxLength} characters (${CONTAINS_CHARSET_TEXT}), up to ${maxTerms} terms that must all match. Contains searches the identifiers, request parameters and details of a record, not the values it changed or its previous values (an asset name on a create record is a changed value).`}
                     errorText={
                         problems.length > 0 ? (
                             <ul style={{ margin: 0, paddingLeft: "1.25em" }}>

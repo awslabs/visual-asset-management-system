@@ -11,7 +11,6 @@ import CollectionPreferences, {
 import Header from "@cloudscape-design/components/header";
 import Pagination from "@cloudscape-design/components/pagination";
 import Table, { TableProps } from "@cloudscape-design/components/table";
-import BreakableIdentifier from "../compliance/BreakableIdentifier";
 import { PAGE_SORTING_NOTE, byNumber, byText, useSortedItems } from "../list/tableSorting";
 import OutcomeIndicator from "./OutcomeIndicator";
 import { AuditRow } from "./auditSearchTypes";
@@ -39,6 +38,12 @@ const timeText = (row: AuditRow): string => {
     const ms = auditTimeMs(row.timestamp);
     return Number.isNaN(ms) ? visibleText(row.timestamp) : new Date(ms).toLocaleString();
 };
+
+/**
+ * A cell value on one line. A long value is cut with an ellipsis and shown in full in the tooltip and in
+ * the record's details (the Wrap lines preference shows it in full in the table).
+ */
+const OneLine: React.FC<{ text: string }> = ({ text }) => <span title={text}>{text}</span>;
 
 const COLUMN_IDS = [
     "timestamp",
@@ -93,7 +98,8 @@ export const AuditResultsTable: React.FC<AuditResultsTableProps> = ({
         registerClearSorting?.(clearSorting);
     }, [registerClearSorting, clearSorting]);
     const [preferences, setPreferences] = useState<CollectionPreferencesProps.Preferences>({
-        wrapLines: true,
+        // One line per row keeps a page of 100 records short; long values are in the tooltip and details.
+        wrapLines: false,
         contentDisplay: COLUMN_IDS.map((id) => ({ id, visible: DEFAULT_VISIBLE.includes(id) })),
     });
     const isPaging = hasMore || pageIndex > 1;
@@ -102,57 +108,74 @@ export const AuditResultsTable: React.FC<AuditResultsTableProps> = ({
         {
             id: "timestamp",
             header: "Time",
-            cell: timeText,
+            width: 190,
+            minWidth: 170,
+            cell: (row) => <OneLine text={timeText(row)} />,
             sortingField: "timestamp",
             sortingComparator: byNumber((row) => auditTimeMs(row.timestamp)),
         },
         {
             id: "group",
             header: "Log group",
-            cell: (row) => visibleText(row.groupLabel ?? row.groupKey),
+            width: 150,
+            minWidth: 110,
+            cell: (row) => <OneLine text={visibleText(row.groupLabel ?? row.groupKey)} />,
             sortingComparator: byText((row) => row.groupLabel ?? row.groupKey),
         },
         {
             id: "action",
             header: "Action",
-            cell: (row) => <BreakableIdentifier text={visibleText(row.action ?? row.legacyType)} />,
+            width: 190,
+            minWidth: 120,
+            cell: (row) => <OneLine text={visibleText(row.action ?? row.legacyType)} />,
             sortingComparator: byText((row) => row.action ?? row.legacyType),
         },
         {
             id: "user",
             header: "User",
-            cell: (row) => <BreakableIdentifier text={visibleText(row.user)} userId />,
+            width: 240,
+            minWidth: 160,
+            cell: (row) => <OneLine text={visibleText(row.user)} />,
             sortingComparator: byText((row) => row.user),
         },
         {
             id: "outcome",
             header: "Outcome",
+            width: 120,
+            minWidth: 100,
             cell: (row) => <OutcomeIndicator outcome={row.outcome} />,
             sortingComparator: byText((row) => row.outcome),
         },
         {
             id: "databaseId",
             header: "Database",
-            cell: (row) => visibleText(row.databaseId),
+            width: 150,
+            minWidth: 100,
+            cell: (row) => <OneLine text={visibleText(row.databaseId)} />,
             sortingComparator: byText((row) => row.databaseId),
         },
         {
             id: "assetId",
             header: "Asset",
-            cell: (row) => visibleText(row.assetId),
+            width: 150,
+            minWidth: 100,
+            cell: (row) => <OneLine text={visibleText(row.assetId)} />,
             sortingComparator: byText((row) => row.assetId),
         },
         {
             id: "entity",
             header: "Entity",
-            cell: entityText,
+            width: 200,
+            minWidth: 120,
+            cell: (row) => <OneLine text={entityText(row)} />,
             sortingComparator: byText((row) => entityText(row)),
         },
         {
             id: "summary",
             header: "Summary",
+            width: 320,
             minWidth: 200,
-            cell: rowSummary,
+            cell: (row) => <OneLine text={rowSummary(row)} />,
         },
     ];
 
@@ -167,6 +190,7 @@ export const AuditResultsTable: React.FC<AuditResultsTableProps> = ({
         <Table<AuditRow>
             variant="container"
             wrapLines={preferences.wrapLines}
+            resizableColumns
             columnDefinitions={columnDefinitions}
             columnDisplay={preferences.contentDisplay}
             items={items}

@@ -32,7 +32,7 @@ const WEB_ROUTE = "/auth/audit-log-search";
 async function decideAuditPage(page: Page, allowed: boolean) {
     await page.route(/\/auth\/routes$/, async (route) => {
         if (route.request().method() !== "POST") return route.fallback();
-        const response = await route.fetch();
+        const response = await route.fetch({ timeout: 45_000 });
         const body = await response.json();
         const list: { method: string; route__path: string }[] = Array.isArray(body.allowedRoutes)
             ? body.allowedRoutes.filter((r: { route__path: string }) => r.route__path !== WEB_ROUTE)
@@ -46,9 +46,16 @@ async function openPage(page: Page, mode: AuditMockMode = "ok", hash = PAGE) {
     const mock = await installAuditMocks(page, mode);
     if (!HARNESS) await decideAuditPage(page, true);
     await page.goto(hash);
-    await expect(page.getByRole("heading", { level: 1, name: "Audit Log Search" })).toBeVisible({
-        timeout: 60_000,
-    });
+    const heading = page.getByRole("heading", { level: 1, name: "Audit Log Search" });
+    // The shell signs in and reads the real route decision before the page mounts; on a cold or busy
+    // deployment that can pass 30 s. One reload then gives a warm start, so a slow shell never fails
+    // a case that is about the page (the only failure seen in 21 cases was this wait).
+    try {
+        await expect(heading).toBeVisible({ timeout: 30_000 });
+    } catch {
+        await page.reload();
+        await expect(heading).toBeVisible({ timeout: 60_000 });
+    }
     return mock;
 }
 
@@ -227,14 +234,18 @@ test.describe("Audit Log Search: search", () => {
         expect(page.url()).toContain("requestId=");
     });
 
-    test("stop ends a running search and keeps what was found", async ({ page }) => {
+    test("stop ends a running search and says no records are kept", async ({ page }) => {
         const mock = await openPage(page);
         mock.holdRunning = true;
         await searchButton(page).click();
-        await expect(page.getByTestId("audit-progress")).toContainText("4 matched");
+        await expect(page.getByTestId("audit-progress")).toContainText(
+            "1200 records scanned so far"
+        );
+        await expect(page.getByTestId("audit-progress")).not.toContainText("matched");
         mock.holdRunning = false;
         await page.getByRole("button", { name: "Stop", exact: true }).click();
         await expect(page.getByText("Search stopped")).toBeVisible();
+        await expect(page.getByText(/A stopped search shows no records/)).toBeVisible();
         expect(mock.stops).toBe(1);
     });
 });

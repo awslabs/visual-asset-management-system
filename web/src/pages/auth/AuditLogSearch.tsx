@@ -26,6 +26,7 @@ import {
 import {
     defaultAuditFilters,
     parseAuditSearchUrl,
+    serializeAuditFilters,
     writeAuditFiltersToUrl,
 } from "../../components/auditLogs/auditSearchUrl";
 import { DEFAULT_LIMITS } from "../../components/auditLogs/auditSearchValidation";
@@ -66,12 +67,18 @@ const AuditLogSearch: React.FC = () => {
     const clearSorting = useRef<() => void>(() => undefined);
     const { canOpenAsset } = useAssetPageAccess();
 
+    const resetRef = useRef<() => void>(() => undefined);
+
     const groups = groupsState.kind === "ready" ? groupsState.data : null;
     const limits = groups?.limits ?? DEFAULT_LIMITS;
-    const { state, run, stop, goToPage, clearError, isActive } = useAuditSearch(
+    const { state, run, stop, goToPage, clearError, reset, isActive } = useAuditSearch(
         limits.longPollWaitSeconds ?? 20,
         filters.sort
     );
+
+    useEffect(() => {
+        resetRef.current = reset;
+    }, [reset]);
 
     // The log groups, actions and limits the caller may use: the server's answer, nothing else.
     const loadGroups = useCallback(async () => {
@@ -93,11 +100,21 @@ const AuditLogSearch: React.FC = () => {
     }, [loadGroups]);
 
     // The URL follows Back and Forward between two entries of this page; a link restores filters
-    // and never runs the search.
+    // and never runs the search. The results shown belong to the filters of the search that made
+    // them: when the address brings other filters (a link opened while results are showing, Back
+    // to an earlier entry), the results and any running search are dropped.
+    const shownFilters = useRef(serializeAuditFilters(filters));
     useEffect(() => {
         const follow = () => {
-            if (isOnRoute(AUDIT_SEARCH_ROUTE))
-                setFilters(parseAuditSearchUrl(window.location.hash));
+            if (!isOnRoute(AUDIT_SEARCH_ROUTE)) return;
+            const fromUrl = parseAuditSearchUrl(window.location.hash);
+            const text = serializeAuditFilters(fromUrl);
+            if (text !== shownFilters.current) {
+                shownFilters.current = text;
+                setSelected(null);
+                resetRef.current();
+            }
+            setFilters(fromUrl);
         };
         window.addEventListener("hashchange", follow);
         window.addEventListener("popstate", follow);
@@ -108,6 +125,7 @@ const AuditLogSearch: React.FC = () => {
     }, []);
 
     const changeFilters = useCallback((next: AuditFilters) => {
+        shownFilters.current = serializeAuditFilters(next);
         setFilters(next);
         if (isOnRoute(AUDIT_SEARCH_ROUTE)) writeAuditFiltersToUrl(next);
     }, []);
@@ -130,6 +148,7 @@ const AuditLogSearch: React.FC = () => {
                 range: filters.range,
                 sort: "asc",
             };
+            shownFilters.current = serializeAuditFilters(next);
             setFilters(next);
             if (isOnRoute(AUDIT_SEARCH_ROUTE)) writeAuditFiltersToUrl(next, true);
             search(next);
@@ -248,13 +267,11 @@ const AuditLogSearch: React.FC = () => {
                         {isActive && (
                             <Alert type="info" header="Searching the audit logs">
                                 <span aria-live="polite" data-testid="audit-progress">
-                                    {statistics.recordsMatched !== undefined
-                                        ? `${statistics.recordsMatched} matched`
-                                        : "Waiting for the first results"}
                                     {statistics.recordsScanned !== undefined
-                                        ? `, ${statistics.recordsScanned} scanned`
-                                        : ""}
-                                    . You can stop the search at any time.
+                                        ? `${statistics.recordsScanned} records scanned so far`
+                                        : "Waiting for the first results"}
+                                    . Results appear when the search finishes. You can stop the
+                                    search at any time.
                                 </span>
                             </Alert>
                         )}
@@ -272,7 +289,8 @@ const AuditLogSearch: React.FC = () => {
 
                         {state.phase === "stopped" && (
                             <Alert type="info" header="Search stopped">
-                                The records found before you stopped the search are shown.
+                                A stopped search shows no records. Narrow the time range or the
+                                filters and search again.
                             </Alert>
                         )}
 

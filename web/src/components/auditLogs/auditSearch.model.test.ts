@@ -199,7 +199,8 @@ describe("request body and responses", () => {
             warnings: ["widerScan", 3],
         });
         expect(page.rows).toEqual([{ action: "a" }]);
-        expect(page.statistics).toEqual({ recordsMatched: 3, candidateLimitReached: true });
+        // A raw prefilter count is never read, even when an older server sends it.
+        expect(page.statistics).toEqual({ candidateLimitReached: true });
         expect(page.nextToken).toBe("tok");
         expect(page.warnings).toEqual(["widerScan"]);
         expect(isTerminal(page.status)).toBe(false);

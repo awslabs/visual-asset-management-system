@@ -87,7 +87,6 @@ export interface AuditRow {
 
 /** Statistics of a query; every field is optional because the server may omit what it cannot know. */
 export interface AuditQueryStatistics {
-    recordsMatched?: number;
     recordsScanned?: number;
     bytesScanned?: number;
     duplicatesRemoved?: number;

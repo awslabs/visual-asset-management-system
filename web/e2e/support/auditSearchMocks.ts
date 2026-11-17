@@ -250,7 +250,7 @@ export async function installAuditMocks(
                 return json(route, 200, {
                     queryId: "mock-q-1",
                     status: "Running",
-                    statistics: { recordsMatched: 4, recordsScanned: 1200, bytesScanned: 2048 },
+                    statistics: { recordsScanned: 1200, bytesScanned: 2048 },
                     Items: [],
                     warnings: [],
                 });
@@ -273,7 +273,6 @@ export async function installAuditMocks(
                 queryId: "mock-q-1",
                 status: "Complete",
                 statistics: {
-                    recordsMatched: rows.length,
                     recordsScanned: 1200,
                     bytesScanned: 2048,
                     rowCount: rows.length,

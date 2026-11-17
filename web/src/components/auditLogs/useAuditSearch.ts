@@ -196,25 +196,14 @@ export const useAuditSearch = (waitSeconds: number, sort: "asc" | "desc") => {
     const stop = useCallback(async () => {
         const queryId = live.current.queryId;
         if (!queryId || !live.current.running) return;
-        // The loop ends at its next check; the handle is stopped on the server, and one read
-        // shows the rows found so far.
+        // The loop ends at its next check and the handle is stopped on the server. The server returns
+        // no rows for a stopped search (CloudWatch hands out partial results only while a query runs,
+        // and a row is shown only after the server's check of a finished search), so none is read.
         runId.current += 1;
         live.current.running = false;
-        patch({ phase: "stopped", status: "Cancelled" });
+        patch({ phase: "stopped", status: "Cancelled", rows: [], nextToken: undefined });
         await stopAuditQuery(queryId);
-        const answer: any[] = await getAuditQuery({
-            queryId,
-            wait: 0,
-            pageSize: AUDIT_PAGE_SIZE,
-            sort,
-        });
-        if (answer[0] === true) {
-            const page = normalizeQueryPage(answer[1]);
-            tokens.current[2] = page.nextToken;
-            applyPage({ ...page, status: "Cancelled" });
-            patch({ knownPages: page.nextToken ? 2 : 1 });
-        }
-    }, [applyPage, patch, sort]);
+    }, [patch]);
 
     const goToPage = useCallback(
         async (pageIndex: number, sortOverride?: "asc" | "desc") => {
@@ -261,6 +250,16 @@ export const useAuditSearch = (waitSeconds: number, sort: "asc" | "desc") => {
 
     const clearError = useCallback(() => patch({ error: null }), [patch]);
 
+    /** Drops the results and stops a running search, for when the filters change under them. */
+    const reset = useCallback(() => {
+        runId.current += 1;
+        const { queryId, running } = live.current;
+        if (queryId && running) void stopAuditQuery(queryId);
+        live.current = { queryId: null, running: false };
+        tokens.current = {};
+        setState(IDLE);
+    }, []);
+
     useEffect(
         () => () => {
             runId.current += 1;
@@ -276,6 +275,7 @@ export const useAuditSearch = (waitSeconds: number, sort: "asc" | "desc") => {
         stop,
         goToPage,
         clearError,
+        reset,
         isActive: state.phase === "starting" || state.phase === "running",
     };
 };

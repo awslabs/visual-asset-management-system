@@ -103,7 +103,11 @@ describe("Audit Log Search page", () => {
         mockGet
             .mockResolvedValueOnce([
                 true,
-                { status: "Running", Items: [], statistics: { recordsMatched: 1 } },
+                {
+                    status: "Running",
+                    Items: [],
+                    statistics: { recordsMatched: 1, recordsScanned: 9 },
+                },
             ])
             .mockResolvedValue(complete([row({ reason: HOSTILE })]));
         await openPage();
@@ -123,6 +127,47 @@ describe("Audit Log Search page", () => {
         expect(document.querySelector("img")).toBeNull();
         expect(table.textContent).toContain("\\u202e");
         expect(mockGet.mock.calls[0][0]).toMatchObject({ queryId: "q-1", wait: 20 });
+    });
+
+    it("shows the scanned count while running and never a matched count", async () => {
+        mockGet.mockResolvedValue([
+            true,
+            { status: "Running", Items: [], statistics: { recordsMatched: 77, recordsScanned: 9 } },
+        ]);
+        await openPage();
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        const progress = await screen.findByTestId("audit-progress");
+        await waitFor(() => expect(progress.textContent).toContain("9 records scanned so far"));
+        expect(progress.textContent).not.toMatch(/matched|77/);
+    });
+
+    it("stops without reading a page: a stopped search shows no records", async () => {
+        mockGet.mockResolvedValue([true, { status: "Running", Items: [], statistics: {} }]);
+        await openPage();
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        const stop = await screen.findByRole("button", { name: "Stop" });
+        const readsBefore = mockGet.mock.calls.length;
+        await act(async () => {
+            await userEvent.click(stop);
+        });
+        await waitFor(() => expect(mockStop).toHaveBeenCalledWith("q-1"));
+        expect(await screen.findByText(/A stopped search shows no records/)).toBeTruthy();
+        expect(mockGet.mock.calls.length).toBeLessThanOrEqual(readsBefore + 1);
+    });
+
+    it("drops the results when a link with other filters is opened while they are showing", async () => {
+        mockGet.mockResolvedValue(complete([row()]));
+        await openPage();
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await screen.findByRole("table", {}, { timeout: 4000 });
+        await waitFor(() => expect(document.body.textContent).toContain("assetUpdate"));
+        await act(async () => {
+            window.location.hash = "#/auth/audit-log-search/?user=mallory";
+            window.dispatchEvent(new HashChangeEvent("hashchange"));
+        });
+        expect(await screen.findByText("No results yet")).toBeTruthy();
+        expect(document.body.textContent).not.toContain("assetUpdate");
+        expect(mockStart).toHaveBeenCalledTimes(1); // a link restores filters and never runs a search
     });
 
     it("opens a record in the detail panel without interpreting its content", async () => {

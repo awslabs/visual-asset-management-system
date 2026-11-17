@@ -132,7 +132,6 @@ const normalizeStatistics = (raw: unknown): AuditQueryStatistics => {
     const stats = asRecord(raw);
     const result: AuditQueryStatistics = {};
     for (const key of [
-        "recordsMatched",
         "recordsScanned",
         "bytesScanned",
         "duplicatesRemoved",
