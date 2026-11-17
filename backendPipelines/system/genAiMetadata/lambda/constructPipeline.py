@@ -39,6 +39,14 @@ _HASH_CHUNK_BYTES = 8 * 1024 * 1024
 # The object's user metadata (x-amz-meta-*) is recorded as sys_file.s3Metadata, bounded per value.
 S3_METADATA_MAX_KEYS = 50
 S3_METADATA_VALUE_MAX_CHARS = 500
+# The keys VAMS writes into an asset object's user metadata for its own use are left out of s3Metadata, as the
+# file indexer leaves them out of search: the asset context keys and every `vams-` key (change provenance,
+# lifecycle status, the upload token of the large object copy engine and of Download as Zip) except the
+# user-assigned primary type. Mirrors ASSET_CONTEXT_METADATA_KEYS, VAMS_METADATA_KEY_PREFIX and
+# SEARCHABLE_VAMS_METADATA_KEYS in backend/backend/common/s3MetadataKeys.py.
+S3_SYSTEM_METADATA_KEYS = frozenset({"assetid", "databaseid", "uploadid"})
+S3_SYSTEM_METADATA_PREFIX = "vams-"
+S3_SEARCHABLE_SYSTEM_METADATA_KEYS = frozenset({"vams-primarytype"})
 
 # Template values copied into the state for the branch handlers that read them from their event; the
 # defaults match the default template's tag values.
@@ -132,12 +140,22 @@ def _iso_timestamp(value):
         return str(value)
 
 
+def is_system_metadata_key(key) -> bool:
+    """Whether an object user-metadata key is one VAMS writes for itself (S3_SYSTEM_METADATA_KEYS, or the
+    S3_SYSTEM_METADATA_PREFIX outside S3_SEARCHABLE_SYSTEM_METADATA_KEYS). S3 returns the keys lowercase."""
+    name = str(key).lower()
+    if name in S3_SEARCHABLE_SYSTEM_METADATA_KEYS:
+        return False
+    return name in S3_SYSTEM_METADATA_KEYS or name.startswith(S3_SYSTEM_METADATA_PREFIX)
+
+
 def s3_user_metadata(head):
     """The object's user metadata as a bounded, sorted dict (``x-amz-meta-`` keys without the prefix,
-    which is how S3 returns them); ``{}`` when the object carries none."""
+    which is how S3 returns them), without the keys VAMS writes for itself (is_system_metadata_key);
+    ``{}`` when the object carries none."""
     metadata = head.get("Metadata") or {}
     recorded = {}
-    for key in sorted(metadata)[:S3_METADATA_MAX_KEYS]:
+    for key in sorted(key for key in metadata if not is_system_metadata_key(key))[:S3_METADATA_MAX_KEYS]:
         value = metadata[key]
         if value is None or not str(value).strip():
             continue
