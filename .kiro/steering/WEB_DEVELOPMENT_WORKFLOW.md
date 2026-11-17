@@ -130,7 +130,7 @@ web/
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx
       AssetUpload/
-      auth/                 # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys
+      auth/                 # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys, AuditLogSearch
       Databases.tsx
       LandingPage.tsx
       ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx

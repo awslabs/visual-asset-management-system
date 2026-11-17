@@ -201,6 +201,8 @@ web/
       searchSmall/ selectors/
       single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
+      auditLogs/              # Audit Log Search: filter bar, results table, detail panel, export dialog,
+                              # URL state, validation, long-poll loop (see 'Audit Log Search' below)
       zipDownloads/           # Download as Zip (Cloudscape): zipDownloads.ts (types, route templates,
                                 #   selection -> request entries, names, polling rule),
                                 #   CreateZipDownloadModal.tsx, ZipDownloadsTable.tsx (asset tab +
@@ -210,7 +212,8 @@ web/
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx AssetUpload/
       ZipDownloadsPage.tsx    # #/zipdownloads "My Download Queue" (profile-menu item only with ZIPDOWNLOADS)
-      auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
+      auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update),
+                              # AuditLogSearch (audit-log search; components/auditLogs/)
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/                 # SearchPage.tsx
       Subscription/ Tag/
@@ -1602,3 +1605,14 @@ Development targets: Latest Chrome, Firefox, Safari.
 ### 18.6 React Version
 
 This project uses **React 18.3** (upgraded from 17.0.2). The entry point (`index.tsx`) uses `createRoot` (React 18 style). React 18 APIs (`useId`, `useTransition`, `useDeferredValue`, automatic batching) are allowed in the orchestration module (`features/orchestration/`) but should be used sparingly elsewhere to maintain consistency with the existing codebase conventions.
+
+### Audit Log Search (`pages/auth/AuditLogSearch.tsx`, `components/auditLogs/`)
+
+Core page at `#/auth/audit-log-search/` (Admin - Auth, no feature switch). The nav entry and the page appear only from the `POST /auth/routes` decision (the registry link and `routes.tsx` entry; a denied user gets `NoAccessPanel`). The Compliance Audit Log page links to it through `hooks/useWebRouteAllowed.ts`, which is false until that decision says yes. The page derives no permission: log groups, actions, entity types, outcomes and limits come only from `GET /audit/log-groups` (`fetchAuditLogGroups`), and a 403 or an empty list shows a panel that names no group.
+
+-   **Request model.** `auditSearchUrl.ts` (filters <-> hash query, defensive reading, a link restores filters and never runs the search), `auditSearchValidation.ts` (the server's value classes and the `limits` object, advisory only), `auditSearchApiModel.ts` (`buildStartBody`, response readers for the contract: `logGroups`, `Items`, `NextToken`, `statistics`, `warnings`), `auditFilterQuery.ts` (filters <-> `PropertyFilter` tokens and the `DateRangePicker` value; the picker works in UTC), `auditPollLoop.ts` (the long-poll loop: sequential calls, floor between calls, stops at once on 400/403/404, retries a dropped connection, client deadline), `useAuditSearch.ts` (start, poll, stop, server paging by `NextToken`, order change re-reads page 1).
+-   **Query text is never sent.** The body holds named filters only; the server builds the query.
+-   **Record content is untrusted text.** Render it only as React text nodes through `visibleText` (control, bidi and zero-width characters shown as `\uXXXX`) or `AuditValueTree` (depth and node bounded). No HTML sink, no link from a record value except an asset link built from validated ids with `encodeURIComponent`. The record time arrives as `2026-11-17 01:00:00.000` (UTC, no zone): read it with `auditTimeMs`, never `new Date(string)`.
+-   **Counts.** The page shows only what the API returns for the groups the caller may search. There is no count of rows the server removed on its recheck.
+-   **Export** joins the server's chunks (`csv`, `ndjson`) and downloads the file; the page rewrites no cell.
+-   **Tests.** Jest: `auditLogs/auditSearch.model.test.ts`, `pages/auth/AuditLogSearch.test.tsx`; e2e: `e2e/auth.auditlogsearch.spec.ts` with the scripted API in `e2e/support/auditSearchMocks.ts`.
