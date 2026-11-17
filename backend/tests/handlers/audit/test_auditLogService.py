@@ -941,6 +941,28 @@ class TestNoRawCountOracle:
         assert present == absent
         assert "candidateLimitReached" not in present["statistics"]
 
+    def test_the_flag_counts_candidates_the_unpushed_filters_dropped(self, env, monkeypatch):
+        """Outcome, entity type and probe handling cannot narrow the Insights candidates, so a search that
+        fills the limit with rows they drop may have missed matches: the flag is set from the candidates the
+        caller may see, before those three filters."""
+        monkeypatch.setenv(svc.ENV_MAX_ROWS, "3")
+        visible = [result_row(action_record("carol", "a-%d" % n)) for n in range(3)]
+        body = _whole_response(env, raw_matched=3, rows=visible, outcomes=["denied"], contains=None)
+        assert body["statistics"]["rowCount"] == 0 and body["statistics"]["candidateLimitReached"] is True
+
+    def test_hidden_candidates_do_not_count_towards_the_flag(self, env, monkeypatch):
+        monkeypatch.setenv(svc.ENV_MAX_ROWS, "3")
+        hidden = [result_row(changes_record(asset="a-%d" % n)) for n in range(3)]
+        with_probe_filter = _whole_response(env, raw_matched=3, rows=hidden, includeProbes=False)
+        assert with_probe_filter["statistics"]["rowCount"] == 0
+        assert "candidateLimitReached" not in with_probe_filter["statistics"]
+
+    def test_a_complete_prefilter_never_sets_the_flag(self, env, monkeypatch):
+        monkeypatch.setenv(svc.ENV_MAX_ROWS, "3")
+        visible = [result_row(action_record("carol", "a-%d" % n)) for n in range(3)]
+        body = _whole_response(env, raw_matched=3, rows=visible, contains=None)
+        assert "candidateLimitReached" not in body["statistics"]
+
     def test_the_candidate_flag_depends_on_visible_rows_only(self, env, monkeypatch):
         monkeypatch.setenv(svc.ENV_MAX_ROWS, "3")
         visible = [result_row(action_record("carol", "a-%d" % n)) for n in range(3)]

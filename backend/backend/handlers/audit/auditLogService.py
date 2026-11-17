@@ -23,6 +23,7 @@ expired or no-longer-authorized handle is the same ``404 Query not found``. An u
 log group the caller may not search are the same generic ``403``.
 """
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -559,6 +560,28 @@ def filters_to_json(filters: SearchFilters) -> str:
     }, separators=(",", ":"))
 
 
+def _candidate_limit_reached(parsed: List[Any], kept: List[Any], item: Dict[str, Any], filters: SearchFilters,
+                             limit: int, budget: MatchBudget, raw_count: int) -> bool:
+    """Whether the search may have missed rows because Logs Insights cut its candidates at the row limit.
+
+    The Insights limit applies to the raw candidates before the recheck, and the filters that are applied
+    only on parsed rows (outcome, entity type, probe handling) cannot narrow it. The flag is derived from
+    what the caller may see only, never from the raw result: it is set when the number of candidates that
+    satisfy every filter the caller can see, except those three, reaches the limit. The raw result also
+    holds records that matched on content the caller cannot see (changes, previous values, request echo,
+    JSON keys), so its length would tell a caller that such records exist (a one-bit probe).
+    The flag can stay unset when records the caller cannot see took the slots; it never tells that they
+    exist. ``raw_count`` only decides whether the second pass can matter (it cannot exceed the raw
+    count): the answer does not depend on it.
+    """
+    if not limit or item.get("prefilterComplete", True) or raw_count < limit:
+        return False
+    if len(kept) >= limit:
+        return True
+    relaxed = dataclasses.replace(filters, outcomes=(), entity_types=(), include_probes=True)
+    return len(recheck(parsed, relaxed, budget)) >= limit
+
+
 def build_rows(results: List[List[Dict[str, str]]], item: Dict[str, Any], filters: SearchFilters,
                context: Optional[LambdaContext]) -> Tuple[List[Any], Dict[str, Any]]:
     """Parse, dedupe and recheck the Insights candidates of a handle.
@@ -590,12 +613,7 @@ def build_rows(results: List[List[Dict[str, str]]], item: Dict[str, Any], filter
     facts = {
         "duplicatesRemoved": duplicates,
         "recheckBudgetExceeded": budget.exceeded,
-        # The Logs Insights candidate limit applies before the recheck. The flag is derived from what the
-        # caller may see only: the number of rows that survived the recheck (never the raw match count,
-        # which includes records matched on hidden content) and whether the request could push every
-        # filter down. A hidden-only term and an absent term therefore give the same flag. It can stay
-        # false when hidden records filled the limit; that is the price of leaking no bit about them.
-        "candidateLimitReached": bool(limit) and len(kept) >= limit and not item.get("prefilterComplete", True),
+        "candidateLimitReached": _candidate_limit_reached(parsed, kept, item, filters, limit, budget, len(results)),
     }
     return rows, facts
 
