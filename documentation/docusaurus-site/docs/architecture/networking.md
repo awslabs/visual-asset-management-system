@@ -207,7 +207,7 @@ Private and public subnets are created when any of the following are enabled:
 -   GenAI CAD STEP agent pipeline on its `fargate` runtime (the `agentcore` runtime runs outside the VPC)
 -   An add-on configured to place its functions in private subnets (the add-on's own pages name the setting)
 
-The AWS Batch pipelines that run in the isolated subnets — Coordinate Transform, Potree Point Cloud Viewer, 3D Preview Thumbnail, GenAI Metadata Labeling, and Video SOP/BOM Extraction — add neither subnet type and no NAT gateway.
+The AWS Batch pipelines that run in the isolated subnets — Coordinate Transform, Potree Point Cloud Viewer, 3D Preview Thumbnail and Media Preview Thumbnail, GenAI Metadata Labeling, and Video SOP/BOM Extraction — add neither subnet type and no NAT gateway.
 
 ### Availability Zone Configuration
 

@@ -168,11 +168,13 @@ describe("3D preview thumbnail compute tier validation", () => {
         expect(builderViolations(config)).toEqual([]);
     });
 
-    test("an invalid tier on a disabled pipeline does not block the deployment", () => {
+    test("an invalid tier is not read when neither the pipeline nor media previews is enabled", () => {
         const config = thumbnailConfig((t) => {
             t.enabled = false;
             t.computeTiers.large = { vcpu: 16, memoryGiB: 16 };
         });
+        // the container also deploys for media previews: the shipped template has them off
+        expect(config.app.pipelines.useMediaPreviews.enabled).toBe(false);
         expect(resolve(config)).not.toThrow();
         expect(builderViolations(config)).toEqual([]);
     });

@@ -46,7 +46,7 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
 
 1. In `infra/config/config.json`, disable everything that requires VPC networking so the dependent ENIs are torn down. This includes:
     - Amazon OpenSearch Service provisioned (`openSearch.useProvisioned.enabled = false`)
-    - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, Image to 3D, ModelOps, RapidPipeline, GenAI CAD STEP agent on its `fargate` runtime, point cloud / 3D thumbnail / GenAI labeling previews)
+    - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, Image to 3D, ModelOps, RapidPipeline, GenAI CAD STEP agent on its `fargate` runtime, point cloud / 3D thumbnail / media previews / GenAI labeling previews)
     - `useGlobalVpc.useForAllLambdas = false` so Lambda functions are removed from the VPC. Their network interfaces stay in the VPC afterwards; step 2 removes them
     - The ALB public subnet if it is being removed (`useAlb.usePublicSubnet = false`), or the ALB itself if the web tier is changing
 2. Remove any Lambda functions and their VPC ENIs. Deploy with networking disabled so AWS CloudFormation detaches the Lambda functions from the VPC and deletes their ENIs:
@@ -617,6 +617,16 @@ See [Configuration reference](../deployment/configuration-reference.md) for the 
 **Resolution:**
 
 These are fixed limits of the pipeline (see [Quotas](../additional/quotas.md)). Reduce or split the input; for an FBX file, export it as FBX 2011 (7.1) or later. For an `.lcc2` scene, upload its `data/3dgs/` folder beside the `.lcc2` file in the same asset. The AWS Batch job log in Amazon CloudWatch records the input size, the render budgets and each phase's duration.
+
+### Media Preview Run Completes With No Preview
+
+**Symptoms:**
+
+-   A Media Preview Thumbnail execution succeeds but no `.previewFile.*` object is written.
+
+**Resolution:**
+
+Open the execution's results and read `preview-not-generated.json`. `alreadyShownAsOwnPreview` means the file is an image under 5 MiB that the web shows as its own preview, so no preview is needed; `noSmallerPreview` and `animatedImageLeftAlone` come from the optional `downscaleSelfPreviewableImages` setting; `emptyFile` is a zero-byte file; `noVideoStream` is a video file with no video track. If the result says the record could not be written, the run still succeeded and the cause is in the pipeline's AWS Lambda log.
 
 ### Pipeline Timeout vs. Workflow Timeout
 

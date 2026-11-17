@@ -74,6 +74,9 @@ export interface ViewerPluginProps {
      *  shared top-level pair — this is what lets a multi-file selection span assets. Indices
      *  align with multiFileKeys. Falls back to top-level assetId/databaseId when absent. */
     multiFiles?: FileInfo[];
+    /** The one file being viewed (set only for a single-file selection): its size and generated
+     *  preview key, as the host listed them. Absent when the host did not have them. */
+    fileInfo?: FileInfo;
     versionId?: string;
     assetVersionId?: string;
     viewerMode: string;

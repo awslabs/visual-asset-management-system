@@ -61,7 +61,7 @@
             "name": "Image Viewer",
             "description": "View images fitted to the viewer panel",
             "componentPath": "./viewers/ImageViewerPlugin/ImageViewerComponent",
-            "supportedExtensions": [".png", ".jpg", ".jpeg", ".svg", ".gif"],
+            "supportedExtensions": [".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp", ".bmp"],
             "supportsMultiFile": false,
             "canFullscreen": true,
             "priority": 1,
@@ -69,6 +69,28 @@
             "loadStrategy": "eager",
             "category": "media",
             "enabled": true
+        },
+        {
+            "id": "tiff-tga-viewer",
+            "name": "TIFF/TGA Image Viewer",
+            "description": "View TIFF and TGA images decoded in the browser, with a page picker for multi-page TIFF files",
+            "componentPath": "./viewers/RasterImageViewerPlugin/RasterImageViewerComponent",
+            "dependencyManager": "./viewers/RasterImageViewerPlugin/dependencies",
+            "dependencyManagerClass": "RasterImageDependencyManager",
+            "dependencyManagerMethod": "loadDecoders",
+            "dependencyCleanupMethod": "cleanup",
+            "supportedExtensions": [".tga", ".tif", ".tiff"],
+            "supportsMultiFile": false,
+            "canFullscreen": true,
+            "priority": 1,
+            "dependencies": ["utif2", "tga-js", "pako"],
+            "loadStrategy": "lazy",
+            "category": "media",
+            "enabled": true,
+            "customParameters": {
+                "maxDecodeBytes": 268435456,
+                "maxDecodePixels": 100000000
+            }
         },
         {
             "id": "html-viewer",
@@ -188,6 +210,7 @@
                 ".ts",
                 ".sql",
                 ".ps1",
+                ".mdl",
                 "(none)"
             ],
             "supportsMultiFile": false,
@@ -229,6 +252,7 @@
                 ".ts",
                 ".sql",
                 ".ps1",
+                ".mdl",
                 "(none)"
             ],
             "supportsMultiFile": false,
