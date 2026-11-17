@@ -97,7 +97,7 @@ def build_window(time_from: Optional[str], time_to: Optional[str],
     start = parse_time(time_from or AUDIT_DEFAULT_WINDOW, now)
     end = parse_time(time_to or 'now', now)
     if end <= start:
-        raise InvalidAuditRequestError("--to must be later than --from")
+        raise InvalidAuditRequestError("The end of the time window must be later than its start")
     return start, end
 
 
@@ -130,15 +130,15 @@ def validate_contains(terms: Optional[Iterable[str]]) -> List[str]:
     cleaned = [(term or '').strip() for term in (terms or ())]
     if len(cleaned) > AUDIT_MAX_CONTAINS_TERMS:
         raise InvalidAuditRequestError(
-            f"--contains takes at most {AUDIT_MAX_CONTAINS_TERMS} terms")
+            f"At most {AUDIT_MAX_CONTAINS_TERMS} contains terms are allowed")
     for term in cleaned:
         if not (AUDIT_CONTAINS_MIN_LENGTH <= len(term) <= AUDIT_CONTAINS_MAX_LENGTH):
             raise InvalidAuditRequestError(
-                f"Each --contains term must be {AUDIT_CONTAINS_MIN_LENGTH} to "
+                f"Each contains term must be {AUDIT_CONTAINS_MIN_LENGTH} to "
                 f"{AUDIT_CONTAINS_MAX_LENGTH} characters")
         if not _CONTAINS_RE.match(term):
             raise InvalidAuditRequestError(
-                "A --contains term may hold only letters, digits, spaces and . _ : @ + / -")
+                "A contains term may hold only letters, digits, spaces and . _ : @ + / -")
     return cleaned
 
 
@@ -156,18 +156,18 @@ def build_filters(*, groups=None, actions=None, entity_types=None, entity_ids=No
     start, end = build_window(time_from, time_to, now)
     body: Dict[str, Any] = {'startTime': start, 'endTime': end}
     for key, name, given in (
-        ('logGroups', '--group', groups), ('actions', '--action', actions),
-        ('entityTypes', '--entity-type', entity_types), ('entityIds', '--entity-id', entity_ids),
-        ('users', '--user', users), ('apiKeyIds', '--api-key-id', api_key_ids),
-        ('databaseIds', '--database', databases), ('assetIds', '--asset', assets),
-        ('outcomes', '--outcome', outcomes), ('requestIds', '--request-id', request_ids),
+        ('logGroups', 'group', groups), ('actions', 'action', actions),
+        ('entityTypes', 'entity type', entity_types), ('entityIds', 'entity id', entity_ids),
+        ('users', 'user', users), ('apiKeyIds', 'api key id', api_key_ids),
+        ('databaseIds', 'database', databases), ('assetIds', 'asset', assets),
+        ('outcomes', 'outcome', outcomes), ('requestIds', 'request id', request_ids),
     ):
         values = _values(name, given)
         if key == 'outcomes':
             bad = [v for v in values if v not in AUDIT_OUTCOMES]
             if bad:
                 raise InvalidAuditRequestError(
-                    f"--outcome must be one of: {', '.join(AUDIT_OUTCOMES)}")
+                    f"outcome must be one of: {', '.join(AUDIT_OUTCOMES)}")
         if values:
             body[key] = values
     terms = validate_contains(contains)
@@ -176,7 +176,7 @@ def build_filters(*, groups=None, actions=None, entity_types=None, entity_ids=No
     body['includeProbes'] = bool(include_probes)
     if order:
         if order not in AUDIT_SORT_ORDERS:
-            raise InvalidAuditRequestError(f"--order must be one of: {', '.join(AUDIT_SORT_ORDERS)}")
+            raise InvalidAuditRequestError(f"order must be one of: {', '.join(AUDIT_SORT_ORDERS)}")
         body['sort'] = order
     return body
 
@@ -185,7 +185,7 @@ def check_page_size(page_size: Optional[int]) -> Optional[int]:
     if page_size is None:
         return None
     if not 1 <= page_size <= AUDIT_MAX_PAGE_SIZE:
-        raise InvalidAuditRequestError(f"--page-size must be 1 to {AUDIT_MAX_PAGE_SIZE}")
+        raise InvalidAuditRequestError(f"page size must be 1 to {AUDIT_MAX_PAGE_SIZE}")
     return page_size
 
 
@@ -306,7 +306,7 @@ def find_record(api_client, query_id: str, record_id: str, *, page_size: Optiona
 
 def check_export_format(export_format: str) -> str:
     if export_format not in AUDIT_EXPORT_FORMATS:
-        raise InvalidAuditRequestError(f"--format must be one of: {', '.join(AUDIT_EXPORT_FORMATS)}")
+        raise InvalidAuditRequestError(f"format must be one of: {', '.join(AUDIT_EXPORT_FORMATS)}")
     return export_format
 
 
