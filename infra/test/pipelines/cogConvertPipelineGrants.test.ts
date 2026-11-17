@@ -137,28 +137,64 @@ const grantsSharedKeyDecrypt = (statement: any): boolean =>
             resource["Fn::GetAtt"][1] === "Arn"
     );
 
-describe("CogConvertContainerJobRole", () => {
-    test("can use the shared KMS key for both the input and the output bucket policy", () => {
-        const statements = inlineStatements("CogConvertContainerJobRole");
+/** The job role's resource properties. */
+const jobRole = () => {
+    const roles = Object.entries(template.findResources("AWS::IAM::Role")).filter(([logicalId]) =>
+        logicalId.includes("CogConvertContainerJobRole")
+    );
+    expect(roles).toHaveLength(1);
+    return (roles[0][1] as any).Properties;
+};
 
-        // One grant per bucket policy: reading inputs and writing outputs are separate calls.
-        expect(statements.filter(grantsSharedKeyDecrypt)).toHaveLength(2);
+/** Last path segment of a resource entry, whether a plain ARN or a Fn::Join of parts. */
+const resourceText = (resource: any): string => JSON.stringify(resource);
+
+describe("CogConvertContainerJobRole", () => {
+    test("can use the shared KMS key for the asset bucket policy", () => {
+        const statements = inlineStatements("CogConvertContainerJobRole");
+        expect(statements.filter(grantsSharedKeyDecrypt)).toHaveLength(1);
     });
 
     test("can read an asset bucket object at a version", () => {
         // The container downloads its input at the S3 version the run recorded at launch, which is
         // a GetObject with a VersionId and so needs s3:GetObjectVersion on the asset bucket.
-        // The auxiliary bucket holds only objects the run writes and reads back at their current
-        // version, so the version action is granted on the asset buckets alone.
         const statements = inlineStatements("CogConvertContainerJobRole");
         const reads = statements.filter((statement) =>
             actionsOf(statement).includes("s3:GetObject")
         );
-        const versioned = reads.filter((statement) =>
-            actionsOf(statement).includes("s3:GetObjectVersion")
+        expect(reads).toHaveLength(1);
+        expect(actionsOf(reads[0])).toContain("s3:GetObjectVersion");
+    });
+
+    test("writes only under the run-I/O pipelines/ area, never where asset files live", () => {
+        // The pipeline promises the original is never replaced; a flaw in GDAL reading an untrusted
+        // TIFF must not be able to overwrite it. Read and write are separate statements, and the
+        // write resource ends in `pipelines/*`.
+        const statements = inlineStatements("CogConvertContainerJobRole");
+        const writes = statements.filter((statement) =>
+            actionsOf(statement).some((action) => /^s3:(Put|Delete|Abort)/.test(action))
         );
-        expect(reads).toHaveLength(2);
-        expect(versioned).toHaveLength(1);
+        expect(writes).toHaveLength(1);
+        for (const resource of resourcesOf(writes[0])) {
+            expect(resourceText(resource)).toMatch(/pipelines\/\*/);
+        }
+        // No statement mixes the read and the write actions.
+        for (const read of statements.filter((st) => actionsOf(st).includes("s3:GetObject"))) {
+            expect(actionsOf(read).some((action) => /^s3:(Put|Delete|Abort)/.test(action))).toBe(
+                false
+            );
+        }
+    });
+
+    test("holds no permission on the auxiliary bucket and deletes nothing", () => {
+        const statements = inlineStatements("CogConvertContainerJobRole");
+        const everyAction = statements.flatMap(actionsOf);
+        expect(everyAction.filter((action) => action.startsWith("s3:Delete"))).toEqual([]);
+        expect(JSON.stringify(statements)).not.toContain("AuxBucket");
+    });
+
+    test("carries no managed policies (image pull and X-Ray belong to other principals)", () => {
+        expect(jobRole().ManagedPolicyArns).toBeUndefined();
     });
 });
 
@@ -196,7 +232,8 @@ describe("CogConvertContainerExecutionRole", () => {
         // satisfy the assertion above while making every task fail to pull its image.
         const managed = JSON.stringify(executionRole().ManagedPolicyArns ?? []);
         expect(managed).toContain("AmazonECSTaskExecutionRolePolicy");
-        expect(managed).toContain("AWSXrayWriteOnlyAccess");
+        // The ECS agent writes no X-Ray segments, so the execution role does not carry that policy either.
+        expect(managed).not.toContain("AWSXrayWriteOnlyAccess");
     });
 });
 

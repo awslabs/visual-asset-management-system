@@ -59,56 +59,50 @@ export class CogConvertConstruct extends Construct {
         const region = cdk.Stack.of(this).region;
         const account = cdk.Stack.of(this).account;
 
-        // IAM policies for container roles
-        const s3BucketActions = [
+        // IAM policies for container roles, least privilege. The container READS the input file (at a launch
+        // version) from an asset bucket and WRITES only its results under the run-I/O area of the default
+        // asset bucket (`{baseAssetsPrefix}pipelines/...`, where the workflow stages every pipeline's output).
+        // It never writes where an asset's own files live, so a flaw in GDAL reading an untrusted TIFF cannot
+        // overwrite an original.
+        const s3ReadActions = [
             "s3:GetObject",
-            "s3:PutObject",
+            "s3:GetObjectVersion",
             "s3:ListBucket",
             "s3:GetBucketLocation",
         ];
+        // AbortMultipartUpload: a failed multipart upload of a large COG is aborted by the SDK.
+        const s3WriteActions = ["s3:PutObject", "s3:AbortMultipartUpload"];
 
-        const inputBucketPolicy = new iam.PolicyDocument({
-            statements: [
-                // Add permissions for all asset buckets from the global array
-                ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
-                    const prefix = record.prefix || "/";
-                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
-                    // leading slash from the prefix so the '/' separator after the bucket
-                    // ARN is always present (root prefix yields {bucketArn}/*).
-                    const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
-                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
+        const assetBucketStatements: iam.PolicyStatement[] = [];
+        for (const record of s3AssetBuckets.getS3AssetBucketRecords()) {
+            const prefix = record.prefix || "/";
+            // Build the object-level resource as {bucketArn}/{prefix}*. Strip any leading slash from the
+            // prefix so the '/' separator after the bucket ARN is always present (root prefix yields
+            // {bucketArn}/*).
+            const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+            const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
-                    return new iam.PolicyStatement({
-                        effect: iam.Effect.ALLOW,
-                        // s3:GetObjectVersion: the container reads its input file at the S3 version the run
-                        // recorded at launch.
-                        actions: [...s3BucketActions, "s3:GetObjectVersion"],
-                        resources: [
-                            record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}/${objectPrefix}*`,
-                        ],
-                    });
-                }),
-            ],
-        });
-
-        const outputBucketPolicy = new iam.PolicyDocument({
-            statements: [
+            assetBucketStatements.push(
                 new iam.PolicyStatement({
-                    actions: s3BucketActions,
+                    effect: iam.Effect.ALLOW,
+                    actions: s3ReadActions,
                     resources: [
-                        props.assetAuxiliaryBucket.bucketArn,
-                        props.assetAuxiliaryBucket.bucketArn + "/*",
+                        record.bucket.bucketArn,
+                        `${record.bucket.bucketArn}/${objectPrefix}*`,
                     ],
                 }),
-            ],
-        });
+                new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: s3WriteActions,
+                    resources: [`${record.bucket.bucketArn}/${objectPrefix}pipelines/*`],
+                })
+            );
+        }
+        const assetBucketPolicy = new iam.PolicyDocument({ statements: assetBucketStatements });
 
         //Add KMS key use if provided
         if (props.kmsKey) {
-            inputBucketPolicy.addStatements(kmsKeyPolicyStatementGenerator(props.kmsKey));
-
-            outputBucketPolicy.addStatements(kmsKeyPolicyStatementGenerator(props.kmsKey));
+            assetBucketPolicy.addStatements(kmsKeyPolicyStatementGenerator(props.kmsKey));
         }
 
         const stateTaskPolicy = new iam.PolicyDocument({
@@ -132,28 +126,21 @@ export class CogConvertConstruct extends Construct {
                 iam.ManagedPolicy.fromAwsManagedPolicyName(
                     "service-role/AmazonECSTaskExecutionRolePolicy"
                 ),
-                iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
             ],
         });
 
-        // Container job role
+        // Container job role: the process in the container. No managed policies: image pull and log writing
+        // belong to the execution role, and the container sends no X-Ray segments.
         const containerJobRole = new iam.Role(this, "CogConvertContainerJobRole", {
             assumedBy: Service("ECS_TASKS").Principal,
             inlinePolicies: {
-                InputBucketPolicy: inputBucketPolicy,
-                OutputBucketPolicy: outputBucketPolicy,
+                AssetBucketPolicy: assetBucketPolicy,
                 StateTaskPolicy: stateTaskPolicy,
             },
-            managedPolicies: [
-                iam.ManagedPolicy.fromAwsManagedPolicyName(
-                    "service-role/AmazonECSTaskExecutionRolePolicy"
-                ),
-                iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
-            ],
         });
 
         // Grant access to any external asset bucket customer managed KMS keys so the
-        // container can read/write objects in cross-account encrypted buckets
+        // container can read and write its objects in cross-account encrypted buckets
         // (no-op when no external keys are configured)
         grantExternalAssetBucketKmsKeys(containerJobRole);
 
@@ -446,7 +433,7 @@ export class CogConvertConstruct extends Construct {
                 },
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "ECS Containers require wildcard access to objects in asset buckets for COG conversion.",
+                    reason: "The execution role carries the AWS managed ECS task execution policy (image pull, log writing), whose resource wildcards AWS defines.",
                 },
             ],
             true
@@ -456,12 +443,8 @@ export class CogConvertConstruct extends Construct {
             containerJobRole,
             [
                 {
-                    id: "AwsSolutions-IAM4",
-                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
-                },
-                {
                     id: "AwsSolutions-IAM5",
-                    reason: "ECS Containers require wildcard access to objects in asset buckets for COG conversion.",
+                    reason: "The container reads the input file of any asset in the registered asset buckets (the object is chosen per run, so the key is a wildcard under each bucket's asset prefix) and writes only under that prefix's pipelines/ run-I/O area; it has no write permission on asset files. The states:SendTask* actions are scoped to this account and Region because the task token is the run's own and its state machine ARN is not known when the role is created.",
                 },
             ],
             true

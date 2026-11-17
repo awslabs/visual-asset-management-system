@@ -255,10 +255,16 @@ describe("the cogConvert image", () => {
     const lines = text.split(/\r?\n/);
 
     it("is pinned to a digest, not only a tag, in both stages", () => {
-        expect(text).toMatch(/^ARG BASE_IMAGE=condaforge\/miniforge3:[\w.-]+@sha256:[0-9a-f]{64}/m);
         const froms = lines.filter((l) => /^FROM\s/.test(l));
         expect(froms).toHaveLength(2);
-        for (const from of froms) expect(from).toContain("${BASE_IMAGE}");
+        for (const from of froms) expect(from).toMatch(/@sha256:[0-9a-f]{64}/);
+    });
+
+    it("runs on a slim base: the runtime stage is not the conda build image", () => {
+        const froms = lines.filter((l) => /^FROM\s/.test(l));
+        expect(froms[0]).toContain("miniforge3");
+        expect(froms[1]).not.toContain("miniforge3");
+        expect(text).toContain("COPY --from=build /opt/cog /opt/cog");
     });
 
     it("installs the GDAL stack from a hash-listed explicit file and Python from the hash lock", () => {
