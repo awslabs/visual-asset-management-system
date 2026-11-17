@@ -27,12 +27,22 @@ import test_sysgenai_asset_summary as summary_tests
 import test_sysgenai_generate_metadata as gm_tests
 
 # The new sentences, pinned as text.
+# D117: frames of a screen recording (a web application's screens) were taken for screenshots of the system that
+# stores the file, and the asset text was described instead. The system prompt and the closing line now say the
+# images are the file's own, and that a screen they show is what the file records.
+FILE_IMAGES_SYSTEM = (
+    "The rendered views or frames come from the file itself (a video's frames, a document's pages, the image, or "
+    "views rendered from a 3D file), not screenshots of the system that stores it: when they show a software "
+    "window, web page or other user interface, the file records that screen, so the title and description name the "
+    "kind of application or screen and what it shows. ")
+FILE_IMAGES_NOTE = "They are the file's own content, not screenshots of the system that stores it."
 SYSTEM_CONTENT_FIRST = (
     "The asset's name, description and tags are context about the asset the file belongs to: they may describe the "
     "upload, a project or a test rather than this file, so do not present them as the file's content. "
     "The title, description and keywords must name what the file itself shows or contains, as its rendered views "
     "or frames, its extracted text and its attributes show it. "
-    "When the file shows little you can name, say so plainly rather than describe the asset text as the file's "
+    + FILE_IMAGES_SYSTEM
+    + "When the file shows little you can name, say so plainly rather than describe the asset text as the file's "
     "content. ")
 USER_CONTENT_FIRST = ("The asset's name, description and tags are context about the asset this file belongs to; the "
                       "title, description and keywords name what this file itself shows or contains.")
@@ -135,6 +145,54 @@ class TestTheFileAnalysisPutsContentFirst:
             "Asset name: Gear Pump\nAsset description: A brass gear pump\nAsset tags: pump, brass")
         for sentence in (KEEP_WORDING, CONTEXT_ONLY, SYSTEM_CONTENT_FIRST.strip()):
             assert sentence not in guarded
+
+
+@pytest.mark.unit
+class TestTheImagesAreTheFilesOwn:
+    """D117: the images are the file's own content, also when they show a software screen."""
+
+    def test_the_system_prompt_says_the_images_come_from_the_file(self):
+        _mod, _s3, bedrock = _analyse()
+        system = bedrock.calls[0]["system"][0]["text"]
+        assert FILE_IMAGES_SYSTEM in system
+        # Between the sentence that names the file's content and the one about a file that shows little.
+        assert (system.index("its extracted text and its attributes show it. ") < system.index(FILE_IMAGES_SYSTEM)
+                < system.index("When the file shows little you can name"))
+
+    @pytest.mark.parametrize("manifest,state,count", [
+        (lambda: gm_tests._manifest(), {}, 2),
+        (lambda: gm_tests._image_manifest(), {"fileClass": "image", "renderBranch": "MEDIA"}, 1),
+        (lambda: gm_tests._manifest(images=4, fileClass="video", renderBranch="MEDIA"),
+         {"fileClass": "video", "fileExt": ".mp4", "renderBranch": "MEDIA"}, 4),
+    ])
+    def test_the_closing_line_says_so_after_the_image_count(self, manifest, state, count):
+        s3 = gm_tests._seed(h.FakeS3(), manifest=manifest())
+        bedrock = h.FakeBedrock([gm_tests._reply()])
+        gm_tests._run(gm_tests._state(**state), s3, bedrock)
+        text = gm_tests._user_text(bedrock)
+        closing = f"{count} rendered view(s) or frame(s) of the file follow. {FILE_IMAGES_NOTE}"
+        assert closing in text
+        # The closing line comes after the file-derived parts and before the content-first instruction.
+        assert text.index("File attributes (JSON):") < text.index(closing) < text.index(USER_CONTENT_FIRST)
+
+    def test_without_images_the_note_is_not_given(self):
+        s3 = gm_tests._seed(h.FakeS3(), manifest=gm_tests._manifest(images=0, fileClass="other",
+                                                                      renderBranch="MEDIA",
+                                                                      renderSkipped="unsupported"))
+        bedrock = h.FakeBedrock([gm_tests._reply()])
+        gm_tests._run(gm_tests._state(fileClass="other", renderBranch="MEDIA", renderSkipped="unsupported"), s3,
+                      bedrock)
+        text = gm_tests._user_text(bedrock)
+        assert "No rendered views are available" in text and FILE_IMAGES_NOTE not in text
+
+    def test_with_a_guardrail_both_sentences_are_plain(self):
+        _mod, _s3, bedrock = _analyse(env=gm_tests.GUARDRAIL_ENV)
+        content = bedrock.calls[0]["messages"][0]["content"]
+        plain, guarded = content[0]["text"], content[1]["guardContent"]["text"]["text"]
+        assert f"2 rendered view(s) or frame(s) of the file follow. {FILE_IMAGES_NOTE}" in plain
+        assert FILE_IMAGES_NOTE not in guarded and "screenshots" not in guarded
+        assert FILE_IMAGES_SYSTEM.strip() not in guarded
+        assert FILE_IMAGES_SYSTEM in bedrock.calls[0]["system"][0]["text"]
 
 
 @pytest.mark.unit

@@ -229,16 +229,23 @@ EXISTING_SECTION_HEADERS = {
 }
 
 # Content first: the asset text is context about the asset, and the descriptive fields name what the file itself
-# shows or contains. Restated for the video window prompt (containers/media/segment_handler.py) and the asset
-# summary (summarizeAsset.py).
+# shows or contains. The images are the file's own (D117: frames of a screen recording were taken for screenshots
+# of the system that stores the file, and the asset text was described instead). Restated for the video window
+# prompt (containers/media/segment_handler.py); the asset summary (summarizeAsset.py) takes no images.
 CONTENT_FIRST_SYSTEM_TEXT = (
     "The asset's name, description and tags are context about the asset the file belongs to: they may describe the "
     "upload, a project or a test rather than this file, so do not present them as the file's content. "
     "The title, description and keywords must name what the file itself shows or contains, as its rendered views "
     "or frames, its extracted text and its attributes show it. "
+    "The rendered views or frames come from the file itself (a video's frames, a document's pages, the image, or "
+    "views rendered from a 3D file), not screenshots of the system that stores it: when they show a software "
+    "window, web page or other user interface, the file records that screen, so the title and description name the "
+    "kind of application or screen and what it shows. "
     "When the file shows little you can name, say so plainly rather than describe the asset text as the file's "
     "content. "
 )
+# Said again, in a few words, after the count of the images that follow (the user message's closing line).
+FILE_IMAGES_NOTE = "They are the file's own content, not screenshots of the system that stores it."
 SYSTEM_PROMPT = (
     "You are a digital asset librarian describing one file from an asset management system so it can be "
     "searched and classified. You receive the asset's name, description and tags, the file's path and class, "
@@ -482,7 +489,7 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
         closing = (f"No rendered views are available (render skipped: {manifest['renderSkipped']}); "
                    "describe the file from its name, attributes and context.")
     elif image_count:
-        closing = f"{image_count} rendered view(s) or frame(s) of the file follow."
+        closing = f"{image_count} rendered view(s) or frame(s) of the file follow. {FILE_IMAGES_NOTE}"
     elif images_withheld:
         closing = ("No rendered views are sent (this analysis model takes no image input); describe the file "
                    "from its name, attributes and context.")
