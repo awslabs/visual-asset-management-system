@@ -1304,7 +1304,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
-        help: "Media Preview Thumbnail workflow: JPG previews for images 5 MiB or larger and for every TGA/TIFF, animated GIF previews for video. Shares the 3D thumbnail container, so it deploys that container (tier sizes below) even when the 3D thumbnail pipeline is off. Requires VPC. A missing value means off.",
+        help: "Media Preview Thumbnail workflow: JPG previews for images 5 MiB or larger and for every TGA/TIFF, animated GIF previews for video. Shares the 3D thumbnail container, so it deploys that container (tier sizes below) even when the 3D thumbnail pipeline is off. Off by default (also when missing); requires the Global VPC (app.useGlobalVpc.enabled).",
     },
     {
         path: "app.pipelines.useMediaPreviews.autoRegisterAutoTriggerOnFileUpload",

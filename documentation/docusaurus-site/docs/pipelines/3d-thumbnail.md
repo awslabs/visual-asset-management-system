@@ -1,6 +1,6 @@
-# 3D Preview Thumbnail Pipeline
+# 3D and Media Preview Thumbnail Pipelines
 
-The 3D Preview Thumbnail pipeline generates animated GIF or static image previews from 3D files, providing visual thumbnails for assets in the VAMS web interface. It supports a wide range of mesh, point cloud, CAD, USD and Gaussian splat file formats. The pipeline uses CPU-based headless rendering with PyVista, VTK, and Xvfb in an AWS Batch job on AWS Fargate.
+The 3D Preview Thumbnail pipeline generates animated GIF or static image previews from 3D files, providing visual thumbnails for assets in the VAMS web interface. The same container also runs the optional **Media Preview Thumbnail** workflow (`app.pipelines.useMediaPreviews`), which writes JPEG or animated GIF previews for images, TGA/TIFF files and video; see [Media Formats](#media-formats). Media previews are off by default and need the Global VPC. It supports a wide range of mesh, point cloud, CAD, USD and Gaussian splat file formats. The pipeline uses CPU-based headless rendering with PyVista, VTK, and Xvfb in an AWS Batch job on AWS Fargate.
 
 ## Supported Formats
 

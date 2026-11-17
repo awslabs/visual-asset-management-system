@@ -1,4 +1,4 @@
-# Preview 3D Thumbnail Pipeline
+# Preview 3D Thumbnail Pipeline (and Media Preview Thumbnail)
 
 The Preview 3D Thumbnail pipeline generates animated GIF or static image preview thumbnails from 3D files. It uses CPU-based headless rendering via PyVista/VTK with Xvfb inside an AWS Batch Fargate container.
 

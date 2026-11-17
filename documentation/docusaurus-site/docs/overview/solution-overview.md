@@ -42,7 +42,7 @@ VAMS delivers the following core capabilities:
 
 -   **Asset Management** -- Organize visual assets across databases with metadata, tagging, versioning, and relationship linking
 -   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, robotics logs, and media files directly in the browser through 22 built-in viewer plugins
--   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation, and AI-powered labeling
+-   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation (3D files, images, TGA/TIFF and video), and AI-powered labeling
 -   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service across assets and files
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement
 -   **Compliance Enforcement** -- Bind versioned compliance schemas to databases or assets, evaluate assets automatically, on demand, or in sweeps, and quarantine assets that fail `quarantine`-level rules, with approval-gated cascades and an audit trail

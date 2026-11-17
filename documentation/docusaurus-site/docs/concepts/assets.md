@@ -128,7 +128,7 @@ Each asset can have a **preview image** that serves as a visual thumbnail or rep
 -   Preview images are uploaded separately from asset files, using the `assetPreview` upload type.
 -   Exactly one file is uploaded per preview operation.
 -   Allowed preview formats include `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, and `.bmp`.
--   Processing pipelines (such as the 3D thumbnail pipeline) can automatically generate preview images for assets.
+-   Processing pipelines (such as the 3D thumbnail pipeline and the optional media preview pipeline) can automatically generate preview images for assets. An image under 5 MiB in an allowed preview format is shown as its own preview.
 -   Previews can be deleted independently of the asset's files.
 
 ## The isDistributable flag
