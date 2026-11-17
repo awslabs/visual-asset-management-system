@@ -516,4 +516,25 @@ describe("PipelineForm DeadlineCloud job template", () => {
         await waitFor(() => expect(screen.getByText(/Cannot be negative/)).toBeInTheDocument());
         expect(mutateAsync).not.toHaveBeenCalled();
     });
+
+    it("shows a fractional count's message and the missing-field messages in one save", async () => {
+        const user = userEvent.setup();
+        const mutateAsync = mockCreate();
+
+        render(<PipelineForm mode="create" databaseId="db1" onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.type(screen.getByLabelText(/Pipeline Name/), "DC Pipe");
+        await user.selectOptions(screen.getByLabelText(/Execution Type/), "DeadlineCloud");
+        await waitFor(() => expect(screen.getByLabelText(/^Priority$/)).toBeInTheDocument());
+        await user.type(screen.getByLabelText(/^Priority$/), "2.5");
+        submit();
+
+        await waitFor(() => expect(screen.getByText("Must be a whole number")).toBeInTheDocument());
+        expect(screen.getByText("DeadlineCloud farmId is required")).toBeInTheDocument();
+        expect(screen.getByText("DeadlineCloud queueId is required")).toBeInTheDocument();
+        expect(screen.getByText("DeadlineCloud job template is required")).toBeInTheDocument();
+        expect(mutateAsync).not.toHaveBeenCalled();
+    });
 });

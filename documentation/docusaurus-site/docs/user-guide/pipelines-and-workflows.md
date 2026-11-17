@@ -81,6 +81,8 @@ The owning database is the one you are creating within — pipelines created fro
 
 `DeadlineCloud` is available only when the deployment enables it; the fields are shown but disabled otherwise.
 
+**Priority** takes a whole number from 0 to 100 (50 when blank), and **Max Retries Per Task** and **Max Failed Tasks Count** each take a whole number from 0 to 2,147,483,647. These are the ranges AWS Deadline Cloud accepts, so VAMS refuses to save a pipeline with a value outside them.
+
 The remaining execution fields apply to any type:
 
 | Field                                | Required | Description                                                                                                                                                                                                                                                             |
