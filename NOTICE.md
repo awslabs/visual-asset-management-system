@@ -20,7 +20,7 @@ This software includes third party software subject to the following copyrights:
 | eslint-plugin-react              | ^7.32.2 | MIT          |
 | prettier                         | ^2.8.7  | MIT          |
 | standard-version                 | ^9.3.2  | ISC          |
-| @types/sanitize-html             | ^2.9.0  | MIT          |
+| @types/sanitize-html             | ^2.16.2 | MIT          |
 | minimist                         | ^1.2.7  | MIT          |
 
 ---
@@ -62,7 +62,7 @@ This software includes third party software subject to the following copyrights:
 | @types/three                        | ^0.180.0      | MIT                     |
 | @types/wicg-file-system-access      | 2020.9.6      | MIT                     |
 | arraybuffer-to-buffer               | ^0.0.7        | MIT                     |
-| autoprefixer                        | ^10.4.20      | MIT                     |
+| autoprefixer                        | ^10.6.2       | MIT                     |
 | aws-amplify                         | ^6.0.0        | Apache-2.0              |
 | axios                               | ^1.6.0        | MIT                     |
 | buffer                              | ^6.0.3        | MIT                     |
@@ -94,7 +94,7 @@ This software includes third party software subject to the following copyrights:
 | tailwindcss                         | ^3.4.14       | MIT                     |
 | tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
 | typescript                          | ^5.0.0        | Apache-2.0              |
-| vite                                | ^8.1.6        | MIT                     |
+| vite                                | 8.3.5         | MIT                     |
 | zod                                 | ^4.6.7        | MIT                     |
 
 `jodit` is not declared directly — it arrives with `jodit-react` and the version shown is the one resolved in the lockfile. `fast-xml-parser` is carried transitively and pinned by the `overrides` block in `web/package.json`.
