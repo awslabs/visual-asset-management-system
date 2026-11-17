@@ -12,8 +12,12 @@ S3_VERSIONS_PAGE_SIZE = 1000
 S3_OBJECTS_PAGE_SIZE = 1000
 
 import os
+import time
 import boto3
 from botocore.config import Config
+from customLogging.logger import safeLogger
+
+logger = safeLogger()
 
 # ---------------------------------------------------------------------------
 # Per-Region client factory and Region-routing client/resource.
@@ -31,6 +35,14 @@ S3_CLIENT_MAX_POOL_CONNECTIONS = 50
 S3_ASSET_CLIENT_CONFIG = Config(
     signature_version='s3v4',
     s3={'addressing_style': 'path', 'us_east_1_regional_endpoint': 'regional'},
+    retries={'max_attempts': 5, 'mode': 'adaptive'},
+    max_pool_connections=S3_CLIENT_MAX_POOL_CONNECTIONS,
+)
+
+S3_ASSET_ACCELERATED_CLIENT_CONFIG = Config(
+    signature_version='s3v4',
+    s3={'addressing_style': 'path', 'us_east_1_regional_endpoint': 'regional',
+        'use_accelerate_endpoint': True},
     retries={'max_attempts': 5, 'mode': 'adaptive'},
     max_pool_connections=S3_CLIENT_MAX_POOL_CONNECTIONS,
 )
@@ -66,6 +78,48 @@ def s3_resource_for_region(region=None):
     return resource
 
 
+# S3 Transfer Acceleration: same contract as the shipped module. The flag comes from bucket details
+# (register_bucket_accelerated / bucket_region_fields); the mock performs no table lookup, so a name
+# nobody registered is not accelerated and a test never reaches DynamoDB through it.
+BUCKET_ACCELERATE_CACHE_TTL_SECONDS = 600
+ACCELERATED_PRESIGN_METHODS = frozenset({'get_object', 'upload_part', 'put_object'})
+_s3_accelerated_clients_by_region = {}
+_bucket_accelerated_by_name = {}
+
+
+class AccelerateNotSupportedError(ValueError):
+    pass
+
+
+def s3_accelerated_client_for_region(region=None):
+    region = region or deployment_region()
+    client = _s3_accelerated_clients_by_region.get(region)
+    if client is None:
+        client = boto3.client('s3', region_name=region, config=S3_ASSET_ACCELERATED_CLIENT_CONFIG)
+        _s3_accelerated_clients_by_region[region] = client
+    return client
+
+
+def accelerated_presign_client_for_bucket(bucket_name, region=None):
+    if '.' in (bucket_name or ''):
+        raise AccelerateNotSupportedError(
+            f"Bucket {bucket_name} has a period in its name, which S3 Transfer Acceleration does "
+            f"not support")
+    return s3_accelerated_client_for_region(region or bucket_region_for_name(bucket_name))
+
+
+def register_bucket_accelerated(bucket_name, accelerated):
+    if bucket_name:
+        _bucket_accelerated_by_name[bucket_name] = (bool(accelerated), time.monotonic())
+
+
+def bucket_is_accelerated(bucket_name):
+    cached = _bucket_accelerated_by_name.get(bucket_name)
+    if cached is not None and time.monotonic() - cached[1] < BUCKET_ACCELERATE_CACHE_TTL_SECONDS:
+        return cached[0]
+    return False
+
+
 def bucket_region(bucket_details):
     region = (bucket_details or {}).get('bucketRegion')
     return region if region else deployment_region()
@@ -81,7 +135,12 @@ def bucket_region_fields(bucket_row):
     account_id = (bucket_row or {}).get('bucketAccountId')
     if account_id:
         fields['bucketAccountId'] = account_id
-    register_bucket_region((bucket_row or {}).get('bucketName'), fields['bucketRegion'])
+    bucket_name = (bucket_row or {}).get('bucketName')
+    register_bucket_region(bucket_name, fields['bucketRegion'])
+    if (bucket_row or {}).get('isAccelerated') is True:
+        fields['isAccelerated'] = True
+    if bucket_row is not None and bucket_name and 'bucketName' in bucket_row:
+        register_bucket_accelerated(bucket_name, bucket_row.get('isAccelerated') is True)
     return fields
 
 
@@ -188,10 +247,25 @@ class RegionRoutingS3Client:
             return self._copy
         if name == 'copy_object':
             return self._copy_object
+        if name in ('generate_presigned_url', 'generate_presigned_post'):
+            return lambda *args, **kwargs: self._presign(name, args, kwargs)
 
         def call(*args, **kwargs):
             return getattr(self._client_for(self._bucket_from_call(args, kwargs)), name)(*args, **kwargs)
         return call
+
+    def _presign(self, name, args, kwargs):
+        bucket = self._bucket_from_call(args, kwargs)
+        method = kwargs.get('ClientMethod', args[0] if args else None)
+        eligible = True if name == 'generate_presigned_post' else method in ACCELERATED_PRESIGN_METHODS
+        if bucket and eligible and bucket_is_accelerated(bucket):
+            try:
+                client = accelerated_presign_client_for_bucket(bucket)
+            except AccelerateNotSupportedError as e:
+                logger.error(f"{e}; signing without acceleration.")
+            else:
+                return getattr(client, name)(*args, **kwargs)
+        return getattr(self._client_for(bucket), name)(*args, **kwargs)
 
     @staticmethod
     def _copy(CopySource=None, Bucket=None, Key=None, ExtraArgs=None, **_ignored):

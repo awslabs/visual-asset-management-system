@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.8.0] (TBD)
+
+### Major Change Summary:
+
+-   S3 Transfer Acceleration for asset bucket transfers, off until a bucket is flagged ([#1610](https://github.com/awslabs/visual-asset-management-system/issues/1610))
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+-   **Backend** Presigned download and upload URLs for an asset bucket whose row carries `isAccelerated: true` use the S3 Transfer Acceleration endpoint (`<bucket>.s3-accelerate.amazonaws.com`), signed for the bucket's Region. The flag is cached for 10 minutes. The auxiliary bucket follows the default asset bucket's flag. A bucket without the flag keeps today's path-style URLs, so nothing changes until a deployment sets the flag. ([#1610](https://github.com/awslabs/visual-asset-management-system/issues/1610))
+    -   Note: A bucket name with a period cannot use Transfer Acceleration, so its URLs stay path-style and an error is logged.
+
+### Bug Fixes
+
+### Chores
+
+### Known Outstanding Issues
+
+### Troubleshooting
+
 ## [2.7.0] (2026-11-20)
 
 ### Major Change Summary:
