@@ -22212,8 +22212,6 @@ components:
                 completedAt:
                     type: string
                     format: date-time
-                errorMessage:
-                    type: string
             required:
                 - evaluationId
                 - databaseId
