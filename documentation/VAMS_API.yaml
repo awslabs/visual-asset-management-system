@@ -20539,7 +20539,7 @@ components:
                     maxItems: 14
                     items:
                         type: string
-                        enum: [image, video, audio, document, text, data, tiles3d, mesh, usd, cad, pointcloud, splat, ifc, other]
+                        enum: [image, video, audio, document, text, data, tiles3d, raster, mesh, usd, cad, pointcloud, splat, ifc, other]
                     default: []
                     description: "fileClass ids to keep (case-insensitive, de-duplicated); any other value is refused with 400. 3D models are mesh, usd or cad. One value is pushed into the index filter; several are applied after the merge."
                 fileExtensions:
