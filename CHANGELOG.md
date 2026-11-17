@@ -543,7 +543,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
--   **Pipelines** A DeadlineCloud pipeline whose priority, max retries per task or max failed tasks count is fractional, a boolean or outside the range AWS Deadline Cloud accepts (priority 0 to 100, the two counts 0 to 2,147,483,647) is refused with `400` and a message that names the range, instead of answering `500` for a fractional value or saving a value that fails every workflow run at job creation. ([#1582](https://github.com/awslabs/visual-asset-management-system/issues/1582), [#1581](https://github.com/awslabs/visual-asset-management-system/issues/1581))
+-   **Pipelines** A DeadlineCloud pipeline whose priority, max retries per task or max failed tasks count is fractional, a boolean or outside the range AWS Deadline Cloud accepts (priority 0 to 100, the two counts 0 to 2,147,483,647) is refused with a message that names the range, in the pipeline form and as a `400` from the API, instead of answering `500` for a fractional value or saving a value that fails every workflow run at job creation. ([#1582](https://github.com/awslabs/visual-asset-management-system/issues/1582), [#1581](https://github.com/awslabs/visual-asset-management-system/issues/1581))
     -   Note: a boolean such as `true`, which earlier saved and ran as priority 1, is refused too; send the number instead. ([#1582](https://github.com/awslabs/visual-asset-management-system/issues/1582))
     -   Note: a workflow that uses a DeadlineCloud pipeline saved earlier with an out-of-range value is refused when its state machine is next built; set the pipeline's value within the range. ([#1581](https://github.com/awslabs/visual-asset-management-system/issues/1581))
 

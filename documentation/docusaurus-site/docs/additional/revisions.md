@@ -431,7 +431,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
--   **DeadlineCloud job settings** — A DeadlineCloud pipeline whose priority, max retries per task or max failed tasks count is fractional, a boolean or outside the range AWS Deadline Cloud accepts (priority 0 to 100, the two counts 0 to 2,147,483,647) is refused with `400` and a message that names the range, instead of answering `500` for a fractional value or saving a value that fails every workflow run at job creation. (issues #1582, #1581)
+-   **DeadlineCloud job settings** — A DeadlineCloud pipeline whose priority, max retries per task or max failed tasks count is fractional, a boolean or outside the range AWS Deadline Cloud accepts (priority 0 to 100, the two counts 0 to 2,147,483,647) is refused with a message that names the range, in the pipeline form and as a `400` from the API, instead of answering `500` for a fractional value or saving a value that fails every workflow run at job creation. (issues #1582, #1581)
     -   Note: A boolean such as `true`, which earlier saved and ran as priority 1, is refused too; send the number instead.
     -   Note: A workflow that uses a DeadlineCloud pipeline saved earlier with an out-of-range value is refused when its state machine is next built; set the pipeline's value within the range.
 
