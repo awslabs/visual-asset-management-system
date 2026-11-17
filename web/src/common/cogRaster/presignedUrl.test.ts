@@ -5,6 +5,7 @@
 
 import {
     FALLBACK_REFRESH_MS,
+    MAX_REFRESH_MS,
     MIN_REFRESH_MS,
     RasterDownloadRefused,
     keepFresh,
@@ -32,6 +33,10 @@ describe("presignedLifetime and refreshDelayMs", () => {
         expect(refreshDelayMs(signed("20261117T170000Z", 1000), issued + 300 * 1000)).toBe(
             500 * 1000
         );
+    });
+    it("never waits longer than the cap, whatever the URL's lifetime", () => {
+        const issued = Date.UTC(2026, 10, 17, 17, 0, 0);
+        expect(refreshDelayMs(signed("20261117T170000Z", 86400), issued)).toBe(MAX_REFRESH_MS);
     });
     it("never goes below the minimum, even for an already late URL", () => {
         const issued = Date.UTC(2026, 10, 17, 17, 0, 0);

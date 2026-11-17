@@ -28,6 +28,14 @@ export const FALLBACK_REFRESH_MS = 4 * 60 * 1000;
 export const MIN_REFRESH_MS = 10 * 1000;
 
 /**
+ * Never wait longer than this before replacing a URL. A presigned URL stops working when the
+ * credentials that signed it expire, which can be well before its X-Amz-Expires lifetime (the API's
+ * role session is shorter than the 24-hour default URL lifetime), so the lifetime alone is not a
+ * safe schedule. A read refused in between is caught by the tile error handler.
+ */
+export const MAX_REFRESH_MS = 45 * 60 * 1000;
+
+/**
  * The moment a SigV4 presigned URL was signed and how long it lives, read from its X-Amz-Date and
  * X-Amz-Expires query parameters. Null when either is missing or unreadable.
  */
@@ -47,12 +55,12 @@ export function presignedLifetime(url: string): { issuedAtMs: number; lifetimeMs
     return { issuedAtMs, lifetimeMs: expires * 1000 };
 }
 
-/** Milliseconds from `nowMs` until the URL should be replaced (about 80% of its lifetime). */
+/** Milliseconds from `nowMs` until the URL should be replaced: about 80% of its lifetime, at most MAX_REFRESH_MS. */
 export function refreshDelayMs(url: string, nowMs: number = Date.now()): number {
     const lifetime = presignedLifetime(url);
     if (!lifetime) return FALLBACK_REFRESH_MS;
     const due = lifetime.issuedAtMs + lifetime.lifetimeMs * REFRESH_FRACTION;
-    return Math.max(MIN_REFRESH_MS, due - nowMs);
+    return Math.min(MAX_REFRESH_MS, Math.max(MIN_REFRESH_MS, due - nowMs));
 }
 
 /** Asks the download route for a presigned URL. The API decides access; a refusal carries its reason. */

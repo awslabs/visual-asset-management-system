@@ -63,7 +63,7 @@ export interface ManagerOptions {
 
 const ID_PREFIX = "vams-raster";
 /** A tile error from the same layer is acted on at most this often. */
-const TILE_ERROR_COOLDOWN_MS = 15 * 1000;
+const TILE_ERROR_COOLDOWN_MS = 30 * 1000;
 
 function boundsOfCorners(corners: [number, number][]): [[number, number], [number, number]] {
     const lons = corners.map((corner) => corner[0]);
@@ -280,11 +280,14 @@ export class RasterLayerManager {
     private handleMapError(event: any): void {
         const item = this.items.find((candidate) => candidate.sourceId === event?.sourceId);
         if (!item || item.entry.mode !== "tile" || !item.refreshNow) return;
-        // A read the store refused as expired (403) or unauthorized: ask for a fresh URL, at most once
-        // in a while, so a file that really is denied does not loop.
+        // A read the store refused (an expired or revoked presigned URL): ask for a fresh URL, at most
+        // once in a while, so a file that really is denied does not loop. geotiff.js reports any non-OK
+        // range read as "Error fetching data." without the status, so that message counts as well.
         const status = event?.error?.status ?? event?.status;
         const message = String(event?.error?.message ?? "");
-        if (status !== 403 && !/\b403\b/.test(message)) return;
+        const refused =
+            status === 403 || /\b403\b/.test(message) || /Error fetching data/i.test(message);
+        if (!refused) return;
         const now = Date.now();
         if (now - item.lastTileErrorAt < TILE_ERROR_COOLDOWN_MS) return;
         item.lastTileErrorAt = now;

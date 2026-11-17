@@ -167,6 +167,24 @@ describe("RasterLayerManager", () => {
         manager.dispose();
     });
 
+    it("treats geotiff's status-less read failure as a refused read, once per cool-down", async () => {
+        const map = new FakeMap();
+        const request = jest.fn().mockResolvedValue("https://s3/fresh");
+        const manager = new RasterLayerManager(map, { ...OPTIONS(map), requestUrl: request });
+        manager.add(prepared("1.tif"));
+        const sourceId = [...map.sources.keys()][0];
+        map.listeners.get("error")!({ sourceId, error: new Error("Error fetching data.") });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const freshId = [...map.sources.keys()][0];
+        map.listeners.get("error")!({
+            sourceId: freshId,
+            error: new Error("Error fetching data."),
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(request).toHaveBeenCalledTimes(1);
+        manager.dispose();
+    });
+
     it("ignores errors that are not a refused read, and errors from other sources", async () => {
         const map = new FakeMap();
         const request = jest.fn();
