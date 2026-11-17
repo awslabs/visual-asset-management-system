@@ -118,15 +118,45 @@ class TestLimits:
         with pytest.raises(convert.ConversionRefused, match="GiB"):
             convert.check_limits(_header(), convert.MAX_INPUT_BYTES + 1)
 
-    def test_the_headroom_covers_the_temporary_and_the_final_file(self):
-        assert convert.required_free_bytes(10 * 1024 ** 3) >= int(3.5 * 10 * 1024 ** 3)
-        assert convert.required_free_bytes(1) == convert.MIN_FREE_BYTES
+    def test_the_output_estimate_covers_the_measured_worst_case(self):
+        # Measured on a 152 MB JPEG-in-TIFF (16,716 x 16,716 RGB): the COG was 23,808 x 23,808 RGBA, 1.44 GB
+        # after DEFLATE and 2.27 GB uncompressed. The estimate must be at least the uncompressed size, and the
+        # scratch need at least temporary plus final (2.9 GB measured).
+        header = _header(width=16716, height=16716, band_count=3)
+        pixels = convert.estimate_output_pixels(16716, 16716, (21800, 21800))
+        output_bytes = convert.estimate_output_bytes(header, pixels)
+        assert output_bytes >= 23808 * 23808 * 4
+        assert convert.required_scratch_bytes(output_bytes) >= int(2.9e9)
 
-    def test_disk_check_names_both_sizes(self, monkeypatch, tmp_path):
+    def test_a_small_scratch_volume_is_refused_before_the_conversion(self, monkeypatch, tmp_path):
+        # D2: a 152 MB compressed input passed the old input-size check on a 2 GiB volume and then ran out of
+        # space inside GDAL. The estimate comes from the pixel grid, not from the file size.
         usage = collections.namedtuple("usage", "total used free")
         monkeypatch.setattr(convert.shutil, "disk_usage", lambda _p: usage(100, 90, 2 * 1024 ** 3))
-        with pytest.raises(convert.ConversionRefused, match="10.0 GiB.*2.0 GiB"):
-            convert.check_disk(str(tmp_path), 10 * 1024 ** 3)
+        header = _header(width=16716, height=16716, band_count=3)
+        output_bytes = convert.estimate_output_bytes(
+            header, convert.estimate_output_pixels(16716, 16716, (21800, 21800)))
+        with pytest.raises(convert.ConversionRefused, match="only 2.0 GiB"):
+            convert.check_disk(str(tmp_path), output_bytes, 152 * 1024 ** 2)
+
+    def test_the_message_names_the_volume_and_does_not_tell_you_to_raise_it(self, monkeypatch, tmp_path):
+        usage = collections.namedtuple("usage", "total used free")
+        monkeypatch.setattr(convert.shutil, "disk_usage", lambda _p: usage(100, 90, 1024 ** 3))
+        with pytest.raises(convert.ConversionRefused) as refused:
+            convert.check_disk(str(tmp_path), 50 * 1024 ** 3, 10 * 1024 ** 3)
+        assert "200 GiB" in str(refused.value) and "raise" not in str(refused.value).lower()
+
+    def test_a_degenerate_warped_grid_falls_back_to_the_source_grid(self):
+        # A whole-world raster warps to a few pixels; the source grid then sets the bound.
+        assert convert.estimate_output_pixels(360, 180, (33, 401)) >= 360 * 180 * 2
+        assert convert.estimate_output_pixels(360, 180, None) >= 360 * 180 * 2
+
+    def test_the_input_that_cannot_fit_is_refused_before_the_download(self, monkeypatch, tmp_path):
+        usage = collections.namedtuple("usage", "total used free")
+        monkeypatch.setattr(convert.shutil, "disk_usage", lambda _p: usage(100, 90, 150 * 1024 ** 3))
+        convert.check_download_disk(str(tmp_path), 100 * 1024 ** 3)  # the documented maximum input fits
+        with pytest.raises(convert.ConversionRefused, match="200 GiB"):
+            convert.check_download_disk(str(tmp_path), 149.5 * 1024 ** 3)
 
     def test_memory_takes_the_smallest_bound(self, monkeypatch):
         monkeypatch.setenv("VAMS_TASK_MEMORY_MIB", "1024")

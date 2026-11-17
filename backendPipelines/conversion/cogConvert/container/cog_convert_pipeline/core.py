@@ -142,6 +142,7 @@ def _run_convert_stage(stage: PipelineStage, input_parameters, local_test: bool,
         if source_version == "null":
             source_version = ""
         input_bytes = int(head.get("ContentLength", 0))
+        convert.check_input_size(input_bytes)
         convert.check_download_disk(work_dir, input_bytes)
 
         version = {"version_id": source_version} if source_version else {}
@@ -162,12 +163,24 @@ def _run_convert_stage(stage: PipelineStage, input_parameters, local_test: bool,
             return stage
         logger.info(f"Converting: {reason}")
 
-        convert.check_limits(header, os.path.getsize(local_input))
-        convert.check_disk(work_dir, os.path.getsize(local_input))
+        input_size = os.path.getsize(local_input)
+        convert.check_limits(header, input_size)
+
+        # GDAL describes the file once: the longitude extent (an antimeridian crossing is refused) and the
+        # nodata values (a source with nodata is converted through a mask band).
+        memory = convert.task_memory_bytes()
+        info = convert.inspect(local_input, memory)
+        convert.check_antimeridian(info)
+        source = convert.prepare_source(local_input, work_dir, info, memory)
+        pixels = convert.estimate_output_pixels(
+            header.width, header.height, convert.warped_size(source, work_dir, memory))
+        output_bytes = convert.estimate_output_bytes(header, pixels)
+        logger.info(f"Estimated output: up to {pixels} pixels, {output_bytes} bytes uncompressed")
+        convert.check_disk(work_dir, output_bytes, input_size)
 
         output_name = convert.derived_output_name(input_name)
         local_output = os.path.join(output_dir, output_name)
-        convert.convert(local_input, local_output, params)
+        convert.convert(source, local_output, params)
         convert.validate_output(local_output)
         out_header = read_header(local_output)
 

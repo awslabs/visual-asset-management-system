@@ -23,7 +23,7 @@
         "allowCustomTemplateOverride": true,
         "inputFileFilters": {
             "allow": ["*.tif", "*.tiff"],
-            "exclude": ["*.cog.tif"]
+            "exclude": []
         }
     }
 }

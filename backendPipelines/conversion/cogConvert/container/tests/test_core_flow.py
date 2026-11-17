@@ -258,8 +258,14 @@ def test_main_reports_an_unexpected_error_on_the_task_token(monkeypatch):
     from cog_convert_pipeline import __main__ as entry
     from cog_convert_pipeline.utils.aws import sfn
 
+    import signal
+
     sent = []
+    previous = signal.getsignal(signal.SIGTERM)
     monkeypatch.setattr(sfn, "send_task_failure", lambda msg="": sent.append(msg))
     monkeypatch.setattr(entry.sys, "argv", ["prog", "{not json"])
-    assert entry.main() == 1
+    try:
+        assert entry.main() == 1
+    finally:
+        signal.signal(signal.SIGTERM, previous)
     assert len(sent) == 1

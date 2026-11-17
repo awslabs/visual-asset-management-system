@@ -140,18 +140,21 @@ def upload(bucket_name: str, object_key: str, file_path: str) -> str | None:
 
 
 class ProgressPercentage:
+    """Upload progress, logged once each time another quarter of the file has gone (a callback arrives for every
+    chunk, so testing the percentage alone logs the same line hundreds of times)."""
+
     def __init__(self, filename: str):
         self._filename = filename
-        self._size = float(os.path.getsize(filename))
+        self._size = float(os.path.getsize(filename)) or 1.0
         self._seen_so_far = 0
+        self._logged_quarter = 0
         self._lock = threading.Lock()
 
     def __call__(self, bytes_amount: int) -> None:
         with self._lock:
             self._seen_so_far += bytes_amount
             percentage = (self._seen_so_far / self._size) * 100
-            if int(percentage) % 25 == 0:
-                logger.info(
-                    f"Upload progress: {self._filename} "
-                    f"{percentage:.1f}%"
-                )
+            quarter = int(percentage // 25)
+            if quarter > self._logged_quarter:
+                self._logged_quarter = quarter
+                logger.info(f"Upload progress: {self._filename} {min(quarter * 25, 100)}%")

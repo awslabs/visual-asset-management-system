@@ -26,12 +26,15 @@ def _templates():
 
 @pytest.mark.unit
 class TestCogConvertBundle:
-    def test_pipeline_filters_accept_tiffs_and_exclude_its_own_output(self):
+    def test_pipeline_filters_accept_tiffs_and_leave_manual_runs_unrestricted(self):
+        # The pipeline excludes nothing by name: a user's own `scene.cog.tif` in another CRS can still be
+        # converted by hand, and a COG in EPSG:3857 is skipped cleanly by the container.
         filters = _load("pipeline.json")["systemConfig"]["inputFileFilters"]
-        assert set(filters["allow"]) == _ACCEPTED and filters["exclude"] == _EXCLUDED
+        assert set(filters["allow"]) == _ACCEPTED and filters["exclude"] == []
 
-    def test_the_trigger_has_the_same_filters_as_the_pipeline(self):
-        # Two separately stored records: the trigger's filters are PUT to the trigger route.
+    def test_the_trigger_excludes_the_pipelines_own_output(self):
+        # The upload trigger is where a result could be re-fed (a chaining workflow fires on a workflow's
+        # output), so it is the one place the name is excluded. The TRIGGER's accepted list matches the pipeline's.
         trigger = _load("workflow.json")["triggers"][0]
         assert set(trigger["inputFileFilters"]["allow"]) == _ACCEPTED
         assert trigger["inputFileFilters"]["exclude"] == _EXCLUDED

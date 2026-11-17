@@ -2,7 +2,8 @@
 # $ conda create --name <env> --file <this file>
 # platform: linux-64
 # created-by: conda 26.5.3
-# Regenerate: in condaforge/miniforge3:26.5.3-0 run: mamba create -y -n cog -c conda-forge --override-channels python=3.12 pip libgdal-core ; conda list -n cog --explicit --sha256
+# Regenerate: in condaforge/miniforge3:26.5.3-0 run: mamba create -y -p /tmp/cogenv -c conda-forge --override-channels python=3.12 pip libgdal-core "libspatialite=5.1.0=lgpl*" ; conda list -p /tmp/cogenv --explicit --sha256
+# The lgpl build of libspatialite is pinned on purpose: the gpl build adds librttopo (GPL-2.0).
 @EXPLICIT
 https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.10.23-hbd8a1cb_0.conda#95619b9c1184be7175392eeb0ee7eeb5ccf25d280951f4225f2d62e725790be3
 https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_7.conda#92a0bb350c7be6a4eedcb4e111c60aefd176018e6b1c009a6e025dbe9bbcd758
@@ -59,7 +60,6 @@ https://conda.anaconda.org/conda-forge/linux-64/freexl-2.0.0-h1f12c17_3.conda#2b
 https://conda.anaconda.org/conda-forge/linux-64/krb5-1.22.2-hbc21106_2.conda#2a5c38c85e63df84c4e69ee71439841ce570d259ae3060627bb9a49a938d66f4
 https://conda.anaconda.org/conda-forge/linux-64/libjxl-0.13.0-heb2dce7_0.conda#a555523a5e99fcbeac07abf60eaee5257a10771e134a945c2c6a5957d7dc171b
 https://conda.anaconda.org/conda-forge/linux-64/libpsl-0.23.1-hd9e3e90_1.conda#09e8effdc89bc5d021349318d32b85594f5b8d8e3ab8f90a85b81f8fe695a566
-https://conda.anaconda.org/conda-forge/linux-64/librttopo-1.1.0-h788ed58_23.conda#b1984cbdc0c80d37e17ced628ae4532d6721539d69299214a624dc9ca1899d47
 https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.54.1-h13e7031_0.conda#07b3c98282022f05781122d073f84e944bfb4299946e8457ece3ce6c384ff78e
 https://conda.anaconda.org/conda-forge/linux-64/libtiff-4.7.2-h6d37cbf_2.conda#3406eed96ee929309ecd3937308d5a81302f4ca2eddd30e832071cbe9121a6c7
 https://conda.anaconda.org/conda-forge/linux-64/libxml2-16-2.15.4-hf3af7cc_1.conda#d1906463070c21f3215cd5de93164f31c44d5bac6ae9b5d8f5adf42b1e304039
@@ -75,7 +75,7 @@ https://conda.anaconda.org/conda-forge/linux-64/libxml2-devel-2.15.4-h7df9aa5_1.
 https://conda.anaconda.org/conda-forge/noarch/packaging-26.3-pyhc364b38_0.conda#c432626b16768b8dab228bfb706f7060c2d462a21c516d240f68f2f902b5a044
 https://conda.anaconda.org/conda-forge/linux-64/proj-9.9.0-h3767062_1.conda#6eb8006173fbcc1548dad7104e2c021175322661d5fd25105763822b7ad99de1
 https://conda.anaconda.org/conda-forge/noarch/setuptools-84.2.1-pyhe730653_0.conda#17add609d1a31c874e39a03935072be59bcafb06d42383eceabea746d12e6025
-https://conda.anaconda.org/conda-forge/linux-64/libspatialite-5.1.0-gpl_h10c4380_123.conda#5a7f0f3ff4ec5c9cffa4a480681c1350a4f9d09c5dfe5eba2d20e867b71c50ce
+https://conda.anaconda.org/conda-forge/linux-64/libspatialite-5.1.0-lgpl_h1d507af_23.conda#d2d54059a6272d4a047eac647c475265dab9d668125790440ee3ca22075e8f1a
 https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda#ba64b29b6d418024cb565081a1799262cb2780d2534ff4c14f76aa858c4286cd
 https://conda.anaconda.org/conda-forge/linux-64/libgdal-core-3.13.3-hfbddf44_11.conda#34eb1e43f5731ea4d8af7a0ac040222d0594d3d17ef04b5e49634705ed832688
 https://conda.anaconda.org/conda-forge/noarch/pip-26.2.2-pyh8b19718_2.conda#27543e132e4f80285e638a08d6d90de631227186ba96901e1e069fa587d9e62f

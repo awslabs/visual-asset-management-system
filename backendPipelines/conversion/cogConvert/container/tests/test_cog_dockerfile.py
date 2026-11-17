@@ -38,11 +38,25 @@ class TestDockerfile:
             assert 0 <= update < upgrade < install, layer
             assert layer.endswith("rm -rf /var/lib/apt/lists/*")
 
-    def test_the_base_is_pinned_by_digest_and_both_stages_use_it(self):
-        text = DOCKERFILE.read_text(encoding="utf-8")
-        assert re.search(r"ARG BASE_IMAGE=condaforge/miniforge3:[\w.-]+@sha256:[0-9a-f]{64}", text)
+    def test_each_stage_is_pinned_by_digest_inline(self):
+        # An inline FROM, not `FROM ${ARG}`: a scanner reads the reference as written (CKV_DOCKER_7).
         froms = [i for i in _instructions() if i.startswith("FROM ")]
-        assert len(froms) == 2 and all("${BASE_IMAGE}" in f for f in froms)
+        assert len(froms) == 2
+        for line in froms:
+            assert re.search(r"@sha256:[0-9a-f]{64}( AS \w+)?$", line), line
+            assert "${" not in line
+
+    def test_the_runtime_stage_is_a_slim_base_that_receives_only_the_gdal_environment(self):
+        # The first review found 7 Critical findings under /opt/conda: the runtime stage was the whole miniforge
+        # base. The runtime stage is a Debian slim and copies /opt/cog from the build stage and nothing else.
+        instructions = _instructions()
+        froms = [i for i in instructions if i.startswith("FROM ")]
+        assert "miniforge" in froms[0] and "miniforge" not in froms[1] and "slim" in froms[1]
+        runtime = instructions[instructions.index(froms[1]):]
+        copies = [i for i in runtime if i.startswith("COPY ")]
+        assert copies[0] == "COPY --from=build /opt/cog /opt/cog"
+        assert [c for c in copies if c.startswith("COPY --from")] == [copies[0]]
+        assert not any("conda" in i for i in runtime if i.startswith(("RUN", "ENV", "ENTRYPOINT")))
 
     def test_conda_packages_come_from_an_explicit_hash_list(self):
         lines = [x for x in (CONTAINER / "conda-explicit.txt").read_text().splitlines()
@@ -50,6 +64,9 @@ class TestDockerfile:
         assert lines[0] == "@EXPLICIT"
         packages = lines[1:]
         assert any("/libgdal-core-" in p for p in packages)
+        # GPL-2.0 librttopo arrives only with the gpl build of libspatialite; the lgpl build is pinned.
+        assert any("/libspatialite-" in p and "-lgpl_" in p for p in packages)
+        assert not any("rttopo" in p for p in packages)
         assert all(re.search(r"#[0-9a-f]{64}$", p) for p in packages)
         assert "--file conda-explicit.txt" in DOCKERFILE.read_text()
 
