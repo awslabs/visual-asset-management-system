@@ -43,8 +43,11 @@ const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo, 
                 const isCompleted = index < currentIndex;
                 const jumpable =
                     !!onJumpTo && !isCurrent && (canJumpTo ? canJumpTo(step.id) : isCompleted);
+                // In a step button the badge is hidden from assistive technology: the button's name
+                // carries the step number, and starts with the label shown (Label in Name, #1592).
                 const badge = (
                     <div
+                        aria-hidden={jumpable || undefined}
                         className={`flex shrink-0 items-center justify-center w-8 h-8 rounded-full text-sm font-medium ${
                             isCurrent
                                 ? "bg-blue-600 text-white"
@@ -78,7 +81,7 @@ const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo, 
                             <BusyButton
                                 busy={busy}
                                 onClick={() => onJumpTo?.(step.id)}
-                                aria-label={`Go to step ${step.label}`}
+                                aria-label={`${step.label}: go to step ${index + 1}`}
                                 className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 hover:bg-surface-hover focus:outline-none focus:ring-2 focus:ring-blue-500"
                             >
                                 {badge}

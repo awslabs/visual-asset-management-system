@@ -8,6 +8,13 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Stepper from "./Stepper";
 
+/** The text `element` shows to assistive technology: its aria-hidden parts left out. */
+const visibleText = (element: Element) => {
+    const copy = element.cloneNode(true) as Element;
+    copy.querySelectorAll("[aria-hidden='true']").forEach((node) => node.remove());
+    return (copy.textContent || "").replace(/\s+/g, " ").trim();
+};
+
 const STEPS = [
     { id: "basic", label: "Basic" },
     { id: "tags", label: "Tags and Config Body" },
@@ -24,13 +31,13 @@ describe("Stepper", () => {
         expect(screen.getByText("3")).toBeInTheDocument(); // the upcoming step's number
     });
 
-    it("turns only the completed steps into 'Go to step' buttons and jumps on click", async () => {
+    it("turns only the completed steps into step buttons and jumps on click", async () => {
         const onJumpTo = jest.fn();
         render(<Stepper steps={STEPS} current="tags" onJumpTo={onJumpTo} />);
-        const back = screen.getByRole("button", { name: "Go to step Basic" });
-        expect(screen.queryByRole("button", { name: "Go to step Review" })).toBeNull();
+        const back = screen.getByRole("button", { name: "Basic: go to step 1" });
+        expect(screen.queryByRole("button", { name: "Review: go to step 3" })).toBeNull();
         expect(
-            screen.queryByRole("button", { name: "Go to step Tags and Config Body" })
+            screen.queryByRole("button", { name: "Tags and Config Body: go to step 2" })
         ).toBeNull();
         await userEvent.click(back);
         expect(onJumpTo).toHaveBeenCalledWith("basic");
@@ -42,7 +49,7 @@ describe("Stepper", () => {
         const { rerender } = render(
             <Stepper steps={STEPS} current="review" onJumpTo={onJumpTo} busy />
         );
-        const basic = screen.getByRole("button", { name: "Go to step Basic" });
+        const basic = screen.getByRole("button", { name: "Basic: go to step 1" });
         expect(basic).toHaveAttribute("aria-disabled", "true");
         expect(basic).not.toBeDisabled();
         await user.click(basic);
@@ -67,10 +74,10 @@ describe("Stepper", () => {
                 canJumpTo={(id) => id === "review"}
             />
         );
-        expect(screen.getByRole("button", { name: "Go to step Review" })).toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: "Go to step Basic" })).toBeNull();
+        expect(screen.getByRole("button", { name: "Review: go to step 3" })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Basic: go to step 1" })).toBeNull();
         expect(
-            screen.queryByRole("button", { name: "Go to step Tags and Config Body" })
+            screen.queryByRole("button", { name: "Tags and Config Body: go to step 2" })
         ).toBeNull();
     });
 
@@ -89,9 +96,26 @@ describe("Stepper", () => {
         }
     });
 
+    it("names each step button by the label it shows, then its number (#1592)", () => {
+        // Basic is completed (its badge is a check mark) and Review is ahead (its badge is "3").
+        render(
+            <Stepper steps={STEPS} current="tags" onJumpTo={jest.fn()} canJumpTo={() => true} />
+        );
+        const buttons = screen.getAllByRole("button");
+        expect(buttons).toHaveLength(2);
+        for (const button of buttons) {
+            // The badge is hidden from assistive technology: the name carries the step number.
+            const shown = visibleText(button);
+            expect(["Basic", "Review"]).toContain(shown);
+            expect(button).toHaveAccessibleName(expect.stringMatching(new RegExp(`^${shown}: `)));
+        }
+        expect(buttons[0]).toHaveAccessibleName("Basic: go to step 1");
+        expect(buttons[1]).toHaveAccessibleName("Review: go to step 3");
+    });
+
     it("keeps a compact jumpable step named by its label", () => {
         render(<Stepper steps={STEPS} current="review" onJumpTo={jest.fn()} />);
-        const back = screen.getByRole("button", { name: "Go to step Basic" });
+        const back = screen.getByRole("button", { name: "Basic: go to step 1" });
         expect(screen.getByText("Basic")).toHaveClass("sr-only");
         expect(back).toContainElement(screen.getByText("Basic"));
     });

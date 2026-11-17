@@ -308,6 +308,12 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
             cell: (item: AssetVersion) => {
                 const isSelected = isVersionSelectedForComparison(item);
                 const selectionIndex = getComparisonSelectionIndex(item);
+                // Each button's name starts with its visible text (WCAG 2.5.3 Label in Name, #1592).
+                const selectText = isSelected
+                    ? selectionIndex > -1
+                        ? `Selected (${selectionIndex + 1})`
+                        : "Selected"
+                    : "Select for Comparison";
 
                 return (
                     <SpaceBetween direction="horizontal" size="xs">
@@ -335,15 +341,11 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                             iconName={isSelected ? "check" : "add-plus"}
                             ariaLabel={
                                 isSelected
-                                    ? `Remove version ${item.Version} from comparison`
-                                    : `Add version ${item.Version} to comparison`
+                                    ? `${selectText}: remove version ${item.Version} from comparison`
+                                    : `${selectText}: version ${item.Version}`
                             }
                         >
-                            {isSelected
-                                ? selectionIndex > -1
-                                    ? `Selected (${selectionIndex + 1})`
-                                    : "Selected"
-                                : "Select for Comparison"}
+                            {selectText}
                         </Button>
                         <Button
                             variant="normal"
@@ -357,7 +359,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                                 handleVersionSelectionForComparison(item, true);
                             }}
                             iconName="copy"
-                            ariaLabel={`Compare version ${item.Version} with current files`}
+                            ariaLabel={`Compare with Current: version ${item.Version}`}
                         >
                             Compare with Current
                         </Button>
