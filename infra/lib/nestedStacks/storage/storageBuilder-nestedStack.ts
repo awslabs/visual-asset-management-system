@@ -1773,15 +1773,11 @@ export function storageResourcesBuilder(
     // feature switch (access is decided only by authorization). Encrypted with the shared CMK when
     // app.useKmsCmkEncryption is on (dynamodbDefaultProps); removal policy RETAIN like every VAMS table,
     // and auto-named (no explicit tableName), so a retained table never collides with a redeploy.
-    const auditLogQueriesStorageTable = new dynamodb.Table(
-        scope,
-        "AuditLogQueriesStorageTable",
-        {
-            ...dynamodbDefaultProps,
-            partitionKey: { name: "queryId", type: dynamodb.AttributeType.STRING },
-            timeToLiveAttribute: "expiresAt",
-        }
-    );
+    const auditLogQueriesStorageTable = new dynamodb.Table(scope, "AuditLogQueriesStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: { name: "queryId", type: dynamodb.AttributeType.STRING },
+        timeToLiveAttribute: "expiresAt",
+    });
     auditLogQueriesStorageTable.addGlobalSecondaryIndex({
         indexName: AUDIT_LOG_OPEN_QUERIES_INDEX,
         partitionKey: { name: "openKey", type: dynamodb.AttributeType.STRING },

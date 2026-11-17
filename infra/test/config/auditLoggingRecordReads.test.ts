@@ -39,7 +39,10 @@ describe("resolveAuditLoggingConfig", () => {
         ["the key is null", appWith({ recordReads: null })],
     ])("records reads when %s", (_label, config) => {
         Config.resolveAuditLoggingConfig(config);
-        expect(config.app.auditLogging).toEqual({ recordReads: true, search: Config.AUDIT_SEARCH_DEFAULTS });
+        expect(config.app.auditLogging).toEqual({
+            recordReads: true,
+            search: Config.AUDIT_SEARCH_DEFAULTS,
+        });
     });
 
     test.each([true, false])("keeps an explicit %s", (value) => {
@@ -68,7 +71,10 @@ describe("the shipped config files and the ConfigBuilder", () => {
         ["config.template.govcloud.json", govcloudTemplate],
         ["config.template.eusovereign.json", eusovereignTemplate],
     ])("%s records reads", (_name, file: any) => {
-        expect(file.app.auditLogging).toEqual({ recordReads: true, search: Config.AUDIT_SEARCH_DEFAULTS });
+        expect(file.app.auditLogging).toEqual({
+            recordReads: true,
+            search: Config.AUDIT_SEARCH_DEFAULTS,
+        });
     });
 
     test.each(["commercial", "govcloud", "eusovereign"] as const)(

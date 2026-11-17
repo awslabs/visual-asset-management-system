@@ -82,7 +82,9 @@ describe.each(TEMPLATES)("audit log search infrastructure (%s)", (name) => {
             expect(JSON.stringify(resource)).not.toMatch(/arn:aws/);
             expect(JSON.stringify(resource)).toMatch(/AuditLogGroup.*Arn/);
         }
-        const queryIdActions = statements.filter((st) => actionsOf(st).includes("logs:GetQueryResults"));
+        const queryIdActions = statements.filter((st) =>
+            actionsOf(st).includes("logs:GetQueryResults")
+        );
         expect(queryIdActions).toHaveLength(1);
         expect(actionsOf(queryIdActions[0]).sort()).toEqual([
             "logs:DescribeQueries",
@@ -104,7 +106,8 @@ describe.each(TEMPLATES)("audit log search infrastructure (%s)", (name) => {
     });
 
     test("no role holds a destructive Logs action on an audit log group", () => {
-        const names = (st: any) => ([] as unknown[]).concat(st.Resource ?? []).map((r) => JSON.stringify(r));
+        const names = (st: any) =>
+            ([] as unknown[]).concat(st.Resource ?? []).map((r) => JSON.stringify(r));
         const onAuditGroup = (st: any) => names(st).some((r) => /AuditLogGroup/.test(r));
         const offenders = allStatements(synth)
             .filter((st) => st.Effect === "Allow")
@@ -134,9 +137,9 @@ describe.each(TEMPLATES)("audit log search infrastructure (%s)", (name) => {
         const indexes = table.properties.GlobalSecondaryIndexes ?? [];
         expect(indexes.map((i: any) => i.IndexName)).toEqual(["OpenQueriesIndex"]);
         expect(indexes[0].KeySchema[0]).toEqual({ AttributeName: "openKey", KeyType: "HASH" });
-        expect((table as any).raw?.DeletionPolicy ?? (table as any).deletionPolicy ?? "Retain").toBe(
-            "Retain"
-        );
+        expect(
+            (table as any).raw?.DeletionPolicy ?? (table as any).deletionPolicy ?? "Retain"
+        ).toBe("Retain");
     });
 
     test("the table name is published for the handler to resolve", () => {

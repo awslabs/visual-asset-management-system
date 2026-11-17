@@ -874,7 +874,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         return validation_error(body={'message': "Method not allowed"}, event=event)
 
     except ValidationError as v:
-        logger.info("Audit request validation failed")
+        logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         return general_error(body={'message': str(v)}, event=event)

@@ -99,23 +99,6 @@ class ExportAuditQueryRequestModel(BaseModel, extra='ignore'):
         return values
 
 
-######################## Audit API Response Models ##########################
-
-class AuditQueryStartedResponseModel(BaseModel):
-    """Response of a started search."""
-    queryId: str
-    status: str
-
-
-class AuditLogGroupModel(BaseModel):
-    """One log group the caller may search."""
-    key: str
-    label: str
-    prefix: str
-    description: str
-    sensitivity: List[str] = []
-
-
 def parse_start_body(body: Any) -> StartAuditQueryRequestModel:
     """The start request of a raw body object (the model wraps it as ``filters``)."""
     return StartAuditQueryRequestModel(filters=body)

@@ -992,8 +992,9 @@ export function validateZipDownloadsConfig(config: ConfigPublic): void {
  * a value that is not an integer in range is a configuration error. Exported for the config tests.
  */
 export function resolveAuditLoggingConfig(config: ConfigPublic): void {
-    const app = config.app as ConfigPublic["app"] & { auditLogging?: unknown };
+    const app = config.app as unknown as { auditLogging?: unknown };
     if (app.auditLogging === undefined || app.auditLogging === null) {
+        // `search` is filled with its defaults below.
         app.auditLogging = { recordReads: true };
     } else if (typeof app.auditLogging !== "object" || Array.isArray(app.auditLogging)) {
         throw new Error(
@@ -1052,14 +1053,39 @@ function resolveAuditSearchConfig(block: { search?: unknown }, config: ConfigPub
         }
     }
     const resolved = {
-        maxQueryWindowDays: auditSearchInteger(search, "maxQueryWindowDays", 1, AUDIT_SEARCH_CEILINGS.maxQueryWindowDays),
+        maxQueryWindowDays: auditSearchInteger(
+            search,
+            "maxQueryWindowDays",
+            1,
+            AUDIT_SEARCH_CEILINGS.maxQueryWindowDays
+        ),
         maxRows: auditSearchInteger(search, "maxRows", 1, AUDIT_SEARCH_CEILINGS.maxRows),
-        maxConcurrentQueries: auditSearchInteger(search, "maxConcurrentQueries", 1, AUDIT_SEARCH_CEILINGS.maxConcurrentQueries),
+        maxConcurrentQueries: auditSearchInteger(
+            search,
+            "maxConcurrentQueries",
+            1,
+            AUDIT_SEARCH_CEILINGS.maxConcurrentQueries
+        ),
         maxConcurrentQueriesPerUser: 0,
-        queryDeadlineSeconds: auditSearchInteger(search, "queryDeadlineSeconds", 10, AUDIT_SEARCH_CEILINGS.queryDeadlineSeconds),
+        queryDeadlineSeconds: auditSearchInteger(
+            search,
+            "queryDeadlineSeconds",
+            10,
+            AUDIT_SEARCH_CEILINGS.queryDeadlineSeconds
+        ),
         longPollWaitSeconds: 0,
-        maxContainsTermLength: auditSearchInteger(search, "maxContainsTermLength", 3, AUDIT_SEARCH_CEILINGS.maxContainsTermLength),
-        maxContainsTerms: auditSearchInteger(search, "maxContainsTerms", 1, AUDIT_SEARCH_CEILINGS.maxContainsTerms),
+        maxContainsTermLength: auditSearchInteger(
+            search,
+            "maxContainsTermLength",
+            3,
+            AUDIT_SEARCH_CEILINGS.maxContainsTermLength
+        ),
+        maxContainsTerms: auditSearchInteger(
+            search,
+            "maxContainsTerms",
+            1,
+            AUDIT_SEARCH_CEILINGS.maxContainsTerms
+        ),
     };
     // The per-user cap can never exceed the VAMS-wide cap. A default per-user cap larger than a
     // lowered VAMS-wide cap follows the VAMS-wide cap; an explicit one above it is an error.
@@ -1078,12 +1104,18 @@ function resolveAuditSearchConfig(block: { search?: unknown }, config: ConfigPub
     }
     // The long poll holds one API request, so it stays below the API integration timeout.
     const apiTimeout =
-        config.app.api?.apiGatewayRest?.apiGatewayTimeoutTime ?? API_GATEWAY_DEFAULT_TIMEOUT_SECONDS;
+        config.app.api?.apiGatewayRest?.apiGatewayTimeoutTime ??
+        API_GATEWAY_DEFAULT_TIMEOUT_SECONDS;
     const longPollMax = Math.min(
         AUDIT_SEARCH_CEILINGS.longPollWaitSeconds,
         apiTimeout - AUDIT_SEARCH_POLL_HEADROOM_SECONDS
     );
-    resolved.longPollWaitSeconds = auditSearchInteger(search, "longPollWaitSeconds", 0, longPollMax);
+    resolved.longPollWaitSeconds = auditSearchInteger(
+        search,
+        "longPollWaitSeconds",
+        0,
+        longPollMax
+    );
     block.search = resolved;
 }
 

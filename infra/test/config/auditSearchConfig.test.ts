@@ -19,7 +19,9 @@ import { makeDefaultConfig } from "../../../documentation/docusaurus-site/src/co
 import { evaluateRules } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
 
 function configWith(search: unknown, apiTimeout?: number): any {
-    const config: any = { app: { auditLogging: { recordReads: true }, api: { apiGatewayRest: {} } } };
+    const config: any = {
+        app: { auditLogging: { recordReads: true }, api: { apiGatewayRest: {} } },
+    };
     if (search !== undefined) config.app.auditLogging.search = search;
     if (apiTimeout !== undefined) config.app.api.apiGatewayRest.apiGatewayTimeoutTime = apiTimeout;
     return config;
@@ -42,29 +44,50 @@ describe("resolveAuditLoggingConfig: search limits", () => {
     });
 
     test("an explicit value is kept and the others default", () => {
-        expect(resolved({ maxRows: 2500 })).toEqual({ ...Config.AUDIT_SEARCH_DEFAULTS, maxRows: 2500 });
+        expect(resolved({ maxRows: 2500 })).toEqual({
+            ...Config.AUDIT_SEARCH_DEFAULTS,
+            maxRows: 2500,
+        });
     });
 
     test.each([
-        ["maxQueryWindowDays", 0], ["maxQueryWindowDays", 367], ["maxRows", 10001], ["maxRows", 0],
-        ["maxConcurrentQueries", 21], ["queryDeadlineSeconds", 901], ["queryDeadlineSeconds", 9],
-        ["maxContainsTermLength", 129], ["maxContainsTermLength", 2], ["maxContainsTerms", 6],
-        ["maxRows", 1.5], ["maxRows", "100"], ["maxRows", true], ["maxRows", []],
+        ["maxQueryWindowDays", 0],
+        ["maxQueryWindowDays", 367],
+        ["maxRows", 10001],
+        ["maxRows", 0],
+        ["maxConcurrentQueries", 21],
+        ["queryDeadlineSeconds", 901],
+        ["queryDeadlineSeconds", 9],
+        ["maxContainsTermLength", 129],
+        ["maxContainsTermLength", 2],
+        ["maxContainsTerms", 6],
+        ["maxRows", 1.5],
+        ["maxRows", "100"],
+        ["maxRows", true],
+        ["maxRows", []],
     ])("refuses %s = %p", (key, value) => {
         expect(() => resolved({ [key as string]: value })).toThrow(
-            new RegExp(`^Configuration Error: app\\.auditLogging\\.search\\.${key} must be an integer`)
+            new RegExp(
+                `^Configuration Error: app\\.auditLogging\\.search\\.${key} must be an integer`
+            )
         );
     });
 
-    test.each([true, "x", 3, ["x"]])("refuses a search block that is not an object: %p", (value) => {
-        expect(() => resolved(value)).toThrow(/app\.auditLogging\.search must be an object/);
-    });
+    test.each([true, "x", 3, ["x"]])(
+        "refuses a search block that is not an object: %p",
+        (value) => {
+            expect(() => resolved(value)).toThrow(/app\.auditLogging\.search must be an object/);
+        }
+    );
 
     test("the per-user cap is at most the VAMS-wide cap", () => {
         expect(() => resolved({ maxConcurrentQueries: 3, maxConcurrentQueriesPerUser: 4 })).toThrow(
             /maxConcurrentQueriesPerUser must be an integer from 1 to 3/
         );
-        expect(resolved({ maxConcurrentQueries: 3, maxConcurrentQueriesPerUser: 3 }).maxConcurrentQueriesPerUser).toBe(3);
+        expect(
+            resolved({ maxConcurrentQueries: 3, maxConcurrentQueriesPerUser: 3 })
+                .maxConcurrentQueriesPerUser
+        ).toBe(3);
     });
 
     test("a lowered VAMS-wide cap lowers the default per-user cap with it", () => {
@@ -73,7 +96,9 @@ describe("resolveAuditLoggingConfig: search limits", () => {
 
     test("the long poll stays below the API timeout", () => {
         expect(resolved({}, 29).longPollWaitSeconds).toBe(20);
-        expect(() => resolved({ longPollWaitSeconds: 26 }, 300)).toThrow(/longPollWaitSeconds must be an integer from 0 to 25/);
+        expect(() => resolved({ longPollWaitSeconds: 26 }, 300)).toThrow(
+            /longPollWaitSeconds must be an integer from 0 to 25/
+        );
         expect(() => resolved({ longPollWaitSeconds: 21 }, 20)).toThrow(/from 0 to 16/);
         expect(resolved({ longPollWaitSeconds: 0 }, 29).longPollWaitSeconds).toBe(0);
     });
@@ -81,7 +106,10 @@ describe("resolveAuditLoggingConfig: search limits", () => {
     test("an upgrade whose config lacks the block behaves with the defaults", () => {
         const config: any = { app: { api: { apiGatewayRest: {} } } };
         Config.resolveAuditLoggingConfig(config);
-        expect(config.app.auditLogging).toEqual({ recordReads: true, search: Config.AUDIT_SEARCH_DEFAULTS });
+        expect(config.app.auditLogging).toEqual({
+            recordReads: true,
+            search: Config.AUDIT_SEARCH_DEFAULTS,
+        });
     });
 });
 
@@ -113,8 +141,12 @@ describe("the shipped config files and the ConfigBuilder", () => {
     });
 
     test("an out-of-range value raises its rule, in line with config.ts", () => {
-        expect(fired((c) => (c.app.auditLogging.search.maxRows = 10001))).toEqual(["audit-search-maxRows-in-range"]);
-        expect(fired((c) => (c.app.auditLogging.search.maxRows = "5"))).toEqual(["audit-search-maxRows-in-range"]);
+        expect(fired((c) => (c.app.auditLogging.search.maxRows = 10001))).toEqual([
+            "audit-search-maxRows-in-range",
+        ]);
+        expect(fired((c) => (c.app.auditLogging.search.maxRows = "5"))).toEqual([
+            "audit-search-maxRows-in-range",
+        ]);
         expect(fired((c) => (c.app.auditLogging.search.maxRows = 10000))).toEqual([]);
         expect(
             fired((c) => {

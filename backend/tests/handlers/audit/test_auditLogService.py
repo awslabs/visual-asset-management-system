@@ -471,7 +471,7 @@ class TestPolling:
     def test_a_second_poller_gets_the_current_status_at_once(self, env):
         handle = started_handle(env)
         env.logs.status = "Running"
-        env.table.items[handle]["pollLeaseUntil"] = NOW + 30
+        env.table.items[handle]["pollLeaseUntil"] = int(time.time()) + 3600
         status, body = get(handle, query={"wait": "20"})
         assert status == 200 and env.logs.polls == 1 and env.sleeps == []
 
