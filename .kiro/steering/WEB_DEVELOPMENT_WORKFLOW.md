@@ -677,7 +677,7 @@ A surface that stays mounted across a login (the side navigation) or that gates 
 
 Any side-navigation entry (a section, link or group in the core, add-on or custom lists) may carry `featuresEnabledRestriction: string[]`, the field name and all-of meaning the viewer config uses: `layout/Navigation.tsx` drops the entry until every listed switch is enabled, re-runs the web-route check when the switches arrive, and strips the field before the items reach `SideNavigation`. An add-on's switch names live in `addons/addonFeatures.ts` (`addonFeaturesEnabled`), each one declared in `infra/common/addonAppFeatures.ts` (`addons/addonFeatures.test.ts`); a fork's live in `custom/customFeatures.ts`.
 
-`VECTORSEARCH` enables the natural-language mode of the search page's Search view; the Executions board offers its `System-Reindex` trigger filter only with it (only the vector reindexer starts such runs). Full flag list: `WEB_FRONTEND.md` section 9.3.
+`VECTORSEARCH` enables the natural-language mode of the search page's Search view; the Executions board offers its `System-Reindex` trigger filter only with it (only the vector reindexer starts such runs), and its `System-ZipDownload` trigger filter only with `ZIPDOWNLOADS` (only Download as Zip starts such runs). Full flag list: `WEB_FRONTEND.md` section 9.3.
 
 ---
 

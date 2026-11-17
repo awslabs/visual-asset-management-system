@@ -61,8 +61,8 @@ Runs of system workflows (workflows shipped with the deployment) are hidden unle
 `--include-system`; the text output then says `System workflow runs hidden`. Filtering to one system
 workflow (`-w` with `--workflow-database-id`) shows its runs unless you pass `--no-include-system`;
 `-w` on its own is not that filter, so a system workflow's runs stay hidden and the text output names
-`--workflow-database-id`. Filtering to a system trigger value, such as `--trigger-type System-Reindex` for the
-vector-search reindexer's runs, or to one execution group (`--group-id`, for example
+`--workflow-database-id`. Filtering to a system trigger value, such as `--trigger-type System-Reindex` for the vector-search reindexer's runs or `--trigger-type System-ZipDownload` for the Download as Zip runs,
+or to one execution group (`--group-id`, for example
 `vec-<runId>-<chunk>`) likewise shows them unless you pass `--no-include-system`. Under `--json-output` each row carries `isSystem`, and `includeSystem`
 reports which applied.
 

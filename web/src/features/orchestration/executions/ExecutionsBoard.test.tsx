@@ -788,6 +788,55 @@ describe("ExecutionsBoard", () => {
         });
     });
 
+    describe("the Zip download trigger filter", () => {
+        afterEach(() => appCache.removeItem("config"));
+
+        it("is offered with Download as Zip on, and sends the stored value unchanged", async () => {
+            appCache.setItem("config", { featuresEnabled: ["ZIPDOWNLOADS"] });
+            const { useExecutions } = require("../api/queries");
+            renderBoard([]);
+
+            const select = screen.getByLabelText("Filter by trigger") as HTMLSelectElement;
+            expect(Array.from(select.options).map((option) => option.value)).toEqual([
+                "",
+                "Manual",
+                "File-Upload",
+                "System-ZipDownload",
+            ]);
+
+            await userEvent.selectOptions(
+                select,
+                screen.getByRole("option", { name: "Zip download" })
+            );
+            await waitFor(() => {
+                const lastFilters =
+                    useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
+                expect(lastFilters.triggerType).toBe("System-ZipDownload");
+            });
+        });
+
+        it("sits after the reindex value when both features are on", () => {
+            appCache.setItem("config", { featuresEnabled: ["VECTORSEARCH", "ZIPDOWNLOADS"] });
+            renderBoard([]);
+
+            const select = screen.getByLabelText("Filter by trigger") as HTMLSelectElement;
+            expect(Array.from(select.options).map((option) => option.value)).toEqual([
+                "",
+                "Manual",
+                "File-Upload",
+                "System-Reindex",
+                "System-ZipDownload",
+            ]);
+        });
+
+        it("is not offered with Download as Zip off, where no such run can exist", () => {
+            appCache.setItem("config", { featuresEnabled: ["VECTORSEARCH"] });
+            renderBoard([]);
+
+            expect(screen.queryByRole("option", { name: "Zip download" })).toBeNull();
+        });
+    });
+
     /**
      * A custom range's lower bound is not optional in the request, only in the form.
      *
