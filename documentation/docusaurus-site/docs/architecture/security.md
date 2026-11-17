@@ -466,6 +466,10 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | `font-src`        | `'self'`                                                                     |
 | `manifest-src`    | `'self'`                                                                     |
 
+:::note[Web workers]
+`worker-src` permits `'self'`, so a viewer can run a decoder in a same-origin web worker. The TIFF/TGA Image Viewer does: its worker is a content-hashed file served from the web application's own `assets/` path (`rasterWorker-<hash>.js`), not a `blob:` or `data:` script, and it loads no other origin. It needs no CSP change and no `allowUnsafeEvalFeatures`: the decoders (`utif2`, `tga-js`, `pako`) are pure JavaScript. If the worker file is blocked or stale, the viewer decodes on the page instead.
+:::
+
 :::note[Framing directives]
 `frame-src` controls which documents VAMS may load into an `<iframe>`; `'self'` plus `blob:` covers same-origin iframe viewers (such as the SuperSplat editor served under `/viewers/supersplat/`) and Blob-URL iframes. A viewer that frames a third-party document needs that document's origin added as well, which is what the Physna Sync add-on contributes in the conditional table below. `frame-ancestors 'self'` controls who may embed VAMS pages in a frame — same-origin only, so external sites cannot frame VAMS (clickjacking protection is preserved) while VAMS-hosted iframe viewers still work. The CloudFront distribution sets a matching `X-Frame-Options: SAMEORIGIN` response header as the legacy equivalent of `frame-ancestors`.
 :::

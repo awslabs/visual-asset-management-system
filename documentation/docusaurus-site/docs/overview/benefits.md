@@ -35,7 +35,7 @@ VAMS leverages Amazon S3 as its storage layer, providing 99.999999999% (11 nines
 
 ## Interactive Visualization
 
-VAMS includes 22 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
+VAMS includes 24 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
 
 -   View 3D meshes (GLTF, GLB, OBJ, FBX, STL, and more) with the Three.js viewer, including scene graph navigation, material editing, and transform controls
 -   Explore point clouds (E57, LAS, LAZ) through the Potree viewer with octree-based streaming
@@ -56,6 +56,7 @@ VAMS provides a configurable pipeline and workflow system that automates common 
 -   **Point Cloud Processing** -- Generate Potree octree representations for browser-based point cloud streaming
 -   **Gaussian Splat Generation** -- Create 3D Gaussian splats from media files using the 3D Reconstruction Toolkit
 -   **3D Preview Thumbnails** -- Generate animated GIF or static image previews from 3D mesh, point cloud, CAD, USD, and Gaussian splat files via headless rendering
+-   **Media Previews** -- Generate JPEG previews for large images and for TGA and TIFF files, and animated GIF previews for video, on the same container (optional, off by default; requires the Global VPC)
 -   **GenAI Metadata Labeling** -- Automatically generate metadata labels using Amazon Bedrock foundation models
 -   **Video SOP/BOM Extraction** -- Transcribe narrated teardown videos with Amazon Transcribe and derive a step-by-step procedure, a bill of materials, a lab summary, and verification key frames with Amazon Bedrock
 -   **GenAI CAD STEP Agent** -- Create or modify a CAD STEP file from a natural-language instruction with a Strands agent that writes, runs and checks CadQuery scripts

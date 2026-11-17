@@ -227,6 +227,7 @@ Each pipeline step in a workflow receives designated Amazon S3 output paths from
 | CAD/Mesh Metadata Extraction       | AWS Lambda (container image)                            | Extract metadata from CAD and mesh files                                                       |
 | Point Cloud Potree Viewer          | AWS Batch (Fargate)                                     | Generate Potree octree data for point cloud visualization                                      |
 | 3D Preview Thumbnail               | AWS Batch (Fargate)                                     | Generate GIF/JPG/PNG preview thumbnails for 3D files                                           |
+| Media Preview Thumbnail            | AWS Batch (Fargate), the 3D Preview Thumbnail container | Generate JPEG/GIF previews for images, TGA/TIFF and video (optional)                           |
 | Gaussian Splatting (Splat Toolbox) | AWS Batch (Fargate)                                     | Generate Gaussian splat reconstructions                                                        |
 | GenAI Metadata 3D Labeling         | AWS Batch (Fargate)                                     | AI-powered metadata labeling using Amazon Bedrock and Amazon Rekognition                       |
 | Video SOP/BOM Extraction           | AWS Batch (Fargate)                                     | Teardown-video transcription and SOP/BOM extraction using Amazon Transcribe and Amazon Bedrock |

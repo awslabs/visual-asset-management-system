@@ -67,6 +67,15 @@ CELL_COLOUR_FIXED_BYTES = 768 * 1024 ** 2
 BYTES_PER_CELL_COLOUR_TRIANGLE = 475
 MIN_CELL_COLOUR_TRIANGLES = 100_000
 
+# Image and video decoding. A decoded raster costs about 4 bytes a pixel (RGBA), and a decode, a mode
+# conversion and a resize each hold one more copy, so a pixel is budgeted at BYTES_PER_IMAGE_PIXEL of
+# the share of memory the raster may take. The pixel count comes from the file's header and is checked
+# before anything is decoded, so a decompression bomb is refused without allocating its raster.
+IMAGE_MEMORY_FRACTION = 0.4
+BYTES_PER_IMAGE_PIXEL = 24
+MIN_IMAGE_PIXELS = 16_000_000
+MAX_IMAGE_PIXELS = 1_000_000_000
+
 # Used when no limit can be read (outside a container).
 FALLBACK_MEMORY_BYTES = 16 * 1024 ** 3
 
@@ -89,10 +98,13 @@ class Budgets:
     points: int
     triangles: int
     splats: int
+    # The most pixels an image the media previews decode may hold (0 when not computed).
+    pixels: int = 0
 
     def describe(self) -> str:
-        return (f"memory={self.memory_bytes / 1024 ** 3:.1f} GiB cpus={self.cpus} "
+        text = (f"memory={self.memory_bytes / 1024 ** 3:.1f} GiB cpus={self.cpus} "
                 f"points={self.points:,} triangles={self.triangles:,} splats={self.splats:,}")
+        return f"{text} pixels={self.pixels:,}" if self.pixels else text
 
 
 def _read(path: str) -> Optional[str]:
@@ -188,6 +200,13 @@ def _budget(per_vcpu, cpus, bytes_each, memory_bytes, floor, ceiling):
     return int(max(floor, min(ceiling, by_cpu, by_memory)))
 
 
+def image_pixel_budget(memory_bytes: int) -> int:
+    """The most pixels an image may hold for a task with ``memory_bytes`` of memory (see
+    IMAGE_MEMORY_FRACTION): at least MIN_IMAGE_PIXELS and at most MAX_IMAGE_PIXELS."""
+    by_memory = int(memory_bytes * IMAGE_MEMORY_FRACTION / BYTES_PER_IMAGE_PIXEL)
+    return int(max(MIN_IMAGE_PIXELS, min(MAX_IMAGE_PIXELS, by_memory)))
+
+
 def cell_colour_triangle_limit(memory_bytes: int) -> int:
     """The most triangles a mesh drawn with per-face colours may hold in a task with ``memory_bytes`` of
     memory, from the corner copy's measured cost (see CELL_COLOUR_MEMORY_FRACTION). The caller also
@@ -209,6 +228,7 @@ def compute_budgets(memory_bytes: Optional[int] = None, cpus: Optional[int] = No
         triangles=_budget(TRIANGLES_PER_VCPU, cpus, BYTES_PER_TRIANGLE, memory_bytes,
                           MIN_TRIANGLES, MAX_TRIANGLES),
         splats=_budget(SPLATS_PER_VCPU, cpus, BYTES_PER_SPLAT, memory_bytes, MIN_SPLATS, MAX_SPLATS),
+        pixels=image_pixel_budget(memory_bytes),
     )
 
 

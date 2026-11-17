@@ -388,6 +388,14 @@ export const PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS = {
 } as const;
 export const PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB = 2;
 
+// The app.pipelines.useMediaPreviews block when the config sets none: every key off, so a deployment
+// upgraded from a release without media previews keeps its behaviour.
+export const PREVIEW_MEDIA_PREVIEWS_DEFAULTS = {
+    enabled: false,
+    autoRegisterAutoTriggerOnFileUpload: false,
+    downscaleSelfPreviewableImages: false,
+} as const;
+
 /** `minGiB`..`maxGiB` in `stepGiB` increments, as MiB. */
 const mibRange = (minGiB: number, maxGiB: number, stepGiB: number): number[] => {
     const values: number[] = [];
@@ -1447,10 +1455,63 @@ export function getConfig(app: cdk.App): Config {
             PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB;
     }
 
+    // Media previews (images, TGA/TIFF and video) share the 3D preview thumbnail container, Batch queue
+    // and state machine, which deploy when either usePreview3dThumbnail or useMediaPreviews is enabled;
+    // each flag only chooses which workflow is registered. A missing block or key is off, so an upgraded
+    // deployment keeps its behaviour. Each key must be a boolean, and the trigger and the downscale
+    // option need the block enabled. The feature is unreleased, so the nested key it briefly had under
+    // usePreview3dThumbnail is refused rather than read.
+    if ((config.app.pipelines.usePreview3dThumbnail as any).mediaPreviews !== undefined) {
+        throw new Error(
+            "Configuration Error: pipelines.usePreview3dThumbnail.mediaPreviews has been renamed to " +
+                "pipelines.useMediaPreviews (a sibling of usePreview3dThumbnail with the same keys). " +
+                "Move the block and delete the old key."
+        );
+    }
+    if (config.app.pipelines.useMediaPreviews == undefined) {
+        config.app.pipelines.useMediaPreviews = { ...PREVIEW_MEDIA_PREVIEWS_DEFAULTS };
+    }
+    {
+        const media = config.app.pipelines.useMediaPreviews as unknown as Record<string, unknown>;
+        if (typeof media !== "object" || media === null || Array.isArray(media)) {
+            throw new Error(
+                "Configuration Error: pipelines.useMediaPreviews must be an object. " +
+                    `Received: ${JSON.stringify(media)}`
+            );
+        }
+        for (const key of Object.keys(PREVIEW_MEDIA_PREVIEWS_DEFAULTS)) {
+            if (media[key] == undefined) {
+                media[key] = false;
+            } else if (typeof media[key] !== "boolean") {
+                throw new Error(
+                    `Configuration Error: pipelines.useMediaPreviews.${key} must be true or ` +
+                        `false. Received: ${JSON.stringify(media[key])}`
+                );
+            }
+        }
+        for (const key of [
+            "autoRegisterAutoTriggerOnFileUpload",
+            "downscaleSelfPreviewableImages",
+        ]) {
+            if (media[key] === true && media.enabled !== true) {
+                throw new Error(
+                    `Configuration Error: pipelines.useMediaPreviews.${key} requires ` +
+                        "pipelines.useMediaPreviews.enabled to be true. Set " +
+                        `useMediaPreviews.enabled to true, or set ${key} to false.`
+                );
+            }
+        }
+    }
+
     // 3D preview thumbnail compute tiers. Each tier's vCPU and memory are the resource overrides of its
     // Batch state, and AWS Batch checks an override against the Fargate task sizes only when a job is
     // submitted -- so an unsupported large-tier pair deploys and then fails every run routed to it.
-    if (config.app.pipelines.usePreview3dThumbnail.enabled) {
+    // The compute tiers apply when the container deploys for either flag; a media-only deployment
+    // takes them from usePreview3dThumbnail (defaults when it names none).
+    if (
+        config.app.pipelines.usePreview3dThumbnail.enabled ||
+        config.app.pipelines.useMediaPreviews.enabled
+    ) {
         const thumbnail = config.app.pipelines.usePreview3dThumbnail;
         for (const tier of ["standard", "large"] as const) {
             const { vcpu, memoryGiB } = thumbnail.computeTiers[tier];
@@ -2526,6 +2587,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useIsaacLabTraining");
     if (config.app.pipelines.usePreview3dThumbnail.enabled)
         vpcRequiringFeatures.push("pipelines.usePreview3dThumbnail");
+    if (config.app.pipelines.useMediaPreviews.enabled)
+        vpcRequiringFeatures.push("pipelines.useMediaPreviews");
     if (config.app.pipelines.useNvidiaCosmos.enabled)
         vpcRequiringFeatures.push("pipelines.useNvidiaCosmos");
     if (config.app.pipelines.useNvidiaCosmos3.enabled)
@@ -5331,6 +5394,20 @@ export interface ConfigPublic {
                     };
                 };
                 largeTierThresholdGiB: number;
+            };
+            /**
+             * Media previews (images, TGA/TIFF and video): a Media Preview Thumbnail workflow on the 3D
+             * preview thumbnail container, which deploys when this or usePreview3dThumbnail is enabled.
+             * A missing block or key means off.
+             */
+            useMediaPreviews: {
+                enabled: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
+                /**
+                 * Also write a smaller JPEG for an image the web already shows as its own preview
+                 * (under 5 MiB), when the JPEG is meaningfully smaller. Off by default.
+                 */
+                downscaleSelfPreviewableImages: boolean;
             };
             useNvidiaCosmos: {
                 enabled: boolean;

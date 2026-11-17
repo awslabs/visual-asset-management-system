@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import { useForm } from "react-hook-form";
 import type { Pipeline, PipelineCreateRequest, ExecutionType } from "../types";
 import {
+    DEADLINE_JOB_SETTING_RANGES,
     DEADLINE_TEMPLATE_TYPES,
     omitBlankEventBus,
     pruneExecutionConfig,
@@ -942,6 +943,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                         )}
                                         type="number"
                                         min={0}
+                                        max={DEADLINE_JOB_SETTING_RANGES.priority.max}
                                         disabled={isDeadlineCloudDisabled}
                                         className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                     />
@@ -970,6 +972,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                         )}
                                         type="number"
                                         min={0}
+                                        max={DEADLINE_JOB_SETTING_RANGES.maxRetriesPerTask.max}
                                         disabled={isDeadlineCloudDisabled}
                                         className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                     />
@@ -1000,6 +1003,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                         )}
                                         type="number"
                                         min={0}
+                                        max={DEADLINE_JOB_SETTING_RANGES.maxFailedTasksCount.max}
                                         disabled={isDeadlineCloudDisabled}
                                         className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                     />

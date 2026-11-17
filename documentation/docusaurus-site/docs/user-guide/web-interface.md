@@ -95,7 +95,7 @@ The search page provides several mechanisms for finding assets:
 
 ### Preview Thumbnails
 
-When assets have preview images, thumbnails are displayed alongside each asset in all view modes. Previews are generated automatically by configured pipelines or can be uploaded manually during asset creation.
+When assets have preview images, thumbnails are displayed alongside each asset in all view modes. Previews are generated automatically by configured pipelines (3D files, and, when media previews are enabled, large images, TGA, TIFF and video) or can be uploaded manually during asset creation. An image under 5 MiB in an allowed preview format is shown as its own preview.
 
 ### Navigating to an Asset
 
@@ -157,7 +157,7 @@ When you select a file in the file manager and choose to view it, VAMS opens a d
 
 ### Supported Viewer Types
 
-VAMS includes 22 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images, video, audio, documents, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
+VAMS includes 24 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images (including TIFF and TGA, which browsers cannot show, plus WebP and BMP), video, audio, documents, text files such as NVIDIA MDL materials, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
@@ -185,7 +185,7 @@ The wizard consists of five steps:
 
 ### Pipelines Page
 
-The **Pipelines** page lists all registered processing pipelines. Pipelines define individual processing steps such as 3D model conversion, point cloud processing, preview thumbnail generation, or AI-based labeling.
+The **Pipelines** page lists all registered processing pipelines. Pipelines define individual processing steps such as 3D model conversion, point cloud processing, preview thumbnail generation (3D files, images and video), or AI-based labeling.
 
 Each pipeline entry shows its name and id, its execution type, its owning database, its category, and how many configuration templates it carries, together with **Disabled** or **Archived** where either applies. Entries are grouped by category or by database, and the list can be filtered by execution type, status, and database.
 
