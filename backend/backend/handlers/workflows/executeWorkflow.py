@@ -2398,12 +2398,14 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     # A system-pipeline launch that asked for a concurrency slot also claims one of the workflow's slots,
     # so at most the count it named of such runs hold one at a time. With every candidate held, the locks
     # just taken are released and SystemSlotsBusy tells the launcher to wait. The slot then travels with
-    # the locks: released from memory below, or by the terminal steps through the holder index.
+    # the locks: released from memory below, or by the terminal steps through the holder index. Its row
+    # outlives the run's output-ingestion wait too, which the definition adds after the pipelines (#1141).
     if system_slot_keys:
         try:
             slot_key = el.acquire_system_slot(
                 dynamodb.Table(workflow_execution_locks_table), system_slot_keys, execution_id,
-                el.system_slot_ttl_seconds(pipeline_records),
+                el.system_slot_ttl_seconds(
+                    pipeline_records, ingestion_wait_seconds=workflowAsl._max_wait_hours() * 3600),
                 stranded_after_seconds=_launch_timeout_seconds() + el.LOCK_TAKEOVER_MARGIN_SECONDS,
                 holder_has_record=_holder_still_running(workflow_database_id, workflow_id))
         except Exception:

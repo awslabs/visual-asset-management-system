@@ -31,6 +31,8 @@ from tests.handlers.workflows.test_execute_per_input_file_version_lock import ( 
 ONE_FILE = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
 SLOT = [el.system_slot_key(WF_DB, WF_ID, index) for index in range(3)]
 SYSTEM_TRIGGER = "System-TestFeature"
+# The workflow definition module the launch reads the output-ingestion wait from.
+workflowAsl = ewv2.workflowAsl
 
 
 def _system_call(slots=None, marker=True, user="SYSTEM_USER", trigger=SYSTEM_TRIGGER, body=None):
@@ -73,12 +75,29 @@ class TestAMarkedLaunchClaimsASlot:
         slot = next(put["Item"] for put in table.puts if put["Item"]["lockKey"] == SLOT[0])
         lock = next(put["Item"] for put in table.puts if put["Item"]["lockKey"] == KEY_F)
         assert SLOT[0] == f"{WF_DB}:{WF_ID}|systemSlot|0"
-        # The harness pipeline's taskTimeout (100000 s) is above the lock's one-day floor, so both rows
-        # expire together here; a shorter pipeline shows the slot's bound has no floor.
-        assert slot["expiresAt"] == lock["expiresAt"]
+        # The harness pipeline's taskTimeout is 100000 s. The slot row lasts the pipelines' bound plus
+        # the output-ingestion wait the definition allows after them (a run waiting for outputs handed
+        # to the copy engine still holds its slot, #1141) plus the margin; a shorter pipeline shows the
+        # slot's bound has no day floor.
+        wait = workflowAsl._max_wait_hours() * 3600
+        assert slot["expiresAt"] - el._epoch_of_iso(slot["acquiredAt"]) == 100000 + wait + 1800
+        assert lock["expiresAt"] - el._epoch_of_iso(lock["acquiredAt"]) == el.lock_ttl_seconds(
+            [{"executionConfig": {"taskTimeout": "100000"}}])
         assert slot["lockScope"] == el.LOCK_SCOPE_SYSTEM_SLOT == "systemSlot"
         assert el.system_slot_ttl_seconds([{"executionConfig": {"taskTimeout": "18000"}}]) == 18000 + 1800
+        assert el.system_slot_ttl_seconds([{"executionConfig": {"taskTimeout": "18000"}}],
+                                          ingestion_wait_seconds=wait) == 18000 + wait + 1800
         assert el.lock_ttl_seconds([{"executionConfig": {"taskTimeout": "18000"}}]) == 86400 + 1800
+
+    def test_a_slot_outlives_the_longest_output_ingestion_wait(self):
+        """A run whose pipelines finished can wait MAX_OUTPUT_INGESTION_WAIT_HOURS for its large
+        outputs (#1141) and stays RUNNING meanwhile; its slot row must not expire before that wait
+        ends, or a second slot-holding run could start while it still holds one."""
+        table = _LockTable()
+        _run(table, tokens=("SYSTEM_USER",), event=_system_call(slots={"count": 3, "candidates": [0]}))
+        slot = next(put["Item"] for put in table.puts if put["Item"]["lockKey"] == SLOT[0])
+        lifetime = slot["expiresAt"] - el._epoch_of_iso(slot["acquiredAt"])
+        assert lifetime >= 100000 + workflowAsl.MAX_OUTPUT_INGESTION_WAIT_HOURS * 3600
 
     def test_every_candidate_held_answers_429_starts_nothing_and_releases_the_locks_it_took(self):
         table = _LockTable(held={SLOT[0]: "E-a", SLOT[1]: "E-b"})

@@ -471,12 +471,18 @@ def system_slot_keys(workflow_database_id, workflow_id, slot_count) -> List[str]
     return [system_slot_key(workflow_database_id, workflow_id, index) for index in range(count)]
 
 
-def system_slot_ttl_seconds(pipeline_records) -> int:
-    """Lifetime of a slot row: the longest the run can last (the sum of its pipelines' bounds, as for a
-    lock) plus the margin. Unlike a lock it is not lifted to a day, so a slot whose holder was lost is
-    usable again once no run could still hold it."""
+def system_slot_ttl_seconds(pipeline_records, ingestion_wait_seconds=0) -> int:
+    """Lifetime of a slot row: the longest the run can last plus the margin. That is the sum of its
+    pipelines' bounds (as for a lock) and `ingestion_wait_seconds`, the longest the run then waits for
+    outputs handed to the large object copy engine (the workflow definition's output-ingestion wait), so
+    a run waiting on its outputs still holds its slot. Unlike a lock it is not lifted to a day, so a slot
+    whose holder was lost is usable again once no run could still hold it."""
     total = sum(pipeline_timeout_seconds(record) for record in pipeline_records or [])
-    return total + LOCK_TTL_MARGIN_SECONDS
+    try:
+        wait = max(0, int(ingestion_wait_seconds or 0))
+    except (TypeError, ValueError):
+        wait = 0
+    return total + wait + LOCK_TTL_MARGIN_SECONDS
 
 
 def slot_is_free(item, now_epoch) -> bool:
