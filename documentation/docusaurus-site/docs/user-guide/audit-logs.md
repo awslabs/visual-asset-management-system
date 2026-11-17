@@ -55,7 +55,7 @@ The table shows one row per record, on one line (long values are cut and shown i
 
 Notices above the table explain what the result may not show:
 
--   The search reached its record limit, so more matching records may exist. Narrow the time range.
+-   The search reached its record limit, so more matching records may exist. Narrow the time range. When a search is large, the notice is not proof that a result without it is complete: narrow the time range whenever the table holds as many rows as the record limit.
 -   Checking the records took longer than the time allowed, so only part of the result is shown.
 -   A value you gave could not be used to narrow the scan, so more of the log was read. The result is still exact.
 -   Some records hold values that were cut short when they were written.
