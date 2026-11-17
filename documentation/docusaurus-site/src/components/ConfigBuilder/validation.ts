@@ -512,6 +512,47 @@ function s3taRequested(cfg: ConfigShape): boolean {
     );
 }
 
+/**
+ * Mirror of config.ts `ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION` (decision D6): whether
+ * presignedUrlNetworkRestrictions.allowedIpRanges may be combined with S3 Transfer Acceleration.
+ * Change both together.
+ */
+export const ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION = true;
+
+/**
+ * True when the presigned URL restriction covers an accelerated bucket. The restriction is applied
+ * only to the VAMS-created asset bucket and the auxiliary bucket, which follows the effective default
+ * asset bucket (config.ts: createdBucketAccelerated / effectiveDefaultBucketAccelerated).
+ */
+function s3taRestrictionCoversAcceleratedBucket(cfg: ConfigShape): boolean {
+    const created =
+        !!g(cfg, "app.assetBuckets.createNewBucket") &&
+        g(cfg, "app.assetBuckets.useS3TransferAcceleration") === true;
+    const externalDefault = externalBuckets(cfg).find((b) => b.isDefault);
+    const effectiveDefault = externalDefault
+        ? externalDefault.useS3TransferAcceleration === true
+        : created;
+    return created || effectiveDefault;
+}
+
+/** True when the named presigned URL restriction list is non-empty. */
+function s3taRestrictionList(cfg: ConfigShape, key: "allowedVpceIds" | "allowedIpRanges"): boolean {
+    const list = g(cfg, `app.assetBuckets.presignedUrlNetworkRestrictions.${key}`);
+    return Array.isArray(list) && list.length > 0;
+}
+
+/** Whether the IP-range rule fires; `allow` defaults to the constant and is a parameter for tests. */
+export function s3taIpRangeRuleApplies(
+    cfg: ConfigShape,
+    allow: boolean = ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION
+): boolean {
+    return (
+        !allow &&
+        s3taRestrictionCoversAcceleratedBucket(cfg) &&
+        s3taRestrictionList(cfg, "allowedIpRanges")
+    );
+}
+
 /** Region-name shape accepted for bucketRegion (config.ts: `AWS_REGION_NAME_PATTERN`, copied verbatim). */
 const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
 
@@ -1853,6 +1894,25 @@ const CORE_RULES: Rule[] = [
             "An app.assetBuckets.externalAssetBuckets bucketArn is registered with inconsistent useS3TransferAcceleration values across its entries. One ARN is one physical bucket, so every entry for it must agree.",
     },
     {
+        id: "s3ta-not-boolean",
+        severity: "error",
+        fieldPaths: [
+            "app.assetBuckets.useS3TransferAcceleration",
+            "app.assetBuckets.externalAssetBuckets",
+        ],
+        appliesWhen: (c) => {
+            const top = g(c, "app.assetBuckets.useS3TransferAcceleration");
+            if (top !== undefined && top !== null && typeof top !== "boolean") return true;
+            return externalBuckets(c).some(
+                (b) =>
+                    b.useS3TransferAcceleration !== undefined &&
+                    typeof b.useS3TransferAcceleration !== "boolean"
+            );
+        },
+        message:
+            "app.assetBuckets.useS3TransferAcceleration and the same key on externalAssetBuckets entries must be a boolean (true or false, not a string).",
+    },
+    {
         id: "s3ta-vpce-restriction",
         severity: "error",
         fieldPaths: [
@@ -1860,19 +1920,22 @@ const CORE_RULES: Rule[] = [
             "app.assetBuckets.externalAssetBuckets",
             "app.assetBuckets.presignedUrlNetworkRestrictions",
         ],
-        appliesWhen: (c) => {
-            if (!s3taRequested(c)) return false;
-            const base = "app.assetBuckets.presignedUrlNetworkRestrictions";
-            const vpceIds = g(c, `${base}.allowedVpceIds`);
-            const ranges = g(c, `${base}.allowedIpRanges`);
-            return (
-                Array.isArray(vpceIds) &&
-                vpceIds.length > 0 &&
-                !(Array.isArray(ranges) && ranges.length > 0)
-            );
-        },
+        appliesWhen: (c) =>
+            s3taRestrictionCoversAcceleratedBucket(c) && s3taRestrictionList(c, "allowedVpceIds"),
         message:
             "S3 Transfer Acceleration cannot be combined with presignedUrlNetworkRestrictions.allowedVpceIds. Accelerated requests do not arrive through a VPC endpoint, so the restriction would deny them. Use allowedIpRanges, or turn useS3TransferAcceleration off.",
+    },
+    {
+        id: "s3ta-ip-range-restriction",
+        severity: "error",
+        fieldPaths: [
+            "app.assetBuckets.useS3TransferAcceleration",
+            "app.assetBuckets.externalAssetBuckets",
+            "app.assetBuckets.presignedUrlNetworkRestrictions",
+        ],
+        appliesWhen: (c) => s3taIpRangeRuleApplies(c),
+        message:
+            "S3 Transfer Acceleration cannot be combined with presignedUrlNetworkRestrictions.allowedIpRanges, because it is not confirmed that aws:SourceIp is the client's address for accelerated requests. Remove the IP-range restriction, or turn useS3TransferAcceleration off.",
     },
     {
         id: "externalbucket-account-matches-deployment-warn",

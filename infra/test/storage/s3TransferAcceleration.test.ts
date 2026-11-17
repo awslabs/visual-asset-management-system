@@ -265,23 +265,30 @@ describe("S3 Transfer Acceleration: roles that presign can resolve the flag", ()
 });
 
 describe("S3 Transfer Acceleration: the CSP already admits the accelerate host", () => {
-    // PR #1618 (fix #1616) puts `https://*.amazonaws.com` (partition suffix) on connect-src, img-src,
-    // media-src and frame-src, which covers `<bucket>.s3-accelerate.amazonaws.com`. This PR adds no
-    // accelerate host. The assertion switches on when that change is on the base branch; until then
-    // it is skipped, because the base CSP lists the regional S3 endpoint only.
-    const s = synthTemplate("commercial");
-    const covered = (name: string) =>
-        directive(csp(s), name).some((src) =>
-            sourceAdmits(src, "vams-bucket.s3-accelerate.amazonaws.com")
-        );
-    const wildcardOnBase = directive(csp(s), "connect-src").includes("https://*.amazonaws.com");
-    const maybe = wildcardOnBase ? test : test.skip;
+    // The partition wildcard `https://*.amazonaws.com` (PR #1618, fix #1616, on the base branch) is on
+    // connect-src, img-src, media-src and frame-src and covers `<bucket>.s3-accelerate.amazonaws.com`.
+    // This PR adds no accelerate-specific source.
+    const ACCELERATE_HOST = "vams-bucket.s3-accelerate.amazonaws.com";
+    const DIRECTIVES = ["connect-src", "img-src", "media-src", "frame-src"];
 
-    maybe.each(["connect-src", "img-src", "media-src", "frame-src"])(
-        "%s admits an accelerate host with no accelerate-specific source",
+    test.each(DIRECTIVES)(
+        "%s of the flag-on commercial policy allows the accelerate host",
         (name) => {
-            expect(covered(name)).toBe(true);
-            expect(csp(flagOn())).not.toContain("s3-accelerate");
+            const sources = directive(csp(flagOn()), name);
+            // Positive control: the wildcard is really present, so the check cannot pass vacuously.
+            expect(sources).toContain("https://*.amazonaws.com");
+            expect(sources.some((src) => sourceAdmits(src, ACCELERATE_HOST))).toBe(true);
+            // The same for a bucket of any name.
+            expect(
+                sources.some((src) =>
+                    sourceAdmits(src, "another-bucket-1.s3-accelerate.amazonaws.com")
+                )
+            ).toBe(true);
         }
     );
+
+    test("the feature adds no accelerate-specific source: flag on and off policies are identical", () => {
+        expect(csp(flagOn())).toBe(csp(synthTemplate("commercial")));
+        expect(csp(flagOn())).not.toContain("s3-accelerate");
+    });
 });

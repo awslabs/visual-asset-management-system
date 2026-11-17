@@ -18,7 +18,12 @@ import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import govcloudTemplate from "../../config/config.template.govcloud.json";
 import { newTestApp } from "../support/testApp";
 import { makeDefaultConfig } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/defaults";
-import { evaluateRules } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
+import {
+    evaluateRules,
+    s3taIpRangeRuleApplies,
+    ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION as ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION_BUILDER,
+} from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
+import { FIELDS } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/schema";
 
 const realReadFileSync = jest.requireActual("fs").readFileSync;
 
@@ -207,8 +212,9 @@ describe("validateS3TransferAcceleration", () => {
         ).not.toThrow();
     });
 
-    test("rejects an accelerated bucket with a VPC-endpoint-only restriction", () => {
+    test("rejects allowedVpceIds when the restriction covers an accelerated bucket", () => {
         const restrictions = { allowedIpRanges: [], allowedVpceIds: ["vpce-0123456789abcdef0"] };
+        // The created bucket is accelerated (and the auxiliary bucket follows it).
         expect(() =>
             Config.validateS3TransferAcceleration(
                 assetBuckets({
@@ -218,15 +224,86 @@ describe("validateS3TransferAcceleration", () => {
                 "aws"
             )
         ).toThrow(/allowedVpceIds/);
+        // An external default is accelerated, so the auxiliary bucket (which carries the restriction) is.
         expect(() =>
             Config.validateS3TransferAcceleration(
                 assetBuckets({
                     presignedUrlNetworkRestrictions: restrictions,
-                    externalAssetBuckets: [external({ useS3TransferAcceleration: true })],
+                    externalAssetBuckets: [
+                        external({ isDefault: true, useS3TransferAcceleration: true }),
+                    ],
                 }),
                 "aws"
             )
         ).toThrow(/allowedVpceIds/);
+    });
+
+    test("allows allowedVpceIds when only an external non-default bucket is accelerated", () => {
+        // The restriction is applied to the created bucket and the auxiliary bucket only, and neither
+        // is accelerated here, so the accelerated external bucket carries no VAMS restriction.
+        expect(() =>
+            Config.validateS3TransferAcceleration(
+                assetBuckets({
+                    presignedUrlNetworkRestrictions: {
+                        allowedIpRanges: [],
+                        allowedVpceIds: ["vpce-0123456789abcdef0"],
+                    },
+                    externalAssetBuckets: [external({ useS3TransferAcceleration: true })],
+                }),
+                "aws"
+            )
+        ).not.toThrow();
+    });
+
+    test("ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION decides allowedIpRanges with an accelerated bucket", () => {
+        const accelerated = assetBuckets({
+            useS3TransferAcceleration: true,
+            presignedUrlNetworkRestrictions: {
+                allowedIpRanges: ["203.0.113.0/24"],
+                allowedVpceIds: [],
+            },
+        });
+        expect(typeof Config.ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION).toBe("boolean");
+        // Allowed.
+        expect(() => Config.validateS3TransferAcceleration(accelerated, "aws", true)).not.toThrow();
+        // Not allowed: rejected, with a message that names the setting to change.
+        expect(() => Config.validateS3TransferAcceleration(accelerated, "aws", false)).toThrow(
+            /allowedIpRanges/
+        );
+        // Not allowed but nothing accelerated is covered: still fine.
+        expect(() =>
+            Config.validateS3TransferAcceleration(
+                assetBuckets({
+                    presignedUrlNetworkRestrictions: {
+                        allowedIpRanges: ["203.0.113.0/24"],
+                        allowedVpceIds: [],
+                    },
+                    externalAssetBuckets: [external({ useS3TransferAcceleration: true })],
+                }),
+                "aws",
+                false
+            )
+        ).not.toThrow();
+        // The default argument is the constant.
+        const withDefault = () => Config.validateS3TransferAcceleration(accelerated, "aws");
+        if (Config.ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION) {
+            expect(withDefault).not.toThrow();
+        } else {
+            expect(withDefault).toThrow(/allowedIpRanges/);
+        }
+    });
+
+    test.each([
+        ["top-level string", { useS3TransferAcceleration: "true" }],
+        ["top-level number", { useS3TransferAcceleration: 1 }],
+        [
+            "entry string",
+            { externalAssetBuckets: [external({ useS3TransferAcceleration: "true" as any })] },
+        ],
+    ])("rejects a value that is not a boolean (%s)", (_label, overrides) => {
+        expect(() =>
+            Config.validateS3TransferAcceleration(assetBuckets(overrides as any), "aws")
+        ).toThrow(/must be a boolean/);
     });
 
     test("allows a VPC-endpoint restriction when nothing is accelerated (control)", () => {
@@ -442,5 +519,68 @@ describe("ConfigBuilder rules mirror the getConfig() validation", () => {
                 ];
             })
         ).toEqual([]);
+    });
+
+    test("allowedVpceIds is not rejected when only an external non-default bucket is accelerated", () => {
+        expect(
+            ruleIds((c) => {
+                c.app.assetBuckets.presignedUrlNetworkRestrictions.allowedVpceIds = [
+                    "vpce-0123456789abcdef0",
+                ];
+                c.app.assetBuckets.externalAssetBuckets = [
+                    external({ useS3TransferAcceleration: true }),
+                ];
+            })
+        ).toEqual([]);
+        expect(
+            ruleIds((c) => {
+                c.app.assetBuckets.presignedUrlNetworkRestrictions.allowedVpceIds = [
+                    "vpce-0123456789abcdef0",
+                ];
+                c.app.assetBuckets.externalAssetBuckets = [
+                    external({ isDefault: true, useS3TransferAcceleration: true }),
+                ];
+            })
+        ).toContain("s3ta-vpce-restriction");
+    });
+
+    test("a string value is rejected as not a boolean", () => {
+        expect(
+            ruleIds((c) => {
+                c.app.assetBuckets.useS3TransferAcceleration = "true";
+            })
+        ).toContain("s3ta-not-boolean");
+        expect(
+            ruleIds((c) => {
+                c.app.assetBuckets.externalAssetBuckets = [
+                    external({ useS3TransferAcceleration: "true" as any }),
+                ];
+            })
+        ).toContain("s3ta-not-boolean");
+    });
+
+    test("the IP-range rule follows ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION, in step with config.ts", () => {
+        expect(ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION_BUILDER).toBe(
+            Config.ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION
+        );
+        const cfg: any = makeDefaultConfig("commercial");
+        cfg.app.assetBuckets.useS3TransferAcceleration = true;
+        cfg.app.assetBuckets.presignedUrlNetworkRestrictions.allowedIpRanges = ["203.0.113.0/24"];
+        expect(s3taIpRangeRuleApplies(cfg, true)).toBe(false);
+        expect(s3taIpRangeRuleApplies(cfg, false)).toBe(true);
+        cfg.app.assetBuckets.useS3TransferAcceleration = false;
+        expect(s3taIpRangeRuleApplies(cfg, false)).toBe(false);
+    });
+
+    test("the top-level field stays visible while it holds true, so its error can be fixed", () => {
+        const cfg: any = makeDefaultConfig("commercial");
+        cfg.app.assetBuckets.createNewBucket = false;
+        cfg.app.assetBuckets.useS3TransferAcceleration = true;
+        const field = FIELDS.find(
+            (f: any) => f.path === "app.assetBuckets.useS3TransferAcceleration"
+        ) as any;
+        expect(field.visibleWhen(cfg)).toBe(true);
+        cfg.app.assetBuckets.useS3TransferAcceleration = false;
+        expect(field.visibleWhen(cfg)).toBe(false);
     });
 });

@@ -316,6 +316,15 @@ export const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
 // has been confirmed.
 export const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
 
+/**
+ * Whether `presignedUrlNetworkRestrictions.allowedIpRanges` may be combined with S3 Transfer
+ * Acceleration (#1610, decision D6). True only if a live test shows that the `aws:SourceIp` condition of
+ * the presigned-URL deny statement sees the client's own address for requests that arrive through the
+ * accelerate endpoint; otherwise every accelerated URL would be denied. The ConfigBuilder carries the
+ * same constant in validation.ts: change both together (a test asserts they agree).
+ */
+export const ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION = true;
+
 // A REST API custom domain host: lowercase labels separated by dots, no scheme, port or path. API
 // Gateway does not accept uppercase letters in a custom domain name.
 export const API_CUSTOM_DOMAIN_HOST_PATTERN =
@@ -4997,11 +5006,39 @@ export function validateS3TransferAcceleration(
         presignedUrlNetworkRestrictions?: ConfigPresignedUrlNetworkRestrictions;
         externalAssetBuckets?: ConfigPublicAssetS3Buckets[] | null;
     },
-    deploymentPartition: string
+    deploymentPartition: string,
+    allowIpRangeRestriction: boolean = ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION
 ): void {
     const externalBuckets = (assetBuckets.externalAssetBuckets || []).filter(
         (bucketConfig) => !!bucketConfig
     );
+
+    // A value that is not a real boolean (the string "true" is the usual one) would silently count as
+    // false, so the operator would believe acceleration is on. Reject it.
+    const typeProblems: string[] = [];
+    if (
+        assetBuckets.useS3TransferAcceleration !== undefined &&
+        typeof assetBuckets.useS3TransferAcceleration !== "boolean"
+    ) {
+        typeProblems.push("app.assetBuckets.useS3TransferAcceleration");
+    }
+    externalBuckets.forEach((bucketConfig, index) => {
+        if (
+            bucketConfig.useS3TransferAcceleration !== undefined &&
+            typeof bucketConfig.useS3TransferAcceleration !== "boolean"
+        ) {
+            typeProblems.push(
+                `app.assetBuckets.externalAssetBuckets[${index}].useS3TransferAcceleration`
+            );
+        }
+    });
+    if (typeProblems.length > 0) {
+        throw new Error(
+            `Configuration Error: ${typeProblems.join(
+                ", "
+            )} must be a boolean (true or false, not a string).`
+        );
+    }
     const flaggedExternal = externalBuckets.filter(
         (bucketConfig) => bucketConfig.useS3TransferAcceleration === true
     );
@@ -5047,17 +5084,28 @@ export function validateS3TransferAcceleration(
     }
 
     // Accelerated requests reach S3 from the client's public address through CloudFront edge
-    // locations, never through a VPC endpoint, so a VPC-endpoint-only restriction would deny them.
-    // An IP-range restriction is allowed (see the documentation for how aws:SourceIp is seen).
+    // locations, never through a VPC endpoint, so a VPC-endpoint restriction would deny them.
+    // presignedUrlNetworkRestrictions is applied only to the VAMS-created asset bucket and the
+    // auxiliary bucket (storageBuilder, security.ts addPresignedUrlNetworkRestrictionsToBucketPolicy),
+    // so the rule applies only when one of those two is accelerated: the created bucket, or the
+    // auxiliary bucket, which follows the effective default bucket. An accelerated external bucket
+    // that is neither the default nor created by VAMS carries no VAMS restriction.
     const restrictions = assetBuckets.presignedUrlNetworkRestrictions;
-    if (
-        restrictions &&
-        (restrictions.allowedVpceIds || []).length > 0 &&
-        (restrictions.allowedIpRanges || []).length === 0
-    ) {
-        throw new Error(
-            "Configuration Error: S3 Transfer Acceleration cannot be combined with app.assetBuckets.presignedUrlNetworkRestrictions.allowedVpceIds. Accelerated requests do not arrive through a VPC endpoint, so the restriction would deny every accelerated presigned URL. Use allowedIpRanges, or turn useS3TransferAcceleration off."
-        );
+    const restrictionCoversAcceleratedBucket =
+        createdBucketAccelerated(assetBuckets) || effectiveDefaultBucketAccelerated(assetBuckets);
+    if (restrictions && restrictionCoversAcceleratedBucket) {
+        const hasVpce = (restrictions.allowedVpceIds || []).length > 0;
+        const hasIpRanges = (restrictions.allowedIpRanges || []).length > 0;
+        if (hasVpce) {
+            throw new Error(
+                "Configuration Error: S3 Transfer Acceleration cannot be combined with app.assetBuckets.presignedUrlNetworkRestrictions.allowedVpceIds. Accelerated requests do not arrive through a VPC endpoint, so the restriction would deny every accelerated presigned URL. Use allowedIpRanges, or turn useS3TransferAcceleration off."
+            );
+        }
+        if (hasIpRanges && !allowIpRangeRestriction) {
+            throw new Error(
+                "Configuration Error: S3 Transfer Acceleration cannot be combined with app.assetBuckets.presignedUrlNetworkRestrictions.allowedIpRanges, because it is not confirmed that aws:SourceIp is the client's address for accelerated requests. Remove the IP-range restriction, or turn useS3TransferAcceleration off."
+            );
+        }
     }
 }
 

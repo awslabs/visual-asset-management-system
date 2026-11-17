@@ -117,23 +117,43 @@ def verify_transfer_acceleration(bucket_name, bucket_region):
     """Fail the deployment when a bucket flagged for S3 Transfer Acceleration does not have it
     enabled. VAMS never enables acceleration on a bucket it does not own, and presigned URLs for the
     accelerate host fail against a bucket without it, so the mismatch is raised here, naming the
-    bucket and the fix, rather than surfacing later as failed uploads and downloads."""
+    bucket, its Region and the fix, rather than surfacing later as failed uploads and downloads.
+    Every failure is raised as an Exception carrying that text, because the CloudFormation failure
+    reason is the exception message and the operator reads it there, not in the log."""
     try:
         response = s3_client_for_region(bucket_region).get_bucket_accelerate_configuration(Bucket=bucket_name)
     except ClientError as e:
-        logger.error(
-            "Could not read the Transfer Acceleration configuration of bucket " + str(bucket_name) +
-            ": " + str(e) + ". Grant s3:GetAccelerateConfiguration on the bucket to this deployment, or "
-            "set useS3TransferAcceleration to false for it."
+        code = e.response.get('Error', {}).get('Code', 'ClientError')
+        if code == 'NoSuchBucket':
+            fix = (
+                "The bucket does not exist in that Region. Create it (with Transfer Acceleration enabled), "
+                "correct the bucket ARN or bucketRegion of the entry, or set useS3TransferAcceleration to "
+                "false for it."
+            )
+        elif code in ('AccessDenied', 'AccessDeniedException', 'AllAccessDisabled'):
+            fix = (
+                "Allow s3:GetAccelerateConfiguration on the bucket in its bucket policy for this deployment's "
+                "account (the s3:* grant of the external bucket setup includes it), or set "
+                "useS3TransferAcceleration to false for the entry."
+            )
+        else:
+            fix = (
+                "Check that the bucket is reachable from this deployment in its Region, or set "
+                "useS3TransferAcceleration to false for the entry."
+            )
+        message = (
+            "Could not read the S3 Transfer Acceleration configuration of bucket " + str(bucket_name) +
+            " in Region " + str(bucket_region) + " (" + str(code) + "). " + fix
         )
-        raise
+        logger.error(message + " Original error: " + str(e))
+        raise Exception(message) from e
     status = response.get('Status')
     if status != 'Enabled':
         message = (
-            "S3 Transfer Acceleration is requested for bucket " + str(bucket_name) + " but its status is " +
-            str(status or 'not configured') + ". Enable Transfer Acceleration on the bucket (S3 console > "
-            "Properties > Transfer acceleration, or aws s3api put-bucket-accelerate-configuration) and "
-            "deploy again, or set useS3TransferAcceleration to false for it. VAMS does not change the "
+            "S3 Transfer Acceleration is requested for bucket " + str(bucket_name) + " (Region " +
+            str(bucket_region) + ") but its status is " + str(status or 'not configured') +
+            ". Enable Transfer Acceleration on the bucket (S3 console > Properties > Transfer acceleration) "
+            "and deploy again, or set useS3TransferAcceleration to false for it. VAMS does not change the "
             "configuration of a bucket it does not own."
         )
         logger.error(message)
@@ -193,7 +213,9 @@ def lambda_handler(event, context):
             # Whether S3 Transfer Acceleration is requested for this bucket. Verified before the row
             # is written, so a bucket without it never gets a row that makes URLs use the accelerate host.
             is_accelerated = bool(bucket.get('isAccelerated'))
-            if is_accelerated:
+            # The check runs on Create and Update only. On Delete (and the cleanup after a rollback) a
+            # suspended acceleration or a revoked grant must never block removing the stack.
+            if is_accelerated and event.get('RequestType') in ('Create', 'Update'):
                 verify_transfer_acceleration(bucket_name, bucket_region)
 
             # Create or update the record in DynamoDB
