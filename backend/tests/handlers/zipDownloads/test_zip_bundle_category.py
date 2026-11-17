@@ -40,7 +40,11 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 
 def _shipped_system_bundles():
     found = []
-    for pipeline_file in sorted((REPO_ROOT / "backendPipelines").rglob("vamsSchema/**/pipeline.json")):
+    # Any vamsSchema* folder: a pipeline folder may ship a second bundle beside its own (vamsSchemaMedia).
+    for pipeline_file in sorted((REPO_ROOT / "backendPipelines").rglob("pipeline.json")):
+        relative = pipeline_file.relative_to(REPO_ROOT).parts
+        if "node_modules" in relative or not any(part.startswith("vamsSchema") for part in relative[:-1]):
+            continue
         if json.loads(pipeline_file.read_text()).get("isSystem") is True:
             found.append(pipeline_file.parent)
     return found
@@ -72,6 +76,7 @@ class TestTheShippedBundle:
     def test_every_shipped_system_bundle_uses_a_system_category(self):
         bundles = _shipped_system_bundles()
         assert any(b.parent.name == "zipArchive" for b in bundles)  # control: the zip bundle is found
+        assert any(b.name == "vamsSchemaMedia" for b in bundles)  # and the media preview bundle beside 3D
         for bundle in bundles:
             for name in ("pipeline.json", "workflow.json"):
                 category = json.loads((bundle / name).read_text()).get("category", "")

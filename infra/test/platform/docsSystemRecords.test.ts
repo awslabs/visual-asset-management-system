@@ -127,7 +127,7 @@ describe("system records are documented", () => {
 });
 
 describe("every shipped system bundle carries a SYSTEM category, and the pages say which", () => {
-    /** Every vamsSchema directory under backendPipelines whose pipeline.json declares isSystem: true. */
+    /** Every vamsSchema* directory under backendPipelines whose pipeline.json declares isSystem: true. */
     function systemBundles(): string[] {
         const found: string[] = [];
         const walk = (dir: string): void => {
@@ -135,7 +135,9 @@ describe("every shipped system bundle carries a SYSTEM category, and the pages s
                 if (!entry.isDirectory() || entry.name === "node_modules") continue;
                 const full = path.join(dir, entry.name);
                 const pipelineFile = path.join(full, "pipeline.json");
-                if (full.split(path.sep).includes("vamsSchema") && fs.existsSync(pipelineFile)) {
+                // vamsSchema*: a pipeline folder may ship a second bundle beside its own (vamsSchemaMedia).
+                const inBundle = full.split(path.sep).some((part) => part.startsWith("vamsSchema"));
+                if (inBundle && fs.existsSync(pipelineFile)) {
                     if (JSON.parse(fs.readFileSync(pipelineFile, "utf8")).isSystem === true) {
                         found.push(full);
                     }
@@ -154,9 +156,12 @@ describe("every shipped system bundle carries a SYSTEM category, and the pages s
     );
     const concepts = section(readDoc("concepts/pipelines-and-workflows.md"), SYSTEM_HEADING);
 
-    test("control: the walk finds the four shipped system bundles, the Zip Archive one included", () => {
-        expect(bundles).toHaveLength(4);
+    test("control: the walk finds the five shipped system bundles, Zip Archive and Media Preview included", () => {
+        expect(bundles).toHaveLength(5);
         expect(bundles.some((dir) => dir.includes(path.join("utility", "zipArchive")))).toBe(true);
+        expect(
+            bundles.some((dir) => dir.endsWith(path.join("3dThumbnail", "vamsSchemaMedia")))
+        ).toBe(true);
     });
 
     test.each(bundles.map((dir) => [path.relative(REPO, dir), dir]))(
@@ -170,6 +175,12 @@ describe("every shipped system bundle carries a SYSTEM category, and the pages s
             expect(concepts).toContain(`\`${pipeline.category}\``);
         }
     );
+
+    test("the Media Preview Thumbnail row of the shipped table names its category", () => {
+        const row =
+            shipped.split("\n").find((line) => line.includes("`preview-media-thumbnail`")) ?? "";
+        expect(row).toContain("`SYSTEM - Preview`");
+    });
 
     test("the Zip Archive row of the shipped table names its category", () => {
         const row =

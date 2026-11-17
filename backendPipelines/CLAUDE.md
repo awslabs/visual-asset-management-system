@@ -810,10 +810,14 @@ false` keeps its trigger off); for the zipArchive bundle (`utility/zipArchive/`,
     `app.pipelines.useZipDownloads.enabled`. Every shipped system bundle pairs the flag with a
     `SYSTEM - <Area>` category, so a role constraint on `category` selects the system records together
     and never matches a deployment's own pipelines: `system/genAiMetadata` and its second registration
-    `system/genAiMetadata/vamsSchema/assetSummary` (both `SYSTEM - GenAI`), `preview/3dThumbnail`
-    (`SYSTEM - Preview`) and `utility/zipArchive` (`SYSTEM - Utility`). The record names, ids and bundle
-    folders stay as they are; the next deployment re-asserts a changed category on records it registered
-    before (`backend/tests/handlers/zipDownloads/test_zip_bundle_category.py`). List the pipeline in
+    `system/genAiMetadata/vamsSchema/assetSummary` (both `SYSTEM - GenAI`), `preview/3dThumbnail` and
+    its media registration `preview/3dThumbnail/vamsSchemaMedia` (both `SYSTEM - Preview`) and
+    `utility/zipArchive` (`SYSTEM - Utility`). The record names, ids and bundle folders stay as they are;
+    the next deployment re-asserts a changed category, and the flag, on records it registered before
+    (`backend/tests/handlers/zipDownloads/test_zip_bundle_category.py`,
+    `backend/tests/handlers/workflows/test_media_preview_bundle_system_record.py`). A test that walks the
+    shipped bundles matches every `vamsSchema*` folder, so a second bundle beside a pipeline's own
+    (`vamsSchemaMedia`) is not skipped. List the pipeline in
     `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`. Tests:
     `backend/tests/common/workflows/test_systemRecords.py`, `test_vamsSchemaImport_isSystem.py` and
     the `test_*_isSystem*.py` handler modules.

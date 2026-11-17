@@ -1411,8 +1411,9 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
     allowed to invoke the import function can register system records. Every shipped system bundle
     pairs the flag with a `SYSTEM - <Area>` category: `system/genAiMetadata` and its second
     registration `system/genAiMetadata/vamsSchema/assetSummary` (both `SYSTEM - GenAI`),
-    `preview/3dThumbnail` (`SYSTEM - Preview`) and the zipArchive bundle
-    (`backendPipelines/utility/zipArchive/`, below; `SYSTEM - Utility`). List the pipeline in
+    `preview/3dThumbnail` and its media registration `preview/3dThumbnail/vamsSchemaMedia` (both
+    `SYSTEM - Preview`) and the zipArchive bundle (`backendPipelines/utility/zipArchive/`, below;
+    `SYSTEM - Utility`). A test that walks the shipped bundles matches every `vamsSchema*` folder. List the pipeline in
     `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`.
 
 ```bash
