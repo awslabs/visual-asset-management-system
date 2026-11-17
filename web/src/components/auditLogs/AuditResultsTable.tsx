@@ -108,8 +108,8 @@ export const AuditResultsTable: React.FC<AuditResultsTableProps> = ({
         {
             id: "timestamp",
             header: "Time",
-            width: 190,
-            minWidth: 170,
+            width: 235,
+            minWidth: 215,
             cell: (row) => <OneLine text={timeText(row)} />,
             sortingField: "timestamp",
             sortingComparator: byNumber((row) => auditTimeMs(row.timestamp)),
