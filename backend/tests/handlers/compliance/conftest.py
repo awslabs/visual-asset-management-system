@@ -20,6 +20,7 @@ here would pre-empt theirs.
 Shared event builders and stand-ins live in `_harness.py` next to this file.
 """
 
+import functools
 import os
 import sys
 import types
@@ -112,7 +113,9 @@ from common.compliance import listing as _listing  # noqa: E402
 
 def _decided_untimed(page):
     """`page` (`listing.query_page` or `listing.merge_query_page`) with its row decisions timed on a
-    clock that does not move, unless the caller passes its own `clock`."""
+    clock that does not move, unless the caller passes its own `clock`. `inspect.unwrap` gives the
+    helper itself, on its default clock."""
+    @functools.wraps(page)
     def untimed(*args, clock=None, **kwargs):
         return page(*args, clock=clock or (lambda: 0.0), **kwargs)
     return untimed
@@ -124,7 +127,7 @@ def untimed_listing_decisions():
     of host time, returning a token. A test here that reads one page expects every row its world
     holds, so a host stall during one decision (a garbage collection, a loaded CI runner) would end
     that page after one row. The decisions are timed on a clock that does not move unless the test
-    passes its own `clock`; the budget has its own tests, on injected clocks
+    passes its own `clock`; the budget has its own tests, on injected clocks and on the host clock
     (test_complianceListings_scopedReader)."""
     with patch.object(_listing, "query_page", _decided_untimed(_listing.query_page)), \
             patch.object(_listing, "merge_query_page", _decided_untimed(_listing.merge_query_page)):
