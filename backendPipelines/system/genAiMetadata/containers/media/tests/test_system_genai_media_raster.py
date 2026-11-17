@@ -563,3 +563,122 @@ class TestPlainTiffKeepsItsBehaviour:
         assert manifest["fileClass"] == "other" and "sys_image" not in manifest["attributes"]
         assert any("exceeds" in warning for warning in manifest["warnings"])
         assert 1 <= gets <= 2  # only the header probe is new
+
+
+# --- reviewer round 1: unresolvable CRS, 0..360, lazy geo tags, tifffile log noise, no-CRS transforms ---------------
+
+DOUBLE = 12
+
+
+def _directory_end(entry_count):
+    return 8 + 2 + 12 * entry_count + 4
+
+
+class TestUnresolvableCrs:
+    def test_a_geotiff_in_a_crs_pyproj_cannot_transform_stays_a_raster_with_a_note(self):
+        result = _extract(_bytes("unresolvable_crs_3145"), "faroe.tif")
+        assert result.file_class == CLASS_RASTER and result.warnings == []
+        facts = result.attributes["sys_raster"]
+        assert (facts["width"], facts["bandCount"], facts["crs"], facts["isCog"]) == (256, 1, "EPSG:3145", True)
+        assert facts["georeferenced"] is True and facts["footprintNote"] == "unknown-crs"
+        assert facts["nativeBounds"] == pytest.approx([100000.0, 174400.0, 125600.0, 200000.0])
+        assert "wgs84Bounds" not in facts and result.attributes["sys_geo"]["footprint"] is None
+        assert result.facts["footprint"] == "none (unknown-crs)"
+
+    def test_the_handler_keeps_the_raster_class_for_it(self, s3):
+        data = _bytes("unresolvable_crs_3145")
+        _seed(s3, "faroe.tif", data)
+        _load(s3).lambda_handler(_tiff_event("faroe.tif", len(data)), None)
+        manifest = s3.manifest(_AUX, _MANIFEST_KEY)
+        assert manifest["fileClass"] == "raster" and s3.downloads == []
+        assert manifest["attributes"]["sys_raster"]["footprintNote"] == "unknown-crs"
+
+
+class TestGlobalRaster:
+    def test_a_0_to_360_raster_has_the_whole_globe_in_its_bounds(self):
+        result = _extract(_bytes("global_0to360_4326"))
+        facts = result.attributes["sys_raster"]
+        assert result.attributes["sys_geo"]["footprint"]["type"] == "MultiPolygon"
+        assert facts["wgs84Bounds"] == [-180.0, -90.0, 180.0, 90.0] and facts["crossesAntimeridian"] is True
+
+
+class TestGeoTagBounds:
+    def _big_tiepoint(self, doubles):
+        # ModelTiepointTag (33922) claiming `doubles` doubles, stored right after the directory.
+        entries = {33922: (33922, DOUBLE, doubles, ("at", _directory_end(10)))}
+        return _classic(_basic(overrides=entries), pad_to=_directory_end(10) + doubles * 8 + 64)
+
+    def test_a_geo_tag_over_the_limit_is_refused_before_it_is_read(self):
+        data = self._big_tiepoint(300_000)  # 2.4 MB of doubles, in the file, over the 256 KiB tag limit
+        client = _RangeClient(data)
+        reader = RangedS3Reader(client, "b", "k", size=len(data), read_ahead=4096)
+        result = raster.extract_raster(reader, len(data), _ctx())
+        facts = result.attributes["sys_raster"]
+        assert result.file_class == CLASS_RASTER
+        assert facts["offsetsTruncated"] is True and facts["footprintNote"] == "header-too-large"
+        assert reader.bytes_read < 64 * 1024, reader.bytes_read  # the array itself was never fetched
+
+    def test_a_geo_tag_within_the_limit_is_read_normally(self):
+        data = self._big_tiepoint(6)
+        result = _extract(data)
+        assert result.file_class == CLASS_RASTER
+        assert "offsetsTruncated" not in result.attributes["sys_raster"]
+
+    def test_geo_tags_count_against_the_total_budget(self, monkeypatch):
+        monkeypatch.setattr(raster, "HEADER_READ_BUDGET_BYTES", 16)
+        result = _extract(self._big_tiepoint(6))
+        assert result.attributes["sys_raster"]["footprintNote"] == "header-too-large"
+
+    def test_a_ten_million_double_claim_is_refused_by_arithmetic(self):
+        data = _classic(_basic(overrides={33922: (33922, DOUBLE, 10_000_000, ("at", _directory_end(10)))}),
+                        pad_to=8192)
+        result = _extract(data)
+        assert result.file_class == CLASS_OTHER and "outside the file" in result.warnings[0]
+
+
+class TestTifffileLogNoise:
+    def test_a_malformed_directory_writes_nothing_to_the_tifffile_logger(self, caplog):
+        import logging
+
+        data = bytearray(_bytes("cog_small_4326"))
+        data[220] ^= 0xFF  # an invalid data type in the BitsPerSample tag: tifffile logs an error line
+        with caplog.at_level(logging.DEBUG, logger="tifffile"):
+            result = _extract(bytes(data))
+        assert result.file_class in (CLASS_OTHER, CLASS_RASTER)
+        assert [record for record in caplog.records if record.name.startswith("tifffile")] == []
+
+
+class TestNoCrsIsNotGeoreferenced:
+    def _transform_file(self, matrix, geokeys=None):
+        out = [1.0 if i in (0, 5, 15) else 0.0 for i in range(16)] if matrix is None else matrix
+        start = _directory_end(10)
+        entries = {34264: (34264, DOUBLE, 16, ("at", start))}
+        extra = struct.pack("<16d", *out)
+        if geokeys:
+            entries[34735] = (34735, SHORT, len(geokeys), ("at", start + len(extra)))
+            extra += struct.pack("<%dH" % len(geokeys), *geokeys)
+        return _classic(_basic(overrides=entries), extra=extra, pad_to=4096)
+
+    def test_an_identity_transform_with_no_crs_is_not_georeferenced(self):
+        result = _extract(self._transform_file(None))
+        facts = result.attributes["sys_raster"]
+        assert facts["georeferenced"] is False and facts["crs"] == "none"
+        assert facts["footprintNote"] == "not-georeferenced" and "nativeBounds" not in facts
+        assert raster.is_georeferenced(result) is False
+
+    def test_the_handler_sends_it_down_the_plain_image_path(self, plain_s3):
+        data = self._transform_file(None)
+        _m, _r, manifest, _renders = _run(plain_s3, "scan.tif", data, "raster")
+        assert "sys_raster" not in manifest["attributes"] and manifest["fileClass"] != "raster"
+
+    def test_a_tie_point_with_no_geokeys_is_not_georeferenced(self):
+        entries = {33922: (33922, DOUBLE, 6, ("at", _directory_end(11))),
+                   33550: (33550, DOUBLE, 3, ("at", _directory_end(11) + 48))}
+        extra = struct.pack("<6d", 0, 0, 0, 10.0, 50.0, 0) + struct.pack("<3d", 0.1, 0.1, 0)
+        result = _extract(_classic(_basic(overrides=entries), extra=extra, pad_to=4096))
+        assert result.attributes["sys_raster"]["georeferenced"] is False
+        assert raster.is_georeferenced(result) is False
+
+    def test_a_real_georeferenced_file_still_counts(self):
+        assert raster.is_georeferenced(_extract(_bytes("cog_4326"))) is True
+        assert raster.is_georeferenced(_extract(_bytes("user_defined_laea"))) is True

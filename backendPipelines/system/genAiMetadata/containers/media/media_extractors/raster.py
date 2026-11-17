@@ -29,6 +29,7 @@ output). It keeps `sys_raster` and `sys_geo`, and is marked `derivedCog` so the 
 `location` for it: the source file's footprint is the one search shows.
 """
 
+import logging
 import math
 import os
 import struct
@@ -55,6 +56,11 @@ DERIVED_COG_SUFFIX = ".cog.tif"
 # for a page's geometry. Their value sizes are what the walk bounds.
 _EAGER_TAGS = frozenset({258, 270, 273, 277, 279, 282, 283, 305, 324, 325, 330, 338, 339, 347, 513, 514, 530,
                          33628, 42113, 50838, 50839})
+# The georeferencing tags tifffile loads on first access (ModelPixelScale, ModelTiepoint, ModelTransformation, the three
+# GeoKey tags). A real file holds a few hundred bytes in each; one is refused above GEO_TAG_MAX_BYTES, and every one
+# counts against the header read budget like an eager tag.
+_GEO_TAGS = frozenset({33550, 33922, 34264, 34735, 34736, 34737})
+GEO_TAG_MAX_BYTES = 256 * 1024
 _TAG_WIDTH, _TAG_LENGTH, _TAG_COMPRESSION = 256, 257, 259
 _TAG_STRIP_OFFSETS, _TAG_TILE_OFFSETS, _TAG_GEOKEYS = 273, 324, 34735
 _TYPE_SIZES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 13: 4, 16: 8, 17: 8, 18: 8}
@@ -178,9 +184,10 @@ def walk_ifds(reader, size: int) -> _Walk:
                     raise RasterRejected(f"tag {tag} stores {nbytes} bytes outside the file")
                 ifd.end = max(ifd.end, position + nbytes)
                 value = position
-                if tag in _EAGER_TAGS:
+                if tag in _EAGER_TAGS or tag in _GEO_TAGS:
                     ifd.eager_bytes += nbytes
-                    if nbytes > TAG_ARRAY_MAX_BYTES and ifd.oversize_tag is None:
+                    limit = GEO_TAG_MAX_BYTES if tag in _GEO_TAGS else TAG_ARRAY_MAX_BYTES
+                    if nbytes > limit and ifd.oversize_tag is None:
                         ifd.oversize_tag = tag
             elif n == 1 and dtype in (3, 4, 16, 8, 9, 1, 6):
                 code = {3: "H", 4: "I", 16: "Q", 8: "h", 9: "i", 1: "B", 6: "b"}[dtype]
@@ -338,6 +345,9 @@ def extract_raster(reader, size: int, ctx: ExtractContext) -> BranchResult:
         return _header_too_large(result, ctx, walk, first_ifd, sys_raster)
     try:
         import tifffile  # noqa: PLC0415 - deferred: the cold-start cost is paid only by a raster
+        # tifffile logs several unstructured warning lines per directory of a malformed header (up to 64
+        # directories); the extractor reports the outcome itself, so they are not wanted in the function log.
+        logging.getLogger("tifffile").setLevel(logging.CRITICAL)
         reader.seek(0)  # tifffile takes the current position of a file object as the start of the file
         with tifffile.TiffFile(reader) as tiff:
             pages = [tiff.pages[index] for index in range(len(walk.ifds))]
@@ -397,6 +407,10 @@ def _describe(result: BranchResult, ctx: ExtractContext, walk: _Walk, pages: lis
     pixel_is_point = keys.get("GTRasterTypeGeoKey") == _RASTER_PIXEL_IS_POINT
     affine = _affine_of(first, pixel_is_point)
     nodata = _nodata(first)
+    # A transform alone does not georeference a file: with no CRS named (an identity ModelTransformation GDAL
+    # itself writes for an unreferenced raster, or a tie point with no GeoKeys) there is nothing to place on Earth.
+    if crs_label == "none":
+        affine = None
     sys_raster.update({
         "bandCount": int(first.samplesperpixel),
         "dataType": str(dtype) if dtype is not None else "unknown",
