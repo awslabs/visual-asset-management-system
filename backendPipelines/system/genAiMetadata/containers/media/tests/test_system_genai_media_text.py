@@ -95,6 +95,20 @@ class TestExtractText:
         assert "language" not in sys_text
         assert sys_text["lineCount"] == 4
 
+    def test_an_mdl_module_is_plain_text_and_a_binary_mdl_is_other(self, tmp_path):
+        # NVIDIA MDL source, which the text viewers open (#1551); a binary model under the same extension
+        # (a Quake or Source engine .mdl) is not text and demotes to `other`.
+        source = (b"mdl 1.4;\nimport ::df::*;\n\nexport material OmniPBR(color diffuse_tint = color(1.0))\n"
+                  b"= material(surface: material_surface(\n"
+                  b"    scattering: df::diffuse_reflection_bsdf(tint: diffuse_tint)));\n")
+        path = write(tmp_path, "OmniPBR.mdl", source)
+        result = text.extract_text(path, make_ctx(tmp_path, "OmniPBR.mdl"))
+        assert result.file_class == "text"
+        assert result.attributes["sys_text"]["kind"] == "plain"
+        assert result.attributes["sys_text"]["lineCount"] == 6
+        binary = write(tmp_path, "player.mdl", b"IDPO\x06\x00\x00\x00" + bytes(range(256)) * 4)
+        assert text.extract_text(binary, make_ctx(tmp_path, "player.mdl")).file_class == "other"
+
     def test_html_is_stripped(self, tmp_path):
         path = write(tmp_path, "page.html", b"<html><head><title>T</title></head><body><p>Hello <b>world</b></p></body></html>")
         result = text.extract_text(path, make_ctx(tmp_path, "page.html"))

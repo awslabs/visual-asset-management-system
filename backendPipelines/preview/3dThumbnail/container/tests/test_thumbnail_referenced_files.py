@@ -42,7 +42,7 @@ class FakeBucket:
             handle.write(data)
         return path
 
-    def head_object_size(self, bucket, key):
+    def head_object_size(self, bucket, key, warn_if_missing=True):
         self.heads.append(key)
         path = os.path.join(self.root, key)
         return os.path.getsize(path) if os.path.isfile(path) else None

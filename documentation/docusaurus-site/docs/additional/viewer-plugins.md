@@ -1,6 +1,6 @@
 # Viewer Plugins
 
-VAMS includes a plugin-based viewer architecture with 22 built-in viewer plugins for visualizing 3D models, point clouds, media files, documents, and data. This page provides a configuration reference for viewer plugins.
+VAMS includes a plugin-based viewer architecture with 25 built-in viewer plugins for visualizing 3D models, point clouds, media files, documents, and data. This page provides a configuration reference for viewer plugins.
 
 For the complete list of viewers, supported extensions, and extension-to-viewer mapping, see [File Viewers](../concepts/viewers.md).
 
@@ -26,6 +26,17 @@ Viewer plugins are configured in `web/src/visualizerPlugin/config/viewerConfig.j
 | `featuresEnabledRestriction` | string[] | Feature flags required for this viewer to be available                                                                     |
 | `requiresPreprocessing`      | boolean  | Whether the viewer needs a pipeline to pre-process files                                                                   |
 | `customParameters`           | object   | Viewer-specific configuration (e.g., Cesium ion token, BabylonJS settings, the Robotics Data Viewer's `maxWholeFileBytes`) |
+
+### TIFF/TGA Image Viewer parameters
+
+The `tiff-tga-viewer` entry (`.tga`, `.tif`, `.tiff`) takes two `customParameters`. They are build-time values in `viewerConfig.json`, not deployment configuration, and a viewer entry in `customViewerConfig.json` cannot replace a shipped one.
+
+| Parameter         | Default     | Description                                                                                                                 |
+| ----------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `maxDecodeBytes`  | `268435456` | Largest file (256 MiB) the viewer downloads to decode. Checked from the file size and `Content-Length` before the download. |
+| `maxDecodePixels` | `100000000` | Most pixels (100 megapixels) decoded for one image or TIFF page. Checked from the header before decoding.                   |
+
+Above a cap, or when the file cannot be decoded (a truncated file, BigTIFF, TIFF stored in separate colour planes, old-style JPEG TIFF), the viewer shows the file's generated preview with a notice when one exists, and a plain message otherwise. Decoding runs in a same-origin web worker and falls back to the page when the worker cannot start; see [Viewer Plugin Development](../developer/viewer-plugins.md#decoding-in-a-web-worker-optional).
 
 ---
 

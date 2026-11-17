@@ -1,6 +1,6 @@
-# 3D Preview Thumbnail Pipeline
+# 3D and Media Preview Thumbnail Pipelines
 
-The 3D Preview Thumbnail pipeline generates animated GIF or static image previews from 3D files, providing visual thumbnails for assets in the VAMS web interface. It supports a wide range of mesh, point cloud, CAD, USD and Gaussian splat file formats. The pipeline uses CPU-based headless rendering with PyVista, VTK, and Xvfb in an AWS Batch job on AWS Fargate. It is a [system pipeline](system-pipelines.md) in the `SYSTEM - Preview` category: registered from its `vamsSchema` bundle, read-only through the API except for its `enabled` switches and its template's configuration body and tag schema, and re-asserted by each deployment.
+The 3D Preview Thumbnail pipeline generates animated GIF or static image previews from 3D files, providing visual thumbnails for assets in the VAMS web interface. It supports a wide range of mesh, point cloud, CAD, USD and Gaussian splat file formats. The same container also runs the optional **Media Preview Thumbnail** workflow (`app.pipelines.useMediaPreviews`), which writes JPEG or animated GIF previews for images, TGA/TIFF files and video; see [Media Formats](#media-formats). Media previews are off by default and need the Global VPC. The pipeline uses CPU-based headless rendering with PyVista, VTK, and Xvfb in an AWS Batch job on AWS Fargate. It is a [system pipeline](system-pipelines.md) in the `SYSTEM - Preview` category: registered from its `vamsSchema` bundle, read-only through the API except for its `enabled` switches and its template's configuration body and tag schema, and re-asserted by each deployment.
 
 ## Supported Formats
 
@@ -79,6 +79,39 @@ A USD stage is rendered as composed: instanced prims and point instancers are dr
 
 The job log names each MDL module whose colour is approximated or not read. Textures are read at most 1,024 pixels on their long side, and the decoded textures of one stage take at most 10% of the task's memory; a texture past that is not read, and its prims take their material's constant colour or the next source in the list. MaterialX materials are not read.
 
+## Media Formats
+
+The same container also writes previews for images and video, through a second registered pipeline and workflow, **Media Preview Thumbnail** (`preview-media-thumbnail`). Like the 3D Preview Thumbnail it is a [system pipeline](system-pipelines.md) in the `SYSTEM - Preview` category: read-only through the API except for its `enabled` switches and its template's configuration body and tag schema, re-registered by every deployment that revises its bundle, and its runs are hidden from the execution lists unless a listing is filtered to its workflow or asks for system runs. One deployment (container, Batch queue and state machine) serves both workflows and deploys when either `app.pipelines.usePreview3dThumbnail.enabled` or `app.pipelines.useMediaPreviews.enabled` is `true`; the flags only choose which workflow is registered, so a media-only deployment (3D off) works and takes its compute tiers from `usePreview3dThumbnail`. A deployment whose configuration has no `useMediaPreviews` block keeps today's behaviour (media previews off).
+
+| Category | Extensions                                                          | Handler                                                 |
+| :------- | :------------------------------------------------------------------ | :------------------------------------------------------ |
+| Image    | .png, .jpg, .jpeg, .gif, .webp, .bmp                                | Pillow                                                  |
+| Image    | .tga, .tif, .tiff                                                   | Pillow, with tifffile and imagecodecs for TIFF variants |
+| Video    | .mp4, .m4v, .mov, .mkv, .webm, .avi, .wmv, .mpg, .mpeg, .mts, .m2ts | PyAV (bundled FFmpeg libraries)                         |
+
+Not accepted: SVG, HEIC/HEIF, AVIF, EXR, HDR, PSD, DDS and MDL (MDL thumbnails are tracked in #1547).
+
+### What a run writes
+
+An image whose extension is one the web shows as its own preview (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) and whose size is strictly under 5,242,880 bytes (5 MiB) is shown as its own preview, so the run writes nothing.
+
+| Input                                             | Default                                                                                                                                    | With `downscaleSelfPreviewableImages`                                                   |
+| :------------------------------------------------ | :----------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------- |
+| Displayable image under 5 MiB                     | No preview and no container job: the run completes successfully and says why                                                               | A JPEG when it is at least 25% smaller or the long edge is over 2048 px; otherwise none |
+| Displayable still image of 5 MiB or more          | A JPEG under 5 MiB (EXIF orientation applied, transparency on white)                                                                       | Same                                                                                    |
+| Animated GIF or WebP of 5 MiB or more             | A smaller animated GIF (fewer frames, then smaller size, then fewer colours); else a first-frame JPEG                                      | Same                                                                                    |
+| `.tga`, `.tif`, `.tiff`, any size                 | A JPEG under 5 MiB (16-bit, float and CMYK scaled to 8-bit RGB; first full-resolution page)                                                | Same                                                                                    |
+| Video                                             | An animated GIF of 12 frames sampled across the duration (at most 24, long edge 480 px, rotation applied), else the middle frame as a JPEG | Same                                                                                    |
+| Audio-only file or video with no decodable frames | Completes successfully, no preview                                                                                                         | Same                                                                                    |
+
+A run that writes no preview completes successfully and records why as `preview-not-generated.json` in the execution's results: for an image shown as its own preview the message reads "No preview was generated for '<name>': the file is under 5 MiB and is already shown as its own preview." With the downscale option on, an animated GIF or WebP under 5 MiB is still left alone (a JPEG would drop the animation), and the result says so. Every preview is strictly under 5 MiB. TGA and TIFF are never shown as their own preview because browsers cannot display them. A large still image, TGA or TIFF that cannot be decoded within the task's memory fails with a message that names the file type and the pixel limit.
+
+TIFF compressions: Pillow reads the common ones; a TIFF it cannot read (16-bit colour, float samples, BigTIFF, some predictors) is read with tifffile and its codec package imagecodecs, which the image installs from wheels only. The pipeline decodes the LZW, Deflate (Adobe and plain), PackBits, Zstandard, LZMA, JPEG and LERC (GeoTIFF) compressions, with or without a predictor, and refuses a TIFF in any other compression (JPEG XL, WebP, JPEG 2000, CCITT, vendor codecs) with a message that names it. The pixel budget and a byte budget for float and multi-sample images apply to this path as to the others. imagecodecs bundles about 90 codec libraries, all permissive licences plus the GCC OpenMP runtime; `NOTICE.md` lists them.
+
+### Safety limits
+
+The pixel count is read from the file header and checked against a budget derived from the task's memory before anything is decoded. Video is opened as a local file only (`protocol_whitelist=file`) through an allowlist of container formats, decoded for at most 10 minutes, and sampled by seeking rather than by decoding the whole file.
+
 ## Architecture
 
 ```mermaid
@@ -150,7 +183,7 @@ The summary groups the skipped files by what their absence costs the preview:
 -   **Data files** -- glTF buffers (`.bin`), the data or chunk files of an XGRIDS `.lcc`/`.lcc2` scene, and USD value clips (a `clips` set's asset paths and manifest). Geometry, points or animated geometry are missing.
 -   **Textures and other files** -- images, OBJ material libraries and other asset-valued attributes. Colour or detail may be missing.
 
-A composition arc to a file that is not a USD layer (a `.mtlx` material, for example) counts as a texture or other file. Two kinds of reference are not counted, because their absence removes nothing from the preview: asset paths in USD layer or prim metadata (a component's `assetInfo` `identifier`, or a source-file path an exporter wrote into `customLayerData` or `customData`), MDL material modules named without a folder (for example `OmniPBR.mdl`), which the renderer resolves from its own library, and FBX texture files, since an FBX preview draws vertex and material colours and does not sample textures. They are still looked up as before and appear in the log, but never make a preview incomplete.
+A composition arc to a file that is not a USD layer (a `.mtlx` material, for example) counts as a texture or other file. Three kinds of reference are not counted, because their absence removes nothing from the preview: asset paths in USD layer or prim metadata (a component's `assetInfo` `identifier`, or a source-file path an exporter wrote into `customLayerData` or `customData`), MDL material modules named without a folder (for example `OmniPBR.mdl`), which the renderer resolves from its own library, and FBX texture files, since an FBX preview draws vertex and material colours and does not sample textures. They are still looked up in the asset and never make a preview incomplete. A metadata path or FBX texture that is not found is logged as missing; an MDL module that is not in the asset is logged once as resolved by the renderer and is not counted among the missing files.
 
 Once the preview has been written, the run's completion line reads, for example:
 
@@ -194,6 +227,11 @@ Enable this pipeline in `infra/config/config.json`:
                     "large": { "vcpu": 16, "memoryGiB": 120 }
                 },
                 "largeTierThresholdGiB": 2
+            },
+            "useMediaPreviews": {
+                "enabled": true,
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "downscaleSelfPreviewableImages": false
             }
         }
     }
@@ -202,16 +240,19 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                                | Default | Description                                                                                                         |
-| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                             | `false` | Deploy the 3D thumbnail pipeline infrastructure. Requires `app.useGlobalVpc.enabled`.                               |
-| `autoRegisterWithVAMS`                | `true`  | Register the pipeline, its workflow, its template, and its trigger during deployment.                               |
-| `autoRegisterAutoTriggerOnFileUpload` | `true`  | Arm the file-upload trigger. Each deployment re-asserts this value on the trigger.                                  |
-| `computeTiers.standard.vcpu`          | `4`     | AWS Fargate vCPU of the standard tier, which runs inputs below the large-tier threshold.                            |
-| `computeTiers.standard.memoryGiB`     | `16`    | Memory (GiB) of the standard tier. Must be a size AWS Fargate supports for the tier's vCPU.                         |
-| `computeTiers.large.vcpu`             | `16`    | AWS Fargate vCPU of the large tier, which runs inputs at or above the large-tier threshold.                         |
-| `computeTiers.large.memoryGiB`        | `120`   | Memory (GiB) of the large tier. Must be a size AWS Fargate supports for the tier's vCPU.                            |
-| `largeTierThresholdGiB`               | `2`     | Input size (GiB) at or above which a run takes the large tier when its `computeTier` parameter is `auto`. Positive. |
+| Option                                                 | Default | Description                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                                              | `false` | Deploy the 3D thumbnail pipeline infrastructure. Requires `app.useGlobalVpc.enabled`.                                                                                                                                                                         |
+| `autoRegisterWithVAMS`                                 | `true`  | Register the pipeline, its workflow, its template, and its trigger during deployment.                                                                                                                                                                         |
+| `autoRegisterAutoTriggerOnFileUpload`                  | `true`  | Arm the file-upload trigger. Each deployment re-asserts this value on the trigger.                                                                                                                                                                            |
+| `computeTiers.standard.vcpu`                           | `4`     | AWS Fargate vCPU of the standard tier, which runs inputs below the large-tier threshold.                                                                                                                                                                      |
+| `computeTiers.standard.memoryGiB`                      | `16`    | Memory (GiB) of the standard tier. Must be a size AWS Fargate supports for the tier's vCPU.                                                                                                                                                                   |
+| `computeTiers.large.vcpu`                              | `16`    | AWS Fargate vCPU of the large tier, which runs inputs at or above the large-tier threshold.                                                                                                                                                                   |
+| `computeTiers.large.memoryGiB`                         | `120`   | Memory (GiB) of the large tier. Must be a size AWS Fargate supports for the tier's vCPU.                                                                                                                                                                      |
+| `largeTierThresholdGiB`                                | `2`     | Input size (GiB) at or above which a run takes the large tier when its `computeTier` parameter is `auto`. Positive.                                                                                                                                           |
+| `useMediaPreviews.enabled`                             | `false` | Registers the Media Preview Thumbnail pipeline and workflow (images, TGA/TIFF, video) and deploys the shared container when `usePreview3dThumbnail` is off. Requires the Global VPC. The shipped config and templates ship `false` (it needs the Global VPC). |
+| `useMediaPreviews.autoRegisterAutoTriggerOnFileUpload` | `false` | Triggers the media workflow when a supported image or video is uploaded. Needs `useMediaPreviews.enabled`. The shipped config and templates ship `false` (it needs the Global VPC).                                                                           |
+| `useMediaPreviews.downscaleSelfPreviewableImages`      | `false` | Also writes a smaller JPEG for an image the web already shows as its own preview (under 5 MiB), when the JPEG is at least 25% smaller. Needs `useMediaPreviews.enabled`.                                                                                      |
 
 The defaults are the values the shipped config templates carry. A pipeline block that omits a flag still registers the pipeline (`autoRegisterWithVAMS` falls back to `true`) but leaves the upload trigger off (`autoRegisterAutoTriggerOnFileUpload` falls back to `false`), and an omitted `computeTiers` or `largeTierThresholdGiB` takes the values in this table; see the [Configuration Reference](../deployment/configuration-reference.md).
 

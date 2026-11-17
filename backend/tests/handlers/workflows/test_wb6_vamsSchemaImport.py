@@ -617,7 +617,7 @@ class TestBuiltInSchemasValidate:
         import glob
         root = self._schema_root()
         found = set()
-        for pat in ("/**/vamsSchema/**/pipeline.json", "/**/vamsSchema/pipeline.json"):
+        for pat in ("/**/vamsSchema*/**/pipeline.json", "/**/vamsSchema*/pipeline.json"):
             for f in glob.glob(root + pat, recursive=True):
                 found.add(os.path.normpath(f))
         return sorted(found)

@@ -20,6 +20,7 @@ import {
     featuresEnabled,
     findAssetFiles,
     largestCanvas,
+    pngStats,
     missingFeatures,
     openViewerFile,
     pickViewerIfAsked,
@@ -361,6 +362,10 @@ type RenderKind =
     | "text-binary"
     /** The Text Viewer names an encoding it cannot show (UTF-16 without a BOM, UTF-32) (#1198). */
     | "text-encoding"
+    /** The TIFF/TGA viewer refuses the file and shows its fallback notice (`expect.notice`). */
+    | "raster-notice"
+    /** The Image Viewer's `<img>` loaded and shows content (a screenshot of the element). */
+    | "image"
     | "not-offered"
     | "refused"
     | "supersplat"
@@ -412,6 +417,11 @@ interface RenderCase {
      * green, then deselect it and check the green goes again (#1275).
      */
     selectInPanel?: boolean;
+    /**
+     * Abort every request for the TIFF/TGA decode worker's script, as a blocked or stale file would
+     * be: the viewer must decode on the page and draw real content (#1551).
+     */
+    blockDecodeWorker?: boolean;
 }
 
 /** Whether the deployment serves `path` as JavaScript (the SPA answers a missing file with HTML). */
@@ -554,6 +564,35 @@ const renderCases: RenderCase[] = [
         reads: [206],
     },
     { sample: "env-example", viewer: "no viewer (.env.example)", kind: "not-offered" },
+    // Formats browsers cannot draw (#1551): decoded in the page onto a canvas.
+    { sample: "tga-rgba-rle", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
+    { sample: "tga-rgb-rle-small", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
+    { sample: "tiff-lzw-rgb", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
+    { sample: "tiff-16bit-rgb", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
+    { sample: "tiff-12in16-grey", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
+    { sample: "tiff-cmyk-jpeg", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
+    { sample: "tiff-multipage", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
+    { sample: "tiff-large-8mp", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
+    {
+        sample: "tga-rgb-rle-small",
+        viewer: "TIFF/TGA Image Viewer",
+        kind: "canvas",
+        blockDecodeWorker: true,
+        // The browser logs the aborted script request; nothing else may be logged.
+        consoleAllowed: [/Failed to load resource/i, /net::ERR_FAILED/i],
+    },
+    {
+        sample: "tiff-lzw-rgb",
+        viewer: "TIFF/TGA Image Viewer",
+        kind: "canvas",
+        blockDecodeWorker: true,
+        consoleAllowed: [/Failed to load resource/i, /net::ERR_FAILED/i],
+    },
+    { sample: "tiff-orientation-6", viewer: "TIFF/TGA Image Viewer", kind: "canvas" },
+    { sample: "tga-truncated-rle", viewer: "TIFF/TGA Image Viewer", kind: "raster-notice" },
+    { sample: "webp", viewer: "Image Viewer", kind: "image" },
+    { sample: "bmp", viewer: "Image Viewer", kind: "image" },
+    { sample: "mdl-core-definitions", viewer: "Text Viewer", kind: "text", reads: [206, 200] },
     { sample: "potree-las", viewer: "Potree Viewer", kind: "potree" },
     { sample: "potree-laz", viewer: "Potree Viewer", kind: "potree" },
     { sample: "potree-e57", viewer: "Potree Viewer", kind: "potree" },
@@ -670,7 +709,11 @@ const seeded = viewerSamples();
 
 test.describe("viewer render proof (seeded samples)", () => {
     for (const c of renderCases) {
-        const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
+        const label = c.withoutFeature
+            ? `${c.sample} without ${c.withoutFeature}`
+            : c.blockDecodeWorker
+            ? `${c.sample} with the decode worker blocked`
+            : c.sample;
         test(`${c.viewer} ${
             c.kind === "refused" || c.kind === "raster-refused" ? "refuses" : "renders"
         } ${label}`, async ({ page }) => {
@@ -685,6 +728,9 @@ test.describe("viewer render proof (seeded samples)", () => {
                 `the seed fixture has no ${c.sample} sample; re-run the seed script`
             );
 
+            if (c.blockDecodeWorker) {
+                await page.route("**/assets/rasterWorker-*.js", (route) => route.abort());
+            }
             // Watchers go in before the first navigation so they see the app's first document.
             const csp = await watchCspViolations(page);
             const hosts = watchRequestHosts(page);
@@ -771,13 +817,17 @@ test.describe("viewer render proof (seeded samples)", () => {
 
             if (c.kind === "canvas") {
                 await expect(page.locator("canvas").first()).toBeVisible({ timeout: 60_000 });
-                const stats = await expectCanvasRendered(
-                    page,
-                    await largestCanvas(page),
-                    `${c.viewer} (${fileName})`,
-                    caseThresholds(c, sample)
-                );
-                console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
+                // A sample made of solid-colour pages has no pixel variety to measure; its case
+                // checks the decoded sizes and the page picker below.
+                if (!sample.expect?.solid) {
+                    const stats = await expectCanvasRendered(
+                        page,
+                        await largestCanvas(page),
+                        `${c.viewer} (${fileName})`,
+                        caseThresholds(c, sample)
+                    );
+                    console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
+                }
                 // A sample may name how many vertices (for a point cloud, points) the viewer's
                 // info box must report, as the Three.js viewer's "▲ N vertices" line does.
                 if (typeof sample.expect?.vertexCount === "number") {
@@ -788,6 +838,50 @@ test.describe("viewer render proof (seeded samples)", () => {
                     ).toBeVisible({ timeout: 30_000 });
                 }
                 if (c.selectInPanel) await expectPanelSelectionHighlight(page, fileName);
+                // The TIFF/TGA viewer names the decoded size on its canvas, so a sample can pin it.
+                if (typeof sample.expect?.canvasWidth === "number") {
+                    const raster = page.getByTestId("raster-viewer-canvas");
+                    await expect(raster).toHaveAttribute(
+                        "data-width",
+                        String(sample.expect.canvasWidth)
+                    );
+                    await expect(raster).toHaveAttribute(
+                        "data-height",
+                        String(sample.expect.canvasHeight)
+                    );
+                }
+                // A multi-page TIFF shows its page picker; the second page has its own size.
+                if (typeof sample.expect?.pages === "number") {
+                    const picker = page.getByTestId("raster-viewer-page-picker");
+                    await expect(picker).toBeVisible();
+                    await picker.getByRole("button").click();
+                    await page.getByRole("option", { name: /Page 3 of/ }).click();
+                    await expect(page.getByTestId("raster-viewer-canvas")).toHaveAttribute(
+                        "data-width",
+                        String(sample.expect.lastPageWidth)
+                    );
+                }
+            } else if (c.kind === "raster-notice") {
+                // A damaged file shows the shared notice, never a blank canvas.
+                const notice = page.getByTestId("raster-viewer-fallback-notice");
+                await expect(notice).toBeVisible({ timeout: 60_000 });
+                await expect(notice).toContainText(sample.expect.notice);
+                await expect(page.getByTestId("raster-viewer-canvas")).toHaveCount(0);
+            } else if (c.kind === "image") {
+                const image = page.locator('img[alt$="preview"]').first();
+                await expect(image).toBeVisible({ timeout: 60_000 });
+                await expect
+                    .poll(() => image.evaluate((el: HTMLImageElement) => el.naturalWidth), {
+                        timeout: 30_000,
+                        message: `${fileName} did not decode in the <img>`,
+                    })
+                    .toBeGreaterThan(0);
+                const stats = await pngStats(page, await image.screenshot());
+                expect(
+                    stats.distinctColours,
+                    `${c.viewer} (${fileName}) shows a blank image: ${JSON.stringify(stats)}`
+                ).toBeGreaterThanOrEqual(8);
+                console.log(`[viewers] ${c.sample} image ${JSON.stringify(stats)}`);
             } else if (c.kind === "pdf") {
                 const pageCanvas = page.locator(".react-pdf__Page canvas").first();
                 await expect(pageCanvas).toBeVisible({ timeout: 60_000 });

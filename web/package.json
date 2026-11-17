@@ -41,6 +41,7 @@
         "jodit-react": "^5.3.21",
         "localforage": "^1.10.0",
         "maplibre-gl": "^6.9.0",
+        "pako": "1.0.11",
         "papaparse": "^5.7.0",
         "proj4": "^2.22.0",
         "prop-types": "^15.8.1",
@@ -59,8 +60,10 @@
         "reactflow": "^11.11.4",
         "sanitize-html": "^2.11.0",
         "semver": "^7.5.2",
+        "tga-js": "1.1.1",
         "tough-cookie": "^4.1.3",
         "typescript": "^5.0.0",
+        "utif2": "4.1.0",
         "zod": "^4.6.7"
     },
     "overrides": {

@@ -605,6 +605,10 @@ Browsers ignore `'unsafe-inline'` whenever a hash source is also present, so the
 
 Controls whether `'unsafe-eval'` is added to `script-src`. Some viewer plugins depend on WebAssembly runtimes that compile JavaScript at runtime and require this relaxation — notably the Needle USD WASM viewer, the SuperSplat Editor, the ThatOpen IFC BIM viewer, and the Three.js CAD viewer for STEP/IGES/BREP files. When this flag is `false` (the default), those viewers will not initialize. Enable only if your security posture allows it.
 
+### `worker-src` and viewer web workers
+
+The base policy sets `worker-src 'self' blob: data:`. A viewer that decodes in a web worker ships the worker as a content-hashed file under the web app's own `assets/` path and creates it with `new Worker(new URL("./worker.ts", import.meta.url), { type: "module" })`, which `'self'` permits. The TIFF/TGA Image Viewer does this and needs no `cspAdditionalConfig.json` entry, no `blob:` script and no `allowUnsafeEvalFeatures`. See [Viewer Plugin Development](viewer-plugins.md#decoding-in-a-web-worker-optional).
+
 ### Add-on origins
 
 When add-ons that embed external content are enabled, CSP is extended dynamically. For example, with the Physna add-on enabled the configured `apiBaseEndpoint` origin is added to both `frame-src` (so the Physna hosted viewer can be loaded in an iframe) and `connect-src` (so any auxiliary fetches to Physna succeed). See `generateContentSecurityPolicy()` in `infra/lib/helper/security.ts` for the full set of conditional rules.

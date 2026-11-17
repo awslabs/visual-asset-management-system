@@ -97,6 +97,23 @@ class TestExtractImage:
         with Image.open(result.render_images[0]) as rendered:
             assert rendered.size == (20, 20)
 
+    @pytest.mark.parametrize("name,pillow_format,expected_format", [
+        ("photo.webp", "WEBP", "WEBP"), ("scan.bmp", "BMP", "BMP"), ("texture.tga", "TGA", "TGA"),
+        ("plan.tif", "TIFF", "TIFF"), ("plan.tiff", "TIFF", "TIFF"),
+    ])
+    def test_the_rasters_the_viewers_gained_are_read_and_rendered(self, tmp_path, name, pillow_format, expected_format):
+        # The classifier sends .webp/.bmp/.tga/.tif/.tiff here as `image` since the viewers serve them (#1551).
+        buffer = io.BytesIO()
+        Image.new("RGB", (64, 32), (200, 40, 40)).save(buffer, format=pillow_format)
+        path = write(tmp_path, name, buffer.getvalue())
+        result = images.extract_image(path, make_ctx(tmp_path, name))
+        sys_image = result.attributes["sys_image"]
+        assert result.file_class == "image" and result.render_skipped is None
+        assert (sys_image["format"], sys_image["width"], sys_image["height"]) == (expected_format, 64, 32)
+        assert len(result.render_images) == 1
+        with Image.open(result.render_images[0]) as rendered:
+            assert rendered.format == "PNG" and rendered.size == (64, 32)
+
     def test_decompression_bomb_is_a_size_skip_without_decoding(self, tmp_path, monkeypatch):
         # Pillow raises DecompressionBombError at open() above twice MAX_IMAGE_PIXELS.
         monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)

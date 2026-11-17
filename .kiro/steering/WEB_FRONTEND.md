@@ -20,7 +20,7 @@ VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application bu
 -   React Context API + useReducer for shared state
 -   Custom apiClient (fetch-based) for API calls, AWS Amplify v6 for authentication
 -   HashRouter (`#/` URLs) for all routing
--   Plugin-based 3D viewer architecture (21 viewer plugin directories)
+-   Plugin-based 3D viewer architecture (22 viewer plugin directories)
 -   `lazyWithRetry` (React.lazy plus chunk-download retry) + Suspense for route-level code splitting
 
 ---
@@ -340,6 +340,8 @@ web/
 ```
 
 ---
+
+`common/constants/fileFormats.ts` is the one definition of the formats and size the web shows as a file's own preview: `previewFileFormats` (mirrors the backend's `ALLOWED_PREVIEW_FILE_EXTENSIONS`; `.tga`, `.tif` and `.tiff` are never in it because browsers cannot display them), `PREVIEW_FILE_SIZE_LIMIT_BYTES` (5 MiB) and `isSelfPreviewable(fileName, size)` (extension in the list and size known and STRICTLY under the limit). The search thumbnail (`FilePreviewThumbnailCell.tsx`) and the file details panel call the helper instead of repeating the check, and the 3D thumbnail pipeline writes no preview for such a file. Drift tests pin the lists and the limit to the backend and the container.
 
 ## 3. Critical Rules
 
@@ -1005,7 +1007,8 @@ The 3D/media viewer system uses a plugin-based architecture:
 | `online3d-viewer`                  | Online 3D Viewer                  | 3d       | .amf, .bim, .off, .wrl                                                                                                                   | enabled                                             |
 | `online3d-viewer-rhino`            | Online 3D Viewer (Rhinoceros 3D)  | 3d       | .3dm                                                                                                                                     | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `potree-viewer`                    | Potree Viewer                     | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
-| `image-viewer`                     | Image Viewer                      | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                            | enabled                                             |
+| `image-viewer`                     | Image Viewer                      | media    | .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp                                                                                               | enabled                                             |
+| `tiff-tga-viewer`                  | TIFF/TGA Image Viewer             | media    | .tga, .tif, .tiff                                                                                                                        | enabled                                             |
 | `html-viewer`                      | HTML Viewer                       | document | .html                                                                                                                                    | enabled                                             |
 | `video-viewer`                     | Video Player                      | media    | .mp4, .webm, .mov, .mkv, .m4v                                                                                                            | enabled                                             |
 | `audio-viewer`                     | Audio Player                      | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                                                                                      | enabled                                             |
@@ -1079,7 +1082,7 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = ({
 export default MyViewerComponent;
 ```
 
-`ViewerPluginProps` (`src/visualizerPlugin/core/types.ts`) is the whole contract a viewer receives. A single file arrives as `assetKey` and `versionId`; a multi-file selection arrives as `multiFileKeys`, with each file's owning asset and database in `multiFiles` (build each file's URL from its own entry, falling back to the top-level `assetId` and `databaseId`). `assetVersionId`, when set, is the asset version to read files from. `viewerMode` is the host's display mode (`"collapse"` when the file page or the file-viewer modal opens, then `"wide"` or `"fullscreen"`); the host's footer controls request a change through `onViewerModeChange`, and the host decides the resulting mode. `customParameters` is the entry's `customParameters` object from `viewerConfig.json`. When `ViewerPluginProps` changes, update the interface listings in `src/visualizerPlugin/README.md` and `documentation/docusaurus-site/docs/developer/viewer-plugins.md`.
+`ViewerPluginProps` (`src/visualizerPlugin/core/types.ts`) is the whole contract a viewer receives. A single file arrives as `assetKey` and `versionId`; a multi-file selection arrives as `multiFileKeys`, with each file's owning asset and database in `multiFiles` (build each file's URL from its own entry, falling back to the top-level `assetId` and `databaseId`). A single-file selection also arrives as `fileInfo` (the host's `FileInfo`: size and the generated preview key `previewFile`), absent when the host did not have them; the TIFF/TGA viewer reads its byte cap and fallback preview from it. `assetVersionId`, when set, is the asset version to read files from. `viewerMode` is the host's display mode (`"collapse"` when the file page or the file-viewer modal opens, then `"wide"` or `"fullscreen"`); the host's footer controls request a change through `onViewerModeChange`, and the host decides the resulting mode. `customParameters` is the entry's `customParameters` object from `viewerConfig.json`. When `ViewerPluginProps` changes, update the interface listings in `src/visualizerPlugin/README.md` and `documentation/docusaurus-site/docs/developer/viewer-plugins.md`.
 
 **Step 3:** Add to `manifest.ts`:
 

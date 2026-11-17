@@ -115,21 +115,23 @@ PROPRIETARY_CAD_EXTENSIONS = (".asm", ".catpart", ".catproduct", ".iam", ".ipt",
                               ".prt", ".sldasm", ".sldprt", ".x_b", ".x_t")
 
 ALLOW_LIST: List[str] = [
-    ".3dm", ".3ds", ".3mf", ".aac", ".amf", ".asm", ".avi", ".bim", ".brep", ".catpart",
+    ".3dm", ".3ds", ".3mf", ".aac", ".amf", ".asm", ".avi", ".bim", ".bmp", ".brep", ".catpart",
     ".catproduct", ".cfg", ".csv", ".dae", ".docx", ".e57", ".fbx", ".fcs", ".flac", ".flv", ".geojson", ".gif",
     ".glb", ".gltf", ".gpkg", ".htm", ".html", ".iam", ".ifc", ".ifczip", ".iges", ".igs", ".inf", ".ini",
     ".ipt", ".ipynb", ".jpeg", ".jpg", ".js", ".json", ".jt", ".ksplat", ".las", ".laz", ".lcc", ".log", ".lyrx",
     ".m4a",
-    ".m4v", ".md", ".mkv", ".mov", ".mp3", ".mp4", ".obj", ".off", ".ogg", ".par", ".pcd", ".pdf", ".ply",
+    ".m4v", ".md", ".mdl", ".mkv", ".mov", ".mp3", ".mp4", ".obj", ".off", ".ogg", ".par", ".pcd", ".pdf", ".ply",
     ".png", ".pptx", ".prt", ".ps1", ".ptx", ".py", ".sh", ".sldasm", ".sldprt", ".sog", ".splat", ".spz",
-    ".sql", ".step", ".stl", ".stp", ".svg", ".toml", ".ts", ".txt", ".usd", ".usda", ".usdc", ".usdz",
-    ".wav", ".webm", ".wmv", ".wrl", ".x_b", ".x_t", ".xlsx", ".xml", ".xyz", ".yaml", ".yml",
+    ".sql", ".step", ".stl", ".stp", ".svg", ".tga", ".tif", ".tiff", ".toml", ".ts", ".txt", ".usd", ".usda",
+    ".usdc", ".usdz", ".wav", ".webm", ".webp", ".wmv", ".wrl", ".x_b", ".x_t", ".xlsx", ".xml", ".xyz", ".yaml",
+    ".yml",
 ]
 
 # Extension -> (fileClass, renderBranch) for every allow-listed extension the extension alone
 # decides. .ply, .json and .geojson are absent on purpose: classify() sniffs them.
 EXTENSION_CLASSES: Dict[str, Tuple[str, str]] = {}
-for _extension in (".png", ".jpg", ".jpeg", ".gif", ".svg"):
+# The Image Viewer's rasters, the TIFF/TGA viewer's rasters (Pillow reads all of them in the MEDIA image) and SVG.
+for _extension in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tga", ".tif", ".tiff", ".svg"):
     EXTENSION_CLASSES[_extension] = (CLASS_IMAGE, BRANCH_MEDIA)
 for _extension in (".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v"):
     EXTENSION_CLASSES[_extension] = (CLASS_VIDEO, BRANCH_MEDIA)
@@ -138,8 +140,10 @@ for _extension in (".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a"):
 EXTENSION_CLASSES[".pdf"] = (CLASS_DOCUMENT, BRANCH_MEDIA)
 for _extension in (".docx", ".pptx"):
     EXTENSION_CLASSES[_extension] = (CLASS_DOCUMENT, BRANCH_MEDIA)
+# `.mdl` is NVIDIA Material Definition Language source, which the text viewers open; a binary file under that
+# extension is demoted to `other` by the MEDIA text extractor.
 for _extension in (".txt", ".md", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".inf", ".log",
-                   ".py", ".js", ".ts", ".sql", ".sh", ".ps1", ".ipynb", ".html", ".htm"):
+                   ".py", ".js", ".ts", ".sql", ".sh", ".ps1", ".mdl", ".ipynb", ".html", ".htm"):
     EXTENSION_CLASSES[_extension] = (CLASS_TEXT, BRANCH_MEDIA)
 for _extension in (".csv", ".fcs", ".xlsx"):
     EXTENSION_CLASSES[_extension] = (CLASS_DATA, BRANCH_MEDIA)

@@ -417,3 +417,118 @@ describe("visualizerPlugin/CLAUDE.md catalog", () => {
         });
     });
 });
+
+describe("viewer counts in the documentation", () => {
+    const repoRoot = path.resolve(__dirname, "..", "..", "..", "..");
+    const read = (relative: string) => fs.readFileSync(path.join(repoRoot, relative), "utf8");
+    const total = viewers.length;
+    const gated = viewers.filter(
+        (viewer) => viewer.enabled === false || (viewer.featuresEnabledRestriction ?? []).length > 0
+    ).length;
+    const viewersPage = read("documentation/docusaurus-site/docs/concepts/viewers.md");
+
+    it("[control] counts every shipped viewer entry once", () => {
+        expect(total).toBe(
+            (viewerConfig as any).viewers.length + (addonViewerConfig as any).viewers.length
+        );
+    });
+
+    it("the viewers page states the shipped total and how many are always available", () => {
+        expect(viewersPage).toContain(`**${total} built-in viewer plugins**`);
+        expect(viewersPage).toContain(`lists all ${total};`);
+        const words = [
+            "Zero",
+            "One",
+            "Two",
+            "Three",
+            "Four",
+            "Five",
+            "Six",
+            "Seven",
+            "Eight",
+            "Nine",
+            "Ten",
+            "Eleven",
+            "Twelve",
+            "Thirteen",
+            "Fourteen",
+            "Fifteen",
+            "Sixteen",
+            "Seventeen",
+            "Eighteen",
+            "Nineteen",
+            "Twenty",
+        ];
+        expect(viewersPage).toContain(`${words[total - gated]} are available in every deployment`);
+        expect(viewersPage).toContain(
+            `The remaining ${words[gated].toLowerCase()} are conditional`
+        );
+    });
+
+    it("the viewers page's master table has one row per viewer", () => {
+        const section = viewersPage
+            .split("## Master viewer table")[1]
+            .split("## File extension")[0];
+        const rows = section.split("\n").filter((line) => line.startsWith("| **"));
+        expect(rows).toHaveLength(total);
+    });
+
+    it.each([
+        "README.md",
+        "documentation/docusaurus-site/docs/index.mdx",
+        "documentation/docusaurus-site/docs/additional/viewer-plugins.md",
+        "documentation/docusaurus-site/docs/concepts/files-and-versions.md",
+        "documentation/docusaurus-site/docs/overview/benefits.md",
+        "documentation/docusaurus-site/docs/overview/solution-overview.md",
+        "documentation/docusaurus-site/docs/overview/use-cases.md",
+        "documentation/docusaurus-site/docs/user-guide/web-interface.md",
+    ])("%s quotes the shipped total when it quotes a viewer count", (file) => {
+        const counts = [
+            ...read(file).matchAll(/\b(\d+) (?:built-in |interactive )?viewer(?: plugins|s)?\b/g),
+        ].map((match) => Number(match[1]));
+        expect(counts.length).toBeGreaterThan(0);
+        for (const count of counts) expect(count).toBe(total);
+    });
+});
+
+describe("TIFF viewers side by side (#1599 with #1576)", () => {
+    const image = byId("tiff-tga-viewer");
+    const map = byId("geotiff-map-viewer");
+    const offered = (extensions: string[], isMultiFile: boolean) =>
+        viewers
+            .filter(
+                (v) => !v.isPreviewViewer && admitsVisualizeSelection(v, extensions, isMultiFile)
+            )
+            .sort((a, b) => a.priority - b.priority)
+            .map((v) => v.name);
+
+    it("gives the two viewers distinct names and ids", () => {
+        expect(image.name).not.toBe(map.name);
+        expect(image.id).not.toBe(map.id);
+        expect(map.name).toBe("GeoTIFF Map Viewer");
+    });
+
+    it("offers both for one .tif and .tiff file, the image viewer first", () => {
+        for (const ext of [".tif", ".tiff"]) {
+            expect(offered([ext], false)).toEqual(["TIFF/TGA Image Viewer", "GeoTIFF Map Viewer"]);
+        }
+    });
+
+    it("offers only the map viewer for several TIFF files", () => {
+        expect(offered([".tif", ".tif"], true)).toEqual(["GeoTIFF Map Viewer"]);
+    });
+
+    it("never hides the map viewer behind the image viewer's decode limits", () => {
+        // The limits are enforced inside the image viewer (it shows a notice); selection is by
+        // extension only, so a file above 100 megapixels still reaches the map viewer.
+        expect(image.customParameters.maxDecodePixels).toBe(100000000);
+        expect(map.priority).toBeGreaterThanOrEqual(image.priority);
+        expect(offered([".tif"], false)).toContain("GeoTIFF Map Viewer");
+        expect(map.customParameters?.maxDecodePixels).toBeUndefined();
+    });
+
+    it("limits the map viewer to the location services feature, and the image viewer to none", () => {
+        expect(map.featuresEnabledRestriction).toEqual(["LOCATIONSERVICES"]);
+        expect(image.featuresEnabledRestriction).toBeUndefined();
+    });
+});

@@ -589,9 +589,14 @@ describe("TemplateForm — Tags and Config Body step", () => {
         // Basic is invalid (no name), so nothing ahead is reachable from the stepper.
         expect(screen.queryByRole("button", { name: /: go to step \d$/ })).not.toBeInTheDocument();
         await user.type(screen.getByPlaceholderText("Template name"), "T");
-        // Every later step is now reachable, since no step between has a failing gate.
+        // Every later step is now reachable, since no step between has a failing gate. Each shows its
+        // number badge and is named starting with that number and its label (#1592).
+        expect(
+            screen.getByRole("button", { name: "2 Pipeline overrides: go to step 2" })
+        ).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "4 Review: go to step 4" })).toBeInTheDocument();
         await user.click(
-            screen.getByRole("button", { name: /^Tags and Config Body: go to step \d$/ })
+            screen.getByRole("button", { name: "3 Tags and Config Body: go to step 3" })
         );
         expect(screen.getByTestId("config-editor")).toBeInTheDocument();
         // And the way back is one click.

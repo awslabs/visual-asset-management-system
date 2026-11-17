@@ -36,6 +36,7 @@ from common.s3MetadataKeys import (
 from common.s3PathPatterns import (
     PREVIEW_FILE_PATTERN,
     ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    PREVIEW_FILE_SIZE_LIMIT_BYTES,
     TEMPORARY_UPLOAD_PREFIX,
     PREVIEW_PREFIX,
 )
@@ -94,7 +95,8 @@ logger = safeLogger(service_name="UploadFile")
 # Constants
 UPLOAD_EXPIRATION_DAYS = 7  # TTL for upload records and S3 multipart uploads
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
-MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
+# Maximum size of an uploaded preview file (5 MiB, the shared limit; a preview of exactly that size is accepted)
+MAX_PREVIEW_FILE_SIZE = PREVIEW_FILE_SIZE_LIMIT_BYTES
 MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 20
 # 1 GiB threshold for asynchronous processing, shared with the copy engine and the output step.
 LARGE_FILE_THRESHOLD_BYTES = loc.LARGE_FILE_THRESHOLD_BYTES
@@ -961,7 +963,7 @@ def check_preview_file_size(bucket_name, key, file_path):
         file_size = head_response.get('ContentLength', 0)
         
         if file_size > MAX_PREVIEW_FILE_SIZE:
-            error_message = f"Preview files exceeds maximum allowed size of 5MB"
+            error_message = f"Preview files exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
             return False, error_message
         
         return True, None
@@ -1407,11 +1409,11 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         # Validate the extension of an asset preview and of a .previewFile. file
         if uploadType == "assetPreview" or is_preview_file(file.relativeKey):
             if not validate_preview_file_extension(file.relativeKey):
-                raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+                raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp")
 
         # Validate file size for preview files
         if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
-            raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5MB per file")
+            raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5 MiB (5,242,880 bytes) per file")
 
         # Determine final S3 key based on upload type
         if uploadType == "assetFile":
@@ -1677,7 +1679,7 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
                         relativeKey=file.relativeKey,
                         uploadIdS3="external",
                         success=False,
-                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp"
                     ))
                     has_failures = True
                     continue
@@ -1747,7 +1749,7 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
                         relativeKey=file.relativeKey,
                         uploadIdS3="external",
                         success=False,
-                        error=f"Preview file {file.relativeKey} exceeds maximum allowed size of 5MB"
+                        error=f"Preview file {file.relativeKey} exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
                     ))
                     has_failures = True
                     continue
@@ -2307,7 +2309,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 name_check_error = "File contains a potentially malicious executable type object"
             elif (uploadType == "assetPreview" or is_preview_file(file.relativeKey)) \
                     and not validate_preview_file_extension(file.relativeKey):
-                name_check_error = "Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                name_check_error = "Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp"
             
             if name_check_error:
                 # AUDIT LOG: upload denied on the file name before any object was created
@@ -2449,7 +2451,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     relativeKey=file.relativeKey,
                     uploadIdS3=file.uploadIdS3,
                     success=False,
-                    error=f"Preview file exceeds maximum allowed size of 5MB"
+                    error=f"Preview file exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
                 ))
                 has_failures = True
                 continue
@@ -2570,7 +2572,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Preview file exceeds maximum allowed size of 5MB"
+                        error=f"Preview file exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
                     ))
                     has_failures = True
                     continue
@@ -2640,7 +2642,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp"
                     ))
                     has_failures = True
                     continue
@@ -2656,7 +2658,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp"
                     ))
                     has_failures = True
                     continue
