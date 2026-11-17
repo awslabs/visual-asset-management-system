@@ -82,7 +82,7 @@ const BASE_LAYER_PROJECT = path.join(REPO, "backend", "lambdaLayers", "base");
 /** The requirements the sync layer exports: the authorizer layer's pins and markers for these three. */
 const SYNC_LAYER_REQUIREMENTS = [
     'cffi==2.0.0 ; python_version >= "3.12" and python_version < "4.0" and platform_python_implementation != "PyPy"',
-    'cryptography==50.0.1 ; python_version >= "3.12" and python_version < "4.0"',
+    'cryptography==50.0.2 ; python_version >= "3.12" and python_version < "4.0"',
     'pycparser==2.22 ; python_version >= "3.12" and python_version < "4.0" and platform_python_implementation != "PyPy" and implementation_name != "PyPy"',
 ];
 
@@ -604,7 +604,7 @@ describe("R3-1, R3-2: the sync's own cryptography layer", () => {
         expect(requirements).toEqual(SYNC_LAYER_REQUIREMENTS);
         expect(lockedPackages(path.join(SYNC_LAYER_PROJECT, "poetry.lock")).sort()).toEqual([
             ["cffi", "2.0.0"],
-            ["cryptography", "50.0.1"],
+            ["cryptography", "50.0.2"],
             ["pycparser", "2.22"],
         ]);
         const pyproject = fs.readFileSync(path.join(SYNC_LAYER_PROJECT, "pyproject.toml"), "utf8");

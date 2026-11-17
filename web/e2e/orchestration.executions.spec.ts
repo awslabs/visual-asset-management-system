@@ -34,6 +34,10 @@ test.describe("Executions board", () => {
     });
 
     test("shows the expected column headers", async ({ page }) => {
+        // The board draws its table only when it has rows; with none it shows its empty state and
+        // no headers (#1492), so a deployment with no execution in the window skips this check.
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
         for (const col of [
             "Status",
             "Execution ID",

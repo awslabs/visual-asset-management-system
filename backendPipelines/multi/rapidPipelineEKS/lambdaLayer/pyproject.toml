@@ -5,10 +5,12 @@ description = "Kubernetes Python client Lambda layer for EKS operations"
 authors = ["VAMS Team"]
 package-mode = false
 
+# No boto3 / botocore / s3transfer here: the pipeline Lambda also attaches the VAMS base layer, which
+# ships the AWS SDK. Both layers extract into /opt/python, so any other package both layers lock is kept
+# at the base layer's version (infra/test/pipelines/eksKubernetesLayerPackages.test.ts checks both).
 [tool.poetry.dependencies]
 python = "^3.12"
 kubernetes = "36.0.3"
-boto3 = ">=1.28.0"
 PyYAML = ">=6.0"
 requests = ">=2.28.0"
 urllib3 = ">=2.7.0,<3"
