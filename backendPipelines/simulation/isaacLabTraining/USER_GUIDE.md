@@ -343,6 +343,7 @@ renders a field for each and substitutes the value into the configuration body a
 | `seed`                   | `SEED`       | integer | null                       | Random seed for reproducibility; a blank field leaves it unset                                                                                         |
 | `customEnvironmentPath`  | -            | string  | -                          | Path to a custom environment package relative to the asset root                                                                                        |
 | `customEnvironmentS3Uri` | -            | string  | -                          | Full S3 URI to the package; must name the executing asset's own bucket                                                                                 |
+| `stageAssetPaths`        | -            | list    | -                          | Files and folders of the executing asset downloaded into `/tmp/assets` (`VAMS_ASSET_FILES_DIR`) before the run, keeping their asset-relative paths     |
 
 **Training Mode Parameters:**
 
