@@ -65,7 +65,8 @@ KIND_TEXTURE_OR_OTHER = "textureOrOther"  # a texture, material or other asset-v
 # before, but a missing one removes nothing from the preview, so it is not reported.
 KIND_METADATA = "metadata"
 # A material module the renderer resolves from its own search path (a bare ``OmniPBR.mdl``), not a
-# file of the asset: still looked up as before, not reported.
+# file of the asset: still looked up beside the layer, but an absent one is logged once at INFO and
+# is neither counted as missing nor reported.
 KIND_RENDERER_MDL = "rendererMdl"
 # A texture of a format whose loader does not sample textures (FBX): still fetched as before, but a
 # missing one removes nothing from the preview, so it is not reported.
@@ -575,14 +576,14 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
                      f"over the file budget ({limits.max_files} files)", rel_path, kind)
                 continue
             key = root_key + relative
-            size = s3.head_object_size(bucket, key)
+            size = s3.head_object_size(bucket, key, warn_if_missing=kind != KIND_RENDERER_MDL)
             if size is None:
                 if kind == KIND_RENDERER_MDL:
                     if raw not in mdl_logged:
                         mdl_logged.add(raw)
                         logger.info(f"  MDL module resolved by the renderer, not fetched: {raw!r}")
-                else:
-                    logger.warning(f"  Referenced file not found in the asset: {relative}")
+                    continue
+                logger.warning(f"  Referenced file not found in the asset: {relative}")
                 skip(report.missing, relative, "missing from the asset", rel_path, kind)
                 continue
             if report.total_bytes + size > limits.max_total_bytes:

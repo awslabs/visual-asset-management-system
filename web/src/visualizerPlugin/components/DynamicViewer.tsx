@@ -479,6 +479,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                                         : undefined
                                                 }
                                                 multiFiles={files.length > 1 ? files : undefined}
+                                                fileInfo={files.length === 1 ? files[0] : undefined}
                                                 versionId={
                                                     files.length === 1
                                                         ? files[0].versionId

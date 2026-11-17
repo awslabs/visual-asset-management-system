@@ -431,6 +431,25 @@ no central partition helper in the backend — these four rules are the contract
     `CopyObject`. Ratchet: `backend/tests/handlers/databases/test_buckets_listing_region.py`;
     mock parity: `backend/tests/common/test_s3_region_routing.py`.
 
+    **S3 Transfer Acceleration is decided in `common.s3`, never in a handler.** A
+    bucket row with `isAccelerated: true` (BOOL, missing is false) makes the router
+    sign `get_object`, `upload_part` and `put_object` presigned URLs for
+    `<bucket>.s3-accelerate.amazonaws.com`, in the commercial partition (`aws`)
+    only; the flag is ignored and a warning logged elsewhere. Every other operation
+    keeps the ordinary client, and a bucket without the flag signs the same
+    path-style URL as before. An accelerate problem (a name with a period or one
+    botocore cannot virtual-host, a FIPS endpoint setting, any signing error) is
+    logged once per bucket per cache window and the ordinary URL is returned.
+    `s3_accelerated_client_for_region(region)` is `S3_ASSET_CLIENT_CONFIG` plus
+    `use_accelerate_endpoint`, one per Region. `bucket_is_accelerated(name)` reads
+    the row through `bucketNameGSI` and caches it for 600 s (the Region cache never
+    expires, the flag must); a failed read keeps the last known value and is retried
+    after 30 s. The auxiliary bucket has no row and follows the effective default
+    asset bucket; the artefacts and staging buckets are never accelerated.
+    Server-side consumers never presign. Tests:
+    `backend/tests/common/test_s3_transfer_acceleration.py` (includes a ratchet that
+    every presigning module holds `region_routing_s3_client()`).
+
 3. **New ARN/URL validators must accept every partition.** Compose them from
    `aws_partition_group` (`aws`, `-us-gov`, `-cn`, `-eusc`, `-iso[-x]`) and
    `aws_dns_suffix_group` in `common/validators.py`; never inline `arn:aws:`. A
@@ -1592,6 +1611,8 @@ To change a dependency version:
 4. Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together — a requirements file that drifts from its lock will be silently overwritten by the next export. The layer bundling build never reads the committed file: `layerBundlingCommand()` (`infra/lib/helper/lambda.ts`) re-exports the layer's `poetry.lock` inside the build container and installs that export, so a layer ships what its lock resolves to. The command installs pinned versions of pip, Poetry and `poetry-plugin-export`, with Poetry pinned to the version that writes the layer lock files; regenerate the locks with that Poetry version, or move the pin with them (`infra/test/security/layerBundlingToolPins.test.ts` asserts every tool is pinned).
 
 `backend/` and `backend/lambdaLayers/base/` lock every package they share at the same version: handler Lambdas load their third-party packages from the base layer, while the backend suite installs `backend/requirements-dev.txt`. Change a shared package in both trees in the same change. To match a transitive package to a version other than its newest release, add a temporary exact constraint to `pyproject.toml`, run `poetry lock`, remove the constraint, and run `poetry lock` again — Poetry keeps the locked version. `backend/tests/test_base_layer_dependency_parity.py` fails on any difference. The authorizer layer (`backend/lambdaLayers/authorizer/`) is a separate dependency set and is not compared.
+
+The RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`) is attached to the pipeline Lambda together with the base layer, and both extract into `/opt/python`, so a package both layers carry at different versions ends up mixed from two releases. That layer therefore declares no AWS SDK package (`boto3`, `botocore` and `s3transfer` come from the base layer) and locks every other package it shares with the base layer at the base layer's version; re-lock it in the same change that moves a shared package in the base layer. `infra/test/pipelines/eksKubernetesLayerPackages.test.ts` fails on either, and on a function that attaches the Kubernetes layer without the base layer.
 
 Requirements files with **no** side-by-side `pyproject.toml` (e.g. `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files and are edited directly.
 
@@ -2799,6 +2820,8 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 A file can hold several `<file>.previewFile.<ext>` objects (a pipeline re-run in another format writes a `.png` beside an existing `.gif`; nothing deletes the other). Every path that attaches a file's preview goes through `select_newest_preview_file((key, lastModified, isArchived) …)` (`backend/common/s3PathPatterns.py`): in `handlers/assets/assetFiles.py` the current listing, the version-snapshot listing in basic and detailed mode, and the single-file info that set `previewFile`, and in `handlers/assets/assetExportService.py` the export's per-file preview path. A live preview beats an archived one, then the latest `lastModified` wins, ties keep key order. Do not pick "the first in key order" in a new path. Tests: `tests/handlers/assets/test_assetFiles_newest_preview.py`, `tests/handlers/assets/test_assetExportService_newest_preview.py`.
 
 ## 🔍 **Code Review Checklist**
+
+`PREVIEW_FILE_SIZE_LIMIT_BYTES` (5 MiB) and `is_self_previewable(name, size)` in `s3PathPatterns.py` are the one backend definition of "the web shows this file as its own preview": an allowed preview extension (`.webp` and `.bmp` included, `.tga`/`.tif`/`.tiff` never) and a size STRICTLY under the limit. The upload handlers' `MAX_PREVIEW_FILE_SIZE` takes the same value and still rejects a preview LARGER than it (a preview of exactly 5 MiB can be uploaded). The web (`fileFormats.ts`) and the 3D thumbnail container (`image_utils.MAX_FILE_SIZE_BYTES`) mirror both; drift tests read those files.
 
 ### **Backend Handler Compliance**
 

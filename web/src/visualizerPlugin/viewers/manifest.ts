@@ -9,6 +9,8 @@
 // Viewer component paths - add new viewers here
 export const VIEWER_COMPONENTS = {
     "./viewers/ImageViewerPlugin/ImageViewerComponent": "ImageViewerPlugin/ImageViewerComponent",
+    "./viewers/RasterImageViewerPlugin/RasterImageViewerComponent":
+        "RasterImageViewerPlugin/RasterImageViewerComponent",
     "./viewers/Online3dViewerPlugin/Online3dViewerComponent":
         "Online3dViewerPlugin/Online3dViewerComponent",
     "./viewers/VideoViewerPlugin/VideoViewerComponent": "VideoViewerPlugin/VideoViewerComponent",
@@ -42,6 +44,7 @@ export const VIEWER_COMPONENTS = {
 
 // Dependency manager paths - add new dependency managers here
 export const DEPENDENCY_MANAGERS = {
+    "./viewers/RasterImageViewerPlugin/dependencies": "RasterImageViewerPlugin/dependencies",
     "./viewers/PotreeViewerPlugin/dependencies": "PotreeViewerPlugin/dependencies",
     "./viewers/CesiumViewerPlugin/dependencies": "CesiumViewerPlugin/dependencies",
     "./viewers/Online3dViewerPlugin/dependencies": "Online3dViewerPlugin/dependencies",

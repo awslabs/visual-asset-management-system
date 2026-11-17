@@ -13,7 +13,7 @@
 -   **ORM**: boto3 DynamoDB resource + client APIs
 -   **Search**: OpenSearch (opensearch-py 2.7.1)
 -   **Logging**: aws-lambda-powertools Logger with custom redaction
--   **Tests**: pytest 9.0.3 + moto 5.1.0 (see `backend/tests/CLAUDE.md`)
+-   **Tests**: pytest 9.2.0 + moto 5.2.5 (see `backend/tests/CLAUDE.md`)
 -   **Gold Standard**: `backend/handlers/assets/assetService.py` (handler), `backend/models/assetsV3.py` (model)
 
 ---
@@ -1359,6 +1359,8 @@ Handlers run in `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign, region `eusc-de-e
 
     **Asset buckets may be in another Region, so every S3 call on an asset bucket goes through `common.s3`'s Region-routing client**, never a module-level `boto3.client('s3', ...)` of the handler's own. `region_routing_s3_client()` / `region_routing_s3_resource()` return the module-level client/resource a handler holds (`s3 = region_routing_s3_client()`); each call is signed for the Region of the `Bucket` it names (`Params['Bucket']` for a presigned URL), resolved from the bucket details the handler read (`bucket_region_fields(row)` spreads `bucketRegion`/`bucketAccountId` into every bucket-details dict and registers the name) or, for a name-only call, from the buckets table's `bucketNameGSI`. `copy_s3_object()` is the one copy path: a managed copy by the destination-Region client, or a streamed GET→PUT when `VAMS_LAMBDAS_IN_VPC` is `true` and the Regions differ, because an S3 interface endpoint does not serve `CopyObject` across Regions. The client config is `S3_ASSET_CLIENT_CONFIG` (SigV4, path style, adaptive retries, the regional `us-east-1` endpoint). `tests/handlers/databases/test_buckets_listing_region.py` holds the listed handlers at zero plain S3 clients, and the test mock `tests/mocks/common/s3.py` carries the same surface (`tests/common/test_s3_region_routing.py` asserts the parity).
 
+    **S3 Transfer Acceleration is decided in `common.s3`, never in a handler.** A bucket row with `isAccelerated: true` (BOOL, a missing attribute is false) makes the router sign `get_object`, `upload_part` and `put_object` presigned URLs for `<bucket>.s3-accelerate.amazonaws.com`, in the commercial partition (`aws`) only: `_accelerated_presign` reads the partition from the ordinary client's `meta.partition` and ignores the flag everywhere else (a warning is logged once per cache window). Every other operation (head, get, put, list, copy, paginators, `generate_presigned_post`) keeps the ordinary client, and a bucket without the flag signs the same path-style URL as before. The accelerated presign client is `s3_accelerated_client_for_region(region)`: `S3_ASSET_CLIENT_CONFIG` plus `use_accelerate_endpoint`, one per Region, so the credential scope is the bucket's Region. An accelerate problem never fails a request: a name with a period, a name botocore cannot virtual-host (legacy underscore names, 1-2 characters), `AWS_USE_FIPS_ENDPOINT=true`, or any error building or signing with the accelerated client is logged once per bucket per cache window with the error class, and the ordinary client's URL is returned. `bucket_is_accelerated(name)` reads the row through `bucketNameGSI` and caches it for `BUCKET_ACCELERATE_CACHE_TTL_SECONDS` (600 s, so a toggle reaches warm Lambdas; the Region cache never expires). A failed read is logged once per window, keeps the last known value (false when there is none) and is retried after `BUCKET_ACCELERATE_FAILURE_TTL_SECONDS` (30 s). `bucket_region_fields(row)` registers the flag and adds `isAccelerated` to the details only when it is true. The auxiliary bucket has no row and follows the effective default asset bucket (the `isDefault` row, possibly external); the artefacts bucket and upload staging buckets are never accelerated. Server-side consumers (Lambda, Step Functions, Batch) never presign. `tests/common/test_s3_transfer_acceleration.py` covers it, asserts the mock parity, and holds a ratchet: every module under `backend/backend` that calls `generate_presigned_url` must get its client from `region_routing_s3_client()`.
+
 3. **New ARN/URL validators must accept every partition.** `common/validators.py` defines `aws_partition_group` (`aws`, `-us-gov`, `-cn`, `-eusc`, `-iso[-x]`) and `aws_dns_suffix_group` (all seven suffixes). Compose new patterns from these groups — never inline `arn:aws:`. A pattern that hardcodes the commercial partition passes every commercial test and rejects legitimate input **only** in the affected partition, which is the hardest failure mode to attribute.
 
     ```python
@@ -1462,9 +1464,9 @@ add-on route or object type gets its tag (`tests/common/test_addon_features.py`;
 
 ## Key Dependencies
 
-Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.45 / `botocore` 1.43.45 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix), `casbin` 1.36.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.7.1, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
+Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.126 / `botocore` 1.43.126 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix), `casbin` 1.36.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.7.1, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
 
-Dev only: `moto` 5.1.0 (AWS mocks), `pytest` 9.0.3, `mypy` 1.0.0, `flake8` 6.0.0.
+Dev only: `moto` 5.2.5 (AWS mocks), `pytest` 9.2.0, `mypy` 1.0.0, `flake8` 6.0.0.
 
 ---
 
@@ -1491,6 +1493,8 @@ To change a dependency version:
 
 `backend/` and `backend/lambdaLayers/base/` lock every package they share at the same version: handler Lambdas load their third-party packages from the base layer, while the backend suite installs `backend/requirements-dev.txt`. Change a shared package in both trees in the same change. To match a transitive package to a version other than its newest release, add a temporary exact constraint to `pyproject.toml`, run `poetry lock`, remove the constraint, and run `poetry lock` again — Poetry keeps the locked version. `backend/tests/test_base_layer_dependency_parity.py` fails on any difference. The authorizer layer (`backend/lambdaLayers/authorizer/`) is a separate dependency set and is not compared.
 
+The RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`) is attached to the pipeline Lambda together with the base layer, and both extract into `/opt/python`, so a package both layers carry at different versions ends up mixed from two releases. That layer therefore declares no AWS SDK package (`boto3`, `botocore` and `s3transfer` come from the base layer) and locks every other package it shares with the base layer at the base layer's version; re-lock it in the same change that moves a shared package in the base layer. `infra/test/pipelines/eksKubernetesLayerPackages.test.ts` fails on either, and on a function that attaches the Kubernetes layer without the base layer.
+
 Requirements files with **no** side-by-side `pyproject.toml` (e.g. `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files, edited directly.
 
 ---
@@ -1516,6 +1520,8 @@ Most anti-patterns are the inverse of a Critical Rule above. The compact list ci
 -   Echoing user input or internal details in client error messages — Rule 11.
 -   Hardcoding `arn:aws:` in an ARN string or a validator regex — see Partition Portability. Compose from `aws_partition_group` / `aws_dns_suffix_group`, or derive the partition from an ARN already in hand; a commercial-only pattern fails only in GovCloud / EU Sovereign.
 -   Passing `endpoint_url` or a hardcoded hostname to a boto3 client — see Partition Portability. Let the SDK resolve per region; read service endpoints from SSM.
+
+`PREVIEW_FILE_SIZE_LIMIT_BYTES` (5 MiB) and `is_self_previewable(name, size)` in `s3PathPatterns.py` are the one backend definition of "the web shows this file as its own preview": an allowed preview extension (`.webp` and `.bmp` included, `.tga`/`.tif`/`.tiff` never) and a size STRICTLY under the limit. The upload handlers' `MAX_PREVIEW_FILE_SIZE` takes the same value and still rejects a preview LARGER than it (a preview of exactly 5 MiB can be uploaded). The web (`fileFormats.ts`) and the 3D thumbnail container (`image_utils.MAX_FILE_SIZE_BYTES`) mirror both; drift tests read those files.
 
 ### Swallowing exceptions silently
 
