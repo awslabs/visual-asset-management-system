@@ -59,6 +59,7 @@ tools/VamsCLI/
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
       compliance.py          # Compliance: schema sub-group, bind/unbind/bindings, evaluate/sweep/state/evaluations, quarantine + cascade sub-groups, audit
+      audit.py               # Audit log search: groups, search, results, show, stop, export (not `compliance audit`)
       addon/
         __init__.py          # Add-on lane: ADDON_COMMANDS, registered by main.py after the core commands
         edh.py               # EDH Workstations add-on: workstation, catalog, admin (images, ami-recipe, instances, settings, capacity-reservation), container (job) sub-groups
@@ -87,6 +88,7 @@ tools/VamsCLI/
       system_records.py      # is_system_record_refusal(): exact match of the API's system-record 400s
       confirmation.py        # confirm_destructive_action(): extra prompt only on an interactive terminal
       zip_downloads.py       # zip-download helpers: PATH@VERSIONID parsing, request body, --wait polling, local path, text output
+      audit_search.py        # audit helpers: filter body, time parsing, long-poll loop, paging, export chunks, text output
       logging.py             # Rotating file logger, verbose mode
       retry_config.py        # Retry settings with env var overrides
       features.py            # Feature switch utilities
@@ -103,7 +105,7 @@ tools/VamsCLI/
     addon/                   # Add-on command and client tests (test_edh.py, test_edh_client.py, test_edh_capacity_reservations.py, test_edh_start_status.py, test_edh_workstation_image.py)
 ```
 
-### Command Groups (25 core + add-on groups)
+### Command Groups (26 core + add-on groups)
 
 The core groups are registered in `main.py` via `cli.add_command()`:
 
@@ -111,8 +113,7 @@ The core groups are registered in `main.py` via `cli.add_command()`:
 setup, auth, assets, asset-version, asset-links, file, profile, database,
 tag, tag-type, metadata, metadata-schema, comment, subscription, features,
 search, sync, workflow, pipeline, execution, industry, user, role, api-key,
-zip-download
-compliance
+zip-download, compliance, audit
 ```
 
 The add-on groups are registered from `commands/addon/` (`ADDON_COMMANDS`): `edh` (EDH Workstations). See [Add-on Commands](#add-on-commands).
@@ -150,6 +151,12 @@ Compliance covers the schema registry, bindings, evaluation, quarantine, cascade
 Every compliance call goes through `APIClient._compliance_request`, which percent-encodes the request path (`quote(endpoint, safe='/%')`): an id with `#` (a deleted database's `<id>#deleted`) is sent as typed, and an id typed encoded (`%23`) is left as it is. A new compliance client method calls `_compliance_request`, not `get`/`post` directly (D134). The MCP compliance tools reach the API only through these methods.
 
 The compliance `schemas` and pending `cascades` listings return their whole list in one response and take no paging parameters, so `schema list` and `cascade list` have none — a `--starting-token` there would be a knob the route ignores (`tools/VamsMCP/CLAUDE.md` Rule 9). `bindings` (`assetOverrides`), `state -d` (`assets`), `quarantine list` (`quarantinedAssets`), `evaluations` and `audit` (`entries`) all page on `maxItems` + `startingToken` with a `NextToken`; the CLI exposes them as `--max-items` (IntRange to the route cap) and `--starting-token`.
+
+Audit covers the audit log search API (core, no feature switch; `/audit/*`):
+
+-   `audit groups|search|results|show|stop|export` -- `groups` lists the log groups the caller may search with the deployment's limits; `search` starts a search (`APIClient.start_audit_query`), waits with the server long poll (`wait_for_audit_query`: sequential polls of `wait=20`, honours `pollAfterMs`, retries a dropped poll `AUDIT_NETWORK_RETRIES` times, gives up after `--timeout` with `AuditSearchTimeoutError` carrying the handle) and reads up to `--max-rows` rows; `--no-wait` prints the handle; `results --handle` reads one page (`--page-token`) or `--all` up to `--max-rows`; `show --handle --record-id` pages the search until it finds the `recordId` (there is no single-record route); `stop` is not destructive and takes no `--confirm`; `export --format csv|ndjson` joins the API's chunks in order and writes them verbatim, to `-o FILE` (written beside the target and moved into place, refuses an existing file without `--overwrite`) or standard output. Filters are repeatable options built by `utils/audit_search.build_filters`; `--contains` (3 to 64 characters of `[A-Za-z0-9 ._:@+/-]`, at most 3) and the 20-value cap are checked before any request and a refused term is never echoed. `includeProbes` is always sent (false unless `--include-probes`). Time options take `24h`/`7d`, `now`, ISO 8601 or epoch seconds.
+-   The CLI never counts, hides or infers rows: it prints `rowCount` and rows as the API returned them, never a count of records the caller may not see, and a stopped (`Cancelled`) search shows no rows. The generic 403 (route, or any unknown, undeployed or not-allowed group) is the usual `PermissionDeniedError`; the one 404 is `AuditQueryNotFoundError` whichever of unknown, expired, someone else's or no-longer-allowed it was; a 400 is `InvalidAuditRequestError` carrying the server's generic text. A deployment without the routes (the gateway's `Missing Authentication Token` 403) is `AuditSearchNotSupportedError`. Every call goes through `APIClient._audit_request`. `vamscli compliance audit` is the compliance evaluation trail and is unrelated; the two commands' help text cross-references each other.
+-   Audit content stays out of the CLI log file: `redact_sensitive` (`utils/logging.py`, `_summarize_audit_payload`) replaces a start body's `contains` terms, a page's `Items`, an export chunk's `content` and a shown row's detail with counts, lengths and the row identity (pinned by `tests/test_audit_api_client.py::TestLogFileKeepsAuditContentOut`).
 
 Industry has nested sub-command groups:
 

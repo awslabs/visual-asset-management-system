@@ -35,6 +35,7 @@ The following options appear on nearly every command and are not repeated in ind
 | `role`, `role constraint`, `role user`                                           | Role management, permission constraints, user-role assignments, and template import              | [Permissions](commands/permissions.md)                               |
 | `user cognito`, `api-key`                                                        | Amazon Cognito user management and API key management                                            | [Users and API Keys](commands/users-and-keys.md)                     |
 | `compliance`, `compliance schema`, `compliance quarantine`, `compliance cascade` | Compliance schemas, bindings, evaluation, quarantine, cascades, and the audit trail              | [Compliance](commands/compliance.md)                                 |
+| `audit`                                                                          | Search the audit logs: groups, search, results, show, stop, and CSV or NDJSON export              | [Audit Log Search](commands/audit.md)                                |
 | `industry engineering bom`, `industry engineering plm`, `industry spatial`       | BOM assembly, PLM XML import, and spatial GLB combination                                        | [Industry](commands/industry.md)                                     |
 | `edh workstation`, `edh catalog`, `edh admin`, `edh container`                   | EDH Workstations add-on: workstations, images, administration, AMI recipes, and container jobs   | [EDH Workstations](../developer/edh-workstations/cli-commands.md)    |
 
@@ -124,6 +125,17 @@ vamscli compliance evaluate -d my-database -a my-asset
 vamscli compliance state -d my-database
 vamscli compliance quarantine list
 vamscli compliance audit --event-type quarantine_released --limit 100
+```
+
+### Audit Log Search
+
+```bash
+vamscli audit groups
+vamscli audit search --action assetUpdate --from 7d
+vamscli audit search --user carol --outcome denied --from 24h --json-output
+vamscli audit results --handle <queryId> --all --max-rows 500
+vamscli audit export --handle <queryId> --format csv -o audit.csv
+vamscli audit stop --handle <queryId>
 ```
 
 ### Industry Commands

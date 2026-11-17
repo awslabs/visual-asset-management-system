@@ -195,6 +195,7 @@ const sidebars: SidebarsConfig = {
                                 "cli/commands/permissions",
                                 "cli/commands/users-and-keys",
                                 "cli/commands/compliance",
+                                "cli/commands/audit",
                                 "cli/commands/industry",
                             ],
                         },
