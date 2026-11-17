@@ -183,18 +183,19 @@ Managed rule groups can match legitimate traffic (for example, large multipart u
 :::info[Implemented by]
 Audit log search (core, always deployed, no `enabled` key) is bounded by `app.auditLogging.search`. An absent block or key takes the default; a value that is not an integer in range fails synthesis.
 
-| Key                                                   | Default | Limit                           | Meaning                                        |
-| ----------------------------------------------------- | ------- | ------------------------------- | ---------------------------------------------- |
-| `app.auditLogging.search.maxQueryWindowDays`          | `31`    | 1 to 366                        | Longest time range one search may cover.       |
-| `app.auditLogging.search.maxRows`                     | `1000`  | 1 to 10000                      | Most rows one search returns.                  |
-| `app.auditLogging.search.maxConcurrentQueries`        | `5`     | 1 to 20                         | Open searches across VAMS.                     |
-| `app.auditLogging.search.maxConcurrentQueriesPerUser` | `2`     | 1 to the VAMS-wide value        | Open searches per user.                        |
-| `app.auditLogging.search.queryDeadlineSeconds`        | `300`   | 10 to 900                       | A search still running after this is stopped.  |
-| `app.auditLogging.search.longPollWaitSeconds`         | `20`    | 0 to 25 and API timeout minus 4 | How long one status request waits.             |
-| `app.auditLogging.search.maxContainsTermLength`       | `64`    | 3 to 128                        | Characters in one free-text term.              |
-| `app.auditLogging.search.maxContainsTerms`            | `3`     | 1 to 5                          | Free-text terms per search, combined with AND. |
+| Key                                                   | Default | Limit                           | Meaning                                                                         |
+| ----------------------------------------------------- | ------- | ------------------------------- | ------------------------------------------------------------------------------- |
+| `app.auditLogging.search.maxQueryWindowDays`          | `31`    | 1 to 366                        | Longest time range one search may cover.                                        |
+| `app.auditLogging.search.maxRows`                     | `1000`  | 1 to 10000                      | Most rows one search returns.                                                   |
+| `app.auditLogging.search.maxConcurrentQueries`        | `5`     | 1 to 20                         | Open searches across VAMS.                                                      |
+| `app.auditLogging.search.maxConcurrentQueriesPerUser` | `2`     | 1 to the VAMS-wide value        | Open searches per user.                                                         |
+| `app.auditLogging.search.queryDeadlineSeconds`        | `300`   | 10 to 900                       | A search still running after this is stopped.                                   |
+| `app.auditLogging.search.longPollWaitSeconds`         | `20`    | 0 to 25 and API timeout minus 4 | How long one status request waits.                                              |
+| `app.auditLogging.search.maxContainsTermLength`       | `64`    | 3 to 128                        | Characters in one free-text term.                                               |
+| `app.auditLogging.search.maxContainsTerms`            | `3`     | 1 to 5                          | Free-text terms per search, combined with AND.                                  |
+| `app.auditLogging.search.handleRetentionMinutes`      | `60`    | 5 to 1440                       | How long a search handle, with its free-text terms, is kept after its last use. |
 
-The limits reach the `auditLogService` Lambda function as `AUDIT_SEARCH_*` environment variables. See [Audit Log Search API](../api/audit.md).
+The limits reach the `auditLogService` Lambda function as `AUDIT_SEARCH_*` environment variables. Each search keeps one handle row in an encrypted DynamoDB table. The row, and the free-text terms in it, expire `handleRetentionMinutes` after the last start, poll, page, export or stop (never before a running search reaches its deadline). A row past its expiry is treated as not found before DynamoDB deletes it. The terms are also removed as soon as a search is stopped, ends without results, or its export is complete. See [Audit Log Search API](../api/audit.md).
 
 `getConfig()` (`infra/config/config.ts`, `resolveAuditLoggingConfig`) defaults and validates the value, and `globalLambdaEnvironmentsAndPermissions()` (`infra/lib/helper/security.ts`) passes it to every VAMS Lambda function as the `AUDIT_RECORD_READS` environment variable, which `backend/backend/customLogging/auditLogging.py` reads. Changing it updates Lambda environment variables only; no other resource changes. See [Audit Logging](../developer/audit-logging.md#reads-switch).
 :::

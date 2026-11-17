@@ -17,6 +17,8 @@ Logs Insights narrows the records. The API then parses each record, redacts it a
 
 A handle belongs to the user who started the search. An unknown, malformed, expired, foreign or no-longer-allowed handle returns the same `404 Query not found`.
 
+A handle is kept for `app.auditLogging.search.handleRetentionMinutes` (default 60) after its last start, poll, page, export or stop; every one of those requests extends it, and a running search is kept at least until its deadline. A handle past that time returns `404` even before the database removes it. The free-text (`contains`) terms of a search are kept only in the handle, which is encrypted, and are removed sooner: when the search is stopped, ends as `Failed`, `Cancelled` or `Timeout`, or its export has returned its last chunk. A completed search whose terms were removed returns `404` for further pages, so start a new search to read it again. The audit record of a search holds the number, total length and SHA-256 of the terms, never the terms.
+
 ## Endpoints
 
 | Method | Path                              | Purpose                                                     |
