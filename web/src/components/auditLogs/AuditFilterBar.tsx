@@ -78,7 +78,7 @@ export interface AuditFilterBarProps {
     disabled?: boolean;
     /** Called when the order changes, so results already shown can be read in the new order. */
     onOrderChange?: (sort: "asc" | "desc") => void;
-    /** Live status of the search (progress, stopped), shown beside the Search and Stop buttons. */
+    /** Live status of the search (progress, stopped), shown under the Search and Stop buttons. */
     status?: React.ReactNode;
     /** An extra info icon beside the filter label (the Authentication group note). */
     filterInfo?: React.ReactNode;
@@ -104,7 +104,11 @@ export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
 }) => {
     const limits = groups?.limits;
     const options = useMemo(() => filteringOptions(groups), [groups]);
-    const properties = useMemo(() => filteringProperties(), []);
+    const groupLabels = useMemo(
+        () => new Map((groups?.groups ?? []).map((g) => [g.key, g.label])),
+        [groups]
+    );
+    const properties = useMemo(() => filteringProperties(groupLabels), [groupLabels]);
     const query = useMemo(() => filtersToQuery(filters), [filters]);
     const allowedKeys = useMemo(() => new Set((groups?.groups ?? []).map((g) => g.key)), [groups]);
 
@@ -150,7 +154,12 @@ export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
         >
             <div
                 data-testid="audit-filter-layout"
-                style={{ display: "flex", flexWrap: "wrap", gap: "16px 24px", alignItems: "end" }}
+                style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "16px 24px",
+                    alignItems: "flex-start",
+                }}
             >
                 <div data-testid="audit-filter-column" style={{ flex: "1 1 420px", minWidth: 0 }}>
                     <SpaceBetween size="s">
@@ -251,80 +260,133 @@ export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
                         flex: "0 1 auto",
                         minWidth: 0,
                         display: "flex",
-                        flexWrap: "wrap",
-                        gap: "16px 16px",
-                        alignItems: "end",
+                        flexDirection: "column",
+                        gap: "8px",
                     }}
                 >
-                    <FormField
-                        label="Time range"
-                        info={
-                            <AuditInfoPopover
-                                testId="audit-range-info"
-                                ariaLabel="About the time range"
-                                header="Time range"
-                            >
-                                Times are in UTC. A range can span at most {maxDays} days. Records
-                                become searchable a short time after they are written.
-                            </AuditInfoPopover>
-                        }
+                    {/* Label row to label row: the controls start level with the filter input,
+                        whatever the filter column holds below it (tokens, the probe checkbox). */}
+                    <div
+                        data-testid="audit-search-controls-row"
+                        style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: "16px 16px",
+                            alignItems: "flex-start",
+                        }}
                     >
-                        <DateRangePicker
-                            value={rangeToPickerValue(filters.range)}
-                            onChange={({ detail }) => {
-                                const range = pickerValueToRange(detail.value);
-                                if (range) onChange({ ...filters, range });
-                            }}
-                            relativeOptions={relativeOptions(maxDays)}
-                            isValidRange={isValidRange}
-                            getTimeOffset={() => 0}
-                            rangeSelectorMode="default"
-                            i18nStrings={PICKER_STRINGS}
-                            ariaLabel="Time range of the search"
-                            placeholder="Filter by a date and time range"
-                        />
-                    </FormField>
-                    <FormField label="Order">
-                        <Select
-                            selectedOption={
-                                ORDER_OPTIONS.find((o) => o.value === filters.sort) ??
-                                ORDER_OPTIONS[0]
+                        <FormField
+                            label="Time range"
+                            info={
+                                <AuditInfoPopover
+                                    testId="audit-range-info"
+                                    ariaLabel="About the time range"
+                                    header="Time range"
+                                >
+                                    Times are in UTC. A range can span at most {maxDays} days.
+                                    Records become searchable a short time after they are written.
+                                </AuditInfoPopover>
                             }
-                            options={ORDER_OPTIONS}
-                            disabled={disabled}
-                            ariaLabel="Order of the records"
-                            onChange={({ detail }) => {
-                                const sort = detail.selectedOption.value === "asc" ? "asc" : "desc";
-                                onChange({ ...filters, sort });
-                                onOrderChange?.(sort);
-                            }}
-                        />
-                    </FormField>
-                    <SpaceBetween direction="horizontal" size="xs" alignItems="center">
-                        {busy ? (
-                            <Button onClick={onStop} iconName="status-stopped" formAction="none">
-                                Stop
-                            </Button>
-                        ) : null}
-                        <Button
-                            variant="primary"
-                            formAction="submit"
-                            loading={busy}
-                            loadingText="Searching"
-                            disabled={problems.length > 0 || noGroups || groups === null}
                         >
-                            Search
-                        </Button>
-                        <AuditInfoPopover
-                            testId="audit-search-info"
-                            ariaLabel="About running a search"
-                            header="Running a search"
-                        >
-                            A search reads CloudWatch audit logs and can take several seconds. A
-                            link to this page restores the filters and does not run the search.
-                        </AuditInfoPopover>
+                            <DateRangePicker
+                                value={rangeToPickerValue(filters.range)}
+                                onChange={({ detail }) => {
+                                    const range = pickerValueToRange(detail.value);
+                                    if (range) onChange({ ...filters, range });
+                                }}
+                                relativeOptions={relativeOptions(maxDays)}
+                                isValidRange={isValidRange}
+                                getTimeOffset={() => 0}
+                                rangeSelectorMode="default"
+                                i18nStrings={PICKER_STRINGS}
+                                ariaLabel="Time range of the search"
+                                placeholder="Filter by a date and time range"
+                            />
+                        </FormField>
+                        <FormField label="Order">
+                            <Select
+                                selectedOption={
+                                    ORDER_OPTIONS.find((o) => o.value === filters.sort) ??
+                                    ORDER_OPTIONS[0]
+                                }
+                                options={ORDER_OPTIONS}
+                                disabled={disabled}
+                                ariaLabel="Order of the records"
+                                onChange={({ detail }) => {
+                                    const sort =
+                                        detail.selectedOption.value === "asc" ? "asc" : "desc";
+                                    onChange({ ...filters, sort });
+                                    onOrderChange?.(sort);
+                                }}
+                            />
+                        </FormField>
+                        {/* An empty label row (hidden from assistive technology) puts the buttons
+                            on the input row, level with the picker and the order select. */}
+                        <FormField label={<span aria-hidden="true">&nbsp;</span>}>
+                            <SpaceBetween direction="horizontal" size="xs" alignItems="center">
+                                {/* Always present, so starting a search adds nothing to the
+                                    row's width; enabled while a search runs. */}
+                                <Button
+                                    onClick={onStop}
+                                    iconName="status-stopped"
+                                    formAction="none"
+                                    disabled={!busy}
+                                >
+                                    Stop
+                                </Button>
+                                {/* The width of the button while it shows "Searching", so the
+                                    loading state does not widen the row. */}
+                                <span style={{ display: "inline-block", minWidth: "7rem" }}>
+                                    <Button
+                                        variant="primary"
+                                        formAction="submit"
+                                        fullWidth
+                                        loading={busy}
+                                        loadingText="Searching"
+                                        disabled={
+                                            problems.length > 0 || noGroups || groups === null
+                                        }
+                                    >
+                                        Search
+                                    </Button>
+                                </span>
+                                <AuditInfoPopover
+                                    testId="audit-search-info"
+                                    ariaLabel="About running a search"
+                                    header="Running a search"
+                                >
+                                    <SpaceBetween size="xs">
+                                        <span>
+                                            A search reads CloudWatch audit logs and can take
+                                            several seconds. Records appear when the search
+                                            finishes. Choose Stop to end it early; a stopped search
+                                            shows no records.
+                                        </span>
+                                        <span>
+                                            A link to this page restores the filters and does not
+                                            run the search.
+                                        </span>
+                                    </SpaceBetween>
+                                </AuditInfoPopover>
+                            </SpaceBetween>
+                        </FormField>
+                    </div>
+                    {/* The status has its own line and takes the width of the controls without
+                        adding to it (width 0, min-width 100%), so starting a search never reflows
+                        the row. A longer text is cut, not wrapped. */}
+                    <div
+                        data-testid="audit-status-slot"
+                        style={{
+                            width: 0,
+                            minWidth: "100%",
+                            overflow: "hidden",
+                            whiteSpace: "nowrap",
+                            textOverflow: "ellipsis",
+                            minHeight: 0,
+                        }}
+                    >
                         {status}
-                    </SpaceBetween>
+                    </div>
                 </div>
             </div>
         </form>

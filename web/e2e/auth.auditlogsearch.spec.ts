@@ -447,3 +447,174 @@ test.describe("Audit Log Search: appearance and keyboard", () => {
         await expect(page.getByRole("button", { name: "Close record details" })).toBeVisible();
     });
 });
+
+/** Opens the page with a record-limit warning on screen (a contains filter makes the mock set it). */
+async function openWithLimitToast(page: Page) {
+    const mock = await openPage(page, "ok", `${PAGE}?contains=abc`);
+    await searchButton(page).click();
+    const warning = toasts(page).getByText(/reached its record limit/);
+    await expect(warning).toBeVisible({ timeout: 30_000 });
+    return { mock, warning };
+}
+
+test.describe("Audit Log Search: the record-limit warning does not outlive its results (D14)", () => {
+    test("a new search dismisses it, and a search without the limit raises none", async ({
+        page,
+    }) => {
+        const { warning } = await openWithLimitToast(page);
+        await page.getByRole("button", { name: "Clear filters" }).click();
+        await searchButton(page).click();
+        await expect(warning).toHaveCount(0);
+        await expect(results(page).getByText("assetUpdate").first()).toBeVisible({
+            timeout: 30_000,
+        });
+        await expect(toasts(page).getByText(/reached its record limit/)).toHaveCount(0);
+    });
+
+    test("a link with other filters clears the results and the warning", async ({ page }) => {
+        const { warning } = await openWithLimitToast(page);
+        await page.evaluate(() => {
+            window.location.hash = "#/auth/audit-log-search/?user=mallory";
+        });
+        await expect(page.getByText("No results yet")).toBeVisible();
+        await expect(warning).toHaveCount(0);
+    });
+
+    test("leaving the page takes the warning along, and it is not on the next page", async ({
+        page,
+    }) => {
+        test.skip(HARNESS, "needs the real shell to navigate to another page");
+        const { warning } = await openWithLimitToast(page);
+        await sideNavigation(page).getByRole("link", { name: "Databases" }).first().click();
+        await expect(page.getByRole("heading", { level: 1, name: "Audit Log Search" })).toHaveCount(
+            0
+        );
+        await expect(warning).toHaveCount(0);
+    });
+});
+
+test.describe("Audit Log Search: controls stay level and in place (D15, D16)", () => {
+    for (const theme of ["light", "dark"] as const) {
+        for (const width of [1280, 1440]) {
+            test(`${theme} ${width}: level with the filter input with 0, 1 and several tokens; status does not move them`, async ({
+                page,
+            }) => {
+                await page.addInitScript(
+                    (value) => localStorage.setItem("vams-theme-preference", value),
+                    theme
+                );
+                await page.setViewportSize({ width, height: 900 });
+                const hashes = [
+                    PAGE,
+                    `${PAGE}?user=a%40example.com`,
+                    `${PAGE}?user=a%40example.com&user=b%40example.com&outcome=denied&action=assetUpdate&entityType=asset&group=auditActions`,
+                ];
+                const mock = await openPage(page, "ok", hashes[0]);
+                for (const hash of hashes) {
+                    await page.evaluate((h) => {
+                        window.location.hash = h;
+                    }, hash.replace("/#", "#"));
+                    await expect(searchButton(page)).toBeEnabled();
+                    const input = await page
+                        .getByRole("combobox", { name: "Filters" })
+                        .boundingBox();
+                    const search = await searchButton(page).boundingBox();
+                    const picker = await page
+                        .getByRole("button", { name: /Time range of the search/ })
+                        .boundingBox();
+                    if (!input || !search || !picker) throw new Error("layout boxes missing");
+                    // D16: the controls are on the input row, not the bottom of the filter column.
+                    expect(Math.abs(search.y - input.y)).toBeLessThanOrEqual(6);
+                    expect(Math.abs(picker.y - input.y)).toBeLessThanOrEqual(6);
+                    const filter = await page.getByTestId("audit-filter-column").boundingBox();
+                    if (!filter) throw new Error("filter box missing");
+                    expect(search.x).toBeGreaterThan(filter.x + filter.width - 1);
+                }
+                // D15: starting a search does not move or resize the controls.
+                const controls = page.getByTestId("audit-search-controls-row");
+                const before = await controls.boundingBox();
+                mock.holdRunning = true;
+                await searchButton(page).click();
+                await expect(page.getByTestId("audit-progress")).toContainText(
+                    "1200 records scanned so far"
+                );
+                const after = await controls.boundingBox();
+                if (!before || !after) throw new Error("boxes missing");
+                expect(Math.abs(after.x - before.x)).toBeLessThanOrEqual(1);
+                expect(Math.abs(after.y - before.y)).toBeLessThanOrEqual(1);
+                expect(Math.abs(after.width - before.width)).toBeLessThanOrEqual(1);
+                const filter = await page.getByTestId("audit-filter-column").boundingBox();
+                if (!filter) throw new Error("filter box missing");
+                expect(after.x).toBeGreaterThanOrEqual(filter.x + filter.width - 1);
+                const status = await page.getByTestId("audit-status-slot").boundingBox();
+                if (!status) throw new Error("status box missing");
+                expect(status.y).toBeGreaterThanOrEqual(after.y + after.height - 1);
+                expect(status.width).toBeLessThanOrEqual(after.width + 1);
+                await expectNoPageOverflowX(page, `Audit Log Search ${theme} ${width}`);
+                mock.holdRunning = false;
+                await page.getByRole("button", { name: "Stop", exact: true }).click();
+            });
+        }
+    }
+});
+
+test.describe("Audit Log Search: wording of the stopped state and the filters", () => {
+    test("a stopped search says it was stopped in the table, not that no record matches", async ({
+        page,
+    }) => {
+        const mock = await openPage(page);
+        mock.holdRunning = true;
+        await searchButton(page).click();
+        await expect(page.getByTestId("audit-progress")).toBeVisible();
+        mock.holdRunning = false;
+        await page.getByRole("button", { name: "Stop", exact: true }).click();
+        await expect(page.getByText("The search was stopped")).toBeVisible();
+        await expect(page.getByText(/No records match this search/)).toHaveCount(0);
+        await expect(page.getByText("No records", { exact: true })).toHaveCount(0);
+    });
+
+    test("the status is a live region that exists before its text", async ({ page }) => {
+        const mock = await openPage(page);
+        const live = page.getByTestId("audit-status-live");
+        await expect(live).toHaveAttribute("aria-live", "polite");
+        await expect(live).toHaveText("");
+        mock.holdRunning = true;
+        await searchButton(page).click();
+        await expect(live).toContainText("records scanned so far");
+        mock.holdRunning = false;
+        await page.getByRole("button", { name: "Stop", exact: true }).click();
+    });
+
+    test("the running-a-search popover says records appear at the end and Stop is there", async ({
+        page,
+    }) => {
+        await openPage(page);
+        await openInfo(page, "About running a search");
+        await expect(page.getByText(/Records appear when the search finishes/)).toBeVisible();
+        await expect(page.getByText(/Choose Stop to end it early/)).toBeVisible();
+    });
+
+    test("a Log group token from a link reads as the group's label", async ({ page }) => {
+        await openPage(page, "ok", `${PAGE}?group=auditActions`);
+        await expect(page.getByText("auditActions")).toHaveCount(0);
+        await expect(page.getByText(/Log group\s*=\s*Actions/).first()).toBeVisible();
+    });
+
+    test("the Authentication note icon carries a visible name beside the filter icon", async ({
+        page,
+    }) => {
+        await openPage(page, "ok", `${PAGE}?group=auditAuthentication`);
+        const note = page.getByRole("button", { name: "About the Authentication log group" });
+        await expect(note).toContainText("Authentication group");
+        await expect(page.getByRole("button", { name: "About the filters" })).toBeVisible();
+    });
+
+    test("a field problem stays inline with Search disabled and raises no toast", async ({
+        page,
+    }) => {
+        await openPage(page, "ok", `${PAGE}?contains=ab`);
+        await expect(page.getByText(/A contains term has 3 to 64 characters/)).toBeVisible();
+        await expect(searchButton(page)).toBeDisabled();
+        await expect(toasts(page)).toHaveCount(0);
+    });
+});
