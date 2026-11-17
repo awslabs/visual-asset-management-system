@@ -7,7 +7,7 @@ import React, { useEffect, useState } from "react";
 import { Box, Spinner } from "@cloudscape-design/components";
 import { downloadAsset, fetchFileInfo } from "../../../services/APIService";
 import { downloadRefusalReason } from "../../../visualizerPlugin/core/streamFailure";
-import { previewFileFormats } from "../../../common/constants/fileFormats";
+import { isSelfPreviewable } from "../../../common/constants/fileFormats";
 import cacheManager from "./SearchCacheManager";
 import "./PreviewThumbnailCell.css"; // Reuse the same CSS as PreviewThumbnailCell
 
@@ -139,11 +139,7 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                         });
                     } else {
                         // No preview file — check if the file itself is a previewable image
-                        const fileExt = fileName.substring(fileName.lastIndexOf(".")).toLowerCase();
-                        const isPreviewFormat = previewFileFormats.includes(fileExt);
-                        const isSizeOk = fileSize !== undefined && fileSize < 5 * 1024 * 1024;
-
-                        if (!isPreviewFormat || !isSizeOk) {
+                        if (!isSelfPreviewable(fileName, fileSize)) {
                             cacheManager.setFile(fileCacheKey, {
                                 previewKey: "",
                                 downloadType: "assetFile",
@@ -204,11 +200,7 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                             hasPreview: true,
                         });
                     } else {
-                        const fileExt = fileName.substring(fileName.lastIndexOf(".")).toLowerCase();
-                        const isPreviewFormat = previewFileFormats.includes(fileExt);
-                        const isSizeOk = fileSize !== undefined && fileSize < 5 * 1024 * 1024;
-
-                        if (!isPreviewFormat || !isSizeOk) {
+                        if (!isSelfPreviewable(fileName, fileSize)) {
                             cacheManager.setFile(fileCacheKey, {
                                 previewKey: "",
                                 downloadType: "assetFile",

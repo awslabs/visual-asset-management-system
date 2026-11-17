@@ -487,7 +487,7 @@ from common.s3PathPatterns import (
     RESERVED_S3_PREFIX_FOLDERS,       # frozenset: pipeline(s), preview(s), temp-upload(s), workspace(s)
     EXCLUDED_FILE_PATH_PATTERNS,      # patterns excluded from generic file processing
     PREVIEW_FILE_PATTERN,             # '.previewFile.' marker substring
-    ALLOWED_PREVIEW_FILE_EXTENSIONS,  # ('.png', '.jpg', '.jpeg', '.svg', '.gif')
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,  # ('.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.bmp')
     TEMPORARY_UPLOAD_PREFIX,          # 'temp-uploads/'
     PREVIEW_PREFIX,                   # 'previews/' (asset bucket)
     PIPELINES_PREFIX,                 # 'pipelines/' (workflow run I/O in the default bucket)

@@ -160,7 +160,7 @@ def verify_files_can_initialize(database, files):
             if extension not in ALLOWED_PREVIEW_FILE_EXTENSIONS:
                 raise VAMSGeneralErrorResponse(
                     "Error initializing upload: Preview files must have one of the allowed extensions: "
-                    ".png, .jpg, .jpeg, .svg, .gif")
+                    ".png, .jpg, .jpeg, .svg, .gif, .webp, .bmp")
 
 
 def invoke_lambda(function_name, payload, invocation_type="RequestResponse"):
