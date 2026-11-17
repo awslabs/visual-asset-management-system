@@ -6,14 +6,24 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock
+import types
 
 _CONTAINER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _CONTAINER_DIR not in sys.path:
     sys.path.insert(0, _CONTAINER_DIR)
 
-# lambda_handler imports the rendering stack at module level; the entry module only needs its name.
-sys.modules.setdefault("lambda_handler", MagicMock())
+
+def _stub_handler(event, context):
+    raise AssertionError("each test patches lambda_handler.lambda_handler")
+
+
+# lambda_handler imports the rendering stack at module level; the entry module only needs its name. The
+# stub is a module with a real `lambda_handler` attribute, not a MagicMock: pytest 9.2's monkeypatch
+# records a MagicMock's auto-created attribute as absent and deletes it on undo, so the next test's
+# setattr would find no attribute.
+_stub = types.ModuleType("lambda_handler")
+_stub.lambda_handler = _stub_handler
+sys.modules.setdefault("lambda_handler", _stub)
 
 from preview_pipeline.analysis import batch_job  # noqa: E402
 
