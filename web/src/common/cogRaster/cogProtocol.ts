@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import "../utils/maplibreWorker";
+
 let registration: Promise<void> | null = null;
 
 /**

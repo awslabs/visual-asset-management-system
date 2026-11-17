@@ -50,7 +50,7 @@ Before it shows a file, the Text Viewer reads the first 8 KiB and checks that it
 
 ### Data
 
-Tabular display of columnar data formats (CSV and FCS files), and playback of robotics logs (MCAP, ROS 1 and ROS 2 bags, PX4 ULog) in the Robotics Data Viewer. Other tabular formats, including R serialization (`.rds`) and Apache Parquet (`.parquet`), have no dedicated viewer; when such a file has a preview image, the file page's **Preview** option shows it in the Preview Viewer.
+Tabular display of columnar data formats (CSV and FCS files), georeferenced rasters on the map (GeoTIFF Map Viewer), and playback of robotics logs (MCAP, ROS 1 and ROS 2 bags, PX4 ULog) in the Robotics Data Viewer. Other tabular formats, including R serialization (`.rds`) and Apache Parquet (`.parquet`), have no dedicated viewer; when such a file has a preview image, the file page's **Preview** option shows it in the Preview Viewer.
 
 ### Preview
 
@@ -85,6 +85,7 @@ This table is the definitive reference for all built-in viewer plugins. The [SYS
 | **Text Viewer**                       | Document | `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`, and files with no extension | 1        | No         | Syntax highlighting for 20+ text file types. Shows a notice instead of binary content.                                                                                                                                                                                                                                                                                                            |
 | **Text Diff Viewer**                  | Document | `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`, and files with no extension | 1        | No         | Compare-only: compares two text files, or two versions of one file, side by side or inline, including files from different assets. Offered only in compare mode, never in the visualize viewer list.                                                                                                                                                                                              |
 | **Columnar Data Viewer**              | Data     | `.fcs`, `.csv`                                                                                                                                                                                       | 2        | No         | Tabular data display with column headers.                                                                                                                                                                                                                                                                                                                                                         |
+| **GeoTIFF Map Viewer**                | Data     | `.tif`, `.tiff`                                                                                                                                                                                      | 2        | Yes        | Shows georeferenced rasters on the Location Service map. Requires the `LOCATIONSERVICES` feature. See [GeoTIFF map viewer](#geotiff-map-viewer).                                                                                                                                                                                                                                                  |
 | **Robotics Data Viewer (Lichtblick)** | Data     | `.mcap`, `.bag`, `.db3`, `.ulg`, `.ulog`                                                                                                                                                             | 1        | Yes        | Lichtblick web app embedded via iframe: plots, 3D scene, images and raw messages on one shared timeline. Several `.mcap` files open on one timeline, and the files of a ROS 2 split bag open together. Requires `ALLOWUNSAFEEVAL`. See [Robotics data viewer](#robotics-data-viewer).                                                                                                             |
 | **Preview Viewer**                    | Preview  | `*` (all extensions)                                                                                                                                                                                 | 10       | No         | Displays a file's preview image when you choose the file page's **Preview** option, which appears only for a file that has one. Not offered in the **File** view.                                                                                                                                                                                                                                 |
 
@@ -174,23 +175,24 @@ For USD, the viewer packages the root layer and every file it loaded into an in-
 
 ### Media extensions
 
-| Extension        | Default Viewer | Other Available Viewers |
-| ---------------- | -------------- | ----------------------- |
-| `.aac`           | Audio Player   | --                      |
-| `.flac`          | Audio Player   | --                      |
-| `.gif`           | Image Viewer   | --                      |
-| `.jpg` / `.jpeg` | Image Viewer   | --                      |
-| `.m4a`           | Audio Player   | --                      |
-| `.m4v`           | Video Player   | --                      |
-| `.mkv`           | Video Player   | --                      |
-| `.mov`           | Video Player   | --                      |
-| `.mp3`           | Audio Player   | --                      |
-| `.mp4`           | Video Player   | --                      |
-| `.ogg`           | Audio Player   | --                      |
-| `.png`           | Image Viewer   | --                      |
-| `.svg`           | Image Viewer   | --                      |
-| `.wav`           | Audio Player   | --                      |
-| `.webm`          | Video Player   | --                      |
+| Extension        | Default Viewer                              | Other Available Viewers |
+| ---------------- | ------------------------------------------- | ----------------------- |
+| `.aac`           | Audio Player                                | --                      |
+| `.flac`          | Audio Player                                | --                      |
+| `.gif`           | Image Viewer                                | --                      |
+| `.jpg` / `.jpeg` | Image Viewer                                | --                      |
+| `.m4a`           | Audio Player                                | --                      |
+| `.m4v`           | Video Player                                | --                      |
+| `.mkv`           | Video Player                                | --                      |
+| `.mov`           | Video Player                                | --                      |
+| `.mp3`           | Audio Player                                | --                      |
+| `.mp4`           | Video Player                                | --                      |
+| `.ogg`           | Audio Player                                | --                      |
+| `.png`           | Image Viewer                                | --                      |
+| `.svg`           | Image Viewer                                | --                      |
+| `.tif` / `.tiff` | GeoTIFF Map Viewer (with location services) | --                      |
+| `.wav`           | Audio Player                                | --                      |
+| `.webm`          | Video Player                                | --                      |
 
 :::info[Video formats and browser support]
 The Video Player plays a file through the browser's built-in `<video>` element, so a file plays only when the browser can open its container and decode its codecs. `.mp4`, `.m4v`, and `.webm` are broadly supported. `.mov` and `.mkv` play in some browsers and not in others. When the browser cannot open a file, the player shows `Error: Failed to load video file`; a file whose video codec the browser cannot decode may play only its audio track. Chrome, Edge, Firefox, and Safari cannot open AVI (`.avi`), Flash Video (`.flv`), or Windows Media Video (`.wmv`) files, so VAMS offers no viewer for them. Download these files to play them in a desktop media player.
@@ -329,6 +331,31 @@ Files are delivered to the SuperSplat editor via presigned Amazon S3 URLs passed
 :::note[The file URL is recorded in web logs]
 Each SuperSplat view records its working presigned URL in the web access logs and, when `app.useWaf` is `true`, in the AWS WAF log group. See [SuperSplat Editor File URLs in Web Logs](../troubleshooting/known-limitations.md#supersplat-editor-file-urls-in-web-logs) for the log locations, how long they keep the URL, and the settings that limit it.
 :::
+
+---
+
+## GeoTIFF map viewer
+
+The GeoTIFF Map Viewer shows `.tif` and `.tiff` rasters on the Location Service basemap. It is offered only when the deployment enables location services (the `LOCATIONSERVICES` feature). Select several rasters to show them together. Each one gets a row in the **Raster layers** list, with an opacity slider, controls to move it up or down, **Zoom to layer** and **Remove**. Up to 8 rasters can be shown at once.
+
+How a file is drawn depends on its coordinate system and layout:
+
+| File                                                                                             | How it is shown                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cloud Optimized GeoTIFF (COG) in Web Mercator (EPSG:3857)                                        | Streamed as map tiles: only the parts the map needs are read, so a file of any size works. The overlay is exact.                                                                                                                                                                      |
+| Other georeferenced TIFF in a supported coordinate system, up to 128 MiB and about 100 km across | Read at up to 2048 pixels and placed on the map by its four corners. It is labelled **approximate placement (not reprojected)**, because the image is not reprojected and can be slightly off for a large or rotated extent. A Web Mercator file that is not a COG is placed exactly. |
+| Larger file, or larger area, outside Web Mercator COG                                            | Not drawn. The viewer suggests converting it with the TIF-to-COG pipeline.                                                                                                                                                                                                            |
+| No georeference, or an unsupported coordinate system                                             | Not drawn, with a message that names the reason.                                                                                                                                                                                                                                      |
+
+Only Web Mercator COGs take the tile path. The tile reader does not reproject, so convert other rasters to a Web Mercator COG to get an exact, streamed overlay.
+
+The supported coordinate systems are built into the viewer, and nothing is looked up on the internet. They are WGS 84 (EPSG:4326), Web Mercator (EPSG:3857), NAD83 (EPSG:4269), ETRS89 (EPSG:4258), the UTM zones on WGS 84 (EPSG:32601-32660, 32701-32760), NAD83 (EPSG:26901-26923) and ETRS89 (EPSG:25828-25837), ETRS89 / LAEA Europe (EPSG:3035), NAD83 / Conus Albers (EPSG:5070), RGF93 / Lambert-93 (EPSG:2154), British National Grid (EPSG:27700), and the NSIDC north and Antarctic polar stereographic grids (EPSG:3413, 3031).
+
+-   **Converted COGs.** When the file's attributes name a converted COG beside it (`cogFile`), the viewer shows that COG instead. If the COG cannot be downloaded, the original file is shown. A COG made from an earlier version of its source is shown with the warning "COG is from an earlier version of the source".
+-   **Raster facts.** The viewer reads the file's `ext_crs`, `ext_is_cog` and `ext_georeferenced` attributes, which the [SYSTEM GenAI metadata pipeline](../pipelines/system-genai-metadata.md) writes, before it opens the file. Without them, it reads the TIFF header.
+-   **Rendering.** Nodata and alpha are transparent. A single band is drawn in gray, stretched between its 2nd and 98th percentile. 16-bit and floating-point colour bands are stretched the same way. Palette files use their colour map.
+-   **Access.** Each file is requested through the download API, which decides access. A refused file shows the API's reason. The presigned URL of a streamed COG is replaced before it expires and after a failed read.
+-   **Search map.** On the search page's map, a TIFF file result with a footprint has a **Show raster** action in its popup. It draws the raster under the result shapes, in the same way and with the same layer list.
 
 ---
 

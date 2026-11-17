@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.8.0] (Unreleased)
+
+### Features
+
+-   **Web** New GeoTIFF Map Viewer for `.tif` and `.tiff` files, shown when location services are enabled. A Cloud Optimized GeoTIFF in Web Mercator (EPSG:3857) streams onto the map as an exact overlay. A small georeferenced TIFF in another common coordinate system (up to 128 MiB and about 100 km across) is placed approximately and labelled so. Other files show a message pointing to COG conversion. Several rasters can be shown together, each with its own opacity, order, zoom and remove controls. ([#1599](https://github.com/awslabs/visual-asset-management-system/issues/1599))
+-   **Web** Search map: a TIFF file result with a footprint has a **Show raster** action that overlays the raster on the map. ([#1599](https://github.com/awslabs/visual-asset-management-system/issues/1599))
+
 ## [2.7.0] (2026-11-20)
 
 ### Major Change Summary:
