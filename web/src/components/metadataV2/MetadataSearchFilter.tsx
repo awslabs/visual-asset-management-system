@@ -103,7 +103,6 @@ export const MetadataSearchFilter: React.FC<MetadataSearchFilterProps> = ({
                                 onSchemaFilter(newValue);
                             }}
                             iconName="filter"
-                            ariaLabel="Filter schema fields only"
                         >
                             Schema Only
                         </Button>

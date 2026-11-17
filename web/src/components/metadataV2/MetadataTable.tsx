@@ -240,7 +240,6 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                                         iconName="add-plus"
                                         onClick={onAddNew}
                                         disabled={loading || restrictMetadata}
-                                        ariaLabel="Add new row"
                                     >
                                         Add Row
                                     </Button>
@@ -367,7 +366,6 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                                         variant="primary"
                                         onClick={onAddNew}
                                         disabled={loading}
-                                        ariaLabel="Add new row"
                                     >
                                         Add Row
                                     </Button>
