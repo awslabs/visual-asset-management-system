@@ -13,7 +13,7 @@
 import { exportAuditQuery } from "../../services/APIService";
 import { AuditExportChunk, normalizeExportChunk } from "./auditSearchApiModel";
 
-export type ExportFormat = "csv" | "json";
+export type ExportFormat = "csv" | "ndjson";
 
 /** More chunks than this means something is wrong (a 10,000-row export is a few chunks). */
 export const MAX_EXPORT_CHUNKS = 500;
@@ -28,24 +28,14 @@ export const exportFileName = (format: ExportFormat, now: Date = new Date()): st
         .replace(/[-:]/g, "")
         .replace(/\.\d{3}Z$/, "Z")}.${format}`;
 
-/** Joins CSV chunks (the header is on the first only) or JSON chunks (arrays of rows). */
-export const joinChunks = (format: ExportFormat, chunks: AuditExportChunk[]): Blob => {
-    if (format === "csv") {
-        return new Blob([chunks.map((c) => c.text ?? "").join("")], {
-            type: "text/csv;charset=utf-8",
-        });
-    }
-    const rows: unknown[] = [];
-    for (const chunk of chunks) {
-        if (chunk.rows) {
-            rows.push(...chunk.rows);
-        } else if (chunk.text) {
-            const parsed = JSON.parse(chunk.text);
-            if (Array.isArray(parsed)) rows.push(...parsed);
-        }
-    }
-    return new Blob([JSON.stringify(rows, null, 2)], { type: "application/json" });
-};
+/**
+ * Joins the chunks in order. CSV has its header on the first chunk only; NDJSON chunks are whole
+ * JSON lines. Both are plain concatenation: the server decides every cell.
+ */
+export const joinChunks = (format: ExportFormat, chunks: AuditExportChunk[]): Blob =>
+    new Blob([chunks.map((c) => c.text ?? "").join("")], {
+        type: format === "csv" ? "text/csv;charset=utf-8" : "application/x-ndjson;charset=utf-8",
+    });
 
 export const collectExport = async ({
     queryId,
@@ -82,16 +72,12 @@ export const collectExport = async ({
             };
         }
     } while (token);
-    try {
-        return {
-            ok: true,
-            blob: joinChunks(format, chunks),
-            fileName: exportFileName(format),
-            chunks: chunks.length,
-        };
-    } catch {
-        return { ok: false, message: "The export could not be read." };
-    }
+    return {
+        ok: true,
+        blob: joinChunks(format, chunks),
+        fileName: exportFileName(format),
+        chunks: chunks.length,
+    };
 };
 
 /** Starts a browser download of `blob`. */

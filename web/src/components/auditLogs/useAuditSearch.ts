@@ -94,18 +94,17 @@ export const useAuditSearch = (waitSeconds: number, sort: "asc" | "desc") => {
         setState((previous) => ({ ...previous, ...update }));
     }, []);
 
-    const applyPage = useCallback(
-        (page: AuditQueryPage) => {
-            patch({
-                status: page.status,
-                statistics: page.statistics,
-                rows: page.rows,
-                warnings: page.warnings,
-                nextToken: page.nextToken,
-            });
-        },
-        [patch]
-    );
+    const applyPage = useCallback((page: AuditQueryPage) => {
+        // Warnings accumulate: the start's (a wider scan) stay when a poll adds its own.
+        setState((previous) => ({
+            ...previous,
+            status: page.status,
+            statistics: page.statistics,
+            rows: page.rows,
+            warnings: Array.from(new Set([...previous.warnings, ...page.warnings])),
+            nextToken: page.nextToken,
+        }));
+    }, []);
 
     const run = useCallback(
         async (body: Record<string, unknown>) => {
@@ -129,7 +128,12 @@ export const useAuditSearch = (waitSeconds: number, sort: "asc" | "desc") => {
                 return;
             }
             live.current = { queryId: handle.queryId, running: true };
-            patch({ phase: "running", queryId: handle.queryId, status: handle.status });
+            patch({
+                phase: "running",
+                queryId: handle.queryId,
+                status: handle.status,
+                warnings: handle.warnings,
+            });
 
             const outcome = await runPollLoop(
                 {

@@ -12,10 +12,10 @@ import Header from "@cloudscape-design/components/header";
 import Pagination from "@cloudscape-design/components/pagination";
 import Table, { TableProps } from "@cloudscape-design/components/table";
 import BreakableIdentifier from "../compliance/BreakableIdentifier";
-import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../list/tableSorting";
+import { PAGE_SORTING_NOTE, byNumber, byText, useSortedItems } from "../list/tableSorting";
 import OutcomeIndicator from "./OutcomeIndicator";
 import { AuditRow } from "./auditSearchTypes";
-import { clipText, visibleText } from "./auditText";
+import { auditTimeMs, clipText, visibleText } from "./auditText";
 
 /** The row's one-line summary: why it ended as it did, what it touched, or the cut-off preview. */
 export const rowSummary = (row: AuditRow): string => {
@@ -36,8 +36,8 @@ const entityText = (row: AuditRow): string =>
 
 const timeText = (row: AuditRow): string => {
     if (!row.timestamp) return "-";
-    const date = new Date(row.timestamp);
-    return Number.isNaN(date.getTime()) ? visibleText(row.timestamp) : date.toLocaleString();
+    const ms = auditTimeMs(row.timestamp);
+    return Number.isNaN(ms) ? visibleText(row.timestamp) : new Date(ms).toLocaleString();
 };
 
 const COLUMN_IDS = [
@@ -104,7 +104,7 @@ export const AuditResultsTable: React.FC<AuditResultsTableProps> = ({
             header: "Time",
             cell: timeText,
             sortingField: "timestamp",
-            sortingComparator: byDate((row) => row.timestamp),
+            sortingComparator: byNumber((row) => auditTimeMs(row.timestamp)),
         },
         {
             id: "group",

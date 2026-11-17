@@ -30,21 +30,19 @@ jest.mock("../../hooks/useAssetPageAccess", () => ({
 }));
 
 const GROUPS = {
-    groups: [
-        {
-            key: "auditActions",
-            label: "Actions",
-            actions: [{ name: "assetUpdate", kind: "write", entityType: "asset" }],
-            entityTypes: ["asset"],
-        },
+    logGroups: [{ key: "auditActions", label: "Actions", prefix: "ACTIONS" }],
+    actions: [
+        { name: "assetUpdate", kind: "write", entityType: "asset", logGroup: "auditActions" },
     ],
+    entityTypes: ["asset"],
+    outcomes: ["success", "failed", "denied"],
     limits: { maxQueryWindowDays: 31, maxContainsTerms: 3, maxContainsTermLength: 64 },
 };
 
 const HOSTILE = "<img src=x onerror=alert(1)>\u202egnp.exe";
 
 const row = (over: object = {}) => ({
-    timestamp: "2026-11-17T10:00:00Z",
+    timestamp: "2026-11-17 10:00:00.000",
     groupKey: "auditActions",
     groupLabel: "Actions",
     action: "assetUpdate",
@@ -62,7 +60,7 @@ const row = (over: object = {}) => ({
 
 const complete = (rows: object[], extra: object = {}) => [
     true,
-    { status: "Complete", rows, statistics: {}, ...extra },
+    { status: "Complete", Items: rows, statistics: {}, ...extra },
 ];
 
 beforeEach(() => {
@@ -87,7 +85,7 @@ describe("Audit Log Search page", () => {
     });
 
     it("says so when no group is allowed, without naming any", async () => {
-        mockGroups.mockResolvedValue([true, { groups: [], limits: {} }]);
+        mockGroups.mockResolvedValue([true, { logGroups: [], limits: {} }]);
         render(<AuditLogSearch />);
         expect(await screen.findByText("No audit logs available to you")).toBeTruthy();
         expect(screen.queryByRole("button", { name: "Search" })).toBeNull();
@@ -105,7 +103,7 @@ describe("Audit Log Search page", () => {
         mockGet
             .mockResolvedValueOnce([
                 true,
-                { status: "Running", rows: [], statistics: { recordsMatched: 1 } },
+                { status: "Running", Items: [], statistics: { recordsMatched: 1 } },
             ])
             .mockResolvedValue(complete([row({ reason: HOSTILE })]));
         await openPage();
@@ -113,7 +111,8 @@ describe("Audit Log Search page", () => {
 
         await waitFor(() => expect(mockStart).toHaveBeenCalledTimes(1));
         const body = mockStart.mock.calls[0][0];
-        expect(body.logGroups).toEqual(["auditActions"]);
+        // No group chosen: the server searches every group this caller may.
+        expect(body).not.toHaveProperty("logGroups");
         expect(body).not.toHaveProperty("query");
 
         const table = await screen.findByRole("table");
@@ -164,7 +163,7 @@ describe("Audit Log Search page", () => {
     it("shows the notices the server's statistics and warnings call for", async () => {
         mockGet.mockResolvedValue(
             complete([row()], {
-                statistics: { droppedOnRecheck: 4, candidateLimitReached: true },
+                statistics: { candidateLimitReached: true },
                 warnings: ["recheckTimeBudget"],
             })
         );
@@ -173,7 +172,6 @@ describe("Audit Log Search page", () => {
         expect(
             await screen.findByText(/reached its candidate limit/, {}, { timeout: 4000 })
         ).toBeTruthy();
-        expect(screen.getByText(/left out when their contents were checked/)).toBeTruthy();
         expect(screen.getByText(/took longer than the time allowed/)).toBeTruthy();
     });
 
@@ -212,7 +210,7 @@ describe("Audit Log Search page", () => {
         mockGet.mockImplementation(
             () =>
                 new Promise((resolve) =>
-                    setTimeout(() => resolve([true, { status: "Running", rows: [] }]), 50)
+                    setTimeout(() => resolve([true, { status: "Running", Items: [] }]), 50)
                 )
         );
         await openPage();

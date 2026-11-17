@@ -90,7 +90,6 @@ export interface AuditQueryStatistics {
     recordsMatched?: number;
     recordsScanned?: number;
     bytesScanned?: number;
-    droppedOnRecheck?: number;
     duplicatesRemoved?: number;
     candidateLimitReached?: boolean;
     rowCount?: number;

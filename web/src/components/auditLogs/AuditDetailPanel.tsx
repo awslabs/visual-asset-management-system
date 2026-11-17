@@ -15,7 +15,7 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 import { AuditRow } from "./auditSearchTypes";
 import AuditValueTree from "./AuditValueTree";
 import OutcomeIndicator from "./OutcomeIndicator";
-import { clipText, hasContent, visibleText } from "./auditText";
+import { auditTimeMs, clipText, hasContent, visibleText } from "./auditText";
 
 /** A hash route to an asset, built from validated ids only. */
 export const ID_FOR_LINK = /^[-_A-Za-z0-9]{3,64}$/;
@@ -36,8 +36,9 @@ const text = (value: unknown): string => clipText(visibleText(value));
 
 const timeFields = (iso: string | null | undefined) => {
     if (!iso) return { local: "-", utc: "-" };
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return { local: visibleText(iso), utc: "-" };
+    const ms = auditTimeMs(iso);
+    if (Number.isNaN(ms)) return { local: visibleText(iso), utc: "-" };
+    const date = new Date(ms);
     return { local: date.toLocaleString(), utc: date.toISOString() };
 };
 

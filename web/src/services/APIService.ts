@@ -3751,7 +3751,7 @@ export const exportAuditQuery = async ({
     startingToken,
 }: {
     queryId: string;
-    format: "csv" | "json";
+    format: "csv" | "ndjson";
     startingToken?: string;
 }) => {
     try {

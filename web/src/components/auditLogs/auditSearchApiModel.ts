@@ -23,13 +23,10 @@ import { rangeBounds } from "./auditSearchUrl";
 /** The `POST /audit/queries` body. The caller never sends query text, only these named filters. */
 export const buildStartBody = (
     filters: AuditFilters,
-    allowedGroupKeys: string[],
     now: number = Date.now()
 ): Record<string, unknown> => {
     const { start, end } = rangeBounds(filters.range, now);
     const body: Record<string, unknown> = {
-        // No group chosen means every group the caller may search (the list the server returned).
-        logGroups: filters.logGroups.length > 0 ? filters.logGroups : allowedGroupKeys,
         startTime: new Date(start).toISOString().replace(/\.\d{3}Z$/, "Z"),
         endTime: new Date(end).toISOString().replace(/\.\d{3}Z$/, "Z"),
         includeProbes: filters.includeProbes,
@@ -47,6 +44,8 @@ export const buildStartBody = (
         "requestIds",
         "contains",
     ] as const;
+    // No group chosen: the key is left out and the server searches every group the caller may.
+    if (filters.logGroups.length > 0) body.logGroups = filters.logGroups;
     for (const key of lists) {
         if (filters[key].length > 0) body[key] = filters[key];
     }
@@ -75,34 +74,33 @@ const positive = (value: unknown, fallback: number): number => {
 /** `GET /audit/log-groups` as the page uses it. */
 export const normalizeLogGroups = (response: unknown): AuditLogGroupsResult => {
     const data = asRecord(response);
-    const rawGroups = Array.isArray(data.groups)
-        ? data.groups
-        : Array.isArray(data.logGroups)
-        ? data.logGroups
-        : [];
+    const rawGroups = Array.isArray(data.logGroups) ? data.logGroups : [];
+    // The contract lists actions once, each naming its group; entity types once for all groups.
+    const rawActions = (Array.isArray(data.actions) ? data.actions : []).map(asRecord);
+    const allEntityTypes = asStringList(data.entityTypes);
     const groups: AuditLogGroupInfo[] = [];
     for (const raw of rawGroups) {
         const group = asRecord(raw);
         const key = asString(group.key);
         if (!key) continue;
+        const actions = rawActions
+            .filter((a) => typeof a.name === "string" && a.logGroup === key)
+            .map((a) => ({
+                name: a.name as string,
+                kind: asString(a.kind),
+                entityType: asString(a.entityType) ?? null,
+            }));
         groups.push({
             key,
             label: asString(group.label) ?? key,
             prefix: asString(group.prefix),
             description: asString(group.description),
-            actions: (Array.isArray(group.actions) ? group.actions : [])
-                .map((a) => (typeof a === "string" ? { name: a } : asRecord(a)))
-                .filter((a) => typeof a.name === "string")
-                .map((a) => ({
-                    name: a.name as string,
-                    kind: asString(a.kind),
-                    entityType: asString(a.entityType) ?? null,
-                })),
-            entityTypes: asStringList(group.entityTypes),
-            outcomes: asStringList(group.outcomes),
+            actions,
+            entityTypes: allEntityTypes,
+            outcomes: [],
         });
     }
-    const limits = asRecord(data.limits ?? asRecord(rawGroups[0]).limits);
+    const limits = asRecord(data.limits);
     const outcomes = asStringList(data.outcomes);
     return {
         groups,
@@ -137,7 +135,6 @@ const normalizeStatistics = (raw: unknown): AuditQueryStatistics => {
         "recordsMatched",
         "recordsScanned",
         "bytesScanned",
-        "droppedOnRecheck",
         "duplicatesRemoved",
         "rowCount",
     ] as const) {
@@ -151,22 +148,24 @@ const normalizeStatistics = (raw: unknown): AuditQueryStatistics => {
 };
 
 /** `POST /audit/queries` (202): the handle and first status. */
-export const normalizeStart = (response: unknown): { queryId: string; status: string } | null => {
+export const normalizeStart = (
+    response: unknown
+): { queryId: string; status: string; warnings: string[] } | null => {
     const data = asRecord(response);
     const queryId = asString(data.queryId);
-    return queryId ? { queryId, status: asString(data.status) ?? "Scheduled" } : null;
+    return queryId
+        ? {
+              queryId,
+              status: asString(data.status) ?? "Running",
+              warnings: asStringList(data.warnings),
+          }
+        : null;
 };
 
 /** `GET /audit/queries/{queryId}`: one poll, one page. */
 export const normalizeQueryPage = (response: unknown): AuditQueryPage => {
     const data = asRecord(response);
-    const rawRows = Array.isArray(data.rows)
-        ? data.rows
-        : Array.isArray(data.items)
-        ? data.items
-        : Array.isArray(data.results)
-        ? data.results
-        : [];
+    const rawRows = Array.isArray(data.Items) ? data.Items : [];
     const pollAfter = asNumber(data.pollAfterMs);
     return {
         queryId: asString(data.queryId),
@@ -196,7 +195,7 @@ export interface AuditExportChunk {
 export const normalizeExportChunk = (response: unknown): AuditExportChunk => {
     if (typeof response === "string") return { text: response };
     const data = asRecord(response);
-    const body = data.data ?? data.content ?? data.body ?? data.rows;
+    const body = data.content;
     return {
         text: typeof body === "string" ? body : undefined,
         rows: Array.isArray(body) ? body : undefined,

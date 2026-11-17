@@ -120,9 +120,9 @@ export const AuditExportDialog: React.FC<AuditExportDialogProps> = ({
                             description: "One row per record; opens in a spreadsheet.",
                         },
                         {
-                            value: "json",
-                            label: "JSON",
-                            description: "A list of records with all their fields.",
+                            value: "ndjson",
+                            label: "NDJSON",
+                            description: "One JSON record per line, with all fields.",
                         },
                     ]}
                 />

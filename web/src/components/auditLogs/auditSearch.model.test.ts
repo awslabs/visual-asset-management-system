@@ -29,7 +29,7 @@ import {
     relativeOptions,
 } from "./auditFilterQuery";
 import { runPollLoop, PollResult, MIN_POLL_GAP_MS } from "./auditPollLoop";
-import { visibleText } from "./auditText";
+import { auditTimeMs, visibleText } from "./auditText";
 import { AuditFilters, AuditTimeRange } from "./auditSearchTypes";
 
 describe("URL state", () => {
@@ -146,15 +146,16 @@ describe("validation against the server limits", () => {
 });
 
 describe("request body and responses", () => {
-    it("sends named filters and no query text, with every allowed group when none is chosen", () => {
+    it("sends named filters and no query text, leaving out the groups when none is chosen", () => {
         const now = Date.parse("2026-11-17T12:00:00.123Z");
         const body = buildStartBody(
             { ...defaultAuditFilters(), users: ["alice"], contains: ["report"] },
-            ["auditActions", "auditErrors"],
             now
         );
+        expect(
+            buildStartBody({ ...defaultAuditFilters(), logGroups: ["a1"] }, now).logGroups
+        ).toEqual(["a1"]);
         expect(body).toEqual({
-            logGroups: ["auditActions", "auditErrors"],
             startTime: "2026-11-16T12:00:00Z",
             endTime: "2026-11-17T12:00:00Z",
             includeProbes: false,
@@ -167,18 +168,22 @@ describe("request body and responses", () => {
 
     it("reads the log groups and limits, with defaults for what is missing", () => {
         const result = normalizeLogGroups({
-            groups: [
+            logGroups: [{ key: "auditActions", label: "Actions" }, { label: "no key is dropped" }],
+            actions: [
                 {
-                    key: "auditActions",
-                    label: "Actions",
-                    actions: [{ name: "assetUpdate", kind: "write", entityType: "asset" }],
-                    entityTypes: ["asset"],
+                    name: "assetUpdate",
+                    kind: "write",
+                    entityType: "asset",
+                    logGroup: "auditActions",
                 },
-                { label: "no key is dropped" },
+                { name: "other", logGroup: "elsewhere" },
             ],
+            entityTypes: ["asset"],
             limits: { maxQueryWindowDays: 14, maxContainsTerms: "many" },
         });
         expect(result.groups.map((g) => g.key)).toEqual(["auditActions"]);
+        expect(result.groups[0].actions?.map((a) => a.name)).toEqual(["assetUpdate"]);
+        expect(result.groups[0].entityTypes).toEqual(["asset"]);
         expect(result.limits.maxQueryWindowDays).toBe(14);
         expect(result.limits.maxContainsTerms).toBe(DEFAULT_LIMITS.maxContainsTerms);
         expect(result.outcomes).toEqual(["success", "failed", "denied"]);
@@ -188,7 +193,7 @@ describe("request body and responses", () => {
         const page = normalizeQueryPage({
             status: "Running",
             pollAfterMs: 500,
-            rows: [{ action: "a" }, "text", null, 5],
+            Items: [{ action: "a" }, "text", null, 5],
             statistics: { recordsMatched: 3, recordsScanned: "x", candidateLimitReached: true },
             NextToken: "tok",
             warnings: ["widerScan", 3],
@@ -257,6 +262,15 @@ describe("property filter and range conversion", () => {
     it("offers only quick ranges within the window limit", () => {
         expect(relativeOptions(1).map((o) => o.key)).toEqual(["15-minute", "1-hour", "24-hour"]);
         expect(relativeOptions(31)).toHaveLength(5);
+    });
+});
+
+describe("record times", () => {
+    it("reads the Logs Insights form as UTC, whatever the browser's zone", () => {
+        expect(auditTimeMs("2026-11-17 01:00:00.000")).toBe(Date.parse("2026-11-17T01:00:00Z"));
+        expect(auditTimeMs("2026-11-17T01:00:00+02:00")).toBe(Date.parse("2026-11-16T23:00:00Z"));
+        expect(auditTimeMs("garbage")).toBeNaN();
+        expect(auditTimeMs(null)).toBeNaN();
     });
 });
 

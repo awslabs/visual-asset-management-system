@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
@@ -112,14 +112,12 @@ const AuditLogSearch: React.FC = () => {
         if (isOnRoute(AUDIT_SEARCH_ROUTE)) writeAuditFiltersToUrl(next);
     }, []);
 
-    const allowedKeys = useMemo(() => (groups?.groups ?? []).map((g) => g.key), [groups]);
-
     const search = useCallback(
         (using: AuditFilters) => {
             setSelected(null);
-            void run(buildStartBody(using, allowedKeys));
+            void run(buildStartBody(using));
         },
-        [run, allowedKeys]
+        [run]
     );
 
     const showRequest = useCallback(
@@ -156,13 +154,6 @@ const AuditLogSearch: React.FC = () => {
         state.phase === "error" ? "failed" : hasRun && finished ? "noRecords" : "notRun";
 
     const notices: { key: string; type: "info" | "warning"; text: string }[] = [];
-    if ((statistics.droppedOnRecheck ?? 0) > 0) {
-        notices.push({
-            key: "dropped",
-            type: "info",
-            text: "Some candidates were left out when their contents were checked against your filters. The records shown all match.",
-        });
-    }
     if (statistics.candidateLimitReached) {
         notices.push({
             key: "candidate",

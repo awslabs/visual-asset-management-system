@@ -53,3 +53,16 @@ export const hasContent = (value: unknown): boolean => {
     if (typeof value === "object") return Object.keys(value as object).length > 0;
     return true;
 };
+
+const ZONELESS = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
+
+/**
+ * A record time in epoch milliseconds, or NaN. The API sends the Logs Insights form
+ * (`2026-11-17 01:00:00.000`, UTC, no zone mark), which browsers read as local time or not at all;
+ * it is read as UTC here. A value that carries its own zone is read as it says.
+ */
+export const auditTimeMs = (value: string | null | undefined): number => {
+    if (!value) return NaN;
+    const zoneless = ZONELESS.exec(value);
+    return Date.parse(zoneless ? `${zoneless[1]}T${zoneless[2]}Z` : value);
+};
