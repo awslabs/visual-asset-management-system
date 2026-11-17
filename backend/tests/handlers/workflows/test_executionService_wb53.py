@@ -1341,6 +1341,7 @@ class TestPermanentDeleteExpiredHistory:
         logged = m_logger.error.call_args.args[0]
         assert code in logged
         assert "e1000000000000000000000000000001" in logged
+        m_logger.info.assert_not_called()
         m_delete_rows.assert_not_called()
         m_dynamo.Table.return_value.delete_item.assert_not_called()
 
@@ -1351,6 +1352,7 @@ class TestPermanentDeleteExpiredHistory:
             "message": "Execution is in progress; abort it before permanent delete."}
         assert m_logger.exception.call_count == 1
         assert "e1000000000000000000000000000001" in m_logger.exception.call_args.args[0]
+        m_logger.info.assert_not_called()
         m_delete_rows.assert_not_called()
         m_dynamo.Table.return_value.delete_item.assert_not_called()
 
