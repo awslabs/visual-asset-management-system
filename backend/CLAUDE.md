@@ -275,6 +275,8 @@ backend/
 │   │   │                                           #   zipDownloadService (Download as Zip: the seven
 │   │   │                                           #   /download/zip routes, the read-time
 │   │   │                                           #   reconcile and the delayed sweep)
+│   │   ├── audit/auditLogService.py                # audit log search: /audit routes, Logs Insights, handles,
+│   │   │                                           #   caps; Tier 2 auditLog per log group (see common/auditSearch)
 │   │   ├── auth/                                   # apiGatewayAuthorizerRest, apiKeyService,
 │   │   │                                           #   constraints, cognito, preTokenGen,
 │   │   │                                           #   apiOriginVerifyRotation (secret rotation);

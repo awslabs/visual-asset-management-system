@@ -445,6 +445,10 @@ Adding a group takes a descriptor and the CDK log group. Nothing in the search c
 5. **Authorization (planned).** The per-group `auditLog` permission is a separate change (the audit search permission work). The registry already holds what it needs: `authorization_object(key)` in `auditLogGroups.py` builds the object `{object__type: auditLog, auditLogGroup: <key>}` that the search will check. Nothing will be hard-coded per group. Until that change lands, nothing checks the object and adding a group needs no authorization step.
 6. **Tests.** The registry contract test (`tests/common/auditSearch/test_audit_search_registry_contract.py`) fails when the group lacks a label, a parser, a valid key, a resource key (core, add-on or custom) that names its log group, or when an action names a group with no descriptor, and the lane merge fails when a key or prefix is repeated. The writer golden test needs the new group's prefix added to its expected values on purpose.
 
+## Searching Audit Records
+
+The [Audit Log Search API](../api/audit.md) searches the log groups with Logs Insights. The service (`backend/backend/handlers/audit/auditLogService.py`) takes only enumerated filters, builds the query with `common/auditSearch/queryBuilder.py`, and parses, redacts and checks every row again (`parsers`, `redaction`, `recordMatcher`). The groups it can search come from the audit group registry (`common/auditLogGroups.py`), so a group added there appears without a change to the service. The service records its own use as the actions `auditLogGroupsList`, `auditQueryStart`, `auditQueryStatus`, `auditQueryResults`, `auditQueryStop` and `auditQueryExport`.
+
 ## How Audit Logging Works
 
 ### Silent Failure Pattern

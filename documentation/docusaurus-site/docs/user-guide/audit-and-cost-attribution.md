@@ -44,4 +44,6 @@ Common questions and how the records answer them:
 | Who runs pipelines, and for how long?             | The `workflowExecutionEnd` records: the user the run was for, its outcome and its duration          |
 | What fails, and why?                              | Records with `outcome` `failed`, counted by action and reason                                       |
 
+Users with the `auditLog` permission can also search these records from the API: see the [Audit Log Search API](../api/audit.md).
+
 Ready-to-run Amazon CloudWatch Logs Insights queries for each of these are in [Audit Logging](../developer/audit-logging.md#cost-attribution). For prices in your Region, use the [Amazon CloudWatch pricing page](https://aws.amazon.com/cloudwatch/pricing/) or the AWS Pricing Calculator.

@@ -304,6 +304,10 @@ A pipeline's `name` and `pipelineExecutionType` are stored structurally on the p
 object before enforcement, so a constraint on either one evaluates against the real value.
 :::
 
+### Audit log access
+
+Audit log search authorizes twice: the `/audit` route, then the `auditLog` object with the `auditLogGroup` field once per requested log group. A refused or unknown group returns one generic `403`, and a handle that is not the caller's returns one generic `404`. The search function can read the audit log groups and nothing more: no role holds an action that modifies or deletes audit records.
+
 ### MFA-Aware Roles
 
 Roles can require MFA verification. When a role has `mfaRequired=True`, it is only active when the user's authentication claims include `mfaEnabled=True`. This provides an additional security layer for privileged operations.
