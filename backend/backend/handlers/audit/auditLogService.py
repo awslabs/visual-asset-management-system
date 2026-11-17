@@ -570,9 +570,11 @@ def _candidate_limit_reached(parsed: List[Any], kept: List[Any], item: Dict[str,
     satisfy every filter the caller can see, except those three, reaches the limit. The raw result also
     holds records that matched on content the caller cannot see (changes, previous values, request echo,
     JSON keys), so its length would tell a caller that such records exist (a one-bit probe).
-    The flag can stay unset when records the caller cannot see took the slots; it never tells that they
-    exist. ``raw_count`` only decides whether the second pass can matter (it cannot exceed the raw
-    count): the answer does not depend on it.
+    The flag and the row count depend only on records the caller may see and the request, with one
+    documented exception: when ``limit`` or more visible candidates exist, hidden-only matches that use up
+    Insights slots can lower the count and clear the flag. That is one bit per guess, needs ``limit`` or
+    more visible matches, and adds nothing beyond the row count. ``raw_count`` only decides whether the
+    second pass can matter (it cannot exceed the raw count): the answer does not depend on it.
     """
     if not limit or item.get("prefilterComplete", True) or raw_count < limit:
         return False
@@ -610,10 +612,12 @@ def build_rows(results: List[List[Dict[str, str]]], item: Dict[str, Any], filter
     kept = recheck(parsed, filters, budget)
     rows, duplicates = dedupe_rows(kept)
     limit = int(item.get("queryLimit", 0) or 0)
+    # The flag is computed first: its relaxed pass uses the same time budget, so the budget is read after it.
+    limit_reached = _candidate_limit_reached(parsed, kept, item, filters, limit, budget, len(results))
     facts = {
         "duplicatesRemoved": duplicates,
         "recheckBudgetExceeded": budget.exceeded,
-        "candidateLimitReached": _candidate_limit_reached(parsed, kept, item, filters, limit, budget, len(results)),
+        "candidateLimitReached": limit_reached,
     }
     return rows, facts
 

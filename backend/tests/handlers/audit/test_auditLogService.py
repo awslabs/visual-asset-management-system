@@ -950,6 +950,30 @@ class TestNoRawCountOracle:
         body = _whole_response(env, raw_matched=3, rows=visible, outcomes=["denied"], contains=None)
         assert body["statistics"]["rowCount"] == 0 and body["statistics"]["candidateLimitReached"] is True
 
+    def test_a_timeout_during_the_relaxed_pass_raises_the_time_budget_warning(self, env, monkeypatch):
+        """The flag's second recheck pass shares the time budget. When the clock runs out during that pass,
+        the count is short and the recheckTimeBudget warning must be raised (D12)."""
+        monkeypatch.setenv(svc.ENV_MAX_ROWS, "3")
+        real_recheck = svc.recheck
+        real_monotonic = time.monotonic
+        calls = {"n": 0, "jump": 0.0}
+        monkeypatch.setattr(svc.time, "monotonic", lambda: real_monotonic() + calls["jump"])
+
+        def recheck_with_clock(rows, filters, budget=None):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                calls["jump"] += 10000.0  # the budget runs out as the relaxed pass starts
+            return real_recheck(rows, filters, budget)
+
+        monkeypatch.setattr(svc, "recheck", recheck_with_clock)
+        visible = [result_row(action_record("carol", "a-%d" % n)) for n in range(3)]
+        # The contains term is checked only for rows that pass the other filters, so the first pass
+        # (outcome denied) never reads the clock and the relaxed pass does.
+        body = _whole_response(env, raw_matched=3, rows=visible, outcomes=["denied"], contains=["db-1"])
+        assert calls["n"] == 2
+        assert svc.WARNING_RECHECK_BUDGET in body["warnings"]
+        assert "candidateLimitReached" not in body["statistics"]
+
     def test_hidden_candidates_do_not_count_towards_the_flag(self, env, monkeypatch):
         monkeypatch.setenv(svc.ENV_MAX_ROWS, "3")
         hidden = [result_row(changes_record(asset="a-%d" % n)) for n in range(3)]
