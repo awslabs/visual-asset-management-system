@@ -35,7 +35,7 @@ A record becomes searchable about a minute after the action it describes, becaus
 | **Request ID**  | Every record written for one request.                                             |
 | **Contains**    | Text inside the record's identifiers, request parameters and details (see below). |
 
-**Contains.** A term holds 3 to 64 letters, digits, spaces and the characters `. _ : @ + / -`, up to 3 terms (the deployment may lower these limits), and every term must match. The case does not matter. Values the viewer hides, such as secrets, are never searched, so a term cannot be used to guess them. The page tells you before you search when a term is not accepted.
+**Contains.** The text is searched in a record's identifiers, request parameters and details. It is not searched in the values a record changed or in its previous values, so an asset name on a create record, which is a changed value, is not found; filter by **Entity ID** or **Asset ID** instead. A term holds 3 to 64 letters, digits, spaces and the characters `. _ : @ + / -`, up to 3 terms (the deployment may lower these limits), and every term must match. The case does not matter. Values the viewer hides, such as secrets, are never searched, so a term cannot be used to guess them. The page tells you before you search when a term is not accepted.
 
 **Permission-probe records.** The web interface asks the API what you may do to decide what to show. Those checks are recorded as denials marked as probes. **Hide permission-probe records** (on by default) leaves them out so real denials stand out.
 
@@ -43,13 +43,13 @@ A record becomes searchable about a minute after the action it describes, becaus
 
 ## While a search runs
 
-A search reads CloudWatch Logs and can take several seconds. The page waits on the server and shows the number of records matched and scanned so far. Choose **Stop** to end the search early; the page keeps the records found before you stopped. A search that passes the deployment's time limit stops with a message that asks you to narrow the range or the filters.
+A search reads CloudWatch Logs and can take several seconds. The page waits on the server and shows how many records it has scanned so far. It shows no count of matches, because the records are checked again on the server when the search finishes. Records appear when the search finishes. Choose **Stop** to end the search early; a stopped search shows no records, so narrow the time range or the filters and search again. A search that passes the deployment's time limit stops with a message that asks you to narrow the range or the filters.
 
 When the service is busy or you already run the most searches allowed at once, the page says so. Wait a moment and search again.
 
 ## Read the results
 
-The table shows one row per record: time (your local time), log group, action, user, outcome, database, asset, entity and a one-line summary. **Order** chooses newest or oldest first for the whole result. Column headers sort the page shown only. Use the preferences button to choose the columns.
+The table shows one row per record, on one line (long values are cut and shown in full when you point at them or open the record; the preferences button turns on wrapped lines): time (your local time), log group, action, user, outcome, database, asset, entity and a one-line summary. **Order** chooses newest or oldest first for the whole result, by the exact time of each record. Time is shown in one format for every record, whichever format it was written in. Column headers sort the page shown only. Use the preferences button to choose the columns.
 
 Notices above the table explain what the result may not show:
 

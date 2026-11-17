@@ -15926,7 +15926,7 @@ components:
                     enum: [Running, Complete, Failed, Cancelled, Timeout]
                 statistics:
                     type: object
-                    description: "recordsMatched, recordsScanned and bytesScanned come from Logs Insights. rowCount, duplicatesRemoved and candidateLimitReached appear for a complete search. No count of rows dropped by the server check is returned."
+                    description: "recordsScanned and bytesScanned come from Logs Insights and do not depend on the filters. rowCount, duplicatesRemoved and candidateLimitReached appear for a complete search. No count of rows dropped by the server check is returned, and no figure varies with the number of dropped rows (CloudWatch recordsMatched is never returned). A stopped (Cancelled) search returns no Items. Item timestamps are UTC ISO 8601 with milliseconds."
                     additionalProperties: true
                 Items:
                     type: array

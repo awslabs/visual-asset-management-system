@@ -11,9 +11,11 @@ Two checks apply. The route check allows `/audit` (GET, POST, DELETE). Then each
 1. `POST /audit/queries` validates the filters, builds the query on the server and returns a `queryId`. No query text is accepted.
 2. `GET /audit/queries/{queryId}?wait=20` waits up to the configured long-poll time for a final status and returns progress. When the status is `Complete` it returns one page of rows. Follow `NextToken` with `startingToken`.
 3. `GET /audit/queries/{queryId}/export` returns the same rows as CSV or NDJSON chunks.
-4. `DELETE /audit/queries/{queryId}` stops a running search.
+4. `DELETE /audit/queries/{queryId}` stops a running search. A stopped search (`Cancelled`) returns no rows: rows are returned only for a finished search, after the server check.
 
-Logs Insights narrows the records. The API then parses each record, redacts it and checks it against every filter again, so a row is shown only when its visible fields match. No count of rows removed by that check is returned.
+Logs Insights narrows the records. The API then parses each record, redacts it and checks it against every filter again, so a row is shown only when its visible fields match. No count of rows removed by that check is returned, and no returned figure changes with the number of removed rows (`duplicatesRemoved` counts duplicates among the rows that are returned). `candidateLimitReached` is a flag that is set only when the raw result reached the candidate limit, and it is returned only for a search that could not push every filter into the query.
+
+Every row's `timestamp` is one UTC format with milliseconds (`2026-11-17T17:19:04.055Z`), whichever format the record was written in, and rows are ordered and paged by that instant.
 
 A handle belongs to the user who started the search. An unknown, malformed, expired, foreign or no-longer-allowed handle returns the same `404 Query not found`.
 
@@ -45,11 +47,11 @@ A handle is kept for `app.auditLogging.search.handleRetentionMinutes` (default 6
 }
 ```
 
-`startTime` and `endTime` are required. Other keys are optional filters: `entityTypes`, `entityIds`, `apiKeyIds`, `databaseIds`, `assetIds`, `requestIds`. Lists hold at most 20 values. `users` matches the acting user, the on-behalf-of user and the user in the record prefix. `contains` takes ASCII letters, digits and ` ._:@+/-`, matched case-insensitively on the redacted values the viewer shows. The unknown key `query` or `regex` is refused.
+`startTime` and `endTime` are required. Other keys are optional filters: `entityTypes`, `entityIds`, `apiKeyIds`, `databaseIds`, `assetIds`, `requestIds`. Lists hold at most 20 values. `users` matches the acting user, the on-behalf-of user and the user in the record prefix. `contains` takes ASCII letters, digits and ` ._:@+/-`, matched case-insensitively on the redacted values the viewer shows: identifiers, request parameters and details. It does not search `changes` or `previous` (an asset name on a create record is a changed value), so a term cannot be used to probe values the viewer cannot see. The unknown key `query` or `regex` is refused.
 
 ### Poll
 
-`status` is `Running`, `Complete`, `Failed`, `Cancelled` or `Timeout`. While `Running`, `Items` is empty and `statistics` shows `recordsMatched`, `recordsScanned` and `bytesScanned`. A complete search also reports `rowCount` and `duplicatesRemoved`, and `candidateLimitReached` when the candidate limit applied and a filter could not be pushed into the query (narrow the time range). `warnings` may hold `widerScan`, `candidateLimitMayApply` and `recheckTimeBudget`.
+`status` is `Running`, `Complete`, `Failed`, `Cancelled` or `Timeout`. While `Running`, `Items` is empty and `statistics` shows `recordsScanned` and `bytesScanned`, which do not depend on the filters. The API never returns CloudWatch's `recordsMatched`: it counts records that matched on the raw message before the server check, so the gap to `rowCount` would be the number of records whose hidden content matched a search term. A complete search also reports `rowCount` and `duplicatesRemoved`, and `candidateLimitReached` when the candidate limit applied and a filter could not be pushed into the query (narrow the time range). `warnings` may hold `widerScan`, `candidateLimitMayApply` and `recheckTimeBudget`.
 
 ### Errors
 

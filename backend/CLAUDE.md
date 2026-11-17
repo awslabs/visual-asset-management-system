@@ -276,7 +276,7 @@ backend/
 │   │   │                                           #   /download/zip routes, the read-time
 │   │   │                                           #   reconcile and the delayed sweep)
 │   │   ├── audit/auditLogService.py                # audit log search: /audit routes, Logs Insights, handles,
-│   │   │                                           #   caps; Tier 2 auditLog per log group (see common/auditSearch). Handle row TTL = handleRetentionMinutes after last use; contains terms in `containsTerms`, removed on stop/fail/export done
+│   │   │                                           #   caps; Tier 2 auditLog per log group (see common/auditSearch). Handle row TTL = handleRetentionMinutes after last use; contains terms in `containsTerms`, removed on stop/fail/export done. Round 2: no `recordsMatched` or any pre-recheck count in a response (rows are rechecked, then deduplicated); row time is one UTC ISO ms format (`rowModel.normalize_time`, sort on `time_ms`); a stopped search returns no rows; the concurrency caps are atomic counters (`slots#all`, `slots#user#<id>` items in the handle table, conditional increment on start, released by the closer that removes `openKey`, self-expiring); the hidden-group probe is one summary denial per call
 │   │   ├── auth/                                   # apiGatewayAuthorizerRest, apiKeyService,
 │   │   │                                           #   constraints, cognito, preTokenGen,
 │   │   │                                           #   apiOriginVerifyRotation (secret rotation);
