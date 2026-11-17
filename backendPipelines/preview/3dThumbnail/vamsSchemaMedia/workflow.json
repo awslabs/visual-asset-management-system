@@ -1,0 +1,85 @@
+{
+    "workflowName": "Media Preview Thumbnail",
+    "category": "SYSTEM - Preview",
+    "isSystem": true,
+    "description": "Automated workflow for image, TGA/TIFF and video preview thumbnails (JPG/PNG/GIF).",
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "crossAssetAllowed": false,
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": false,
+            "folderAllowed": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": true,
+            "fileAttributes": true
+        },
+        "inputFileFilters": {
+            "allow": [
+                "*.png",
+                "*.jpg",
+                "*.jpeg",
+                "*.gif",
+                "*.webp",
+                "*.bmp",
+                "*.tga",
+                "*.tif",
+                "*.tiff",
+                "*.mp4",
+                "*.m4v",
+                "*.mov",
+                "*.mkv",
+                "*.webm",
+                "*.avi",
+                "*.wmv",
+                "*.mpg",
+                "*.mpeg",
+                "*.mts",
+                "*.m2ts"
+            ],
+            "exclude": []
+        },
+        "concurrencyRestriction": "none",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": false
+        },
+        "allowWorkflowTriggerChaining": true
+    },
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": [
+                    "*.png",
+                    "*.jpg",
+                    "*.jpeg",
+                    "*.gif",
+                    "*.webp",
+                    "*.bmp",
+                    "*.tga",
+                    "*.tif",
+                    "*.tiff",
+                    "*.mp4",
+                    "*.m4v",
+                    "*.mov",
+                    "*.mkv",
+                    "*.webm",
+                    "*.avi",
+                    "*.wmv",
+                    "*.mpg",
+                    "*.mpeg",
+                    "*.mts",
+                    "*.m2ts"
+                ],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:preview-media-thumbnail": "preview-media-thumbnail-default"
+            },
+            "enabled": false
+        }
+    ]
+}

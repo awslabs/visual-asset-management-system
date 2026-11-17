@@ -75,12 +75,15 @@ _MODEL_GEOCENTRIC = 3
 _RASTER_PIXEL_IS_POINT = 2
 
 
+TIFF_EXTENSIONS = (".tif", ".tiff")
+
+
 class RasterRejected(ValueError):
     """The bytes are not a TIFF this extractor reads, or break one of its read limits (the message says which)."""
 
 
 def is_raster_name(file_name: str) -> bool:
-    return str(file_name).lower().endswith((".tif", ".tiff"))
+    return str(file_name).lower().endswith(TIFF_EXTENSIONS)
 
 
 def derived_cog_source_name(file_name: str) -> Optional[str]:
@@ -89,7 +92,7 @@ def derived_cog_source_name(file_name: str) -> Optional[str]:
     if not name.lower().endswith(DERIVED_COG_SUFFIX):
         return None
     source = name[:-len(DERIVED_COG_SUFFIX)]
-    return source if source.lower().endswith((".tif", ".tiff")) else None
+    return source if source.lower().endswith(TIFF_EXTENSIONS) else None
 
 
 # --- the directory walk (struct only) ----------------------------------------------------------------------------

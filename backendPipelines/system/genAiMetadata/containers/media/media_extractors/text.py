@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Text and code (.txt .md .json .geojson .xml .yaml .yml .toml .ini .cfg .inf .log .py .js .ts .sql .sh .ps1
+"""Text and code (.txt .md .json .geojson .xml .yaml .yml .toml .ini .cfg .inf .log .py .js .ts .sql .sh .ps1 .mdl
 .ipynb .html .htm): encoding, line and word counts, a language guess and an excerpt -> sys_text. A `.json` or
 `.geojson` tileset is promoted to tiles3d and a GeoJSON root to `data` (sys_geo); bytes that are not text at all
 demote the file to `other`."""

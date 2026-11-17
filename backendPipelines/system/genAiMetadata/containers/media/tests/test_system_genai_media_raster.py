@@ -388,13 +388,13 @@ class TestHandlerReadsByRange:
         assert s3.downloads == []
         assert s3.manifest(_AUX, _MANIFEST_KEY)["attributes"]["sys_raster"]["width"] == 1024
 
-    def test_an_unreadable_tiff_takes_the_path_it_took_before_the_raster_class(self, s3):
+    def test_an_unreadable_tiff_takes_the_image_path(self, s3):
         _seed(s3, "scene.tif", b"not a tiff at all, just text.\n" * 20)
         module = _load(s3)
         module.lambda_handler(_tiff_event("scene.tif", 600), None)
         manifest = s3.manifest(_AUX, _MANIFEST_KEY)
         assert manifest["fileClass"] != "raster" and "sys_raster" not in manifest["attributes"]
-        assert s3.downloads == [(_ASSETS, "a1/scene.tif", "v1")]  # the generic probe reads a downloaded copy
+        assert s3.downloads == [(_ASSETS, "a1/scene.tif", "v1")]  # the image path reads a downloaded copy
 
     def test_a_derived_cog_checks_its_source_with_one_head(self, s3):
         data = _bytes("cog_small_4326")
@@ -464,11 +464,12 @@ class TestHandlerReadsByRange:
             module.lambda_handler(_tiff_event("scene.tif", len(data)), None)
         assert "X-Amz-Signature" not in str(excinfo.value) and "could not be read by range" in str(excinfo.value)
 
-    def test_the_extension_alone_routes_a_tiff_to_the_raster_extractor(self, s3):
+    def test_the_extension_alone_is_image_and_a_raster_state_is_the_raster_extractor(self, s3):
         module = _load(s3)
         extractor, file_class = module.select_extractor(None, ".tiff")
+        assert file_class == "image" and extractor is module.images.extract_image  # the handler probes the header
+        extractor, file_class = module.select_extractor("raster", ".tif")
         assert file_class == "raster" and extractor is raster.extract_raster_file
-        assert module.select_extractor("raster", ".tif")[1] == "raster"
 
     def test_the_local_copy_path_gives_the_same_result(self, tmp_path):
         path = tmp_path / "input.tif"
@@ -477,7 +478,7 @@ class TestHandlerReadsByRange:
         assert result.attributes["sys_raster"]["crs"] == "EPSG:32633"
 
 
-# --- a TIFF that is not a georeferenced raster keeps its behaviour from before the raster class ---------------------
+# --- a TIFF that is not a georeferenced raster keeps the image path ---------------------
 
 def _photo_tiff(width=320, height=200):
     """A plain RGB TIFF photo with an EXIF-style description, no GeoTIFF tags."""
@@ -514,10 +515,10 @@ def plain_s3():
 
 class TestPlainTiffKeepsItsBehaviour:
     @pytest.mark.parametrize("make", [_photo_tiff, lambda: _bytes("no_georef")], ids=["photo", "plain-cog"])
-    def test_a_tiff_with_no_georeference_gets_what_the_other_class_gave_it(self, plain_s3, make):
+    def test_a_tiff_with_no_georeference_gets_what_the_image_class_gives_it(self, plain_s3, make):
         data = make()
-        # Before the raster class a .tif was classified `other` and read by the generic probe.
-        _m, base_response, base, base_renders = _run(plain_s3, "scan.tif", data, "other")
+        # Without the raster class a .tif is `image` (a TIFF/TGA viewer extension) and read by the image extractor.
+        _m, base_response, base, base_renders = _run(plain_s3, "scan.tif", data, "image")
         _m, response, manifest, renders = _run(plain_s3, "scan.tif", data, "raster")
         assert base["fileClass"] == "image" and "sys_image" in base["attributes"] and base_renders
         assert manifest == base
@@ -538,6 +539,24 @@ class TestPlainTiffKeepsItsBehaviour:
         assert manifest["fileClass"] == "raster" and "sys_image" not in manifest["attributes"]
         assert plain_s3.downloads == [] and renders == []
 
+    @pytest.mark.parametrize("name", ["scene.tif", "scene.tiff", "SCENE.TIF"])
+    def test_a_georeferenced_tiff_the_classifier_called_image_becomes_raster(self, plain_s3, name):
+        """The classifier maps .tif and .tiff to `image` (the TIFF/TGA viewer serves them); the MEDIA branch reads
+        the header by range and promotes a georeferenced file to `raster`, with no download and no render."""
+        data = _bytes("cog_4326")
+        _m, response, manifest, renders = _run(plain_s3, name, data, "image")
+        assert manifest["fileClass"] == response["fileClass"] == "raster"
+        assert "sys_raster" in manifest["attributes"] and "sys_image" not in manifest["attributes"]
+        assert plain_s3.downloads == [] and renders == []
+
+    def test_a_georeferenced_raster_above_the_image_pixel_budget_is_described_not_refused(self, plain_s3):
+        """The image extractor's raster pixel budget skips the render of a huge picture; a georeferenced raster never
+        reaches it, whatever its pixel count, because only its header is read."""
+        data = _bytes("tiled_big_no_overviews_4326")
+        _m, _r, manifest, renders = _run(plain_s3, "big.tif", data, "image")
+        assert manifest["fileClass"] == "raster" and renders == []
+        assert not any("raster budget" in warning for warning in manifest["warnings"])
+
     def test_a_non_georeferenced_tiff_over_the_download_bound_keeps_sys_file_only_as_before(self, plain_s3, tmp_path):
         path = tmp_path / "scan.tif"
         with open(path, "wb") as handle:
@@ -545,7 +564,7 @@ class TestPlainTiffKeepsItsBehaviour:
             handle.truncate(4 * 1024 ** 3)
         plain_s3.objects.clear()
         results = {}
-        for state_class in ("other", "raster"):
+        for state_class in ("image", "raster"):
             plain_s3.files.clear()
             plain_s3.objects[(_RUN, _CONFIG_KEY)] = json.dumps(_CONFIG_BODY).encode()
             plain_s3.objects[(_AUX, _MANIFEST_KEY)] = json.dumps(_pre_manifest(state_class)).encode()
@@ -557,12 +576,12 @@ class TestPlainTiffKeepsItsBehaviour:
             _load(plain_s3).lambda_handler(event, None)
             assert plain_s3.downloads == []  # never downloaded whole
             results[state_class] = (plain_s3.manifest(_AUX, _MANIFEST_KEY), len(plain_s3.ranged_gets))
-        base, base_gets = results["other"]
+        base, base_gets = results["image"]
         manifest, gets = results["raster"]
-        assert manifest == base and base_gets == 0
-        assert manifest["fileClass"] == "other" and "sys_image" not in manifest["attributes"]
+        assert manifest == base and gets == base_gets  # the same bytes read whichever class the state names
+        assert manifest["fileClass"] == "image" and "sys_image" not in manifest["attributes"]
         assert any("exceeds" in warning for warning in manifest["warnings"])
-        assert 1 <= gets <= 2  # only the header probe is new
+        assert 1 <= gets <= 2  # the header probe only
 
 
 # --- reviewer round 1: unresolvable CRS, 0..360, lazy geo tags, tifffile log noise, no-CRS transforms ---------------

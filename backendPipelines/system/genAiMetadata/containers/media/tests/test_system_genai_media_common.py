@@ -2,10 +2,9 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 """The MEDIA branch's vocabulary: the extension table equals the supported MEDIA extensions by class, every
-listed extension is one a viewer serves (`.webp` excepted -- supported here, and no viewer serves it), the
-entries the pipeline's classifier treats differently are named with their reasons, the promotion source
-contract equals the keys metadataCatalog reads, and the text and result helpers behave as the extractors
-rely on."""
+listed extension is one a viewer serves or one the pipeline's ADDITIONAL_EXTENSIONS admits, the entries the
+pipeline's classifier treats differently are named with their reasons, the promotion source contract equals the
+keys metadataCatalog reads, and the text and result helpers behave as the extractors rely on."""
 
 import json
 import os
@@ -19,29 +18,27 @@ _VIEWER_CONFIG = os.path.join(_REPO_ROOT, "web", "src", "visualizerPlugin", "con
 
 # The supported MEDIA extensions by class, transcribed literally.
 SUPPORTED_MEDIA_EXTENSIONS = {
-    "image": {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"},
+    "image": {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tga", ".tif", ".tiff", ".svg"},
     "video": {".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v"},
     "audio": {".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a"},
     "document": {".pdf", ".docx", ".pptx"},
     "text": {".txt", ".md", ".json", ".geojson", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".inf", ".log",
-             ".py", ".js", ".ts", ".sql", ".sh", ".ps1", ".ipynb", ".html", ".htm"},
+             ".py", ".js", ".ts", ".sql", ".sh", ".ps1", ".mdl", ".ipynb", ".html", ".htm"},
     "data": {".csv", ".fcs", ".xlsx", ".gpkg", ".lyrx"},
-    "raster": {".tif", ".tiff"},
 }
-# The one supported extension no viewer serves; the allow-list rule (only viewer-served extensions enter the
-# pipeline) keeps it out of the pipeline's allow list, and the image still handles it should a viewer gain it.
-_NOT_A_VIEWER_EXTENSION = {".webp"}
+# The extensions the Image Viewer and the TIFF/TGA Image Viewer gained (#1551), and the NVIDIA MDL source the text
+# viewers open: each one is a viewer extension, so the allow-list rule admits it and this table names its class.
+_VIEWER_EXTENSIONS_ADDED_WITH_1551 = {".webp", ".bmp", ".tga", ".tif", ".tiff", ".mdl"}
 # Formats no viewer renders, admitted by the pipeline's ADDITIONAL_EXTENSIONS for their extracted content: the
 # office formats for their text, the ffmpeg-decodable video containers no browser plays for their stream facts,
 # the GIS containers (GeoPackage, ArcGIS Pro layer file) for their layers and extents, and the GeoJSON extension
-# for its features (sniffed like a .json), and the TIFF extensions for the header facts and footprint of a GeoTIFF.
+# for its features (sniffed like a .json). The TIFF extensions are served by the TIFF/TGA viewer, so they are not here;
+# the MEDIA branch reads a GeoTIFF's header under the `raster` class all the same.
 _OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx"}
 _UNPLAYABLE_VIDEO_EXTENSIONS = {".avi", ".flv", ".wmv"}
 _GIS_EXTENSIONS = {".gpkg", ".lyrx"}
 _GEOJSON_EXTENSIONS = {".geojson"}
-_RASTER_EXTENSIONS = {".tif", ".tiff"}
-_ADDITIONAL_EXTENSIONS = (_OFFICE_EXTENSIONS | _UNPLAYABLE_VIDEO_EXTENSIONS | _GIS_EXTENSIONS | _GEOJSON_EXTENSIONS
-                          | _RASTER_EXTENSIONS)
+_ADDITIONAL_EXTENSIONS = _OFFICE_EXTENSIONS | _UNPLAYABLE_VIDEO_EXTENSIONS | _GIS_EXTENSIONS | _GEOJSON_EXTENSIONS
 _FILE_CLASSIFIER = os.path.join(_REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "lambda", "fileClassifier.py")
 
 
@@ -112,14 +109,18 @@ class TestExtensionTable:
             for extension in viewer.get("supportedExtensions", [])
             if extension != "*"
         }
-        assert set(common.MEDIA_EXTENSION_CLASSES) - viewer_extensions == _NOT_A_VIEWER_EXTENSION | _ADDITIONAL_EXTENSIONS
+        assert set(common.MEDIA_EXTENSION_CLASSES) - viewer_extensions == _ADDITIONAL_EXTENSIONS
+        # Control: the extensions the viewers gained are served by a viewer and listed here, so a viewer losing one
+        # (or this table dropping one) fails above or here rather than shrinking both sides together.
+        assert _VIEWER_EXTENSIONS_ADDED_WITH_1551 <= viewer_extensions
+        assert _VIEWER_EXTENSIONS_ADDED_WITH_1551 <= set(common.MEDIA_EXTENSION_CLASSES)
 
     def test_classifier_overrides_are_table_entries_with_a_reason(self):
         # The pipeline's `lambda/fileClassifier.py` suite diffs its MEDIA rows against this table minus these
         # entries; a new divergence is named here with its reason rather than widening the gap silently.
-        assert set(common.CLASSIFIER_OVERRIDE_EXTENSIONS) == {".webp", ".json", ".geojson"}
+        assert set(common.CLASSIFIER_OVERRIDE_EXTENSIONS) == {".json", ".geojson"}
         assert set(common.CLASSIFIER_OVERRIDE_EXTENSIONS) <= set(common.MEDIA_EXTENSION_CLASSES)
-        assert _NOT_A_VIEWER_EXTENSION <= set(common.CLASSIFIER_OVERRIDE_EXTENSIONS)
+        assert not _VIEWER_EXTENSIONS_ADDED_WITH_1551 & set(common.CLASSIFIER_OVERRIDE_EXTENSIONS)
         assert all(reason.strip() for reason in common.CLASSIFIER_OVERRIDE_EXTENSIONS.values())
 
     def test_office_rows_match_the_classifier_additional_extensions(self):

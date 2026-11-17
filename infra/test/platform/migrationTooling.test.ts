@@ -459,3 +459,99 @@ describe(`${CURRENT.dir} steps are documented where the operator looks`, () => {
         expect(checklist).toMatch(/\| Built-in category rename[^\n]*\| v2\.6 to v2\.7 /);
     });
 });
+
+describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs alone", () => {
+    // Download as Zip (`app.pipelines.useZipDownloads`) and the large object copy engine ship in 2.7.0
+    // with no data to migrate. These pin why no step of this release reaches their records, and that the
+    // operator documentation says what the deploy creates for them and in which order a v2.5 deployment
+    // runs the two releases' migrations.
+    const release = MIGRATIONS.find((m) => m.dir === "v2.6_to_v2.7");
+    if (!release) throw new Error("the v2.6_to_v2.7 migration is not listed");
+    const script = readMigrationFile(release, release.script);
+    const readme = readMigrationFile(release, release.readme);
+    const previous = MIGRATIONS.find((m) => m.dir === "v2.5_to_v2.6");
+    if (!previous) throw new Error("the v2.5_to_v2.6 migration is not listed");
+
+    /** The quoted strings of a top-level Python tuple assignment (possibly spanning lines). */
+    function tuple(source: string, name: string): string[] {
+        const body = new RegExp(`^${name}\\s*=\\s*\\(([^)]*)\\)`, "m").exec(source)?.[1] ?? "";
+        return Array.from(body.matchAll(/['"]([^'"]+)['"]/g)).map((m) => m[1]);
+    }
+
+    it("matches fileUpload trigger rows only, so a system trigger value is never read as a trigger", () => {
+        expect(tuple(script, "TRIGGER_BASE_TYPES")).toEqual(["fileUpload"]);
+    });
+
+    it("retires and reports only the two retired built-ins, never the Zip Archive workflow", () => {
+        const retired = tuple(script, "RETIRED_PIPELINE_IDS");
+        expect(retired).toHaveLength(2);
+        expect(retired).not.toContain("utility-zip-archive");
+        expect(script).toMatch(/^RETIRED_WORKFLOW_IDS = RETIRED_PIPELINE_IDS$/m);
+        // The in-flight listing queries the executions of the retired workflows by name, nothing else.
+        const listing = script.slice(script.indexOf("def list_inflight_retired_executions("));
+        expect(listing.slice(0, 600)).toContain("for workflow_id in RETIRED_WORKFLOW_IDS:");
+    });
+
+    it("walks no Amazon S3 bucket itself; the backfills hand the walk to the reindexer", () => {
+        expect(script).not.toMatch(/list_objects|list_object_versions|\.client\(\s*['"]s3['"]/);
+        expect(script).not.toMatch(/auxiliary/i);
+    });
+
+    it("documents what the deploy creates for Download as Zip and the copy engine", () => {
+        for (const text of [
+            "ZipDownloadRequestsStorageTable",
+            "LargeObjectCopyJobsStorageTable",
+            "vams.preparedDownloads/",
+            "app.pipelines.useZipDownloads.enabled",
+            "GLOBAL/utility-zip-archive",
+            "System-ZipDownload",
+            "AWS Batch, Amazon ECR API and Amazon ECR Docker interface",
+        ]) {
+            expect({ text, inReadme: readme.includes(text) }).toEqual({ text, inReadme: true });
+        }
+    });
+
+    it("tells a v2.5 deployment to run the v2.5 to v2.6 migration first, which skips the zip prefix", () => {
+        expect(readme).toContain("### Upgrading from v2.5");
+        expect(readme).toContain("../../v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_README.md");
+        expect(
+            fs.existsSync(path.join(migrationDir(previous), "v2.5_to_v2.6_migration_README.md"))
+        ).toBe(true);
+        const reserved = tuple(
+            readMigrationFile(previous, previous.script),
+            "_AUX_RESERVED_TOP_PREFIXES"
+        );
+        const patterns = fs.readFileSync(
+            path.join(__dirname, "..", "../../backend/backend/common/s3PathPatterns.py"),
+            "utf8"
+        );
+        const prefix = /^AUXILIARY_PREPARED_DOWNLOADS_PREFIX = "([^"]+)\/"$/m.exec(patterns)?.[1];
+        expect(prefix).toBe("vams.preparedDownloads");
+        expect(reserved).toContain(prefix);
+        const page = fs.readFileSync(
+            path.join(DOCS_ROOT, "deployment/update-the-solution.md"),
+            "utf8"
+        );
+        const section = page.slice(page.indexOf("\n### v2.6 to v2.7\n"));
+        const end = section.slice(1).search(/\n#{2,3} /);
+        const v27 = end === -1 ? section : section.slice(0, end + 1);
+        expect(v27).toContain("[v2.5 to v2.6](#v25-to-v26)");
+        expect(v27).toContain("ZipDownloadRequestsStorageTable");
+        expect(v27).toContain("LargeObjectCopyJobsStorageTable");
+        expect(v27).toContain("`vams.preparedDownloads/` lifecycle rules");
+    });
+
+    it("resolves the zip download table and the vector-search names from one SSM key list", () => {
+        const lookup = fs.readFileSync(SSM_RESOURCE_LOOKUP_PY, "utf8");
+        expect(lookup).toMatch(
+            /ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE = "dynamoTables\/zipDownloadRequestsStorage"/
+        );
+        expect(lookup).toMatch(
+            /VECTOR_EMBEDDINGS_STORAGE_TABLE = "dynamoTables\/vectorEmbeddingsStorage"/
+        );
+        expect(lookup).toMatch(/VECTOR_REINDEXER_FUNCTION = "lambdaFunctions\/vectorReindexer"/);
+        expect(lookup).toMatch(
+            /LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE = "dynamoTables\/largeObjectCopyJobsStorage"/
+        );
+    });
+});

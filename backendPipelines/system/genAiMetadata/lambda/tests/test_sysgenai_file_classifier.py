@@ -116,13 +116,13 @@ class TestAllowList:
     def test_additional_extensions_are_the_formats_no_viewer_serves(self):
         """The office formats join the allow list for their text, the ffmpeg-decodable video containers for
         their stream facts, the GIS containers (GeoPackage, ArcGIS Pro layer file) for their layers and
-        extents, the GeoJSON extension for its features, and the TIFF extensions for a GeoTIFF's header facts and
-        footprint (the `raster` class), although no viewer renders them. The tuple is the
-        registry literal, none of its members is a viewer extension, every member is allow-listed, and their
-        classes are document, data, document, video three times, then data three times (the `.geojson` one
-        sniffed from a GeoJSON root), then raster twice, all on the MEDIA branch."""
+        extents, and the GeoJSON extension for its features, although no viewer renders them. The tuple is the
+        registry literal, none of its members is a viewer extension (the TIFF extensions are served by the
+        TIFF/TGA viewer and are not in it), every member is allow-listed, and their classes are document, data,
+        document, video three times, then data three times (the `.geojson` one sniffed from a GeoJSON root),
+        all on the MEDIA branch."""
         assert fc.ADDITIONAL_EXTENSIONS == (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv", ".gpkg", ".lyrx",
-                                            ".geojson", ".tif", ".tiff")
+                                            ".geojson")
         assert not set(fc.ADDITIONAL_EXTENSIONS) & catalog_extensions()
         assert set(fc.ADDITIONAL_EXTENSIONS) <= set(fc.ALLOW_LIST)
         head = json.dumps(_FEATURE_COLLECTION).encode()
@@ -130,19 +130,21 @@ class TestAllowList:
             (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA),
             (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA), (fc.CLASS_VIDEO, fc.BRANCH_MEDIA),
             (fc.CLASS_VIDEO, fc.BRANCH_MEDIA), (fc.CLASS_VIDEO, fc.BRANCH_MEDIA),
-            (fc.CLASS_DATA, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA),
-            (fc.CLASS_RASTER, fc.BRANCH_MEDIA), (fc.CLASS_RASTER, fc.BRANCH_MEDIA)]
+            (fc.CLASS_DATA, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA)]
         # Every member but the sniffed one is decided by the table alone.
         assert [extension for extension in fc.ADDITIONAL_EXTENSIONS if extension not in fc.EXTENSION_CLASSES] == [
             ".geojson"]
 
-    def test_tiff_extensions_are_the_raster_class_on_the_media_branch(self):
-        """A TIFF is read by its header alone: `.tif` and `.tiff` (and any case) classify `raster` on the MEDIA
-        branch, with no sniff of the bytes, and the class has its phrase."""
-        for extension in (".tif", ".tiff", ".TIF", ".Tiff"):
+    def test_tiff_extensions_are_served_by_the_viewer_and_stay_image(self):
+        """`.tif`, `.tiff` and `.tga` are served by the TIFF/TGA viewer, so they are on the allow list through the
+        viewer catalog, not ADDITIONAL_EXTENSIONS, and classify `image` on the MEDIA branch (any case), with no sniff
+        of the bytes. The MEDIA branch promotes a georeferenced TIFF to `raster` after reading its header; the
+        class exists and has its phrase."""
+        for extension in (".tif", ".tiff", ".tga", ".TIF", ".Tiff"):
             assert fc.classify(extension, lambda n: pytest.fail("a TIFF is not sniffed")) == (
-                fc.CLASS_RASTER, fc.BRANCH_MEDIA)
-        assert ".tif" in fc.ALLOW_LIST and ".tiff" in fc.ALLOW_LIST
+                fc.CLASS_IMAGE, fc.BRANCH_MEDIA)
+        assert {".tif", ".tiff", ".tga"} <= set(fc.ALLOW_LIST) and {".tif", ".tiff", ".tga"} <= catalog_extensions()
+        assert not {".tif", ".tiff"} & set(fc.ADDITIONAL_EXTENSIONS)
         assert fc.CLASS_RASTER in fc.FILE_CLASSES and fc.FILE_CLASS_PHRASES[fc.CLASS_RASTER]
 
     def test_geojson_is_allow_listed_although_no_viewer_lists_it(self):
@@ -209,6 +211,10 @@ class TestAllowList:
 class TestClassifyMatrix:
     @pytest.mark.parametrize("extension,expected", [
         (".png", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)), (".svg", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)),
+        # The rasters and the MDL text the viewers gained with #1551; before it they fell to `other`.
+        (".webp", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)), (".bmp", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)),
+        (".tga", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)), (".tif", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)),
+        (".tiff", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)), (".mdl", (fc.CLASS_TEXT, fc.BRANCH_MEDIA)),
         (".mp4", (fc.CLASS_VIDEO, fc.BRANCH_MEDIA)), (".wav", (fc.CLASS_AUDIO, fc.BRANCH_MEDIA)),
         (".pdf", (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA)), (".md", (fc.CLASS_TEXT, fc.BRANCH_MEDIA)),
         (".docx", (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA)), (".pptx", (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA)),

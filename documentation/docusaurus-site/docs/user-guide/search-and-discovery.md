@@ -212,7 +212,7 @@ The geospatial filter and a keyword search on the map view both match the indexe
 The **Show Thumbnails** toggle in the sidebar enables inline preview images in table, card, and map views.
 
 -   For **assets**, the thumbnail is loaded from the asset-level preview image.
--   For **files**, the thumbnail shows the file-specific preview (for example, a rendered image of a 3D model or the first page of a PDF).
+-   For **files**, the thumbnail shows the file-specific preview (for example, a rendered image of a 3D model, the first page of a PDF, or a frame sequence of a video). An image under 5 MiB in an allowed preview format (`.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, `.bmp`) is shown as its own thumbnail; a larger image, a TGA or TIFF file, or a video shows a generated preview when media previews are enabled, and no thumbnail otherwise.
 
 Choosing a thumbnail opens a full-size preview modal with download options.
 

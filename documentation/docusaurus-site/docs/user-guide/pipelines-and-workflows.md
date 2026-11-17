@@ -621,7 +621,8 @@ VAMS may include built-in pipelines depending on your deployment configuration. 
 
 -   **3D Conversion** -- Converts 3D mesh file formats (for example, OBJ to glTF).
 -   **GenAI Metadata Generation** (`SYSTEM - GenAI`) -- Analyzes every uploaded file, of any type: records its attributes and, with the GenAI layer on, describes it with Amazon Bedrock; produces the embeddings behind natural-language search.
--   **Preview Generation** (`SYSTEM - Preview`) -- Creates thumbnail preview images for 3D files.
+-   **Preview Generation** (`SYSTEM - Preview`) -- Creates thumbnail preview images for 3D files and, with media previews enabled, for images, TGA/TIFF files and video.
+-   **Zip Archive** (`SYSTEM - Utility`) -- Writes selected files, folders, or a whole asset into one zip, tar, or tar.gz file, for [Download as Zip](zip-downloads.md) or as a new file of the asset.
 -   **Point Cloud Processing** -- Processes point cloud data (for example, E57, LAS) for web visualization.
 -   **Coordinate Transform** -- Reprojects point clouds between coordinate reference systems.
 -   **Video SOP/BOM Extraction** -- Transcribes narrated teardown videos and derives a step-by-step procedure, a bill of materials, and a lab summary; select one to four video files of one asset explicitly.

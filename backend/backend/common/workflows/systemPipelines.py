@@ -33,9 +33,11 @@ artefacts with S3 lifecycle rules. Core workflow code never names a specific pip
 Trust boundary: the launch path is gated by who can invoke the execute function (executeWorkflowV2)
 directly, not by the API. Any principal holding ``lambda:InvokeFunction`` on it can send the marked
 cross-call and so launch a system run under any well-formed system trigger, with any context. API
-Gateway invokes it too, but cannot place the top-level keys. Today only the execution service
-(re-run) and the workflow trigger dispatcher hold an invoke grant, and neither sends the marker. A new
-invoke grant on the execute function is a grant to launch system runs and must be reviewed as one.
+Gateway invokes it too, but cannot place the top-level keys. The execution service (re-run) and the
+workflow trigger dispatcher hold an invoke grant and never send the marker; each feature that launches
+system runs holds one for its launcher, scoped to the function's ARN, and sends it (backend/CLAUDE.md,
+"Trust boundary", names every holder). A new invoke grant on the execute function is a grant to launch
+system runs and must be reviewed as one.
 
 This module has NO import-time AWS or environment dependency, so it imports and unit-tests in isolation
 like the other ``common.workflows`` record helpers.

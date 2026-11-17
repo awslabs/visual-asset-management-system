@@ -45,7 +45,7 @@ import PreviewModal from "./PreviewModal";
 import FileViewerModal from "../modals/FileViewerModal";
 import FileMetadata from "../../metadata/FileMetadata";
 import "./FileDetailsPanel.css";
-import { previewFileFormats } from "../../../common/constants/fileFormats";
+import { isSelfPreviewable, previewFileFormats } from "../../../common/constants/fileFormats";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
 import { ViewerMode } from "../../../visualizerPlugin/core/PluginRegistry";
 import Synonyms from "../../../synonyms";
@@ -1773,10 +1773,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
 
                                     // If file format is previewable, show preview section
                                     if (isPreviewFormat) {
-                                        // Check if file size is less than 5MB
-                                        const isSizeOk =
-                                            selectedItem.size !== undefined &&
-                                            selectedItem.size < 5 * 1024 * 1024;
+                                        // A file is shown as its own preview only when it is strictly under 5 MiB
+                                        const isSizeOk = isSelfPreviewable(
+                                            fileName,
+                                            selectedItem.size
+                                        );
 
                                         return (
                                             <div className="file-info-item">
@@ -1797,7 +1798,10 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     // Show message if file is too large
                                                     <Box padding="s" textAlign="center">
                                                         <div>
-                                                            File is too large to preview (over 5MB)
+                                                            This image is 5 MiB or larger, so it is
+                                                            not shown as its own preview. A
+                                                            generated preview appears here when
+                                                            media previews are enabled.
                                                         </div>
                                                     </Box>
                                                 )}

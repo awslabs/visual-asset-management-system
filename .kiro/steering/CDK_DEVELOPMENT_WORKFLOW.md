@@ -464,6 +464,9 @@ export interface ConfigPublic {
         // optional bucketAccountId/bucketRegion/bucketKmsKeyArn),
         // presignedUrlNetworkRestrictions (allowedIpRanges/allowedVpceIds; mutually exclusive;
         // non-empty list adds a presigned-only bucket policy Deny to the created asset + auxiliary buckets)
+        // pipelines.useMediaPreviews: {enabled, autoRegisterAutoTriggerOnFileUpload, downscaleSelfPreviewableImages}, a sibling of
+        // usePreview3dThumbnail. The thumbnail container deploys when either is enabled; the flags only choose the registered
+        // workflows. A missing block or key is off; booleans only; the trigger and the option need enabled.
         // pipelines.externalPipelineBridges: [{accountId, roleArnPattern, invokeTargets?}] — one
         // events:PutEvents statement per entry on the orchestration bus resource policy (bridge account
         // root + aws:PrincipalArn condition on the pattern) and the exact invokeTargets ARNs on the shared
@@ -1414,13 +1417,13 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
     registration. Only the import function's marked cross-call can set it; the API then refuses every
     change except the `enabled` switches and a template's `configBody` / `tagSchema` / `webFormJson`,
     and each registration re-asserts the shipped values, so `enabled` is a pause switch. Any principal
-    allowed to invoke the import function can register system records. Pair the flag with a
-    `SYSTEM - <Area>` category — the shipped bundles are `system/genAiMetadata` and its second
-    registration `system/genAiMetadata/vamsSchema/assetSummary` (both `SYSTEM - GenAI`) and
-    `preview/3dThumbnail` (`SYSTEM - Preview`) — and list the pipeline in
-    `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`. The zipArchive bundle
-    (`backendPipelines/utility/zipArchive/`, below) is also a shipped system bundle; it keeps the
-    `Utility` category.
+    allowed to invoke the import function can register system records. Every shipped system bundle
+    pairs the flag with a `SYSTEM - <Area>` category: `system/genAiMetadata` and its second
+    registration `system/genAiMetadata/vamsSchema/assetSummary` (both `SYSTEM - GenAI`),
+    `preview/3dThumbnail` and its media registration `preview/3dThumbnail/vamsSchemaMedia` (both
+    `SYSTEM - Preview`) and the zipArchive bundle (`backendPipelines/utility/zipArchive/`, below;
+    `SYSTEM - Utility`). A test that walks the shipped bundles matches every `vamsSchema*` folder. List the pipeline in
+    `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`.
 
 ```bash
 vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
@@ -2059,7 +2062,7 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 
     Which flags belong where is read from the source, and the two lists below are asserted against it by `infra/test/platform/steeringVectorSearchRelease.test.ts` (the block anchors are shared with `infra/test/security/vpcEndpointsAndAuthGrants.test.ts`):
 
-    Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `useGenAiVideoSopBom`, `usePreview3dThumbnail`, `usePreviewPcPotreeViewer`, `useSystemGenAiMetadata.useFargateRenderer`, `useZipDownloads`.
+    Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `useGenAiVideoSopBom`, `useMediaPreviews`, `usePreview3dThumbnail`, `usePreviewPcPotreeViewer`, `useSystemGenAiMetadata.useFargateRenderer`, `useZipDownloads`.
 
     Private-subnet flags (all three blocks): `useGenAiCadStepAgent.runtime`, `useImageTo3d`, `useModelOps`, `useNvidiaCosmos`, `useNvidiaCosmos3`, `useNvidiaGr00t`, `useRapidPipeline.useEcs`, `useRapidPipeline.useEks`, `useSplatToolbox`.
 

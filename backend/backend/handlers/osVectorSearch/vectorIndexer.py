@@ -78,7 +78,10 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
     VAMS_CHANGE_SOURCE_RESTORE_VALUES,
 )
-from common.s3PathPatterns import PREVIEW_FILE_PATTERN, key_has_reserved_segment, select_newest_preview_file
+from common.s3PathPatterns import (
+    AUXILIARY_PREPARED_DOWNLOADS_PREFIX, PREVIEW_FILE_PATTERN, key_has_reserved_segment,
+    select_newest_preview_file,
+)
 from common.vectorsearch.embeddings import round_vector
 from common.vectorsearch.vectorStore import DynamoDbVectorStore, VectorItem
 from customLogging.auditLogging import audited_handler
@@ -402,6 +405,11 @@ def handle_embedding_ready(detail: Dict[str, Any]) -> Outcome:
         # bucket, so a location elsewhere is a publisher fault, acknowledged and left untouched.
         logger.warning("embedding.ready names a document outside the auxiliary bucket; dropping")
         return Outcome(True, 'drop', 'document is not in the auxiliary bucket')
+    if doc_key.startswith(AUXILIARY_PREPARED_DOWNLOADS_PREFIX):
+        # Download as Zip keeps its archives under this auxiliary-bucket prefix, and no pipeline writes an
+        # embedding document there: a location under it is a publisher fault, acknowledged and never read.
+        logger.warning("embedding.ready names an object under the prepared downloads prefix; dropping")
+        return Outcome(True, 'drop', 'document is under the prepared downloads prefix')
     try:
         document = _read_document(doc_key)
     except ClientError as e:
@@ -709,6 +717,10 @@ def handle_s3_record(record: Dict[str, Any], bucket_name_hint: Optional[str],
         return Outcome(True, 'ignore', 'record without bucket or key')
     if key.endswith('/'):
         return Outcome(True, 'ignore', 'folder marker')
+    if bucket_name == aux_bucket_name and key.startswith(AUXILIARY_PREPARED_DOWNLOADS_PREFIX):
+        # A Download as Zip archive is never an asset file, even when the auxiliary bucket is also
+        # registered as an asset bucket.
+        return Outcome(True, 'ignore', 'prepared download')
     if key_has_reserved_segment(key, prefix or ''):
         return Outcome(True, 'ignore', 'reserved segment')
     if PREVIEW_FILE_PATTERN in key:

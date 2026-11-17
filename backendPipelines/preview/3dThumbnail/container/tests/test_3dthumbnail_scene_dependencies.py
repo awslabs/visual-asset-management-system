@@ -15,6 +15,7 @@ call names a key outside the asset root. The USD cases read real layers through 
 """
 
 import json
+import logging
 import os
 import shutil
 import struct
@@ -39,6 +40,7 @@ class FakeStore:
         self.versions = {}
         self.modified = {}
         self.calls = []
+        self.quiet_heads = []  # keys looked up with warn_if_missing=False
         for key, data in (objects or {}).items():
             self.put(key, data, modified=modified)
 
@@ -47,8 +49,10 @@ class FakeStore:
         self.versions[key] = version or f"v-{len(self.versions) + 1}"
         self.modified[key] = modified or (NOW - timedelta(days=1))
 
-    def head(self, key):
+    def head(self, key, warn_if_missing=True):
         self.calls.append(("head", key))
+        if not warn_if_missing:
+            self.quiet_heads.append(key)
         if key not in self.objects:
             return None
         return dependencies.ObjectInfo(len(self.objects[key]), self.versions[key], self.modified[key])
@@ -682,3 +686,94 @@ class TestFbxAndLccReferencesInTheSceneWalk:
         report, _ = _resolve(tmp_path, store, "xid/scan/meta.lcc")
         assert "scan/data.bin" in report.missing
         assert report.missing_required == [] and report.partial is False
+
+
+class _HeadClient:
+    """The HeadObject call ``ClientStore.head`` makes, answering from a set of keys; ``error`` is the code
+    a key outside the set answers with."""
+
+    def __init__(self, keys=(), error="404"):
+        self.keys = set(keys)
+        self.error = error
+
+    def head_object(self, Bucket, Key):
+        from botocore.exceptions import ClientError
+        if Key not in self.keys:
+            raise ClientError({"Error": {"Code": self.error, "Message": "x"}}, "HeadObject")
+        return {"ContentLength": 3, "VersionId": "v1"}
+
+
+@pytest.mark.unit
+class TestAnAbsentRendererMdlModuleIsNotMissingInTheResolver:
+    """A bare MDL module the renderer resolves itself (`@OmniPBR.mdl@` in an Isaac Sim USD file) is still
+    looked up beside each layer that names it, but quietly: an absent one logs no HeadObject warning, is
+    logged once at INFO, and is neither counted as missing nor recorded as skipped, in the scene report
+    and in the thumbnail's report alike (#1597). A missing referenced file keeps both."""
+
+    REFERENCES = {
+        "scene/root.refs": [("OmniPBR.mdl", False), ("sub/a.refs", False), ("materials/Custom.mdl", False)],
+        "scene/sub/a.refs": [("OmniPBR.mdl", False), ("OmniSurface.mdl", False), ("tex/wood.png", False)],
+    }
+
+    def _walk(self, tmp_path, store, caplog):
+        local_root, local_input = _local_input(tmp_path, store, "xid/scene/root.refs")
+
+        def collect(path):
+            rel = os.path.relpath(path, local_root).replace(os.sep, "/")
+            return list(self.REFERENCES[rel])
+        resolver = dependencies.DependencyResolver(store, ROOT, local_root, collectors={".refs": collect},
+                                                   late_arrival=False)
+        with caplog.at_level(logging.INFO):
+            resolver.discover("scene/root.refs", local_input, ".refs")
+            resolver.fetch()
+        return resolver
+
+    def _store(self, *extra):
+        store = FakeStore({"xid/scene/root.refs": "root", "xid/scene/sub/a.refs": "a",
+                           "xid/scene/sub/tex/wood.png": b"png"})
+        for key in extra:
+            store.put(key, b"mdl")
+        return store
+
+    def test_an_absent_bare_module_is_looked_up_quietly_and_not_counted(self, tmp_path, caplog):
+        store = self._store()
+        resolver = self._walk(tmp_path, store, caplog)
+        modules = {"xid/scene/OmniPBR.mdl", "xid/scene/sub/OmniPBR.mdl", "xid/scene/sub/OmniSurface.mdl"}
+        assert modules <= set(store.keys("head"))
+        assert set(store.quiet_heads) == modules
+        assert resolver.missing == ["scene/materials/Custom.mdl"]
+        assert [entry.reference for entry in resolver.skipped_references] == ["scene/materials/Custom.mdl"]
+        assert resolver.report().missing == ["scene/materials/Custom.mdl"]
+        assert resolver.thumbnail_report().missing == ["scene/materials/Custom.mdl"]
+        infos = [r.getMessage() for r in caplog.records if "MDL module resolved by the renderer" in r.getMessage()]
+        assert [message.split(": ", 1)[1] for message in infos] == ["'OmniPBR.mdl'", "'OmniSurface.mdl'"]
+        warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert warnings == ["  Referenced file not found in the asset: scene/materials/Custom.mdl"]
+        summary = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Referenced files:")]
+        assert ", 1 missing," in summary[-1]
+
+    def test_a_bare_module_shipped_beside_its_layer_is_fetched(self, tmp_path, caplog):
+        store = self._store("xid/scene/sub/OmniPBR.mdl")
+        resolver = self._walk(tmp_path, store, caplog)
+        assert "scene/sub/OmniPBR.mdl" in resolver.fetched
+        assert "scene/sub/OmniPBR.mdl" not in resolver.missing
+
+    def test_an_absent_module_named_again_by_a_reference_that_loads_it_is_missing(self, tmp_path, caplog):
+        store = self._store()
+        self.REFERENCES = dict(self.REFERENCES)
+        self.REFERENCES["scene/sub/a.refs"] = [("OmniPBR.mdl", False), ("./OmniPBR.mdl", False)]
+        resolver = self._walk(tmp_path, store, caplog)
+        assert "scene/sub/OmniPBR.mdl" in resolver.missing
+        assert resolver.report().missing.count("scene/sub/OmniPBR.mdl") == 1
+
+    def test_the_client_store_logs_a_quiet_not_found_and_warns_on_any_other_error(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            quiet = dependencies.ClientStore(_HeadClient(), "b")
+            assert quiet.head("xid/a.mdl", warn_if_missing=False) is None
+            assert caplog.records == []
+            assert quiet.head("xid/a.mdl") is None
+            assert [r.getMessage() for r in caplog.records] == ["HeadObject b/xid/a.mdl failed: 404"]
+            caplog.clear()
+            denied = dependencies.ClientStore(_HeadClient(error="403"), "b")
+            assert denied.head("xid/a.mdl", warn_if_missing=False) is None
+            assert [r.getMessage() for r in caplog.records] == ["HeadObject b/xid/a.mdl failed: 403"]

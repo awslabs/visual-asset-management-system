@@ -170,7 +170,8 @@ KIND_TEXTURE_OR_OTHER = "textureOrOther"  # a texture, material or other asset-v
 # before, but a missing one removes nothing from the preview, so it is not reported.
 KIND_METADATA = "metadata"
 # A material module the renderer resolves from its own search path (a bare ``OmniPBR.mdl``), not a
-# file of the asset: still looked up as before, not reported.
+# file of the asset: still looked up beside the layer, but an absent one is logged once at INFO and
+# is neither counted as missing nor reported.
 KIND_RENDERER_MDL = "rendererMdl"
 # A texture of a format whose thumbnail loader does not sample textures (FBX): still fetched as before,
 # but a missing one removes nothing from the thumbnail, so its incomplete preview does not report it.
@@ -824,6 +825,8 @@ def _is_renderer_mdl(reference) -> bool:
 # --------------------------------------------------------------------------------------------------
 
 _STORE_ERRORS = (ClientError, BotoCoreError, S3TransferFailedError, OSError)
+# The HeadObject error codes of an object that is not there (as ``s3_utils.head_object_size`` reads them).
+_NOT_FOUND_CODES = ("404", "NoSuchKey", "NotFound")
 
 
 class ClientStore:
@@ -838,12 +841,16 @@ class ClientStore:
         self.transfer_config = transfer_config
         self.log = log or logger
 
-    def head(self, key: str) -> Optional[ObjectInfo]:
+    def head(self, key: str, warn_if_missing: bool = True) -> Optional[ObjectInfo]:
+        """The object's size, version and modification time, or ``None``. With ``warn_if_missing`` false a
+        not-found answer is not logged (a renderer's own MDL module that is not in the asset); any other
+        failure still warns."""
         try:
             response = self.client.head_object(Bucket=self.bucket, Key=key)
         except _STORE_ERRORS as e:
             code = e.response.get("Error", {}).get("Code", "") if isinstance(e, ClientError) else ""
-            self.log.warning(f"HeadObject {self.bucket}/{key} failed: {code or type(e).__name__}")
+            if warn_if_missing or code not in _NOT_FOUND_CODES:
+                self.log.warning(f"HeadObject {self.bucket}/{key} failed: {code or type(e).__name__}")
             return None
         return ObjectInfo(int(response.get("ContentLength", 0) or 0), response.get("VersionId") or None,
                           response.get("LastModified"))
@@ -878,8 +885,8 @@ class _ThumbnailStore:
     def __init__(self, bucket: str):
         self.bucket = bucket
 
-    def head(self, key: str) -> Optional[ObjectInfo]:
-        size = s3.head_object_size(self.bucket, key)
+    def head(self, key: str, warn_if_missing: bool = True) -> Optional[ObjectInfo]:
+        size = s3.head_object_size(self.bucket, key, warn_if_missing=warn_if_missing)
         return None if size is None else ObjectInfo(int(size))
 
     def read_range(self, key: str, version_id: Optional[str], start: int, length: int) -> bytes:
@@ -1140,6 +1147,14 @@ class DependencyResolver:
             self.graph_edges += 1
         if relative in self.visited:
             node = self.nodes.get(relative)
+            if (node is not None and node.state == _MISSING and node.kind == KIND_RENDERER_MDL
+                    and kind != KIND_RENDERER_MDL and kind not in _UNREPORTED_PREVIEW_KINDS):
+                # An absent renderer module (not counted, #1597) now named by a reference that loads it.
+                node.kind = kind
+                node.required = node.required or required
+                self.log.warning(f"  Referenced file not found in the asset: {node.rel}")
+                self._missing(node, "missing from the asset")
+                return
             if required and node is not None and not node.required:
                 node.required = True
                 if node.state == _MISSING:
@@ -1166,14 +1181,20 @@ class DependencyResolver:
             self._skip(node, TRUNCATED_FILES)
             return
         self.lookups += 1
-        info = self.store.head(self.root_key + node.rel)
+        renderer_mdl = node.kind == KIND_RENDERER_MDL
+        info = (self.store.head(self.root_key + node.rel, warn_if_missing=False) if renderer_mdl
+                else self.store.head(self.root_key + node.rel))
         if info is None:
-            if node.kind == KIND_RENDERER_MDL:
+            if renderer_mdl:
+                # A bare MDL module the renderer resolves from its own search path: still looked up beside
+                # the layer, but an absent one is logged once at INFO and is neither counted as missing nor
+                # recorded as skipped (#1597).
+                node.state = _MISSING
                 if node.raw not in self._mdl_logged:
                     self._mdl_logged.add(node.raw)
                     self.log.info(f"  MDL module resolved by the renderer, not fetched: {_shown(node.raw)!r}")
-            else:
-                self.log.warning(f"  Referenced file not found in the asset: {node.rel}")
+                return
+            self.log.warning(f"  Referenced file not found in the asset: {node.rel}")
             self._missing(node, "missing from the asset")
             return
         node.info = info

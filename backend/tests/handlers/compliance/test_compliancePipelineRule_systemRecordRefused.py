@@ -4,8 +4,9 @@
 """A compliance pipeline rule may not use a system pipeline or workflow.
 
 The system records are the rows the deployment's import registers with `isSystem: true`: the SYSTEM
-GenAI metadata and asset summary pipelines and the 3D preview thumbnail pipeline, with their
-workflows (`backendPipelines/**/vamsSchema`). A schema save whose new or changed pipeline rule names
+GenAI metadata and asset summary pipelines, the 3D and media preview thumbnail pipelines and the Zip
+Archive pipeline of Download as Zip, with their workflows (every `backendPipelines/**/vamsSchema*` bundle whose
+`pipeline.json` declares the flag). A schema save whose new or changed pipeline rule names
 one (its workflow, its own pipeline, or a pipeline its workflow runs) answers 400 with one generic
 message, for every caller, after authorization: a caller who may not run the workflow gets the 403 it
 got before and learns nothing about the record. An ordinary pipeline is still accepted. A schema
@@ -27,13 +28,30 @@ from handlers.compliance import complianceEvaluationStore as store
 from models.compliance import PipelineRule
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-SYSTEM_BUNDLES = [
-    REPO_ROOT / "backendPipelines" / "system" / "genAiMetadata" / "vamsSchema",
-    REPO_ROOT / "backendPipelines" / "system" / "genAiMetadata" / "vamsSchema" / "assetSummary",
-    REPO_ROOT / "backendPipelines" / "preview" / "3dThumbnail" / "vamsSchema",
-]
 SYSTEM_IDS = {"genAiMetadata": "system-genai-metadata", "assetSummary": "system-genai-asset-summary",
-              "3dThumbnail": "preview-3d-thumbnail"}
+              "3dThumbnail": "preview-3d-thumbnail", "vamsSchemaMedia": "preview-media-thumbnail",
+              "zipArchive": "utility-zip-archive"}
+
+
+def _bundle_name(bundle):
+    """A bundle folder's own name, or its pipeline folder's for a plain vamsSchema folder (the media
+    preview bundle is vamsSchemaMedia beside the 3D thumbnail's vamsSchema)."""
+    return bundle.name if bundle.name != "vamsSchema" else bundle.parent.name
+
+
+def _shipped_system_bundles():
+    """Every vamsSchema* bundle under backendPipelines whose pipeline.json declares isSystem: true."""
+    found = []
+    for pipeline_file in sorted((REPO_ROOT / "backendPipelines").rglob("pipeline.json")):
+        relative = pipeline_file.relative_to(REPO_ROOT).parts
+        if "node_modules" in relative or not any(part.startswith("vamsSchema") for part in relative[:-1]):
+            continue
+        if json.loads(pipeline_file.read_text()).get("isSystem") is True:
+            found.append(pipeline_file.parent)
+    return found
+
+
+SYSTEM_BUNDLES = _shipped_system_bundles()
 # The one message every refusal and every error result carries (pinned here, not read from the code).
 MESSAGE = ("A pipeline rule cannot use a system pipeline. To require the generated metadata, add a "
            "metadata rule on its genai_* fields.")
@@ -41,7 +59,7 @@ REFUSAL = {"message": MESSAGE, "ruleName": "convert"}
 
 
 def _bundle_id(bundle):
-    return SYSTEM_IDS[bundle.name if bundle.name != "vamsSchema" else bundle.parent.name]
+    return SYSTEM_IDS[_bundle_name(bundle)]
 
 
 def _seed_system(world, bundle, database_id="GLOBAL"):
@@ -215,3 +233,12 @@ class TestAStoredRuleNamingASystemRecordIsNotLaunched:
 def test_the_code_carries_the_pinned_message():
     from common.workflows import systemRecords
     assert systemRecords.SYSTEM_RECORD_PIPELINE_RULE_MESSAGE == MESSAGE
+
+
+@pytest.mark.unit
+def test_every_shipped_system_bundle_is_covered():
+    # The refusal reads the stored isSystem flag, so it covers a new system bundle without a code change;
+    # this keeps the parametrized cases above on every bundle the deployment ships, Zip Archive included.
+    names = sorted(_bundle_name(bundle) for bundle in SYSTEM_BUNDLES)
+    assert names == sorted(SYSTEM_IDS)
+    assert "zipArchive" in names and "vamsSchemaMedia" in names

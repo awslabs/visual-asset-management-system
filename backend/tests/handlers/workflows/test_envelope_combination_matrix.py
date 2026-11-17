@@ -832,9 +832,10 @@ class TestEveryExecutionTypeReadsTheManifest:
 
 def _bundle_dirs():
     root = os.path.join(REPO, "backendPipelines")
-    found = {os.path.dirname(p) for p in glob.glob(os.path.join(root, "**", "vamsSchema", "**",
+    # vamsSchema* : a pipeline folder may ship a second bundle beside its own (3dThumbnail/vamsSchemaMedia).
+    found = {os.path.dirname(p) for p in glob.glob(os.path.join(root, "**", "vamsSchema*", "**",
                                                                  "pipeline.json"), recursive=True)}
-    found |= {os.path.dirname(p) for p in glob.glob(os.path.join(root, "**", "vamsSchema",
+    found |= {os.path.dirname(p) for p in glob.glob(os.path.join(root, "**", "vamsSchema*",
                                                                  "pipeline.json"), recursive=True)}
     return sorted(d for d in found if "node_modules" not in d)
 
@@ -893,7 +894,8 @@ class TestBuiltInPipelinesAreUnchanged:
         # The two system bundles are under the guard as well: neither asks for an opt-in key.
         found = {os.path.relpath(d, REPO) for d in self.BUNDLES}
         for system_bundle in (os.path.join("backendPipelines", "system", "genAiMetadata", "vamsSchema"),
-                              os.path.join("backendPipelines", "preview", "3dThumbnail", "vamsSchema")):
+                              os.path.join("backendPipelines", "preview", "3dThumbnail", "vamsSchema"),
+                              os.path.join("backendPipelines", "preview", "3dThumbnail", "vamsSchemaMedia")):
             assert system_bundle in found, system_bundle
         # Every named exception is a shipped bundle, so a moved bundle cannot leave a stale exception behind.
         assert set(OPT_IN_BUNDLES) <= found, set(OPT_IN_BUNDLES) - found

@@ -53,6 +53,22 @@ export const PREVIEW_3D_THUMBNAIL_LARGE_TIER_TIMEOUT = Duration.hours(3);
 export const PREVIEW_3D_THUMBNAIL_STATE_MACHINE_TIMEOUT = Duration.hours(4);
 
 /**
+ * Media previews: the image and video extensions the "Media Preview Thumbnail" workflow accepts, the
+ * images the web shows as their own preview, and the size limit of a preview file. Each is a literal
+ * the container's drift tests read (backendPipelines/preview/3dThumbnail/container/tests): the first
+ * must equal the media vamsSchema filters and the container's handlers, the second the backend's
+ * ALLOWED_PREVIEW_FILE_EXTENSIONS (less .svg) and the web's previewFileFormats, and the limit the
+ * backend's PREVIEW_FILE_SIZE_LIMIT_BYTES and the web's constant. TGA and TIFF are never self-previewable.
+ */
+export const PREVIEW_MEDIA_INPUT_FILE_EXTENSIONS =
+    ".png,.jpg,.jpeg,.gif,.webp,.bmp,.tga,.tif,.tiff,.mp4,.m4v,.mov,.mkv,.webm,.avi,.wmv,.mpg,.mpeg,.mts,.m2ts";
+export const PREVIEW_SELF_PREVIEWABLE_FILE_EXTENSIONS = ".png,.jpg,.jpeg,.gif,.webp,.bmp";
+export const PREVIEW_FILE_SIZE_LIMIT_BYTES = 5 * 1024 * 1024;
+// The container reads this variable to decide whether to write a smaller JPEG for an image the web
+// already shows as its own preview (useMediaPreviews.downscaleSelfPreviewableImages).
+export const PREVIEW_DOWNSCALE_ENVIRONMENT_VARIABLE = "VAMS_DOWNSCALE_SELF_PREVIEWABLE_IMAGES";
+
+/**
  * Default input properties
  */
 const defaultProps: Partial<Preview3dThumbnailConstructProps> = {
@@ -213,6 +229,13 @@ export class Preview3dThumbnailConstruct extends NestedStack {
          * AWS Batch Job Definition & Compute Env for Preview 3D Thumbnail Container
          */
         const computeTiers = props.config.app.pipelines.usePreview3dThumbnail.computeTiers;
+        // One deployment serves both workflows: the container, queue, state machine and Lambdas always
+        // carry the 3D and the media paths. The two flags only choose which workflow is registered.
+        const threeDEnabled = props.config.app.pipelines.usePreview3dThumbnail.enabled === true;
+        const mediaPreviews = props.config.app.pipelines.useMediaPreviews;
+        const mediaEnabled = mediaPreviews?.enabled === true;
+        const downscaleSelfPreviewableImages =
+            mediaPreviews?.downscaleSelfPreviewableImages === true;
         const batchPipeline = new BatchFargatePipelineConstruct(
             this,
             "BatchFargatePipeline_Preview3dThumbnail",
@@ -350,6 +373,11 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                         VAMS_COMPUTE_TIER: tier,
                         // the task's memory, which a Fargate container cannot read from its cgroup
                         VAMS_TASK_MEMORY_MIB: String(Config.fargateMemoryMiB(sizing.memoryGiB)),
+                        // Whether a smaller JPEG is written for an image the web already shows as its
+                        // own preview (useMediaPreviews.downscaleSelfPreviewableImages).
+                        [PREVIEW_DOWNSCALE_ENVIRONMENT_VARIABLE]: String(
+                            downscaleSelfPreviewableImages
+                        ),
                     },
                 },
             })
@@ -457,7 +485,8 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             props.lambdaCommonBaseLayer,
             props.storageResources.s3.assetAuxiliaryBucket,
             pipelineStateMachine,
-            allowedInputFileExtensions,
+            // The 3D and the media extensions: one deployment, both workflows
+            `${allowedInputFileExtensions},${PREVIEW_MEDIA_INPUT_FILE_EXTENSIONS}`,
             props.config,
             props.vpc,
             props.pipelineSubnets,
@@ -470,7 +499,12 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             Math.round(
                 props.config.app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB * 1024 ** 3
             ),
-            props.storageResources.encryption.kmsKey
+            props.storageResources.encryption.kmsKey,
+            {
+                selfPreviewableFileExtensions: PREVIEW_SELF_PREVIEWABLE_FILE_EXTENSIONS,
+                previewFileSizeLimitBytes: PREVIEW_FILE_SIZE_LIMIT_BYTES,
+                downscaleSelfPreviewableImages,
+            }
         );
 
         //Build Lambda VAMS Execution Function (as an optional pipeline execution action)
@@ -486,8 +520,12 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 props.storageResources.encryption.kmsKey
             );
 
-        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables).
-        if (props.config.app.pipelines.usePreview3dThumbnail.autoRegisterWithVAMS === true) {
+        // Auto-register the 3D workflow with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template
+        // tables), only when the 3D pipeline itself is enabled.
+        if (
+            threeDEnabled &&
+            props.config.app.pipelines.usePreview3dThumbnail.autoRegisterWithVAMS === true
+        ) {
             new VamsSchemaRegistration(this, "Preview3dThumbnailRegistration", {
                 importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
                 artefactsBucket: props.storageResources.s3.artefactsBucket,
@@ -515,6 +553,37 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 triggerEnabled:
                     props.config.app.pipelines.usePreview3dThumbnail
                         .autoRegisterAutoTriggerOnFileUpload === true,
+            });
+        }
+
+        // The "Media Preview Thumbnail" pipeline and workflow: images, TGA/TIFF and video on this same
+        // container and state machine (useMediaPreviews.enabled; a missing block is off).
+        if (mediaEnabled) {
+            new VamsSchemaRegistration(this, "PreviewMediaThumbnailRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "preview",
+                    "3dThumbnail",
+                    "vamsSchemaMedia"
+                ),
+                resourceOverrides: {
+                    lambdaName: preview3dThumbnailPipelineVamsExecuteFunction.functionName,
+                },
+                idOverrides: {
+                    pipelineId: "preview-media-thumbnail",
+                    workflowId: "preview-media-thumbnail",
+                },
+                triggerEnabled: mediaPreviews.autoRegisterAutoTriggerOnFileUpload === true,
             });
         }
 
