@@ -45,6 +45,26 @@ import {
     popupOffsetsFor,
 } from "./utils/mapPopupPlacement";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
+import type { SearchRasterRequest } from "./SearchRasterLayers";
+
+// Loaded on the first "Show raster", so the COG reader is not part of the Search page bundle.
+const SearchRasterLayers = React.lazy(() => import("./SearchRasterLayers"));
+
+/** A file hit can be shown as a raster when it is a TIFF (a converted .cog.tif included) with a footprint. */
+export function canShowRaster(item: {
+    rectype: string;
+    type: string;
+    fileKey?: string;
+    geoJson?: any;
+}): boolean {
+    return (
+        item.rectype === "file" &&
+        item.type === "geojson" &&
+        !!item.geoJson &&
+        !!item.fileKey &&
+        /\.tiff?$/i.test(item.fileKey)
+    );
+}
 
 interface LocationDataWithDetails {
     id: string;
@@ -410,6 +430,19 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     // onLoad, and running again on it, frames those results too. Points and GeoJSON shapes both count,
     // so a page of shapes alone is framed as well (locationDataBounds).
     const [mapLoaded, setMapLoaded] = useState(false);
+    const [rasterRequests, setRasterRequests] = useState<SearchRasterRequest[]>([]);
+    const showRaster = (item: LocationDataWithDetails) => {
+        const key = item.fileKey;
+        if (!key) return;
+        setRasterRequests((current) => [
+            ...current,
+            {
+                seq: (current[current.length - 1]?.seq ?? 0) + 1,
+                file: { databaseId: item.databaseId, assetId: item.assetId, key },
+                sizeBytes: item.fileSize,
+            },
+        ]);
+    };
     useEffect(() => {
         if (!mapLoaded || !mapRef.current) return;
         const bounds = locationDataBounds(locationData);
@@ -825,6 +858,19 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                             is what right-click → "Open in new tab" copies, so it
                                             must carry the path so a fresh page load lands on the
                                             correct file inside the file manager. */}
+                                        {/* Overlay the file's raster on this map (GeoTIFF / COG). Access is
+                                            decided by the download route when the raster is requested. */}
+                                        {canShowRaster(selectedItem) && (
+                                            <Button
+                                                iconName="location-pin"
+                                                fullWidth
+                                                onClick={() => showRaster(selectedItem)}
+                                                data-testid="search-map-show-raster"
+                                            >
+                                                Show raster
+                                            </Button>
+                                        )}
+
                                         {selectedItem.rectype === "file" ? (
                                             (() => {
                                                 const filePathQuery = selectedItem.fileKey
@@ -881,6 +927,15 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                         );
                     })()}
             </Map>
+
+            {rasterRequests.length > 0 && (
+                <React.Suspense fallback={null}>
+                    <SearchRasterLayers
+                        map={mapLoaded ? (mapRef.current?.getMap() as any) ?? null : null}
+                        requests={rasterRequests}
+                    />
+                </React.Suspense>
+            )}
 
             {/* Informational note about location requirements */}
             <Box variant="p" color="text-body-secondary">
