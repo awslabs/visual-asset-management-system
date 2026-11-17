@@ -8,18 +8,24 @@ constraint on `category` selects the system records together and never matches a
 pipelines in an ordinary category. The Zip Archive pipeline and workflow keep their name and their fixed
 ids (`utility-zip-archive`); only the category is `SYSTEM - Utility`.
 
-A deployment that registered the records from an earlier build stored `Utility`. The next deployment's
-import finds the records and sends the bundle's update bodies through the pipeline and workflow services
-with its marked cross-call, which the system-record guard exempts, so the stored category becomes the
-shipped one, the way the 3D Preview Thumbnail moved from `Preview` to `SYSTEM - Preview`.
+A deployment that registered the records from an earlier build stored `Utility`. The changed bundle
+changes the registration's schema hash, so the next deployment runs the import lambda
+(`handlers/workflows/importGlobalPipelineWorkflow.register_bundle`), which finds the records and PUTs the
+bundle's update bodies (`common/workflows/vamsSchemaImport`, `category` included) through the pipeline and
+workflow services with its marked cross-call. The system-record guard exempts that call, so the stored
+category becomes the shipped one, the way the 3D Preview Thumbnail moved from `Preview` to
+`SYSTEM - Preview`.
 """
 
+import io
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from backend.tests.handlers.pipelines import test_pipelineService_isSystem as pipelines
+from backend.tests.handlers.workflows import test_importGlobalPipelineWorkflow_source_marker as importer
 from backend.tests.handlers.pipelines.test_pipelineService_isSystem import _quiet_side_paths  # noqa: F401
 from backend.tests.handlers.workflows import test_workflowService_isSystem as workflows
 from backend.tests.handlers.workflows.test_workflowService_isSystem import bind_real_to_update_expr  # noqa: F401
@@ -101,6 +107,33 @@ class TestTheNextDeploymentReassertsIt:
         assert resp["statusCode"] == 200, resp["body"]
         written = workflows._written(table)
         assert written["category"] == CATEGORY and written["isSystem"] is True
+
+    def test_the_import_lambda_sends_the_category_to_records_that_exist(self):
+        # The deploy step itself: a changed bundle file changes the registration's schema hash
+        # (VamsSchemaRegistration.hashSchema; infra/test/pipelines/vamsSchemaRegistrationHash.test.ts), so
+        # CloudFormation sends an Update and the import lambda registers the bundle again. For a pipeline
+        # or workflow that already exists it PUTs the bundle's update body through the service.
+        calls = []
+
+        def invoke(**kwargs):
+            event = json.loads(kwargs["Payload"].decode("utf-8"))
+            calls.append(event)
+            return {"Payload": io.BytesIO(json.dumps({"statusCode": 200, "body": "{}"}).encode("utf-8"))}
+
+        client = MagicMock()
+        client.invoke.side_effect = invoke
+        properties = {"inlineBundle": zipBundle.load_bundle(),
+                      "resourceOverrides": {"lambdaName": "vamsExecuteZipArchivePipeline"},
+                      "idOverrides": dict(zipBundle.ID_OVERRIDES)}
+        with patch.object(importer.imp, "lambda_client", client):
+            result = importer.imp.register_bundle(properties)
+        assert f"pipeline '{RECORD_ID}' updated" in result["applied"]
+        assert f"workflow '{RECORD_ID}' updated" in result["applied"]
+        puts = {event["requestContext"]["http"]["path"]: json.loads(event["body"])
+                for event in calls if event["requestContext"]["http"]["method"] == "PUT"}
+        for path in (f"/database/{GLOBAL}/pipelines/{RECORD_ID}", f"/database/{GLOBAL}/workflows/{RECORD_ID}"):
+            assert puts[path]["category"] == CATEGORY, path
+            assert puts[path]["isSystem"] is True, path
 
     def test_an_api_caller_still_cannot_change_it(self):
         # The guard that lets the deployment re-assert the category refuses everyone else.
