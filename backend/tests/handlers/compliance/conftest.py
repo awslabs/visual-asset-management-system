@@ -105,3 +105,27 @@ def no_binding_apply(request):
     from handlers.compliance import complianceBindingApply as binding_apply
     with patch.object(binding_apply, "get_record", return_value=None):
         yield
+
+
+from common.compliance import listing as _listing  # noqa: E402
+
+
+def _decided_untimed(page):
+    """`page` (`listing.query_page` or `listing.merge_query_page`) with its row decisions timed on a
+    clock that does not move, unless the caller passes its own `clock`."""
+    def untimed(*args, clock=None, **kwargs):
+        return page(*args, clock=clock or (lambda: 0.0), **kwargs)
+    return untimed
+
+
+@pytest.fixture(autouse=True)
+def untimed_listing_decisions():
+    """A listing ends its page once its row decisions took `listing.DEFAULT_DECISION_BUDGET_SECONDS`
+    of host time, returning a token. A test here that reads one page expects every row its world
+    holds, so a host stall during one decision (a garbage collection, a loaded CI runner) would end
+    that page after one row. The decisions are timed on a clock that does not move unless the test
+    passes its own `clock`; the budget has its own tests, on injected clocks
+    (test_complianceListings_scopedReader)."""
+    with patch.object(_listing, "query_page", _decided_untimed(_listing.query_page)), \
+            patch.object(_listing, "merge_query_page", _decided_untimed(_listing.merge_query_page)):
+        yield
