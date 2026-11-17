@@ -46,28 +46,28 @@ Start a search, wait for it and print the matching records.
 vamscli audit search [OPTIONS]
 ```
 
-| Option             | Type    | Required | Description                                                                                                                                     |
-| ------------------ | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--group`          | TEXT    | No       | Log group key to search. Repeatable. Default: every group you may search                                                                        |
-| `--action`         | TEXT    | No       | Action name, for example `assetUpdate`. Repeatable                                                                                              |
-| `--entity-type`    | TEXT    | No       | Entity type, for example `asset`. Repeatable                                                                                                    |
-| `--entity-id`      | TEXT    | No       | Entity ID. Repeatable                                                                                                                           |
-| `--user`           | TEXT    | No       | Acting user, or the user acted for. Repeatable                                                                                                  |
-| `--api-key-id`     | TEXT    | No       | ID of the API key that made the request. Repeatable                                                                                             |
-| `--database`       | TEXT    | No       | Database ID. Repeatable                                                                                                                         |
-| `--asset`          | TEXT    | No       | Asset ID. Repeatable                                                                                                                            |
-| `--outcome`        | CHOICE  | No       | `success`, `failed` or `denied`. Repeatable                                                                                                     |
-| `--request-id`     | TEXT    | No       | Request ID. Repeatable                                                                                                                          |
-| `--contains`       | TEXT    | No       | Text the record must contain. Repeatable, at most 3, all must match, case-insensitive. 3 to 64 characters of letters, digits, space and `. _ : @ + / -` |
-| `--from`           | TEXT    | No       | Start of the window: relative (`90m`, `24h`, `7d`, `2w`), ISO 8601 or epoch seconds. Default `24h` ago                                          |
-| `--to`             | TEXT    | No       | End of the window: relative, `now`, ISO 8601 or epoch seconds. Default `now`                                                                    |
-| `--include-probes` | FLAG    | No       | Include permission-probe records (hidden by default)                                                                                            |
-| `--order`          | CHOICE  | No       | `asc` or `desc`: the order of the rows by time                                                                                                  |
-| `--max-rows`       | INT     | No       | Most rows to read into the output (default 100)                                                                                                 |
-| `--page-size`      | INT     | No       | Rows per request, 1 to 500                                                                                                                      |
-| `--no-wait`        | FLAG    | No       | Start the search and print its handle without waiting                                                                                           |
-| `--timeout`        | INT     | No       | Seconds to wait for the search to finish (default 360)                                                                                          |
-| `--json-output`    | FLAG    | No       | Output raw JSON response                                                                                                                        |
+| Option             | Type   | Required | Description                                                                                                                                             |
+| ------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--group`          | TEXT   | No       | Log group key to search. Repeatable. Default: every group you may search                                                                                |
+| `--action`         | TEXT   | No       | Action name, for example `assetUpdate`. Repeatable                                                                                                      |
+| `--entity-type`    | TEXT   | No       | Entity type, for example `asset`. Repeatable                                                                                                            |
+| `--entity-id`      | TEXT   | No       | Entity ID. Repeatable                                                                                                                                   |
+| `--user`           | TEXT   | No       | Acting user, or the user acted for. Repeatable                                                                                                          |
+| `--api-key-id`     | TEXT   | No       | ID of the API key that made the request. Repeatable                                                                                                     |
+| `--database`       | TEXT   | No       | Database ID. Repeatable                                                                                                                                 |
+| `--asset`          | TEXT   | No       | Asset ID. Repeatable                                                                                                                                    |
+| `--outcome`        | CHOICE | No       | `success`, `failed` or `denied`. Repeatable                                                                                                             |
+| `--request-id`     | TEXT   | No       | Request ID. Repeatable                                                                                                                                  |
+| `--contains`       | TEXT   | No       | Text the record must contain. Repeatable, at most 3, all must match, case-insensitive. 3 to 64 characters of letters, digits, space and `. _ : @ + / -` |
+| `--from`           | TEXT   | No       | Start of the window: relative (`90m`, `24h`, `7d`, `2w`), ISO 8601 or epoch seconds. Default `24h` ago                                                  |
+| `--to`             | TEXT   | No       | End of the window: relative, `now`, ISO 8601 or epoch seconds. Default `now`                                                                            |
+| `--include-probes` | FLAG   | No       | Include permission-probe records (hidden by default)                                                                                                    |
+| `--order`          | CHOICE | No       | `asc` or `desc`: the order of the rows by time                                                                                                          |
+| `--max-rows`       | INT    | No       | Most rows to read into the output (default 100)                                                                                                         |
+| `--page-size`      | INT    | No       | Rows per request, 1 to 500                                                                                                                              |
+| `--no-wait`        | FLAG   | No       | Start the search and print its handle without waiting                                                                                                   |
+| `--timeout`        | INT    | No       | Seconds to wait for the search to finish (default 360)                                                                                                  |
+| `--json-output`    | FLAG   | No       | Output raw JSON response                                                                                                                                |
 
 ```bash
 vamscli audit search --action assetUpdate --from 7d
@@ -98,17 +98,17 @@ Read the rows of a search by its handle: one page, or every page up to a cap.
 vamscli audit results --handle <queryId> [OPTIONS]
 ```
 
-| Option          | Type   | Required | Description                                                         |
-| --------------- | ------ | -------- | ------------------------------------------------------------------- |
-| `--handle`      | TEXT   | Yes      | Search handle (`queryId`)                                           |
-| `--page-token`  | TEXT   | No       | `NextToken` of the previous page                                    |
-| `--all`         | FLAG   | No       | Read every page, up to `--max-rows`                                 |
-| `--max-rows`    | INT    | No       | With `--all`, the most rows to read (default 1000)                  |
-| `--page-size`   | INT    | No       | Rows per request, 1 to 500                                          |
-| `--order`       | CHOICE | No       | `asc` or `desc`                                                     |
-| `--wait`        | FLAG   | No       | Wait for a running search to finish first                           |
-| `--timeout`     | INT    | No       | Seconds to wait with `--wait` (default 360)                         |
-| `--json-output` | FLAG   | No       | Output raw JSON response                                            |
+| Option          | Type   | Required | Description                                        |
+| --------------- | ------ | -------- | -------------------------------------------------- |
+| `--handle`      | TEXT   | Yes      | Search handle (`queryId`)                          |
+| `--page-token`  | TEXT   | No       | `NextToken` of the previous page                   |
+| `--all`         | FLAG   | No       | Read every page, up to `--max-rows`                |
+| `--max-rows`    | INT    | No       | With `--all`, the most rows to read (default 1000) |
+| `--page-size`   | INT    | No       | Rows per request, 1 to 500                         |
+| `--order`       | CHOICE | No       | `asc` or `desc`                                    |
+| `--wait`        | FLAG   | No       | Wait for a running search to finish first          |
+| `--timeout`     | INT    | No       | Seconds to wait with `--wait` (default 360)        |
+| `--json-output` | FLAG   | No       | Output raw JSON response                           |
 
 ```bash
 vamscli audit results --handle <queryId>
@@ -152,13 +152,13 @@ Export the rows of a `Complete` search as CSV or NDJSON.
 vamscli audit export --handle <queryId> [OPTIONS]
 ```
 
-| Option          | Type   | Required | Description                                                      |
-| --------------- | ------ | -------- | ---------------------------------------------------------------- |
-| `--handle`      | TEXT   | Yes      | Search handle (`queryId`)                                        |
-| `--format`      | CHOICE | No       | `csv` (default) or `ndjson`                                      |
-| `-o`, `--output` | PATH  | No       | File to write. Default: standard output. Required with `--json-output` |
-| `--overwrite`   | FLAG   | No       | Replace the output file if it exists                             |
-| `--json-output` | FLAG   | No       | Output raw JSON response                                         |
+| Option           | Type   | Required | Description                                                            |
+| ---------------- | ------ | -------- | ---------------------------------------------------------------------- |
+| `--handle`       | TEXT   | Yes      | Search handle (`queryId`)                                              |
+| `--format`       | CHOICE | No       | `csv` (default) or `ndjson`                                            |
+| `-o`, `--output` | PATH   | No       | File to write. Default: standard output. Required with `--json-output` |
+| `--overwrite`    | FLAG   | No       | Replace the output file if it exists                                   |
+| `--json-output`  | FLAG   | No       | Output raw JSON response                                               |
 
 ```bash
 vamscli audit export --handle <queryId> --format csv -o audit.csv
