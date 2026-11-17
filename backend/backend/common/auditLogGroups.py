@@ -65,8 +65,9 @@ CORE_AUDIT_LOG_GROUPS: Tuple[AuditLogGroup, ...] = (
     # The order is the order the writer resolves the group names in.
     AuditLogGroup(
         GROUP_AUTHENTICATION, "AUDIT_LOG_AUTHENTICATION", "Authentication",
-        "Reserved for sign-in events. No VAMS code writes this group yet: a sign-in appears as the API "
-        "authorizer's record in the Authorization group.", "AUTHENTICATION", False,
+        "Reserved for sign-in events. VAMS does not write sign-in events yet, so this group is empty. "
+        "Amazon Cognito or the external identity provider records the sign-in itself; the API authorizer's "
+        "per-request token verification result is in the Authorization group.", "AUTHENTICATION", False,
         PARSER_AUTHENTICATION, action_target=False, sensitivity=(SENSITIVITY_CONTAINS_PII,)),
     AuditLogGroup(
         GROUP_AUTHORIZATION, "AUDIT_LOG_AUTHORIZATION", "Authorization",

@@ -909,8 +909,9 @@ def changes_record(term=HIDDEN_TERM, asset="a-9"):
             '"changes": {"assetName": "%s"}}' % (asset, asset, asset, term))
 
 
-def _whole_response(env, raw_matched, rows):
-    handle = started_handle(env, contains=[HIDDEN_TERM])
+def _whole_response(env, raw_matched, rows, **overrides):
+    overrides.setdefault("contains", [HIDDEN_TERM])
+    handle = started_handle(env, **{k: v for k, v in overrides.items() if v is not None})
     env.logs.matched = raw_matched
     env.logs.results = rows
     body = get(handle)[1]
@@ -926,6 +927,25 @@ class TestNoRawCountOracle:
         absent = _whole_response(env, raw_matched=1, rows=[visible])
         present = _whole_response(env, raw_matched=5, rows=[visible] + hidden)
         assert present == absent
+
+    @pytest.mark.parametrize("filters", [
+        {"outcomes": ["success"]}, {"includeProbes": False}, {"entityTypes": ["asset"]},
+        {"outcomes": ["success"], "includeProbes": False}])
+    def test_at_the_row_limit_a_hidden_only_term_looks_like_an_absent_term(self, env, monkeypatch, filters):
+        """The raw result reaches the Logs Insights row limit only when hidden content matched. Every field
+        of the response, the candidate warning included, must be the same as for a term that is absent."""
+        monkeypatch.setenv(svc.ENV_MAX_ROWS, "3")
+        hidden = [result_row(changes_record(asset="a-%d" % n)) for n in range(3)]
+        absent = _whole_response(env, raw_matched=0, rows=[], **filters)
+        present = _whole_response(env, raw_matched=3, rows=hidden, **filters)
+        assert present == absent
+        assert "candidateLimitReached" not in present["statistics"]
+
+    def test_the_candidate_flag_depends_on_visible_rows_only(self, env, monkeypatch):
+        monkeypatch.setenv(svc.ENV_MAX_ROWS, "3")
+        visible = [result_row(action_record("carol", "a-%d" % n)) for n in range(3)]
+        body = _whole_response(env, raw_matched=3, rows=visible, outcomes=["success"], contains=None)
+        assert body["statistics"]["candidateLimitReached"] is True
 
     def test_hidden_duplicates_are_not_counted_either(self, env):
         record = result_row(changes_record())
@@ -1035,6 +1055,36 @@ class TestAtomicCaps:
         start(env), start(env)
         env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE]["expiresAt"] = NOW - 1
         assert start(env)[0] == 202
+
+    def test_an_expired_counter_below_the_cap_is_reset_not_incremented(self, env, monkeypatch):
+        """A leaked count of 1 (no handle holds it) must not turn a per-user cap of 2 into 1."""
+        monkeypatch.setattr(svc, "reconcile_open_handles", lambda: [])
+        env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE] = {
+            "queryId": svc.SLOT_USER_KEY_PREFIX + ALICE, "slotCount": 1, "expiresAt": NOW - 100}
+        env.table.items[svc.SLOT_ALL_KEY] = {"queryId": svc.SLOT_ALL_KEY, "slotCount": 1, "expiresAt": NOW - 100}
+        assert start(env)[0] == 202
+        assert env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE]["slotCount"] == 1
+        assert start(env)[0] == 202       # the second of the two allowed searches
+        assert start(env)[0] == 400
+        assert env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE]["slotCount"] == 2
+
+    def test_a_counter_that_has_not_expired_is_incremented(self, env, monkeypatch):
+        monkeypatch.setattr(svc, "reconcile_open_handles", lambda: [])
+        env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE] = {
+            "queryId": svc.SLOT_USER_KEY_PREFIX + ALICE, "slotCount": 1, "expiresAt": NOW + 1000}
+        assert start(env)[0] == 202
+        assert env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE]["slotCount"] == 2
+        assert start(env)[0] == 400
+
+    def test_a_crash_between_reserving_and_storing_heals_after_the_deadline(self, env, monkeypatch):
+        """The Lambda dies after the slots are taken and before the handle is stored: nothing gives them back."""
+        monkeypatch.setattr(svc, "reconcile_open_handles", lambda: [])
+        svc._reserve_slots(ALICE)         # the reservation of the start that died
+        key = svc.SLOT_USER_KEY_PREFIX + ALICE
+        assert env.table.items[key]["slotCount"] == 1
+        env.table.items[key]["expiresAt"] = NOW - 1
+        env.table.items[svc.SLOT_ALL_KEY]["expiresAt"] = NOW - 1
+        assert start(env)[0] == 202 and start(env)[0] == 202 and start(env)[0] == 400
 
     def test_the_counters_are_not_handles(self, env):
         started_handle(env)

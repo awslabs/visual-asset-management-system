@@ -449,15 +449,17 @@ def _slot_keys(user_id: str) -> Tuple[str, str]:
 
 
 def _take_slot(key: str, cap: int, expires_at: int) -> bool:
-    """Take one slot of a counter if it is below ``cap`` (or has expired). False when it is full."""
+    """Take one slot of a counter: reset it first when it has expired (full or not), else add one if it
+    is below ``cap``. The conditional writes are atomic. False when it is full and not expired."""
     now = _now()
     attempts = (
+        # An expired counter belongs to handles that are all past their deadline (or to a start that died
+        # between reserving and storing a handle): start over, whether or not the counter is full.
+        ("SET #c = :one, expiresAt = :e", "attribute_exists(#c) AND expiresAt < :now",
+         {":one": 1, ":now": now, ":e": expires_at}),
         ("SET #c = if_not_exists(#c, :zero) + :one, expiresAt = :e",
          "attribute_not_exists(#c) OR #c < :cap",
          {":zero": 0, ":one": 1, ":cap": cap, ":e": expires_at}),
-        # A full counter past its expiry belongs to handles that are all past their deadline: start over.
-        ("SET #c = :one, expiresAt = :e", "attribute_exists(#c) AND expiresAt < :now",
-         {":one": 1, ":now": now, ":e": expires_at}),
     )
     for expression, condition, values in attempts:
         try:
@@ -582,14 +584,18 @@ def build_rows(results: List[List[Dict[str, str]]], item: Dict[str, Any], filter
     budget = MatchBudget(deadline=time.monotonic() + max(1.0, remaining - RECHECK_HEADROOM_SECONDS))
     # Rows are rechecked first and deduplicated after, so ``duplicatesRemoved`` counts only rows the
     # caller may see: a duplicate pair that the recheck drops must not show in any figure.
-    rows, duplicates = dedupe_rows(recheck(parsed, filters, budget))
+    kept = recheck(parsed, filters, budget)
+    rows, duplicates = dedupe_rows(kept)
     limit = int(item.get("queryLimit", 0) or 0)
     facts = {
         "duplicatesRemoved": duplicates,
         "recheckBudgetExceeded": budget.exceeded,
-        # The candidate limit applied in Logs Insights before the recheck; true only when the query
-        # could not push every filter down and the limit was reached.
-        "candidateLimitReached": bool(limit) and len(results) >= limit and not item.get("prefilterComplete", True),
+        # The Logs Insights candidate limit applies before the recheck. The flag is derived from what the
+        # caller may see only: the number of rows that survived the recheck (never the raw match count,
+        # which includes records matched on hidden content) and whether the request could push every
+        # filter down. A hidden-only term and an absent term therefore give the same flag. It can stay
+        # false when hidden records filled the limit; that is the price of leaking no bit about them.
+        "candidateLimitReached": bool(limit) and len(kept) >= limit and not item.get("prefilterComplete", True),
     }
     return rows, facts
 
