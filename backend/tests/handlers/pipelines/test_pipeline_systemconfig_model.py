@@ -151,6 +151,16 @@ class TestSqsResourceValidation:
             UpdatePipelineRequestModel(executionConfig={"executionType": "SQS", "sqs": {}})
 
 
+# The Deadline Cloud CreateJob range of each DeadlineCloud job setting, and the 400 message the API
+# gives for a value outside it.
+_DEADLINE_MAX = {"priority": 100, "maxRetriesPerTask": 2 ** 31 - 1, "maxFailedTasksCount": 2 ** 31 - 1}
+_DEADLINE_SETTINGS = list(_DEADLINE_MAX)
+
+
+def _range_message(field):
+    return rf"deadlineCloud\.{field} must be an integer from 0 to {_DEADLINE_MAX[field]}"
+
+
 @pytest.mark.unit
 class TestDeadlineCloudResourceValidation:
     """DeadlineCloud createJob only queues the job — completion arrives via the task-token callback,
@@ -164,6 +174,11 @@ class TestDeadlineCloudResourceValidation:
         config = {"executionType": "DeadlineCloud", "waitForCallback": "Enabled",
                   "deadlineCloud": {"farmId": "farm-1", "queueId": "queue-1"}}
         config.update(overrides)
+        return config
+
+    def _with(self, field, value):
+        config = self._config()
+        config["deadlineCloud"][field] = value
         return config
 
     def test_complete_config_accepted(self):
@@ -192,27 +207,42 @@ class TestDeadlineCloudResourceValidation:
             UpdatePipelineRequestModel(
                 executionConfig=self._config(waitForCallback="Disabled"))
 
-    @pytest.mark.parametrize("field", ["priority", "maxRetriesPerTask", "maxFailedTasksCount"])
-    def test_non_integer_setting_rejected(self, field):
-        # The createJob task state casts these to int; catch a bad value on the pipeline that holds
-        # it rather than later at workflow save.
-        config = self._config()
-        config["deadlineCloud"][field] = "abc"
-        with pytest.raises(ValidationError):
-            self._create(config)
+    @pytest.mark.parametrize("field", _DEADLINE_SETTINGS)
+    @pytest.mark.parametrize("value", [2.5, 2.0, True, False, "2.5", "abc", " ", [1], {"n": 1}])
+    def test_non_integer_setting_rejected_with_its_range(self, field, value):
+        # #1582: 2.5 passed int() and then failed the DynamoDB write, a 500. Any float is refused
+        # (DynamoDB cannot store one, and the form never sends one), as are a bool and text that is
+        # not a whole number.
+        with pytest.raises(ValidationError, match=_range_message(field)):
+            self._create(self._with(field, value))
 
-    @pytest.mark.parametrize("field", ["priority", "maxRetriesPerTask", "maxFailedTasksCount"])
-    def test_negative_setting_rejected(self, field):
-        config = self._config()
-        config["deadlineCloud"][field] = -1
-        with pytest.raises(ValidationError):
-            self._create(config)
+    @pytest.mark.parametrize("field,value", [
+        ("priority", -1), ("priority", 101), ("priority", "101"),
+        ("maxRetriesPerTask", -1), ("maxRetriesPerTask", 2 ** 31), ("maxRetriesPerTask", "-1"),
+        ("maxFailedTasksCount", -1), ("maxFailedTasksCount", 2 ** 31),
+    ])
+    def test_out_of_range_setting_rejected_with_its_range(self, field, value):
+        # #1581: Deadline Cloud createJob refuses these, so a saved pipeline would fail every run.
+        with pytest.raises(ValidationError, match=_range_message(field)):
+            self._create(self._with(field, value))
 
-    def test_zero_priority_accepted(self):
+    @pytest.mark.parametrize("field,value", [
+        ("priority", 0), ("priority", 100),
+        ("maxRetriesPerTask", 0), ("maxRetriesPerTask", 2 ** 31 - 1),
+        ("maxFailedTasksCount", 0), ("maxFailedTasksCount", 2 ** 31 - 1),
+        # Accepted before the range check and kept: a whole-number string is stored as given, and
+        # a blank value means the setting is unset.
+        ("priority", "50"), ("maxRetriesPerTask", None), ("maxFailedTasksCount", ""),
+    ])
+    def test_setting_in_range_accepted(self, field, value):
         # 0 is the lowest valid Deadline priority, not an absent value.
-        config = self._config()
-        config["deadlineCloud"]["priority"] = 0
-        assert self._create(config).executionConfig["deadlineCloud"]["priority"] == 0
+        model = self._create(self._with(field, value))
+        assert model.executionConfig["deadlineCloud"][field] == value
+
+    def test_update_model_rejects_fractional_and_out_of_range_settings(self):
+        for field, value in (("priority", 2.5), ("priority", 101), ("maxFailedTasksCount", 2 ** 31)):
+            with pytest.raises(ValidationError, match=_range_message(field)):
+                UpdatePipelineRequestModel(executionConfig=self._with(field, value))
 
 
 @pytest.mark.unit

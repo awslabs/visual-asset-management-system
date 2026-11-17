@@ -186,6 +186,58 @@ class TestDeadlineCloudTaskBuilder:
         with pytest.raises(ValueError, match="deadlinePriority"):
             _build_state(pipeline=pipeline)
 
+    @staticmethod
+    def _with_settings(**settings):
+        resource = {
+            "resourceType": "DeadlineCloud",
+            "deadlineFarmId": "farm-" + "0" * 32,
+            "deadlineQueueId": "queue-" + "0" * 32,
+            "deadlineTemplate": "{}",
+        }
+        resource.update(settings)
+        return _deadline_pipeline(userProvidedResource=json.dumps(resource))
+
+    @pytest.mark.parametrize("key,value,message", [
+        ("deadlinePriority", 101, "deadlinePriority must be an integer from 0 to 100"),
+        ("deadlinePriority", -1, "deadlinePriority must be an integer from 0 to 100"),
+        ("deadlinePriority", True, "deadlinePriority must be an integer from 0 to 100"),
+        ("deadlineMaxRetriesPerTask", 2 ** 31,
+         "deadlineMaxRetriesPerTask must be an integer from 0 to 2147483647"),
+        ("deadlineMaxFailedTasksCount", 2.5,
+         "deadlineMaxFailedTasksCount must be an integer from 0 to 2147483647"),
+        ("deadlineMaxFailedTasksCount", -1,
+         "deadlineMaxFailedTasksCount must be an integer from 0 to 2147483647"),
+    ])
+    def test_setting_outside_the_createjob_range_rejected(self, key, value, message):
+        # #1581: createJob refuses these, so the definition is refused instead of failing each run.
+        with pytest.raises(ValueError, match=message):
+            _build_state(pipeline=self._with_settings(**{key: value}))
+
+    def test_settings_at_the_createjob_limits_accepted(self):
+        state = _build_state(pipeline=self._with_settings(
+            deadlinePriority=100, deadlineMaxRetriesPerTask=2 ** 31 - 1,
+            deadlineMaxFailedTasksCount=2 ** 31 - 1))
+        params = state["Parameters"]
+        assert params["Priority"] == 100
+        assert params["MaxRetriesPerTask"] == 2 ** 31 - 1
+        assert params["MaxFailedTasksCount"] == 2 ** 31 - 1
+
+    def test_stored_out_of_range_priority_never_reaches_createjob(self):
+        # A pipeline saved before the API checked the range still holds the value, as a DynamoDB
+        # Decimal. Mapping the stored record keeps working (the pipeline can still be read, edited
+        # and fingerprinted), and building its createJob state refuses it.
+        from decimal import Decimal
+        from backend.backend.common.workflows import workflowAsl as wa
+        record = {"pipelineId": "renderPipeline", "databaseId": "db1",
+                  "executionConfig": {"executionType": "DeadlineCloud", "waitForCallback": "Enabled",
+                                      "deadlineCloud": {"farmId": "farm-" + "0" * 32,
+                                                        "queueId": "queue-" + "0" * 32,
+                                                        "template": "{}",
+                                                        "priority": Decimal("500")}}}
+        assert wa.pipeline_asl_fingerprint(record)
+        with pytest.raises(ValueError, match="deadlinePriority must be an integer from 0 to 100"):
+            _build_state(pipeline=wa.to_asl_pipeline_dict(record))
+
     def test_payload_without_pipeline_execution_id_ref(self):
         # Legacy path contexts without the ref still build (no VamsPipelineExecutionId param).
         state = _build_state(path_context={})
