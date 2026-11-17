@@ -46,7 +46,7 @@ export const WARNING_TEXT: Record<string, string> = {
     widerScan:
         "A value you gave could not be used to narrow the scan, so more of the log was read. The result is still exact.",
     candidateLimitMayApply:
-        "Some filters cannot narrow the scan in advance. If a search reaches the record limit, narrow the time range.",
+        "Some filters cannot narrow the scan in advance. If a search reaches the record limit, narrow the time range. A result without a limit notice is not proof that it is complete.",
     recheckTimeBudget:
         "Checking the records took longer than the time allowed. The records shown are only part of the result.",
 };

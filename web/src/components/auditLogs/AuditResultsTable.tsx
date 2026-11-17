@@ -119,7 +119,7 @@ export const AuditResultsTable: React.FC<AuditResultsTableProps> = ({
         {
             id: "group",
             header: "Log group",
-            width: 125,
+            width: 140,
             minWidth: 100,
             cell: (row) => <OneLine text={visibleText(row.groupLabel ?? row.groupKey)} />,
             sortingComparator: byText((row) => row.groupLabel ?? row.groupKey),
