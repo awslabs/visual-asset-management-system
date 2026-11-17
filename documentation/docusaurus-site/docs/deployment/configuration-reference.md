@@ -1848,6 +1848,8 @@ The file supports the following categories:
 | `fontSrc`    | External font sources (for example, Google Fonts)                                                          |
 | `styleSrc`   | External stylesheet sources that can be loaded                                                             |
 
+The built-in viewers need no entry here. The TIFF/TGA Image Viewer's decode worker is a same-origin file covered by the base `worker-src 'self'`, its decoders are pure JavaScript (no `allowUnsafeEvalFeatures`), and its size and pixel caps are viewer parameters in `viewerConfig.json`, not deployment configuration ([Viewer Plugins](../additional/viewer-plugins.md#tifftga-image-viewer-parameters)).
+
 **Behavior:**
 
 -   **File not found** -- VAMS uses default CSP settings without failing the build.

@@ -73,6 +73,7 @@ This software includes third party software subject to the following copyrights:
 | jodit-react                         | ^5.3.21       | MIT                     |
 | localforage                         | ^1.10.0       | Apache-2.0              |
 | maplibre-gl                         | ^6.9.0        | BSD-3-Clause            |
+| pako                                | 1.0.11        | (MIT AND Zlib)          |
 | papaparse                           | ^5.7.0        | MIT                     |
 | postcss                             | ^8.4.47       | MIT                     |
 | prop-types                          | ^15.8.1       | MIT                     |
@@ -92,8 +93,10 @@ This software includes third party software subject to the following copyrights:
 | sanitize-html                       | ^2.11.0       | MIT                     |
 | semver                              | ^7.5.2        | ISC                     |
 | tailwindcss                         | ^3.4.14       | MIT                     |
+| tga-js                              | 1.1.1         | MIT                     |
 | tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
 | typescript                          | ^5.0.0        | Apache-2.0              |
+| utif2                               | 4.1.0         | MIT                     |
 | vite                                | 8.3.5         | MIT                     |
 | zod                                 | ^4.6.7        | MIT                     |
 
