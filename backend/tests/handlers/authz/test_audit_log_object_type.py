@@ -302,3 +302,43 @@ class TestACheckWithoutAGroupKey:
         restricted = build_enforcer({
             "narrow": _template_constraints(TEMPLATE, "narrow", {"ALLOWED_GROUPS": "authorization"})})
         assert restricted.enforce(attributes, "GET") is False
+
+
+@pytest.mark.unit
+class TestTheReaderTemplateNamesRealGroupKeys:
+    """The template's examples are the keys ``GET /audit/log-groups`` lists, so a copied example works."""
+
+    @staticmethod
+    def _registry_keys():
+        from common.auditLogGroups import audit_log_group_keys
+        return set(audit_log_group_keys())
+
+    @staticmethod
+    def _description():
+        variables = json.loads(TEMPLATE_PATH.read_text(encoding="utf-8"))["variables"]
+        return [v for v in variables if v["name"] == "ALLOWED_GROUPS"][0]["description"]
+
+    def test_every_key_the_description_lists_is_a_registered_group_and_every_group_is_listed(self):
+        import re
+        listed = set(re.findall(r"\baudit[A-Z][A-Za-z]*\b", self._description()))
+        assert listed == self._registry_keys()
+
+    def test_the_example_patterns_grant_the_groups_they_name(self, build_enforcer):
+        enforcer = build_enforcer({"reader": _template_constraints(
+            TEMPLATE, "reader", {"ALLOWED_GROUPS": "(auditActions|auditErrors)"})})
+        assert enforcer.enforce(_audit("auditActions"), "GET") is True
+        assert enforcer.enforce(_audit("auditErrors"), "GET") is True
+        assert enforcer.enforce(_audit("auditAuthorization"), "GET") is False
+        single = build_enforcer({"reader": _template_constraints(
+            TEMPLATE, "reader", {"ALLOWED_GROUPS": "auditFileDownload"})})
+        assert single.enforce(_audit("auditFileDownload"), "GET") is True
+        assert single.enforce(_audit("auditFileDownloadStreamed"), "GET") is False  # the whole key is matched
+
+    def test_the_reader_can_read_the_route_listing_the_page_loads(self, build_enforcer):
+        enforcer = build_enforcer({"reader": _template_constraints(
+            TEMPLATE, "reader", {"ALLOWED_GROUPS": ".*"})})
+        for route in ("/auth/routes/api/allowed", "/auth/loginProfile", "/secure-config"):
+            assert enforcer.enforce(_api(route), "GET") is True, route
+        assert enforcer.enforce(_api("/auth/routes"), "POST") is True
+        for route in ("/auth/constraints", "/roles"):
+            assert enforcer.enforce(_api(route), "PUT") is False, route
