@@ -55,8 +55,8 @@ class TestTheShippedBundle:
 
     def test_name_and_ids_are_unchanged(self):
         bundle = zipBundle.load_bundle()
-        assert (bundle["pipeline"]["pipelineName"], bundle["workflow"]["workflowName"]) == ("Zip Archive",
-                                                                                           "Zip Archive")
+        names = (bundle["pipeline"]["pipelineName"], bundle["workflow"]["workflowName"])
+        assert names == ("Zip Archive", "Zip Archive")
         requests = zipBundle.import_requests()
         assert requests["pipeline"]["createBody"]["pipelineId"] == RECORD_ID
         assert requests["workflow"]["createBody"]["workflowId"] == RECORD_ID

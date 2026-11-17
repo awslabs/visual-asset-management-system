@@ -6,10 +6,11 @@
 A Zip Archive workflow run writes its archive into the asset, and the SYSTEM GenAI metadata trigger then
 analyses it (trigger chaining). The archive is produced by the Zip Archive pipeline's own streaming engine
 (`backendPipelines/utility/zipArchive/container/zip_archive_pipeline/engine/`), whose output differs from
-`zipfile`'s: every member carries a data descriptor (bit 3, sizes zero in the local header), directories
-are explicit entries (a listing counts files only, as for any zip), names may be UTF-8, and past 65,535 entries it writes the ZIP64 end records. The media
-branch lists such a ZIP by ranged reads of its end records and central directory, never downloading it,
-and lists the engine's pax tar and tar.gz from the downloaded copy, as D109 bounds both.
+`zipfile`'s: every member carries a data descriptor (bit 3, sizes zero in the local header), directories are
+explicit entries (a listing counts files only, as for any zip), names may be UTF-8, and past 65,535 entries it
+writes the ZIP64 end records. The media branch lists such a ZIP by ranged reads of its end records and central
+directory, never downloading it, and lists the engine's pax tar and tar.gz from the downloaded copy, as D109
+bounds both.
 
 The engine modules are loaded by file path (they are stdlib only); this suite does not run the Zip Archive
 container.
@@ -33,8 +34,8 @@ _ENGINE_DIR = os.path.abspath(os.path.join(
 
 
 def _engine(name):
-    spec = importlib.util.spec_from_file_location(f"zip_archive_engine_{name}", os.path.join(_ENGINE_DIR,
-                                                                                               f"{name}.py"))
+    path = os.path.join(_ENGINE_DIR, f"{name}.py")
+    spec = importlib.util.spec_from_file_location(f"zip_archive_engine_{name}", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -109,8 +110,10 @@ class TestZipFromTheZipArchiveEngine:
 
 @pytest.mark.unit
 class TestTarFromTheZipArchiveEngine:
-    @pytest.mark.parametrize("gzip_on, name, content_type", [(False, "a1-archive.tar", "application/x-tar"),
-                                                              (True, "a1-archive.tar.gz", "application/gzip")])
+    @pytest.mark.parametrize("gzip_on, name, content_type", [
+        (False, "a1-archive.tar", "application/x-tar"),
+        (True, "a1-archive.tar.gz", "application/gzip"),
+    ])
     def test_its_tar_is_listed_from_the_downloaded_copy(self, s3, gzip_on, name, content_type):
         out = io.BytesIO()
         writer = _engine("tarstream").TarStreamWriter(out, gzip=gzip_on)

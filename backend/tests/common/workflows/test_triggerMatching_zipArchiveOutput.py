@@ -87,8 +87,8 @@ class TestZipArchiveOutputFiresTheSystemPipelineOnce:
         body = matches[0][2]
         assert body["inputFiles"] == [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": name,
                                        "versionId": "v7"}]
-        assert (body["outputDatabaseId"], body["outputAssetId"], body["triggerType"]) == ("db1", "a1",
-                                                                                         "fileUpload")
+        target = (body["outputDatabaseId"], body["outputAssetId"], body["triggerType"])
+        assert target == ("db1", "a1", "fileUpload")
 
     def test_no_file_can_start_a_zip_archive_run(self):
         for writer in ("", SYSTEM_GENAI, ZIP_ARCHIVE, "some-user-workflow"):
