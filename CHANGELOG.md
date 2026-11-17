@@ -218,6 +218,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **CDK** Fixed the web Content Security Policy blocking presigned URLs for an asset bucket in a Region other than the deployment Region: the policy named only the deployment Region's Amazon S3 host, so downloads, previews and the HTML viewer for such a bucket failed in the browser. The four directives that carried that host now carry the partition's AWS service-host wildcard. ([#1616](https://github.com/awslabs/visual-asset-management-system/issues/1616))
 -   **Documentation** The OpenAPI document `VAMS_API.yaml` no longer defines `errorMessage` twice in the `complianceEvaluation` schema, so strict YAML and OpenAPI parsers accept it. ([#1498](https://github.com/awslabs/visual-asset-management-system/issues/1498))
 -   **Web** Fixed a file manager selection made with Ctrl- or Shift-click while the file list was still loading: when the next page of files arrived, every item but the first one clicked was dropped, so an action such as Download as Zip got a smaller selection than the one shown. ([#1497](https://github.com/awslabs/visual-asset-management-system/issues/1497))
 -   **Backend** Asset version resolution errors no longer repeat the requested asset version ID or alias. ([#1134](https://github.com/awslabs/visual-asset-management-system/issues/1134))

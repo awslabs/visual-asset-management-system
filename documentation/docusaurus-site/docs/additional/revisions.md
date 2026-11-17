@@ -187,6 +187,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Cross-Region bucket downloads** — The web Content Security Policy admits presigned Amazon S3 URLs for an asset bucket in any Region of the partition, not only the deployment Region. (issue #1616)
 -   **API document parses strictly** — `VAMS_API.yaml` no longer defines `errorMessage` twice in the `complianceEvaluation` schema, so strict YAML and OpenAPI tools accept it. (issue #1498)
 -   A file manager selection made with Ctrl- or Shift-click while the file list is still loading keeps every selected item when more files arrive (#1497).
 -   **Version resolution errors** — Asset version resolution errors no longer repeat the requested asset version ID or alias. (issue #1134)
