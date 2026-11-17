@@ -403,12 +403,12 @@ class TestConverseRequest:
                          "MATERIAL OPTIONS: metal", "COLOR OPTIONS: black", "outside these lists",
                          "Existing file metadata:\n- PART_NO: GP-100", "Existing asset metadata:\n- PROJECT: Alpha",
                          "Existing database metadata:\n- SITE: Plant 7",
-                         "Existing file attributes:\n- SOURCE_SCANNER: Leica RTC360", "2 rendered view(s)"):
+                         "Existing file attributes:\n- SOURCE_SCANNER: Leica RTC360", "2 view(s) rendered"):
             assert fragment in text, fragment
         # Facts, then the vocabulary, then the four existing-metadata sections in scope order, then the images.
         assert (text.index("File facts") < text.index("CATEGORY OPTIONS") < text.index("Existing file metadata:")
                 < text.index("Existing asset metadata:") < text.index("Existing database metadata:")
-                < text.index("Existing file attributes:") < text.index("2 rendered view(s)"))
+                < text.index("Existing file attributes:") < text.index("2 view(s) rendered"))
         # genai_* values never seed the prompt.
         assert "genai_asset_keywords" not in text
 
@@ -569,7 +569,7 @@ class TestGuardrail:
                          "STYLE OPTIONS: realistic"):
             assert fragment in guarded["text"], fragment
             assert fragment not in plain, fragment
-        for fragment in ("Describe and classify this file", "2 rendered view(s)",
+        for fragment in ("Describe and classify this file", "2 view(s) rendered",
                          "CATEGORY OPTIONS (pick one category", "You may use values outside these lists"):
             assert fragment in plain, fragment
             assert fragment not in guarded["text"], fragment
@@ -1315,7 +1315,8 @@ class TestModelSettings:
         assert len(content) == 1 and "text" in content[0]
         assert not any(key[1].startswith(f"{AUX_PREFIX}renders/") for key in s3.gets), "a render was read"
         text = _user_text(bedrock)
-        assert "takes no image input" in text and "rendered view(s)" not in text
+        assert "takes no image input" in text
+        assert "view(s) rendered" not in text and "decoded from this file" not in text
         # No image travels, so the request goes to the text model.
         assert bedrock.calls[0]["modelId"] == TEXT_MODEL
         summary = s3.json_at("abkt", SUMMARY_KEY)
@@ -1504,7 +1505,7 @@ class TestKeyReuse:
         assert "Previous analysis of this file:\n- title: Old title\n- keywords: pump, old" in text
         # No asset-text digest is on record, so the previous analysis is given for reference only.
         assert "included for reference only" in text and "keep its wording where it still" not in text
-        assert text.index("Existing file metadata:") < text.index("Previous analysis") < text.index("rendered view")
+        assert text.index("Existing file metadata:") < text.index("Previous analysis") < text.index("view(s) rendered")
         summary = s3.json_at("abkt", SUMMARY_KEY)
         assert summary["keyReuse"]["previousValues"] == 2
         assert "previous-analysis" in summary["sourceModalities"]
