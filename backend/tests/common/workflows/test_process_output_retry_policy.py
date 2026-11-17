@@ -65,14 +65,19 @@ class TestDeployedWorkflowsPickItUp:
         _state, definition = _process_output_state()
         assert f"aslSchemaVersion={wa.ASL_SCHEMA_VERSION}" in definition["Comment"]
 
-    def test_a_workflow_deployed_before_the_schema_key_is_redeployed_at_launch(self):
+    @pytest.mark.parametrize("deployed_under", [None, "1", "2"])
+    def test_a_workflow_deployed_under_an_older_schema_is_redeployed_at_launch(self, deployed_under):
+        # One mechanism (#1123 + #1271): the stored aslSchemaVersion, compared by deployment_matches.
+        # Version 1 predates the large-output wait, 2 the Sandbox.Timedout / EarlierIngestionInProgress
+        # retry; both redeploy, and so does a record written before the field existed.
         record = {"databaseId": "db", "pipelineId": "p1", "executionConfig": {"executionType": "Lambda"}}
-        current = wa.workflow_pipeline_fingerprints([record])
-        old = {k: v for k, v in current.items() if k != wa.ASL_SCHEMA_FINGERPRINT_KEY}
-        deployed_before = {"workflowVersionArn": "arn:sm:1", "pipelineFingerprints": old}
-        assert wa.deployment_matches(deployed_before, [record]) is False
-        deployed_under_v1 = {"workflowVersionArn": "arn:sm:1",
-                             "pipelineFingerprints": {**old, wa.ASL_SCHEMA_FINGERPRINT_KEY: "1"}}
-        assert wa.deployment_matches(deployed_under_v1, [record]) is False
-        redeployed = {"workflowVersionArn": "arn:sm:2", "pipelineFingerprints": current}
+        prints = wa.workflow_pipeline_fingerprints([record])
+        assert set(prints) == {"db:p1"}
+        deployed = {"workflowVersionArn": "arn:sm:1", "pipelineFingerprints": prints,
+                    "outputIngestionWaitHours": str(wa._max_wait_hours())}
+        if deployed_under is not None:
+            deployed["aslSchemaVersion"] = deployed_under
+        assert wa.deployment_matches(deployed, [record]) is False
+        redeployed = {**deployed, "workflowVersionArn": "arn:sm:2", "aslSchemaVersion": "3"}
+        assert wa.ASL_SCHEMA_VERSION == 3
         assert wa.deployment_matches(redeployed, [record]) is True

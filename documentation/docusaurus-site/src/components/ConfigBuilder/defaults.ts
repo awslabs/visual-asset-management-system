@@ -380,6 +380,15 @@ const COMMERCIAL: ConfigShape = {
             useNvidiaCosmos3: cloneConfig(COSMOS3_DEFAULT),
             useNvidiaGr00t: cloneConfig(GR00T_DEFAULT),
             useImageTo3d: cloneConfig(IMAGE_TO_3D_DEFAULT),
+            useZipDownloads: {
+                enabled: false,
+                maxFilesPerRequest: 100000,
+                maxTotalBytesPerRequest: 5497558138880,
+                maxActiveRequestsPerUser: 5,
+                computeVcpu: 16,
+                computeMemoryGiB: 32,
+                useCodeBuild: false,
+            },
         },
         addons: {
             useGarnetFramework: {

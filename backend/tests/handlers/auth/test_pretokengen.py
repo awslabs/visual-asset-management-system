@@ -123,3 +123,23 @@ class TestPreTokenGenV2:
     def test_module_does_not_touch_dynamodb(self):
         assert not hasattr(self.mod, "userRoleTable")
         assert not hasattr(self.mod, "authEntTable")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("module_name", ["pretokengenv1", "pretokengenv2"])
+def test_a_login_logs_no_user_attributes(module_name):
+    """The trigger logs its source and shape, never the email, user name or pool id of the event (#1552)."""
+    mod = _load(module_name)
+    mod.logger = MagicMock()
+    event = {
+        "triggerSource": "TokenGeneration_Authentication",
+        "userName": "zq1552-user-name",
+        "userPoolId": "us-east-1_zq1552pool",
+        "request": {"userAttributes": {"email": "zq1552@example.com"}},
+    }
+    result = mod.lambda_handler(event, None)
+    logged = "\n".join(str(call) for call in mod.logger.method_calls)
+    assert "zq1552" not in logged
+    assert "TokenGeneration_Authentication" in logged  # the entry line names the source
+    assert mod.logger.info.call_count == 2
+    assert "zq1552@example.com" in json.dumps(result)  # the claims are unchanged
