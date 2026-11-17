@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import PipelineForm from "./PipelineForm";
@@ -513,7 +513,55 @@ describe("PipelineForm DeadlineCloud job template", () => {
         await user.type(screen.getByLabelText(/^Priority$/), "-5");
         submit();
 
-        await waitFor(() => expect(screen.getByText(/Cannot be negative/)).toBeInTheDocument());
+        await waitFor(() =>
+            expect(screen.getByText("Must be a whole number from 0 to 100")).toBeInTheDocument()
+        );
+        expect(mutateAsync).not.toHaveBeenCalled();
+    });
+
+    // Deadline Cloud CreateJob refuses a value above its maximum (#1581), so each field shows the
+    // range under itself instead of the save reaching the API.
+    it("shows each count's range under the field when it is above the maximum", async () => {
+        const user = userEvent.setup();
+        const mutateAsync = mockCreate();
+
+        render(<PipelineForm mode="create" databaseId="db1" onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.type(screen.getByLabelText(/Pipeline Name/), "DC Pipe");
+        await user.selectOptions(screen.getByLabelText(/Execution Type/), "DeadlineCloud");
+        await waitFor(() => expect(screen.getByLabelText(/Farm ID/)).toBeInTheDocument());
+        await user.type(screen.getByLabelText(/Farm ID/), "farm-1");
+        await user.type(screen.getByLabelText(/Queue ID/), "queue-1");
+        await user.type(screen.getByLabelText(/Job Template/), "specificationVersion: x");
+        const cases = [
+            [/^Priority$/, "101", "Must be a whole number from 0 to 100"],
+            [
+                /^Max Retries Per Task$/,
+                "2147483648",
+                "Must be a whole number from 0 to 2,147,483,647",
+            ],
+            [
+                /^Max Failed Tasks Count$/,
+                "2147483648",
+                "Must be a whole number from 0 to 2,147,483,647",
+            ],
+        ] as const;
+        for (const [label, value] of cases) {
+            await user.type(screen.getByLabelText(label), value);
+        }
+        submit();
+
+        for (const [label, , message] of cases) {
+            const input = screen.getByLabelText(label);
+            await waitFor(() =>
+                expect(
+                    within(input.parentElement as HTMLElement).getByText(message)
+                ).toBeInTheDocument()
+            );
+            expect(input).toHaveAttribute("max", message.endsWith("100") ? "100" : "2147483647");
+        }
         expect(mutateAsync).not.toHaveBeenCalled();
     });
 
@@ -531,7 +579,9 @@ describe("PipelineForm DeadlineCloud job template", () => {
         await user.type(screen.getByLabelText(/^Priority$/), "2.5");
         submit();
 
-        await waitFor(() => expect(screen.getByText("Must be a whole number")).toBeInTheDocument());
+        await waitFor(() =>
+            expect(screen.getByText("Must be a whole number from 0 to 100")).toBeInTheDocument()
+        );
         expect(screen.getByText("DeadlineCloud farmId is required")).toBeInTheDocument();
         expect(screen.getByText("DeadlineCloud queueId is required")).toBeInTheDocument();
         expect(screen.getByText("DeadlineCloud job template is required")).toBeInTheDocument();
