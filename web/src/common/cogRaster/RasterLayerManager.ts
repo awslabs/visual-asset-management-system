@@ -280,14 +280,10 @@ export class RasterLayerManager {
     private handleMapError(event: any): void {
         const item = this.items.find((candidate) => candidate.sourceId === event?.sourceId);
         if (!item || item.entry.mode !== "tile" || !item.refreshNow) return;
-        // A read the store refused (an expired or revoked presigned URL): ask for a fresh URL, at most
-        // once in a while, so a file that really is denied does not loop. geotiff.js reports any non-OK
-        // range read as "Error fetching data." without the status, so that message counts as well.
-        const status = event?.error?.status ?? event?.status;
-        const message = String(event?.error?.message ?? "");
-        const refused =
-            status === 403 || /\b403\b/.test(message) || /Error fetching data/i.test(message);
-        if (!refused) return;
+        // A read failed. The usual cause is an expired or revoked presigned URL, and maplibre reports a
+        // failed cog:// tile only as "Request failed" (geotiff.js drops the HTTP status), so any error
+        // on this raster's own source asks for a fresh URL, at most once per cool-down, so a file that
+        // really is denied or broken does not loop.
         const now = Date.now();
         if (now - item.lastTileErrorAt < TILE_ERROR_COOLDOWN_MS) return;
         item.lastTileErrorAt = now;
