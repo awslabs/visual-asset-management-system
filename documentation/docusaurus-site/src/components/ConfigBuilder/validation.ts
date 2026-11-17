@@ -504,6 +504,14 @@ function externalBuckets(cfg: ConfigShape): any[] {
     return Array.isArray(value) ? value.filter((entry) => !!entry) : [];
 }
 
+/** True when S3 Transfer Acceleration is requested on the created bucket or any external entry. */
+function s3taRequested(cfg: ConfigShape): boolean {
+    return (
+        g(cfg, "app.assetBuckets.useS3TransferAcceleration") === true ||
+        externalBuckets(cfg).some((b) => b.useS3TransferAcceleration === true)
+    );
+}
+
 /** Region-name shape accepted for bucketRegion (config.ts: `AWS_REGION_NAME_PATTERN`, copied verbatim). */
 const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
 
@@ -1783,6 +1791,88 @@ const CORE_RULES: Rule[] = [
         appliesWhen: (c) => externalBucketsWithInconsistentAttributes(c).length > 0,
         message:
             "An app.assetBuckets.externalAssetBuckets bucketArn is registered with inconsistent bucketAccountId, bucketRegion, or bucketKmsKeyArn values across its entries. One ARN is one physical bucket, so those must match on every entry for it.",
+    },
+    // ----- S3 Transfer Acceleration (config.ts: validateS3TransferAcceleration) -----
+    {
+        id: "s3ta-commercial-only",
+        severity: "error",
+        fieldPaths: [
+            "app.assetBuckets.useS3TransferAcceleration",
+            "app.assetBuckets.externalAssetBuckets",
+            "env.region",
+        ],
+        appliesWhen: (c) => s3taRequested(c) && !isCommercialPartition(c),
+        message:
+            "S3 Transfer Acceleration (app.assetBuckets.useS3TransferAcceleration, or the same key on an externalAssetBuckets entry) is available in the commercial partition only. Set it to false in this partition.",
+    },
+    {
+        id: "s3ta-needs-created-bucket",
+        severity: "error",
+        fieldPaths: [
+            "app.assetBuckets.useS3TransferAcceleration",
+            "app.assetBuckets.createNewBucket",
+        ],
+        appliesWhen: (c) =>
+            g(c, "app.assetBuckets.useS3TransferAcceleration") === true &&
+            !g(c, "app.assetBuckets.createNewBucket"),
+        message:
+            "app.assetBuckets.useS3TransferAcceleration is true but createNewBucket is false, so there is no VAMS-created asset bucket to accelerate. Set useS3TransferAcceleration on the externalAssetBuckets entries instead; the auxiliary bucket follows the default asset bucket.",
+    },
+    {
+        id: "s3ta-external-bucket-name",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets"],
+        appliesWhen: (c) =>
+            externalBuckets(c).some(
+                (b) =>
+                    b.useS3TransferAcceleration === true &&
+                    !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(
+                        String(b.bucketArn ?? "")
+                            .replace(/^.*:::/, "")
+                            .split("/")[0]
+                    )
+            ),
+        message:
+            "An app.assetBuckets.externalAssetBuckets entry sets useS3TransferAcceleration but its bucket name is not valid for S3 Transfer Acceleration. The name must be 3 to 63 characters of lowercase letters, digits and hyphens with no period.",
+    },
+    {
+        id: "s3ta-external-inconsistent",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets"],
+        appliesWhen: (c) => {
+            const seen = new Map<string, boolean>();
+            for (const b of externalBuckets(c)) {
+                const flag = b.useS3TransferAcceleration === true;
+                const arn = String(b.bucketArn ?? "");
+                if (seen.has(arn) && seen.get(arn) !== flag) return true;
+                seen.set(arn, flag);
+            }
+            return false;
+        },
+        message:
+            "An app.assetBuckets.externalAssetBuckets bucketArn is registered with inconsistent useS3TransferAcceleration values across its entries. One ARN is one physical bucket, so every entry for it must agree.",
+    },
+    {
+        id: "s3ta-vpce-restriction",
+        severity: "error",
+        fieldPaths: [
+            "app.assetBuckets.useS3TransferAcceleration",
+            "app.assetBuckets.externalAssetBuckets",
+            "app.assetBuckets.presignedUrlNetworkRestrictions",
+        ],
+        appliesWhen: (c) => {
+            if (!s3taRequested(c)) return false;
+            const base = "app.assetBuckets.presignedUrlNetworkRestrictions";
+            const vpceIds = g(c, `${base}.allowedVpceIds`);
+            const ranges = g(c, `${base}.allowedIpRanges`);
+            return (
+                Array.isArray(vpceIds) &&
+                vpceIds.length > 0 &&
+                !(Array.isArray(ranges) && ranges.length > 0)
+            );
+        },
+        message:
+            "S3 Transfer Acceleration cannot be combined with presignedUrlNetworkRestrictions.allowedVpceIds. Accelerated requests do not arrive through a VPC endpoint, so the restriction would deny them. Use allowedIpRanges, or turn useS3TransferAcceleration off.",
     },
     {
         id: "externalbucket-account-matches-deployment-warn",
