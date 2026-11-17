@@ -1,1 +1,3 @@
-{"availability-zones:account=123456789012:region=us-east-1": ["us-east-1a", "us-east-1b"], "availability-zones:account=123456789012:region=us-gov-west-1": ["us-gov-west-1a", "us-gov-west-1b"], "availability-zones:account=123456789012:region=eusc-de-east-1": ["eusc-de-east-1a", "eusc-de-east-1b"]}
+{
+    "acknowledged-issue-numbers": [19836, 34892]
+}
