@@ -16,6 +16,7 @@ from common.apiRouteTypes import ApiRoute
 
 # The audit log groups, by their audit log type (the last segment of the group's resource
 # parameter key in common/resourceNames.py, e.g. cloudwatchLogGroups/auditActions).
+GROUP_AUTHENTICATION = "auditAuthentication"
 GROUP_ACTIONS = "auditActions"
 GROUP_AUTH_CHANGES = "auditAuthChanges"
 GROUP_AUTH_OTHER = "auditAuthOther"
@@ -25,10 +26,43 @@ GROUP_FILE_UPLOAD = "auditFileUpload"
 GROUP_FILE_DOWNLOAD = "auditFileDownload"
 GROUP_FILE_DOWNLOAD_STREAMED = "auditFileDownloadStreamed"
 
-AUDIT_GROUPS = frozenset({
-    GROUP_ACTIONS, GROUP_AUTH_CHANGES, GROUP_AUTH_OTHER, GROUP_AUTHORIZATION, GROUP_ERRORS,
-    GROUP_FILE_UPLOAD, GROUP_FILE_DOWNLOAD, GROUP_FILE_DOWNLOAD_STREAMED,
-})
+
+class AuditLogGroup(NamedTuple):
+    """One audit log group: the descriptor the writer and the audit search read.
+
+    ``key`` is the public group key, the last segment of the group's resource parameter key
+    (``auditActions``), and the planned value of an ``auditLogGroup`` constraint. ``resource_key_name`` is the
+    attribute of ``ResourceKeys`` (or ``AddonResourceKeys`` or ``CustomResourceKeys``, in that order) that resolves the group's CloudWatch name
+    (``AUDIT_LOG_ACTIONS``); it is held as a name so this module stays import-light. ``prefix`` is the
+    record prefix label (``ACTIONS``). ``has_type_segment`` says whether ``log_action`` writes a
+    ``[type: ...]`` segment (the file groups' records carry none). ``legacy_parser`` names the adapter
+    that reads a record written without ``auditVersion`` (``common/auditSearch/parsers``).
+    ``action_target`` says whether ``log_action`` may write action records to the group.
+    ``sensitivity`` tags the group's content (``containsPii``). ``addon_feature`` names the add-on
+    feature the group belongs to, when it belongs to one.
+    """
+
+    key: str
+    resource_key_name: str
+    label: str
+    description: str
+    prefix: str
+    has_type_segment: bool
+    legacy_parser: str
+    action_target: bool = True
+    sensitivity: Tuple[str, ...] = ()
+    addon_feature: Optional[str] = None
+
+
+def __getattr__(name: str):
+    # AUDIT_GROUPS, the groups log_action may write to, is derived from the merged group registry
+    # (common/auditLogGroups.py). The registry imports the add-on action lists, which import this
+    # module, so it is resolved on first access instead of at import.
+    if name == "AUDIT_GROUPS":
+        from common.auditLogGroups import action_target_group_keys
+        return action_target_group_keys()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # What an action does with data. A write records what it wrote or changed; a read, a search and a
 # download record the request only, never what was returned.
@@ -50,6 +84,8 @@ AUDIT_ENTITY_TYPES = frozenset({
     # (its state, quarantine and exception), a cascade, and the compliance audit trail.
     "complianceSchema", "complianceBinding", "complianceEvaluation", "complianceState",
     "complianceCascade", "complianceAudit",
+    # Audit log search: one search handle (a query over the audit log groups).
+    "auditQuery",
 })
 
 # A canonical action name: lower camelCase <entity><Verb>, letters and digits only. It is written

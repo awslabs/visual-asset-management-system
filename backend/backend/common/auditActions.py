@@ -22,6 +22,10 @@ handler after the write succeeds (``workflowService.py`` is the reference placem
 from typing import Dict, Optional, Tuple
 
 from common.apiRoutes import (
+    API_AUDIT_LOG_GROUPS,
+    API_AUDIT_QUERIES,
+    API_AUDIT_QUERY_BY_ID,
+    API_AUDIT_QUERY_EXPORT,
     ALL_API_ROUTES,
     API_AMPLIFY_CONFIG,
     API_ARCHIVE_ASSET,
@@ -170,6 +174,7 @@ from common.auditActionTypes import (
     route_entries,
     spec,
 )
+from common.auditLogGroups import action_target_group_keys
 from common.addonAuditActions import (
     ADDON_AUDIT_EXEMPT,
     ADDON_AUDIT_ROUTE_ACTIONS,
@@ -511,6 +516,16 @@ CORE_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
     # The two audit routes read the compliance audit trail.
     **route_entries(API_COMPLIANCE_AUDIT, {GET: read("complianceAuditList", "complianceAudit")}),
     **route_entries(API_COMPLIANCE_AUDIT_ASSET, {GET: read("complianceAuditList", "complianceAudit")}),
+    # Audit log search. The viewer's own use of audit data is audited: starting and stopping a search
+    # are writes, a poll is a read (the secondary auditQueryResults records one that returned rows),
+    # an export is a download. Everything that moves audit data is recorded also with recordReads off.
+    **route_entries(API_AUDIT_LOG_GROUPS, {GET: read("auditLogGroupsList", "auditQuery")}),
+    **route_entries(API_AUDIT_QUERIES, {POST: spec("auditQueryStart", "auditQuery")}),
+    **route_entries(API_AUDIT_QUERY_BY_ID, {
+        GET: read("auditQueryStatus", "auditQuery"),
+        DELETE: spec("auditQueryStop", "auditQuery"),
+    }),
+    **route_entries(API_AUDIT_QUERY_EXPORT, {GET: spec("auditQueryExport", "auditQuery", KIND_DOWNLOAD)}),
 }
 
 _HEAD_REASON = "returns object headers only, no content; the GET of the same file is recorded"
@@ -543,6 +558,8 @@ CORE_AUDIT_SECONDARY_ACTIONS: Tuple[AuditSpec, ...] = (
     spec("zipDownloadCancel", "export"),
     # A zip download read, list or create that found the job's run ended finalizes the job.
     spec("zipDownloadReconcile", "export"),
+    # A poll of an audit search that returned rows (the route action auditQueryStatus is a poll with none).
+    spec("auditQueryResults", "auditQuery", KIND_DOWNLOAD),
 )
 
 # Actions recorded by handlers that serve no API route. The actor is the system; onBehalfOf names
@@ -620,6 +637,9 @@ def _merge_exempt() -> Dict[RouteMethod, str]:
             merged.setdefault(key, value)
     return merged
 
+
+# The groups log_action may write to, derived from the merged group registry (common/auditLogGroups.py).
+AUDIT_GROUPS = action_target_group_keys()
 
 AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = _merge_route_actions()
 AUDIT_EXEMPT: Dict[RouteMethod, str] = _merge_exempt()

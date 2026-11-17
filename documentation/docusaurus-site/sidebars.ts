@@ -240,6 +240,7 @@ const sidebars: SidebarsConfig = {
                         "api/tags",
                         "api/subscriptions",
                         "api/compliance",
+                        "api/audit",
                         "api/auth",
                         "api/addon",
                     ],

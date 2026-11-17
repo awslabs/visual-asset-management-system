@@ -481,7 +481,18 @@
             }
         },
         "auditLogging": {
-            "recordReads": true
+            "recordReads": true,
+            "search": {
+                "maxQueryWindowDays": 31,
+                "maxRows": 1000,
+                "maxConcurrentQueries": 5,
+                "maxConcurrentQueriesPerUser": 2,
+                "queryDeadlineSeconds": 300,
+                "longPollWaitSeconds": 20,
+                "maxContainsTermLength": 64,
+                "maxContainsTerms": 3,
+                "handleRetentionMinutes": 60
+            }
         },
         "webUi": {
             "optionalBannerHtmlMessage": "",

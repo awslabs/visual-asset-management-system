@@ -12867,6 +12867,235 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: "#/components/schemas/error"
             security:
                 - DefaultCognitoAuthorizer: []
+    /audit/log-groups:
+        get:
+            summary: "List the audit log groups the caller may search."
+            description: "Returns the audit log groups the caller may search, derived from the audit group registry and the caller's `auditLog` permission (one check per group), with the filter options and the limits that apply. Only groups that are deployed and allowed are listed; an empty list is a normal answer. Core capability with no feature switch."
+            responses:
+                "200":
+                    description: Log groups retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/auditLogGroupsResponse"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /audit/queries:
+        post:
+            summary: "Start an audit log search."
+            description: "Starts a search over one or more audit log groups and returns a handle. The request carries enumerated filters only; no query text is accepted and any unknown key is refused. Every returned row is parsed, redacted and checked against the filters again. Each named log group must be allowed for the caller (`auditLog` object, GET); one unknown or refused group refuses the whole request with the same 403. Without `logGroups`, every allowed group is searched. VAMS-wide and per-user caps on open searches apply."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/auditQueryRequest"
+            responses:
+                "202":
+                    description: Search started.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/auditQueryStarted"
+                "400":
+                    description: "Invalid request (the message names no value), or too many searches are running."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: "Not authorized: the route is not allowed, or a named log group is unknown or not allowed (one response for both)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /audit/queries/{queryId}:
+        get:
+            summary: "Poll an audit log search and read a page of rows."
+            description: "Long-polls the search for up to `wait` seconds (clamped to the configured wait and the time left), then returns the status and statistics. While the status is `Running` no rows are returned. When it is `Complete`, one page of rows is returned; follow `NextToken` with `startingToken`. One poller waits per handle. The handle belongs to the user who started the search; an unknown, expired, foreign or no-longer-allowed handle is the same 404."
+            parameters:
+                - name: queryId
+                  in: path
+                  required: true
+                  schema:
+                      type: string
+                - name: wait
+                  in: query
+                  required: false
+                  description: "Seconds to wait for a final status, 0 to 60. Default 0."
+                  schema:
+                      type: integer
+                      minimum: 0
+                      maximum: 60
+                - name: pageSize
+                  in: query
+                  required: false
+                  description: "Rows per page, 1 to 500. Default 100. A page ends early near 5 MB."
+                  schema:
+                      type: integer
+                      minimum: 1
+                      maximum: 500
+                - name: startingToken
+                  in: query
+                  required: false
+                  description: "The `NextToken` of the previous page."
+                  schema:
+                      type: string
+                - name: sort
+                  in: query
+                  required: false
+                  schema:
+                      type: string
+                      enum: [asc, desc]
+            responses:
+                "200":
+                    description: Status and, for a complete search, a page of rows.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/auditQueryPage"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: "Query not found (unknown, malformed, expired, owned by another user, or a group is no longer allowed)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Stop an audit log search."
+            description: "Stops a running search and frees its slot. A search that already ended returns its status unchanged."
+            parameters:
+                - name: queryId
+                  in: path
+                  required: true
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Search stopped.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    queryId:
+                                        type: string
+                                    status:
+                                        type: string
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: Query not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /audit/queries/{queryId}/export:
+        get:
+            summary: "Export the rows of a finished audit log search."
+            description: "Returns one chunk of the finished search as CSV or NDJSON text, at most 4 MB of response body. Follow `NextToken` with `startingToken` until it is absent and join the chunks in order. CSV carries its header on the first chunk only; cells that start with `=`, `+`, `-`, `@`, tab or carriage return get a leading apostrophe. The export is recorded as a download."
+            parameters:
+                - name: queryId
+                  in: path
+                  required: true
+                  schema:
+                      type: string
+                - name: format
+                  in: query
+                  required: false
+                  schema:
+                      type: string
+                      enum: [csv, ndjson]
+                      default: csv
+                - name: startingToken
+                  in: query
+                  required: false
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: One export chunk.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/auditQueryExportChunk"
+                "400":
+                    description: "Invalid parameters, or the search has not finished or has no results."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: Query not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
 components:
     securitySchemes:
         DefaultCognitoAuthorizer:
@@ -13299,8 +13528,8 @@ components:
                     description: >-
                         Type of object this constraint applies to. The core types are database,
                         asset, api, web, tag, tagType, role, userRole, pipeline, workflow,
-                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade
-                        and complianceBinding; a deployment can register more (permission object types in
+                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade,
+                        complianceBinding and auditLog; a deployment can register more (permission object types in
                         the fork or add-on constants files), so the set is not fixed. GET
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.
@@ -13375,8 +13604,8 @@ components:
                     description: >-
                         Type of object this constraint applies to. The core types are database,
                         asset, api, web, tag, tagType, role, userRole, pipeline, workflow,
-                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade
-                        and complianceBinding; a deployment can register more (permission object types in
+                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade,
+                        complianceBinding and auditLog; a deployment can register more (permission object types in
                         the fork or add-on constants files), so the set is not fixed. GET
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.
@@ -15534,6 +15763,223 @@ components:
                 warnings:
                     type: array
                     description: "One `<method> <arn>: <ErrorType>` entry per EC2 Image Builder resource that could not be deleted."
+                    items:
+                        type: string
+        auditLogGroupsResponse:
+            type: object
+            properties:
+                logGroups:
+                    type: array
+                    maxItems: 64
+                    items:
+                        type: object
+                        properties:
+                            key:
+                                type: string
+                                example: "auditActions"
+                            label:
+                                type: string
+                            prefix:
+                                type: string
+                            description:
+                                type: string
+                            sensitivity:
+                                type: array
+                                maxItems: 8
+                                items:
+                                    type: string
+                actions:
+                    type: array
+                    maxItems: 2000
+                    description: "Actions written to a listed group, from the audit action registry."
+                    items:
+                        type: object
+                        properties:
+                            name:
+                                type: string
+                            kind:
+                                type: string
+                                enum: [write, read, search, download]
+                            entityType:
+                                type: string
+                            logGroup:
+                                type: string
+                entityTypes:
+                    type: array
+                    maxItems: 200
+                    items:
+                        type: string
+                outcomes:
+                    type: array
+                    maxItems: 3
+                    items:
+                        type: string
+                        enum: [success, failed, denied]
+                limits:
+                    type: object
+                    additionalProperties:
+                        type: integer
+        auditQueryRequest:
+            type: object
+            description: "Enumerated filters. Unknown keys are refused. Lists hold at most 20 values."
+            properties:
+                logGroups:
+                    type: array
+                    maxItems: 20
+                    items:
+                        type: string
+                startTime:
+                    description: "Epoch seconds, or an ISO 8601 timestamp."
+                    oneOf:
+                        - type: integer
+                        - type: string
+                endTime:
+                    description: "Epoch seconds, or an ISO 8601 timestamp. After startTime; the window is at most maxQueryWindowDays."
+                    oneOf:
+                        - type: integer
+                        - type: string
+                actions:
+                    type: array
+                    maxItems: 20
+                    items:
+                        type: string
+                entityTypes:
+                    type: array
+                    maxItems: 20
+                    items:
+                        type: string
+                entityIds:
+                    type: array
+                    maxItems: 20
+                    items:
+                        type: string
+                users:
+                    type: array
+                    maxItems: 20
+                    description: "Matches the acting user, the on-behalf-of user and the user named in the record prefix."
+                    items:
+                        type: string
+                apiKeyIds:
+                    type: array
+                    maxItems: 20
+                    items:
+                        type: string
+                databaseIds:
+                    type: array
+                    maxItems: 20
+                    items:
+                        type: string
+                assetIds:
+                    type: array
+                    maxItems: 20
+                    items:
+                        type: string
+                outcomes:
+                    type: array
+                    maxItems: 3
+                    items:
+                        type: string
+                        enum: [success, failed, denied]
+                requestIds:
+                    type: array
+                    maxItems: 20
+                    items:
+                        type: string
+                contains:
+                    description: "Free-text terms (a string or a list): ASCII letters, digits and ` ._:@+/-`, 3 to maxContainsTermLength characters, at most maxContainsTerms, combined with AND, case-insensitive. Matched on the redacted values the viewer shows."
+                    oneOf:
+                        - type: string
+                        - type: array
+                          maxItems: 5
+                          items:
+                              type: string
+                includeProbes:
+                    type: boolean
+                    default: true
+                sort:
+                    type: string
+                    enum: [asc, desc]
+            required:
+                - startTime
+                - endTime
+        auditQueryStarted:
+            type: object
+            properties:
+                queryId:
+                    type: string
+                    description: "UUID handle, owned by the caller."
+                status:
+                    type: string
+                    example: "Running"
+                warnings:
+                    type: array
+                    maxItems: 10
+                    items:
+                        type: string
+        auditQueryPage:
+            type: object
+            properties:
+                queryId:
+                    type: string
+                status:
+                    type: string
+                    enum: [Running, Complete, Failed, Cancelled, Timeout]
+                statistics:
+                    type: object
+                    description: "recordsMatched, recordsScanned and bytesScanned come from Logs Insights. rowCount, duplicatesRemoved and candidateLimitReached appear for a complete search. No count of rows dropped by the server check is returned."
+                    additionalProperties: true
+                Items:
+                    type: array
+                    maxItems: 500
+                    items:
+                        $ref: "#/components/schemas/auditRow"
+                NextToken:
+                    type: string
+                warnings:
+                    type: array
+                    maxItems: 10
+                    items:
+                        type: string
+        auditRow:
+            type: object
+            description: "One parsed, redacted audit record. A fixed key set; an absent fact is null. Control and bidirectional characters appear as visible escapes."
+            additionalProperties: true
+            properties:
+                timestamp:
+                    type: string
+                groupKey:
+                    type: string
+                action:
+                    type: string
+                user:
+                    type: string
+                outcome:
+                    type: string
+                    enum: [success, failed, denied]
+                formatVersion:
+                    type: string
+                    enum: [legacy, contract-v1]
+                parseStatus:
+                    type: string
+                    enum: [parsed, partial, unparsed, unsupportedVersion]
+        auditQueryExportChunk:
+            type: object
+            properties:
+                queryId:
+                    type: string
+                format:
+                    type: string
+                    enum: [csv, ndjson]
+                content:
+                    type: string
+                    description: "One chunk of the document; join the chunks in order."
+                rowCount:
+                    type: integer
+                NextToken:
+                    type: string
+                warnings:
+                    type: array
+                    maxItems: 10
                     items:
                         type: string
         error:

@@ -633,6 +633,21 @@ COMPLIANCE_ROUTES: Tuple[ApiRoute, ...] = (
 )
 
 # ---------------------------------------------------------------------------
+# Audit log search (core, no feature switch: access is decided by authorization only)
+# ---------------------------------------------------------------------------
+API_AUDIT_LOG_GROUPS = ApiRoute("/audit/log-groups", (GET,), "audit")
+API_AUDIT_QUERIES = ApiRoute("/audit/queries", (POST,), "audit")
+API_AUDIT_QUERY_BY_ID = ApiRoute("/audit/queries/{queryId}", (GET, DELETE), "audit")
+API_AUDIT_QUERY_EXPORT = ApiRoute("/audit/queries/{queryId}/export", (GET,), "audit")
+
+AUDIT_ROUTES: Tuple[ApiRoute, ...] = (
+    API_AUDIT_LOG_GROUPS,
+    API_AUDIT_QUERIES,
+    API_AUDIT_QUERY_BY_ID,
+    API_AUDIT_QUERY_EXPORT,
+)
+
+# ---------------------------------------------------------------------------
 # Master list and lookups
 # ---------------------------------------------------------------------------
 ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
@@ -659,6 +674,7 @@ ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
     + USER_ROUTES
     + SEARCH_ROUTES
     + COMPLIANCE_ROUTES
+    + AUDIT_ROUTES
     + ADDON_ROUTES
     + CUSTOM_ROUTES
 )

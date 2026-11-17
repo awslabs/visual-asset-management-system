@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.8.0] (YYYY-MM-DD)
+
+### Major Change Summary:
+
+-   New `auditLog` permission object type: a role's access to audit log records is set per audit log group. The seeded `admin` role holds it for every group, and no other role gets it unless an administrator adds a constraint or imports the new Audit Reader permission template. ([#1536](https://github.com/awslabs/visual-asset-management-system/issues/1536))
+
+### Features
+
+-   **Backend/CDK** Audit log search API: `GET /audit/log-groups`, `POST /audit/queries`, `GET` and `DELETE /audit/queries/{queryId}` and `GET /audit/queries/{queryId}/export` search the audit log groups the caller is allowed to read, with filters for log group, action, entity, user, API key, database, asset, outcome, request id, free text and time range, long-poll status reads, paged rows and CSV or NDJSON export. Always deployed with no feature switch; access is decided by the `auditLog` permission per log group. Limits are set under `app.auditLogging.search`. A search handle, and the free-text terms in it, expire 60 minutes after last use by default (`handleRetentionMinutes`, 5 to 1440); the terms are removed sooner when the search is stopped or its export is complete. ([#1535](https://github.com/awslabs/visual-asset-management-system/issues/1535))
+    -   Note: Rows are redacted and checked again by the API, a search shows only what its filters match, and the use of the search is itself recorded in the audit log. The seeded `admin` role can search; other roles need the Audit Reader permission template or an `auditLog` constraint.
+-   **Backend/CDK** New `auditLog` permission object type with one constraint field, `auditLogGroup` (the audit log group key), and a seeded `admin` allow-all constraint. The type and field appear in the constraint editor with no other change. ([#1536](https://github.com/awslabs/visual-asset-management-system/issues/1536))
+    -   Note: Existing roles and templates are unchanged and nothing is granted to any role other than `admin`. A custom role that mirrors `admin` by listing each object type does not get audit access until a constraint on `auditLog` is added to it. A fork that already registered its own `auditLog` permission object type or `auditLogGroup` field in its constants must rename it, because the constants lane refuses to redefine a core name at import.
+-   **Docs** New Audit Reader permission template (`audit-reader.json`) for the audit log pages and routes, limited by the `ALLOWED_GROUPS` pattern (every group by default). ([#1536](https://github.com/awslabs/visual-asset-management-system/issues/1536))
+
 ## [2.7.0] (2026-11-20)
 
 ### Major Change Summary:
