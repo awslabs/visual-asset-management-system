@@ -48,7 +48,7 @@ export const DEADLINE_JOB_SETTING_RANGES = {
 // non-finite or not a number), naming the range as the API does. The check is a refinement on an
 // unknown value rather than z.number().int().max(): zod treats a non-number or a failed .int() as
 // fatal and then skips the object's superRefine, which would hide the DeadlineCloud farmId, queueId
-// and template messages until the next save (#1574).
+// and template messages until the next save.
 const deadlineCountSchema = ({ min, max }: { min: number; max: number }) =>
     z.preprocess(
         blankNumberToUndefined,
