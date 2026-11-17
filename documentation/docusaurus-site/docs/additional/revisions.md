@@ -48,8 +48,6 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
--   **Web** The Three.js viewer opens files from an external S3 bucket whose CORS rule lists only the VAMS web origin. It now reads each file and referenced file through a presigned URL, so the browser sends the web origin instead of `null`. ([#1623](https://github.com/awslabs/visual-asset-management-system/issues/1623))
-
 **Other changes:**
 
 **Known issues:**
@@ -444,6 +442,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Known issues:**
 
 -   **Comment and subscription routes** — These routes find an asset by its ID alone, so an asset ID that is live in two databases is refused on them, except `GET /subscriptions`, which leaves that asset's subscriptions out of its list. (issue #605)
+-   **Web** The Three.js viewer opens files from an external S3 bucket whose CORS rule lists only the VAMS web origin. It now reads each file and referenced file through a presigned URL, so the browser sends the web origin instead of `null`. ([#1623](https://github.com/awslabs/visual-asset-management-system/issues/1623))
 
 ### 2.6.8
 
