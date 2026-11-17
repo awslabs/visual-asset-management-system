@@ -21,7 +21,7 @@ A record becomes searchable about a minute after the action it describes, becaus
 3. Choose a **Time range**. Times are in UTC. The range can span at most the number of days the deployment allows (31 by default).
 4. Choose **Search**.
 
-![Audit Log Search results with a record's details open](/img/audit_log_search_results_20261117_v2.8.png)
+![Audit Log Search results with a record's details open](/img/audit_log_search_results_20261117_v2.7.png)
 
 | Filter          | Matches                                                                           |
 | --------------- | --------------------------------------------------------------------------------- |
@@ -66,7 +66,7 @@ Select a row to open **Record details**: the time in local time and UTC, the use
 
 **Show records of this request** starts a new search for every record written for the same request. **Back** in the browser returns to the earlier search.
 
-![Record details panel](/img/audit_log_search_detail_20261117_v2.8.png)
+![Record details panel](/img/audit_log_search_detail_20261117_v2.7.png)
 
 ## Export
 
