@@ -43,11 +43,14 @@ const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo, 
                 const isCompleted = index < currentIndex;
                 const jumpable =
                     !!onJumpTo && !isCurrent && (canJumpTo ? canJumpTo(step.id) : isCompleted);
-                // In a step button the badge is hidden from assistive technology: the button's name
-                // carries the step number, and starts with the label shown (Label in Name, #1592).
+                // A step button's name starts with the text it shows (Label in Name, #1592): the
+                // badge's number and the label, then what the button does. A completed step's badge
+                // is a check mark, a symbol rather than text, so in a step button it is hidden from
+                // assistive technology and the name starts with the label.
+                const badgeNumber = isCompleted ? "" : `${index + 1} `;
                 const badge = (
                     <div
-                        aria-hidden={jumpable || undefined}
+                        aria-hidden={(jumpable && isCompleted) || undefined}
                         className={`flex shrink-0 items-center justify-center w-8 h-8 rounded-full text-sm font-medium ${
                             isCurrent
                                 ? "bg-blue-600 text-white"
@@ -81,7 +84,7 @@ const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo, 
                             <BusyButton
                                 busy={busy}
                                 onClick={() => onJumpTo?.(step.id)}
-                                aria-label={`${step.label}: go to step ${index + 1}`}
+                                aria-label={`${badgeNumber}${step.label}: go to step ${index + 1}`}
                                 className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 hover:bg-surface-hover focus:outline-none focus:ring-2 focus:ring-blue-500"
                             >
                                 {badge}

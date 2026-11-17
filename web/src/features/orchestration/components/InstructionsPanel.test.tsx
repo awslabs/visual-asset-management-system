@@ -46,6 +46,24 @@ describe("InstructionsPanel", () => {
         ).toBeInTheDocument();
     });
 
+    it("names the trigger by the text it shows, starting with the title (#1592)", () => {
+        // The info icon is an image, not a letter: the text a speech-input user reads on the
+        // trigger is the title and the line count, and the trigger is named by exactly that.
+        render(<InstructionsPanel text={LONG} title="Instructions for this template" />);
+        const trigger = screen.getByTestId("instructions-tooltip-trigger");
+        // Every text node, aria-hidden or not, with a space between elements (flex items).
+        const text = (node: Node): string =>
+            node.nodeType === Node.TEXT_NODE
+                ? node.textContent || ""
+                : ` ${Array.from(node.childNodes).map(text).join("")} `;
+        const shown = text(trigger).replace(/\s+/g, " ").trim();
+        expect(shown).toBe("Instructions for this template (20 lines)");
+        expect(trigger).toHaveAccessibleName("Instructions for this template (20 lines)");
+        expect(trigger).not.toHaveAttribute("aria-label");
+        expect(screen.getByTestId("instructions-info-icon")).toHaveAttribute("aria-hidden", "true");
+        expect(screen.getByTestId("instructions-info-icon").textContent).toBe("");
+    });
+
     it("renders nothing at all when there are no instructions", () => {
         // An empty labelled box reads as "there is guidance and it is blank".
         const { container } = render(<InstructionsPanel text="" />);
