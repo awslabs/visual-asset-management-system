@@ -368,6 +368,46 @@ describe("pipelines/system-pipelines.md — the SYSTEM category page", () => {
         expect(shipped).toContain("`" + thumb.category + "`");
     });
 
+    test("every isSystem bundle under backendPipelines has a row with its name and category", () => {
+        const shipped = section(
+            readDoc("pipelines/system-pipelines.md"),
+            "## Shipped system pipelines"
+        );
+        const rows = shipped.split("\n").filter((line) => line.startsWith("| ["));
+        const bundles: string[] = [];
+        const walk = (dir: string): void => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory() && entry.name !== "node_modules") {
+                    walk(full);
+                } else if (
+                    entry.name === "pipeline.json" &&
+                    full.split(path.sep).includes("vamsSchema")
+                ) {
+                    bundles.push(full);
+                }
+            }
+        };
+        walk(path.join(REPO, "backendPipelines"));
+        const system = bundles
+            .map((file) => JSON.parse(fs.readFileSync(file, "utf-8")))
+            .filter((p: { isSystem?: unknown }) => p.isSystem === true) as {
+            pipelineName: string;
+            category: string;
+        }[];
+        // Control: the GenAI metadata, asset summary, 3D thumbnail and Zip Archive bundles.
+        expect(system.length).toBeGreaterThanOrEqual(4);
+        const missing = system.filter(
+            (p) =>
+                !rows.some(
+                    (row) =>
+                        row.startsWith(`| [${p.pipelineName}](`) &&
+                        row.includes("`" + p.category + "`")
+                )
+        );
+        expect(missing.map((p) => `${p.pipelineName} (${p.category})`)).toEqual([]);
+    });
+
     test("the page states the toggle paths and the durable off switch", () => {
         const text = readDoc("pipelines/system-pipelines.md");
         expect(text).toContain("workflow trigger set");
