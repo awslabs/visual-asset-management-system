@@ -16,6 +16,7 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import get_asset_object_from_id
 from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler, log_action
 
 claims_and_roles = {}
@@ -55,7 +56,10 @@ def edit_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, eve
 
     item = get_single_comment(assetId, assetVersionIdAndCommentId)
     if item:
-        logger.info(item)
+        logger.info(
+            f"Loaded comment: assetId={assetId}, commentId={assetVersionIdAndCommentId}, "
+            f"commentBody={len(item.get('commentBody') or '')} char(s)"
+        )
         logger.info("Validating owner")
 
 
@@ -108,7 +112,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     # event first (coerces null pathParameters to {} for the reads below).
     normalize_event(event)
 
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
 
     # Parse request body
     if not event.get('body'):

@@ -280,13 +280,13 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 
 **Purpose:** Lambda layer Poetry configuration  
 **Lines:** ~20  
-**Dependencies:** kubernetes, boto3, PyYAML, requests, urllib3
+**Dependencies:** kubernetes, PyYAML, requests, urllib3. No AWS SDK: the consolidated handler also attaches the common base layer, which provides boto3, botocore and s3transfer, and the packages both layers carry are locked at the base layer's versions.
 
 #### 10. `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/requirements.txt`
 
-**Purpose:** Lambda layer Python dependencies  
-**Lines:** ~5  
-**Dependencies:** kubernetes==36.0.3, boto3, PyYAML, requests, urllib3
+**Purpose:** Lambda layer Python dependencies (exported from `poetry.lock`)  
+**Lines:** ~25  
+**Dependencies:** kubernetes==36.0.3, PyYAML, requests, urllib3 and their dependencies
 
 ---
 

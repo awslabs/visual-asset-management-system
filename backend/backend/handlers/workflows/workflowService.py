@@ -42,6 +42,7 @@ from common.dynamodb import validate_pagination_info, to_update_expr, batch_get_
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler, log_action, log_actions
 from models.common import (
     APIGatewayProxyResponseV2,
@@ -1249,7 +1250,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 raise
             return internal_error()
     normalize_event(event)
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     try:
         path_parameters = event.get("pathParameters", {}) or {}
         query_parameters = event.get("queryStringParameters", {}) or {}

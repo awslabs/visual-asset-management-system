@@ -40,6 +40,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler
 from common.workflows.executionRecords import orchestration_event_prefix
 from common.workflows.stepfunctions_builder import (
@@ -221,7 +222,7 @@ def lambda_handler(event, context):
     """EventBridge-invoked. The event is an EventBridge envelope; the Deadline job status
     payload is in event['detail']. GetJob/SendTask* errors (other than token-gone) raise so
     EventBridge retries the delivery."""
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     detail = event.get("detail", {})
     if isinstance(detail, str):
         detail = json.loads(detail)

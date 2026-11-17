@@ -69,7 +69,15 @@ An XGRIDS `.lcc` or `.lcc2` scene holds several levels of detail; the preview re
 | USDC   | `.usdc`   | OpenUSD (pxr) |
 | USDZ   | `.usdz`   | OpenUSD (pxr) |
 
-A USD stage is rendered as composed: instanced prims and point instancers are drawn at every instance, invisible prims and `guide` or `proxy` purpose prims are skipped, and implicit shapes (cube, sphere, cylinder, cone, capsule) are drawn. Colour comes from the diffuse texture or constant `diffuseColor` of the bound `UsdPreviewSurface`, else `displayColor`; an uncoloured prim is drawn in neutral grey. MaterialX materials are not read.
+A USD stage is rendered as composed: instanced prims and point instancers are drawn at every instance, invisible prims and `guide` or `proxy` purpose prims are skipped, and implicit shapes (cube, sphere, cylinder, cone, capsule) are drawn. Each prim's colour comes from the first of these that its material or the prim provides:
+
+1. The diffuse texture or constant `diffuseColor` of the bound `UsdPreviewSurface`.
+2. When the material has no `UsdPreviewSurface`, its NVIDIA `OmniPBR` or `OmniSurface` MDL shader, as in NVIDIA Isaac Sim and Omniverse assets: its diffuse texture, else its base colour, times the `OmniPBR` colour tint.
+3. A material from another MDL module, such as the `MI_*.mdl` materials of an Unreal Engine export: inputs found by name, for example `AlbedoTexture` or `BaseColor_Texture`, else `ColorAlbedo`, times `BaseColor_Tint`. This is an approximation of the module's own blend; the [pipeline README](https://github.com/awslabs/visual-asset-management-system/blob/main/backendPipelines/preview/3dThumbnail/README.md#usd-colour-and-texture-support) lists every input name read.
+4. The `displayColor` primvar.
+5. Otherwise the prim is drawn in neutral grey.
+
+The job log names each MDL module whose colour is approximated or not read. Textures are read at most 1,024 pixels on their long side, and the decoded textures of one stage take at most 10% of the task's memory; a texture past that is not read, and its prims take their material's constant colour or the next source in the list. MaterialX materials are not read.
 
 ## Media Formats
 
