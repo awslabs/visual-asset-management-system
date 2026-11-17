@@ -155,6 +155,75 @@ describe("Audit Log Search page", () => {
         expect(mockGet.mock.calls.length).toBeLessThanOrEqual(readsBefore + 1);
     });
 
+    it("sends the stop once the handle arrives when Stop is pressed while the search starts", async () => {
+        let answerStart: (value: unknown) => void = () => undefined;
+        mockStart.mockImplementation(
+            () =>
+                new Promise((resolve) => {
+                    answerStart = resolve;
+                })
+        );
+        await openPage();
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await act(async () => {
+            await userEvent.click(await screen.findByRole("button", { name: "Stop" }));
+        });
+        expect(await screen.findByText("Search stopped")).toBeTruthy();
+        expect(mockStop).not.toHaveBeenCalled();
+        await act(async () => {
+            answerStart([true, { queryId: "q-late", status: "Running" }]);
+        });
+        await waitFor(() => expect(mockStop).toHaveBeenCalledWith("q-late"));
+        expect(mockGet).not.toHaveBeenCalled();
+        expect(screen.getByText("Search stopped")).toBeTruthy();
+    });
+
+    it("stops a search that was replaced while its start was in flight", async () => {
+        const answers: ((value: unknown) => void)[] = [];
+        mockStart.mockImplementation(
+            () =>
+                new Promise((resolve) => {
+                    answers.push(resolve);
+                })
+        );
+        mockGet.mockResolvedValue(complete([row()]));
+        const { unmount } = render(<AuditLogSearch />);
+        await screen.findByRole("button", { name: "Search" });
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        unmount();
+        await act(async () => {
+            answers[0]([true, { queryId: "q-left", status: "Running" }]);
+        });
+        await waitFor(() => expect(mockStop).toHaveBeenCalledWith("q-left"));
+    });
+
+    it("explains that the Authentication group is empty while it is among the searched groups", async () => {
+        window.location.hash = "#/auth/audit-log-search/?group=auditAuthentication";
+        mockGroups.mockResolvedValue([
+            true,
+            {
+                ...GROUPS,
+                logGroups: [
+                    ...GROUPS.logGroups,
+                    {
+                        key: "auditAuthentication",
+                        label: "Authentication",
+                        prefix: "AUTHENTICATION",
+                    },
+                ],
+            },
+        ]);
+        await openPage();
+        expect(screen.getByTestId("audit-authentication-note").textContent).toMatch(
+            /does not record sign-ins itself/
+        );
+    });
+
+    it("shows no Authentication note for other groups", async () => {
+        await openPage();
+        expect(screen.queryByTestId("audit-authentication-note")).toBeNull();
+    });
+
     it("drops the results when a link with other filters is opened while they are showing", async () => {
         mockGet.mockResolvedValue(complete([row()]));
         await openPage();
@@ -215,7 +284,7 @@ describe("Audit Log Search page", () => {
         await openPage();
         await userEvent.click(screen.getByRole("button", { name: "Search" }));
         expect(
-            await screen.findByText(/reached its candidate limit/, {}, { timeout: 4000 })
+            await screen.findByText(/reached its record limit/, {}, { timeout: 4000 })
         ).toBeTruthy();
         expect(screen.getByText(/took longer than the time allowed/)).toBeTruthy();
     });

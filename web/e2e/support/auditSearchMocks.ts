@@ -139,6 +139,8 @@ export interface AuditMock {
     mode: AuditMockMode;
     /** Runs before the answer to each poll; lets a test hold the search in Running. */
     holdRunning: boolean;
+    /** Milliseconds the answer to the start request is held back, for a stop pressed before the handle arrives. */
+    startDelayMs: number;
     /** Every request URL the mock answered, for "no failed request" checks. */
     requests: string[];
 }
@@ -168,6 +170,7 @@ export async function installAuditMocks(
         exports: [],
         mode,
         holdRunning: false,
+        startDelayMs: 0,
         requests: [],
     };
     await page.route(/\/audit\/(log-groups|queries)/, async (route) => {
@@ -201,6 +204,9 @@ export async function installAuditMocks(
                 return json(route, 400, {
                     message: "Too many audit searches are running. Try again later.",
                 });
+            }
+            if (mock.startDelayMs > 0) {
+                await new Promise((resolve) => setTimeout(resolve, mock.startDelayMs));
             }
             return json(route, 202, {
                 queryId: "mock-q-1",

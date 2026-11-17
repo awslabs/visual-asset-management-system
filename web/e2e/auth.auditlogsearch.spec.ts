@@ -200,7 +200,7 @@ test.describe("Audit Log Search: search", () => {
             includeProbes: true,
         });
         // The candidate limit the server reported is explained.
-        await expect(page.getByText(/reached its candidate limit/)).toBeVisible();
+        await expect(page.getByText(/reached its record limit/)).toBeVisible();
     });
 
     test("a link restores the filters and does not run the search; reload keeps them", async ({
@@ -247,6 +247,20 @@ test.describe("Audit Log Search: search", () => {
         await expect(page.getByText("Search stopped")).toBeVisible();
         await expect(page.getByText(/A stopped search shows no records/)).toBeVisible();
         expect(mock.stops).toBe(1);
+    });
+
+    test("stop pressed before the search handle arrives still cancels the search", async ({
+        page,
+    }) => {
+        const mock = await openPage(page);
+        mock.startDelayMs = 800;
+        await searchButton(page).click();
+        await page.getByRole("button", { name: "Stop", exact: true }).click();
+        await expect(page.getByText("Search stopped")).toBeVisible();
+        // The start answers after the stop: the handle is cancelled at once and no poll is made.
+        await expect.poll(() => mock.stops).toBe(1);
+        expect(mock.polls).toHaveLength(0);
+        await expect(page.getByText("Search stopped")).toBeVisible();
     });
 });
 

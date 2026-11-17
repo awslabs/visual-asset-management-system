@@ -49,14 +49,16 @@ const COLUMN_IDS = [
     "timestamp",
     "group",
     "action",
-    "user",
     "outcome",
+    "user",
     "databaseId",
     "assetId",
     "entity",
     "summary",
 ] as const;
 
+// The order puts Outcome next to the Action, so it is in view without scrolling at 1280 px with the
+// side navigation open (Time, Log group, Action and Outcome together are 655 px wide).
 const DEFAULT_VISIBLE = [...COLUMN_IDS];
 
 export interface AuditResultsTableProps {
@@ -117,34 +119,34 @@ export const AuditResultsTable: React.FC<AuditResultsTableProps> = ({
         {
             id: "group",
             header: "Log group",
-            width: 150,
-            minWidth: 110,
+            width: 125,
+            minWidth: 100,
             cell: (row) => <OneLine text={visibleText(row.groupLabel ?? row.groupKey)} />,
             sortingComparator: byText((row) => row.groupLabel ?? row.groupKey),
         },
         {
             id: "action",
             header: "Action",
-            width: 190,
+            width: 170,
             minWidth: 120,
             cell: (row) => <OneLine text={visibleText(row.action ?? row.legacyType)} />,
             sortingComparator: byText((row) => row.action ?? row.legacyType),
         },
         {
-            id: "user",
-            header: "User",
-            width: 240,
-            minWidth: 160,
-            cell: (row) => <OneLine text={visibleText(row.user)} />,
-            sortingComparator: byText((row) => row.user),
-        },
-        {
             id: "outcome",
             header: "Outcome",
-            width: 120,
-            minWidth: 100,
+            width: 125,
+            minWidth: 110,
             cell: (row) => <OutcomeIndicator outcome={row.outcome} />,
             sortingComparator: byText((row) => row.outcome),
+        },
+        {
+            id: "user",
+            header: "User",
+            width: 210,
+            minWidth: 140,
+            cell: (row) => <OneLine text={visibleText(row.user)} />,
+            sortingComparator: byText((row) => row.user),
         },
         {
             id: "databaseId",

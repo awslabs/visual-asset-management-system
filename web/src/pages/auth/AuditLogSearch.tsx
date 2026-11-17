@@ -51,6 +51,12 @@ export const WARNING_TEXT: Record<string, string> = {
         "Checking the records took longer than the time allowed. The records shown are only part of the result.",
 };
 
+/** The key of the Authentication log group (a fixed registry key; the page decides nothing from it). */
+export const AUTHENTICATION_GROUP_KEY = "auditAuthentication";
+/** Shown while the Authentication group is among the searched groups: VAMS writes nothing to it yet. */
+export const AUTHENTICATION_NOTE =
+    "The Authentication group is empty: VAMS does not record sign-ins itself. Amazon Cognito or your identity provider records them. API requests, allowed and denied, are in the Authorization group.";
+
 type GroupsState =
     | { kind: "loading" }
     | { kind: "denied" }
@@ -177,7 +183,7 @@ const AuditLogSearch: React.FC = () => {
         notices.push({
             key: "candidate",
             type: "warning",
-            text: "The search reached its candidate limit, so matching records may be missing. Narrow the time range to be sure.",
+            text: "The search reached its record limit, so more matching records may exist. Narrow the time range to be sure.",
         });
     }
     for (const code of warnings) {
@@ -263,6 +269,12 @@ const AuditLogSearch: React.FC = () => {
                             disabled={state.loadingPage}
                             onOrderChange={changeOrder}
                         />
+
+                        {filters.logGroups.includes(AUTHENTICATION_GROUP_KEY) && (
+                            <Alert type="info" data-testid="audit-authentication-note">
+                                {AUTHENTICATION_NOTE}
+                            </Alert>
+                        )}
 
                         {isActive && (
                             <Alert type="info" header="Searching the audit logs">

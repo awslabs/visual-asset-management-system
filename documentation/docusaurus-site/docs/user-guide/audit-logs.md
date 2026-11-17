@@ -6,7 +6,9 @@ Audit Log Search finds records in the audit logs of your VAMS deployment from th
 
 ## What you can search
 
-Audit records are grouped into audit log groups, for example Actions, Authentication and Authorization. A role grants access per group, so the groups you can search are the ones your roles allow. The page lists no other group and never names one you cannot search. If your roles allow no group, the page says so.
+Audit records are grouped into audit log groups, for example Actions and Authorization. A role grants access per group, so the groups you can search are the ones your roles allow. The page lists no other group and never names one you cannot search. If your roles allow no group, the page says so.
+
+The Authentication group exists but is empty: VAMS does not record sign-ins itself. Amazon Cognito or your identity provider records sign-ins. The API authorizer's check of the token on each API request, allowed and denied, is in the Authorization group. The page shows a short note when you choose the Authentication group.
 
 The log groups, actions and entity types you can choose come from the deployment itself, so a group or action added later appears without an update of the web interface.
 
@@ -37,23 +39,23 @@ A record becomes searchable about a minute after the action it describes, becaus
 
 **Contains.** The text is searched in a record's identifiers, request parameters and details. It is not searched in the values a record changed or in its previous values, so an asset name on a create record, which is a changed value, is not found; filter by **Entity ID** or **Asset ID** instead. A term holds 3 to 64 letters, digits, spaces and the characters `. _ : @ + / -`, up to 3 terms (the deployment may lower these limits), and every term must match. The case does not matter. Values the viewer hides, such as secrets, are never searched, so a term cannot be used to guess them. The page tells you before you search when a term is not accepted.
 
-**Permission-probe records.** The web interface asks the API what you may do to decide what to show. Those checks are recorded as denials marked as probes. **Hide permission-probe records** (on by default) leaves them out so real denials stand out.
+**Permission-probe records.** The web interface asks the API what you may do to decide what to show. Those checks are recorded as denials marked as probes. **Hide permission-probe records** (on by default) leaves them out so real denials stand out. A probe that asked which audit log groups you may search is one row labelled **permission probe (summary)**; it never names a group.
 
 **A link restores a search.** The filters are kept in the page address. Opening a shared link restores the filters and the time range, and never runs the search. Choose **Search** to run it.
 
 ## While a search runs
 
-A search reads CloudWatch Logs and can take several seconds. The page waits on the server and shows how many records it has scanned so far. It shows no count of matches, because the records are checked again on the server when the search finishes. Records appear when the search finishes. Choose **Stop** to end the search early; a stopped search shows no records, so narrow the time range or the filters and search again. A search that passes the deployment's time limit stops with a message that asks you to narrow the range or the filters.
+A search reads CloudWatch Logs and can take several seconds. The page waits on the server and shows how many records it has scanned so far. It shows no count of matches, because the records are checked again on the server when the search finishes. Records appear when the search finishes. Choose **Stop** to end the search early (also right after you chose Search: the search is cancelled as soon as the service has started it); a stopped search shows no records, so narrow the time range or the filters and search again. A search that passes the deployment's time limit stops with a message that asks you to narrow the range or the filters.
 
 When the service is busy or you already run the most searches allowed at once, the page says so. Wait a moment and search again.
 
 ## Read the results
 
-The table shows one row per record, on one line (long values are cut and shown in full when you point at them or open the record; the preferences button turns on wrapped lines): time (your local time), log group, action, user, outcome, database, asset, entity and a one-line summary. **Order** chooses newest or oldest first for the whole result, by the exact time of each record. Time is shown in one format for every record, whichever format it was written in. Column headers sort the page shown only. Use the preferences button to choose the columns.
+The table shows one row per record, on one line (long values are cut and shown in full when you point at them or open the record; the preferences button turns on wrapped lines): time (your local time), log group, action, outcome, user, database, asset, entity and a one-line summary. **Order** chooses newest or oldest first for the whole result, by the exact time of each record. Time is shown in one format for every record, whichever format it was written in. Column headers sort the page shown only. Use the preferences button to choose the columns.
 
 Notices above the table explain what the result may not show:
 
--   The search reached its candidate limit, so matching records may be missing. Narrow the time range.
+-   The search reached its record limit, so more matching records may exist. Narrow the time range.
 -   Checking the records took longer than the time allowed, so only part of the result is shown.
 -   A value you gave could not be used to narrow the scan, so more of the log was read. The result is still exact.
 -   Some records hold values that were cut short when they were written.

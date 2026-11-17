@@ -89,6 +89,9 @@ export const useAuditSearch = (waitSeconds: number, sort: "asc" | "desc") => {
         running: false,
     });
     const tokens = useRef<Record<number, string | undefined>>({});
+    // The start request of the current run, while it is in flight: a stop pressed before the handle is
+    // known is remembered here and sent as soon as the handle arrives.
+    const starting = useRef<{ stopRequested: boolean } | null>(null);
 
     const patch = useCallback((update: Partial<AuditSearchState>) => {
         setState((previous) => ({ ...previous, ...update }));
@@ -112,11 +115,20 @@ export const useAuditSearch = (waitSeconds: number, sort: "asc" | "desc") => {
             const mine = runId.current;
             const isMine = () => runId.current === mine;
             tokens.current = {};
+            const request = { stopRequested: false };
+            starting.current = request;
             setState({ ...IDLE, phase: "starting" });
 
             const started: any[] = await startAuditQuery(body);
-            if (!isMine()) return;
+            if (starting.current === request) starting.current = null;
             const handle = started[0] === true ? normalizeStart(started[1]) : null;
+            if (handle && (request.stopRequested || !isMine())) {
+                // Stopped (or replaced, or the page left) while the start was in flight: the search
+                // exists on the server now and holds a slot, so it is stopped here.
+                await stopAuditQuery(handle.queryId);
+                return;
+            }
+            if (!isMine() || request.stopRequested) return;
             if (!handle) {
                 patch({
                     phase: "error",
@@ -194,6 +206,12 @@ export const useAuditSearch = (waitSeconds: number, sort: "asc" | "desc") => {
     );
 
     const stop = useCallback(async () => {
+        if (starting.current) {
+            // The handle is not known yet: show the stop now and send the cancellation when it arrives.
+            starting.current.stopRequested = true;
+            patch({ phase: "stopped", status: "Cancelled", rows: [], nextToken: undefined });
+            return;
+        }
         const queryId = live.current.queryId;
         if (!queryId || !live.current.running) return;
         // The loop ends at its next check and the handle is stopped on the server. The server returns
@@ -253,6 +271,7 @@ export const useAuditSearch = (waitSeconds: number, sort: "asc" | "desc") => {
     /** Drops the results and stops a running search, for when the filters change under them. */
     const reset = useCallback(() => {
         runId.current += 1;
+        starting.current = null;
         const { queryId, running } = live.current;
         if (queryId && running) void stopAuditQuery(queryId);
         live.current = { queryId: null, running: false };
