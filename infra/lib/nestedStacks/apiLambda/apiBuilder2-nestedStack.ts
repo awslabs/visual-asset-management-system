@@ -26,7 +26,17 @@ import {
     buildAuthConstraintsFunction,
     buildAuthConstraintsTemplateFunction,
 } from "../../lambdaBuilder/authFunctions";
-import { buildAssetHistoryFunction } from "../../lambdaBuilder/assetFunctions";
+import {
+    buildAssetHistoryFunction,
+    buildLargeObjectCopyEngine,
+    grantLargeObjectCopyCoordination,
+    grantLargeObjectCopyProgressRead,
+    grantLargeObjectCopyViaEngine,
+    buildZipDownloadServiceFunction,
+    buildZipDownloadSweep,
+    grantZipDownloadLaunch,
+    ZIP_DOWNLOAD_ROUTES,
+} from "../../lambdaBuilder/assetFunctions";
 import {
     buildDeadlineCloudJobCallbackFunction,
     buildExecuteWorkflowV2Function,
@@ -35,6 +45,8 @@ import {
     buildWorkflowTriggerDispatchFunction,
     buildImportGlobalPipelineWorkflowFunction,
     buildExecutionServiceFunction,
+    buildExecutionDetailsFunction,
+    buildExecutionLogsFunction,
     buildExecutionPermanentDeleteFunction,
     buildProcessWorkflowExecutionOutputFunction,
     buildInterimPipelineTrackingFunction,
@@ -42,6 +54,7 @@ import {
     buildRegisterPipelineExecutionFunction,
     buildWorkflowRole,
     grantWorkflowServiceInternalInvoke,
+    buildWorkflowStatusChangeRule,
 } from "../../lambdaBuilder/workflowFunctions";
 import {
     buildPipelineServiceV2Function,
@@ -79,6 +92,8 @@ export interface ApiBuilder2NestedStackProps {
     // process-output to write outputs back to the asset).
     metadataServiceFunction: lambda.Function;
     uploadFileFunction: lambda.Function;
+    // Invoked by the large object copy engine built here once a large file has landed.
+    sendEmailFunction: lambda.Function;
 }
 
 /**
@@ -285,8 +300,9 @@ export class ApiBuilder2NestedStack extends NestedStack {
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
 
-        // Execution service: asset-scoped + global list, details/traceability, paged detail
-        // metadata, logs, abort, abort-by-group, re-run. Permanent delete has its own function below.
+        // The execution service handler runs as four functions, each on a role holding only the calls
+        // its routes make (EXECUTION_SERVICE_ROUTES, workflowFunctions.ts). The execution service:
+        // asset-scoped + global list, abort, abort-by-group, re-run.
         const executionServiceFunction = buildExecutionServiceFunction(
             this,
             lambdaCommonBaseLayer,
@@ -312,31 +328,6 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.DELETE,
             registry: registry,
         });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/details",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/details/metadata",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/details/files",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/details/results",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/logs",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
         // Global execution ops on the same handler: asset-less list, re-run.
         attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/workflows/executions",
@@ -346,6 +337,43 @@ export class ApiBuilder2NestedStack extends NestedStack {
         attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/workflows/executions/{executionId}/rerun",
             method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        // Details/traceability and its paged metadata, files and results.
+        const executionDetailsFunction = buildExecutionDetailsFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            workflowsLogGroup,
+            config,
+            vpc,
+            subnets
+        );
+        for (const routePath of [
+            "/workflows/executions/{executionId}/details",
+            "/workflows/executions/{executionId}/details/metadata",
+            "/workflows/executions/{executionId}/details/files",
+            "/workflows/executions/{executionId}/details/results",
+        ]) {
+            attachFunctionToApi(this, executionDetailsFunction, {
+                routePath,
+                method: apigateway.HttpMethod.GET,
+                registry: registry,
+            });
+        }
+        // Execution logs.
+        const executionLogsFunction = buildExecutionLogsFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            workflowsLogGroup,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, executionLogsFunction, {
+            routePath: "/workflows/executions/{executionId}/logs",
+            method: apigateway.HttpMethod.GET,
             registry: registry,
         });
         // Permanent delete runs the same handler on its own function and role, the only one that can
@@ -395,6 +423,81 @@ export class ApiBuilder2NestedStack extends NestedStack {
             config,
             vpc,
             subnets
+        );
+
+        // Download as Zip: one function, the zip download service, serves the seven routes and the
+        // delayed sweep's passes. It deploys whatever app.pipelines.useZipDownloads.enabled says, so turning the
+        // feature off keeps existing jobs readable and the routes answering 404. Only with it on is
+        // it given the sweep state machine and granted its launch and abort cross-calls (below, once
+        // executeWorkflowV2 exists). It registers no terminal callback: a job follows its run by the
+        // stored execution id and the service's read-time reconcile.
+        const zipDownloadServiceFunction = buildZipDownloadServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        for (const route of ZIP_DOWNLOAD_ROUTES) {
+            attachFunctionToApi(this, zipDownloadServiceFunction, {
+                routePath: route.routePath,
+                method: route.method,
+                registry: registry,
+            });
+        }
+        if (config.app.pipelines.useZipDownloads.enabled) {
+            // The delayed sweep of a stopped job's archive upload (#1125 D16).
+            buildZipDownloadSweep(this, zipDownloadServiceFunction, storageResources, config);
+        }
+
+        // A run that ends outside VAMS (stopped from the console or API, timed out or failed at the
+        // state machine level) is reconciled when Step Functions reports it, through the execution
+        // service's read-path reconcile, so its execution row does not wait for a read. A feature that
+        // launched the run tracks it from that row by its stored workflowExecutionId.
+        buildWorkflowStatusChangeRule(this, executionServiceFunction, storageResources);
+
+        // Large object copy engine: copies workflow outputs over 1 GiB (and API uploads over the
+        // engine threshold) into their asset as resumable multipart copies. The output step waits
+        // on a run's copies and finalizes it; the abort route and the error handler stop them. Each
+        // of the three gets its grants as one managed policy (their inline policies are near the
+        // IAM quota).
+        const largeObjectCopyEngine = buildLargeObjectCopyEngine(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            props.sendEmailFunction,
+            processWorkflowExecutionOutputFunction,
+            config,
+            vpc,
+            subnets
+        );
+        // The output step's copy work (batch, task token, outcomes, cancel) is done by the engine.
+        grantLargeObjectCopyViaEngine(
+            this,
+            processWorkflowExecutionOutputFunction,
+            largeObjectCopyEngine.engineFunction,
+            config
+        );
+        // Each stopper hands the engine the copies it stopped whose outcome the engine's reconcile
+        // finishes.
+        grantLargeObjectCopyCoordination(handleExecutionErrorFunction, storageResources, config, {
+            handsOffTo: largeObjectCopyEngine.engineFunction,
+        });
+        // The abort route (and the status change push) stops a run's copies and hands the engine the
+        // ones it stopped. Since the execution routes run on four functions (#1255), the details
+        // read's backstop for a copy whose execution ended unreported is granted to the details
+        // function only (grantLargeObjectCopyProgressRead).
+        grantLargeObjectCopyCoordination(executionServiceFunction, storageResources, config, {
+            handsOffTo: largeObjectCopyEngine.engineFunction,
+            // Its abort grant already covers the copy executions (states:StopExecution on execution:*).
+            stopCoveredByCallerGrant: true,
+        });
+        grantLargeObjectCopyProgressRead(
+            executionDetailsFunction,
+            storageResources,
+            config,
+            largeObjectCopyEngine.engineFunction
         );
 
         // Pipeline sub-process registration lambda + its standing EventBridge rule on the
@@ -567,6 +670,15 @@ export class ApiBuilder2NestedStack extends NestedStack {
                 resources: [executeWorkflowV2.functionArn],
             })
         );
+
+        if (config.app.pipelines.useZipDownloads.enabled) {
+            grantZipDownloadLaunch(
+                zipDownloadServiceFunction,
+                executeWorkflowV2,
+                executionServiceFunction,
+                executionDetailsFunction
+            );
+        }
 
         // Keep workflow state machines current with their pipelines: a pipeline save schedules an
         // asynchronous redeploy of every referencing workflow, and a launch redeploys a stale workflow

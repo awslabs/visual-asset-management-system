@@ -4,7 +4,7 @@
  */
 
 /**
- * The concurrency lock table reaches exactly the four handlers that take or release its rows, with
+ * The concurrency lock table reaches exactly the five handlers that take or release its rows, with
  * exactly the DynamoDB actions the lock code issues, in every shipped config template.
  *
  * The table lives in the storage nested stack while the handlers live in the API stack, so a statement's
@@ -24,11 +24,13 @@ const LOCK_TABLE = /WorkflowExecutionLocksStorageTable/;
 const EXPECTED: Record<string, string[]> = {
     // Takes the locks (conditional PutItem) and rolls them back on a conflict or a failed launch.
     executeWorkflowServiceRole: ["dynamodb:DeleteItem", "dynamodb:PutItem"],
-    // Release only (the end-state step, the error handler, and abort / reconcile on read): list the
-    // execution's rows through the holder index and delete them.
+    // Release only (the end-state step, the error handler, abort and the reconcile on a list read, and
+    // the reconcile on a details read): list the execution's rows through the holder index and delete
+    // them.
     processWorkflowExecutionOutputServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
     handleExecutionErrorServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
     executionServiceServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
+    executionDetailsServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
 };
 const HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";
 
@@ -121,7 +123,7 @@ describe.each(LOCK_CELLS)("concurrency lock table grants ($label template)", (ce
         ).toHaveLength(1);
     });
 
-    test("exactly the four lock handlers hold a grant on the table, with exactly the lock actions", () => {
+    test("exactly the five lock handlers hold a grant on the table, with exactly the lock actions", () => {
         const grants = lockGrants(synth);
         const byPrefix: Record<string, string[]> = {};
         for (const [roleId, actions] of grants) {
@@ -150,7 +152,7 @@ describe.each(LOCK_CELLS)("concurrency lock table grants ($label template)", (ce
                 }
             }
         }
-        expect(rolesQueryingTheIndex.size).toBe(3);
+        expect(rolesQueryingTheIndex.size).toBe(4);
     });
 
     test("PutItem and DeleteItem reach the lock table itself, never an index", () => {
@@ -182,7 +184,8 @@ describe.each(LOCK_CELLS)("concurrency lock table grants ($label template)", (ce
 
     test("every lock-table statement lives in a lock policy, never a role's default or overflow policy", () => {
         // A statement added to a role's default policy can move existing statements into an overflow
-        // policy, and CloudFormation updates the two separately during a deploy.
+        // policy, and CloudFormation updates the two separately during a deploy (owner decision
+        // 2026-11-14: the execution service's too).
         const holders = synth.resources
             .filter((r) => /IAM::(Policy|ManagedPolicy)$/.test(r.type))
             .filter((r) =>
@@ -190,14 +193,12 @@ describe.each(LOCK_CELLS)("concurrency lock table grants ($label template)", (ce
                     LOCK_TABLE.test(JSON.stringify(st.Resource ?? ""))
                 )
             )
-            .map((r) => r.logicalId);
+            .map((r) => ({ logicalId: r.logicalId, type: r.type }));
         expect(holders).toHaveLength(Object.keys(EXPECTED).length);
         // Each is a role-inline AWS::IAM::Policy (the lock policy), never an AWS::IAM::ManagedPolicy,
         // so CDK's overflow, which only splits a role's default policy, cannot move its statements.
-        for (const r of synth.resources.filter((x) => holders.includes(x.logicalId))) {
-            expect(r.type).toBe("AWS::IAM::Policy");
-        }
-        for (const logicalId of holders) {
+        for (const { logicalId, type } of holders) {
+            expect(type).toBe("AWS::IAM::Policy");
             expect(logicalId).toMatch(new RegExp(`^[A-Za-z]+${EXECUTION_LOCK_POLICY_ID}`));
             expect(logicalId).not.toMatch(/DefaultPolicy|OverflowPolicy/);
         }

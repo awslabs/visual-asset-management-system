@@ -34,6 +34,9 @@ from common.s3PathPatterns import (
     ALLOWED_PREVIEW_FILE_EXTENSIONS,
 )
 from models.common import VAMSGeneralErrorResponse
+from common import largeObjectCopy as loc
+from common import uploadStatus
+from common.resourceNames import ResourceKeys, get_table_name
 
 # Configure AWS clients with retry configuration
 retry_config = Config(
@@ -47,6 +50,7 @@ s3 = region_routing_s3_client()
 s3_resource = region_routing_s3_resource()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
+sfn_client = boto3.client('stepfunctions', config=retry_config)
 logger = safeLogger(service_name="SqsUploadFileLarge")
 
 # Constants
@@ -59,7 +63,10 @@ EXTERNAL_UPLOAD_ID = "external"
 # Receives before SQS moves a message to the dead-letter queue. Matches maxReceiveCount on
 # LargeFileProcessingQueue (infra apiBuilder-nestedStack.ts). On the final receive a retryable
 # failure aborts the multipart upload, since no later receive could complete it.
-LARGE_FILE_MAX_RECEIVE_COUNT = 3
+try:
+    LARGE_FILE_MAX_RECEIVE_COUNT = int(os.environ.get("LARGE_FILE_QUEUE_MAX_RECEIVE_COUNT", "") or 3)
+except ValueError:
+    LARGE_FILE_MAX_RECEIVE_COUNT = 3
 # complete_multipart_upload error codes that a retry with the same parts cannot fix.
 DETERMINISTIC_COMPLETE_ERROR_CODES = (
     'InvalidPart', 'InvalidPartOrder', 'EntityTooSmall', 'MalformedXML', 'InvalidArgument',
@@ -93,10 +100,10 @@ class LargeFileAlreadyProcessed(Exception):
     """A redelivered message names a file that an earlier receive already stored.
 
     SQS standard queues deliver at least once, so the same message can arrive after an
-    earlier receive stored the file. The message is consumed with no cleanup and no new
-    audit entry. The earlier receive normally wrote the completion entry, but not when it
-    stopped (a timeout or a crash) between deleting the staged object and writing the
-    entry; that entry is then missing.
+    earlier receive stored the file, including one that timed out or failed after it deleted
+    the staged object and before it wrote its audit entry or the file's outcome. The message
+    is consumed with no cleanup; finish_stored_file writes what the earlier receive did not
+    (the audit entry once, the outcome) when the upload record tracks the file.
     """
 
 
@@ -898,6 +905,12 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
             # since the original upload validation would have caught missing base files
             logger.info(f"Preview file {relative_key} validation passed (base file existence assumed)")
 
+        # A file over the engine threshold is handed to the large object copy engine, which has no
+        # time limit and resumes after a failure; the engine finishes the file (temp delete, asset
+        # update, audit). A failed start raises, so the message is retried and dead-lettered.
+        if hand_off_to_copy_engine(file_info, source_bucket, temp_s3_key, final_s3_key, change_metadata):
+            return True
+
         # Copy file from temporary (source bucket) to final (destination asset bucket) location
         logger.info(f"Copying file from {temp_s3_key} to {final_s3_key}")
 
@@ -932,6 +945,180 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
     except Exception as e:
         logger.exception(f"Error validating and moving large file: {e}")
         raise
+
+
+_upload_table = None
+
+
+def upload_table():
+    """The upload records table, resolved on first use (an async file's outcome is recorded there)."""
+    global _upload_table
+    if _upload_table is None:
+        _upload_table = dynamodb.Table(get_table_name(ResourceKeys.ASSET_UPLOADS_STORAGE_TABLE))
+    return _upload_table
+
+
+def record_file_outcome(file_info: Dict[str, Any], succeeded: bool, reason: str = "",
+                        raise_errors: bool = False):
+    """Record a queued file's outcome on its upload record (common.uploadStatus). Idempotent. Never
+    raises unless ``raise_errors``, which the stored-file path uses so a failed write returns the
+    message to the queue and its redelivery records the outcome."""
+    try:
+        uploadStatus.record_async_file_outcome(
+            upload_table(), file_info.get('uploadId'), file_info.get('assetId'),
+            file_info.get('relativeKey'), succeeded, reason, raise_errors=raise_errors)
+    except Exception as e:
+        logger.warning(f"Could not record the outcome of {file_info.get('relativeKey')}: {e}")
+        if raise_errors:
+            raise
+
+
+def audit_stored_file(file_info: Dict[str, Any], correlation_id: str) -> bool:
+    """Write the completion audit entry of a file this consumer stored. Never raises; returns False
+    (logged) when the entry could not be written."""
+    try:
+        log_file_upload(
+            build_async_audit_event(file_info),
+            file_info.get('databaseId'),
+            file_info.get('assetId'),
+            file_info.get('relativeKey'),
+            False,  # Not denied
+            None,
+            {
+                "uploadId": file_info.get('uploadId'),
+                "uploadType": file_info.get('uploadType'),
+                "status": "completed_async",
+                "processingType": "large_file_async",
+                "correlationId": correlation_id
+            }
+        )
+        return True
+    except Exception as audit_error:
+        logger.exception(f"Failed to log large file upload audit - {correlation_id}: {audit_error}")
+        return False
+
+
+def finish_stored_file(file_info: Dict[str, Any], correlation_id: str, redelivered_stored: bool):
+    """The completion audit entry and the outcome of a file this consumer stored, written once
+    across receives of its message.
+
+    When the upload record tracks the file, the audit entry is claimed on its entry first, so a
+    receive that stops after the staged object is deleted (a timeout, a failed outcome write) and
+    its redelivery write one entry between them, and the outcome is written last and raises when it
+    fails, so the message returns to the queue and the redelivery (``redelivered_stored``: the
+    file is found already stored) writes it. A file the record does not track (no record, or one
+    that expired) keeps the earlier behaviour: the receive that stored it writes the entry, and a
+    redelivery writes nothing.
+
+    A redelivery whose file the copy engine may have stored (a copy job exists, or its row cannot be
+    read) writes nothing: the engine writes that file's entry and outcome.
+
+    Raises when the upload record cannot be read or written, so the message is redelivered."""
+    if redelivered_stored and copy_job_state(file_info) != COPY_JOB_NONE:
+        return
+    claim = uploadStatus.claim_async_file_audit(
+        upload_table(), file_info.get('uploadId'), file_info.get('assetId'),
+        file_info.get('relativeKey'))
+    if claim is True:
+        if not audit_stored_file(file_info, correlation_id):
+            # Release the claim (as the copy engine's _audit_once does), so a redelivery of this
+            # message (the outcome write below failing, or a later receive) writes the entry.
+            uploadStatus.release_async_file_audit(
+                upload_table(), file_info.get('uploadId'), file_info.get('assetId'),
+                file_info.get('relativeKey'))
+    elif claim is None and not redelivered_stored:
+        audit_stored_file(file_info, correlation_id)
+    if claim is not None:
+        record_file_outcome(file_info, True, raise_errors=True)
+
+
+COPY_JOB_NONE = "none"
+COPY_JOB_EXISTS = "exists"
+COPY_JOB_UNKNOWN = "unknown"
+
+
+def copy_job_state(file_info: Dict[str, Any]) -> str:
+    """Whether the copy engine owns this file: COPY_JOB_EXISTS (a job row exists), COPY_JOB_NONE
+    (no engine, or no job), or COPY_JOB_UNKNOWN (the job row could not be read)."""
+    if not loc.state_machine_arn() or not file_info.get('uploadId') or not file_info.get('relativeKey'):
+        return COPY_JOB_NONE
+    job_id = loc.job_id_for(file_info['uploadId'], file_info['relativeKey'])
+    try:
+        return COPY_JOB_EXISTS if loc.get_job_row(copy_jobs_table(), job_id) else COPY_JOB_NONE
+    except Exception as e:
+        logger.warning(f"Could not read copy job {job_id}: {e}")
+        return COPY_JOB_UNKNOWN
+
+
+def already_handed_off(file_info: Dict[str, Any]) -> str:
+    """The copy job id when an earlier delivery of this message already handed the file to the copy
+    engine (the job row exists), else "". A redelivered message then neither re-validates the staged
+    object (the engine deleted it once the file landed) nor audits a rejection."""
+    if not loc.state_machine_arn() or not file_info.get('uploadId') or not file_info.get('relativeKey'):
+        return ""
+    job_id = loc.job_id_for(file_info['uploadId'], file_info['relativeKey'])
+    try:
+        return job_id if loc.get_job_row(copy_jobs_table(), job_id) else ""
+    except Exception as e:
+        logger.warning(f"Could not read copy job {job_id}; processing the message as new: {e}")
+        return ""
+
+
+_copy_jobs_table = None
+
+
+def copy_jobs_table():
+    """The large object copy jobs table, resolved on first use."""
+    global _copy_jobs_table
+    if _copy_jobs_table is None:
+        _copy_jobs_table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+    return _copy_jobs_table
+
+
+def hand_off_to_copy_engine(file_info: Dict[str, Any], source_bucket: str, temp_s3_key: str,
+                            final_s3_key: str, change_metadata: Dict[str, str]) -> bool:
+    """Start a large object copy job for a file over the engine threshold and return True; return
+    False to copy the file here as before (at or below the threshold, or no engine configured).
+
+    At or below the threshold (default 5 GiB) a managed copy is a single CopyObject that finishes
+    well inside this function's time limit, so those files keep today's path unchanged. Raises when
+    the job cannot be started, which the caller treats as retryable."""
+    machine_arn = loc.state_machine_arn()
+    if not machine_arn:
+        return False
+    head = s3.head_object(Bucket=source_bucket, Key=temp_s3_key)
+    size = int(head.get('ContentLength', 0) or 0)
+    if size <= loc.API_UPLOAD_ENGINE_THRESHOLD_BYTES:
+        return False
+    job = loc.build_job(
+        kind=loc.KIND_UPLOAD,
+        source={"bucket": source_bucket, "key": temp_s3_key,
+                "region": file_info.get('sourceBucketRegion') or file_info.get('bucketRegion') or "",
+                "versionId": head.get('VersionId') or "", "etag": head.get('ETag') or "", "size": size},
+        dest={"bucket": file_info['bucketName'], "key": final_s3_key,
+              "region": file_info.get('bucketRegion') or ""},
+        metadata={DATABASE_ID_METADATA_KEY: file_info['databaseId'],
+                  ASSET_ID_METADATA_KEY: file_info['assetId'],
+                  **(change_metadata or build_upload_change_metadata(None))},
+        content_headers={},
+        database_id=file_info['databaseId'],
+        asset_id=file_info['assetId'],
+        upload_id=file_info['uploadId'],
+        upload_type=file_info['uploadType'],
+        relative_key=file_info['relativeKey'],
+        change_user_id=file_info.get('changeUserId'),
+        scope_id=file_info['uploadId'],
+        workflow_id=file_info.get('workflowId') or "",
+        workflow_execution_id=file_info.get('workflowExecutionId') or "",
+        delete_source_on_success=True,
+    )
+    # A throttle or the deploy window's AccessDenied is waited out (#1123 L1); a message that still
+    # fails is redelivered.
+    loc.start_copy_job(copy_jobs_table(), sfn_client, machine_arn, job,
+                       max_wait_seconds=loc.ENGINE_CALL_DEPLOY_WAIT_SECONDS)
+    file_info['copyJobId'] = job['jobId']
+    logger.info(f"File {file_info['relativeKey']} ({size} bytes) handed to copy job {job['jobId']}")
+    return True
 
 
 def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str],
@@ -1175,6 +1362,13 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
         register_bucket_region(file_info.get('bucketName'), file_info.get('bucketRegion'))
         register_bucket_region(file_info.get('sourceBucketName'), file_info.get('sourceBucketRegion'))
 
+        # A redelivery after the hand-off to the copy engine: the engine owns the file.
+        handed_off_job = already_handed_off(file_info)
+        if handed_off_job:
+            logger.info(f"File already handed to copy job {handed_off_job}; nothing to do - {correlation_str}")
+            file_info['copyJobId'] = handed_off_job
+            return True
+
         # Step 1: Complete multipart upload at temporary location
         logger.info(f"Step 1: Completing multipart upload - {correlation_str}")
         step1_start = utc_now()
@@ -1183,6 +1377,7 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
             logger.error(f"Step 1 rejected: multipart upload completion - {correlation_str}")
             cleanup_failed_processing(file_info, correlation_ids)
             audit_rejected_large_file(file_info, correlation_ids, "Multipart upload completion rejected")
+            record_file_outcome(file_info, False, "The upload could not be completed.")
             return False
 
         step1_duration = (utc_now() - step1_start).total_seconds()
@@ -1196,6 +1391,7 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
             logger.error(f"Step 2 rejected: file validation - {correlation_str}")
             cleanup_failed_processing(file_info, correlation_ids)
             audit_rejected_large_file(file_info, correlation_ids, "File type or extension not allowed")
+            record_file_outcome(file_info, False, loc.REASON_BLOCKED)
             return False
 
         step2_duration = (utc_now() - step2_start).total_seconds()
@@ -1216,6 +1412,8 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
                 cleanup_failed_processing(file_info, correlation_ids, delete_temp=False)
             except Exception as cleanup_error:
                 logger.exception(f"Error during cleanup after final processing failure - {correlation_str}: {cleanup_error}")
+            # No later delivery will process the file.
+            record_file_outcome(file_info, False, uploadStatus.REASON_PROCESSING_FAILED)
         else:
             logger.exception(f"Retryable error processing large file on receive {receive_count} after "
                              f"{total_duration:.2f}s, the message will be redelivered - {correlation_str}: {e}")
@@ -1304,11 +1502,18 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
             try:
                 success = process_large_file(file_info, correlation_ids, receive_count, sent_timestamp_ms)
             except LargeFileAlreadyProcessed:
-                # An earlier receive stored the file and normally wrote its audit entry (not when
-                # it stopped between deleting the staged object and the entry; see
-                # LargeFileAlreadyProcessed). No second entry is written here.
-                logger.info(f"Duplicate delivery of a file already stored, message consumed with no new "
-                            f"audit entry - {format_correlation_ids(correlation_ids)}")
+                # An earlier receive stored the file, but it may have stopped before its audit
+                # entry or the file's outcome: write what is missing (once) when the upload
+                # record tracks the file.
+                logger.info(f"Duplicate delivery of a file already stored, message consumed - "
+                            f"{format_correlation_ids(correlation_ids)}")
+                try:
+                    finish_stored_file(file_info, record_correlation_id, redelivered_stored=True)
+                except Exception as outcome_error:
+                    retryable_errors.append(outcome_error)
+                    failure_count += 1
+                    processed_count += 1
+                    continue
                 success_count += 1
                 processed_count += 1
                 continue
@@ -1318,30 +1523,24 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
                 processed_count += 1
                 continue
             
-            if success:
-                logger.info(f"Successfully processed large file - {format_correlation_ids(correlation_ids)}")
+            if success and file_info.get('copyJobId'):
+                # Handed to the copy engine, which writes the completion (or rejection) audit
+                # entry once the file has landed.
+                logger.info(f"Large file handed to copy job {file_info['copyJobId']} - {format_correlation_ids(correlation_ids)}")
                 success_count += 1
-                
-                # AUDIT LOG: Large file upload completed asynchronously, with the actor
-                # resolved by build_async_audit_event.
+            elif success:
+                logger.info(f"Successfully processed large file - {format_correlation_ids(correlation_ids)}")
+                # AUDIT LOG (once across receives, actor resolved by build_async_audit_event) and
+                # the file's outcome. A failed outcome write returns the message to the queue; its
+                # redelivery finds the file stored and writes the outcome.
                 try:
-                    log_file_upload(
-                        build_async_audit_event(file_info),
-                        file_info.get('databaseId'),
-                        file_info.get('assetId'),
-                        file_info.get('relativeKey'),
-                        False,  # Not denied
-                        None,
-                        {
-                            "uploadId": file_info.get('uploadId'),
-                            "uploadType": file_info.get('uploadType'),
-                            "status": "completed_async",
-                            "processingType": "large_file_async",
-                            "correlationId": record_correlation_id
-                        }
-                    )
-                except Exception as audit_error:
-                    logger.exception(f"Failed to log large file upload audit - {format_correlation_ids(correlation_ids)}: {audit_error}")
+                    finish_stored_file(file_info, record_correlation_id, redelivered_stored=False)
+                except Exception as outcome_error:
+                    retryable_errors.append(outcome_error)
+                    failure_count += 1
+                    processed_count += 1
+                    continue
+                success_count += 1
             else:
                 logger.error(f"Large file rejected and cleaned up, message consumed - {format_correlation_ids(correlation_ids)}")
                 failure_count += 1

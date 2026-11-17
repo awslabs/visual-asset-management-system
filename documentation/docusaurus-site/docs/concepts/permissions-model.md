@@ -425,6 +425,7 @@ needs to set a database's default bucket without holding the route can still do 
 | ------------------------------ | ------- | ------------------ | ---------------------------------------------- |
 | `/uploads`                     | POST    | `asset`            | `assetName`, `assetType`, `databaseId`, `tags` |
 | `/uploads/{uploadId}/complete` | POST    | `asset`            | `assetName`, `assetType`, `databaseId`, `tags` |
+| `/uploads/{uploadId}`          | GET     | `asset`            | `assetName`, `assetType`, `databaseId`, `tags` |
 | `/ingest-asset`                | POST    | `asset`            | `assetName`, `databaseId`                      |
 
 ### Asset link routes
