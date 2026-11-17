@@ -12,10 +12,10 @@ S3_VERSIONS_PAGE_SIZE = 1000
 S3_OBJECTS_PAGE_SIZE = 1000
 
 import os
-import time
+import time  # noqa: E402
 import boto3
 from botocore.config import Config
-from customLogging.logger import safeLogger
+from customLogging.logger import safeLogger  # noqa: E402
 
 logger = safeLogger()
 
@@ -82,6 +82,7 @@ def s3_resource_for_region(region=None):
 # (register_bucket_accelerated / bucket_region_fields); the mock performs no table lookup, so a name
 # nobody registered is not accelerated and a test never reaches DynamoDB through it.
 BUCKET_ACCELERATE_CACHE_TTL_SECONDS = 600
+BUCKET_ACCELERATE_FAILURE_TTL_SECONDS = 30
 ACCELERATED_PRESIGN_METHODS = frozenset({'get_object', 'upload_part', 'put_object'})
 _s3_accelerated_clients_by_region = {}
 _bucket_accelerated_by_name = {}
@@ -214,6 +215,23 @@ class _RegionRoutingPaginator:
             self._operation_name).paginate(**kwargs)
 
 
+def _accelerated_presign(ordinary_client, bucket, args, kwargs):
+    # Same contract as the shipped module: commercial partition only, and an accelerate problem is
+    # logged and signed without acceleration instead of failing the request.
+    partition = ordinary_client.meta.partition
+    if partition != 'aws':
+        logger.warning(f"Bucket {bucket} is flagged for Transfer Acceleration but runs in "
+                       f"partition {partition}, signing without acceleration.")
+        return None
+    try:
+        client = accelerated_presign_client_for_bucket(bucket, ordinary_client.meta.region_name)
+        return client.generate_presigned_url(*args, **kwargs)
+    except Exception as e:
+        logger.error(f"Could not sign an accelerated URL for bucket {bucket} "
+                     f"({type(e).__name__}: {e}), signing without acceleration.")
+        return None
+
+
 class RegionRoutingS3Client:
     def __init__(self):
         # Bound at construction, so a module that builds its router at import binds its
@@ -247,25 +265,22 @@ class RegionRoutingS3Client:
             return self._copy
         if name == 'copy_object':
             return self._copy_object
-        if name in ('generate_presigned_url', 'generate_presigned_post'):
-            return lambda *args, **kwargs: self._presign(name, args, kwargs)
+        if name == 'generate_presigned_url':
+            return self._presign
 
         def call(*args, **kwargs):
             return getattr(self._client_for(self._bucket_from_call(args, kwargs)), name)(*args, **kwargs)
         return call
 
-    def _presign(self, name, args, kwargs):
+    def _presign(self, *args, **kwargs):
         bucket = self._bucket_from_call(args, kwargs)
         method = kwargs.get('ClientMethod', args[0] if args else None)
-        eligible = True if name == 'generate_presigned_post' else method in ACCELERATED_PRESIGN_METHODS
-        if bucket and eligible and bucket_is_accelerated(bucket):
-            try:
-                client = accelerated_presign_client_for_bucket(bucket)
-            except AccelerateNotSupportedError as e:
-                logger.error(f"{e}; signing without acceleration.")
-            else:
-                return getattr(client, name)(*args, **kwargs)
-        return getattr(self._client_for(bucket), name)(*args, **kwargs)
+        ordinary = self._client_for(bucket)
+        if bucket and method in ACCELERATED_PRESIGN_METHODS and bucket_is_accelerated(bucket):
+            url = _accelerated_presign(ordinary, bucket, args, kwargs)
+            if url is not None:
+                return url
+        return ordinary.generate_presigned_url(*args, **kwargs)
 
     @staticmethod
     def _copy(CopySource=None, Bucket=None, Key=None, ExtraArgs=None, **_ignored):

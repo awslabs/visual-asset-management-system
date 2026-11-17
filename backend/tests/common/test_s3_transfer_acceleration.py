@@ -164,13 +164,6 @@ class TestFlagOn:
         assert a.meta.config.s3["use_accelerate_endpoint"] is True
         assert a.meta.config.signature_version == "s3v4"
 
-    def test_presigned_post_follows_the_flag(self, shipped):
-        shipped.register_bucket_region("fast-b", "us-west-2")
-        shipped.register_bucket_accelerated("fast-b", True)
-        post = shipped.region_routing_s3_client().generate_presigned_post(
-            Bucket="fast-b", Key="k", ExpiresIn=60)
-        assert post["url"].startswith("https://fast-b.s3-accelerate.amazonaws.com")
-
 
 @pytest.mark.unit
 class TestServerSideCallsUnchanged:
@@ -212,7 +205,7 @@ class TestDottedBucketName:
         with pytest.raises(shipped.AccelerateNotSupportedError, match="period in its name"):
             shipped.accelerated_presign_client_for_bucket("my.bucket.name")
 
-    def test_a_download_for_a_dotted_flagged_bucket_still_gets_a_url_and_the_fault_is_logged(self, shipped, monkeypatch):
+    def test_a_dotted_flagged_bucket_still_gets_a_url_and_the_fault_is_logged(self, shipped, monkeypatch):
         # Never a 500 on a download: the URL is signed without acceleration and the error is logged.
         shipped.register_bucket_region("my.dotted.b", "us-west-2")
         shipped.register_bucket_accelerated("my.dotted.b", True)
@@ -265,12 +258,20 @@ class TestFlagCache:
         assert shipped.bucket_is_accelerated("fast-b") is True
 
 
+def _denied():
+    return ClientError({"Error": {"Code": "AccessDeniedException", "Message": "no"}}, "Query")
+
+
 @pytest.mark.unit
 class TestLookupFailure:
-    def test_a_denied_read_is_logged_with_its_code_signs_without_acceleration_and_retries(self, shipped, monkeypatch):
+    def _clock(self, shipped, monkeypatch):
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(shipped.time, "monotonic", lambda: clock["now"])
+        return clock
+
+    def test_a_denied_read_is_logged_with_its_code_and_signs_without_acceleration(self, shipped, monkeypatch):
         table = MagicMock()
-        table.query.side_effect = ClientError(
-            {"Error": {"Code": "AccessDeniedException", "Message": "no"}}, "Query")
+        table.query.side_effect = _denied()
         shipped._buckets_table = table
         shipped.register_bucket_region("fast-b", "us-west-2")
         logged = MagicMock()
@@ -278,13 +279,43 @@ class TestLookupFailure:
         url = _presign_get(shipped.region_routing_s3_client(), "fast-b")
         assert url.startswith("https://s3.us-west-2.amazonaws.com/fast-b/k?")  # download still works
         assert "AccessDeniedException" in logged.error.call_args.args[0]
-        # Not cached: the next call reads again and, once the read works, accelerates.
+
+    def test_a_failing_read_costs_one_call_per_interval_and_one_log_line(self, shipped, monkeypatch):
+        clock = self._clock(shipped, monkeypatch)
+        table = MagicMock()
+        table.query.side_effect = _denied()
+        shipped._buckets_table = table
+        shipped.register_bucket_region("fast-b", "us-west-2")
+        logged = MagicMock()
+        monkeypatch.setattr(shipped, "logger", logged)
+        router = shipped.region_routing_s3_client()
+        for _ in range(50):
+            _presign_get(router, "fast-b")
+        assert table.query.call_count == 1
+        assert logged.error.call_count == 1
+        # After the short failure interval the read is tried again and, once it works, accelerates.
+        clock["now"] += shipped.BUCKET_ACCELERATE_FAILURE_TTL_SECONDS + 1
         table.query.side_effect = None
         table.query.return_value = {"Items": [{"bucketName": "fast-b", "isAccelerated": True}]}
-        assert ".s3-accelerate.amazonaws.com/k?" in _presign_get(shipped.region_routing_s3_client(), "fast-b")
+        assert ".s3-accelerate.amazonaws.com/k?" in _presign_get(router, "fast-b")
         assert table.query.call_count == 2
 
-    def test_a_non_client_failure_is_logged_and_not_cached(self, shipped, monkeypatch):
+    def test_the_failure_interval_is_30_seconds(self, shipped):
+        assert shipped.BUCKET_ACCELERATE_FAILURE_TTL_SECONDS == 30
+
+    def test_a_failed_refresh_keeps_the_last_known_value(self, shipped, monkeypatch):
+        clock = self._clock(shipped, monkeypatch)
+        table = _table([{"bucketName": "fast-b", "isAccelerated": True}])
+        shipped._buckets_table = table
+        assert shipped.bucket_is_accelerated("fast-b") is True
+        clock["now"] += shipped.BUCKET_ACCELERATE_CACHE_TTL_SECONDS + 1
+        table.query.side_effect = _denied()
+        assert shipped.bucket_is_accelerated("fast-b") is True  # not dropped to false
+        assert shipped.bucket_is_accelerated("fast-b") is True
+        assert table.query.call_count == 2  # the one failed refresh, not one per call
+
+    def test_a_non_client_failure_is_logged_and_retried_after_the_interval(self, shipped, monkeypatch):
+        clock = self._clock(shipped, monkeypatch)
         table = MagicMock()
         table.query.side_effect = RuntimeError("boom")
         shipped._buckets_table = table
@@ -292,7 +323,11 @@ class TestLookupFailure:
         monkeypatch.setattr(shipped, "logger", logged)
         assert shipped.bucket_is_accelerated("fast-b") is False
         assert "RuntimeError" in logged.error.call_args.args[0]
-        assert "fast-b" not in shipped._bucket_accelerated_by_name
+        assert shipped.bucket_is_accelerated("fast-b") is False
+        assert table.query.call_count == 1
+        clock["now"] += shipped.BUCKET_ACCELERATE_FAILURE_TTL_SECONDS + 1
+        assert shipped.bucket_is_accelerated("fast-b") is False
+        assert table.query.call_count == 2
 
 
 @pytest.mark.unit
@@ -326,12 +361,49 @@ class TestAuxiliaryBucketFollowsDefault:
     def test_aux_presigned_download_uses_the_accelerate_host_in_the_deployment_region(self, shipped, monkeypatch):
         self._wire(shipped, monkeypatch, [{"bucketName": "default-b", "isAccelerated": True}], True)
         url = _presign_get(shipped.region_routing_s3_client(), self.AUX, "vams.preparedDownloads/z.zip")
-        assert url.startswith(f"https://{self.AUX}.s3-accelerate.amazonaws.com/vams.preparedDownloads/z.zip?")
+        assert url.startswith("https://" + self.AUX + ".s3-accelerate.amazonaws.com/vams.preparedDownloads/z.zip?")
         assert "us-west-2%2Fs3" in url
 
     def test_a_name_that_is_neither_registered_nor_aux_is_not_accelerated(self, shipped, monkeypatch):
         self._wire(shipped, monkeypatch, [{"bucketName": "default-b", "isAccelerated": True}], True)
         assert shipped.bucket_is_accelerated("artefacts-or-staging-b") is False
+
+    def _stub_table(self, rows, default_rows):
+        table = MagicMock()
+        table.query.side_effect = lambda **kwargs: {
+            "Items": rows.get(kwargs["KeyConditionExpression"]._values[1], [])}
+        table.scan.return_value = {"Items": default_rows}
+        return table
+
+    def test_the_real_lookup_resolves_the_aux_name_and_the_default_row(self, shipped, monkeypatch):
+        # Nothing under test is mocked away: the aux name comes from the resource-name env override,
+        # the default bucket from the real resolve_default_bucket scan, the flag from the GSI query.
+        monkeypatch.setenv("S3_ASSET_AUXILIARY_BUCKET", self.AUX)
+        default_row = {"bucketId": "b1", "bucketName": "default-b", "isDefault": True, "isAccelerated": True}
+        shipped._buckets_table = self._stub_table(
+            {"default-b": [default_row]}, [default_row])
+        assert shipped.bucket_is_accelerated(self.AUX) is True
+        assert shipped.bucket_is_accelerated("some-other-b") is False
+        shipped._buckets_table.scan.assert_called_once()
+
+    def test_the_real_lookup_follows_an_unflagged_default(self, shipped, monkeypatch):
+        monkeypatch.setenv("S3_ASSET_AUXILIARY_BUCKET", self.AUX)
+        default_row = {"bucketId": "b1", "bucketName": "default-b", "isDefault": True}
+        shipped._buckets_table = self._stub_table({"default-b": [default_row]}, [default_row])
+        assert shipped.bucket_is_accelerated(self.AUX) is False
+
+    def test_an_unresolvable_aux_name_is_logged_once(self, shipped, monkeypatch):
+        for name in ("S3_ASSET_AUXILIARY_BUCKET", "ASSET_AUXILIARY_BUCKET_NAME",
+                     "S3_ASSETAUXILIARY_STORAGE_BUCKET"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv("VAMS_RESOURCE_PARAM_PREFIX", raising=False)
+        shipped._buckets_table = self._stub_table({}, [])
+        logged = MagicMock()
+        monkeypatch.setattr(shipped, "logger", logged)
+        assert shipped._is_auxiliary_bucket("any-b") is False
+        assert shipped._is_auxiliary_bucket("any-b") is False
+        assert logged.error.call_count == 1
+        assert "auxiliary bucket" in logged.error.call_args.args[0]
 
     def test_no_default_bucket_row_means_not_accelerated(self, shipped, monkeypatch):
         self._wire(shipped, monkeypatch, [], False)
@@ -345,13 +417,143 @@ class TestAuxiliaryBucketFollowsDefault:
 
 
 @pytest.mark.unit
+class TestEndpointErrorsNeverFailARequest:
+    """An accelerate problem is logged once and the ordinary URL is returned, never an exception."""
+
+    @pytest.mark.parametrize("name", ["My_Legacy_Bucket", "ab", "a"])
+    def test_names_botocore_cannot_virtual_host_fall_back_to_the_ordinary_url(self, shipped, monkeypatch, name):
+        shipped.register_bucket_region(name, "us-west-2")
+        shipped.register_bucket_accelerated(name, True)
+        logged = MagicMock()
+        monkeypatch.setattr(shipped, "logger", logged)
+        router = shipped.region_routing_s3_client()
+        url = _presign_get(router, name)
+        assert "s3-accelerate" not in url
+        assert url.startswith("https://s3.us-west-2.amazonaws.com/" + name + "/k?")
+        assert name in logged.error.call_args.args[0]
+        _presign_get(router, name)
+        assert logged.error.call_count == 1  # once per bucket per cache window
+
+    def test_the_failure_is_logged_with_the_bucket_name_and_error_class(self, shipped, monkeypatch):
+        shipped.register_bucket_region("My_Legacy_Bucket", "us-west-2")
+        shipped.register_bucket_accelerated("My_Legacy_Bucket", True)
+        logged = MagicMock()
+        monkeypatch.setattr(shipped, "logger", logged)
+        _presign_get(shipped.region_routing_s3_client(), "My_Legacy_Bucket")
+        message = logged.error.call_args.args[0]
+        assert "My_Legacy_Bucket" in message
+        assert "Error" in message
+
+    def test_a_fips_endpoint_setting_falls_back_to_the_ordinary_url(self, shipped, monkeypatch):
+        monkeypatch.setenv("AWS_USE_FIPS_ENDPOINT", "true")
+        shipped.register_bucket_region("fast-b", "us-west-2")
+        shipped.register_bucket_accelerated("fast-b", True)
+        logged = MagicMock()
+        monkeypatch.setattr(shipped, "logger", logged)
+        url = _presign_get(shipped.region_routing_s3_client(), "fast-b")
+        assert "s3-accelerate" not in url
+        assert "fast-b" in url
+        assert logged.error.call_count == 1
+        assert "fast-b" in logged.error.call_args.args[0]
+
+    @pytest.mark.parametrize("error_name", ["EndpointResolutionError", "UnsupportedS3ConfigurationError"])
+    def test_botocore_endpoint_errors_from_the_accelerated_client_are_absorbed(self, shipped, monkeypatch, error_name):
+        import botocore.exceptions as botocore_exceptions
+        error_class = getattr(botocore_exceptions, error_name)
+        shipped.register_bucket_region("fast-b", "us-west-2")
+        shipped.register_bucket_accelerated("fast-b", True)
+        accelerated = MagicMock()
+        accelerated.generate_presigned_url.side_effect = error_class(msg="no")
+        monkeypatch.setattr(shipped, "s3_accelerated_client_for_region", lambda r=None: accelerated)
+        logged = MagicMock()
+        monkeypatch.setattr(shipped, "logger", logged)
+        url = _presign_get(shipped.region_routing_s3_client(), "fast-b")
+        assert url.startswith("https://s3.us-west-2.amazonaws.com/fast-b/k?")
+        assert error_name in logged.error.call_args.args[0]
+
+    def test_an_error_building_the_accelerated_client_is_absorbed(self, shipped, monkeypatch):
+        shipped.register_bucket_region("fast-b", "us-west-2")
+        shipped.register_bucket_accelerated("fast-b", True)
+
+        def broken(region=None):
+            raise RuntimeError("cannot build")
+
+        monkeypatch.setattr(shipped, "s3_accelerated_client_for_region", broken)
+        url = _presign_get(shipped.region_routing_s3_client(), "fast-b")
+        assert url.startswith("https://s3.us-west-2.amazonaws.com/fast-b/k?")
+
+
+@pytest.mark.unit
+class TestPartitionGuard:
+    """Transfer Acceleration is commercial-partition only; a flag on a row elsewhere is ignored."""
+
+    @pytest.mark.parametrize("region,partition", [
+        ("us-west-2", "aws"), ("us-gov-west-1", "aws-us-gov"),
+        ("eusc-de-east-1", "aws-eusc"), ("cn-north-1", "aws-cn")])
+    def test_only_the_commercial_partition_accelerates(self, shipped, monkeypatch, region, partition):
+        monkeypatch.setenv("AWS_REGION", region)
+        shipped.register_bucket_region("fast-b", region)
+        shipped.register_bucket_accelerated("fast-b", True)
+        assert shipped.s3_client_for_region(region).meta.partition == partition
+        logged = MagicMock()
+        monkeypatch.setattr(shipped, "logger", logged)
+        router = shipped.region_routing_s3_client()
+        url = _presign_get(router, "fast-b")
+        if partition == "aws":
+            assert ".s3-accelerate.amazonaws.com/k?" in url
+            logged.warning.assert_not_called()
+        else:
+            assert "accelerate" not in url
+            assert "fast-b" in url
+            assert partition in logged.warning.call_args.args[0]
+            _presign_get(router, "fast-b")
+            assert logged.warning.call_count == 1  # once per cache window
+            assert logged.error.call_count == 0
+
+
+@pytest.mark.unit
+class TestEveryPresignSiteUsesTheRouter:
+    """Ratchet: a module under backend/backend that presigns must get its client from
+    region_routing_s3_client(), so the acceleration decision stays in common.s3."""
+
+    # Modules that may call generate_presigned_url without the router: the router itself. The
+    # server-side consumers named in the WP0 classification (Lambda, Step Functions, Batch) do not
+    # presign at all.
+    ALLOWED = {os.path.join("common", "s3.py")}
+
+    def test_presigning_modules_hold_the_region_routing_client(self):
+        offenders = []
+        for root, _dirs, files in os.walk(BACKEND):
+            for name in files:
+                if not name.endswith(".py"):
+                    continue
+                path = os.path.join(root, name)
+                relative = os.path.relpath(path, BACKEND)
+                if relative in self.ALLOWED:
+                    continue
+                with open(path, encoding="utf-8") as handle:
+                    source = handle.read()
+                if ".generate_presigned_url(" in source and "region_routing_s3_client(" not in source:
+                    offenders.append(relative)
+        assert offenders == []
+
+    def test_the_ratchet_finds_the_known_presign_sites(self):
+        sites = []
+        for root, _dirs, files in os.walk(os.path.join(BACKEND, "handlers")):
+            for name in files:
+                if name.endswith(".py"):
+                    with open(os.path.join(root, name), encoding="utf-8") as handle:
+                        if ".generate_presigned_url(" in handle.read():
+                            sites.append(name)
+        assert len(sites) >= 6
+
+
+@pytest.mark.unit
 class TestUploadPartUrlBound:
     def test_the_fixed_overhead_constant_still_bounds_an_accelerated_upload_part_url(self, shipped, monkeypatch):
         """models/assetsV3.UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES is measured for a path-style URL with
         a 1,300-character session token, a 63-character bucket, a 256-character uploadId and a
         7-day expiry. The accelerate host is shorter than the regional path-style host."""
-        import boto3
-        from botocore.config import Config
         sys.path.insert(0, BACKEND)
         with open(os.path.join(BACKEND, "models", "assetsV3.py")) as handle:
             constant = int(re.search(r"^UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES = (\d+)", handle.read(), re.M).group(1))
@@ -378,13 +580,15 @@ class TestUploadPartUrlBound:
 class TestMockParity:
     SURFACE = ["bucket_is_accelerated", "register_bucket_accelerated", "s3_accelerated_client_for_region",
                "accelerated_presign_client_for_bucket", "AccelerateNotSupportedError",
-               "BUCKET_ACCELERATE_CACHE_TTL_SECONDS", "ACCELERATED_PRESIGN_METHODS"]
+               "BUCKET_ACCELERATE_CACHE_TTL_SECONDS", "BUCKET_ACCELERATE_FAILURE_TTL_SECONDS",
+               "ACCELERATED_PRESIGN_METHODS"]
 
     def test_the_mock_exposes_the_surface(self, mock_module):
         assert [n for n in self.SURFACE if not hasattr(mock_module, n)] == []
 
     def test_the_constants_match_the_shipped_module(self, mock_module, shipped):
         assert mock_module.BUCKET_ACCELERATE_CACHE_TTL_SECONDS == shipped.BUCKET_ACCELERATE_CACHE_TTL_SECONDS
+        assert mock_module.BUCKET_ACCELERATE_FAILURE_TTL_SECONDS == shipped.BUCKET_ACCELERATE_FAILURE_TTL_SECONDS
         assert mock_module.ACCELERATED_PRESIGN_METHODS == shipped.ACCELERATED_PRESIGN_METHODS
 
     def test_the_mock_presigns_like_the_shipped_module(self, mock_module, shipped):
@@ -403,6 +607,17 @@ class TestMockParity:
         mock_module.register_bucket_region("a.b", "us-west-2")
         mock_module.register_bucket_accelerated("a.b", True)
         assert "s3-accelerate" not in _presign_get(mock_module.region_routing_s3_client(), "a.b")
+
+    def test_the_mock_ignores_the_flag_outside_the_commercial_partition(self, mock_module, monkeypatch):
+        monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
+        mock_module.register_bucket_region("fast-b", "us-gov-west-1")
+        mock_module.register_bucket_accelerated("fast-b", True)
+        assert "accelerate" not in _presign_get(mock_module.region_routing_s3_client(), "fast-b")
+
+    def test_the_mock_falls_back_for_a_name_botocore_cannot_virtual_host(self, mock_module):
+        mock_module.register_bucket_region("My_Legacy_Bucket", "us-west-2")
+        mock_module.register_bucket_accelerated("My_Legacy_Bucket", True)
+        assert "accelerate" not in _presign_get(mock_module.region_routing_s3_client(), "My_Legacy_Bucket")
 
     def test_bucket_details_agree(self, mock_module, shipped):
         row = {"bucketName": "fast-b", "bucketRegion": "eu-west-1", "isAccelerated": True}
