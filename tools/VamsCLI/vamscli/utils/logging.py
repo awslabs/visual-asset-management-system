@@ -142,6 +142,33 @@ def scrub_text(value: str) -> str:
     return value
 
 
+def _summarize_audit_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep audit search content out of the log file: a search's `contains` terms (the value being
+    looked for), the rows a read returned and an export's text are replaced by counts and lengths.
+
+    The audit log search API does the same in its own records (count, length and a hash only), and
+    the CLI log file outlives the command and may be read by other local users. The shapes are
+    recognised by their keys, so no other payload is touched. Returns ``obj`` itself when it is not
+    an audit payload; otherwise a shallow copy.
+    """
+    if 'recordId' in obj and 'groupKey' in obj and 'timestamp' in obj:
+        # One audit row (`audit show`): its identity and kind only, not its users, parameters or changes.
+        return {key: obj.get(key) for key in ('recordId', 'timestamp', 'groupKey', 'action', 'outcome')}
+    is_request = 'contains' in obj and 'startTime' in obj and 'endTime' in obj
+    is_page = 'queryId' in obj and ('Items' in obj or 'content' in obj)
+    if not (is_request or is_page):
+        return obj
+    summary = dict(obj)
+    if is_request and isinstance(summary.get('contains'), (list, tuple)):
+        summary['contains'] = f"[{len(summary['contains'])} terms omitted]"
+    if is_page:
+        if isinstance(summary.get('Items'), list):
+            summary['Items'] = f"[{len(summary['Items'])} rows omitted]"
+        if isinstance(summary.get('content'), str):
+            summary['content'] = f"[{len(summary['content'])} characters omitted]"
+    return summary
+
+
 def redact_sensitive(obj: Any, _depth: int = 0) -> Any:
     """
     Return a copy of ``obj`` with credential values replaced by ``REDACTED``.
@@ -156,6 +183,7 @@ def redact_sensitive(obj: Any, _depth: int = 0) -> Any:
         if _depth > _MAX_REDACT_DEPTH:
             return '***DEPTH_LIMIT***'
         if isinstance(obj, dict):
+            obj = _summarize_audit_payload(obj)
             return {
                 k: (REDACTED if _is_sensitive_key(k) else redact_sensitive(v, _depth + 1))
                 for k, v in obj.items()

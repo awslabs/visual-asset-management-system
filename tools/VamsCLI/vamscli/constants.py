@@ -224,6 +224,36 @@ API_COMPLIANCE_CASCADE_REJECT = "/compliance/cascades/{cascadeId}/reject"
 API_COMPLIANCE_AUDIT = "/compliance/audit"
 API_COMPLIANCE_AUDIT_ASSET = "/compliance/audit/{databaseId}/{assetId}"
 
+# Audit log search (core feature, no feature switch): the groups the caller may search, a search
+# (POST starts it and answers a handle, GET reads or long-polls it, DELETE stops it) and its export.
+API_AUDIT_LOG_GROUPS = "/audit/log-groups"
+API_AUDIT_QUERIES = "/audit/queries"
+API_AUDIT_QUERY = "/audit/queries/{queryId}"
+API_AUDIT_QUERY_EXPORT = "/audit/queries/{queryId}/export"
+
+# Client-side copies of the server's limits, used only to refuse an obviously bad value early: the
+# server stays authoritative and `audit groups` shows the deployment's own limits.
+AUDIT_LONG_POLL_WAIT_SECONDS = 20
+AUDIT_MIN_POLL_GAP_SECONDS = 0.25
+AUDIT_MAX_POLL_GAP_SECONDS = 30
+AUDIT_NETWORK_RETRIES = 3
+# The server's search deadline is 5 minutes by default (queryDeadlineSeconds); the client gives up a
+# little after the longest deadline it allows.
+AUDIT_DEFAULT_WAIT_TIMEOUT_SECONDS = 360
+AUDIT_DEFAULT_PAGE_SIZE = 100
+AUDIT_MAX_PAGE_SIZE = 500
+AUDIT_DEFAULT_MAX_ROWS = 1000
+AUDIT_MAX_FILTER_VALUES = 20
+AUDIT_MAX_CONTAINS_TERMS = 3
+AUDIT_CONTAINS_MIN_LENGTH = 3
+AUDIT_CONTAINS_MAX_LENGTH = 64
+AUDIT_CONTAINS_ALLOWED_PATTERN = r"[A-Za-z0-9 ._:@+/-]+"
+AUDIT_EXPORT_FORMATS = ("csv", "ndjson")
+AUDIT_SORT_ORDERS = ("asc", "desc")
+AUDIT_OUTCOMES = ("success", "failed", "denied")
+AUDIT_DEFAULT_WINDOW = "24h"
+AUDIT_FINAL_STATUSES = ("Complete", "Failed", "Cancelled", "Timeout")
+
 # The audit routes page on `maxItems` (alias `limit`) + `startingToken`, returning a `NextToken`;
 # the handler applies the default when the request names no page size and clamps larger values to
 # the cap.

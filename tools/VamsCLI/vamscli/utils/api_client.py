@@ -269,6 +269,7 @@ def _redirected_host(response, request_url: str) -> Optional[str]:
     return host if host and host != urlparse(request_url).netloc else None
 
 from ..constants import (
+    API_AUDIT_LOG_GROUPS, API_AUDIT_QUERIES, API_AUDIT_QUERY, API_AUDIT_QUERY_EXPORT,
     API_VERSION, API_AMPLIFY_CONFIG, DEFAULT_TIMEOUT, DEFAULT_READ_TIMEOUT, MAX_AUTH_RETRIES,
     MINIMUM_API_VERSION,
     API_LOGIN_PROFILE, API_SECURE_CONFIG, API_ASSETS, API_DATABASE_ASSETS, API_DATABASE_ASSET,
@@ -336,7 +337,8 @@ from .exceptions import (
     InvalidZipDownloadRequestError, ZipDownloadLimitError, ZipDownloadNotReadyError,
     ZipDownloadExpiredError, ZipDownloadStateError, ZipDownloadTransferError,
     UploadStatusNotFoundError, RouteNotDeployedError,
-    ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError
+    ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError,
+    AuditSearchError, AuditSearchNotSupportedError, InvalidAuditRequestError, AuditQueryNotFoundError
 )
 from .exceptions import GlobalInfrastructureError, InvalidRequestPathError
 from .profile import ProfileManager, read_active_profile_name
@@ -8487,3 +8489,148 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         return self._compliance_request(
             'GET', endpoint, f"Reading the audit history for asset '{asset_id}'",
             params=params or None)
+
+    # ------------------------------------------------------------------
+    # Audit log search (core feature): groups, start, read, stop, export
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _audit_http_error(e: "requests.exceptions.HTTPError", action: str) -> Exception:
+        """Map an audit route's HTTP error onto the CLI's exception for it.
+
+        The API answers with generic messages that never name a group or a handle, and so does the
+        CLI: a 404 is one error whether the handle is unknown, expired, someone else's or no longer
+        allowed. A 403 never reaches here (`_make_request` raises it as a permission denial)."""
+        status = e.response.status_code
+        message = _api_error_message(e.response, str(e))
+        if status == 404:
+            return AuditQueryNotFoundError(
+                "Search not found. The handle is unknown, has expired or is not yours.")
+        if status == 400:
+            return InvalidAuditRequestError(f"Audit request refused: {message}")
+        if status == 401:
+            return AuthenticationError(f"Authentication failed: {e}")
+        if status == 429:
+            return AuditSearchError(
+                "The audit search was throttled. Wait a moment and try again.")
+        return APIError(f"Failed to {action}: {message}")
+
+    def _audit_request(self, method: str, endpoint: str, action: str, **kwargs) -> Dict[str, Any]:
+        """Issue one audit call and map its errors. A deployment without the routes (an older VAMS
+        answers a path it does not have with the gateway's 'Missing Authentication Token' 403)
+        raises AuditSearchNotSupportedError."""
+        try:
+            response = self._make_request(method, endpoint, include_auth=True,
+                                          raise_http_errors=True, **kwargs)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            raise self._audit_http_error(e, action)
+
+        except RouteNotDeployedError:
+            raise AuditSearchNotSupportedError(
+                "Audit log search is not supported by this deployment (upgrade VAMS to 2.7.0 or later).")
+
+        except GlobalInfrastructureError:
+            raise
+
+        except AuditSearchError:
+            raise
+
+        except Exception as e:
+            raise APIError(f"Failed to {action}: {e}")
+
+    def list_audit_log_groups(self) -> Dict[str, Any]:
+        """
+        List the audit log groups the caller may search, the actions and entity types written to
+        them, and the deployment's search limits, using GET /audit/log-groups.
+
+        Returns:
+            {"logGroups": [...], "actions": [...], "entityTypes": [...], "outcomes": [...],
+            "limits": {...}}. An empty `logGroups` is a normal answer for a caller who may search none.
+
+        Raises:
+            AuditSearchNotSupportedError: When the deployment has no audit search routes
+            PermissionDeniedError: When the caller may not use audit search
+            APIError: When the API call fails
+        """
+        return self._audit_request('GET', API_AUDIT_LOG_GROUPS, "list the audit log groups")
+
+    def start_audit_query(self, filters: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Start an audit search using POST /audit/queries. The body is the filter object (see
+        `vamscli.utils.audit_search.build_filters`); the API accepts no query text.
+
+        Returns:
+            {"queryId": str, "status": "Running", "warnings": [...]}
+
+        Raises:
+            InvalidAuditRequestError: When a filter, the window or a cap is refused (400)
+            PermissionDeniedError: When the route or any named log group is not allowed (one generic 403)
+            AuditSearchNotSupportedError / APIError: as list_audit_log_groups
+        """
+        return self._audit_request('POST', API_AUDIT_QUERIES, "start the audit search", json=filters)
+
+    def get_audit_query(self, query_id: str, wait: Optional[int] = None,
+                        page_size: Optional[int] = None, starting_token: Optional[str] = None,
+                        sort: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read a search with GET /audit/queries/{queryId}: its status and statistics, and, once it is
+        Complete, one page of rows (`Items`, with `NextToken` when more follow).
+
+        Args:
+            query_id: The handle `start_audit_query` returned
+            wait: Seconds the server may hold the request until the search ends (long poll)
+            page_size: Rows per page (1-500)
+            starting_token: The NextToken of the previous page
+            sort: asc or desc
+
+        Raises:
+            AuditQueryNotFoundError: Unknown, expired, not the caller's or no longer allowed (one 404)
+            InvalidAuditRequestError: When a parameter is refused (400)
+            AuditSearchNotSupportedError / APIError: as list_audit_log_groups
+        """
+        params: Dict[str, Any] = {}
+        if wait is not None:
+            params['wait'] = wait
+        if page_size is not None:
+            params['pageSize'] = page_size
+        if starting_token:
+            params['startingToken'] = starting_token
+        if sort:
+            params['sort'] = sort
+        endpoint = route_path(API_AUDIT_QUERY, queryId=query_id)
+        return self._audit_request('GET', endpoint, "read the audit search", params=params or None)
+
+    def stop_audit_query(self, query_id: str) -> Dict[str, Any]:
+        """
+        Stop a search and free its concurrency slot using DELETE /audit/queries/{queryId}.
+
+        Returns:
+            {"queryId": str, "status": str}. A search that already ended keeps its status.
+
+        Raises:
+            AuditQueryNotFoundError / AuditSearchNotSupportedError / APIError: as get_audit_query
+        """
+        endpoint = route_path(API_AUDIT_QUERY, queryId=query_id)
+        return self._audit_request('DELETE', endpoint, "stop the audit search")
+
+    def export_audit_query(self, query_id: str, export_format: str = 'csv',
+                           starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read one export chunk of a Complete search using GET /audit/queries/{queryId}/export.
+
+        Returns:
+            {"queryId", "format", "content": str, "rowCount", "warnings", "NextToken"?}. Join the
+            `content` of the chunks in order; follow `NextToken` until it is absent.
+
+        Raises:
+            InvalidAuditRequestError: When the format is refused or the search has not finished
+            AuditQueryNotFoundError / AuditSearchNotSupportedError / APIError: as get_audit_query
+        """
+        params: Dict[str, Any] = {'format': export_format}
+        if starting_token:
+            params['startingToken'] = starting_token
+        endpoint = route_path(API_AUDIT_QUERY_EXPORT, queryId=query_id)
+        return self._audit_request('GET', endpoint, "export the audit search", params=params)
+
