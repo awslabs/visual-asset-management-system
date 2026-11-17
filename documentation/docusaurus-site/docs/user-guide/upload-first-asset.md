@@ -136,7 +136,7 @@ The **Select Files to Upload** step lets you attach files to your asset. This st
 
 3. For a single folder, choose **Upload folder contents** (the default here, name dropped) or **Upload folder** (name kept). The preview updates as you switch.
 
-    ![Create Asset file step with a single folder added: the Upload folder contents / Upload folder choice and the preview of each file's final path](/img/upload_create_asset_single_folder_20261113_v2.7.png)
+    ![Create Asset file step with a single folder added: the Upload folder contents / Upload folder choice and the preview of each file's final path](/img/upload_create_asset_single_folder_20261117_v2.7.png)
 
 4. Review the preview table below the upload zone. It lists the final asset path of every file, sorted by path, with its status and size underneath, and the total file count and size. You can filter by path, remove single files, selected files, or all files, and switch the view:
 
@@ -148,21 +148,21 @@ The **Select Files to Upload** step lets you attach files to your asset. This st
     - **Duplicate paths are errors.** When two files would land at the same path (for example, two different folders with the same name), both rows are marked **Duplicate path** and **Next** stays blocked until you remove one. Nothing is skipped silently. An alert above the table gives the number of files with path errors, and its **Show errors only** action switches the table to the **Errors** view.
     - **Multi-file formats.** When a loose file can reference other files by relative path (`.usd*`, `.gltf`, `.obj`, `.fbx`, `.dae`, STEP, IFC, IGES and CAD assemblies, or `tileset.json`), an info alert suggests adding the whole folder with **Add folder** instead, so those references keep working. The alert does not block the upload.
 
-    ![Create Asset file step with two folders added: each folder keeps its name as a top-level folder](/img/upload_create_asset_two_folders_20261113_v2.7.png)
+    ![Create Asset file step with two folders added: each folder keeps its name as a top-level folder](/img/upload_create_asset_two_folders_20261117_v2.7.png)
 
 ### File Extension Restrictions
 
 If the selected database has file upload extension restrictions, an alert banner displays the allowed extensions. Files with disallowed extensions are marked with an error on their row in the preview table (for example **Extension .gltf not allowed**), count toward its errors, and block the upload until you remove them.
 
 :::note
-Preview files (filenames containing `.previewFile.`) are exempt from the database's extension restrictions, but must still be one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`. A preview file with any other extension is flagged before the upload starts, and rejects the whole upload request if it reaches the API.
+Preview files (filenames containing `.previewFile.`) are exempt from the database's extension restrictions, but must still be one of `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, or `.bmp`. A preview file with any other extension is flagged before the upload starts, and rejects the whole upload request if it reaches the API.
 :::
 
 ### Preview Files
 
 VAMS supports two types of preview files:
 
--   **Overall asset preview** -- Use the **Asset Overall Preview File** uploader on the right side to select a single image (`.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`, maximum 5 MB) that represents the entire asset.
+-   **Overall asset preview** -- Use the **Asset Overall Preview File** uploader on the right side to select a single image (`.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, or `.bmp`, 5 MiB (5,242,880 bytes) or less) that represents the entire asset.
 -   **File-level previews** -- Include files named with the `.previewFile.{ext}` convention in your upload. For example, `model.gltf.previewFile.png` is automatically used as the preview thumbnail for `model.gltf`.
 
 5. Select **Next** to proceed to the review step, which lists the same final paths.

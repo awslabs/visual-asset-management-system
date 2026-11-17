@@ -653,15 +653,15 @@ Write to the resolved output locations, preserving each input file's relative pa
 The workflow's process-output step then moves the results onto the asset. Metadata write-back has its
 own file convention:
 
-| Output          | Location                    | Naming                                                     |
-| --------------- | --------------------------- | ---------------------------------------------------------- |
-| Files           | `outputS3AssetFilesPath`    | Preserve the input's relative path                         |
-| File previews   | `outputS3AssetFilesPath`    | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg) |
-| Asset preview   | `outputS3AssetPreviewPath`  | Any allowed image name                                     |
-| File metadata   | `outputS3AssetMetadataPath` | `{targetFilePath}.metadata.json`                           |
-| File attributes | `outputS3AssetMetadataPath` | `{targetFilePath}.attribute.json`                          |
-| Asset metadata  | `outputS3AssetMetadataPath` | `asset.metadata.json` (reserved basename)                  |
-| Results         | `outputS3AssetResultsPath`  | Any name except the reserved `execution.status.json`       |
+| Output          | Location                    | Naming                                                                |
+| --------------- | --------------------------- | --------------------------------------------------------------------- |
+| Files           | `outputS3AssetFilesPath`    | Preserve the input's relative path                                    |
+| File previews   | `outputS3AssetFilesPath`    | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg, webp, bmp) |
+| Asset preview   | `outputS3AssetPreviewPath`  | Any allowed image name                                                |
+| File metadata   | `outputS3AssetMetadataPath` | `{targetFilePath}.metadata.json`                                      |
+| File attributes | `outputS3AssetMetadataPath` | `{targetFilePath}.attribute.json`                                     |
+| Asset metadata  | `outputS3AssetMetadataPath` | `asset.metadata.json` (reserved basename)                             |
+| Results         | `outputS3AssetResultsPath`  | Any name except the reserved `execution.status.json`                  |
 
 A pipeline that backs a compliance rule reports its measurements in one results file,
 `compliance-output.json`; see

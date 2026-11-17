@@ -127,6 +127,13 @@ The largest input the 3D Preview Thumbnail pipeline accepts is the free space of
 -   **Gaussian splats** -- Splats are drawn as flat discs in their base colour, so view-dependent colour and splat shape are not shown. The preview shows a captured scene's core and leaves out the background around it. A scene whose up axis differs from the 3D Gaussian Splatting convention renders tilted unless its core is a ground plane, which is levelled.
 -   **Referenced files** -- A referenced file is fetched only when it lies inside the same asset; a reference to another asset, an absolute path or a URL is skipped and the preview renders without it. An `.lcc2` scene that names a chunk file outside its asset is not rendered.
 
+### Media Preview Thumbnail Limits
+
+-   **An image under 5 MiB gets no generated preview.** The web shows it as its own preview (`.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, `.bmp`), so the run completes successfully and its results say so. A TGA or TIFF of any size, and a larger image, gets a JPEG.
+-   **TIFF compressions.** LZW, Deflate, PackBits, Zstandard, LZMA, JPEG and LERC are read; a TIFF in another compression (for example WebP or JPEG XL) fails with a message naming it. Re-save it uncompressed or with LZW or deflate.
+-   **MDL files have no thumbnail** (tracked separately); an animated GIF or WebP under 5 MiB is left as it is, and a video with no video stream completes with no preview.
+-   **`vamscli` does not yet accept `.webp` and `.bmp` as preview uploads** (tracked in issue #1580); the web and the API do.
+
 ### Video SOP/BOM Extraction Pipeline Input Limits
 
 The Video SOP/BOM Extraction pipeline accepts at most **4 video files** per run (`limits.maxVideoFiles`), **4 GB** per video and **16 GB** per run (`config.ts` constants sized to the container's 100 GiB ephemeral volume), and **240 minutes** of summed audio (`limits.maxTotalDurationMinutes`, at most 480, the Amazon Transcribe ceiling). Templates and workflows cannot express these bounds, so the pipeline enforces them itself: the file count, extensions, and byte sizes are checked by the entry-point Lambda before any AWS Batch job is submitted, and the duration by the container from the extracted audio before the transcription starts. A refused run fails its pipeline step through the AWS Step Functions task token with a readable cause visible in the execution details (for example `VideoSopBomInputRejected: 5 video files selected; this deployment allows at most 4.`); no partial deliverables are written. Whole-asset and folder selections are refused by the execute API with a `400` response. See [Video SOP/BOM Extraction — Limits](../pipelines/video-sop-bom.md#limits).

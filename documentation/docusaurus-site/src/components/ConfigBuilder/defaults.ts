@@ -281,6 +281,11 @@ const COMMERCIAL: ConfigShape = {
                 },
                 largeTierThresholdGiB: 2,
             },
+            useMediaPreviews: {
+                enabled: false,
+                autoRegisterAutoTriggerOnFileUpload: false,
+                downscaleSelfPreviewableImages: false,
+            },
             useConversionCadMeshMetadataExtraction: {
                 enabled: false,
                 autoRegisterWithVAMS: true,
