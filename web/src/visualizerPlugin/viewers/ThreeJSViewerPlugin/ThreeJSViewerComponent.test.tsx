@@ -17,8 +17,10 @@ import ThreeJSViewerComponent from "./ThreeJSViewerComponent";
 import { loadFile } from "./utils/fileLoaders";
 import {
     QUARANTINE_REFUSAL_MESSAGE,
-    quarantineRefusalResponse,
+    QUARANTINE_REFUSED_DOWNLOAD,
 } from "../../core/quarantineRefusal.testdata";
+import { downloadAsset } from "../../../services/APIService";
+import { clearPresignedUrlCache } from "../../core/presignedFetch";
 
 jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: jest.fn(() => ({ api: "https://api.example.test/" })) },
@@ -26,6 +28,7 @@ jest.mock("../../../services/appCache", () => ({
 jest.mock("../../../utils/authTokenUtils", () => ({
     getDualAuthorizationHeader: jest.fn(() => Promise.resolve("Bearer test")),
 }));
+jest.mock("../../../services/APIService", () => ({ downloadAsset: jest.fn() }));
 jest.mock("./dependencies", () => ({
     ThreeJSDependencyManager: {
         loadThreeJS: jest.fn(() => Promise.resolve()),
@@ -49,6 +52,7 @@ jest.mock("./utils/fileLoaders", () => ({
 }));
 
 const mockedLoadFile = loadFile as jest.MockedFunction<typeof loadFile>;
+const mockedDownloadAsset = downloadAsset as jest.Mock;
 
 const CSP_MESSAGE =
     "CAD Format Support Not Available.\n\n" +
@@ -102,6 +106,13 @@ describe("ThreeJSViewerComponent error panel", () => {
     beforeEach(() => {
         createdCanvases = [];
         installFakeThree();
+        clearPresignedUrlCache();
+        // The authorized download route presigns every file (#1623).
+        mockedDownloadAsset.mockReset();
+        mockedDownloadAsset.mockImplementation(async ({ key }: { key: string }) => [
+            true,
+            `https://bucket.s3.example.test/${key}?X-Amz-Signature=sig`,
+        ]);
         global.fetch = jest.fn(() =>
             Promise.resolve({
                 ok: true,
@@ -153,24 +164,19 @@ describe("ThreeJSViewerComponent error panel", () => {
         [403, "You do not have permission to view or download this file."],
         [401, "Your session has expired. Sign in again to view this file."],
     ])("names a download the API refused with %s (#1211)", async (status, message) => {
-        global.fetch = jest.fn(() =>
-            Promise.resolve({
-                ok: false,
-                status,
-                arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
-            })
-        ) as any;
+        mockedDownloadAsset.mockResolvedValue([false, "refused", status]);
 
         renderViewer("models/part.glb");
 
         expect(await screen.findByText(message)).toBeInTheDocument();
         expect(screen.queryByText(/Failed to load: part\.glb/)).not.toBeInTheDocument();
-        // The refused file never reached a loader.
+        // A refused file is never requested from S3 and never reached a loader.
+        expect(global.fetch).not.toHaveBeenCalled();
         expect(mockedLoadFile.mock.calls.some((call) => call[2] === "part.glb")).toBe(false);
     });
 
     it("shows the API's refusal alone, with no format hint under it (D170)", async () => {
-        global.fetch = jest.fn(() => Promise.resolve(quarantineRefusalResponse())) as any;
+        mockedDownloadAsset.mockResolvedValue(QUARANTINE_REFUSED_DOWNLOAD);
 
         renderViewer("models/part.glb");
 
@@ -180,7 +186,7 @@ describe("ThreeJSViewerComponent error panel", () => {
     });
 
     it("shows the API's refusal alone when every file of a multi-file view was refused", async () => {
-        global.fetch = jest.fn(() => Promise.resolve(quarantineRefusalResponse())) as any;
+        mockedDownloadAsset.mockResolvedValue(QUARANTINE_REFUSED_DOWNLOAD);
 
         render(
             <ThreeJSViewerComponent
@@ -194,6 +200,34 @@ describe("ThreeJSViewerComponent error panel", () => {
 
         expect(await screen.findByText(QUARANTINE_REFUSAL_MESSAGE)).toBeInTheDocument();
         expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+    });
+
+    it("reads the main file from its presigned URL with no Authorization header (#1623)", async () => {
+        mockedLoadFile.mockRejectedValue(new Error("stop after download"));
+
+        renderViewer("models/part.glb");
+
+        await screen.findByText(/stop after download/);
+        expect(mockedDownloadAsset).toHaveBeenCalledWith(
+            expect.objectContaining({
+                databaseId: "db-1",
+                assetId: "asset-1",
+                key: "models/part.glb",
+            })
+        );
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        const [url, options] = (global.fetch as jest.Mock).mock.calls[0];
+        expect(url).toBe("https://bucket.s3.example.test/models/part.glb?X-Amz-Signature=sig");
+        expect(url).not.toContain("/download/stream/");
+        expect(options.headers).toBeUndefined();
+    });
+
+    it("shows a failed presign as an error, not a blank viewer", async () => {
+        mockedDownloadAsset.mockResolvedValue(false);
+
+        renderViewer("models/part.glb");
+
+        expect(await screen.findByText(/Failed to load: part\.glb/)).toBeInTheDocument();
     });
 
     it("[control] keeps the file's own message for any other status", async () => {

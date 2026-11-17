@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Web** The Three.js viewer opens files from an external S3 bucket whose CORS rule lists only the VAMS web origin. It now reads each file and referenced file through a presigned URL, so the browser sends the web origin instead of `null`. ([#1623](https://github.com/awslabs/visual-asset-management-system/issues/1623))
+
 ### Chores
 
 ### Known Outstanding Issues

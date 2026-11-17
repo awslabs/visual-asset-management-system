@@ -7,7 +7,6 @@ import React, { useEffect, useRef, useState } from "react";
 import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { ThreeJSDependencyManager } from "./dependencies";
-import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 import { MouseControls } from "./MouseControls";
 import ThreeJSPanel from "./ThreeJSPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
@@ -25,6 +24,7 @@ import {
     isApiRefusalError,
     streamResponseFailure,
 } from "../../core/streamFailure";
+import { fetchPresignedFile } from "../../core/presignedFetch";
 import {
     applySelectionHighlight,
     createHighlightMaterial,
@@ -374,9 +374,6 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 const allAnimations: any[] = [];
                 const unloaded: string[] = [];
 
-                // Get authorization header for streaming endpoint
-                const authHeader = await getDualAuthorizationHeader();
-
                 // Aborted by cleanup so closing the viewer mid-download stops the transfer instead
                 // of letting it run to completion for a scene nobody is looking at.
                 downloadAbortRef.current = new AbortController();
@@ -410,30 +407,26 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                             return;
                         }
 
-                        // Download file using streaming endpoint
-                        const pathSegments = fileKey.split("/");
-                        const encodedSegments = pathSegments.map((segment) =>
-                            encodeURIComponent(segment)
-                        );
-                        const encodedFileKey = encodedSegments.join("/");
-                        let assetUrl = `${
-                            config.api
-                        }database/${fileDatabaseId}/assets/${encodeURIComponent(
-                            fileAssetId
-                        )}/download/stream/${encodedFileKey}`;
-
+                        // Read the file straight from S3 through a presigned URL from the
+                        // authorized download route. The streaming route's 307 makes the browser
+                        // send `Origin: null` to S3, which an external bucket's single-origin CORS
+                        // rule rejects (#1623). Nothing is sent to S3 but the signed URL.
                         // assetVersionId takes precedence (used for all files including deps)
                         // versionId is S3 file version, only for the primary file (isMainFile)
-                        if (assetVersionId) {
-                            assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
-                        } else if (versionId && fileKey === assetKey) {
-                            assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
-                        }
-
-                        const response = await fetch(assetUrl, {
-                            headers: { Authorization: authHeader },
-                            signal: downloadAbortRef.current?.signal,
-                        });
+                        const response = await fetchPresignedFile(
+                            {
+                                databaseId: fileDatabaseId,
+                                assetId: fileAssetId,
+                                key: fileKey,
+                                assetVersionId: assetVersionId || undefined,
+                                versionId:
+                                    !assetVersionId && versionId && fileKey === assetKey
+                                        ? versionId
+                                        : undefined,
+                                signal: downloadAbortRef.current?.signal,
+                            },
+                            `Failed to load: ${fileName}`
+                        );
 
                         if (!response.ok) {
                             // A refused download (401/403/404/410) is named from the API's status
@@ -454,10 +447,8 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         const resolver = new AssetDependencyResolver({
                             assetId: fileAssetId,
                             databaseId: fileDatabaseId,
-                            apiEndpoint: config.api,
                             assetVersionId: assetVersionId,
                             signal: downloadAbortRef.current?.signal,
-                            getAuthHeader: () => Promise.resolve(authHeader),
                         });
                         runResolvers.push(resolver);
 
