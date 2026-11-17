@@ -276,7 +276,7 @@ backend/
 │   │   │                                           #   /download/zip routes, the read-time
 │   │   │                                           #   reconcile and the delayed sweep)
 │   │   ├── audit/auditLogService.py                # audit log search: /audit routes, Logs Insights, handles,
-│   │   │                                           #   caps; Tier 2 auditLog per log group (see common/auditSearch)
+│   │   │                                           #   caps; Tier 2 auditLog per log group (see common/auditSearch). Handle row TTL = handleRetentionMinutes after last use; contains terms in `containsTerms`, removed on stop/fail/export done
 │   │   ├── auth/                                   # apiGatewayAuthorizerRest, apiKeyService,
 │   │   │                                           #   constraints, cognito, preTokenGen,
 │   │   │                                           #   apiOriginVerifyRotation (secret rotation);

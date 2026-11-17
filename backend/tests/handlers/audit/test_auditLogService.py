@@ -196,7 +196,8 @@ def env(monkeypatch):
         for name in auditLogGroups.resource_key(group).env_var_names:
             monkeypatch.setenv(name, "test-" + group.key)
     for name in (svc.ENV_MAX_WINDOW_DAYS, svc.ENV_MAX_ROWS, svc.ENV_MAX_CONCURRENT,
-                 svc.ENV_MAX_CONCURRENT_PER_USER, svc.ENV_DEADLINE_SECONDS, svc.ENV_LONG_POLL_SECONDS):
+                 svc.ENV_MAX_CONCURRENT_PER_USER, svc.ENV_DEADLINE_SECONDS, svc.ENV_LONG_POLL_SECONDS,
+                 svc.ENV_HANDLE_RETENTION_MINUTES):
         monkeypatch.delenv(name, raising=False)
     recorder = MagicMock()
     monkeypatch.setattr(svc, "log_action", recorder)
@@ -337,7 +338,10 @@ class TestStart:
         assert "assetUpdate" in started["queryString"] and "limit 1000" in started["queryString"]
         item = env.table.items[body["queryId"]]
         assert item["userId"] == ALICE and item["openKey"] == "open" and item["cwlQueryId"] == "cw-1"
-        assert item["expiresAt"] > NOW + 6 * 86400
+        # The row lives for the deadline plus the retention (60 minutes by default), not for days.
+        assert abs(item["expiresAt"] - (int(time.time()) + 300 + 3600)) <= 120  # clock drift under load
+        assert item["containsTerms"] == ["report.usd"] and item["containsCount"] == 1
+        assert "report.usd" not in item["filters"].lower()
 
     def test_the_start_record_holds_filters_but_never_the_contains_text(self, env):
         start(env, contains=["secret-term-777"], actions=["assetUpdate"])
@@ -705,3 +709,150 @@ class TestNoLeaks:
         for name in ("delete_log_group", "delete_log_stream", "put_retention_policy", "put_subscription_filter",
                      "create_export_task", "associate_kms_key"):
             assert name not in source
+
+
+# ---------------------------------------------------------------------------------------------------
+# Handle retention and the contains terms
+# ---------------------------------------------------------------------------------------------------
+
+class TestHandleRetention:
+    def test_the_default_is_sixty_minutes_and_the_setting_is_clamped(self, env, monkeypatch):
+        assert svc.handle_retention_seconds() == 3600
+        monkeypatch.setenv(svc.ENV_HANDLE_RETENTION_MINUTES, "15")
+        assert svc.handle_retention_seconds() == 900
+        monkeypatch.setenv(svc.ENV_HANDLE_RETENTION_MINUTES, "1")
+        assert svc.handle_retention_seconds() == svc.MIN_HANDLE_RETENTION_MINUTES * 60
+        monkeypatch.setenv(svc.ENV_HANDLE_RETENTION_MINUTES, "999999")
+        assert svc.handle_retention_seconds() == svc.CEILING_HANDLE_RETENTION_MINUTES * 60
+        monkeypatch.setenv(svc.ENV_HANDLE_RETENTION_MINUTES, "soon")
+        assert svc.handle_retention_seconds() == 3600
+
+    def test_the_ttl_is_written_on_create_from_the_setting(self, env, monkeypatch):
+        monkeypatch.setenv(svc.ENV_HANDLE_RETENTION_MINUTES, "10")
+        handle = started_handle(env)
+        assert abs(env.table.items[handle]["expiresAt"] - (int(time.time()) + 300 + 600)) <= 120
+
+    def test_every_poll_page_and_export_moves_the_expiry(self, env, monkeypatch):
+        monkeypatch.setenv(svc.ENV_HANDLE_RETENTION_MINUTES, "10")
+        handle = started_handle(env, contains=["report"])
+        env.logs.results = [result_row(action_record())]
+        for call_once in (lambda: get(handle), lambda: get(handle, query={"format": "csv"}, suffix="/export")):
+            env.table.items[handle]["expiresAt"] = int(time.time()) + 30  # about to expire
+            assert call_once()[0] == 200
+            assert env.table.items[handle]["expiresAt"] >= int(time.time()) + 600 - 120
+
+    def test_a_running_search_is_never_set_to_expire_before_its_deadline(self, env, monkeypatch):
+        monkeypatch.setenv(svc.ENV_HANDLE_RETENTION_MINUTES, "5")
+        handle = started_handle(env)
+        env.table.items[handle]["deadlineAt"] = NOW + 800
+        env.logs.status = "Running"
+        get(handle)
+        assert env.table.items[handle]["expiresAt"] >= NOW + 800
+
+    def test_a_closed_search_gets_the_retention_from_the_moment_it_closed(self, env, monkeypatch):
+        monkeypatch.setenv(svc.ENV_HANDLE_RETENTION_MINUTES, "10")
+        handle = started_handle(env)
+        env.table.items[handle]["expiresAt"] = NOW + 5000
+        get(handle)
+        assert env.table.items[handle]["status"] == "Complete"
+        assert abs(env.table.items[handle]["expiresAt"] - (int(time.time()) + 600)) <= 5
+
+    def test_a_row_past_its_expiry_is_a_generic_404_and_its_terms_are_never_used(self, env, monkeypatch):
+        handle = started_handle(env, contains=["secret-term-777"])
+        env.logs.results = [result_row(action_record(extra=', "note": "secret-term-777"'))]
+        env.table.items[handle]["expiresAt"] = NOW - 1       # TTL deletion has not run yet
+        used = []
+        real = svc.build_rows
+        monkeypatch.setattr(svc, "build_rows", lambda *a, **k: used.append(a) or real(*a, **k))
+        for response in (get(handle), get(handle, query={"format": "csv"}, suffix="/export"),
+                         call(make_event("DELETE", "/audit/queries/" + handle, path_parameters={"queryId": handle}))):
+            assert response == (404, {"message": "Query not found"})
+        assert used == [] and env.logs.polls == 0 and env.logs.stopped == []
+        assert "secret-term-777" not in json.dumps(get(handle)[1])
+
+    def test_a_search_without_terms_stays_readable_until_it_expires(self, env):
+        handle = started_handle(env)
+        assert "containsTerms" not in env.table.items[handle]
+        assert get(handle)[0] == 200 and get(handle)[0] == 200
+
+
+class TestContainsTermsRemoval:
+    def test_stop_removes_the_terms_and_keeps_the_row(self, env):
+        handle = started_handle(env, contains=["secret-term-777"])
+        env.logs.status = "Running"
+        status, body = call(make_event("DELETE", "/audit/queries/" + handle, path_parameters={"queryId": handle}))
+        assert status == 200 and body["status"] == "Cancelled"
+        assert "containsTerms" not in env.table.items[handle] and env.table.items[handle]["status"] == "Cancelled"
+        assert "secret-term-777" not in json.dumps(env.table.items[handle])
+
+    def test_stopping_a_completed_search_removes_the_terms_and_ends_its_paging(self, env):
+        handle = started_handle(env, contains=["report"])
+        env.logs.results = [result_row(action_record(extra=', "note": "report"'))]
+        assert get(handle)[0] == 200
+        assert call(make_event("DELETE", "/audit/queries/" + handle, path_parameters={"queryId": handle}))[0] == 200
+        assert "containsTerms" not in env.table.items[handle]
+        assert get(handle) == (404, {"message": "Query not found"})
+
+    @pytest.mark.parametrize("cloudwatch_status", ["Failed", "Cancelled", "Timeout"])
+    def test_a_search_that_ends_without_results_drops_its_terms(self, env, cloudwatch_status):
+        handle = started_handle(env, contains=["secret-term-777"])
+        env.logs.status = cloudwatch_status
+        assert get(handle)[0] == 200
+        assert "containsTerms" not in env.table.items[handle]
+
+    def test_a_deadline_timeout_drops_the_terms(self, env):
+        handle = started_handle(env, contains=["secret-term-777"])
+        env.table.items[handle]["deadlineAt"] = NOW - 1
+        get(handle)
+        assert env.table.items[handle]["status"] == "Timeout" and "containsTerms" not in env.table.items[handle]
+
+    def test_a_completed_search_keeps_its_terms_while_pages_are_read(self, env):
+        handle = started_handle(env, contains=["report"])
+        env.logs.results = [result_row(action_record(extra=', "note": "report"'))]
+        assert get(handle)[0] == 200 and get(handle)[0] == 200
+        assert env.table.items[handle]["containsTerms"] == ["report"]
+
+    def test_the_last_export_chunk_removes_the_terms_and_an_earlier_one_does_not(self, env, monkeypatch):
+        monkeypatch.setattr(svc, "EXPORT_CHUNK_BYTES", 6000)
+        handle = started_handle(env, contains=["report"])
+        env.logs.results = [result_row(action_record(asset="a-%03d" % n, extra=', "note": "report"'))
+                            for n in range(30)]
+        first = get(handle, query={"format": "csv"}, suffix="/export")[1]
+        assert first["NextToken"] and env.table.items[handle]["containsTerms"] == ["report"]
+        token = first["NextToken"]
+        while token:
+            body = get(handle, query={"format": "csv", "startingToken": token}, suffix="/export")[1]
+            token = body.get("NextToken")
+        assert "containsTerms" not in env.table.items[handle]
+        assert get(handle) == (404, {"message": "Query not found"})
+
+    def test_an_export_of_a_search_without_terms_leaves_it_readable(self, env):
+        handle = started_handle(env)
+        env.logs.results = [result_row(action_record())]
+        assert get(handle, query={"format": "csv"}, suffix="/export")[0] == 200
+        assert get(handle)[0] == 200
+
+
+class TestTermsStayOutOfRecordsAndLogs:
+    TERM = "secret-term-777"
+
+    def test_no_record_and_no_log_line_of_a_whole_search_carries_the_term(self, env, caplog):
+        with caplog.at_level("DEBUG"):
+            handle = started_handle(env, contains=[self.TERM])
+            env.logs.results = [result_row(action_record(extra=', "note": "%s"' % self.TERM))]
+            status, page = get(handle)
+            assert status == 200 and page["Items"]
+            get(handle, query={"format": "ndjson"}, suffix="/export")
+            call(make_event("DELETE", "/audit/queries/" + handle, path_parameters={"queryId": handle}))
+            get(handle)
+        recorded = json.dumps([[c.args[1:], c.kwargs] for c in env.record.call_args_list], default=str)
+        assert self.TERM not in recorded and self.TERM not in caplog.text
+        start_call = next(c for c in env.record.call_args_list if c.args[1] == "auditQueryStart")
+        changes = start_call.kwargs["changes"]
+        assert changes["containsTermCount"] == 1 and len(changes["containsSha256"]) == 64
+
+    def test_a_validation_refusal_does_not_log_the_term(self, env, caplog):
+        with caplog.at_level("DEBUG"):
+            start(env, contains=[self.TERM + "`"], actions=["no such action"])
+        assert self.TERM not in caplog.text
+        assert self.TERM not in json.dumps([[c.args[1:], c.kwargs] for c in env.record.call_args_list], default=str)

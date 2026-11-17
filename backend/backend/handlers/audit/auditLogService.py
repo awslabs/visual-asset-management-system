@@ -98,6 +98,7 @@ ENV_DEADLINE_SECONDS = "AUDIT_SEARCH_QUERY_DEADLINE_SECONDS"
 ENV_LONG_POLL_SECONDS = "AUDIT_SEARCH_LONG_POLL_WAIT_SECONDS"
 ENV_MAX_CONTAINS_TERM_LENGTH = "AUDIT_SEARCH_MAX_CONTAINS_TERM_LENGTH"
 ENV_MAX_CONTAINS_TERMS = "AUDIT_SEARCH_MAX_CONTAINS_TERMS"
+ENV_HANDLE_RETENTION_MINUTES = "AUDIT_SEARCH_HANDLE_RETENTION_MINUTES"
 
 DEFAULT_MAX_CONCURRENT = 5
 CEILING_MAX_CONCURRENT = 20
@@ -113,8 +114,16 @@ LAMBDA_HEADROOM_SECONDS = 3.0
 # The share of the remaining Lambda time the server-side recheck may use before it returns what it has.
 RECHECK_HEADROOM_SECONDS = 4.0
 
-# A handle outlives its search by seven days (DynamoDB TTL on expiresAt), then it is gone.
-HANDLE_TTL_SECONDS = 7 * 86400
+# A handle lives for ``handleRetentionMinutes`` after its last activity (start, poll, page, export or
+# stop), by DynamoDB TTL on ``expiresAt``. TTL deletion is lazy, so a row past its ``expiresAt`` reads as
+# not found and its contains terms are never used. A running search keeps its row at least until its deadline.
+DEFAULT_HANDLE_RETENTION_MINUTES = 60
+MIN_HANDLE_RETENTION_MINUTES = 5
+CEILING_HANDLE_RETENTION_MINUTES = 1440
+
+# The attribute that holds the contains terms of a search (KMS-encrypted table). Kept apart from the
+# normalized filters so it can be removed on its own once the search is stopped or its export is done.
+TERMS_ATTRIBUTE = "containsTerms"
 
 # One page of a results read stays under this many serialized bytes (the Lambda response limit is 6 MB).
 PAGE_BYTE_BUDGET = 5 * 1024 * 1024
@@ -201,6 +210,20 @@ def long_poll_seconds() -> int:
     return _env_int(ENV_LONG_POLL_SECONDS, DEFAULT_LONG_POLL_SECONDS, 0, CEILING_LONG_POLL_SECONDS)
 
 
+def handle_retention_seconds() -> int:
+    """How long a handle (and the contains terms in it) lives after its last activity."""
+    return 60 * _env_int(ENV_HANDLE_RETENTION_MINUTES, DEFAULT_HANDLE_RETENTION_MINUTES,
+                         MIN_HANDLE_RETENTION_MINUTES, CEILING_HANDLE_RETENTION_MINUTES)
+
+
+def _expiry_after_activity(item: Dict[str, Any], now: int) -> int:
+    """The new ``expiresAt`` after activity: retention from now, never before the deadline of a running search."""
+    expiry = now + handle_retention_seconds()
+    if item.get("status", STATUS_RUNNING) == STATUS_RUNNING:
+        expiry = max(expiry, int(item.get("deadlineAt", 0)))
+    return expiry
+
+
 #######################
 # Groups and authorization
 #######################
@@ -259,8 +282,35 @@ def _load_handle(query_id: str) -> Optional[Dict[str, Any]]:
     if not item:
         return None
     if int(item.get("expiresAt", 0)) and int(item["expiresAt"]) < _now():
-        return None  # past its TTL, not yet deleted by DynamoDB
+        return None  # past its TTL, not yet deleted by DynamoDB: its terms are never read
+    if int(item.get("containsCount", 0)) and not item.get(TERMS_ATTRIBUTE) \
+            and item.get("status", STATUS_RUNNING) in (STATUS_RUNNING, STATUS_COMPLETE):
+        return None  # a search with contains terms whose terms were removed is done: no page can be rechecked
     return item
+
+
+def _touch_handle(item: Dict[str, Any]) -> None:
+    """Activity on a handle moves its expiry (one conditional write; the row must still exist)."""
+    expiry = _expiry_after_activity(item, _now())
+    try:
+        query_table.update_item(
+            Key={"queryId": item["queryId"]}, UpdateExpression="SET expiresAt = :e",
+            ConditionExpression="attribute_exists(queryId)", ExpressionAttributeValues={":e": expiry})
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            raise AuditSearchNotFound()
+        raise
+    item["expiresAt"] = expiry
+
+
+def _remove_terms(query_id: str) -> None:
+    """Delete the contains terms of a handle (the row stays, with its status, for the retention window)."""
+    try:
+        query_table.update_item(Key={"queryId": query_id}, UpdateExpression=f"REMOVE {TERMS_ATTRIBUTE}",
+                                ConditionExpression="attribute_exists(queryId)")
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
 
 
 def _own_handle(query_id: str, enforcer: CasbinEnforcer) -> Dict[str, Any]:
@@ -283,6 +333,7 @@ def _close_handle(query_id: str, status: str, row_count: Optional[int] = None,
                   bytes_scanned: Optional[int] = None) -> None:
     """Record a final status and free the handle's concurrency slot (the sparse open index)."""
     names = {"#s": "status"}
+    now_expiry = _now() + handle_retention_seconds()
     values: Dict[str, Any] = {":s": status}
     expression = "SET #s = :s"
     if row_count is not None:
@@ -291,7 +342,12 @@ def _close_handle(query_id: str, status: str, row_count: Optional[int] = None,
     if bytes_scanned is not None:
         expression += ", bytesScanned = :b"
         values[":b"] = int(bytes_scanned)
-    expression += " REMOVE openKey, pollLeaseUntil"
+    values[":e"] = now_expiry
+    expression += ", expiresAt = :e"
+    remove = "openKey, pollLeaseUntil"
+    if status != STATUS_COMPLETE:
+        remove += f", {TERMS_ATTRIBUTE}"  # no rows will ever be rechecked for a search that did not complete
+    expression += f" REMOVE {remove}"
     query_table.update_item(Key={"queryId": query_id}, UpdateExpression=expression,
                             ExpressionAttributeNames=names, ExpressionAttributeValues=values)
 
@@ -391,6 +447,7 @@ def filters_from_item(item: Dict[str, Any]) -> SearchFilters:
     """The validated filters a handle was started with (stored normalized; stored values are trusted
     only as far as ``SearchFilters`` goes: they were validated before they were stored)."""
     stored = json.loads(item["filters"])
+    stored["contains"] = list(item.get(TERMS_ATTRIBUTE) or [])  # the terms live in their own attribute
     return SearchFilters(
         group_keys=tuple(stored["groupKeys"]), start_time=int(stored["startTime"]), end_time=int(stored["endTime"]),
         actions=tuple(stored.get("actions", [])), entity_types=tuple(stored.get("entityTypes", [])),
@@ -408,7 +465,7 @@ def filters_to_json(filters: SearchFilters) -> str:
         "entityIds": list(filters.entity_ids), "users": list(filters.users),
         "apiKeyIds": list(filters.api_key_ids), "databaseIds": list(filters.database_ids),
         "assetIds": list(filters.asset_ids), "outcomes": list(filters.outcomes),
-        "requestIds": list(filters.request_ids), "contains": list(filters.contains),
+        "requestIds": list(filters.request_ids),
         "includeProbes": filters.include_probes, "sort": filters.sort,
     }, separators=(",", ":"))
 
@@ -546,12 +603,14 @@ def start_query(event: Dict[str, Any], enforcer: CasbinEnforcer, raw_filters: Di
     item = {
         "queryId": query_id, "userId": _user_id(), "cwlQueryId": cwl_query_id,
         "logGroupKeys": list(filters.group_keys), "filters": filters_to_json(filters),
-        "containsLength": sum(len(term) for term in filters.contains),
+        "containsLength": sum(len(term) for term in filters.contains), "containsCount": len(filters.contains),
         "startTime": plan.start_time, "endTime": plan.end_time, "queryLimit": plan.limit,
         "prefilterComplete": plan.prefilter_complete, "warnings": list(plan.warnings),
         "status": STATUS_RUNNING, "openKey": OPEN_KEY_VALUE, "createdAt": _iso(now), "createdAtEpoch": now,
-        "deadlineAt": now + deadline_seconds(), "expiresAt": now + HANDLE_TTL_SECONDS,
+        "deadlineAt": now + deadline_seconds(), "expiresAt": now + deadline_seconds() + handle_retention_seconds(),
     }
+    if filters.contains:
+        item[TERMS_ATTRIBUTE] = list(filters.contains)
     try:
         query_table.put_item(Item=item, ConditionExpression="attribute_not_exists(queryId)")
     except Exception:
@@ -657,6 +716,7 @@ def get_query(event: Dict[str, Any], context: Optional[LambdaContext], enforcer:
               request: GetAuditQueryRequestModel) -> Dict[str, Any]:
     """Long-poll a handle and return its status, statistics and (when complete) one page of rows."""
     item = _own_handle(request.queryId, enforcer)
+    _touch_handle(item)
     response = poll_results(item, request.wait or 0, context)
     status = response["vamsStatus"]
     warnings = list(item.get("warnings", []))
@@ -699,6 +759,8 @@ def stop_query(event: Dict[str, Any], enforcer: CasbinEnforcer, query_id: str) -
         _stop_cloudwatch_query(item.get("cwlQueryId", ""))
         _close_handle(query_id, STATUS_CANCELLED)
         status = STATUS_CANCELLED
+    else:
+        _remove_terms(query_id)  # a stopped or finished search needs no terms
     log_action(event, "auditQueryStop", entity_id=query_id)
     return {"queryId": query_id, "status": status}
 
@@ -707,6 +769,7 @@ def export_query(event: Dict[str, Any], context: Optional[LambdaContext], enforc
                  request: ExportAuditQueryRequestModel) -> Dict[str, Any]:
     """One export chunk of a completed search (at most ``EXPORT_CHUNK_BYTES`` of response body)."""
     item = _own_handle(request.queryId, enforcer)
+    _touch_handle(item)
     if item.get("status") not in (STATUS_RUNNING, STATUS_COMPLETE):
         raise VAMSGeneralErrorResponse("The search has no results to export")
     response = poll_results(item, 0, context)
@@ -737,6 +800,8 @@ def export_query(event: Dict[str, Any], context: Optional[LambdaContext], enforc
     next_offset = offset + len(chunk_rows)
     if next_offset < len(rows):
         body["NextToken"] = str(next_offset)
+    else:
+        _remove_terms(item["queryId"])  # the export is complete: nothing is rechecked again
     log_action(event, "auditQueryExport", entity_id=item["queryId"], item_count=len(chunk_rows), bytes=size,
                details={"format": request.format})
     return body
