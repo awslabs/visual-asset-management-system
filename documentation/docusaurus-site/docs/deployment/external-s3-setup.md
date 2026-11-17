@@ -532,7 +532,7 @@ Also ensure the IAM identity used to deploy VAMS can access the external bucket 
 
 ### Step 5: Update VAMS configuration and deploy
 
-1. Edit `infra/config/config.json` and add your external bucket entries to the `externalAssetBuckets` array as shown in the [example configuration](#example-configuration).
+1. Edit `infra/config/config.json` and add your external bucket entries to the `externalAssetBuckets` array as shown in the [example configuration](#example-configuration). If you set `useS3TransferAcceleration` on an entry, complete [Step 5b](#step-5b-enable-s3-transfer-acceleration-optional) on that bucket first, because the deployment fails when acceleration is not enabled on it.
 
 2. Deploy the VAMS stack:
 
@@ -547,11 +547,11 @@ For external buckets, the CDK deployment imports the bucket by ARN, creates Amaz
 
 ### Step 5b: Enable S3 Transfer Acceleration (optional)
 
-Skip this step unless you set `useS3TransferAcceleration: true` on a bucket entry. Complete it **before** the deployment in [Step 5](#step-5-update-vams-configuration-and-deploy). VAMS does not enable acceleration on a bucket it does not own, so the bucket owner does. See [Amazon S3 Transfer Acceleration](s3-transfer-acceleration.md) for what the option does, its cost and when it helps. The commercial partition is the only one that offers it.
+Skip this step unless you set `useS3TransferAcceleration: true` on a bucket entry. Complete it **before** the deployment in [Step 5](#step-5-update-vams-configuration-and-deploy) (Step 5 points back here). VAMS does not enable acceleration on a bucket it does not own, so the bucket owner does. See [Amazon S3 Transfer Acceleration](s3-transfer-acceleration.md) for what the option does, its cost and when it helps. The commercial partition is the only one that offers it.
 
 **Prerequisite checklist (bucket owner, Account B, before deploying):**
 
-1. **Bucket name.** The bucket name is 3 to 63 characters of lowercase letters, digits and hyphens, and has no period. This is an Amazon S3 requirement for acceleration; the VAMS configuration check rejects any other name.
+1. **Bucket name and Region.** The bucket is a general purpose bucket in a Region where S3 supports Transfer Acceleration (AWS keeps the list on the [requirements page](https://docs.aws.amazon.com/AmazonS3/latest/userguide/transfer-acceleration.html#transfer-acceleration-requirements); not every commercial Region is on it). The bucket name is 3 to 63 characters of lowercase letters, digits and hyphens, and has no period. This is an Amazon S3 requirement for acceleration; the VAMS configuration check rejects any other name.
 2. **Enable acceleration on the bucket.** The bucket owner (the principal that holds `s3:PutAccelerateConfiguration` on the bucket; VAMS does not need and is not given this permission) runs:
 
     ```bash
@@ -565,7 +565,7 @@ Skip this step unless you set `useS3TransferAcceleration: true` on a bucket entr
     In the console: **Amazon S3 > Buckets > `<BUCKET_NAME>` > Properties > Transfer acceleration > Edit > Enable > Save changes**.
 
 3. **Allow VAMS to read the setting.** The deployment calls `s3:GetAccelerateConfiguration` on the bucket from Account A. The `s3:*` grant in the [Step 1](#step-1-configure-the-s3-bucket-policy) policy already includes it. If you narrowed that grant to a list of actions, add `s3:GetAccelerateConfiguration`, the same as `s3:GetBucketVersioning`. It is a bucket-level action, so the bucket ARN without `/*` is the resource.
-4. **Wait for propagation.** AWS can take up to about 30 minutes after the first time acceleration is enabled on a bucket before accelerated requests succeed. Check the status:
+4. **Check the status.** The deployment reads the status, so it must already be `Enabled` when you deploy. AWS says the transfer speed can take up to 20 minutes to improve after you enable acceleration ([Amazon S3 requirements for Transfer Acceleration](https://docs.aws.amazon.com/AmazonS3/latest/userguide/transfer-acceleration.html#transfer-acceleration-requirements)); you do not need to wait for that before deploying. Check the status:
 
     ```bash
     aws s3api get-bucket-accelerate-configuration --bucket <BUCKET_NAME> --region <BUCKET_REGION> --profile <ACCOUNT_B_PROFILE>

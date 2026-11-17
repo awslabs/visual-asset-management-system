@@ -551,7 +551,7 @@ A policy that exceeds the limit is rejected at synthesis time with a message nam
 
 ### Amazon S3 Transfer Acceleration and the CSP
 
-When [Amazon S3 Transfer Acceleration](../deployment/s3-transfer-acceleration.md) is on for an asset bucket, the browser loads files from `<bucket>.s3-accelerate.amazonaws.com`. The `https://*.amazonaws.com` source for the partition that the S3 entries in `connect-src`, `img-src`, `media-src` and `frame-src` use (fix #1616) admits that host, so the feature adds no source and does not change the policy length. Deployments that run a version without that wildcard need the accelerate host added to those four directives before turning the feature on.
+When [Amazon S3 Transfer Acceleration](../deployment/s3-transfer-acceleration.md) is on for an asset bucket, the browser loads files from `<bucket>.s3-accelerate.amazonaws.com`. The `https://*.amazonaws.com` source for the partition that the S3 entries in `connect-src`, `img-src`, `media-src` and `frame-src` use (fix #1616) admits that host, so the feature adds no source and does not change the policy length.
 
 ## Web Response Security Headers
 
@@ -585,7 +585,7 @@ Enforcement occurs at URL use time. Restriction changes applied through a redepl
 
 For external (imported) asset buckets, VAMS does not apply resource policies to buckets it does not own. To restrict presigned URLs on an external bucket, the bucket owner applies an equivalent deny statement manually to the bucket policy. See [External Amazon S3 bucket setup](../deployment/external-s3-setup.md) for the complete statement and instructions.
 
-Transfer Acceleration changes how these restrictions apply. A request through the accelerate endpoint reaches S3 from the client's public address, never through a VPC endpoint, so `allowedVpceIds` cannot be combined with an accelerated bucket (configuration validation rejects it). `allowedIpRanges` can, and should be confirmed on the deployment, because the `aws:SourceIp` condition has to see the client's address.
+Transfer Acceleration changes how these restrictions apply. A request through the accelerate endpoint reaches S3 from the client's public address, never through a VPC endpoint, so `allowedVpceIds` cannot be combined with an accelerated bucket (configuration validation rejects it). See the restrictions section of the [Transfer Acceleration page](../deployment/s3-transfer-acceleration.md#presigned-url-network-restrictions) for `allowedIpRanges`, and for which buckets the restriction covers.
 
 For custom bucket policy statements beyond network restrictions, `infra/config/policy/s3AdditionalBucketPolicyConfig.json` applies an operator-defined statement to all VAMS-created buckets. See the [configuration reference](../deployment/configuration-reference.md) for details.
 
