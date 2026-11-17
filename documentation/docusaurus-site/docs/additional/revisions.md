@@ -344,6 +344,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **RapidPipeline EKS job cleanup after a stopped execution** — When a pipeline execution is stopped, for example by an execution abort or a failure elsewhere in the workflow, or times out, the pipeline deletes the Kubernetes job it started, so the job does not run on until its deadline and write its output. The pipeline records the job names under the execution's name in the auxiliary bucket, where they expire after one day. (issue #753)
 -   **RapidPipeline EKS job submission timeout** — The RunJob step waits one minute longer than the Lambda function it invokes can run. When RunJob times out, or the function returns an error, the job submission has therefore finished or been stopped before the pipeline's end step deletes the job, so no job is created after that cleanup and left running until its deadline. (issue #734)
 -   **RapidPipeline EKS Kubernetes client** — The pipeline's Kubernetes Lambda layer installs the Kubernetes Python client 36.0.3, which matches the default EKS cluster version 1.36, and the pipeline Lambda's own requirements ask for the same release, so the two can be installed together. (issue #722)
+-   **RapidPipeline EKS AWS SDK version** — The pipeline Lambda loads one AWS SDK, the base layer's: the Kubernetes layer no longer bundles `boto3`, `botocore` and `s3transfer`, and the packages both layers carry are kept at the same version. Previously two SDK releases were merged in the function, and the merged `charset-normalizer` package could not be imported. (issue #1577)
 -   **RapidPipeline EKS Kubernetes request settings** — Every Kubernetes API call the pipeline makes has a 30-second connect and 60-second read timeout and sends the `vams-eks-pipeline/1.0` user agent. The Kubernetes client resends a request only after a connection failure; the pipeline's retry wrapper handles throttling, server errors and timeouts. (issue #724)
 -   **RapidPipeline EKS execution failure details** — When the RapidPipeline EKS state machine's execution fails, it reports the error name and cause of the step that ended the run, on the VAMS execution page and in its Step Functions history; the failure sent to the parent workflow is unchanged. (issue #733)
 -   **RapidPipeline EKS job cleanup after a step error** — When the ConstructPipeline, RunJob or CheckJob step times out or fails, the pipeline reaches its end step with the name of the Kubernetes job that exists at that point, so a job that was already created is deleted rather than left running until its deadline, and the parent workflow is sent the failure without waiting for its task timeout. (issue #726)
@@ -536,6 +537,10 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 **Added:**
 
 **Key fixes:**
+
+-   **DeadlineCloud job settings** — A DeadlineCloud pipeline whose priority, max retries per task or max failed tasks count is fractional, a boolean or outside the range AWS Deadline Cloud accepts (priority 0 to 100, the two counts 0 to 2,147,483,647) is refused with `400` and a message that names the range, instead of answering `500` for a fractional value or saving a value that fails every workflow run at job creation. (issues #1582, #1581)
+    -   Note: A boolean such as `true`, which earlier saved and ran as priority 1, is refused too; send the number instead.
+    -   Note: A workflow that uses a DeadlineCloud pipeline saved earlier with an out-of-range value is refused when its state machine is next built; set the pipeline's value within the range.
 
 **Other changes:**
 
