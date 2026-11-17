@@ -2235,10 +2235,14 @@ def _finalize_ingestion(event, audit_event=None):
             continue
         metadata_type = deferred.get("type") or 'metadata'
         try:
+            # Written as the execution's, as on the ingest path: the metadata service records the
+            # write as the run's (lastChangeSource workflowExecution), so the compliance trigger does
+            # not re-evaluate the asset on a pipeline rule's own output.
             applied = process_metadata_file(
                 state.get("sourceBucket"), deferred["key"], state_event.get('metadataPathKey', ''),
                 state_event.get('databaseId'), state_event.get('assetId'), deferred["filePath"],
-                metadata_type, None)
+                metadata_type, None,
+                workflow_execution_id=state_event.get('workflowExecutionId') or batch_id)
             if applied is None or isinstance(applied, MetadataWriteBackRejection):
                 output_failures.append(_metadata_write_back_failure(applied))
             else:
