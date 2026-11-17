@@ -4,7 +4,6 @@
  */
 
 import React, { useMemo } from "react";
-import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Checkbox from "@cloudscape-design/components/checkbox";
 import DateRangePicker, {
@@ -30,6 +29,7 @@ import {
     auditFilterProblems,
 } from "./auditSearchValidation";
 import { rangeBounds } from "./auditSearchUrl";
+import AuditInfoPopover from "./AuditInfoPopover";
 
 const DAY_MS = 86_400_000;
 
@@ -78,6 +78,10 @@ export interface AuditFilterBarProps {
     disabled?: boolean;
     /** Called when the order changes, so results already shown can be read in the new order. */
     onOrderChange?: (sort: "asc" | "desc") => void;
+    /** Live status of the search (progress, stopped), shown beside the Search and Stop buttons. */
+    status?: React.ReactNode;
+    /** An extra info icon beside the filter label (the Authentication group note). */
+    filterInfo?: React.ReactNode;
 }
 
 /**
@@ -95,6 +99,8 @@ export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
     busy,
     disabled = false,
     onOrderChange,
+    status,
+    filterInfo,
 }) => {
     const limits = groups?.limits;
     const options = useMemo(() => filteringOptions(groups), [groups]);
@@ -142,64 +148,127 @@ export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
                 if (!busy && problems.length === 0 && !noGroups) onSearch();
             }}
         >
-            <SpaceBetween size="m">
-                <FormField
-                    label="Filters"
-                    description="Choose a property, then a value. Values of one property are alternatives; different properties all apply."
-                    constraintText={`Contains: ${CONTAINS_MIN_LENGTH} to ${maxLength} characters (${CONTAINS_CHARSET_TEXT}), up to ${maxTerms} terms that must all match. Contains searches the identifiers, request parameters and details of a record, not the values it changed or its previous values (an asset name on a create record is a changed value).`}
-                    errorText={
-                        problems.length > 0 ? (
-                            <ul style={{ margin: 0, paddingLeft: "1.25em" }}>
-                                {problems.map((problem) => (
-                                    <li key={problem}>{problem}</li>
-                                ))}
-                            </ul>
-                        ) : undefined
-                    }
-                >
-                    <PropertyFilter
-                        query={query}
-                        onChange={({ detail }) => onChange(queryToFilters(detail, filters))}
-                        filteringProperties={properties}
-                        filteringOptions={options}
-                        disableFreeTextFiltering
-                        hideOperations
-                        tokenLimit={10}
-                        filteringPlaceholder="Filter by log group, action, user, asset, request ID or contains text"
-                        filteringAriaLabel="Filter audit records"
-                        i18nStrings={{
-                            filteringAriaLabel: "Filter audit records",
-                            filteringPlaceholder:
-                                "Filter by log group, action, user, asset, request ID or contains text",
-                            clearFiltersText: "Clear filters",
-                            removeTokenButtonAriaLabel: (token) =>
-                                `Remove filter ${token.propertyLabel} ${token.value}`,
-                            allPropertiesLabel: "All properties",
-                            groupPropertiesText: "Properties",
-                            groupValuesText: "Values",
-                            operatorsText: "Operators",
-                            operationAndText: "and",
-                            operationOrText: "or",
-                            operatorContainsText: "Contains",
-                            operatorEqualsText: "Equals",
-                            applyActionText: "Apply",
-                            cancelActionText: "Cancel",
-                            enteredTextLabel: (text) => `Use: "${text}"`,
-                            tokenLimitShowMore: "Show more",
-                            tokenLimitShowFewer: "Show fewer",
-                            clearAriaLabel: "Clear",
-                            editTokenHeader: "Edit filter",
-                            propertyText: "Property",
-                            operatorText: "Operator",
-                            valueText: "Value",
-                            formatToken: (token) =>
-                                `${token.propertyLabel} ${token.operator} ${token.value}`,
-                        }}
-                    />
-                </FormField>
+            <div
+                data-testid="audit-filter-layout"
+                style={{ display: "flex", flexWrap: "wrap", gap: "16px 24px", alignItems: "end" }}
+            >
+                <div data-testid="audit-filter-column" style={{ flex: "1 1 420px", minWidth: 0 }}>
+                    <SpaceBetween size="s">
+                        <FormField
+                            label="Filters"
+                            info={
+                                <SpaceBetween direction="horizontal" size="xxs">
+                                    <AuditInfoPopover
+                                        testId="audit-filters-info"
+                                        ariaLabel="About the filters"
+                                        header="Filters"
+                                    >
+                                        <SpaceBetween size="xs">
+                                            <span>
+                                                Choose a property, then a value. Values of one
+                                                property are alternatives; different properties all
+                                                apply.
+                                            </span>
+                                            <span>
+                                                Contains: {CONTAINS_MIN_LENGTH} to {maxLength}{" "}
+                                                characters ({CONTAINS_CHARSET_TEXT}), up to{" "}
+                                                {maxTerms} terms that must all match. Contains
+                                                searches the identifiers, request parameters and
+                                                details of a record, not the values it changed or
+                                                its previous values (an asset name on a create
+                                                record is a changed value).
+                                            </span>
+                                        </SpaceBetween>
+                                    </AuditInfoPopover>
+                                    {filterInfo}
+                                </SpaceBetween>
+                            }
+                            errorText={
+                                problems.length > 0 ? (
+                                    <ul style={{ margin: 0, paddingLeft: "1.25em" }}>
+                                        {problems.map((problem) => (
+                                            <li key={problem}>{problem}</li>
+                                        ))}
+                                    </ul>
+                                ) : undefined
+                            }
+                        >
+                            <PropertyFilter
+                                query={query}
+                                onChange={({ detail }) => onChange(queryToFilters(detail, filters))}
+                                filteringProperties={properties}
+                                filteringOptions={options}
+                                disableFreeTextFiltering
+                                hideOperations
+                                tokenLimit={10}
+                                filteringPlaceholder="Filter by log group, action, user, asset, request ID or contains text"
+                                filteringAriaLabel="Filter audit records"
+                                i18nStrings={{
+                                    filteringAriaLabel: "Filter audit records",
+                                    filteringPlaceholder:
+                                        "Filter by log group, action, user, asset, request ID or contains text",
+                                    clearFiltersText: "Clear filters",
+                                    removeTokenButtonAriaLabel: (token) =>
+                                        `Remove filter ${token.propertyLabel} ${token.value}`,
+                                    allPropertiesLabel: "All properties",
+                                    groupPropertiesText: "Properties",
+                                    groupValuesText: "Values",
+                                    operatorsText: "Operators",
+                                    operationAndText: "and",
+                                    operationOrText: "or",
+                                    operatorContainsText: "Contains",
+                                    operatorEqualsText: "Equals",
+                                    applyActionText: "Apply",
+                                    cancelActionText: "Cancel",
+                                    enteredTextLabel: (text) => `Use: "${text}"`,
+                                    tokenLimitShowMore: "Show more",
+                                    tokenLimitShowFewer: "Show fewer",
+                                    clearAriaLabel: "Clear",
+                                    editTokenHeader: "Edit filter",
+                                    propertyText: "Property",
+                                    operatorText: "Operator",
+                                    valueText: "Value",
+                                    formatToken: (token) =>
+                                        `${token.propertyLabel} ${token.operator} ${token.value}`,
+                                }}
+                            />
+                        </FormField>
+                        <Checkbox
+                            checked={!filters.includeProbes}
+                            onChange={({ detail }) =>
+                                onChange({ ...filters, includeProbes: !detail.checked })
+                            }
+                            description="Permission checks the web app makes to decide what to show are left out."
+                        >
+                            Hide permission-probe records
+                        </Checkbox>
+                    </SpaceBetween>
+                </div>
 
-                <SpaceBetween direction="horizontal" size="l" alignItems="end">
-                    <FormField label="Time range" description="UTC">
+                <div
+                    data-testid="audit-search-controls"
+                    style={{
+                        flex: "0 1 auto",
+                        minWidth: 0,
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: "16px 16px",
+                        alignItems: "end",
+                    }}
+                >
+                    <FormField
+                        label="Time range"
+                        info={
+                            <AuditInfoPopover
+                                testId="audit-range-info"
+                                ariaLabel="About the time range"
+                                header="Time range"
+                            >
+                                Times are in UTC. A range can span at most {maxDays} days. Records
+                                become searchable a short time after they are written.
+                            </AuditInfoPopover>
+                        }
+                    >
                         <DateRangePicker
                             value={rangeToPickerValue(filters.range)}
                             onChange={({ detail }) => {
@@ -231,18 +300,9 @@ export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
                             }}
                         />
                     </FormField>
-                    <Checkbox
-                        checked={!filters.includeProbes}
-                        onChange={({ detail }) =>
-                            onChange({ ...filters, includeProbes: !detail.checked })
-                        }
-                        description="Permission checks the web app makes to decide what to show are left out."
-                    >
-                        Hide permission-probe records
-                    </Checkbox>
-                    <SpaceBetween direction="horizontal" size="xs">
+                    <SpaceBetween direction="horizontal" size="xs" alignItems="center">
                         {busy ? (
-                            <Button onClick={onStop} iconName="status-stopped">
+                            <Button onClick={onStop} iconName="status-stopped" formAction="none">
                                 Stop
                             </Button>
                         ) : null}
@@ -255,13 +315,18 @@ export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
                         >
                             Search
                         </Button>
+                        <AuditInfoPopover
+                            testId="audit-search-info"
+                            ariaLabel="About running a search"
+                            header="Running a search"
+                        >
+                            A search reads CloudWatch audit logs and can take several seconds. A
+                            link to this page restores the filters and does not run the search.
+                        </AuditInfoPopover>
+                        {status}
                     </SpaceBetween>
-                </SpaceBetween>
-                <Box variant="small" color="text-body-secondary">
-                    A search reads CloudWatch audit logs and can take several seconds. A link to
-                    this page restores the filters and does not run the search.
-                </Box>
-            </SpaceBetween>
+                </div>
+            </div>
         </form>
     );
 };

@@ -61,6 +61,12 @@ async function openPage(page: Page, mode: AuditMockMode = "ok", hash = PAGE) {
 
 const searchButton = (page: Page) => page.getByRole("button", { name: "Search", exact: true });
 const results = (page: Page) => page.getByRole("table", { name: "Audit records" });
+/** The app's toast stack (Flashbar in a labelled fixed container). */
+const toasts = (page: Page) => page.getByLabel("Notifications");
+/** Opens an info popover by its icon's accessible name. */
+const openInfo = async (page: Page, name: string) => {
+    await page.getByRole("button", { name, exact: true }).click();
+};
 
 async function runSearch(page: Page) {
     await expect(searchButton(page)).toBeEnabled();
@@ -140,8 +146,12 @@ test.describe("Audit Log Search: search", () => {
         expect(mock.starts[0].includeProbes).toBe(false);
         // The page asked the server to wait (long-poll) rather than polling at a rapid fixed rate.
         expect(Number(mock.polls[0].get("wait"))).toBeGreaterThan(0);
-        // The start warning is shown, in words.
+        // The start warning is information: an info icon beside the results, not a banner.
+        await expect(page.getByText(/could not be used to narrow the scan/)).toHaveCount(0);
+        await openInfo(page, "About these results");
         await expect(page.getByText(/could not be used to narrow the scan/)).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(page.getByText(/could not be used to narrow the scan/)).toHaveCount(0);
 
         // Server paging: first page of three, then the next by token.
         await expect(results(page).getByRole("radio")).toHaveCount(3);
@@ -199,8 +209,13 @@ test.describe("Audit Log Search: search", () => {
             contains: ["report.usd"],
             includeProbes: true,
         });
-        // The candidate limit the server reported is explained.
-        await expect(page.getByText(/reached its record limit/)).toBeVisible();
+        // The candidate limit the server reported is a toast, shown once, and dismissible.
+        await expect(toasts(page).getByText(/reached its record limit/)).toBeVisible();
+        await expect(toasts(page).getByText(/reached its record limit/)).toHaveCount(1);
+        await toasts(page)
+            .getByRole("button", { name: /Dismiss warning/ })
+            .click();
+        await expect(page.getByText(/reached its record limit/)).toHaveCount(0);
     });
 
     test("a link restores the filters and does not run the search; reload keeps them", async ({
@@ -245,6 +260,8 @@ test.describe("Audit Log Search: search", () => {
         mock.holdRunning = false;
         await page.getByRole("button", { name: "Stop", exact: true }).click();
         await expect(page.getByText("Search stopped")).toBeVisible();
+        await expect(page.getByText(/A stopped search shows no records/)).toHaveCount(0);
+        await openInfo(page, "About the stopped search");
         await expect(page.getByText(/A stopped search shows no records/)).toBeVisible();
         expect(mock.stops).toBe(1);
     });
@@ -282,6 +299,31 @@ test.describe("Audit Log Search: states", () => {
         });
     }
 
+    test("a failed search is a dismissible toast, and not a banner in the page", async ({
+        page,
+    }) => {
+        await openPage(page, "failed");
+        await searchButton(page).click();
+        const toast = toasts(page).getByText(/The search failed/);
+        await expect(toast).toBeVisible({ timeout: 30_000 });
+        await expect(toasts(page).getByText("The search could not be completed")).toBeVisible();
+        await toasts(page)
+            .getByRole("button", { name: /Dismiss error/ })
+            .click();
+        await expect(toast).toHaveCount(0);
+    });
+
+    test("a throttled search raises one toast, however often it is tried again", async ({
+        page,
+    }) => {
+        await openPage(page, "startThrottled");
+        const busy = toasts(page).getByText("The service is busy", { exact: true });
+        await searchButton(page).click();
+        await expect(busy).toBeVisible({ timeout: 30_000 });
+        await searchButton(page).click();
+        await expect(busy).toHaveCount(1);
+    });
+
     test("no access to any group: a panel, no search form", async ({ page }) => {
         await openPage(page, "noGroups");
         await expect(page.getByText("No audit logs available to you")).toBeVisible();
@@ -292,6 +334,71 @@ test.describe("Audit Log Search: states", () => {
         await openPage(page, "groupsDenied");
         await expect(page.getByText("You do not have access to audit logs.")).toBeVisible();
         await expect(searchButton(page)).toHaveCount(0);
+    });
+});
+
+test.describe("Audit Log Search: info icons and layout", () => {
+    test("an info popover opens with the mouse and the keyboard and closes with Escape", async ({
+        page,
+    }) => {
+        await openPage(page);
+        const hint = page.getByText(/Contains searches the identifiers/);
+        await expect(hint).toHaveCount(0);
+
+        await openInfo(page, "About the filters");
+        await expect(hint).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(hint).toHaveCount(0);
+        // The icon keeps focus, so the keyboard user can open it again.
+        const icon = page.getByRole("button", { name: "About the filters", exact: true });
+        await expect(icon).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expect(hint).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(hint).toHaveCount(0);
+
+        await openInfo(page, "About the time range");
+        await expect(page.getByText(/Times are in UTC/)).toBeVisible();
+    });
+
+    test("the progress and the info sit beside the Search button while a search runs", async ({
+        page,
+    }) => {
+        const mock = await openPage(page);
+        mock.holdRunning = true;
+        await searchButton(page).click();
+        const progress = page.getByTestId("audit-progress");
+        await expect(progress).toContainText("records scanned so far");
+        await expect(page.getByText("Searching the audit logs")).toHaveCount(0);
+        const stop = await page.getByRole("button", { name: "Stop", exact: true }).boundingBox();
+        const box = await progress.boundingBox();
+        expect(stop && box && Math.abs(stop.y - box.y) < 60).toBe(true);
+        mock.holdRunning = false;
+        await page.getByRole("button", { name: "Stop", exact: true }).click();
+    });
+
+    test("at 1280 the time range, the order and Search sit to the right of the filter", async ({
+        page,
+    }) => {
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await openPage(page);
+        const filter = await page.getByTestId("audit-filter-column").boundingBox();
+        const controls = await page.getByTestId("audit-search-controls").boundingBox();
+        const search = await searchButton(page).boundingBox();
+        if (!filter || !controls || !search) throw new Error("layout boxes missing");
+        expect(controls.x).toBeGreaterThanOrEqual(filter.x + filter.width - 1);
+        expect(search.x).toBeGreaterThan(filter.x + filter.width - 1);
+        await expectNoPageOverflowX(page, "Audit Log Search at 1280");
+    });
+
+    test("at 360 the controls stack below the filter", async ({ page }) => {
+        await page.setViewportSize(VIEWPORTS.phone);
+        await openPage(page);
+        const filter = await page.getByTestId("audit-filter-column").boundingBox();
+        const search = await searchButton(page).boundingBox();
+        if (!filter || !search) throw new Error("layout boxes missing");
+        expect(search.y).toBeGreaterThanOrEqual(filter.y + filter.height - 1);
+        await expectNoPageOverflowX(page, "Audit Log Search at 360");
     });
 });
 

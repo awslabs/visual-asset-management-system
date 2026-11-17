@@ -11,8 +11,10 @@ import Header from "@cloudscape-design/components/header";
 import Link from "@cloudscape-design/components/link";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Spinner from "@cloudscape-design/components/spinner";
+import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { VAMS_PAGE_PADDING } from "../../components/compliance/rowActions";
 import { isOnRoute } from "../../components/compliance/listingFilters";
+import AuditInfoPopover from "../../components/auditLogs/AuditInfoPopover";
 import AuditDetailPanel from "../../components/auditLogs/AuditDetailPanel";
 import AuditExportDialog from "../../components/auditLogs/AuditExportDialog";
 import AuditFilterBar from "../../components/auditLogs/AuditFilterBar";
@@ -33,6 +35,7 @@ import { DEFAULT_LIMITS } from "../../components/auditLogs/auditSearchValidation
 import { DENIED_MESSAGE, useAuditSearch } from "../../components/auditLogs/useAuditSearch";
 import { visibleText } from "../../components/auditLogs/auditText";
 import { fetchAuditLogGroups } from "../../services/APIService";
+import { useToast } from "../../features/orchestration/components/ToastProvider";
 import { useAssetPageAccess } from "../../hooks/useAssetPageAccess";
 
 /** The page's route (routes.tsx); the filters are read from and written to this route's URL only. */
@@ -178,25 +181,27 @@ const AuditLogSearch: React.FC = () => {
     const emptyState: "notRun" | "noRecords" | "failed" =
         state.phase === "error" ? "failed" : hasRun && finished ? "noRecords" : "notRun";
 
-    const notices: { key: string; type: "info" | "warning"; text: string }[] = [];
+    // Warnings are toasts; information is an info icon beside the results.
+    const warningToasts: { key: string; title: string; text: string }[] = [];
+    const infoNotes: { key: string; text: string }[] = [];
     if (statistics.candidateLimitReached) {
-        notices.push({
+        warningToasts.push({
             key: "candidate",
-            type: "warning",
+            title: "Results may be incomplete",
             text: "The search reached its record limit, so more matching records may exist. Narrow the time range to be sure.",
         });
     }
     for (const code of warnings) {
-        notices.push({
-            key: `warning-${code}`,
-            type: code === "recheckTimeBudget" ? "warning" : "info",
-            text: WARNING_TEXT[code] ?? visibleText(code),
-        });
+        const text = WARNING_TEXT[code] ?? visibleText(code);
+        if (code === "recheckTimeBudget") {
+            warningToasts.push({ key: `warning-${code}`, title: "Results may be partial", text });
+        } else {
+            infoNotes.push({ key: `warning-${code}`, text });
+        }
     }
     if (state.rows.some((row) => row.truncated)) {
-        notices.push({
+        infoNotes.push({
             key: "truncated",
-            type: "info",
             text: "Some records hold values that were cut short when they were written. Open a record to see them.",
         });
     }
@@ -211,6 +216,63 @@ const AuditLogSearch: React.FC = () => {
             : state.error?.kind === "timeout"
             ? "The search stopped"
             : "The search could not be completed";
+
+    // Toasts: each distinct message once per search, so long polling never stacks them. A new
+    // search starts a new set. Warnings that say the result is not complete stay until dismissed;
+    // errors follow the app's default (8 seconds).
+    const toast = useToast();
+    const shown = useRef<Set<string>>(new Set());
+    useEffect(() => {
+        if (state.phase === "starting") shown.current.clear();
+    }, [state.phase]);
+    const once = (key: string, raise: () => void) => {
+        if (shown.current.has(key)) return;
+        shown.current.add(key);
+        raise();
+    };
+    useEffect(() => {
+        if (!state.error) return;
+        const { kind, message } = state.error;
+        once(`error:${kind}:${message}`, () => {
+            if (kind === "denied") toast.warning(errorHeader, { description: message });
+            else toast.error(errorHeader, { description: message });
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [state.error]);
+    const warningKeys = warningToasts.map((w) => `${state.queryId}:${w.key}`).join("|");
+    useEffect(() => {
+        for (const w of warningToasts) {
+            once(`${state.queryId}:${w.key}`, () =>
+                toast.warning(w.title, { description: w.text, duration: 0 })
+            );
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [warningKeys]);
+    const groupsFailure = groupsState.kind === "failed" ? groupsState.message : null;
+    useEffect(() => {
+        if (groupsFailure !== null) {
+            toast.error("The audit log groups could not be loaded", { description: groupsFailure });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [groupsFailure]);
+
+    const status = isActive ? (
+        <span aria-live="polite" data-testid="audit-progress">
+            <StatusIndicator type="in-progress">
+                {statistics.recordsScanned !== undefined
+                    ? `${statistics.recordsScanned} records scanned so far`
+                    : "Waiting for the first results"}
+            </StatusIndicator>
+        </span>
+    ) : state.phase === "stopped" ? (
+        <span aria-live="polite" data-testid="audit-stopped">
+            <StatusIndicator type="stopped">Search stopped</StatusIndicator>
+            <AuditInfoPopover ariaLabel="About the stopped search" header="Search stopped">
+                A stopped search shows no records. Narrow the time range or the filters and search
+                again.
+            </AuditInfoPopover>
+        </span>
+    ) : null;
 
     return (
         <Box padding={VAMS_PAGE_PADDING}>
@@ -241,13 +303,12 @@ const AuditLogSearch: React.FC = () => {
                 )}
 
                 {groupsState.kind === "failed" && (
-                    <Alert
-                        type="error"
-                        header="The audit log groups could not be loaded"
-                        action={<Button onClick={() => void loadGroups()}>Retry</Button>}
-                    >
-                        {groupsState.message}
-                    </Alert>
+                    <SpaceBetween size="xs" direction="horizontal" alignItems="center">
+                        <StatusIndicator type="error">
+                            The audit log groups could not be loaded
+                        </StatusIndicator>
+                        <Button onClick={() => void loadGroups()}>Retry</Button>
+                    </SpaceBetween>
                 )}
 
                 {groups && groups.groups.length === 0 && (
@@ -268,52 +329,35 @@ const AuditLogSearch: React.FC = () => {
                             busy={isActive}
                             disabled={state.loadingPage}
                             onOrderChange={changeOrder}
+                            status={status}
+                            filterInfo={
+                                filters.logGroups.includes(AUTHENTICATION_GROUP_KEY) ? (
+                                    <AuditInfoPopover
+                                        testId="audit-authentication-note"
+                                        ariaLabel="About the Authentication log group"
+                                        header="Authentication group"
+                                    >
+                                        {AUTHENTICATION_NOTE}
+                                    </AuditInfoPopover>
+                                ) : undefined
+                            }
                         />
-
-                        {filters.logGroups.includes(AUTHENTICATION_GROUP_KEY) && (
-                            <Alert type="info" data-testid="audit-authentication-note">
-                                {AUTHENTICATION_NOTE}
-                            </Alert>
-                        )}
-
-                        {isActive && (
-                            <Alert type="info" header="Searching the audit logs">
-                                <span aria-live="polite" data-testid="audit-progress">
-                                    {statistics.recordsScanned !== undefined
-                                        ? `${statistics.recordsScanned} records scanned so far`
-                                        : "Waiting for the first results"}
-                                    . Results appear when the search finishes. You can stop the
-                                    search at any time.
-                                </span>
-                            </Alert>
-                        )}
-
-                        {state.error && (
-                            <Alert
-                                type={state.error.kind === "denied" ? "warning" : "error"}
-                                header={errorHeader}
-                                dismissible
-                                onDismiss={clearError}
-                            >
-                                {state.error.message}
-                            </Alert>
-                        )}
-
-                        {state.phase === "stopped" && (
-                            <Alert type="info" header="Search stopped">
-                                A stopped search shows no records. Narrow the time range or the
-                                filters and search again.
-                            </Alert>
-                        )}
-
-                        {notices.map((notice) => (
-                            <Alert key={notice.key} type={notice.type}>
-                                {notice.text}
-                            </Alert>
-                        ))}
 
                         <SpaceBetween size="s">
                             <Box float="right">
+                                {infoNotes.length > 0 && (
+                                    <AuditInfoPopover
+                                        testId="audit-results-info"
+                                        ariaLabel="About these results"
+                                        header="About these results"
+                                    >
+                                        <SpaceBetween size="xs">
+                                            {infoNotes.map((note) => (
+                                                <span key={note.key}>{note.text}</span>
+                                            ))}
+                                        </SpaceBetween>
+                                    </AuditInfoPopover>
+                                )}
                                 <Button
                                     iconName="download"
                                     onClick={() => setExportOpen(true)}

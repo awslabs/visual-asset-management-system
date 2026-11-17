@@ -10,9 +10,10 @@
  */
 
 import React from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import AuditLogSearch from "./AuditLogSearch";
+import { ToastProvider } from "../../features/orchestration/components/ToastProvider";
 
 const mockGroups = jest.fn();
 const mockStart = jest.fn();
@@ -72,21 +73,33 @@ beforeEach(() => {
 });
 
 const openPage = async () => {
-    render(<AuditLogSearch />);
+    render(
+        <ToastProvider>
+            <AuditLogSearch />
+        </ToastProvider>
+    );
     await screen.findByRole("button", { name: "Search" });
 };
 
 describe("Audit Log Search page", () => {
     it("shows the no-access panel for a 403 on the log groups and offers no search", async () => {
         mockGroups.mockResolvedValue([false, "Forbidden", 403]);
-        render(<AuditLogSearch />);
+        render(
+            <ToastProvider>
+                <AuditLogSearch />
+            </ToastProvider>
+        );
         expect(await screen.findByText("You do not have access to audit logs.")).toBeTruthy();
         expect(screen.queryByRole("button", { name: "Search" })).toBeNull();
     });
 
     it("says so when no group is allowed, without naming any", async () => {
         mockGroups.mockResolvedValue([true, { logGroups: [], limits: {} }]);
-        render(<AuditLogSearch />);
+        render(
+            <ToastProvider>
+                <AuditLogSearch />
+            </ToastProvider>
+        );
         expect(await screen.findByText("No audit logs available to you")).toBeTruthy();
         expect(screen.queryByRole("button", { name: "Search" })).toBeNull();
     });
@@ -151,6 +164,13 @@ describe("Audit Log Search page", () => {
             await userEvent.click(stop);
         });
         await waitFor(() => expect(mockStop).toHaveBeenCalledWith("q-1"));
+        const stopped = await screen.findByTestId("audit-stopped");
+        expect(stopped.textContent).toContain("Search stopped");
+        // The explanation is in the info popover, not an inline banner.
+        expect(screen.queryByText(/A stopped search shows no records/)).toBeNull();
+        await userEvent.click(
+            within(stopped).getByRole("button", { name: "About the stopped search" })
+        );
         expect(await screen.findByText(/A stopped search shows no records/)).toBeTruthy();
         expect(mockGet.mock.calls.length).toBeLessThanOrEqual(readsBefore + 1);
     });
@@ -187,7 +207,11 @@ describe("Audit Log Search page", () => {
                 })
         );
         mockGet.mockResolvedValue(complete([row()]));
-        const { unmount } = render(<AuditLogSearch />);
+        const { unmount } = render(
+            <ToastProvider>
+                <AuditLogSearch />
+            </ToastProvider>
+        );
         await screen.findByRole("button", { name: "Search" });
         await userEvent.click(screen.getByRole("button", { name: "Search" }));
         unmount();
@@ -214,9 +238,12 @@ describe("Audit Log Search page", () => {
             },
         ]);
         await openPage();
-        expect(screen.getByTestId("audit-authentication-note").textContent).toMatch(
-            /does not record sign-ins itself/
+        const note = screen.getByTestId("audit-authentication-note");
+        expect(screen.queryByText(/does not record sign-ins itself/)).toBeNull();
+        await userEvent.click(
+            within(note).getByRole("button", { name: "About the Authentication log group" })
         );
+        expect(await screen.findByText(/does not record sign-ins itself/)).toBeTruthy();
     });
 
     it("shows no Authentication note for other groups", async () => {
@@ -287,6 +314,37 @@ describe("Audit Log Search page", () => {
             await screen.findByText(/reached its record limit/, {}, { timeout: 4000 })
         ).toBeTruthy();
         expect(screen.getByText(/took longer than the time allowed/)).toBeTruthy();
+        // Warnings are toasts: dismissible, and shown once.
+        expect(screen.getAllByText(/reached its record limit/)).toHaveLength(1);
+        await userEvent.click(screen.getAllByRole("button", { name: /Dismiss warning/ })[0]);
+        await waitFor(() => expect(screen.queryByText(/reached its record limit/)).toBeNull());
+    });
+
+    it("keeps information out of banners: notes of the results sit in an info popover", async () => {
+        mockGet.mockResolvedValue(complete([row()], { warnings: ["widerScan"] }));
+        await openPage();
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        const info = await screen.findByTestId("audit-results-info", {}, { timeout: 4000 });
+        expect(screen.queryByText(/could not be used to narrow the scan/)).toBeNull();
+        await userEvent.click(within(info).getByRole("button", { name: "About these results" }));
+        expect(await screen.findByText(/could not be used to narrow the scan/)).toBeTruthy();
+    });
+
+    it("opens the filter hints from the keyboard", async () => {
+        await openPage();
+        const info = screen.getByTestId("audit-filters-info");
+        const button = within(info).getByRole("button", { name: "About the filters" });
+        button.focus();
+        await userEvent.keyboard("{Enter}");
+        expect(await screen.findByText(/Contains searches the identifiers/)).toBeTruthy();
+    });
+
+    it("raises a failed search once as a toast, however often the same error repeats", async () => {
+        mockStart.mockResolvedValue([false, "busy", 429]);
+        await openPage();
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        expect(await screen.findByText("The service is busy")).toBeTruthy();
+        expect(screen.getAllByText(/The service is busy with other searches/)).toHaveLength(1);
     });
 
     it.each([
