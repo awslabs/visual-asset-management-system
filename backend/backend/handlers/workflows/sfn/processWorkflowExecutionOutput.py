@@ -36,6 +36,7 @@ from common.apiRoutes import (
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler, log_action
 from models.common import success, validation_error, VAMSGeneralErrorResponse
 from common.s3 import validateUnallowedFileExtensionAndContentType, list_all_objects, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
@@ -2299,7 +2300,7 @@ def _log_execution_end(audit_event, body, status, start_date, details=None):
 def lambda_handler(event, context):
     global _invocation_context
     _invocation_context = context
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     audit_event = event
 
     try:

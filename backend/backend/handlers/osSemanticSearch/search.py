@@ -31,6 +31,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import deferred_authorization_audit, audited_handler, log_action
 from common.auditSearchText import search_text_parameters
+from common.eventLogSummary import exception_log_summary, query_clause_log_summary
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, service_unavailable, VAMSGeneralErrorResponse, validation_error_message
 from models.search import (
     SearchRequestModel, SimpleSearchRequestModel, SearchResponseModel, SearchHitModel, SearchHitExplanationModel,
@@ -420,7 +421,9 @@ class DualIndexSearchManager:
             return results
             
         except Exception as e:
-            logger.exception(f"Error executing dual-index search: {e}")
+            # The engine's error text can quote a fragment of the query (a parse error names the
+            # typed text), and logger.exception adds it again in the traceback: log class and status.
+            logger.error(f"Error executing dual-index search: {exception_log_summary(e)}")
             raise VAMSGeneralErrorResponse("Error executing search query")
 
     @classmethod
@@ -1174,8 +1177,8 @@ class SimpleSearchQueryBuilder:
             # Build base query structure
             query_clause = self._build_simple_query_clause(request, accessible_databases, index_type)
             
-            # Log the generated query for debugging
-            logger.info(f"[SimpleSearch] Generated {index_type} query clause: {json.dumps(query_clause, indent=2)}")
+            # Log the shape of the generated query, never its values: they are typed search text.
+            logger.info(f"[SimpleSearch] Generated {index_type} query clause: {query_clause_log_summary(query_clause)}")
 
             # Fetch from offset 0 with a buffer and page in Python, matching the complex
             # path. Applying the offset here as well would skip the requested page twice.

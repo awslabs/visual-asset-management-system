@@ -483,7 +483,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         asset_object.update({"object__type": "asset"})
 
-        logger.info(asset_object)
+        logger.info(f"Asset loaded: databaseId={asset_object.get('databaseId')}, assetId={asset_object.get('assetId')}")
 
         # Check API authorization
         if len(claims_and_roles["tokens"]) > 0:
