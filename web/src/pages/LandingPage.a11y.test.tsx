@@ -149,6 +149,12 @@ describe("LandingPage carousel keyboard access (#1573)", () => {
             expect(radio.top).toBeUndefined();
         });
 
+        it("keeps the radios inside the slides box, so focusing one does not scroll the slides", () => {
+            // A negative margin put the radio just below the overflow-hidden box: focusing it
+            // scrolled the box and shifted the slide image up.
+            expect(radio.margin).toBe("0");
+        });
+
         it("outlines the dot of the focused slide control", () => {
             [1, 2, 3, 4].forEach((n) => {
                 const focusRule = declarations(

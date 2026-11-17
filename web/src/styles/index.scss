@@ -311,14 +311,16 @@ code {
 }
 
 /* Hidden visually, not with display: none, so the radios stay in the tab order and keep their
-   accessible names: they are the carousel's keyboard controls (#1573). They sit at the bottom
-   edge, by the dots, because focusing one scrolls it into view, and the dots must be in view. */
+   accessible names: they are the carousel's keyboard controls. They sit at the bottom edge, by
+   the dots, because focusing one scrolls it into view, and the dots must be in view. No negative
+   margin: it would put the radio outside .slides, and focusing it would scroll that
+   overflow-hidden box and shift the slide image. */
 .carousel .slides input {
     position: absolute;
     bottom: 0;
     width: 1px;
     height: 1px;
-    margin: -1px;
+    margin: 0;
     padding: 0;
     border: 0;
     overflow: hidden;
