@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.8.0] (TBD)
+
+### Major Change Summary:
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+-   **Backend** S3 presigned URLs can use the accelerate host for buckets flagged accelerated in the buckets table; no setting yet. ([#1610](https://github.com/awslabs/visual-asset-management-system/issues/1610))
+
+### Bug Fixes
+
+### Chores
+
+### Known Outstanding Issues
+
+### Troubleshooting
+
 ## [2.7.0] (2026-11-20)
 
 ### Major Change Summary:
