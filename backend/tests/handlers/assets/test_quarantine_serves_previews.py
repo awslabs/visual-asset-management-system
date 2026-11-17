@@ -193,6 +193,16 @@ class TestThePreviewTest:
         ("a1/model.glb.previewFile.png", True),
         ("a1/sub/model.glb.previewFile.JPEG", True),
         ("a1/model.glb.previewFile.svg", True),
+        # The Media Preview Thumbnail's outputs (#1550) and the formats #1550/#1583 allow: served the same way.
+        ("a1/photos/site.png.previewFile.jpg", True),
+        ("a1/scans/texture.tif.previewFile.jpg", True),
+        ("a1/clips/walkthrough.mp4.previewFile.gif", True),
+        ("a1/photos/large.webp.previewFile.webp", True),
+        ("a1/photos/old.bmp.previewFile.BMP", True),
+        # A preview in a format that is not a preview format, and the original image itself (shown as its
+        # own preview by the web when small, but it is the file, so a quarantined asset does not serve it).
+        ("a1/scans/texture.tif.previewFile.tif", False),
+        ("a1/photos/site.png", False),
         ("a1/model.glb", False),
         ("a1/x.previewFile.png/model.glb", False),
         ("a1/model.glb.previewFile.exe", False),
@@ -212,6 +222,7 @@ class TestThePreviewTest:
 
     @pytest.mark.parametrize("key,expected", [
         ("previews/a1/thumb.png", True), ("previews/a1/thumb.GIF", True),
+        ("previews/a1/thumb.webp", True), ("previews/a1/thumb.bmp", True), ("previews/a1/thumb.tiff", False),
         ("previews/a1/thumb.glb", False), ("previews/a1/png", False),
         ("previews/a1/../a2/thumb.png", False)])
     def test_the_asset_preview_image(self, key, expected):
