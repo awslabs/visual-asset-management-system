@@ -1405,13 +1405,12 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
     registration. Only the import function's marked cross-call can set it; the API then refuses every
     change except the `enabled` switches and a template's `configBody` / `tagSchema` / `webFormJson`,
     and each registration re-asserts the shipped values, so `enabled` is a pause switch. Any principal
-    allowed to invoke the import function can register system records. Pair the flag with a
-    `SYSTEM - <Area>` category — the shipped bundles are `system/genAiMetadata` and its second
-    registration `system/genAiMetadata/vamsSchema/assetSummary` (both `SYSTEM - GenAI`) and
-    `preview/3dThumbnail` (`SYSTEM - Preview`) — and list the pipeline in
-    `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`. The zipArchive bundle
-    (`backendPipelines/utility/zipArchive/`, below) is also a shipped system bundle; it keeps the
-    `Utility` category.
+    allowed to invoke the import function can register system records. Every shipped system bundle
+    pairs the flag with a `SYSTEM - <Area>` category: `system/genAiMetadata` and its second
+    registration `system/genAiMetadata/vamsSchema/assetSummary` (both `SYSTEM - GenAI`),
+    `preview/3dThumbnail` (`SYSTEM - Preview`) and the zipArchive bundle
+    (`backendPipelines/utility/zipArchive/`, below; `SYSTEM - Utility`). List the pipeline in
+    `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`.
 
 ```bash
 vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
