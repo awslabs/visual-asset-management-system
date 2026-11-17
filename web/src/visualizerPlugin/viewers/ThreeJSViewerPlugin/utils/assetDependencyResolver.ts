@@ -505,11 +505,6 @@ export class AssetDependencyResolver {
             return null;
         }
 
-        if (!response.ok) {
-            this.recordUnloaded(key, "not-found");
-            return null;
-        }
-
         const declared = Number(response.headers?.get?.("content-length") ?? NaN);
         if (Number.isFinite(declared) && declared > this.limits.maxFileBytes) {
             response.body?.cancel?.().catch(() => undefined);

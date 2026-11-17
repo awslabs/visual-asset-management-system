@@ -19,11 +19,7 @@ import { isCadSupportError } from "./utils/fileLoaders";
 import { AssetDependencyResolver } from "./utils/assetDependencyResolver";
 import { loadWithDependencies, USD_NO_GEOMETRY_MESSAGE } from "./utils/dependencyLoading";
 import { applySceneEnvironment, applySceneLighting, SceneEnvironment } from "./utils/sceneLighting";
-import {
-    ApiRefusalError,
-    isApiRefusalError,
-    streamResponseFailure,
-} from "../../core/streamFailure";
+import { ApiRefusalError, isApiRefusalError } from "../../core/streamFailure";
 import { fetchPresignedFile } from "../../core/presignedFetch";
 import {
     applySelectionHighlight,
@@ -427,17 +423,6 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                             },
                             `Failed to load: ${fileName}`
                         );
-
-                        if (!response.ok) {
-                            // A refused download (401/403/404/410) is named from the API's status
-                            // (#1211), another refusal by the API's own message, as an
-                            // ApiRefusalError (D166); any other status keeps this file's own
-                            // message.
-                            throw await streamResponseFailure(
-                                response,
-                                `Failed to load: ${fileName} (${response.status})`
-                            );
-                        }
 
                         const arrayBuffer = await response.arrayBuffer();
                         console.log(`Downloaded: ${fileName} (${arrayBuffer.byteLength} bytes)`);

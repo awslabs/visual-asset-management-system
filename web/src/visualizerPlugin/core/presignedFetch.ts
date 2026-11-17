@@ -16,7 +16,12 @@
  * Authorization stays in the API: the presign call is the same authorized download route every
  * other viewer uses, and a refusal reaches the user as the API's own answer. No `Authorization`
  * header is ever sent to S3. A presigned URL is a bearer credential: it is held in memory only, for
- * a short time, and is never logged.
+ * a short time that never outlives the URL (`presignedUrlCache.ts`), is dropped on sign-out
+ * (`sessionManager.clearStoredSession`) and is never logged.
+ *
+ * A failure of S3 itself is not the API's answer: an expired or invalid signature or a missing
+ * object is worded as an unavailable link (`PresignedReadError`), after one fresh presign and one
+ * more read when the URL was a reused one.
  */
 
 import { downloadAsset } from "../../services/APIService";
@@ -27,15 +32,33 @@ import {
     downloadResponseApiMessage,
     downloadResponseStatus,
 } from "./streamFailure";
+import {
+    dropCachedPresignedUrl,
+    readCachedPresignedUrl,
+    writeCachedPresignedUrl,
+} from "./presignedUrlCache";
 
-/**
- * How long a presigned URL is reused. It stays well under the lifetime the download route gives a
- * URL, so a cached URL never reaches S3 already expired.
- */
-export const PRESIGNED_URL_TTL_MILLIS = 60_000;
+export {
+    clearPresignedUrlCache,
+    PRESIGNED_URL_CACHE_LIMIT,
+    PRESIGNED_URL_MARGIN_MILLIS,
+    PRESIGNED_URL_TTL_MILLIS,
+    setPresignedUrlClock,
+} from "./presignedUrlCache";
 
-/** Upper bound on cached URLs, so a viewer that opens many files cannot grow the cache without limit. */
-export const PRESIGNED_URL_CACHE_LIMIT = 200;
+/** What a viewer shows when S3 (not the API) refused or could not find the file. */
+export const PRESIGNED_LINK_UNAVAILABLE_MESSAGE =
+    "The download link for this file expired or the file is unavailable. Reload the viewer to try again.";
+
+/** S3 answered the presigned read with an error status. */
+export class PresignedReadError extends Error {
+    status: number;
+    constructor(message: string, status: number) {
+        super(message);
+        this.name = "PresignedReadError";
+        this.status = status;
+    }
+}
 
 export interface PresignedFileRequest {
     databaseId: string;
@@ -46,25 +69,8 @@ export interface PresignedFileRequest {
     versionId?: string;
     /** Logical asset version; takes precedence over `versionId`. */
     assetVersionId?: string;
+    /** Aborts the presign request and the read. */
     signal?: AbortSignal;
-}
-
-interface CacheEntry {
-    url: string;
-    expiresAt: number;
-}
-
-const urlCache = new Map<string, CacheEntry>();
-
-/** Test hook: the clock the cache reads. */
-let now: () => number = () => Date.now();
-
-export function setPresignedUrlClock(clock: (() => number) | null): void {
-    now = clock ?? (() => Date.now());
-}
-
-export function clearPresignedUrlCache(): void {
-    urlCache.clear();
 }
 
 function cacheKey(request: PresignedFileRequest): string {
@@ -77,27 +83,10 @@ function cacheKey(request: PresignedFileRequest): string {
     ]);
 }
 
-function readCache(key: string): string | undefined {
-    const entry = urlCache.get(key);
-    if (!entry) return undefined;
-    if (entry.expiresAt <= now()) {
-        urlCache.delete(key);
-        return undefined;
-    }
-    return entry.url;
-}
-
-function writeCache(key: string, url: string): void {
-    const current = now();
-    urlCache.forEach((entry, existing) => {
-        if (entry.expiresAt <= current) urlCache.delete(existing);
-    });
-    while (urlCache.size >= PRESIGNED_URL_CACHE_LIMIT) {
-        const oldest = urlCache.keys().next().value;
-        if (oldest === undefined) break;
-        urlCache.delete(oldest);
-    }
-    urlCache.set(key, { url, expiresAt: current + PRESIGNED_URL_TTL_MILLIS });
+function abortError(): Error {
+    const error = new Error("The operation was aborted");
+    error.name = "AbortError";
+    return error;
 }
 
 /**
@@ -113,14 +102,27 @@ function presignFailure(result: unknown, subject: string): Error {
     return new Error(downloadFailureMessage(result, subject));
 }
 
-/** A presigned URL for the file, from the authorized download route (cached briefly). */
+/** A presigned URL for the file, from the authorized download route (cached while it is safe). */
 export async function getPresignedFileUrl(
     request: PresignedFileRequest,
-    subject: string
+    subject: string,
+    options: { fresh?: boolean } = {}
 ): Promise<string> {
+    return (await resolvePresignedFileUrl(request, subject, options)).url;
+}
+
+async function resolvePresignedFileUrl(
+    request: PresignedFileRequest,
+    subject: string,
+    options: { fresh?: boolean } = {}
+): Promise<{ url: string; cached: boolean }> {
     const key = cacheKey(request);
-    const cached = readCache(key);
-    if (cached) return cached;
+    if (options.fresh) {
+        dropCachedPresignedUrl(key);
+    } else {
+        const cached = readCachedPresignedUrl(key);
+        if (cached) return { url: cached, cached: true };
+    }
 
     const result: any = await downloadAsset({
         databaseId: request.databaseId,
@@ -129,23 +131,42 @@ export async function getPresignedFileUrl(
         versionId: request.versionId,
         assetVersionId: request.assetVersionId,
         downloadType: "assetFile",
+        signal: request.signal,
     });
+    // downloadAsset reports an aborted request as a failure tuple; a closed viewer must stop.
+    if (request.signal?.aborted) throw abortError();
     if (!Array.isArray(result) || result[0] !== true || typeof result[1] !== "string") {
         throw presignFailure(result, subject);
     }
-    writeCache(key, result[1]);
-    return result[1];
+    writeCachedPresignedUrl(key, result[1]);
+    return { url: result[1], cached: false };
 }
 
 /**
  * Fetches the file's bytes from its presigned URL, with no `Authorization` header and no
- * credentials, so the request is an ordinary CORS read from the web origin. Returns the response;
- * the caller checks `ok`. A failed presign throws (see `presignFailure`).
+ * credentials, so the request is an ordinary CORS read from the web origin. A 403 from S3 for a
+ * reused URL (an expired signature) is read once more through a fresh presign. Returns the OK response,
+ * or throws: a failed presign as the API's answer, an S3 error status as a `PresignedReadError`.
  */
 export async function fetchPresignedFile(
     request: PresignedFileRequest,
     subject: string
 ): Promise<Response> {
-    const url = await getPresignedFileUrl(request, subject);
-    return fetch(url, { signal: request.signal });
+    const first = await resolvePresignedFileUrl(request, subject);
+    let response = await fetch(first.url, { signal: request.signal });
+    // A URL just issued cannot have expired, so only a reused one is worth a second presign: S3
+    // also answers 403 for a missing object, and that is not retried.
+    if (!response.ok && response.status === 403 && first.cached) {
+        response = await fetch(await getPresignedFileUrl(request, subject, { fresh: true }), {
+            signal: request.signal,
+        });
+    }
+    if (!response.ok) {
+        const unavailable = response.status === 403 || response.status === 404;
+        throw new PresignedReadError(
+            unavailable ? PRESIGNED_LINK_UNAVAILABLE_MESSAGE : `${subject} (${response.status})`,
+            response.status
+        );
+    }
+    return response;
 }

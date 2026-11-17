@@ -213,6 +213,8 @@ describe("ThreeJSViewerComponent error panel", () => {
                 databaseId: "db-1",
                 assetId: "asset-1",
                 key: "models/part.glb",
+                // The viewer's abort controller covers the presign request too.
+                signal: expect.any(AbortSignal),
             })
         );
         expect(global.fetch).toHaveBeenCalledTimes(1);
