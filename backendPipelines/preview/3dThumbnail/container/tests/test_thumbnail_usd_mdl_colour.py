@@ -118,6 +118,32 @@ def Scope "Looks"
             "        color3f inputs:diffuse_tint = (1, 0.5, 0)"))
         _assert_close(_rgb(usd_handler.load(path)), [[200, 100, 0]] * 3)
 
+    @pytest.mark.parametrize("uv_sets", [
+        ["st_0"],              # the warehouse forklifts' layout
+        ["st_1", "st_0"],      # several sets: the first by name is sampled
+        ["map1"],
+    ])
+    def test_a_texture_is_sampled_through_a_uv_set_of_another_name(self, tmp_path, uv_sets):
+        _texture(tmp_path / "tex.png")
+        uvs = "".join(f'\n        texCoord2f[] primvars:{name} = [(0.5, 0.5), (0.5, 0.5), (0.5, 0.5)] '
+                      f'(interpolation = "vertex")' for name in uv_sets)
+        tri = _TRI.split("\n        texCoord2f[]")[0] + uvs
+        body = f"""
+def Mesh "M" (prepend apiSchemas = ["MaterialBindingAPI"]) {{{tri}
+    rel material:binding = </Mat>
+}}""" + _mdl_material("        asset inputs:diffuse_texture = @tex.png@")
+        assert _rgb(usd_handler.load(_stage(tmp_path, body))) == [list(_RED)] * 3
+
+    def test_a_float2_primvar_that_is_not_a_texture_coordinate_is_not_sampled(self, tmp_path):
+        _texture(tmp_path / "tex.png")
+        tri = _TRI.split("\n        texCoord2f[]")[0] + (
+            '\n        float2[] primvars:wind = [(0.5, 0.5), (0.5, 0.5), (0.5, 0.5)] (interpolation = "vertex")')
+        body = f"""
+def Mesh "M" (prepend apiSchemas = ["MaterialBindingAPI"]) {{{tri}
+    rel material:binding = </Mat>
+}}""" + _mdl_material("        asset inputs:diffuse_texture = @tex.png@")
+        assert _rgb(usd_handler.load(_stage(tmp_path, body))) is None
+
     def test_the_constant_colours_the_mesh_when_there_is_no_texture(self, tmp_path):
         path = _stage(tmp_path, _mesh() + _mdl_material(
             "        color3f inputs:diffuse_color_constant = (0, 0, 1)"))

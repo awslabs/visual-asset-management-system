@@ -577,12 +577,29 @@ _UV_NAMES = ("st", "UVMap", "st0", "texCoord_0", "Texture_uv", "uv")
 
 
 def _uv_primvar(prim, preferred, time):
+    """(uvs, interpolation) of the prim's texture coordinates, or (None, None): the primvar
+    ``preferred`` names, then the usual UV set names, then the prim's other ``texCoord2f[]`` primvars
+    by name (an exporter may name its sets ``st_0``, ``st_1``, ...)."""
     names = ([preferred] if preferred else []) + [n for n in _UV_NAMES if n != preferred]
+    names += _other_texture_coordinate_primvars(prim, names)
     for name in names:
         values, interpolation = _flattened_primvar(prim, name, time)
         if values is not None and values.ndim == 2 and values.shape[1] >= 2:
             return values[:, :2], interpolation
     return None, None
+
+
+def _other_texture_coordinate_primvars(prim, named):
+    """Names of the prim's texture coordinate array primvars that ``named`` does not list, sorted."""
+    from pxr import UsdGeom
+
+    found = []
+    for primvar in UsdGeom.PrimvarsAPI(prim).GetPrimvarsWithValues():
+        type_name = primvar.GetTypeName()
+        name = str(primvar.GetPrimvarName())
+        if type_name.isArray and type_name.role == "TextureCoordinate" and name not in named:
+            found.append(name)
+    return sorted(found)
 
 
 def _texture_colours(prim, topology, context):
