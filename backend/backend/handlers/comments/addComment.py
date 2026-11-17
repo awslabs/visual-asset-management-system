@@ -15,6 +15,7 @@ from common.dynamodb import get_asset_object_from_id
 from common.constants import STANDARD_JSON_RESPONSE
 from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler, log_action
 
 claims_and_roles = {}
@@ -67,7 +68,10 @@ def add_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, even
         response["message"] = "Internal Server Error"
         return response
 
-    logger.info(item)
+    logger.info(
+        f"Comment added: assetId={assetId}, commentId={assetVersionIdAndCommentId}, "
+        f"commentBody={len(item['commentBody'])} char(s)"
+    )
 
     return response
 
@@ -88,7 +92,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     """
     normalize_event(event)
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
 
     # Parse request body
     if not event.get('body'):
