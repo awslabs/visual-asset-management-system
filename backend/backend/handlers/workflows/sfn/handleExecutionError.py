@@ -33,6 +33,7 @@ from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 from datetime import datetime, timezone
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler, log_action
 from common.resourceNames import get_table_name, ResourceKeys
 from common.workflows import executionRecords as er
@@ -487,7 +488,7 @@ def lambda_handler(event, context):
     """SFN-invoked on any caught error. Reconciles tables to FAILED, then returns so the
     state machine transitions to the Fail state. Never raises (so it never masks the
     original failure)."""
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     try:
         body = event.get('body', event)
         if isinstance(body, str):
