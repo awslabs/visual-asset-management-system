@@ -83,6 +83,10 @@ The Coordinate Transform pipeline depends on the open-source [laspy](https://git
 The laspy BSD-3-Clause license is functionally similar to the MIT and Apache-2.0 licenses already used throughout VAMS and does not introduce any copyleft (LGPL/GPL) requirements. The pipeline's other core libraries — PDAL (BSD-3-Clause), pyproj (MIT), and NumPy (BSD-3-Clause) — are likewise permissively licensed.
 :::
 
+### Zip Archive Pipeline Library Notice
+
+The Zip Archive pipeline, which builds Download as Zip archives, writes zip (ZIP64), tar and tar.gz archives with the Python standard library and reads and writes Amazon S3 with the AWS SDK for Python (Boto3 and Botocore, Apache-2.0), on the Python base image (PSF-2.0). It includes no other third-party archive library.
+
 ### GenAI CAD STEP Agent Pipeline Library Notice
 
 The GenAI CAD STEP Agent pipeline container depends on [CadQuery](https://github.com/CadQuery/cadquery) (Apache-2.0) for STEP import, modelling and export, which in turn bundles the [OCP](https://github.com/CadQuery/OCP) bindings to Open CASCADE Technology. Open CASCADE Technology is distributed under the GNU Lesser General Public License v2.1 with the Open CASCADE exception, an LGPL license: the pipeline uses it as an unmodified, dynamically linked library inside the container image, which is the usage the LGPL permits without imposing its terms on the surrounding code. The agent framework [Strands Agents](https://github.com/strands-agents/sdk-python) and the [Amazon Bedrock AgentCore SDK](https://github.com/aws/bedrock-agentcore-sdk-python) are Apache-2.0, as is the [OpenAI Python SDK](https://github.com/openai/openai-python) that the Strands Agents `openai` extra installs for the OpenAI model provider; the web-search library `ddgs` is MIT; `httpx` is BSD-3-Clause.
@@ -225,6 +229,20 @@ The Image to 3D pipeline's print-readiness cleanup runs a ladder of mesh repair 
 :::note
 Because **pymeshfix** and **PyMeshLab** are present in every Image to 3D container image, GPL-3.0 terms apply to those images regardless of which backends a run selects. GPL-3.0 is a strong copyleft license whose obligations differ materially from the MIT, Apache-2.0, and LGPL-2.1 terms elsewhere in VAMS, and they include source availability obligations if you redistribute the images. Review the license requirements with your legal team before deploying the Image to 3D pipeline, and leave the pipeline disabled where GPL-3.0 components cannot be accepted in your container images. This mirrors the copyleft considerations already noted for Blender (GPL-3.0) in the GenAI Metadata 3D Labeling pipeline and for the LGPL-2.1 CAD components.
 :::
+
+### Sample Assets in Documentation Screenshots
+
+The screenshots in this documentation use sample 3D models from the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets) repository:
+
+| Model                                                                                                  | Author                     | Licence                                                       |
+| ------------------------------------------------------------------------------------------------------ | -------------------------- | ------------------------------------------------------------- |
+| [BoomBox](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/BoomBox)                 | Microsoft                  | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [Avocado](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Avocado)                 | Microsoft                  | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [WaterBottle](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/WaterBottle)         | Microsoft                  | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [Lantern](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Lantern)                 | Microsoft                  | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [IridescenceLamp](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/IridescenceLamp) | Eric Chadwick, Wayfair LLC | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)     |
+
+The USDZ model shown in the file viewer screenshots was created for this documentation. The models appear only in the screenshots; they are not distributed with VAMS.
 
 ---
 

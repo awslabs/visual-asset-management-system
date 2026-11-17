@@ -12,16 +12,19 @@
  * rendered only when the `web` constraint allows its path; an add-on path that repeats a core path
  * never replaces the core page; and the add-on navigation sections are filtered by the same check,
  * the main-menu ones placed after "Orchestrate & Automate" and the admin ones after the core admin
- * sections and before "User", with the fork's after everything. A navigation entry restricted to feature
- * switches shows only while all of them are enabled, and appears when they arrive after mount.
+ * sections, with the fork's after everything. A navigation entry restricted to feature switches
+ * shows only while all of them are enabled, and appears when they arrive after mount. Entries with
+ * `placement: "profile"` from either lane go to the top-bar profile menu instead, filtered by the
+ * same check and placed after the core profile entries.
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import { routeTable, AppRoutes } from "../routes";
 import { Navigation } from "../layout/Navigation";
+import { useProfileMenuItems } from "../layout/useProfileMenuItems";
 import { RuntimeConfigContext } from "../context/RuntimeConfigContext";
 import { checkWebRoutesAllowed, WebRouteCheck } from "../services/webRoutesCheck";
 
@@ -64,12 +67,25 @@ jest.mock("./addonNavigation", () => ({
             text: "Add-on admin probe",
             items: [{ type: "link", text: "Add-on admin page", href: "#/addon-admin-probe/" }],
         },
+        {
+            type: "link",
+            text: "Add-on restricted profile probe",
+            href: "#/addon-restricted-profile/",
+            placement: "profile",
+            featuresEnabledRestriction: ["ADDON_PROBE_FEATURE"],
+        },
     ],
     addonNavMainSections: [
         {
             type: "section",
             text: "Add-on probe",
             items: [{ type: "link", text: "Add-on probe page", href: "#/addon-probe/" }],
+        },
+        {
+            type: "link",
+            text: "Add-on profile probe",
+            href: "#/addon-profile-probe/",
+            placement: "profile",
         },
         {
             type: "section",
@@ -94,6 +110,12 @@ jest.mock("../custom/customNavigation", () => ({
             type: "section",
             text: "Custom probe",
             items: [{ type: "link", text: "Custom probe page", href: "#/custom/probe/" }],
+        },
+        {
+            type: "section",
+            text: "Custom profile probe",
+            placement: "profile",
+            items: [{ type: "link", text: "Custom profile page", href: "#/custom/profile-probe/" }],
         },
     ],
 }));
@@ -186,7 +208,7 @@ describe("navigation lanes", () => {
     }
 
     it("places the add-on main-menu section after Orchestrate & Automate, ahead of the admin area", async () => {
-        allowRoutes("/executions", "/addon-probe", "/metadataschema", "/auth/api-keys");
+        allowRoutes("/executions", "/addon-probe", "/metadataschema");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 
@@ -196,10 +218,9 @@ describe("navigation lanes", () => {
         expect(executions).toBeGreaterThan(-1);
         expect(text.indexOf("Add-on probe")).toBeGreaterThan(executions);
         expect(text.indexOf("Metadata Schema")).toBeGreaterThan(text.indexOf("Add-on probe"));
-        expect(text.indexOf("API Key Management")).toBeGreaterThan(text.indexOf("Add-on probe"));
     });
 
-    it("places the add-on admin section after the core admin sections and before User", async () => {
+    it("places the add-on admin section after the core admin sections", async () => {
         allowRoutes("/auth/userroles", "/addon-admin-probe", "/auth/api-keys");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
@@ -209,13 +230,12 @@ describe("navigation lanes", () => {
         const usersInRoles = text.indexOf("Users in Roles");
         expect(usersInRoles).toBeGreaterThan(-1);
         expect(text.indexOf("Add-on admin probe")).toBeGreaterThan(usersInRoles);
-        expect(text.indexOf("API Key Management")).toBeGreaterThan(
-            text.indexOf("Add-on admin probe")
-        );
+        // The user's own API key page is in the profile menu, so there is no "User" section below.
+        expect(text).not.toContain("API Key Management");
     });
 
     it("keeps the fork's section after every core and add-on section", async () => {
-        allowRoutes("/addon-probe", "/addon-admin-probe", "/auth/api-keys", "/custom/probe");
+        allowRoutes("/addon-probe", "/addon-admin-probe", "/auth/userroles", "/custom/probe");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 
@@ -224,15 +244,15 @@ describe("navigation lanes", () => {
         const custom = text.indexOf("Custom probe");
         expect(custom).toBeGreaterThan(text.indexOf("Add-on probe"));
         expect(custom).toBeGreaterThan(text.indexOf("Add-on admin probe"));
-        expect(custom).toBeGreaterThan(text.indexOf("API Key Management"));
+        expect(custom).toBeGreaterThan(text.indexOf("Users in Roles"));
     });
 
     it("filters the add-on admin section by the same web-route check", async () => {
-        allowRoutes("/auth/api-keys");
+        allowRoutes("/auth/userroles");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 
-        await waitFor(() => expect(nav?.findLinkByHref("#/auth/api-keys/")).toBeTruthy());
+        await waitFor(() => expect(nav?.findLinkByHref("#/auth/userroles/")).toBeTruthy());
         expect(nav?.findLinkByHref("#/addon-admin-probe/")).toBeFalsy();
         expect(screen.queryByText("Add-on admin probe")).not.toBeInTheDocument();
     });
@@ -292,5 +312,87 @@ describe("navigation lanes", () => {
         // Every switch an entry lists must be on: the second one is still absent.
         expect(nav()?.findLinkByHref("#/addon-restricted/both/")).toBeFalsy();
         expect(screen.queryByText("Add-on two-switch page")).not.toBeInTheDocument();
+    });
+
+    it("keeps profile-placed add-on and custom entries out of the side navigation", async () => {
+        allowRoutes("/databases", "/addon-profile-probe", "/custom/profile-probe");
+        const container = await renderNavigation();
+        const nav = createWrapper(container).findSideNavigation();
+
+        await waitFor(() => expect(nav?.findLinkByHref("#/databases/")).toBeTruthy());
+        expect(nav?.findLinkByHref("#/addon-profile-probe/")).toBeFalsy();
+        expect(nav?.findLinkByHref("#/custom/profile-probe/")).toBeFalsy();
+    });
+});
+
+describe("profile menu lanes", () => {
+    function hrefs(items: any[]): string[] {
+        return items.flatMap((item) => [
+            ...(item.href ? [item.href] : []),
+            ...hrefs(item.items ?? []),
+        ]);
+    }
+
+    it("places add-on, then custom profile entries after the core ones, before Sign out", async () => {
+        allowRoutes("/auth/api-keys", "/addon-profile-probe", "/custom/profile-probe");
+        const { result } = renderHook(() => useProfileMenuItems());
+
+        await waitFor(() => expect(hrefs(result.current)).toContain("#/custom/profile-probe/"));
+        expect(hrefs(result.current)).toEqual([
+            "#/auth/api-keys/?mode=user",
+            "#/addon-profile-probe/",
+            "#/custom/profile-probe/",
+        ]);
+        const ids = (result.current as any[]).map((item) => item.id);
+        expect(ids[ids.length - 1]).toBe("signout");
+        expect(ids).toContain("group:Custom profile probe");
+    });
+
+    it("filters add-on and custom profile entries by the same web-route check", async () => {
+        allowRoutes("/auth/api-keys");
+        const { result } = renderHook(() => useProfileMenuItems());
+
+        await waitFor(() => expect(hrefs(result.current)).toContain("#/auth/api-keys/?mode=user"));
+        expect(hrefs(result.current)).not.toContain("#/addon-profile-probe/");
+        expect(hrefs(result.current)).not.toContain("#/custom/profile-probe/");
+        expect((result.current as any[]).map((item) => item.id)).not.toContain(
+            "group:Custom profile probe"
+        );
+    });
+
+    it("adds a profile entry restricted to a feature switch only while the switch is on", async () => {
+        allowRoutes(
+            "/auth/api-keys",
+            "/addon-profile-probe",
+            "/addon-restricted-profile",
+            "/custom/profile-probe"
+        );
+        let features: string[] = [];
+        const wrapper = ({ children }: { children: React.ReactNode }) => (
+            <RuntimeConfigContext.Provider value={{ featuresEnabled: features }}>
+                {children}
+            </RuntimeConfigContext.Provider>
+        );
+        const { result, rerender } = renderHook(() => useProfileMenuItems(), { wrapper });
+
+        await waitFor(() => expect(hrefs(result.current)).toContain("#/custom/profile-probe/"));
+        expect(hrefs(result.current)).not.toContain("#/addon-restricted-profile/");
+        const firstCheck = mockCheckWebRoutesAllowed.mock.calls[0][0].map(
+            (route) => route.route__path
+        );
+        expect(firstCheck).not.toContain("/addon-restricted-profile");
+
+        features = ["ADDON_PROBE_FEATURE"];
+        rerender();
+
+        // Both add-on lists' profile entries follow the core ones, and the fork's come last.
+        await waitFor(() =>
+            expect(hrefs(result.current)).toEqual([
+                "#/auth/api-keys/?mode=user",
+                "#/addon-profile-probe/",
+                "#/addon-restricted-profile/",
+                "#/custom/profile-probe/",
+            ])
+        );
     });
 });

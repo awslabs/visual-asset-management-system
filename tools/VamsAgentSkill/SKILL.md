@@ -394,7 +394,10 @@ success from the launch alone — read the execution back.
 -   There are **two listings**: a global, filterable, cross-asset execution list
     (execution group), and a per-asset execution history (workflow group). Use the
     global one for status/date/group/trigger filtering; use the per-asset one to
-    answer "what has run against this asset".
+    answer "what has run against this asset". Both **hide runs of system
+    workflows** unless asked (`--include-system`; MCP `include_system`), except a
+    listing narrowed to one system workflow; `includeSystem` in the response says
+    which applied, so do not report a history as complete without checking it.
 -   **Statuses** are `NEW`, `RUNNING`, `SUCCEEDED`, `FAILED`, `TIMED_OUT`, and
     `ABORTED`. The last four are terminal.
 -   **Details** give per-step status, the rendered config each step ran with,

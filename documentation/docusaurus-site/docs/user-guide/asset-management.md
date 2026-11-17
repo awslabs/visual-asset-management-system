@@ -25,7 +25,7 @@ The asset detail page is organized into three vertically stacked sections:
 
 The details pane is the top section and displays the asset's core properties alongside action buttons.
 
-![Asset detail page showing preview thumbnail, properties, and action buttons](/img/view_asset_page_20260323_v2.5.png)
+![Asset detail page showing preview thumbnail, properties, and action buttons](/img/view_asset_page_20261109_v2.7.png)
 
 | Element                  | Description                                                                                                                                                     |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -213,9 +213,27 @@ Select **(versions)** beside the **Version Date** to open the file's version his
 
 To add files to an existing asset:
 
-1. In the File Manager, use the upload controls to select files or folders.
-2. Files are uploaded to the current directory location in the asset's file hierarchy.
-3. Upload progress is displayed for each file.
+1. In the File Manager, select the folder to add files to (or the asset root), then select **Upload Files**. The **Modify Asset Files** page opens with that folder as the **Destination folder**. The page header names the asset, its database and the destination. Beside the upload zone, the asset's overall preview file picker (asset root only), the database's upload restrictions, if any, and the **About preview files** guidance are shown. The guidance is expanded when the page opens; if you collapse it, it opens again on its own when the selection includes preview files.
+2. Change the destination if needed. It is also kept in the page address as `?folder=/scene/`, so a refresh or a shared link keeps it. Relative segments (`.`, `..`) and backslashes are refused.
+3. Add files with **Add files**, **Add folder**, or by dropping files and folders onto the upload zone. A picked folder and a dropped folder land at the same path:
+    - **A folder keeps its name** under the destination: `textures/` added at `/scene/` lands under `/scene/textures/`. For a single folder you can switch to **Upload folder contents** to put its files directly in the destination instead.
+    - **Loose files** land directly in the destination: `notes.txt` added at `/scene/` becomes `/scene/notes.txt`.
+4. Review the preview. Every path includes the destination, and changing the destination moves every previewed file. Files whose path already exists in the asset are marked before the upload starts, and you can remove them from the selection:
+
+    - **Exists: uploads a new version** -- the upload adds a new version of that file. The earlier versions stay in its history, and existing asset versions keep pointing at the version they captured.
+    - **Archived: uploading restores it with a new version** -- the archived file becomes visible and current again, with the uploaded content as its new version.
+
+    If VAMS cannot check every existing file (for example, the listing is refused or the folder holds more than 10,000 files), an info alert says so and no rows are marked; the upload still works the same way. Duplicate paths within the selection are errors and block the upload until removed. See [File versions](../concepts/files-and-versions.md#file-versions-amazon-s3).
+
+    The view switch above the table narrows the list:
+
+    - **All** -- every file in the selection.
+    - **Errors (n)** -- the files that block the upload: **Duplicate path**, **Invalid path**, and an extension the database does not allow (for example **Extension .gltf not allowed**). The reason also shows beside the disabled **Finalize and Upload** button. The error alert's **Show errors only** action switches to this view.
+    - **Existing (n)** -- appears once the existing-file check has finished, and lists the files marked **Exists** or **Archived**. These marks are warnings, not errors: they do not block the upload.
+
+5. Select **Finalize and Upload**, or **Cancel** to return to the asset. While the button is disabled, the reason is shown beside it. Upload progress is displayed for each file.
+
+![Add Files page with the destination folder /scene/, files at existing paths marked Exists: uploads a new version, and two Duplicate path errors](/img/upload_add_files_destination_20261113_v2.7.png)
 
 :::tip
 You can also navigate to the dedicated upload page for the asset from the asset detail page to use the full upload wizard with metadata and relationship options.
@@ -303,7 +321,7 @@ Preview images appear in the file details panel and are used as thumbnails in se
 
 ### Download and Share URLs
 
-![Download dialog for multiple file selection](/img/download_file_multiple_20260323_v2.5.png)
+![Download dialog for multiple file selection](/img/download_file_multiple_20261109_v2.7.png)
 
 For distributable assets, you can generate shareable download URLs:
 
@@ -313,7 +331,11 @@ For distributable assets, you can generate shareable download URLs:
     - **URLs (Embedded Auth)** -- Generates time-limited presigned URLs with embedded authentication. These expire after the timeout configured by your administrator (24 hours by default), or earlier if the credentials that signed them expire first.
     - **URLs (API Stream)** -- Generates long-lasting streaming URLs that require an Authorization header with a Bearer token. These do not expire as long as the caller is authenticated.
 
-![Share files modal for generating presigned URLs](/img/share_files_modal_20260323_v2.5.png)
+![Share files modal for generating presigned URLs](/img/share_files_modal_20261109_v2.7.png)
+
+### Download as Zip
+
+When the deployment enables Download as Zip, the **Export** menu in the file details toolbar offers **Download as Zip** for any selection of files and folders, or for the asset root. VAMS builds one zip, tar, or tar.gz archive in the background from the current files or from an asset version, and lists the archive job in the asset's **Download Queue** tab, where you download, cancel, or delete it. The whole archive is refused when a selected file is archived, a deleted version, in an archive storage class, or has a blocked file type. See [Download as Zip and the Download Queue](zip-downloads.md).
 
 ---
 
@@ -440,7 +462,7 @@ Comments are tied to the asset, not to a specific version. All comments remain v
 
 The **Executions** tab shows the execution history of all workflows that have been run against the asset. This provides a centralized view of processing activities without needing to navigate to the workflow management pages.
 
-![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20260803_v2.6.png)
+![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20261109_v2.7.png)
 
 ### Viewing Execution History
 

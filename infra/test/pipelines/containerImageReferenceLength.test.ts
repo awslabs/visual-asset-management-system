@@ -106,6 +106,12 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
                         !pipelines.useGenAiVideoSopBom.bedrockModelId
                     )
                         pipelines.useGenAiVideoSopBom.bedrockModelId = "synth-only-model";
+                    // The Download as Zip zipArchive pipeline (app.pipelines.useZipDownloads).
+                    c.app.pipelines.useZipDownloads = {
+                        ...(c.app.pipelines.useZipDownloads ?? {}),
+                        enabled: true,
+                        useCodeBuild: true,
+                    };
                 },
             });
         });

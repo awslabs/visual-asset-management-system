@@ -12,10 +12,16 @@ The rules follow the VAMS API authorizer (``backend/backend/common/auth/authoriz
 * Amazon Cognito: ``token_use`` is ``id`` or ``access``; the app client (``aud`` of an ID token,
   ``client_id`` of an access token) is one of the configured audiences; an access token names its
   user in ``username`` (a client credentials token carries none).
-* External OAuth IdP: one of the token's ``aud`` values is a configured audience, and the token names
-  a user: an identity claim (``cognito:username``, ``username`` or ``sub``) that is not its own
-  client identifier (``client_id``, ``azp``, ``cid``), and no app-only marker (``gty`` =
-  ``client-credentials``, ``idtyp`` = ``app``, ``preferred_username`` starting ``service-account-``).
+* External OAuth IdP: the token's audience, read through the configured audience claims (``aud`` by
+  default, or ``client_id`` or both; the first claim of the list the token carries decides, and a later
+  claim cannot rescue a mismatch), is a configured audience; and the token names a user: the configured
+  user id claim when one is set (that claim only), else the first of ``cognito:username``, ``username``
+  and ``sub``. That identity must not be the token's own client identifier (``client_id``, ``azp``,
+  ``cid``), and the token must carry no app-only marker (``gty`` = ``client-credentials``, ``idtyp`` =
+  ``app``, ``preferred_username`` starting ``service-account-``). The two claim settings are the
+  deployment's ``lambdaAuthorizorJWTAudienceClaims`` and ``lambdaAuthorizorJWTUserIdClaim``;
+  ``tests/test_remote_auth_parity.py`` runs one set of token fixtures through this verifier and the
+  authorizer and requires the same outcome.
 
 The configured audiences are this server's own clients only (the ones the operator registered for
 remote MCP clients), not the web application's client, so a web-app token is not accepted here.
@@ -28,6 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -49,6 +56,13 @@ PROVIDERS = (PROVIDER_COGNITO, PROVIDER_EXTERNAL)
 MCP_PATH = "/mcp"
 # At most this many audiences, the same bound the API's additionalTokenAudiences setting has.
 MAX_AUDIENCES = 10
+
+# The claims an external token's audience may be read from, and the default (the authorizer's own).
+SUPPORTED_AUDIENCE_CLAIMS = ("aud", "client_id")
+DEFAULT_AUDIENCE_CLAIMS = ("aud",)
+# A user id claim name, as the authorizer and the deployment's configuration accept it; the reserved
+# 'vams:' prefix (any letter case) is refused.
+USER_ID_CLAIM_PATTERN = re.compile(r"^(?!vams:)[A-Za-z0-9_:.\-]+$", re.IGNORECASE)
 
 ALLOWED_ALGORITHMS = ["RS256"]
 JWKS_CACHE_SECONDS = 3600
@@ -92,6 +106,52 @@ def _check_url(name: str, value: Any, *, require_path: Optional[str] = None) -> 
     return value
 
 
+def check_audience_claims(value: Any) -> Tuple[str, ...]:
+    """``value`` as a list of distinct audience claim names the authorizer supports, else a ConfigError."""
+    if (
+        not isinstance(value, (list, tuple))
+        or not value
+        or any(name not in SUPPORTED_AUDIENCE_CLAIMS for name in value)
+        or len(set(value)) != len(value)
+    ):
+        raise ConfigError(
+            "remote auth configuration: 'audienceClaims' must list distinct claim names from "
+            f"{', '.join(SUPPORTED_AUDIENCE_CLAIMS)}"
+        )
+    return tuple(value)
+
+
+def check_user_id_claim(value: Any) -> str:
+    """``value`` as a user id claim name (not under the reserved 'vams:' prefix), else a ConfigError."""
+    if not isinstance(value, str) or not USER_ID_CLAIM_PATTERN.fullmatch(value):
+        raise ConfigError(
+            "remote auth configuration: 'userIdClaim' must be a claim name of letters, digits and _ : . - "
+            "that does not start with 'vams:'"
+        )
+    return value
+
+
+def _parse_claim_settings(data: Dict[str, Any], provider: str) -> Tuple[Tuple[str, ...], Optional[str]]:
+    """The audience claims and user id claim of a settings file (the defaults when absent).
+
+    They apply to an external IdP only; a Cognito file naming them is refused rather than ignored.
+    """
+    has_audience_claims = data.get("audienceClaims") is not None
+    has_user_id_claim = data.get("userIdClaim") not in (None, "")
+    if provider != PROVIDER_EXTERNAL:
+        if has_audience_claims or has_user_id_claim:
+            raise ConfigError(
+                "remote auth configuration: 'audienceClaims' and 'userIdClaim' apply to an external "
+                "IdP only"
+            )
+        return DEFAULT_AUDIENCE_CLAIMS, None
+    audience_claims = (
+        check_audience_claims(data["audienceClaims"]) if has_audience_claims else DEFAULT_AUDIENCE_CLAIMS
+    )
+    user_id_claim = check_user_id_claim(data["userIdClaim"]) if has_user_id_claim else None
+    return audience_claims, user_id_claim
+
+
 @dataclass(frozen=True)
 class RemoteAuthSettings:
     """What ``vams-mcp setup-remote`` writes and the remote server reads. Holds no secret."""
@@ -106,6 +166,10 @@ class RemoteAuthSettings:
     client: Dict[str, Any] = field(default_factory=dict)
     # The web application's own client, recorded by `vams-mcp setup-remote`; never an audience.
     web_app_client_id: Optional[str] = None
+    # External IdP only: the token claims the audience is read from, and the claim the user id is read
+    # from (None: the first of cognito:username, username, sub). Absent in the file = the defaults.
+    audience_claims: Tuple[str, ...] = DEFAULT_AUDIENCE_CLAIMS
+    user_id_claim: Optional[str] = None
 
     @property
     def resource_path(self) -> str:
@@ -167,6 +231,7 @@ class RemoteAuthSettings:
                 f"('{web_app_client_id}'); the remote server accepts only the clients registered for remote "
                 "MCP clients. Remove it, or write the file again with `vams-mcp setup-remote`"
             )
+        audience_claims, user_id_claim = _parse_claim_settings(data, provider)
         return cls(
             api_url=_check_url("apiUrl", data.get("apiUrl")).rstrip("/"),
             resource_url=_check_url("resourceUrl", data.get("resourceUrl"), require_path=MCP_PATH).rstrip("/"),
@@ -177,6 +242,8 @@ class RemoteAuthSettings:
             scopes=tuple(dict.fromkeys(scopes)),
             client=dict(client),
             web_app_client_id=web_app_client_id,
+            audience_claims=audience_claims,
+            user_id_claim=user_id_claim,
         )
 
     @classmethod
@@ -204,6 +271,12 @@ class RemoteAuthSettings:
             "scopes": list(self.scopes),
             "client": dict(self.client),
             **({"webAppClientId": self.web_app_client_id} if self.web_app_client_id else {}),
+            **(
+                {"audienceClaims": list(self.audience_claims)}
+                if self.audience_claims != DEFAULT_AUDIENCE_CLAIMS
+                else {}
+            ),
+            **({"userIdClaim": self.user_id_claim} if self.user_id_claim else {}),
         }
 
 
@@ -370,13 +443,31 @@ class TokenVerifier:
             raise _Rejected("no_user")
         return user, audience
 
+    def _matched_audience(self, claims: Dict[str, Any]) -> Optional[str]:
+        """The configured audience the token names, read through the configured audience claims.
+
+        The first claim of the list the token carries decides; it must name a configured audience
+        (``aud`` may be a string or a list of strings, ``client_id`` a string), and a later claim cannot
+        rescue a mismatch. Exact string comparison, as in the authorizer.
+        """
+        for claim_name in self.settings.audience_claims:
+            if claim_name in claims:
+                value = claims[claim_name]
+                if claim_name == "aud" and isinstance(value, list):
+                    values = list(value) if all(isinstance(item, str) for item in value) else []
+                else:
+                    values = [value] if isinstance(value, str) else []
+                return next((a for a in self.settings.audiences if a in values), None)
+        return None
+
     def _external_identity(self, claims: Dict[str, Any]) -> Tuple[str, str]:
-        aud = claims.get("aud")
-        candidates = [aud] if isinstance(aud, str) else (aud if isinstance(aud, list) else [])
-        matched = next((a for a in candidates if isinstance(a, str) and a in self.settings.audiences), None)
+        matched = self._matched_audience(claims)
         if matched is None:
             raise _Rejected("audience")
-        identity = claims.get("cognito:username") or claims.get("username") or claims.get("sub")
+        if self.settings.user_id_claim:
+            identity = claims.get(self.settings.user_id_claim)
+        else:
+            identity = claims.get("cognito:username") or claims.get("username") or claims.get("sub")
         if not _non_blank(identity) or _is_machine_token(claims):
             raise _Rejected("no_user")
         client_ids = {claims.get(c) for c in _CLIENT_IDENTIFIER_CLAIMS if _non_blank(claims.get(c))}
@@ -407,16 +498,16 @@ class TokenVerifier:
                     key,
                     algorithms=ALLOWED_ALGORITHMS,
                     issuer=self.settings.issuer,
-                    # A Cognito access token carries its client in client_id, not aud, so the audience
-                    # is checked against the token_use-specific claim in _cognito_identity instead.
-                    audience=list(self.settings.audiences) if external else None,
+                    # The audience is checked after the signature, through the claim(s) the provider
+                    # reads it from (_cognito_identity, _external_identity); PyJWT reads only 'aud'.
+                    audience=None,
                     options={
                         "require": ["exp", "iss"],
                         "verify_signature": True,
                         "verify_exp": True,
                         "verify_nbf": True,
                         "verify_iss": True,
-                        "verify_aud": external,
+                        "verify_aud": False,
                     },
                 )
             except pyjwt.ExpiredSignatureError:

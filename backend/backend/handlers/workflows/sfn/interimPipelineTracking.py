@@ -33,6 +33,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.workflows import executionRecords as er
@@ -473,7 +474,7 @@ def lambda_handler(event, context):
 
     Returns the next-pipeline input locations as the state result. Never finalizes the
     overall execution (that is the end-state processWorkflowExecutionOutput lambda)."""
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     body = event.get('body', event)
     if isinstance(body, str):
         try:

@@ -1352,6 +1352,77 @@ export async function pickViewerIfAsked(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Top-bar profile menu (the user's own pages from the navigation registry, then Sign out)
+// ---------------------------------------------------------------------------------------------
+
+/** The signed-in user's name as the top bar shows it (the `user` entry the auth flow stores). */
+export async function profileMenuName(page: Page): Promise<string | null> {
+    return page.evaluate(() => {
+        try {
+            const user = JSON.parse(localStorage.getItem("user") ?? "null");
+            return typeof user?.username === "string" && user.username ? user.username : null;
+        } catch {
+            return null;
+        }
+    });
+}
+
+/**
+ * The profile menu's trigger in the top bar: the button named with the user's name, or "Profile
+ * menu" when the top bar has no name to show. Settings never collapses. At phone widths (320-390
+ * px) the trigger stays in the top bar as the user icon; only at about 280 px does TopNavigation
+ * move it into the "More" overflow menu, so use `openProfileMenu` to reach it at any width.
+ */
+export async function profileMenuTrigger(page: Page): Promise<Locator> {
+    const name = await profileMenuName(page);
+    return page
+        .locator("#headerWrapper")
+        .getByRole("button", { name: name ?? "Profile menu", exact: true });
+}
+
+/**
+ * Open the profile menu by keyboard (focus, then Enter) and return how it was reached: `menu` when
+ * the trigger is in the top bar (including the user icon at phone widths), `overflow` when
+ * TopNavigation collapsed it into "More" (about 280 px and below), where the user's entry opens a
+ * submenu view. Page links are `a[href="#/..."]` in both.
+ */
+export async function openProfileMenu(page: Page): Promise<"menu" | "overflow"> {
+    const header = page.locator("#headerWrapper");
+    const trigger = await profileMenuTrigger(page);
+    if (await trigger.isVisible()) {
+        await trigger.focus();
+        await page.keyboard.press("Enter");
+        return "menu";
+    }
+    const more = header.getByRole("button", { name: "More", exact: true });
+    await expect(
+        more,
+        "neither the profile menu nor the More menu is in the top bar"
+    ).toBeVisible();
+    await more.focus();
+    await page.keyboard.press("Enter");
+    const name = await profileMenuName(page);
+    const entry = page.getByRole("button", { name: name ?? "Profile menu", exact: true }).last();
+    await expect(entry, "the profile entry of the More menu").toBeVisible();
+    await entry.focus();
+    await page.keyboard.press("Enter");
+    return "overflow";
+}
+
+/** A page link in the open profile menu, by its href (for example `#/auth/api-keys/?mode=user`). */
+export function profileMenuLink(page: Page, href: string): Locator {
+    return page.locator(`a[href="${href}"]`).filter({ visible: true });
+}
+
+/**
+ * The side navigation: the `nav` landmark holding the app's hash-route links. The top bar's links
+ * are outside any `nav`, and the phone toolbar's `nav` holds no links.
+ */
+export function sideNavigation(page: Page): Locator {
+    return page.locator("nav").filter({ has: page.locator('a[href^="#/"]') });
+}
+
+// ---------------------------------------------------------------------------------------------
 // SuperSplat Editor (iframe-embedded, WebGPU-only): the splat count and a pixel diff against the
 // empty editor, because the editor's own grid and UI make an unloaded canvas look "rendered".
 // ---------------------------------------------------------------------------------------------
@@ -1479,4 +1550,56 @@ export async function expectSuperSplatRendered(
         `${what}: the SuperSplat canvas matches the empty editor`
     ).toBeGreaterThanOrEqual(minChangedFraction);
     return { splats, changedFraction };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Feature switches and a second signed-in user
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The deployment's feature switches (`featuresEnabled`), as the running app cached them from
+ * secure-config. The app holds its shell until the switches arrive, so once the app has rendered
+ * they are present; this polls briefly for a page that is still starting.
+ */
+export async function featureSwitches(page: Page): Promise<string[]> {
+    if (!page.url().startsWith("http")) {
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+    }
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+        const switches = await page.evaluate(() => {
+            try {
+                const raw = localStorage.getItem("vams_cache_config");
+                const parsed = raw ? JSON.parse(raw) : null;
+                const config = parsed?.value ?? parsed ?? {};
+                const value = config.featuresEnabled;
+                if (Array.isArray(value))
+                    return value.filter((v: unknown) => typeof v === "string");
+                if (typeof value === "string") return value.split(",").map((v) => v.trim());
+                return null;
+            } catch {
+                return null;
+            }
+        });
+        if (switches) return switches;
+        if (Date.now() > deadline) return [];
+        await page.waitForTimeout(1000);
+    }
+}
+
+/**
+ * Sign a fresh page in through the Amplify Authenticator as another user (the admin state comes
+ * from `auth.setup.ts`). Use with `test.use({ storageState: { cookies: [], origins: [] } })` or a
+ * new browser context, and read the credentials from the environment, never from the spec.
+ */
+export async function signInAs(page: Page, username: string, password: string): Promise<void> {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    const userField = page
+        .locator('input[name="username"], input[autocomplete="username"], input[type="email"]')
+        .first();
+    await userField.waitFor({ state: "visible", timeout: 45_000 });
+    await userField.fill(username);
+    await page.locator('input[name="password"], input[type="password"]').first().fill(password);
+    await page.getByRole("button", { name: /sign in/i }).click();
+    await expect(page.getByRole("button", { name: username })).toBeVisible({ timeout: 45_000 });
 }

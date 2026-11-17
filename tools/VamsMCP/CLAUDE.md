@@ -49,7 +49,7 @@ tools/VamsMCP/
                              # (the server's own token check, before any tool runs)
     http_app.py              # remote mode: RemoteGate (RFC 9728 metadata, the 401 challenge, token
                              # check, per-request identity) in front of the SDK's streamable HTTP app
-    setup_remote.py          # `vams-mcp setup-remote`: writes the auth file from /api/amplify-config
+    setup_remote.py          # `vams-mcp setup-remote`: writes the auth file from /api/amplify-config (incl. the published externalOAuthIdpAudienceClaims / UserIdClaim and the relative externalOAuthIdpDiscoveryEndpoint path joined to the provider URL, --issuer as fallback and required when the provider URL serves no discovery document, e.g. a Cognito hosted UI domain; --audience-claim overrides)
     annotations.py           # the MCP ToolAnnotations constant of each gate tier (Mandatory Rule 12)
     results.py               # typed results of the most-used reads -> outputSchema (Rule 13)
     client.py                # VamsClient: wraps vamscli APIClient + ProfileManager; remote mode's
@@ -94,6 +94,7 @@ tools/VamsMCP/
                              # bad tokens, per-user results under concurrency, fail closed, no token
                              # in logs or on disk, DNS rebinding, body limit
     test_remote_auth.py      # TokenVerifier rules (Cognito, external IdP, keys) and the auth file
+    test_remote_auth_parity.py  # shared token cases (tests/parity/) also run against the API authorizer
     test_remote_mode.py      # remote start-up rules, per-request client, CLI log silenced, budget
     test_setup_remote.py     # `vams-mcp setup-remote`
     api_coverage.py          # COVERAGE MANIFEST: every public APIClient method -> the tools that call
@@ -103,6 +104,9 @@ tools/VamsMCP/
     test_comment_subscription_tools.py
                              # the comment / subscription / metadata-schema / API-key tools: the three
                              # response shapes they span, and their docstring contracts
+    test_zip_download_tools.py
+                             # the Download as Zip tools: gate tiers, the body create builds (the CLI's
+                             # own selection helpers), errors as data, the URL tool out of autoApprove
     test_compliance_tools.py # the compliance tools: the two single-response listings, the
                              # maxItems-keyed pages (evaluations, audit, quarantine), the
                              # page-returning overview/bindings reads, the write/destructive
@@ -239,6 +243,13 @@ asymmetry other callers rely on):
    with `is_active=False` is the reversible revoke and is what the delete tools point at
    first. An API-key tool takes `is_active` as a bool and sends the model's `"true"` /
    `"false"` string — the request model rejects a raw boolean.
+   `get_zip_download_url` (write tier) is the same kind: it returns a presigned URL to a whole
+   archive, so it stays out of `autoApprove` and its docstring says where the URL ends up;
+   `create_zip_download` starts a Batch job and stays out too (annotated `COMPUTE`).
+   `cancel_zip_download` (`DESTRUCTIVE_COMPUTE`: it stops that job) and `delete_zip_download`
+   are destructive tier; the reads `list_zip_downloads` (with `all_users=True`, every user's
+   jobs for one asset; the API decides who may call it) and `get_zip_download` may be
+   auto-approved.
 
     **A required-true request field is not a confirmation to re-expose.**
     `delete_asset` sends `confirmPermanentDelete=True` because
@@ -468,7 +479,13 @@ asymmetry other callers rely on):
     - **The server verifies the token before any tool or resource runs.** `http_app.RemoteGate`
       checks every request except the RFC 9728 metadata routes with `remote_auth.TokenVerifier`
       (RS256 against the issuer's JWKS, `iss`, an audience in the auth file, `exp`, `token_use`, a
-      named user, the machine-token rules of the API authorizer). No token or a bad one: `401` with
+      named user, the machine-token rules of the API authorizer). For an external IdP the verifier
+      mirrors `authorizerCore.py`: the audience is read through the auth file's `audienceClaims`
+      (default `aud`; first claim present decides) and the user through `userIdClaim` (default the
+      chain `cognito:username`, `username`, `sub`). Keep both in step with the authorizer:
+      `tests/parity/external_token_cases.json` is run through each side
+      (`tests/test_remote_auth_parity.py`, `backend/tests/common/auth/test_authorizerCore_remote_mcp_parity.py`),
+      so change a rule in both places and add a case to the file. No token or a bad one: `401` with
       `WWW-Authenticate: Bearer resource_metadata="..."`. Keys that cannot be read: `503`, nothing
       passes. Detecting a header is not verifying it; never add a path around the gate, and never a
       test bypass (the tests sign real tokens with keys a loopback fake issuer serves).

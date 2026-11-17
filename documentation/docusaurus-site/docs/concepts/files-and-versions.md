@@ -36,6 +36,8 @@ Files are uploaded using a multipart upload process:
 
 VAMS supports uploading up to 1,000 files per request, with a maximum of 1,500 total parts across all files. A request whose pre-signed URL response would be too large for the API, which can happen below 1,500 parts when file names are long and use non-ASCII characters, is refused; see [Upload request size limits](../troubleshooting/known-limitations.md#upload-request-size-limits). Zero-byte files are supported with special handling (no multipart upload needed).
 
+Uploading to a path that already exists in the asset adds a new Amazon S3 version of that file; nothing is refused or asked. Uploading to the path of an archived file restores it, with the uploaded content as its new current version. The web upload page marks both cases in its preview before the upload starts.
+
 :::info[Upload types]
 Two upload types are supported: `assetFile` for regular asset files, and `assetPreview` for asset-level preview images. Preview uploads accept exactly one file.
 :::

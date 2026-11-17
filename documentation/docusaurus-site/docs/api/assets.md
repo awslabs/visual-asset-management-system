@@ -190,6 +190,10 @@ The endpoint runs in two stages against the same path, distinguished by the pres
 
 Both stages require `PUT` permission on the asset (`objectType: "asset"`) in addition to route access.
 
+When the complete stage finds no asset, it checks the upload before it creates the asset: an `uploadId` that is unknown, already completed, initialized for another asset or database, or expired is refused with `400` and nothing is created.
+
+Likewise, when the initialize stage finds no asset, it checks the file names first: a file with a blocked extension, an extension the database does not allow, or a `.previewFile.` file with a disallowed extension is refused with `400` and the asset is not created.
+
 #### Initialize request body
 
 | Field             | Type          | Required | Description                                                                                                          |
@@ -301,13 +305,13 @@ Repeat the asset fields from the initialize request, and add:
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                               |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, or a failure creating the asset or the upload. |
-| `403`  | Not authorized to write this asset, or the upload step refused the request.                                                                                               |
-| `404`  | The upload step reported its target as not found.                                                                                                                         |
-| `429`  | Rate limit exceeded: more than 20 upload initializations by the user in one minute. The response carries a `Retry-After` header (seconds).                                |
-| `500`  | Internal server error.                                                                                                                                                    |
+| Status | Description                                                                                                                                                                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, a file the upload step refuses for its name (initialize), an upload that cannot be completed (complete; no asset is created in either case), or a failure creating the asset or the upload. |
+| `403`  | Not authorized to write this asset, or the upload step refused the request.                                                                                                                                                                                                                                            |
+| `404`  | The upload step reported its target as not found.                                                                                                                                                                                                                                                                      |
+| `429`  | Rate limit exceeded: more than 20 upload initializations by the user in one minute. The response carries a `Retry-After` header (seconds).                                                                                                                                                                             |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                 |
 
 ---
 
@@ -697,6 +701,10 @@ Bulk requests return one entry per requested key. File paths that do not exist o
 | `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                                                                                                                                                                                              |
 | `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                              |
 
+:::tip[One archive instead of many URLs]
+To download files, folders, or a whole asset as a single zip, tar, or tar.gz file, create a zip download job with `POST /database/{databaseId}/assets/{assetId}/download/zip`. The archive is built in the background and can reach 5 TiB. See the [Zip Downloads API](zip-downloads.md).
+:::
+
 ---
 
 ### Export Asset
@@ -904,6 +912,7 @@ The `assetSnapshot` object is open-schema: snapshot fields may grow over time, a
 
 -   [Databases API](databases.md) -- Manage the databases assets belong to
 -   [Files API](files.md) -- Upload, move, and stream an asset's files
+-   [Zip Downloads API](zip-downloads.md) -- Download files, folders, or a whole asset as one archive
 -   [Asset Versions API](asset-versions.md) -- Create, inspect, and revert asset versions
 -   [Comments API](comments.md) -- Attach review comments to an asset version
 -   [Metadata API](metadata.md) -- Manage asset and file metadata

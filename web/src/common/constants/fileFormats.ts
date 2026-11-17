@@ -16,3 +16,28 @@ export const previewFileFormats = [".png", ".jpg", ".jpeg", ".svg", ".gif"];
 // CONTAINS this substring. Mirrored in the backend as PREVIEW_FILE_PATTERN in
 // backend/backend/common/s3PathPatterns.py; keep the two in sync.
 export const PREVIEW_FILE_PATTERN = ".previewFile.";
+
+// Formats whose files can reference other files by relative path (USD sublayers, glTF buffers and
+// textures, OBJ materials, CAD assemblies, 3D Tiles). When one is added as a loose file the upload
+// control suggests Add folder, so the referenced files keep their relative paths (#1462).
+export const referencingFileExtensions = [
+    ".usd",
+    ".usda",
+    ".usdc",
+    ".usdz",
+    ".gltf",
+    ".obj",
+    ".fbx",
+    ".dae",
+    ".step",
+    ".stp",
+    ".ifc",
+    ".iges",
+    ".igs",
+    ".sldasm",
+    ".catproduct",
+    ".asm",
+];
+
+// Exact (lower-case) file names that reference other files.
+export const referencingFileNames = ["tileset.json"];

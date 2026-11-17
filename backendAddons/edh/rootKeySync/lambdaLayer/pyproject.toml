@@ -10,7 +10,7 @@ package-mode = false
 # ships none of these packages, so no file or package metadata of the two layers overlaps.
 [tool.poetry.dependencies]
 python = "^3.12"
-cryptography = "50.0.1"
+cryptography = "50.0.2"
 cffi = { version = "2.0.0", markers = "platform_python_implementation != \"PyPy\"" }
 pycparser = { version = "2.22", markers = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\"" }
 

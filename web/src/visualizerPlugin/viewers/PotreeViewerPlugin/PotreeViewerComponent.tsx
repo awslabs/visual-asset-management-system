@@ -82,7 +82,9 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                     relativeAssetKey = relativeAssetKey.slice(assetId.length + 1);
                 }
                 const fileKey = relativeAssetKey + "/preview/PotreeViewer/metadata.json";
-                const url = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${fileKey}`;
+                const url = `${config.api}database/${databaseId}/assets/${encodeURIComponent(
+                    assetId
+                )}/auxiliaryPreviewAssets/stream/${fileKey}`;
 
                 // Get a valid, fresh authorization header (automatically refreshes token if expired)
                 const authorizationHeader = await getDualAuthorizationHeader();

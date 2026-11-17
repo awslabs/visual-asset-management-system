@@ -52,6 +52,9 @@ const ACM_CERTIFICATE_ARN_PATTERN =
 const API_CUSTOM_DOMAIN_HOST_PATTERN =
     /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
+// config.ts EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN and EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS.
+const EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN = /^(?!vams:)[A-Za-z0-9_:.-]+$/i;
+const EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS = ["aud", "client_id"];
 // config.ts API_CUSTOM_DOMAIN_PARTITIONS.
 const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
 const COMMERCIAL_DNS_SUFFIX = "amazonaws.com";
@@ -780,6 +783,12 @@ const VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
         label: "pipelines.useGenAiCadStepAgent",
         fieldPaths: ["app.pipelines.useGenAiCadStepAgent.enabled"],
         appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        id: "vpc-required-pipelines-use-zip-downloads",
+        label: "pipelines.useZipDownloads",
+        fieldPaths: ["app.pipelines.useZipDownloads.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useZipDownloads.enabled"),
     },
     ...ADDON_VPC_REQUIRING_FEATURES,
 ];
@@ -1835,7 +1844,7 @@ const CORE_RULES: Rule[] = [
 
     // ----- Execution log read allow-list (config.ts: "executionLogReadPrefixes") -----
     //
-    // Each entry is used verbatim as an IAM log-group resource name on the executionService read
+    // Each entry is used verbatim as an IAM log-group resource name on the executionLogs read
     // grant, so getConfig() rejects '*', '/', '/aws/', '/aws/*', '/aws/<service>/*', anything outside
     // '/aws/', a '*' anywhere but last, '?', duplicates, an empty list and names over 512 characters.
     {
@@ -2198,6 +2207,52 @@ const CORE_RULES: Rule[] = [
             g(c, "app.authProvider.useExternalOAuthIdp.enabled") && oauthFieldsMissing(c),
         message:
             "External OAuth IdP requires its provider URL, client ID, scope, token and authorization endpoints, JWT issuer URL and audience. The MFA scope, principal domain and discovery endpoint may be left null, but not empty or UNDEFINED.",
+    },
+
+    // ----- External OAuth claim settings (config.ts: "External OAuth claim settings, read only in
+    // external OAuth mode"). Both are optional: an absent (null) value takes its default. -----
+    {
+        id: "oauth-user-id-claim",
+        severity: "error",
+        fieldPaths: ["app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.authProvider.useExternalOAuthIdp.enabled")) return false;
+            const claim = g(
+                c,
+                "app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim"
+            );
+            if (isAbsent(claim)) return false;
+            return (
+                typeof claim !== "string" ||
+                (claim !== "" && !EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN.test(claim))
+            );
+        },
+        message:
+            "JWT user ID claim must be empty (cognito:username, then username, then sub) or a token claim name of letters, digits, '_', ':', '.' and '-' that does not start with the reserved prefix 'vams:'.",
+    },
+    {
+        id: "oauth-audience-claims",
+        severity: "error",
+        fieldPaths: ["app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.authProvider.useExternalOAuthIdp.enabled")) return false;
+            const claims = g(
+                c,
+                "app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims"
+            );
+            if (isAbsent(claims)) return false;
+            return (
+                !Array.isArray(claims) ||
+                claims.some(
+                    (claim: unknown) =>
+                        typeof claim !== "string" ||
+                        !EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS.includes(claim)
+                ) ||
+                new Set(claims).size !== claims.length
+            );
+        },
+        message:
+            'JWT audience claims must be a list (empty means the default, aud) of distinct claim names from "aud" and "client_id".',
     },
 
     // ----- Cognito federation: SAML or OIDC, or neither
@@ -3464,6 +3519,77 @@ const CORE_RULES: Rule[] = [
         message: `usePhysnaSync.${label} points at a loopback, link-local, or private address. It is called by a Lambda that can read the VAMS asset buckets, so it must name an external service.`,
     })),
 
+    // ----- Download as Zip
+    // (config.ts: "app.pipelines.useZipDownloads.<key> must be a whole number of",
+    // "app.pipelines.useZipDownloads.computeVcpu must be 4, 8 or 16", "is not an AWS Fargate memory size") -----
+    {
+        id: "zip-downloads-enabled-boolean",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useZipDownloads.enabled"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.pipelines.useZipDownloads.enabled");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message: "app.pipelines.useZipDownloads.enabled must be true or false.",
+    },
+    {
+        id: "zip-downloads-use-codebuild-boolean",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useZipDownloads.useCodeBuild"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.pipelines.useZipDownloads.useCodeBuild");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message: "app.pipelines.useZipDownloads.useCodeBuild must be true or false.",
+    },
+    ...(
+        [
+            ["maxFilesPerRequest", 1, 1000000, "files"],
+            ["maxTotalBytesPerRequest", 1, 5497558138880, "bytes"],
+            ["maxActiveRequestsPerUser", 1, 100, "jobs"],
+            ["computeVcpu", 4, 16, "vCPU"],
+            ["computeMemoryGiB", 8, 120, "GiB"],
+        ] as Array<[string, number, number, string]>
+    ).map(([key, min, max, unit]) => ({
+        id: `zip-downloads-${key}-range`,
+        severity: "error" as const,
+        fieldPaths: [`app.pipelines.useZipDownloads.${key}`],
+        appliesWhen: (c: ConfigShape) => {
+            const value = g(c, `app.pipelines.useZipDownloads.${key}`);
+            if (value === undefined || value === null || value === "") return false;
+            const n = Number(value);
+            return !Number.isInteger(n) || n < min || n > max;
+        },
+        message: `app.pipelines.useZipDownloads.${key} must be a whole number of ${unit} between ${min} and ${max}.`,
+    })),
+    {
+        id: "zip-downloads-compute-vcpu",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useZipDownloads.computeVcpu"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.pipelines.useZipDownloads.computeVcpu");
+            if (value === undefined || value === null || value === "") return false;
+            return ![4, 8, 16].includes(Number(value));
+        },
+        message: "app.pipelines.useZipDownloads.computeVcpu must be 4, 8 or 16.",
+    },
+    {
+        id: "zip-downloads-compute-fargate-size",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useZipDownloads.computeVcpu",
+            "app.pipelines.useZipDownloads.computeMemoryGiB",
+        ],
+        appliesWhen: (c) => {
+            const vcpu = Number(g(c, "app.pipelines.useZipDownloads.computeVcpu") ?? 16);
+            const memoryGiB = Number(g(c, "app.pipelines.useZipDownloads.computeMemoryGiB") ?? 32);
+            if (![4, 8, 16].includes(vcpu)) return false;
+            return !isFargateCpuMemory(vcpu, memoryGiB);
+        },
+        message:
+            "app.pipelines.useZipDownloads.computeMemoryGiB is not an AWS Fargate memory size for the vCPU: 4 vCPU " +
+            "takes 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in 8 GiB steps.",
+    },
     // ----- Compliance default schema
     // (config.ts: "The default compliance schema holds one metadata rule against the GLOBAL
     // `defaultAsset` metadata schema") -----

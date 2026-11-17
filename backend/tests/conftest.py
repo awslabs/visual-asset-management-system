@@ -206,6 +206,17 @@ _ixe_module = _s3mk_importlib_util.module_from_spec(_ixe_spec)
 _ixe_spec.loader.exec_module(_ixe_module)
 sys.modules['common.indexerEvents'] = _ixe_module
 sys.modules['common'].indexerEvents = _ixe_module
+# eventLogSummary describes an event for a log line from its shape alone (stdlib only). The indexers,
+# the bucket sync and the Garnet add-on indexers import it at module level, so it is registered for
+# the same reason as indexerEvents.
+_els_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.eventLogSummary',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'eventLogSummary.py')
+)
+_els_module = _s3mk_importlib_util.module_from_spec(_els_spec)
+_els_spec.loader.exec_module(_els_module)
+sys.modules['common.eventLogSummary'] = _els_module
+sys.modules['common'].eventLogSummary = _els_module
 # assetProvenance builds the asset-row change-provenance attributes (stdlib + the s3MetadataKeys
 # constants). The upload and large-file completion handlers import it at module level.
 _apv_spec = _s3mk_importlib_util.spec_from_file_location(
@@ -216,6 +227,16 @@ _apv_module = _s3mk_importlib_util.module_from_spec(_apv_spec)
 _apv_spec.loader.exec_module(_apv_module)
 sys.modules['common.assetProvenance'] = _apv_module
 sys.modules['common'].assetProvenance = _apv_module
+# assetUploads holds the record-level upload completion checks (stdlib only). The upload completion
+# and the ingest-asset handler import it at module level.
+_aup_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.assetUploads',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'assetUploads.py')
+)
+_aup_module = _s3mk_importlib_util.module_from_spec(_aup_spec)
+_aup_spec.loader.exec_module(_aup_module)
+sys.modules['common.assetUploads'] = _aup_module
+sys.modules['common'].assetUploads = _aup_module
 # metadataSchemaValidation owns `extract_file_extension`, which the compliance evaluation engine
 # imports at module level to apply a metadata schema's fileKeyTypeRestriction exactly as the metadata
 # write path does. Registered for the same reason as indexerEvents. tests/handlers/metadata/conftest.py
@@ -323,7 +344,8 @@ sys.modules['common.apiRoutes'] = _apir_module
 # The audit action registry is pure constants over the route list, so load the REAL modules by path
 # for the same reason: the route type module first, then the add-on lane and the merged registry
 # (which imports the fork-owned custom/customAuditActions.py by name).
-for _audit_reg in ('auditActionTypes', 'addonAuditActions', 'auditActions'):
+# common.auditSearchText (the redacted searchText key of a search record) is pure Python and joins them.
+for _audit_reg in ('auditActionTypes', 'addonAuditActions', 'auditActions', 'auditSearchText'):
     _audit_reg_spec = _s3mk_importlib_util.spec_from_file_location(
         f'common.{_audit_reg}',
         os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', f'{_audit_reg}.py')
@@ -435,6 +457,19 @@ _rn_spec = _s3mk_importlib_util.spec_from_file_location(
 _rn_module = _s3mk_importlib_util.module_from_spec(_rn_spec)
 _rn_spec.loader.exec_module(_rn_module)
 sys.modules['common.resourceNames'] = _rn_module
+# downloadEligibility is the shared download-eligibility check set (downloadAsset imports it at module
+# level). It builds no client and reads no table at import -- every S3 client, getter and resolver is
+# passed in by the caller -- so load the REAL module by path. It must come after common.s3 above, which
+# it imports. Bound on the MagicMock `common` too, so `from common import downloadEligibility` resolves
+# the real module rather than a mock attribute.
+_de_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.downloadEligibility',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'downloadEligibility.py')
+)
+_de_module = _s3mk_importlib_util.module_from_spec(_de_spec)
+_de_spec.loader.exec_module(_de_module)
+sys.modules['common.downloadEligibility'] = _de_module
+sys.modules['common'].downloadEligibility = _de_module
 
 # snsTopicNames is pure naming logic; register the real module so handlers that
 # import it at load time collect cleanly under the MagicMock `common` package.
@@ -492,6 +527,32 @@ else:
     sys.modules['customLogging'] = MagicMock()
     sys.modules['customLogging.logger'] = MagicMock()
     sys.modules['customLogging.logger'].safeLogger = mock_safe_logger
+
+# largeObjectCopy is the copy engine's shared logic (settings, part planner, job and batch rows); every
+# client and table it touches is passed in, so the REAL module loads with no AWS access. Loaded after
+# customLogging (it builds a safeLogger at import) and bound on the `common` MagicMock as well, the same
+# way as batchItemFailures: a MagicMock attribute would otherwise answer `from common import
+# largeObjectCopy` with a stand-in whose settings and thresholds are all MagicMocks.
+_loc_spec = _importlib_util.spec_from_file_location(
+    'common.largeObjectCopy',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'largeObjectCopy.py')
+)
+_loc_module = _importlib_util.module_from_spec(_loc_spec)
+sys.modules['common.largeObjectCopy'] = _loc_module
+_loc_spec.loader.exec_module(_loc_module)
+sys.modules['common'].largeObjectCopy = _loc_module
+
+# uploadStatus (an upload's asynchronously ingested files) likewise takes its table as an argument, so
+# the REAL module is loaded and bound the same way.
+_us_spec = _importlib_util.spec_from_file_location(
+    'common.uploadStatus',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'uploadStatus.py')
+)
+_us_module = _importlib_util.module_from_spec(_us_spec)
+sys.modules['common.uploadStatus'] = _us_module
+_us_spec.loader.exec_module(_us_module)
+sys.modules['common'].uploadStatus = _us_module
+
 sys.modules['customConfigCommon'] = MagicMock()
 sys.modules['customConfigCommon.customAuthClaimsCheck'] = MagicMock()
 sys.modules['customConfigCommon.customAuthClaimsCheck'].customAuthClaimsCheckOverride = lambda claims_and_roles, request: claims_and_roles

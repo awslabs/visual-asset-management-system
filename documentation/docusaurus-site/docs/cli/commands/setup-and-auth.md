@@ -181,6 +181,8 @@ vamscli auth login --user-id user@example.com --token-override "your-token"
 ```
 
 Obtain the token from the identity provider or from the VAMS web application after signing in through the federated login button. Token override validates the token against the VAMS API rather than against a specific issuer, so a token from any of these providers works. A user pool with federation enabled still accepts username/password for its **native** users (for example the initial administrator), so an administrator can keep using `--username`.
+
+With `useExternalOAuthIdp`, the API identifies the caller from the token, so `--user-id` must be the user ID the API resolves from it: the claim `lambdaAuthorizorJWTUserIdClaim` names, or, when that is not set, the first of `cognito:username`, `username` and `sub` (see [External OAuth IdP](../../deployment/configuration-reference.md#external-oauth-idp-appauthprovideruseexternaloauthidp)).
 :::
 
 ---
@@ -429,6 +431,7 @@ Output includes total count, list of enabled feature names, and last updated tim
 | `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito user pool federated to an OIDC identity provider               |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                              |
 | `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type                                    |
+| `ZIPDOWNLOADS`                  | Download as Zip (`vamscli zip-download` commands)                             |
 
 An enabled add-on adds feature switches of its own, which `vamscli features list` also shows and which are listed on the add-on's pages. See [Add-ons Overview](../../developer/addons-overview.md).
 

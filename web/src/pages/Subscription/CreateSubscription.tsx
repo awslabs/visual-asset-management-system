@@ -169,7 +169,11 @@ export default function CreateSubscription({
             id: "assetId",
             header: `${Synonyms.Asset} Name`,
             cell: (item: any) => (
-                <Link href={`#/databases/${item.databaseName}/assets/${item.assetId}`}>
+                <Link
+                    href={`#/databases/${item.databaseName}/assets/${encodeURIComponent(
+                        item.assetId
+                    )}`}
+                >
                     {item.assetName}
                 </Link>
             ),

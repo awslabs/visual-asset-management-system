@@ -12,6 +12,7 @@ import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import { Navigation } from "./layout/Navigation";
+import { ActiveNavHrefProvider } from "./layout/activeNavHref";
 import LandingPage from "./pages/LandingPage";
 import Spinner from "@cloudscape-design/components/spinner";
 import { useNavigate } from "react-router";
@@ -49,6 +50,7 @@ const MetadataSchema = lazyWithRetry(() => import("./pages/MetadataSchema"));
 const ViewFile = lazyWithRetry(() => import("./components/single/ViewFile"));
 const AssetIngestion = lazyWithRetry(() => import("./components/single/AssetIngestion"));
 const AssetDownloadsPage = lazyWithRetry(() => import("./pages/AssetDownload"));
+const ZipDownloadsPage = lazyWithRetry(() => import("./pages/ZipDownloadsPage"));
 const ComplianceSchemas = lazyWithRetry(() => import("./pages/ComplianceSchemas"));
 const ComplianceQuarantine = lazyWithRetry(() => import("./pages/ComplianceQuarantine"));
 const ComplianceCascades = lazyWithRetry(() => import("./pages/ComplianceCascades"));
@@ -149,6 +151,9 @@ const coreRouteTable: RouteOption[] = [
     { path: "/workflows", Page: WorkflowsPage2, active: "#/workflows/" },
     { path: "/executions", Page: ExecutionsPage, active: "#/executions/" },
     { path: "/executions/:executionId", Page: ExecutionDetail, active: "#/executions/" },
+    // Download as Zip: the caller's own zip downloads across assets (the page states when the
+    // deployment has the feature off)
+    { path: "/zipdownloads", Page: ZipDownloadsPage, active: "#/zipdownloads/" },
     {
         path: "/databases/:databaseId/workflows/:workflowId/triggers",
         Page: WorkflowTriggersPage,
@@ -436,6 +441,9 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
     const [loading, setLoading] = useState(true);
     const [checkAttempt, setCheckAttempt] = useState(0);
     const [routesCheckFailed, setRoutesCheckFailed] = useState(false);
+    // A page may override its route's highlighted side-navigation href from its own resolved
+    // state (layout/activeNavHref.tsx); null keeps the route's `active` value.
+    const [activeNavOverride, setActiveNavOverride] = useState<string | null>(null);
 
     const retryRoutesCheck = () => {
         setRoutesCheckFailed(false);
@@ -566,7 +574,11 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                             )
                         }
                         navigation={
-                            <Navigation key={checkAttempt} activeHref={active} user={user} />
+                            <Navigation
+                                key={checkAttempt}
+                                activeHref={activeNavOverride ?? active}
+                                user={user}
+                            />
                         }
                         navigationOpen={navigationOpen}
                         onNavigationChange={({ detail }) => setNavigationOpen(detail.open)}
@@ -582,5 +594,9 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
     // Every route this deployment has is mounted, so a URL the role does not allow reaches the
     // no-access panel, and an unknown URL, or the page of an add-on the deployment does not run, the
     // not-found panel.
-    return <Routes>{activeRouteTable.map(buildRoute)}</Routes>;
+    return (
+        <ActiveNavHrefProvider setActiveNavHref={setActiveNavOverride}>
+            <Routes>{activeRouteTable.map(buildRoute)}</Routes>
+        </ActiveNavHrefProvider>
+    );
 };

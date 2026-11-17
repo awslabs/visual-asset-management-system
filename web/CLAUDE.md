@@ -33,7 +33,7 @@ web/
   customInstalls/           # Per-viewer custom install scripts (one dir per viewer)
   e2e/                      # Playwright specs against a deployed stack — see e2e/CLAUDE.md (11.5)
   src/
-    App.tsx                 # Root app shell, HashRouter, TopNavigation
+    App.tsx                 # Root app shell, HashRouter, TopNavigation (Settings menu, profile menu)
     routes.tsx              # Centralized route table (core + add-on + custom), lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
@@ -80,6 +80,9 @@ web/
                             #   chunks — never one re-rendered string) ResultDownloadButton.tsx
                             #   resourceTypeLabels.ts (sub-process type labels; unknown types render raw,
                             #   with a not-abortable note when abortable === false)
+                            #   OutputIngestionProgress.tsx ("Ingesting outputs (n of m)" from the
+                            #   details' executionPhase/outputIngestion; IngestedBadge for output
+                            #   rows with ingestionStatus SUCCEEDED; display only)
                             #   SkippedLaunchPanel.tsx (details `skip` block of a SKIPPED record; the
                             #   blocking run is linked only when the API returned its id)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
@@ -104,14 +107,14 @@ web/
       ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
-      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
+      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx, Navigation, profile menu
       addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
 
     addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts (add-on feature-switch names)
       edh/                  #   EDH Workstations add-on module (Tailwind + Radix, pages/ route shells) — see addons/edh/CLAUDE.md
     custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
       customRoutes.tsx      #   customRouteTable, appended to routeTable in routes.tsx
-      customNavigation.ts   #   customNavSections, appended to the side navigation
+      customNavigation.ts   #   customNavSections, appended by layout/navigationRegistry.ts
       customFeatures.ts     #   names of the fork's feature switches
       services/             #   fork API calls (may import apiClient)
       pages/                #   fork pages
@@ -124,9 +127,16 @@ web/
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
         tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions,
-                              #   Compliance tabs
+                              #   Compliance tabs, ZipDownloadsTab ("Download Queue", only with ZIPDOWNLOADS)
         versions/             # Asset version management (list, comparison, edit/archive modals)
-      common/ createupdate/ form/
+      common/ createupdate/
+      form/                   # DragDropFileUpload.tsx — the shared upload control (Add files, Add
+                                #   folder, drop zone) of Create Asset and Add Files; reports
+                                #   onAdd(roots: UploadRoot[]), never asset paths.
+                                #   uploadPaths.ts — the ONE upload path rule (planUploadPaths,
+                                #   normalizeDestination, root builders); see section 7.7.
+                                #   UploadPreview.tsx — final-path preview, single-folder override,
+                                #   referencing-format hint.
       compliance/             # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
                               #   rules: "Add rule" for all six types, the pipeline-rule input-file
                               #   selector (mode / globs / explicit paths), the metadata-rule scope
@@ -191,9 +201,15 @@ web/
       searchSmall/ selectors/
       single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
+      zipDownloads/           # Download as Zip (Cloudscape): zipDownloads.ts (types, route templates,
+                                #   selection -> request entries, names, polling rule),
+                                #   CreateZipDownloadModal.tsx, ZipDownloadsTable.tsx (asset tab +
+                                #   global page; polls every 5 s only while a job is queued/running,
+                                #   the surface is active and the browser tab is visible)
 
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx AssetUpload/
+      ZipDownloadsPage.tsx    # #/zipdownloads "My Download Queue" (profile-menu item only with ZIPDOWNLOADS)
       auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/                 # SearchPage.tsx
@@ -242,13 +258,16 @@ web/
     constants/uploadLimits.ts
     hooks/                  # usePageTitle.ts, useThemeSettings.ts,
                             #   useAssetPageAccess.ts (may the caller open an assets/asset page)
-    layout/Navigation.tsx   # Left sidebar navigation
+    layout/navigationRegistry.ts  # The one navigation registry: core + add-on + custom, side/profile placement
+    layout/Navigation.tsx   # Left sidebar navigation (side entries)
+    layout/useProfileMenuItems.ts # Top-bar profile menu items (profile entries, current page checked, then Sign out)
 
     utils/
       apiEndpoint.ts        # Resolves the API base URL
       chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload
-      authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
+      authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader, resolveExternalUserId
       sessionManager.ts     # Idle/expiry session handling
+      queryRetry.ts         # createAppQueryClient, shouldRetryQuery: a final 4xx is never retried
       fileExtensionValidation.ts
       fileHandleCompat.ts
       maplibreWorker.ts     # setWorkerUrl() for maplibre-gl's bundled worker; import for side effect before a map mounts
@@ -567,6 +586,7 @@ Key patterns to follow:
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
 5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`fetchAssetWithStatus`, `fetchFileInfo`, `downloadAsset`, `deleteAssetLink`, `deleteComment`)
 6. A request whose response the browser never saw (a network failure, or a cross-origin preflight a web ACL blocked) is not an API answer: `fetch` rejects with a `TypeError` whose text ("Failed to fetch") means nothing to a user. `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `apiClient.ts`) in its place, with no status, so the page can say the service could not be reached and offer Retry rather than a "not found" or permission message (`fetchAssetWithStatus`, `fetchFileInfo`, `fetchFileVersions`, `fetchMetadata`; the asset and file pages)
+7. A TanStack Query hook never retries a final answer. The app's query client (`createAppQueryClient` in `utils/queryRetry.ts`) retries a failed query once, except when the error carries a 4xx status other than 408 or 429: a 403 is the API's authorization decision and a 404 says the object is not there, so the page shows the error at once. `toTuple` / `toTupleWithWarnings` tag a failed tuple with the call's status (`failureStatus(result)`, non-enumerable, so the tuple still destructures and compares as `[false, message]`), and the hooks in `features/orchestration/api/queries.ts` throw through `callService`, which raises a `ServiceCallError` carrying it. A hook that throws on a tuple itself goes through `callService` too, or its 403 is re-sent (#1270). A service that rebuilds its tuple drops the status and keeps the old retry-once behaviour
 
 ### 4.2 Consuming API Results
 
@@ -616,6 +636,8 @@ POST   /database/{databaseId}/assets/{assetId}/download  # Download
 POST   /auth/routes                                 # Check allowed routes
 GET    /secure-config                               # Get runtime config
 ```
+
+**An id in a URL keeps every character it has (#1476).** An asset id may end in `#` or `%`. `apiClient.buildUrl` percent-encodes any `#` or `?` in a path before `new URL()`, which would read either as the start of a fragment or a query, and any `%` that does not start an escape (a `%` followed by two hex digits is kept, because callers pass segments they encoded themselves), so service paths interpolate ids as they are and pass query parameters in `queryStringParameters`, never inline. A URL built outside `apiClient` (a viewer's `${config.api}database/.../download/stream/...`) and every in-app link to an asset route wrap the asset id in `encodeURIComponent`; the router decodes route parameters, so the page receives the id as it is. `src/__tests__/assetIdInUrls.test.ts` fails on a raw asset id in either.
 
 ---
 
@@ -687,6 +709,16 @@ identity comes from the `user` entry above. Storing it a second time under its o
 identifier in `localStorage` for no consumer, and wrote the literal string `"undefined"` when there
 was no signed-in user.
 
+In external OAuth mode `user.username` is the user id the API authorizer resolves from the access
+token (`resolveExternalUserId` in `src/utils/authTokenUtils.ts`). With amplify-config
+`externalOAuthIdpUserIdClaim` set, a token without that claim opens no session: storing it throws
+`MissingUserIdClaimError` (sign-in, refresh, page load, amplify-config refresh), the app signs out,
+and the sign-in page names the claim from `MISSING_USER_ID_CLAIM_KEY`.
+
+amplify-config also carries `externalOAuthIdpAudienceClaims` (the claim names the authorizer reads
+the audience from). The web app does not read it: the API alone decides whether a token's audience
+is accepted, and `vams-mcp setup-remote` is its consumer.
+
 ---
 
 ## 6. State Management
@@ -757,6 +789,8 @@ The core pages use the same check: the database list (Create, Edit, Delete Selec
 A **navigational surface** is the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer. Removing a tab from a strip makes the capability undiscoverable and reads as though the deployment has no logs at all, whereas an unavailable menu entry simply narrows a list of actions. Gate the panel's contents, not the tab.
 
 **System records** (`isSystem: true` on a pipeline or workflow, `types.ts`) are graded the same way, from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page (`PipelineForm`, `WorkflowBuilder`, `TemplateForm`, `TriggersEditor`), where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu. Every other action the API would refuse stays listed, disabled with its reason from `permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which opens above the control, stays inside the viewport at any width, and Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` are what enforce it.
+
+**System workflow runs** are hidden by the execution list APIs unless the request carries `includeSystem`. `ExecutionsBoard` (global page, workflow-scoped page and asset Executions tab) keeps the **Show system runs** choice in the URL query (`INCLUDE_SYSTEM_PARAM`, read and written with `useSearchParams`, other query keys preserved), sends it only when the user chose, and otherwise ticks the box from the response's `includeSystem` echo: the server alone decides the default (shown for a list scoped to one system workflow). Rows with `isSystem: true` carry the same **System** badge as system records.
 
 **Busy controls and focus.** A control whose own request is in flight is a `BusyButton` or `BusyInput` (`components/BusyControls.tsx`: `aria-disabled` and the busy look, not `disabled`, which drops keyboard focus to the page body), a dialog whose footer sent the request passes `busy`, a control the answer removes hands focus on (`LoadMoreButton`, `useFocusHandOff`), and a dialog returns focus to the control that opened it as it closes (`Dialog` and `Drawer` do this through `useReturnFocus`; a dialog opened from a row's menu passes `returnFocusTo`, naming the row's actions button or, once the action removed the row, a control the list keeps).
 
@@ -895,6 +929,19 @@ export default MyComponent;
 
 ### 7.3 Page Template (New Page Wrapper)
 
+Every top-level page (a route in `src/routes.tsx`, `src/addons/addonRoutes.tsx` or `src/custom/customRoutes.tsx`) sets its own outer padding and heading. The `AppLayout` in `routes.tsx` runs with `disableContentPaddings` while the side navigation is open, so a page whose root is a bare `Table` or `Container` sits flush against the navigation and the header. A page opens with one of two page shells:
+
+-   **Cloudscape pages:** the root is `<Box padding={{ top: "m", horizontal: "l" }}>`; inside it, the page `h1` in a `TextContent` in its own `Grid` row, then the content (a `variant="container"` `Table` or a `Container`) in the next `Grid` row, then `<div style={{ paddingBottom: "20px" }} />`. References: `src/pages/auth/ApiKeys.tsx` (a list opened from the profile menu, with search, refresh and Load more), `src/pages/ListPageNoDatabase.tsx` (Roles, Constraints, Tags) and `src/pages/ZipDownloadsPage.tsx`. A page that opens with a breadcrumb uses a smaller top (`"s"`, or `"xs"` as on the asset page) and keeps `horizontal: "l"`.
+-   **Tailwind pages (orchestration module, add-ons):** the root element carries `className="orchestration-root orchestration-page ..."` (`src/styles/tailwind.css`, matched to the Cloudscape shell). Reference: `src/features/orchestration/pipelines/PipelinesPage.tsx`.
+
+The page also calls `usePageTitle`. A feature component that renders both as a page and inside an asset tab (such as `ZipDownloadsTable`) has no outer padding of its own; the page adds the shell around it. A list table searches like the other VAMS tables: a Cloudscape `TextFilter` in the table's `filter` slot with the refresh icon button beside it, not in the header actions (`ApiKeys.tsx`, `components/list/TableList.tsx`).
+
+**Table filter row:** a table's filter row has the search on the left, the refresh icon button right beside the search, and any view toggle or select (a `Toggle`, `SegmentedControl` or `Select` that changes which rows are listed, such as "Show archived" or "My jobs / Show all users") right-aligned. Put the search and refresh in the table's `filter` slot inside `<SpaceBetween direction="horizontal" size="xs">`, and the toggles in the table's `pagination` slot (in the same `SpaceBetween` when there are several, followed by the `Pagination` when the table has one). Cloudscape draws that slot in the right-aligned group of the filter row. Do not put toggles in the `filter` slot or the header actions, and do not build the row with hand-rolled flex styles. A toggle that depends on a permission renders only when the API's route listing allows its route. References: `src/components/asset/versions/components/AssetVersionList.tsx` (the Versions tab: search and refresh left, "Show archived" right) and `src/components/zipDownloads/ZipDownloadsTable.tsx` (the Download Queue tab: search and refresh left, "My jobs / Show all users" right).
+
+**Table width:** a table fits its container at 1280 px without sideways scrolling. Give no column a `minWidth` to stop wrapping; keep a status on one line with `<StatusIndicator wrapText={false}>`, let names and IDs with no spaces break anywhere (`overflowWrap: "anywhere"`), and put several row actions in icon buttons (`variant="icon"` with an `ariaLabel`, which Cloudscape also shows as the tooltip). `inline-link` and `link` buttons drop `disabledReason`, so do not use them for an action that can be greyed with a reason. Reference: `components/zipDownloads/ZipDownloadsTable.tsx` (#1125 D30).
+
+`src/pages/pageShell.test.ts` reads every routed page and the local modules it imports directly, and fails when none of them opens with a shell. Its `EXEMPT` map lists the pages with a layout of their own, each with its reason (the landing page); a list page never belongs there.
+
 ```tsx
 /*
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -902,10 +949,29 @@ export default MyComponent;
  */
 
 import React from "react";
+import Box from "@cloudscape-design/components/box";
+import Grid from "@cloudscape-design/components/grid";
+import TextContent from "@cloudscape-design/components/text-content";
 import MyComponent from "../components/myfeature/MyComponent";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 const MyPage: React.FC = () => {
-    return <MyComponent />;
+    usePageTitle("My Feature");
+    return (
+        <Box padding={{ top: "m", horizontal: "l" }}>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <div>
+                    <TextContent>
+                        <h1>My Feature</h1>
+                    </TextContent>
+                </div>
+            </Grid>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <MyComponent />
+            </Grid>
+            <div style={{ paddingBottom: "20px" }} />
+        </Box>
+    );
 };
 
 export default MyPage;
@@ -940,7 +1006,13 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 
 An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream functionality goes in the add-on lane when it integrates an external solution, depends on an AWS service outside the tier-1 set, or implements a use-case lens for an industry; viewers and pipelines keep their own lanes, and a fork uses the custom lane. The tier-1 services, the exemptions and the toggle rule: root `CLAUDE.md` "Core, add-on and custom". Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
-A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavMainSections` for the main menu, spliced in after "Orchestrate & Automate"; `addonNavAdminSections` for the admin area, spliced in after the core "Admin - ..." sections and before "User"), upstream-owned, hold an add-on's pages, and `src/addons/addonFeatures.ts` (`addonFeaturesEnabled`) names the add-ons' feature switches. An add-on route carries its add-on's switches in `featuresEnabledRestriction`, as its navigation entries do: without them `routeTableFor()` (`routes.tsx`) leaves it out, so its URL reaches the not-found panel, the web-route check is not sent it, and the Create Constraint editor does not offer it (`src/addons/addonFeatureRoutes.test.tsx`). `AppRoutes` runs the web-route check again when the switches change (they can land after the first check) and on Retry, and uses only the latest check's answer: an earlier check that answers or fails after it is ignored, and a successful latest check clears the could-not-check panel. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), with the fork's sections after every core and add-on section, so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+A fork adds pages without editing `routes.tsx` or `layout/navigationRegistry.ts`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavMainSections` for the main menu, placed after "Orchestrate & Automate"; `addonNavAdminSections` for the admin area, placed after the core "Admin - ..." sections), upstream-owned, hold an add-on's pages, and `src/addons/addonFeatures.ts` (`addonFeaturesEnabled`) names the add-ons' feature switches. An add-on route carries its add-on's switches in `featuresEnabledRestriction`, as its navigation entries do (see 7.6): without them `routeTableFor()` (`routes.tsx`) leaves it out, so its URL reaches the not-found panel, the web-route check is not sent it, and the Create Constraint editor does not offer it (`src/addons/addonFeatureRoutes.test.tsx`). `AppRoutes` runs the web-route check again when the switches change (they can land after the first check) and on Retry, and uses only the latest check's answer: an earlier check that answers or fails after it is ignored, and a successful latest check clears the could-not-check panel. The merge order is core, add-on, custom for the route table and, within each placement, for the navigation (`src/addons/addonLanes.test.tsx`), with the fork's entries after every core and add-on entry, so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its navigation entry in `customNavSections` (`src/custom/customNavigation.ts`; side navigation by default, or `placement: "profile"` for the top-bar profile menu, see 7.6), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
+### 7.6 Navigation Placement
+
+Every page link is declared in one registry, `src/layout/navigationRegistry.ts`, which `allNavEntries()` composes from the core entries (`coreNavEntries()`, a function because `window.DISABLE_COGNITO` is read at runtime), the two add-on lists and `customNavSections`. A top-level entry's optional `placement` decides where it renders: `side` (the default) in the side navigation (`layout/Navigation.tsx`), `profile` in the top-bar profile menu (`layout/useProfileMenuItems.ts`, rendered by `App.tsx` before Sign out, which is always last). The side navigation runs core main menu, `addonNavMainSections`, divider, core admin sections, `addonNavAdminSections`, then the fork's entries; the profile menu runs the core profile entries, then the add-on entries of both lists, then the fork's. A profile entry is a `link` or a `section` of links (a menu group headed by its `text`); other shapes are skipped with a console warning. Any entry may carry `featuresEnabledRestriction: string[]`, the deployment's feature switches (`useFeaturesEnabled()`) that must all be on: an entry whose switches are off is dropped and its route is not checked, and both placements check again when the switches arrive after mount (only the latest check's answer is used). `entriesFor(placement, enabledFeatures)` returns one placement in registry order and strips the registry-only fields (`placement`, `requiresApiRoute`, `featuresEnabledRestriction`) before Cloudscape sees them.
+
+Both placements use the same `checkWebRoutesAllowed` check and share its one batched `auth/routes` call. They fail closed: the profile menu lists no page links while the check is loading or after it failed (it retries on the next `hashchange`, as the top bar sits outside the HashRouter and has no Retry), and Sign out always works. The page the user is on is shown as current: Cloudscape's public menu items have no current-page state or `aria-current`, so `toMenuItems(entries, currentPath)` renders the item whose route path (`normaliseHref`, so the query is ignored: `#/auth/api-keys/?mode=user` matches `/auth/api-keys`) equals `currentRoutePath()` as a checked `itemType: "checkbox"` item (check mark, `aria-checked`, still selectable) and every other page as a link. A checkbox item takes no `href`, so `App.tsx` follows an item whose id starts with `PAGE_ITEM_ID_PREFIX` (`page:`) by setting `window.location.hash`. The hook re-renders on every `hashchange`, so the mark follows navigation. It applies to every `placement: "profile"` entry (core, add-on and custom lanes). When the side navigation is empty but profile pages are allowed, it says the pages are in the profile menu instead of "No Access". A link may also set `requiresApiRoute: { method, path }`: it is then shown only when the cached API allowed-routes listing (`isApiRouteAllowed`) allows that route, and hidden while the listing is unknown or failed. It is advisory; the API still enforces every call. Core uses it for Admin - Auth's "API Keys (all users)" (`#/auth/api-keys/?mode=admin`, needs `GET /auth/api-keys`), while the profile menu's "API Key Management" opens `?mode=user`; `pages/auth/ApiKeys.tsx` treats `?mode=` as a preference validated against the modes the listing allowed, so a URL never opens admin mode for a role the listing does not allow. `normaliseHref` drops a `?query` before the route check. A route's `active` href is static, so a page serving several views may override the highlighted side link with `useActiveNavHref(href)` (`layout/activeNavHref.tsx`; `null` keeps the route's value, `""` highlights nothing, cleared on unmount); `ApiKeys.tsx` passes the Admin - Auth href only when its resolved mode is admin.
 
 ### 7.6 List Toolbar: Search, Refresh and Filters
 
@@ -968,6 +1040,14 @@ Every list page lays out the toolbar it passes as the Cloudscape Table's `filter
 
 -   **A list the server pages** (token paging) sorts the page shown with `useSortedItems`. While more than one page exists, the table header's description says `PAGE_SORTING_NOTE` ("Column sorting applies to the page shown."). An order across the whole list is a server-side filter (the database compliance overview's **Sort by**), not a column header. Choosing such an order clears the column-header sort (`clearSorting` from `useSortedItems`), so the rows follow the order just chosen.
 -   **A list the API returns whole** is filtered, sorted and paged in the browser with `useBrowserPagedItems` (15 rows to a page, as `TableList` pages), so its filters and sorting cover the whole list. Call `toFirstPage()` when a filter changes.
+
+### 7.7 The Upload Control and the Upload Path Rule
+
+The Create Asset wizard (`pages/AssetUpload/AssetUpload.tsx`, `AssetFileInfo`) and the Add Files page (`pages/AssetUpload/ModifyAssetsUploads.tsx`) share one upload control, `components/form/DragDropFileUpload.tsx`: **Add files** (a plain multi-file input), **Add folder** (a `webkitdirectory` input in every browser; `showDirectoryPicker` is only an enhancement and falls back to the input on any error other than a cancel) and one drop zone for files and folders together. Its contract is `onAdd(roots: UploadRoot[])`: it reports what the user added, never asset paths.
+
+Every asset path comes from `components/form/uploadPaths.ts`. A page stores the roots (Create Asset in the wizard state, `UploadRoots` and `folderNameMode`, so they survive step changes) and derives the files with `planUploadPaths(roots, { flow, destination, folderNameMode })` over the whole selection each time, then maps them onto `FileUploadTableItem`s with `plannedToUploadItems` (`pages/AssetUpload/uploadSelection.ts`) right before the upload workflow. The rule (#1462, #1471): on Create Asset a single folder added on its own drops its name; on Add Files a single folder keeps it; either flow's single folder can be switched with the override; every other selection keeps every folder's name; loose files keep their file name; the destination (`normalizeDestination`, `/` or `/a/b/`) is joined with one slash. Duplicate final paths are errors on every affected row and block the upload; never skip or dedupe them. Pass the database's `restrictFileUploadsToExtensions` in the context: files it refuses, and preview files without a preview image extension, become row errors by the same rule as `validateFiles` (`extensionViolation`), so they count in the preview's errors, its Errors view and the blocking reason; do not add a separate invalid-files alert. Do not build, prefix or re-derive upload paths in a page, and do not add a second picker: extend the root builders in `uploadPaths.ts` so every way of adding items gives identical roots.
+
+`components/form/UploadPreview.tsx` shows the preview (final path, size, status, counters, filters, removal), the single-folder override, the folder-rule info line and the hint for loose files in a referencing format (`referencingFileExtensions` / `referencingFileNames` in `common/constants/fileFormats.ts`). Add Files keeps its destination in `?folder=` and marks files at existing or archived paths from the list-files API (`fetchExistingPaths`, prefix-scoped, capped at 10,000 keys). That mark is advisory: a refusal or failure shows "Could not check all existing files" and marks nothing, and the API still enforces the upload.
 
 ---
 
@@ -1046,6 +1126,7 @@ Known feature flags:
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
 -   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval)
 -   Add-on flags (`addons/addonFeatures.ts`) are described in each add-on module's own `CLAUDE.md`
+-   `ZIPDOWNLOADS` -- Download as Zip (`app.pipelines.useZipDownloads.enabled`). Read through `isZipDownloadsEnabled()` (`components/zipDownloads/zipDownloads.ts`). Without it the file manager's Export menus have no **Download as Zip**, the asset page has no **Download Queue** tab and the profile menu no **My Download Queue** link (the `navigationRegistry.ts` profile entry carries `featuresEnabledRestriction: [ZIPDOWNLOADS]` and takes its text from `DOWNLOAD_QUEUE_PAGE_TITLE`); `#/zipdownloads` states the feature is off. With it, the Export entry is still hidden when the asset is not distributable or archived (`transfersUnavailable`) and greyed with its reason when `useAllowedRoutes().can("POST", "/database/{databaseId}/assets/{assetId}/download/zip")` says no; Download, Cancel and Delete in the table are icon buttons (`variant="icon"`, named by `ariaLabel`, which is also their tooltip; the compact form that keeps `disabledReason`) greyed the same way from the URL and DELETE routes. No table column has a `minWidth`; long names and IDs break anywhere (`overflowWrap: anywhere`), so the table fits its container at 1280 px (#1125 D28, D30). A mixed file-and-folder selection, which has no other Export action, gets an Export menu with only this entry. Jobs belong to the signed-in user (the API keys them on the token), so no ownership rule lives in the client. The user-facing names (`DOWNLOAD_QUEUE_PAGE_TITLE` "My Download Queue", `DOWNLOAD_QUEUE_TAB_LABEL` "Download Queue") do not say "zip", so other kinds of download job can join the queue later; the `#/zipdownloads` route, the `zipDownloads` tab id, the API routes and the CLI and MCP names keep `zip`. Both lists search the rows already loaded (`filterZipJobs`: asset ID, asset name, request ID, archive name) with the refresh button beside the search; the API pages the list, so **Load more** adds older jobs, which the search then covers. The asset tab offers **Show all users** (a `SegmentedControl` right-aligned in the table's filter row through the `pagination` slot, default **My jobs**) only when `useAllowedRoutes().can("GET", ZIP_ROUTES.allUsers)` allows the all-users route; that view lists `fetchAssetZipDownloadsAllUsers` and shows **Download** and **Cancel**/**Delete** only from the row flags the API returns (`canDownload`, `canRemove`), never from a role or ownership rule in the client. The My jobs views (the asset tab's default and the **My Download Queue** page) get the same flags on their rows: a finished job with `canDownload: false` (a quarantined asset) offers no **Download**, and `canRemove: false` greys **Cancel**/**Delete**; the role's route decisions still gate the controls, and a response without the flags is read as before (#1125 D37). A created job's success message links to the asset's own **Download Queue** tab: `assetDownloadQueueLink()` sets the asset page's `?tab=zipDownloads` query (`ASSET_TAB_QUERY_PARAM`) and keeps its other parameters, and `ViewAsset` hands `?tab=` to `TabbedContainer` (`requestedTabId`), which switches tabs in place without remounting and reports a tab the user picks back to the query (`onTabChange`; File Manager drops it).
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
@@ -1414,6 +1495,7 @@ When in doubt about patterns, reference these well-structured files:
 | File operations      | `src/services/FileOperationsService.ts`           |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |
 | Synonyms config      | `src/synonyms.tsx`                                |
+| Navigation registry  | `src/layout/navigationRegistry.ts`                |
 | Navigation           | `src/layout/Navigation.tsx`                       |
 | App shell            | `src/App.tsx`                                     |
 | List page and table  | `src/components/list/TableList.tsx`               |
@@ -1465,7 +1547,7 @@ export const myServiceFunction = async ({ databaseId }) => {
 3. Lay out the toolbar and wire the column sorting per section 7.6
 4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
 5. Add lazy import + route in `src/routes.tsx`
-6. Add navigation item in `src/layout/Navigation.tsx`
+6. Add a navigation entry in `src/layout/navigationRegistry.ts` (`placement: "profile"` for a page of the signed-in user)
 
 ### Adding a new API call
 
