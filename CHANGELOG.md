@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.8.0] (Unreleased)
+
+### Features
+
+-   **Pipelines** The SYSTEM GenAI metadata pipeline reads GeoTIFF and Cloud Optimized GeoTIFF (`.tif`, `.tiff`) headers by ranged reads, with no download and no pixel decoded: size, bands, sample type, compression, layout, overviews, whether the file is a COG, its CRS and its WGS84 footprint, written as `sys_raster` and `sys_geo` and promoted to `ext_width`, `ext_height`, `ext_is_cog`, `ext_crs`, `ext_band_count`, `ext_georeferenced` and the file's `location` (a `MultiPolygon` where it crosses the antimeridian). A new `raster` file class carries these files; `raster` is accepted by the natural-language search file-class filter. ([#1600](https://github.com/awslabs/visual-asset-management-system/issues/1600))
+    -   **Pipelines** A GeoPackage layer in an EPSG reference other than WGS84 now contributes its reprojected extent to the file's footprint. ([#1600](https://github.com/awslabs/visual-asset-management-system/issues/1600))
+
 ## [2.7.0] (2026-11-20)
 
 ### Major Change Summary:

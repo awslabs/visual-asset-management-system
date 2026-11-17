@@ -468,10 +468,10 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
         }
         expect(matrix).toContain("`sys_geo`");
         // The formats the classifier admits for their extracted content (office text, the non-browser
-        // video containers, the GIS containers read without GDAL, the GeoJSON extension) are marked on the
+        // video containers, the GIS containers read without GDAL, the GeoJSON extension, the TIFF extensions) are marked on the
         // matrix, and the matrix says the input filter is any file.
         expect(classifier).toMatch(
-            /ADDITIONAL_EXTENSIONS\s*=\s*\(\s*"\.docx",\s*"\.xlsx",\s*"\.pptx",\s*"\.avi",\s*"\.flv",\s*"\.wmv",\s*"\.gpkg",\s*"\.lyrx",\s*"\.geojson"\s*\)/
+            /ADDITIONAL_EXTENSIONS\s*=\s*\(\s*"\.docx",\s*"\.xlsx",\s*"\.pptx",\s*"\.avi",\s*"\.flv",\s*"\.wmv",\s*"\.gpkg",\s*"\.lyrx",\s*"\.geojson",\s*"\.tif",\s*"\.tiff"\s*\)/
         );
         expect(classifier).toMatch(
             /JSON_SNIFFED_EXTENSIONS\s*=\s*\(\s*"\.json",\s*"\.geojson"\s*\)/
@@ -1558,7 +1558,8 @@ describe("changelog, revision history, and notices", () => {
 
     test("CHANGELOG.md's newest release heading is the package version", () => {
         const changelog = readRepo("CHANGELOG.md");
-        const first = changelog.match(/^## \[(\d+\.\d+\.\d+)\]/m);
+        // A section for the next, unreleased version may sit above it, marked `(Unreleased)`.
+        const first = changelog.match(/^## \[(\d+\.\d+\.\d+)\](?! \(Unreleased\))/m);
         expect(first && first[1]).toBe(version);
         const release = section(changelog, `## [${version}]`);
         expect(release).toContain("### Major Change Summary:");

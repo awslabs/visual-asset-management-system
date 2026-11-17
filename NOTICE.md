@@ -334,20 +334,24 @@ release's PyPI metadata.
 | aws-lambda-powertools              | 3.2.0       | MIT-0                                          | Lambda utilities                                                                |
 | boto3                              | 1.43.89     | Apache-2.0                                     | AWS SDK for Python                                                              |
 | botocore                           | 1.43.89     | Apache-2.0                                     | AWS SDK for Python (core)                                                       |
+| certifi                            | 2026.10.23  | MPL-2.0                                        | CA bundle (pyproj dependency)                                                   |
 | charset-normalizer                 | 3.5.1       | MIT                                            | Text encoding detection                                                         |
 | defusedxml                         | 0.7.1       | PSF-2.0                                        | Safe XML parsing                                                                |
 | et_xmlfile                         | 2.0.0       | MIT                                            | Streaming XML writer (openpyxl dependency)                                      |
 | imageio-ffmpeg                     | 0.6.0       | BSD-2-Clause                                   | FFmpeg wrapper for video frame extraction                                       |
 | jmespath                           | 1.1.0       | MIT                                            | JSON querying (boto3 dependency)                                                |
 | lxml                               | 6.1.3       | BSD-3-Clause                                   | XML processing (python-docx / python-pptx dependency)                           |
+| numpy                              | 2.5.5       | BSD-3-Clause AND 0BSD AND MIT AND Zlib         | Array library (tifffile); bundles OpenBLAS, libgfortran (GCC exception)         |
 | openpyxl                           | 3.1.5       | MIT                                            | Excel workbook text extraction                                                  |
 | Pillow                             | 13.0.0      | MIT-CMU                                        | Image processing                                                                |
+| pyproj                             | 3.8.0       | MIT                                            | Footprint reprojection; bundles PROJ, libcurl, libtiff, SQLite                  |
 | pypdfium2                          | 5.13.0      | BSD-3-Clause / Apache-2.0 (PDFium)             | PDF page rendering                                                              |
 | python-dateutil                    | 2.9.0.post0 | Apache-2.0 / BSD-3-Clause (dual)               | Date parsing (boto3 dependency)                                                 |
 | python-docx                        | 1.2.0       | MIT                                            | Word document text extraction                                                   |
 | python-pptx                        | 1.0.2       | MIT                                            | PowerPoint document text extraction                                             |
 | s3transfer                         | 0.19.2      | Apache-2.0                                     | S3 transfer manager (boto3 dependency)                                          |
 | six                                | 1.17.0      | MIT                                            | Python 2/3 compatibility (dependency)                                           |
+| tifffile                           | 2026.11.16  | BSD-3-Clause                                   | TIFF header reading for GeoTIFF/COG facts                                       |
 | tinytag                            | 2.3.2       | MIT                                            | Audio and video metadata tags                                                   |
 | typing-extensions                  | 4.16.0      | PSF-2.0                                        | Typing backports                                                                |
 | urllib3                            | 2.8.0       | MIT                                            | HTTP client (boto3 dependency)                                                  |
