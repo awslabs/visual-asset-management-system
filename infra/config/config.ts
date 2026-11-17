@@ -559,6 +559,23 @@ export const COGNITO_APP_CLIENT_ID_PATTERN = /^[\w+]{1,128}$/;
 export const IAM_MANAGED_POLICY_ARN_PATTERN =
     /^arn:(aws[a-z-]*):iam::(?:\d{12}|aws):policy\/(?:[\w+=,.@-]+\/)*[\w+=,.@-]{1,128}$/;
 
+/** Bounds of each numeric app.pipelines.useZipDownloads key (inclusive integers). */
+export const ZIP_DOWNLOADS_BOUNDS: Record<
+    Exclude<keyof typeof ZIP_DOWNLOADS_DEFAULTS, "enabled" | "useCodeBuild">,
+    { min: number; max: number; unit: string }
+> = {
+    maxFilesPerRequest: { min: 1, max: 1000000, unit: "files" },
+    maxTotalBytesPerRequest: { min: 1, max: 5 * 1024 * 1024 * MIB, unit: "bytes" },
+    maxActiveRequestsPerUser: { min: 1, max: 100, unit: "jobs" },
+    computeVcpu: { min: 4, max: 16, unit: "vCPU" },
+    computeMemoryGiB: { min: 8, max: 120, unit: "GiB" },
+};
+
+/** The zipArchive job's AWS Fargate vCPU sizes. Memory must be one Fargate accepts for the size
+ * (`isFargateCpuMemory`): 4 vCPU 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in
+ * 8 GiB steps. */
+export const ZIP_DOWNLOADS_COMPUTE_VCPUS: readonly number[] = [4, 8, 16];
+
 /** One embedding model family the backend's embedding adapter serves. */
 export interface EmbeddingModelFamily {
     family: string;
@@ -671,23 +688,6 @@ export function deriveVectorIndexName(
 ): string {
     return `vec-${slugModelId(embeddingModelId)}-${embeddingDimensions}`;
 }
-
-/** Bounds of each numeric app.pipelines.useZipDownloads key (inclusive integers). */
-export const ZIP_DOWNLOADS_BOUNDS: Record<
-    Exclude<keyof typeof ZIP_DOWNLOADS_DEFAULTS, "enabled" | "useCodeBuild">,
-    { min: number; max: number; unit: string }
-> = {
-    maxFilesPerRequest: { min: 1, max: 1000000, unit: "files" },
-    maxTotalBytesPerRequest: { min: 1, max: 5 * 1024 * 1024 * MIB, unit: "bytes" },
-    maxActiveRequestsPerUser: { min: 1, max: 100, unit: "jobs" },
-    computeVcpu: { min: 4, max: 16, unit: "vCPU" },
-    computeMemoryGiB: { min: 8, max: 120, unit: "GiB" },
-};
-
-/** The zipArchive job's AWS Fargate vCPU sizes. Memory must be one Fargate accepts for the size
- * (`isFargateCpuMemory`): 4 vCPU 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in
- * 8 GiB steps. */
-export const ZIP_DOWNLOADS_COMPUTE_VCPUS: readonly number[] = [4, 8, 16];
 
 /**
  * Whether a Region sits outside the Territory the Tencent Hunyuan 3D 2.0 Community License Agreement
