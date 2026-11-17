@@ -20,6 +20,7 @@ import shutil
 from unittest.mock import MagicMock, patch
 
 import pytest
+from botocore.exceptions import ClientError
 
 from conftest import requires_real
 from preview_pipeline import core, dependencies
@@ -47,7 +48,7 @@ class FakeBucket:
             handle.write(data)
         return path
 
-    def head_object_size(self, bucket, key):
+    def head_object_size(self, bucket, key, warn_if_missing=True):
         path = os.path.join(self.root, key)
         return os.path.getsize(path) if os.path.isfile(path) else None
 
@@ -57,14 +58,14 @@ class FakeBucket:
         return path
 
 
-def _fetch(tmp_path, bucket, input_key, ext, asset_id="xid", limits=None):
+def _fetch(tmp_path, bucket, input_key, ext, asset_id="xid", limits=None, head_object_size=None):
     root_key = dependencies.asset_root_key(input_key, asset_id)
     local_root = str(tmp_path / "local")
     local_input = dependencies.local_path_for(
         local_root, dependencies.relative_to_root(input_key, root_key))
     os.makedirs(os.path.dirname(local_input), exist_ok=True)
     shutil.copyfile(os.path.join(bucket.root, input_key), local_input)
-    with patch.object(dependencies.s3, "head_object_size", bucket.head_object_size), \
+    with patch.object(dependencies.s3, "head_object_size", head_object_size or bucket.head_object_size), \
             patch.object(dependencies.s3, "download", bucket.download):
         return dependencies.fetch_referenced_files(BUCKET, input_key, local_input, local_root,
                                                    root_key, ext, limits=limits)
@@ -661,6 +662,127 @@ class TestRendererMdlModules:
         monkeypatch.setitem(dependencies._COLLECTORS, ".refs",
                             lambda path: [(line, False) for line in open(path).read().split()])
         assert dependencies.incomplete_preview(_fetch(tmp_path, bucket, "xid/root.refs", ".refs")) is None
+
+
+class FakeS3Client:
+    """The HeadObject call ``s3_utils.head_object_size`` makes, served from a FakeBucket, so the
+    helper's own not-found handling and logging run."""
+
+    def __init__(self, bucket):
+        self.bucket = bucket
+        self.heads = []
+
+    def head_object(self, Bucket, Key):
+        self.heads.append(Key)
+        size = self.bucket.head_object_size(Bucket, Key)
+        if size is None:
+            raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
+        return {"ContentLength": size}
+
+
+def _fetch_through_head_object(tmp_path, bucket, input_key, ext, caplog):
+    client = FakeS3Client(bucket)
+    with patch.object(dependencies.s3, "client_for_bucket", lambda name: client), \
+            caplog.at_level(logging.INFO):
+        report = _fetch(tmp_path, bucket, input_key, ext,
+                        head_object_size=dependencies.s3.head_object_size)
+    return report, client
+
+
+def _warnings(caplog, text):
+    return [r.getMessage() for r in caplog.records
+            if r.levelno >= logging.WARNING and text in r.getMessage()]
+
+
+def _summary_line(caplog):
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith("Referenced files:")][-1]
+
+
+@pytest.mark.unit
+class TestAnAbsentRendererMdlModuleIsNotMissing:
+    """A bare MDL module is looked up in every referring folder, but an absent one logs no HeadObject
+    warning and is not counted as missing; a referenced file that is missing keeps both (#1597)."""
+
+    def _scene(self, tmp_path, monkeypatch, extra=()):
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/scene/root.refs", "OmniPBR.mdl\nsub/a.refs\nmaterials/Custom.mdl\n")
+        bucket.put("xid/scene/sub/a.refs", "OmniPBR.mdl\nOmniSurface.mdl\ntex/wood.png\n")
+        bucket.put("xid/scene/sub/tex/wood.png", b"png")
+        for key in extra:
+            bucket.put(key, b"mdl")
+        monkeypatch.setitem(dependencies._COLLECTORS, ".refs",
+                            lambda path: [(line, False) for line in open(path).read().split()])
+        return bucket
+
+    def test_an_absent_bare_module_logs_no_warning_and_is_not_counted(self, tmp_path, monkeypatch,
+                                                                      caplog):
+        bucket = self._scene(tmp_path, monkeypatch)
+        report, client = _fetch_through_head_object(tmp_path, bucket, "xid/scene/root.refs", ".refs",
+                                                    caplog)
+        # Still looked up beside each layer that names it.
+        assert {"xid/scene/OmniPBR.mdl", "xid/scene/sub/OmniPBR.mdl",
+                "xid/scene/sub/OmniSurface.mdl"} <= set(client.heads)
+        assert _warnings(caplog, "OmniPBR") == [] and _warnings(caplog, "OmniSurface") == []
+        assert report.missing == ["scene/materials/Custom.mdl"]
+        assert [entry.reference for entry in report.skipped] == ["scene/materials/Custom.mdl"]
+        assert ", 1 missing," in _summary_line(caplog)
+        infos = [r for r in caplog.records if "MDL module resolved by the renderer" in r.getMessage()]
+        assert [r.getMessage().split(": ", 1)[1] for r in infos] == ["'OmniPBR.mdl'", "'OmniSurface.mdl'"]
+        assert all(r.levelno == logging.INFO for r in infos)
+
+    def test_a_missing_referenced_file_keeps_its_warning_and_count(self, tmp_path, monkeypatch, caplog):
+        bucket = self._scene(tmp_path, monkeypatch)
+        _fetch_through_head_object(tmp_path, bucket, "xid/scene/root.refs", ".refs", caplog)
+        assert _warnings(caplog, f"HeadObject {BUCKET}/xid/scene/materials/Custom.mdl failed: 404")
+        assert _warnings(caplog, "Referenced file not found in the asset: scene/materials/Custom.mdl")
+
+    def test_a_bare_module_shipped_beside_the_layer_is_fetched(self, tmp_path, monkeypatch, caplog):
+        bucket = self._scene(tmp_path, monkeypatch, extra=("xid/scene/sub/OmniPBR.mdl",))
+        report, _ = _fetch_through_head_object(tmp_path, bucket, "xid/scene/root.refs", ".refs", caplog)
+        assert "scene/sub/OmniPBR.mdl" in report.fetched
+        assert report.missing == ["scene/materials/Custom.mdl"]
+
+    @requires_real("pxr")
+    def test_an_isaac_sim_material_module_is_not_missing(self, tmp_path, caplog):
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/pallet.usda", """#usda 1.0
+def Material "M"
+{
+    def Shader "S"
+    {
+        uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+        asset inputs:diffuse_texture = @./tex/pallet.png@
+    }
+}
+""")
+        report, client = _fetch_through_head_object(tmp_path, bucket, "xid/pallet.usda", ".usda", caplog)
+        assert "xid/OmniPBR.mdl" in client.heads
+        assert report.missing == ["tex/pallet.png"]
+        assert _warnings(caplog, "OmniPBR") == []
+        assert _warnings(caplog, "Referenced file not found in the asset: tex/pallet.png")
+
+
+@pytest.mark.unit
+class TestHeadObjectSizeNotFound:
+    def _client(self, code):
+        client = MagicMock()
+        client.head_object.side_effect = ClientError({"Error": {"Code": code}}, "HeadObject")
+        return client
+
+    @pytest.mark.parametrize("code", ["404", "NoSuchKey", "NotFound"])
+    def test_a_missing_object_warns_unless_the_caller_expects_it(self, code, caplog):
+        with patch.object(dependencies.s3, "client_for_bucket", lambda name: self._client(code)), \
+                caplog.at_level(logging.INFO):
+            assert dependencies.s3.head_object_size(BUCKET, "xid/a.mdl", warn_if_missing=False) is None
+            assert _warnings(caplog, "HeadObject") == []
+            assert dependencies.s3.head_object_size(BUCKET, "xid/a.mdl") is None
+            assert _warnings(caplog, f"HeadObject {BUCKET}/xid/a.mdl failed: {code}")
+
+    def test_any_other_error_still_warns(self, caplog):
+        with patch.object(dependencies.s3, "client_for_bucket", lambda name: self._client("403")), \
+                caplog.at_level(logging.INFO):
+            assert dependencies.s3.head_object_size(BUCKET, "xid/a.mdl", warn_if_missing=False) is None
+        assert _warnings(caplog, f"HeadObject {BUCKET}/xid/a.mdl failed: 403")
 
 
 @pytest.mark.unit
