@@ -44,7 +44,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Added:**
 
--   **COG Conversion pipeline** — `app.pipelines.useCogConversion` (off by default, requires the global VPC) converts a georeferenced `.tif` or `.tiff` into a Cloud Optimized GeoTIFF in EPSG:3857 with GDAL on AWS Batch Fargate, written beside the original as `<file name>.cog.tif`. The original is never changed and the pixels are resampled into Web Mercator, the only coordinate system the Search map draws. A COG already in EPSG:3857 and a TIFF with no georeference are skipped with a note in the run's results; a raster that crosses the antimeridian is refused. The upload trigger ships disabled. See [COG Conversion](../pipelines/cog-conversion.md). (issue #1601)
+-   **COG Conversion pipeline** — `app.pipelines.useCogConversion` (off by default, requires the global VPC) converts a georeferenced `.tif` or `.tiff` into a Cloud Optimized GeoTIFF in EPSG:3857 with GDAL on AWS Batch Fargate, written beside the original as `<file name>.cog.tif`. The original is never changed and the pixels are resampled into Web Mercator, the only coordinate system the Search map draws. A COG already in EPSG:3857 and a TIFF with no georeference are skipped with a note in the run's results; a raster that crosses the antimeridian is refused. The upload trigger ships disabled. The media preview pipeline skips the `.cog.tif` output. See [COG Conversion](../pipelines/cog-conversion.md). (issue #1601)
 -   **Backend** S3 presigned URLs can use the accelerate host for buckets flagged accelerated in the buckets table; no setting yet. ([#1610](https://github.com/awslabs/visual-asset-management-system/issues/1610))
 
 **Key fixes:**

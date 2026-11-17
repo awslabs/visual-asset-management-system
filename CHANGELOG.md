@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
--   **Pipelines** New COG Conversion pipeline (`app.pipelines.useCogConversion`, off by default, requires the global VPC): converts a georeferenced `.tif` or `.tiff` into a Cloud Optimized GeoTIFF in EPSG:3857, written beside the original as `<file name>.cog.tif`. The original is never changed. The pixels are resampled into Web Mercator, the only coordinate system the Search map draws. Files that cross the antimeridian are refused. The upload trigger ships disabled. ([#1601](https://github.com/awslabs/visual-asset-management-system/issues/1601))
+-   **Pipelines** New COG Conversion pipeline (`app.pipelines.useCogConversion`, off by default, requires the global VPC): converts a georeferenced `.tif` or `.tiff` into a Cloud Optimized GeoTIFF in EPSG:3857, written beside the original as `<file name>.cog.tif`. The original is never changed. The pixels are resampled into Web Mercator, the only coordinate system the Search map draws. Files that cross the antimeridian are refused. The upload trigger ships disabled. The media preview pipeline skips the `.cog.tif` output. ([#1601](https://github.com/awslabs/visual-asset-management-system/issues/1601))
 -   **Backend** S3 presigned URLs can use the accelerate host for buckets flagged accelerated in the buckets table; no setting yet. ([#1610](https://github.com/awslabs/visual-asset-management-system/issues/1610))
 
 ### Bug Fixes
