@@ -229,6 +229,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Key fixes:**
 
+-   **Cross-Region bucket downloads** — The web Content Security Policy admits presigned Amazon S3 URLs for an asset bucket in any Region of the partition, not only the deployment Region. (issue #1616)
 -   **API document parses strictly** — `VAMS_API.yaml` no longer defines `errorMessage` twice in the `complianceEvaluation` schema, so strict YAML and OpenAPI tools accept it. (issue #1498)
 -   A file manager selection made with Ctrl- or Shift-click while the file list is still loading keeps every selected item when more files arrive (#1497).
 -   **Zip downloads leave preview images out** — A Download as Zip holds the files the file list shows, without the generated `{file}.previewFile.{ext}` preview images; a Zip Archive workflow run includes them only when its template configuration body sets the new `includePreviewFiles` option to `true` (default `false`). (issue #1622)
