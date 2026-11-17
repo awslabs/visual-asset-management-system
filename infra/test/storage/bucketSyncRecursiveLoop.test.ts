@@ -79,7 +79,8 @@ interface AlarmedDlq {
 
 /**
  * Every alarmed dead-letter queue, by logical-id prefix, with the alarm-name suffix it carries. The
- * bucket-sync DLQs are per registered bucket and carry its queue index; the indexer DLQs are one each.
+ * bucket-sync DLQs are per registered bucket and carry its queue index; the indexer DLQs and the large
+ * object copy reconcile DLQ are one each.
  * The vector search DLQs (the vector indexer's, the `vector.embedding.ready` rule target's, the
  * system-workflow launcher's and the reindexer's asynchronous-invocation DLQ, whose message is a reindex
  * run that stopped part-way) carry the same alarm; only the commercial template ships vector search on,
@@ -115,6 +116,12 @@ const ALARMED_DLQS: AlarmedDlq[] = [
         prefix: "VectorIndexingVectorReindexerAsyncDLQ",
         alarmName: (t) => new RegExp(`-t1-${t}-vectorReindexerAsyncDLQ$`),
         templates: ["commercial"],
+    },
+    // The large object copy engine's reconcile requests (#1123): an ended copy whose job may still be
+    // open. Its own pins are in test/workflows/largeObjectCopyEngine.test.ts.
+    {
+        prefix: "LargeObjectCopyReconcileDLQ",
+        alarmName: (t) => new RegExp(`-t1-${t}-largeObjectCopyReconcileDLQ$`),
     },
 ];
 

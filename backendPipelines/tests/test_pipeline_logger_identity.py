@@ -54,6 +54,7 @@ LOGGER_COPIES = (
     "backendPipelines/system/genAiMetadata/lambda/customLogging/logger.py",
     "backendPipelines/system/genAiMetadata/containers/media/customLogging/logger.py",
     "backendPipelines/system/genAiMetadata/containers/blender/containerLogger.py",
+    "backendPipelines/utility/zipArchive/lambda/customLogging/logger.py",
 )
 
 # Vendored copies that live outside a `<pipeline>/lambda/customLogging/` directory, by file name.

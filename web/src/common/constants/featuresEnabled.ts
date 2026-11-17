@@ -8,6 +8,8 @@ export const featuresEnabled = {
     NOOPENSEARCH: "NOOPENSEARCH",
     ALLOWUNSAFEEVAL: "ALLOWUNSAFEEVAL",
     VECTORSEARCH: "VECTORSEARCH",
+    // Download as Zip (prepared archive downloads); present only when app.pipelines.useZipDownloads.enabled
+    ZIPDOWNLOADS: "ZIPDOWNLOADS",
 };
 
 /**

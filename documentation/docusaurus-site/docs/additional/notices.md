@@ -98,6 +98,10 @@ No Python library imported by the three images carries a GPL license. The remain
 The pipeline invokes the Amazon Bedrock models named in `app.pipelines.useSystemGenAiMetadata.bedrockModels` (`analysisModelId` and, when set, `textModelId` with the GenAI layer on, `embeddingModelId` with vector search on). Use of a model is governed by the model provider's terms accepted in the AWS account (for Anthropic models, a one-time use-case submission per account or organization). Content sent to the models is described in [Security Architecture](../architecture/security.md#data-sent-to-amazon-bedrock).
 :::
 
+### Zip Archive Pipeline Library Notice
+
+The Zip Archive pipeline, which builds Download as Zip archives, writes zip (ZIP64), tar and tar.gz archives with the Python standard library and reads and writes Amazon S3 with the AWS SDK for Python (Boto3 and Botocore, Apache-2.0), on the Python base image (PSF-2.0). It includes no other third-party archive library.
+
 ### GenAI CAD STEP Agent Pipeline Library Notice
 
 The GenAI CAD STEP Agent pipeline container depends on [CadQuery](https://github.com/CadQuery/cadquery) (Apache-2.0) for STEP import, modelling and export, which in turn bundles the [OCP](https://github.com/CadQuery/OCP) bindings to Open CASCADE Technology. Open CASCADE Technology is distributed under the GNU Lesser General Public License v2.1 with the Open CASCADE exception, an LGPL license: the pipeline uses it as an unmodified, dynamically linked library inside the container image, which is the usage the LGPL permits without imposing its terms on the surrounding code. The agent framework [Strands Agents](https://github.com/strands-agents/sdk-python) and the [Amazon Bedrock AgentCore SDK](https://github.com/aws/bedrock-agentcore-sdk-python) are Apache-2.0, as is the [OpenAI Python SDK](https://github.com/openai/openai-python) that the Strands Agents `openai` extra installs for the OpenAI model provider; the web-search library `ddgs` is MIT; `httpx` is BSD-3-Clause.

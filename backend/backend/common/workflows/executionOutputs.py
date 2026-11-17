@@ -368,6 +368,13 @@ def record_pipeline_output_files(dynamo, output_files_table, pipeline_execution_
 INGEST_LEDGER_PARTITION_PREFIX = "ingest#"
 INGEST_STATE_MOVING = "moving"
 INGEST_STATE_INGESTED = "ingested"
+# Handed to the large object copy engine (#1123): the row carries the copy job's id (`engineJobId`).
+# Not `moving`, so no attempt waits on it or takes it over (the engine copy is bounded by the run's
+# maximum output-ingestion wait, not by an attempt's time) and no claim succeeds over it, so it is never
+# handed to ingestion again. FinalizeOutputs (settle_engine_rows) makes it `ingested` once the copy
+# landed, or releases it when the copy did not. Its staged version is the one the job pinned: the job
+# deletes it after landing, so the end-state step's staged-version delete (#1291) never runs for it.
+INGEST_STATE_ENGINE_COPYING = "engine-copying"
 INGEST_LEDGER_SORT_KEY = "fileType:relativeFilePath"
 # Upper bound on the ledger rows one read returns: twice the output-file recording cap, so a run whose
 # output was truncated at the cap still reads every row it wrote.
@@ -506,6 +513,79 @@ def drop_ingest_ledger_rows(dynamo, output_files_table, workflow_execution_id, d
                 raise
 
 
+def mark_engine_copying(dynamo, output_files_table, workflow_execution_id, descriptors, job_ids, holder):
+    """Move `holder`'s `moving` rows of outputs handed to copy jobs to `engine-copying` with each job
+    id. Conditional on the row being `holder`'s `moving` row, or already `engine-copying` with the
+    same job (a repeated hand-off). A row another attempt took over meanwhile is left to it."""
+    if not workflow_execution_id or not descriptors:
+        return
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    for d, job_id in zip(descriptors, job_ids):
+        try:
+            table.update_item(
+                Key={"pipelineExecutionId": partition, INGEST_LEDGER_SORT_KEY: ingest_ledger_sort_key(d)},
+                UpdateExpression="SET ingestState = :engine, engineJobId = :job REMOVE movingSince",
+                ConditionExpression=("(ingestState = :moving AND ingestHolder = :me) OR "
+                                     "(ingestState = :engine AND engineJobId = :job)"),
+                ExpressionAttributeValues={":engine": INGEST_STATE_ENGINE_COPYING, ":job": job_id,
+                                           ":moving": INGEST_STATE_MOVING, ":me": holder})
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+            logger.warning("An output's ledger row changed before its engine hand-off was recorded")
+
+
+def settle_engine_rows(dynamo, output_files_table, workflow_execution_id, ledger, status_by_job,
+                       succeeded_status, jobs_by_source_key=None, terminal_statuses=()):
+    """Settle the run's rows of outputs the copy engine copied, from their jobs' outcomes. Returns
+    (ingested, released) counts.
+
+    - Every `engine-copying` row: `ingested` when its job ended `succeeded_status`, released (deleted)
+      otherwise, conditional on the row still naming that job.
+    - A `moving` row whose staged key is the source of one of this run's copy jobs
+      (`jobs_by_source_key`: {source key: (job id, status)}): the attempt that handed it to the
+      engine died before it recorded the hand-off (#1271 + #1123, combined smoke D1). Settled the same
+      way, but only once the job has ended (`terminal_statuses`), and conditional on the row being
+      exactly as read (same holder and `movingSince`). A `moving` row no job reads from is a small-file
+      move, possibly by a live attempt, and is never touched."""
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    jobs_by_source_key = jobs_by_source_key or {}
+    ingested = released = 0
+    for sort_key, row in (ledger or {}).items():
+        state = row.get("ingestState")
+        key = {"pipelineExecutionId": partition, INGEST_LEDGER_SORT_KEY: sort_key}
+        if state == INGEST_STATE_ENGINE_COPYING:
+            job_id = row.get("engineJobId", "")
+            status = status_by_job.get(job_id)
+            condition = "ingestState = :state AND engineJobId = :job"
+            values = {":state": INGEST_STATE_ENGINE_COPYING, ":job": job_id}
+        elif state == INGEST_STATE_MOVING and row.get("s3Key") in jobs_by_source_key:
+            job_id, status = jobs_by_source_key[row["s3Key"]]
+            if status not in terminal_statuses:
+                continue
+            condition = "ingestState = :state AND ingestHolder = :holder AND movingSince = :since"
+            values = {":state": INGEST_STATE_MOVING, ":holder": row.get("ingestHolder", ""),
+                      ":since": row.get("movingSince")}
+        else:
+            continue
+        try:
+            if status == succeeded_status:
+                table.update_item(Key=key, UpdateExpression="SET ingestState = :ingested, engineJobId = :jid",
+                                  ConditionExpression=condition,
+                                  ExpressionAttributeValues={**values, ":ingested": INGEST_STATE_INGESTED,
+                                                             ":jid": job_id})
+                ingested += 1
+            else:
+                table.delete_item(Key=key, ConditionExpression=condition, ExpressionAttributeValues=values)
+                released += 1
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+    return ingested, released
+
+
 def read_ingest_ledger(dynamo, output_files_table, workflow_execution_id):
     """The run's ledger rows as {sort key: row}, at most MAX_INGEST_LEDGER_ROWS (a longer ledger is
     logged and read up to the bound). Empty for a run that wrote none, including a run whose earlier
@@ -530,84 +610,6 @@ def read_ingest_ledger(dynamo, output_files_table, workflow_execution_id):
     return ledger
 
 
-# ---------------------------------------------------------------------------
-# Copy claims: one asynchronous copy per run output
-# ---------------------------------------------------------------------------
-#
-# A retried end-state step can queue a large output for its asynchronous copy a second time (its
-# attempt ended before it saw the ingestion answer). The large-file worker takes a claim on that output
-# before it copies: a conditional UpdateItem on a row in the run's ledger partition, sort key
-# `copy:<destination key>`. Only the holder copies. Another worker that finds a live claim returns its
-# message to the queue and, once redelivered, reports the holder's outcome. A claim whose holder
-# crashed is taken over once it is older than COPY_CLAIM_TAKEOVER_SECONDS; the holder's own message,
-# redelivered after a crash, takes its claim back at once. The rows carry no ingestState, so the
-# end-state step's ledger reads pass over them.
-
-COPY_CLAIM_SORT_KEY_PREFIX = "copy:"
-COPY_CLAIM_COPYING = "copying"
-COPY_CLAIM_COPIED = "copied"
-# The large-file worker's timeout (15 minutes) plus a margin: a claim this old has no live holder.
-COPY_CLAIM_TAKEOVER_SECONDS = 15 * 60 + 5 * 60
-
-CLAIM_ACQUIRED = "acquired"
-CLAIM_HELD = "held"
-CLAIM_COPIED = "copied"
-
-
-def copy_claim_key(workflow_execution_id, destination_key):
-    return {"pipelineExecutionId": ingest_ledger_partition(workflow_execution_id),
-            INGEST_LEDGER_SORT_KEY: f"{COPY_CLAIM_SORT_KEY_PREFIX}{destination_key}"}
-
-
-def acquire_copy_claim(dynamo, output_files_table, workflow_execution_id, destination_key, holder,
-                       now_epoch):
-    """Take the copy claim for one run output. Returns CLAIM_ACQUIRED (this holder copies),
-    CLAIM_COPIED (another holder already copied it) or CLAIM_HELD (another holder is copying it).
-
-    The write succeeds when no one holds the claim, when `holder` already holds it (its message was
-    redelivered), or when the claim is still `copying` and older than COPY_CLAIM_TAKEOVER_SECONDS."""
-    table = dynamo.Table(output_files_table)
-    key = copy_claim_key(workflow_execution_id, destination_key)
-    try:
-        table.update_item(
-            Key=key,
-            UpdateExpression="SET claimHolder = :h, claimedAt = :now, claimState = :copying",
-            ConditionExpression=("attribute_not_exists(claimHolder) OR claimHolder = :h OR "
-                                 "(claimState = :copying AND claimedAt < :stale)"),
-            ExpressionAttributeValues={
-                ":h": holder, ":now": int(now_epoch), ":copying": COPY_CLAIM_COPYING,
-                ":stale": int(now_epoch) - COPY_CLAIM_TAKEOVER_SECONDS},
-        )
-        return CLAIM_ACQUIRED
-    except Exception as e:
-        if not is_conditional_check_failure(e):
-            raise
-    item = table.get_item(Key=key, ConsistentRead=True).get("Item") or {}
-    if item.get("claimState") == COPY_CLAIM_COPIED:
-        return CLAIM_COPIED
-    return CLAIM_HELD
-
-
-def finish_copy_claim(dynamo, output_files_table, workflow_execution_id, destination_key, holder,
-                      copied):
-    """Finalize this holder's claim: `copied` after a successful copy, released (no holder) after a
-    failure so another worker may copy. Conditional on `holder` still holding it; a claim taken over
-    in the meantime is left to its new holder."""
-    table = dynamo.Table(output_files_table)
-    if copied:
-        expression, values = "SET claimState = :copied", {":copied": COPY_CLAIM_COPIED, ":h": holder}
-    else:
-        expression, values = "REMOVE claimHolder, claimedAt, claimState", {":h": holder}
-    try:
-        table.update_item(Key=copy_claim_key(workflow_execution_id, destination_key),
-                          UpdateExpression=expression, ConditionExpression="claimHolder = :h",
-                          ExpressionAttributeValues=values)
-    except Exception as e:
-        if not is_conditional_check_failure(e):
-            raise
-        logger.warning("The copy claim was taken over before this holder finished; left to its holder")
-
-
 def ledger_row_descriptor(row):
     """The output descriptor (the shape the end-state step collects) a ledger row records."""
     return {
@@ -630,6 +632,13 @@ def is_conditional_check_failure(error):
         if code:
             return code == "ConditionalCheckFailedException"
     return "ConditionalCheckFailed" in str(error)
+
+
+# Main-row attributes of a run whose large outputs are being copied into the asset (the phase and its
+# progress counters). They describe a RUNNING row only, so every write of a terminal status removes
+# them (a no-op on a row that never entered the phase).
+INGESTION_PHASE_ATTRIBUTES = ("executionPhase", "outputIngestion")
+REMOVE_INGESTION_PHASE = " REMOVE " + ", ".join(INGESTION_PHASE_ATTRIBUTES)
 
 
 def not_terminal_condition(values):
@@ -749,6 +758,7 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
     if execution_error is not None:
         expr += ", executionError = :er"
         values[":er"] = execution_error or ""
+    expr += REMOVE_INGESTION_PHASE
     condition = not_terminal_condition(values)
     try:
         table.update_item(

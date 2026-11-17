@@ -60,6 +60,28 @@ VAMS_STATUS_METADATA_KEY = "vams-status"
 VAMS_STATUS_ARCHIVED = "archived"
 VAMS_STATUS_DELETED = "deleted"
 
+# VAMS_COPY_UPLOAD_TOKEN: the per-job upload token a VAMS writer records on its job row and stamps
+#   on its multipart upload, so it can tell the object its own upload created from any earlier object
+#   at the same key (is_own_upload_object below; never presence or size). Two writers use it: the
+#   large object copy engine (handlers/assets/largeObjectCopy.py prepare, destUploadToken,
+#   common/largeObjectCopy.landed_object_version) and the zipArchive container of Download as Zip
+#   (archiveUploadToken, common/zipDownloads.landed_archive; mirrored in
+#   backendPipelines/utility/zipArchive/container/zip_archive_pipeline/runner.py). System-owned (``vams-``
+#   prefix): not indexed.
+VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY = "vams-copyuploadtoken"
+
+
+def is_own_upload_object(head, token) -> bool:
+    """Whether a HeadObject response describes the object a job's own multipart upload created: the
+    object carries the job's upload token under VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY. False for no
+    object or no token. Never decided by presence or size: an earlier object of the same size (and
+    part count) can sit at the key, for example a re-run of the same output or archive."""
+    return (
+        bool(head)
+        and bool(token)
+        and (head.get("Metadata") or {}).get(VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY) == token
+    )
+
 # ---------------------------------------------------------------------------
 # Change-provenance keys (``vams-`` hyphen prefix).
 #

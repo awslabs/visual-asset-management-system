@@ -497,10 +497,11 @@ run. `PipelineExecutionLogsStorageTable` holds the per-step result and error log
 The same output-files table also holds each run's **ingest ledger**, under the partition
 `ingest#{workflowExecutionId}` rather than a `pipelineExecutionId`, so no output listing reads it. The
 end-state step writes one row per output it hands to ingestion (`ingestState` `moving`, then `ingested`),
-which lets a retried step record outputs an earlier attempt already moved into the asset. The large-file
-worker keeps a copy claim per output in the same partition (sort key `copy:{destination key}`,
-`claimHolder`, `claimedAt`, `claimState`), so two queued copies of one output never both write it. A claim
-whose holder stopped is taken over after 20 minutes. Permanently deleting an execution deletes the
+which lets a retried step record outputs an earlier attempt already moved into the asset. An output over
+1 GiB handed to the large object copy engine is `engine-copying` with its copy job's id (`engineJobId`)
+until the run's finalize step reads the job's outcome: `ingested` when the copy landed, the row removed
+when it did not. A `moving` row whose attempt stopped is taken over after 20 minutes; an `engine-copying`
+row is never taken over or handed to ingestion again. Permanently deleting an execution deletes the
 partition.
 
 ### Workflow Execution Locks Storage Table
@@ -554,6 +555,45 @@ downstream re-evaluation on approval; the audit table is the compliance event tr
 | ComplianceAuditStorageTable      | `EventTypeIndex`         | `eventType`          | `timestamp`       | Audit entries by event type                                                                                                                                                       |
 | ComplianceAuditStorageTable      | `AuditByDateGSI`         | `allListPartition`   | `timestamp`       | The unfiltered audit trail, newest first (every row carries the constant `allListPartition`)                                                                                      |
 | ComplianceAuditStorageTable      | `DatabaseIndex`          | `databaseId`         | `timestamp`       | One database's audit trail, newest first: the listing filtered by database, and the listing of a caller who may read only some databases (one query per database, merged by time) |
+
+### Zip Download Requests Storage Table
+
+Holds one row per Download as Zip job. Every write and every get, cancel and delete starts from the authenticated caller's user ID, so a user changes only their own rows. The all-users list reads `AssetIndex` for one asset, for a caller allowed that route who may read the asset, and the download URL route signs another user's archive for a caller who may download from the asset. Status changes are conditional writes: a terminal status (`SUCCEEDED`, `FAILED`, `CANCELLED`) is final, and the Zip Archive container's writes are further conditional on its own run.
+
+| Attribute                                            | Type   | Key           | Notes                                                                                                  |
+| ---------------------------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------------ |
+| `userId`                                             | String | Partition Key | The requesting user                                                                                    |
+| `requestId`                                          | String | Sort Key      | Zero-padded base-36 epoch milliseconds, `-`, and a UUID4 hex, so lexicographic order is creation order |
+| `userAssetKey`                                       | String |               | `{userId}#{databaseId}#{assetId}`; partition key of `UserAssetIndex`                                   |
+| `assetKey`                                           | String |               | `{databaseId}#{assetId}`; partition key of `AssetIndex` (written from creation)                        |
+| `databaseId`                                         | String |               | Database of the asset                                                                                  |
+| `assetId`                                            | String |               | Asset archived                                                                                         |
+| `assetName`                                          | String |               | Asset name when the job was created                                                                    |
+| `status`                                             | String |               | `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, or `CANCELLED`                                             |
+| `archiveFormat`                                      | String |               | `zip`, `tar`, or `tar.gz`                                                                              |
+| `compression`                                        | String |               | `store` or `deflate` (`store` for tar formats)                                                         |
+| `archiveFileName`                                    | String |               | Sanitized archive file name, including its extension                                                   |
+| `archiveKey`                                         | String |               | Archive object key in the auxiliary bucket                                                             |
+| `manifestKey`                                        | String |               | Request manifest key in the auxiliary bucket                                                           |
+| `resolvedManifestKey`                                | String |               | Resolved member list the Zip Archive container writes                                                  |
+| `selectionSummary`                                   | Map    |               | `{files, folders, wholeAsset}` as requested                                                            |
+| `selectionPreview`                                   | List   |               | The first 20 requested entries `{type, relativePath, versionId}`                                       |
+| `assetVersionId`                                     | String |               | The asset version the job is pinned to, when it is                                                     |
+| `filesTotal`, `bytesTotal`                           | Number |               | Totals of the resolved selection                                                                       |
+| `filesDone`, `bytesDone`                             | Number |               | Progress the Zip Archive container writes                                                              |
+| `archiveSizeBytes`                                   | Number |               | Size of the finished archive                                                                           |
+| `errorMessage`                                       | String |               | User-safe failure reason                                                                               |
+| `cancelledBy`                                        | String |               | `user` or `execution`                                                                                  |
+| `workflowExecutionId`                                | String |               | The Zip Archive run; never returned by the API                                                         |
+| `createdAt`, `startedAt`, `completedAt`, `updatedAt` | String |               | ISO-8601 UTC times                                                                                     |
+| `expiresAt`                                          | Number |               | Epoch seconds, `createdAt` plus 7 days; the table's time-to-live attribute                             |
+
+| Index            | Partition Key  | Sort Key    | Projection |
+| ---------------- | -------------- | ----------- | ---------- |
+| `UserAssetIndex` | `userAssetKey` | `requestId` | ALL        |
+| `AssetIndex`     | `assetKey`     | `requestId` | ALL        |
+
+Reads treat a row whose `expiresAt` has passed as absent, since DynamoDB removes expired items some time after they expire. No DynamoDB Streams.
 
 ### Authorization Tables
 
@@ -648,6 +688,7 @@ by the input file that the data was derived from and one keyed by the execution 
 ```
 {databaseId}/{assetFileKey}/preview/{viewer_subfolder}/{generated_files}
 pipelines/{pipelineName}/{executionId}/{working_files}
+vams.preparedDownloads/{databaseId}/{assetId}/{userHash}/{requestId}/{archiveFileName | manifest.json | resolved-manifest.jsonl}
 ```
 
 Where:
@@ -661,12 +702,18 @@ Where:
     subfolder (for example `PotreeViewer`) so several viewers can coexist for one file
 -   `pipelineName` / `executionId` scope temporary working files to a single run, so concurrent runs of the
     same pipeline cannot collide
+-   `vams.preparedDownloads/` holds Download as Zip jobs: each job's archive, its request manifest, and its
+    resolved member list, under the first 16 hex characters of the SHA-256 of the requesting user's ID
+    (`userHash`) and the job's `requestId`. Lifecycle rules expire the prefix after
+    7 days. The prefix sits beside the per-database prefixes; a database ID
+    cannot contain a dot, so the rules never reach a database's data
 
 Common uses:
 
 -   Potree octree data for point cloud visualization
 -   Temporary pipeline processing files
 -   Pipeline intermediate outputs
+-   Download as Zip archives
 
 :::note
 Because the preview layout is keyed per input file, every file of an asset gets its own viewer-data

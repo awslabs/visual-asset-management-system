@@ -22,6 +22,7 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 -   **Asset preview thumbnails** -- Display generated preview images in asset detail pages and search results
 -   **Cross-database asset linking** -- Create relationships between assets across different databases
 -   **File manager** -- Hierarchical file tree with folder expansion, file selection, copy, move, and rename operations
+-   **Download as Zip** -- Package selected files, folders, or a whole asset, current or at an asset version, into one zip (ZIP64), tar, or tar.gz archive of up to 5 TiB built in the background, and download it from **My Download Queue** (`app.pipelines.useZipDownloads.enabled`)
 -   **Drag-and-drop upload** -- Upload files and folders directly through the browser with progress tracking
 -   **Metadata management** -- View and edit asset-level and file-level metadata with configurable schemas
 -   **Tag management** -- Assign tags to assets using custom tag types for classification
@@ -72,6 +73,7 @@ VAMS exposes a REST API through Amazon API Gateway, secured by a custom Lambda a
 | Asset Links      | CRUD                                                     | Cross-database asset relationships                                                   |
 | Databases        | CRUD                                                     | Database lifecycle with metadata and Amazon S3 bucket management                     |
 | Files            | Upload, download, copy, move, delete                     | File operations with presigned URL generation                                        |
+| Zip Downloads    | Create, list, get, URL, cancel, delete                   | Background archives of files, folders, or a whole asset                              |
 | Metadata         | CRUD                                                     | Asset-level and file-level metadata with version support                             |
 | Metadata Schemas | CRUD                                                     | Schema definitions for structured metadata validation                                |
 | Tags             | CRUD                                                     | Tag assignment and management                                                        |
@@ -187,7 +189,7 @@ The Deadline Cloud execution type requires `app.pipelines.deadlineCloudExecution
 
 ### Built-In Pipelines
 
-VAMS includes twenty-seven built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag. Pipelines whose category begins with `SYSTEM - ` are [system pipelines](../pipelines/system-pipelines.md), owned by the deployment and read-only through the API.
+VAMS includes twenty-eight built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag. Pipelines whose category begins with `SYSTEM - ` are [system pipelines](../pipelines/system-pipelines.md), owned by the deployment and read-only through the API.
 
 | Pipeline                                | Config Flag                                        | Description                                                                                                                                                                                | Default  |
 | --------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
@@ -217,6 +219,7 @@ VAMS includes twenty-seven built-in processing pipelines, each deployable throug
 | Isaac Lab RL Evaluation                 | `useIsaacLabTraining`                              | Evaluation of trained reinforcement learning policies using NVIDIA Isaac Lab                                                                                                               | Disabled |
 | RapidPipeline 3D Processor              | `useRapidPipeline.useEcs`                          | Licensed 3D model optimization and conversion on Amazon ECS                                                                                                                                | Disabled |
 | RapidPipeline (EKS)                     | `useRapidPipeline.useEks`                          | Licensed 3D model optimization and conversion on Amazon EKS                                                                                                                                | Disabled |
+| Zip Archive (system pipeline)           | `app.pipelines.useZipDownloads.enabled`            | Streams selected files into a zip (ZIP64), tar, or tar.gz archive for Download as Zip, or into the asset as a new file                                                                     | Disabled |
 | VNTANA ModelOps 3D Optimization         | `useModelOps`                                      | Licensed 3D model optimization and conversion using the VNTANA engine                                                                                                                      | Disabled |
 
 :::note[Model variant flags]
@@ -289,6 +292,7 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 | `AUTHPROVIDER_COGNITO_SAML`     | Indicates Amazon Cognito with SAML federation                                                                                                                                                                                                                                                                                                                                         |
 | `AUTHPROVIDER_COGNITO_OIDC`     | Indicates Amazon Cognito with OIDC federation                                                                                                                                                                                                                                                                                                                                         |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | Indicates external OAuth2 authentication                                                                                                                                                                                                                                                                                                                                              |
+| `ZIPDOWNLOADS`                  | Enables the Download as Zip controls, the asset's **Download Queue** tab, and the **My Download Queue** page. Emitted automatically when `app.pipelines.useZipDownloads.enabled` is `true`.                                                                                                                                                                                           |
 | `DEADLINECLOUD_PIPELINES`       | Enables the AWS Deadline Cloud pipeline execution type in the web interface. Emitted automatically when `app.pipelines.deadlineCloudExecutionTypeEnabled` is `true`.                                                                                                                                                                                                                  |
 | `VECTORSEARCH`                  | Enables natural-language (vector) search: `POST /search/nlp`, the web toggle, and the CLI `search nlp` command. The MCP `search_nlp` tool is registered on every deployment and returns the API's answer; when the switch is off the route does not exist and the tool returns an `APIError` result instead of hits. Emitted automatically when `app.vectorSearch.enabled` is `true`. |
 
