@@ -332,3 +332,24 @@ describe("My Download Queue (Download as Zip)", () => {
         expect(hrefsIn(both)).toContain("#/zipdownloads/");
     });
 });
+
+describe("Audit Log Search", () => {
+    const href = "#/auth/audit-log-search/";
+
+    it("is an Admin - Auth link with no feature switch", () => {
+        const adminAuth = entriesFor("side").find((entry) => entry.text === "Admin - Auth");
+        expect(hrefsIn([adminAuth])).toContain(href);
+        const link = (adminAuth?.items ?? []).find((item) => item.href === href);
+        expect(link?.text).toBe("Audit Log Search");
+    });
+
+    it("appears only when the API's web-route decision allows the route", () => {
+        expect(hrefsIn(allowedEntriesFor("side", ["/databases"]))).not.toContain(href);
+        expect(hrefsIn(allowedEntriesFor("side", ["/auth/audit-log-search"]))).toContain(href);
+    });
+
+    it("is checked as a web route like every other page, once", () => {
+        const checks = webRouteChecksFor(["side"]).map((route) => route.route__path);
+        expect(checks.filter((path) => path === "/auth/audit-log-search")).toHaveLength(1);
+    });
+});

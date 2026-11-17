@@ -150,6 +150,13 @@ function coreAdminNavEntries(): NavEntry[] {
                           },
                       ]
                     : []),
+                // Core VAMS, no feature switch: the entry shows when the API's web-route decision
+                // allows the page (admins by seed, others through the audit-reader template).
+                {
+                    type: "link",
+                    text: "Audit Log Search",
+                    href: "#/auth/audit-log-search/",
+                },
                 {
                     // The tenant-wide view of the API keys page. The web route is the same as the
                     // profile entry's, so the admin decision comes from the API listing.
