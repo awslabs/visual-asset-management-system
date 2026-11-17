@@ -1556,11 +1556,17 @@ describe("changelog, revision history, and notices", () => {
         expect(version).toMatch(/^2\.\d+\.\d+$/);
     });
 
-    test("CHANGELOG.md's newest release heading is the package version", () => {
+    test("CHANGELOG.md's newest dated release heading is the package version", () => {
         const changelog = readRepo("CHANGELOG.md");
-        // A section for the next, unreleased version may sit above it, marked `(Unreleased)`.
-        const first = changelog.match(/^## \[(\d+\.\d+\.\d+)\](?! \(Unreleased\))/m);
-        expect(first && first[1]).toBe(version);
+        // An unreleased section (`## [x.y.z] (TBD)`, as development opens one for the next release) may sit
+        // above it; the newest heading that carries a date is the release this package version ships.
+        const headings = [...changelog.matchAll(/^## \[(\d+\.\d+\.\d+)\] \(([^)]*)\)/gm)];
+        const dated = headings.filter((heading) => /^\d{4}-\d{2}-\d{2}$/.test(heading[2]));
+        expect(dated.length).toBeGreaterThan(1);
+        expect(dated[0][1]).toBe(version);
+        for (const heading of headings.slice(0, headings.indexOf(dated[0]))) {
+            expect(heading[2]).toBe("TBD");
+        }
         const release = section(changelog, `## [${version}]`);
         expect(release).toContain("### Major Change Summary:");
         expect(release).toContain("### ⚠ BREAKING CHANGES");

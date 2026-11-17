@@ -21,6 +21,7 @@ for the record, never asserted. The audit trail is decided by the production enf
 shipped Compliance Admin template, scoped to one database.
 """
 
+import inspect
 import math
 import time
 from contextlib import contextmanager
@@ -564,13 +565,27 @@ class _Clock:
 
 @pytest.mark.unit
 class TestTheDecisionBudget:
+    """The listing helpers themselves (`inspect.unwrap`: the directory's fixture times them on a
+    clock that does not move, conftest), on the host clock unless a test passes its own."""
 
     def test_a_cheap_accept_fills_the_page_as_before(self):
         table = _Pages({"Items": _rows(0, 30)})
-        items, key, reads = listing.query_page(table, {}, 5, ("k",),
-                                               accept=lambda item: item["keep"])
+        items, key, reads = inspect.unwrap(listing.query_page)(table, {}, 5, ("k",),
+                                                               accept=lambda item: item["keep"])
         assert [i["k"] for i in items] == ["i000", "i003", "i006", "i009", "i012"]
         assert key == {"k": "i012"} and reads == 1
+
+    def test_without_a_clock_the_decisions_are_timed_on_the_host_clock(self):
+        # The host clock moves past the budget on every reading: the first decision spends it.
+        with patch("time.monotonic", _Clock(2 * listing.DEFAULT_DECISION_BUDGET_SECONDS)):
+            items, key, _ = inspect.unwrap(listing.query_page)(
+                _Pages({"Items": _rows(0, 30), "LastEvaluatedKey": {"k": "i029"}}), {}, 10,
+                ("k",), accept=lambda item: True)
+            merged, positions, _ = inspect.unwrap(listing.merge_query_page)(
+                _Pages({"Items": _rows(0, 30)}), [("p", None)], lambda _partition: {}, 10,
+                ("k",), "k", accept=lambda item: True)
+        assert [i["k"] for i in items] == ["i000"] and key == {"k": "i000"}
+        assert [i["k"] for i in merged] == ["i000"] and positions == {"p": {"k": "i000"}}
 
     def test_the_budget_ends_the_page_after_the_row_decided_with_its_key(self):
         # Each decision takes one clock step (0.05 s); a budget of 0.33 s is spent by the seventh

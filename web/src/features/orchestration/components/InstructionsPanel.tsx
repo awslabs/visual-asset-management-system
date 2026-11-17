@@ -105,22 +105,30 @@ const InstructionsPanel: React.FC<InstructionsPanelProps> = ({
         <Tooltip.Provider delayDuration={150}>
             <Tooltip.Root>
                 <Tooltip.Trigger asChild>
+                    {/* Focusable, not hover-only: a keyboard or touch user has to be able to reach
+                        content that is otherwise invisible. The button is named by the text it shows,
+                        the title and the line count (Label in Name, #1592); the info icon is an
+                        image, not a letter, so the text starts with the title. */}
                     <button
                         type="button"
-                        // Focusable, not hover-only: a keyboard or touch user has to be able to
-                        // reach content that is otherwise invisible.
-                        aria-label={`${title} (${lineCount} lines)`}
                         data-testid="instructions-tooltip-trigger"
                         className="orch-outline inline-flex items-center gap-1.5 rounded border border-border-default bg-surface-secondary px-3 py-1.5 text-sm text-text-primary hover:bg-surface-hover focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
-                        <span
+                        <svg
                             aria-hidden="true"
-                            className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-text-secondary text-[10px] leading-none text-text-secondary"
+                            focusable="false"
+                            data-testid="instructions-info-icon"
+                            className="h-4 w-4 shrink-0 text-text-secondary"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.25"
                         >
-                            i
-                        </span>
-                        {title}
-                        <span className="text-text-secondary">({lineCount} lines)</span>
+                            <circle cx="8" cy="8" r="7" />
+                            <path d="M8 7v4.5" strokeLinecap="round" />
+                            <circle cx="8" cy="4.75" r="0.75" fill="currentColor" stroke="none" />
+                        </svg>
+                        {title} <span className="text-text-secondary">({lineCount} lines)</span>
                     </button>
                 </Tooltip.Trigger>
                 <Tooltip.Portal>

@@ -288,6 +288,11 @@ const COMMERCIAL: ConfigShape = {
                 },
                 largeTierThresholdGiB: 2,
             },
+            useMediaPreviews: {
+                enabled: false,
+                autoRegisterAutoTriggerOnFileUpload: false,
+                downscaleSelfPreviewableImages: false,
+            },
             useSystemGenAiMetadata: {
                 enabled: true,
                 autoRegisterWithVAMS: true,

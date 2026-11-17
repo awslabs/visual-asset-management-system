@@ -538,6 +538,14 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                 loading={loading}
                 loadingText="Loading asset versions"
                 selectionType="single"
+                // The selection column's header and each row's radio name what they select (#1613):
+                // without them the header cell is empty and each radio has no name.
+                ariaLabels={{
+                    selectionGroupLabel: "Version selection",
+                    allItemsSelectionLabel: () => "Select all versions",
+                    itemSelectionLabel: (_selection, item) =>
+                        `Select version ${formatVersionDisplay(item)}`,
+                }}
                 selectedItems={selectedVersion ? [selectedVersion] : []}
                 sortingColumn={sortingColumn}
                 sortingDescending={sortingColumn.isDescending}

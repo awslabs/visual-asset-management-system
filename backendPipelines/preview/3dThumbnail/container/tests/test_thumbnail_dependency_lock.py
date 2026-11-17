@@ -85,3 +85,35 @@ class TestDependencyLock:
             "the direct-dependency parser is not reading requirements.txt"
         missing = sorted(name for name in direct if name not in entries)
         assert missing == []
+
+
+@pytest.mark.unit
+class TestImagecodecs:
+    """imagecodecs (tifffile's codec package) is a binary-only, hash-locked dependency."""
+
+    def test_it_is_a_direct_dependency_and_locked_with_hashes(self):
+        assert "imagecodecs" in _direct_dependencies()
+        version, hashes = _lock_entries()["imagecodecs"]
+        assert re.fullmatch(r"\d{4}\.\d+\.\d+", version) and len(hashes) >= 3
+
+    def test_the_image_installs_it_from_wheels_only(self):
+        with open(DOCKERFILE, encoding="utf-8") as handle:
+            installs = [line for line in handle.read().splitlines()
+                        if re.search(r"\bpip3?\s+install\b", line) and not line.lstrip().startswith("#")]
+        assert installs
+        for line in installs:
+            only = re.search(r"--only-binary[= ]([\w,.-]+)", line)
+            assert only, f"pip install may build from source: {line}"
+            for package in ("imagecodecs", "av", "tifffile"):
+                assert package in only.group(1).split(","), f"{package} may be built from source"
+
+    def test_the_licence_inventory_is_recorded_in_the_notice(self):
+        notice = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+            CONTAINER_DIR)))), "NOTICE.md")
+        if not os.path.isfile(notice):
+            pytest.skip("NOTICE.md is not checked out here")
+        text = open(notice, encoding="utf-8").read()
+        version = _lock_entries()["imagecodecs"][0]
+        assert re.search(rf"imagecodecs\s*\|\s*{re.escape(version)}", text), "NOTICE.md names another version"
+        for library in ("libtiff", "libjxl", "libwebp", "libaom", "zstd", "libgomp"):
+            assert library in text, f"NOTICE.md does not list the bundled {library}"

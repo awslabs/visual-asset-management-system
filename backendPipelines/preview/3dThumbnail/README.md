@@ -1,10 +1,11 @@
-# Preview 3D Thumbnail Pipeline
+# Preview 3D Thumbnail Pipeline (and Media Preview Thumbnail)
 
 The Preview 3D Thumbnail pipeline generates animated GIF or static image preview thumbnails from 3D files. It uses CPU-based headless rendering via PyVista/VTK with Xvfb inside an AWS Batch Fargate container.
 
 ## Contents
 
 -   [Supported Formats](#supported-formats)
+-   [Media Formats](#media-formats)
 -   [Architecture](#architecture)
 -   [Output](#output)
 -   [Input Parameters](#input-parameters)
@@ -29,6 +30,39 @@ The Preview 3D Thumbnail pipeline generates animated GIF or static image preview
 | Gaussian splat | .ply (3DGS), .compressed.ply, .spz, .sog, .splat, .ksplat, .lcc, .lcc2 | numpy; PlayCanvas splat-transform for conversion |
 
 FARO scans (`.fls`, `.fws`) are not supported: reading them needs the proprietary FARO SDK. Convert them to E57 or LAS first.
+
+## Media Formats
+
+The same container also writes previews for images and video, through a second registered pipeline and workflow, **Media Preview Thumbnail** (`preview-media-thumbnail`). One deployment (container, Batch queue and state machine) serves both workflows and deploys when either `app.pipelines.usePreview3dThumbnail.enabled` or `app.pipelines.useMediaPreviews.enabled` is `true`; the flags only choose which workflow is registered, so a media-only deployment (3D off) works and takes its compute tiers from `usePreview3dThumbnail`. A deployment whose configuration has no `useMediaPreviews` block keeps today's behaviour (media previews off).
+
+| Category | Extensions                                                          | Handler                                                 |
+| :------- | :------------------------------------------------------------------ | :------------------------------------------------------ |
+| Image    | .png, .jpg, .jpeg, .gif, .webp, .bmp                                | Pillow                                                  |
+| Image    | .tga, .tif, .tiff                                                   | Pillow, with tifffile and imagecodecs for TIFF variants |
+| Video    | .mp4, .m4v, .mov, .mkv, .webm, .avi, .wmv, .mpg, .mpeg, .mts, .m2ts | PyAV (bundled FFmpeg libraries)                         |
+
+Not accepted: SVG, HEIC/HEIF, AVIF, EXR, HDR, PSD, DDS and MDL (MDL thumbnails are tracked in #1547).
+
+### What a run writes
+
+An image whose extension is one the web shows as its own preview (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) and whose size is strictly under 5,242,880 bytes (5 MiB) is shown as its own preview, so the run writes nothing.
+
+| Input                                             | Default                                                                                                                                    | With `downscaleSelfPreviewableImages`                                                   |
+| :------------------------------------------------ | :----------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------- |
+| Displayable image under 5 MiB                     | No preview and no container job: the run completes successfully and says why                                                               | A JPEG when it is at least 25% smaller or the long edge is over 2048 px; otherwise none |
+| Displayable still image of 5 MiB or more          | A JPEG under 5 MiB (EXIF orientation applied, transparency on white)                                                                       | Same                                                                                    |
+| Animated GIF or WebP of 5 MiB or more             | A smaller animated GIF (fewer frames, then smaller size, then fewer colours); else a first-frame JPEG                                      | Same                                                                                    |
+| `.tga`, `.tif`, `.tiff`, any size                 | A JPEG under 5 MiB (16-bit, float and CMYK scaled to 8-bit RGB; first full-resolution page)                                                | Same                                                                                    |
+| Video                                             | An animated GIF of 12 frames sampled across the duration (at most 24, long edge 480 px, rotation applied), else the middle frame as a JPEG | Same                                                                                    |
+| Audio-only file or video with no decodable frames | Completes successfully, no preview                                                                                                         | Same                                                                                    |
+
+A run that writes no preview completes successfully and records why as `preview-not-generated.json` in the execution's results: for an image shown as its own preview the message reads "No preview was generated for '<name>': the file is under 5 MiB and is already shown as its own preview." With the downscale option on, an animated GIF or WebP under 5 MiB is still left alone (a JPEG would drop the animation), and the result says so. Every preview is strictly under 5 MiB. TGA and TIFF are never shown as their own preview because browsers cannot display them. A large still image, TGA or TIFF that cannot be decoded within the task's memory fails with a message that names the file type and the pixel limit.
+
+TIFF compressions: Pillow reads the common ones; a TIFF it cannot read (16-bit colour, float samples, BigTIFF, some predictors) is read with tifffile and its codec package imagecodecs, which the image installs from wheels only. The pipeline decodes the LZW, Deflate (Adobe and plain), PackBits, Zstandard, LZMA, JPEG and LERC (GeoTIFF) compressions, with or without a predictor, and refuses a TIFF in any other compression (JPEG XL, WebP, JPEG 2000, CCITT, vendor codecs) with a message that names it. The pixel budget and a byte budget for float and multi-sample images apply to this path as to the others. imagecodecs bundles about 90 codec libraries, all permissive licences plus the GCC OpenMP runtime; `NOTICE.md` lists them.
+
+### Safety limits
+
+The pixel count is read from the file header and checked against a budget derived from the task's memory before anything is decoded. Video is opened as a local file only (`protocol_whitelist=file`) through an allowlist of container formats, decoded for at most 10 minutes, and sampled by seeking rather than by decoding the whole file.
 
 ## Architecture
 
@@ -97,7 +131,23 @@ Enable the pipeline in `infra/config/config.json`:
 | `autoRegisterWithVAMS`                | Automatically registers the pipeline and workflow in the VAMS database during CDK deployment |
 | `autoRegisterAutoTriggerOnFileUpload` | When auto-registered, configures the workflow to trigger automatically on file upload        |
 
-Enabling this pipeline requires the Global VPC to be enabled (`useGlobalVpc.enabled: true`). The CDK configuration validation enforces this automatically.
+Media previews have their own block, beside this one:
+
+```json
+"useMediaPreviews": {
+    "enabled": true,
+    "autoRegisterAutoTriggerOnFileUpload": true,
+    "downscaleSelfPreviewableImages": false
+}
+```
+
+| Setting                                                | Default | Description                                                                                                                                                                                                                                                   |
+| :----------------------------------------------------- | :------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `useMediaPreviews.enabled`                             | `false` | Registers the Media Preview Thumbnail pipeline and workflow (images, TGA/TIFF, video) and deploys the shared container when `usePreview3dThumbnail` is off. Requires the Global VPC. The shipped config and templates ship `false` (it needs the Global VPC). |
+| `useMediaPreviews.autoRegisterAutoTriggerOnFileUpload` | `false` | Triggers the media workflow when a supported image or video is uploaded. Needs `useMediaPreviews.enabled`. The shipped config and templates ship `false` (it needs the Global VPC).                                                                           |
+| `useMediaPreviews.downscaleSelfPreviewableImages`      | `false` | Also writes a smaller JPEG for an image the web already shows as its own preview (under 5 MiB), when the JPEG is at least 25% smaller. Needs `useMediaPreviews.enabled`.                                                                                      |
+
+Enabling this pipeline, or media previews, requires the Global VPC to be enabled (`useGlobalVpc.enabled: true`). The CDK configuration validation enforces this automatically.
 
 ## Docker Notes
 
@@ -185,7 +235,7 @@ The copy holds three vertices per triangle. A 36-frame orbit of a mesh coloured 
 
 Before loading, `preview_pipeline/dependencies.py` fetches the files the input references from the input's own asset (glTF buffers and images; USD sublayers, references, payloads and asset-valued attributes, followed through each fetched layer; OBJ `mtllib` files and their `map_*`/`bump`/`disp` textures; FBX texture file names; an `.lcc` scene's `data.bin` and `index.bin`, and its `shcoef.bin` only when splat-transform reads it (`fileType` `Quality`, or a `shcoef` attribute in a scene without a `fileType`); `environment.bin` is never read and not fetched; the chunk files of the one level of detail an `.lcc2` scene is read at). The input and every fetched file land at their asset-relative paths under one local root, so relative references resolve locally as they do in the asset.
 
-Every reference is untrusted input. It is accepted only as a relative path that, normalised against the referring file's directory, stays inside the asset prefix (the key up to the asset id, the run's output files folder for a file an earlier step wrote, else the input's own directory); absolute paths, `..` escapes, URI schemes, control characters and over-long values are rejected. The fetch is bounded: 2,000 files, 50 GiB (HeadObject before each download, checked against free disk with 1 GiB headroom) and a recursion depth of 32. A rejected, missing or over-budget reference is logged and skipped; it never fails the run. When any was skipped, or the fetch stopped on an error, `dependencies.incomplete_preview` builds one WARNING summary that lists each skipped file, the file naming it and the reason (missing from the asset; outside the asset: absolute path, URI scheme or `..` escape; over the file, byte or disk budget), grouped as geometry layers (a USD layer's composition arcs to USD layer files: sublayers, references, payloads, from `Sdf.Layer.GetCompositionAssetDependencies()`), data files (glTF buffers, LCC data and chunk files, USD value clips) and textures and other files (images, materials, `asset`-typed attributes, and an arc to a non-USD file such as `.mtlx`). Only `asset`/`asset[]` attributes are read for this, never geometry or animation samples. Asset paths in layer or prim metadata (`assetInfo` `identifier`, `customLayerData`, `customData`), which load nothing, directory-less `.mdl` modules the renderer resolves itself, and FBX textures, which the FBX loader does not sample, are still looked up but not counted. A glTF or OBJ is loaded through a resolver confined to the same local root (`mesh_handler.asset_resolver`), so a `../textures/x.png` the fetch accepted inside the asset is read, an MTL's texture maps are looked up beside the MTL, and a name outside the asset is still refused. The summary is logged after the fetch; once the preview is written, the run completes with "Preview generated, but incomplete: N referenced files could not be fetched (G geometry layers, D data files, T textures/other files)" instead of the plain success message. When the run has an execution results folder (`outputS3AssetResultsPath`, carried to the container in the Batch command's second element as `outputResults` beside `inputVersions`, never in the definition, so an image or Lambda from before it still runs), the container also writes `preview-incomplete.json` there: the message, the counts by kind, at most 100 skipped files with a `truncated` flag, asset-relative paths, and, for a reference refused as outside the asset, only its reason and at most a sanitized base file name (`safe_base_name`: no scheme, authority, drive, share, query or folder). The workflow records it as an output result on the execution. A complete run writes none, and a failed write is logged as a warning and does not fail the run.
+Every reference is untrusted input. It is accepted only as a relative path that, normalised against the referring file's directory, stays inside the asset prefix (the key up to the asset id, the run's output files folder for a file an earlier step wrote, else the input's own directory); absolute paths, `..` escapes, URI schemes, control characters and over-long values are rejected. The fetch is bounded: 2,000 files, 50 GiB (HeadObject before each download, checked against free disk with 1 GiB headroom) and a recursion depth of 32. A rejected, missing or over-budget reference is logged and skipped; it never fails the run. When any was skipped, or the fetch stopped on an error, `dependencies.incomplete_preview` builds one WARNING summary that lists each skipped file, the file naming it and the reason (missing from the asset; outside the asset: absolute path, URI scheme or `..` escape; over the file, byte or disk budget), grouped as geometry layers (a USD layer's composition arcs to USD layer files: sublayers, references, payloads, from `Sdf.Layer.GetCompositionAssetDependencies()`), data files (glTF buffers, LCC data and chunk files, USD value clips) and textures and other files (images, materials, `asset`-typed attributes, and an arc to a non-USD file such as `.mtlx`). Only `asset`/`asset[]` attributes are read for this, never geometry or animation samples. Asset paths in layer or prim metadata (`assetInfo` `identifier`, `customLayerData`, `customData`), which load nothing, directory-less `.mdl` modules the renderer resolves itself, and FBX textures, which the FBX loader does not sample, are still looked up but not counted. A directory-less `.mdl` module that is not in the asset is also left out of the fetch's `missing` total and is logged once at INFO, with no HeadObject warning. A glTF or OBJ is loaded through a resolver confined to the same local root (`mesh_handler.asset_resolver`), so a `../textures/x.png` the fetch accepted inside the asset is read, an MTL's texture maps are looked up beside the MTL, and a name outside the asset is still refused. The summary is logged after the fetch; once the preview is written, the run completes with "Preview generated, but incomplete: N referenced files could not be fetched (G geometry layers, D data files, T textures/other files)" instead of the plain success message. When the run has an execution results folder (`outputS3AssetResultsPath`, carried to the container in the Batch command's second element as `outputResults` beside `inputVersions`, never in the definition, so an image or Lambda from before it still runs), the container also writes `preview-incomplete.json` there: the message, the counts by kind, at most 100 skipped files with a `truncated` flag, asset-relative paths, and, for a reference refused as outside the asset, only its reason and at most a sanitized base file name (`safe_base_name`: no scheme, authority, drive, share, query or folder). The workflow records it as an output result on the execution. A complete run writes none, and a failed write is logged as a warning and does not fail the run.
 
 ### Up-Axis Normalization
 

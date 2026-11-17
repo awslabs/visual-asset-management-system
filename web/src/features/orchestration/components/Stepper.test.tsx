@@ -8,12 +8,24 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Stepper from "./Stepper";
 
-/** The text `element` shows to assistive technology: its aria-hidden parts left out. */
-const visibleText = (element: Element) => {
-    const copy = element.cloneNode(true) as Element;
-    copy.querySelectorAll("[aria-hidden='true']").forEach((node) => node.remove());
-    return (copy.textContent || "").replace(/\s+/g, " ").trim();
+/**
+ * The text `element` shows a sighted user, as a speech-input user would say it: every text node,
+ * aria-hidden or not, a space between elements (the badge and the label are separate flex items), and
+ * symbols such as the check mark left out, since they are not words (axe's
+ * label-content-name-mismatch drops them too).
+ */
+const shownText = (element: Element) => {
+    const text = (node: Node): string =>
+        node.nodeType === Node.TEXT_NODE
+            ? node.textContent || ""
+            : ` ${Array.from(node.childNodes).map(text).join("")} `;
+    return text(element)
+        .replace(/[\u2190-\u2BFF]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
 };
+
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const STEPS = [
     { id: "basic", label: "Basic" },
@@ -35,9 +47,9 @@ describe("Stepper", () => {
         const onJumpTo = jest.fn();
         render(<Stepper steps={STEPS} current="tags" onJumpTo={onJumpTo} />);
         const back = screen.getByRole("button", { name: "Basic: go to step 1" });
-        expect(screen.queryByRole("button", { name: "Review: go to step 3" })).toBeNull();
+        expect(screen.queryByRole("button", { name: /Review: go to step 3$/ })).toBeNull();
         expect(
-            screen.queryByRole("button", { name: "Tags and Config Body: go to step 2" })
+            screen.queryByRole("button", { name: /Tags and Config Body: go to step 2$/ })
         ).toBeNull();
         await userEvent.click(back);
         expect(onJumpTo).toHaveBeenCalledWith("basic");
@@ -74,10 +86,10 @@ describe("Stepper", () => {
                 canJumpTo={(id) => id === "review"}
             />
         );
-        expect(screen.getByRole("button", { name: "Review: go to step 3" })).toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: "Basic: go to step 1" })).toBeNull();
+        expect(screen.getByRole("button", { name: "3 Review: go to step 3" })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /Basic: go to step 1$/ })).toBeNull();
         expect(
-            screen.queryByRole("button", { name: "Tags and Config Body: go to step 2" })
+            screen.queryByRole("button", { name: /Tags and Config Body: go to step 2$/ })
         ).toBeNull();
     });
 
@@ -96,21 +108,39 @@ describe("Stepper", () => {
         }
     });
 
-    it("names each step button by the label it shows, then its number (#1592)", () => {
+    it("names each step button starting with the text it shows, then the step it opens (#1592)", () => {
         // Basic is completed (its badge is a check mark) and Review is ahead (its badge is "3").
         render(
             <Stepper steps={STEPS} current="tags" onJumpTo={jest.fn()} canJumpTo={() => true} />
         );
         const buttons = screen.getAllByRole("button");
-        expect(buttons).toHaveLength(2);
+        expect(buttons.map(shownText)).toEqual(["Basic", "3 Review"]);
         for (const button of buttons) {
-            // The badge is hidden from assistive technology: the name carries the step number.
-            const shown = visibleText(button);
-            expect(["Basic", "Review"]).toContain(shown);
-            expect(button).toHaveAccessibleName(expect.stringMatching(new RegExp(`^${shown}: `)));
+            expect(button).toHaveAccessibleName(
+                expect.stringMatching(new RegExp(`^${escape(shownText(button))}: go to step \\d$`))
+            );
         }
         expect(buttons[0]).toHaveAccessibleName("Basic: go to step 1");
-        expect(buttons[1]).toHaveAccessibleName("Review: go to step 3");
+        expect(buttons[1]).toHaveAccessibleName("3 Review: go to step 3");
+    });
+
+    it("names the steps ahead of the first one by their numbers and labels (#1592)", () => {
+        // The pipeline template wizard: from its first step every later step can be opened, and
+        // each shows its number badge beside its label.
+        render(
+            <Stepper steps={STEPS} current="basic" onJumpTo={jest.fn()} canJumpTo={() => true} />
+        );
+        const buttons = screen.getAllByRole("button");
+        expect(buttons.map(shownText)).toEqual(["2 Tags and Config Body", "3 Review"]);
+        expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+            "2 Tags and Config Body: go to step 2",
+            "3 Review: go to step 3",
+        ]);
+        // The number is visible text, so it stays in the accessibility tree; only a check mark is
+        // hidden.
+        for (const button of buttons) {
+            expect(button.querySelector("[aria-hidden='true']")).toBeNull();
+        }
     });
 
     it("keeps a compact jumpable step named by its label", () => {

@@ -121,6 +121,11 @@
                 },
                 "largeTierThresholdGiB": 2
             },
+            "useMediaPreviews": {
+                "enabled": false,
+                "autoRegisterAutoTriggerOnFileUpload": false,
+                "downscaleSelfPreviewableImages": false
+            },
             "useSystemGenAiMetadata": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,

@@ -336,7 +336,9 @@ export default function ModifyAssetsUploadsPage() {
     // Handle preview file selection with size and extension validation
     const handlePreviewFileSelection = (file: File | null) => {
         if (file && file.size > MAX_PREVIEW_FILE_SIZE) {
-            setPreviewFileError("Preview file exceeds maximum allowed size of 5MB");
+            setPreviewFileError(
+                "Preview file exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
+            );
             // Don't update the state with the oversized file
             return;
         }
@@ -468,7 +470,12 @@ export default function ModifyAssetsUploadsPage() {
                         ))}{" "}
                         are valid file extensions for preview files.
                     </li>
-                    <li>Preview files must be 5MB or less in size.</li>
+                    <li>Preview files must be 5 MiB (5,242,880 bytes) or less in size.</li>
+                    <li>
+                        An image in one of these formats under 5 MiB is shown as its own preview, so
+                        it needs no preview file. TGA, TIFF, larger images and video get a generated
+                        preview when media previews are enabled.
+                    </li>
                 </ul>
                 {hasPreviewFiles && (
                     <Box variant="p">
@@ -593,7 +600,7 @@ export default function ModifyAssetsUploadsPage() {
                                                 fileFormats={previewFileFormatsStr}
                                                 file={previewFile || undefined}
                                                 errorText={previewFileError}
-                                                description={`File types: ${previewFileFormatsStr}. Maximum allowed size: 5MB.`}
+                                                description={`File types: ${previewFileFormatsStr}. Maximum allowed size: 5 MiB.`}
                                                 data-testid="preview-file"
                                             />
                                         )}

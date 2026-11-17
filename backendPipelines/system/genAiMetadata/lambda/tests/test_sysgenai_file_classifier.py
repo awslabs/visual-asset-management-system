@@ -197,6 +197,10 @@ class TestAllowList:
 class TestClassifyMatrix:
     @pytest.mark.parametrize("extension,expected", [
         (".png", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)), (".svg", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)),
+        # The rasters and the MDL text the viewers gained with #1551; before it they fell to `other`.
+        (".webp", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)), (".bmp", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)),
+        (".tga", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)), (".tif", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)),
+        (".tiff", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)), (".mdl", (fc.CLASS_TEXT, fc.BRANCH_MEDIA)),
         (".mp4", (fc.CLASS_VIDEO, fc.BRANCH_MEDIA)), (".wav", (fc.CLASS_AUDIO, fc.BRANCH_MEDIA)),
         (".pdf", (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA)), (".md", (fc.CLASS_TEXT, fc.BRANCH_MEDIA)),
         (".docx", (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA)), (".pptx", (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA)),

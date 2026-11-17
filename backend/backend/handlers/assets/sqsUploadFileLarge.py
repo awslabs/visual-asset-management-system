@@ -32,6 +32,7 @@ from common.s3MetadataKeys import (
 from common.s3PathPatterns import (
     PREVIEW_FILE_PATTERN,
     ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    PREVIEW_FILE_SIZE_LIMIT_BYTES,
 )
 from models.common import VAMSGeneralErrorResponse
 from common import largeObjectCopy as loc
@@ -54,7 +55,8 @@ sfn_client = boto3.client('stepfunctions', config=retry_config)
 logger = safeLogger(service_name="SqsUploadFileLarge")
 
 # Constants
-MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
+# Maximum size of an uploaded preview file (5 MiB, the shared limit; a preview of exactly that size is accepted)
+MAX_PREVIEW_FILE_SIZE = PREVIEW_FILE_SIZE_LIMIT_BYTES
 # uploadIdS3 sentinels. "zero-byte" marks a file the processor must materialize itself;
 # "external" marks a file an external producer already wrote in full at the temporary key,
 # so neither has a real S3 multipart upload to complete or abort.
@@ -886,7 +888,7 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
         if upload_type == "assetPreview":
             # Validate preview file extension
             if not validate_preview_file_extension(relative_key):
-                logger.error(f"Preview file {relative_key} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+                logger.error(f"Preview file {relative_key} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp")
                 # Delete the uploaded file
                 delete_s3_object(source_bucket, temp_s3_key)
                 return False
@@ -895,7 +897,7 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
         if upload_type == "assetFile" and is_preview_file(relative_key):
             # Validate preview file extension
             if not validate_preview_file_extension(relative_key):
-                logger.error(f"Preview file {relative_key} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+                logger.error(f"Preview file {relative_key} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp")
                 # Delete the uploaded file
                 delete_s3_object(source_bucket, temp_s3_key)
                 return False
@@ -1272,7 +1274,7 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
         # Check file size for preview files - both assetPreview type and .previewFile. files
         upload_type = file_info.get('uploadType')
         if (upload_type == "assetPreview" or is_preview_file(relative_key)) and file_size > MAX_PREVIEW_FILE_SIZE:
-            logger.error(f"Preview file {relative_key} exceeds maximum allowed size of 5MB")
+            logger.error(f"Preview file {relative_key} exceeds maximum allowed size of 5 MiB (5,242,880 bytes)")
             return False
 
         return True

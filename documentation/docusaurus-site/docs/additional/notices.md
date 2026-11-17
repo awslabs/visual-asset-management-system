@@ -40,14 +40,16 @@ You are also responsible for making your own independent assessment of the third
 
 The complete list of third-party dependencies and their licenses is maintained in the project's `NOTICE.md` file. Key categories include:
 
-| Category         | Notable Libraries                                                | Licenses                      |
-| ---------------- | ---------------------------------------------------------------- | ----------------------------- |
-| Web application  | React, Vite, Cloudscape Design System, Amplify                   | MIT, Apache-2.0               |
-| 3D visualization | Three.js, BabylonJS, CesiumJS, Potree, PlayCanvas, Needle Engine | MIT, Apache-2.0, BSD-2-Clause |
-| Backend          | Pydantic, Casbin, boto3, aws-lambda-powertools                   | MIT, Apache-2.0, MIT-0        |
-| 3D conversion    | trimesh, NumPy, Pillow (3D Basic Conversion pipeline)            | MIT, BSD-3-Clause, MIT-CMU    |
-| Infrastructure   | AWS CDK, cdk-nag, constructs                                     | Apache-2.0                    |
-| CLI              | Click, requests, boto3, pycognito                                | BSD-3-Clause, Apache-2.0      |
+| Category         | Notable Libraries                                                    | Licenses                                                                                                                                                             |
+| ---------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web application  | React, Vite, Cloudscape Design System, Amplify                       | MIT, Apache-2.0                                                                                                                                                      |
+| 3D visualization | Three.js, BabylonJS, CesiumJS, Potree, PlayCanvas, Needle Engine     | MIT, Apache-2.0, BSD-2-Clause                                                                                                                                        |
+| Image decoding   | utif2, tga-js, pako (TIFF/TGA Image Viewer)                          | MIT, MIT AND Zlib                                                                                                                                                    |
+| Backend          | Pydantic, Casbin, boto3, aws-lambda-powertools                       | MIT, Apache-2.0, MIT-0                                                                                                                                               |
+| 3D conversion    | trimesh, NumPy, Pillow (3D Basic Conversion pipeline)                | MIT, BSD-3-Clause, MIT-CMU                                                                                                                                           |
+| Media previews   | Pillow, tifffile, imagecodecs, PyAV (3D Preview Thumbnail container) | HPND, BSD-3-Clause, BSD-3-Clause (the imagecodecs wheel bundles permissive codec libraries and the GCC OpenMP runtime; the PyAV wheels bundle LGPL FFmpeg libraries) |
+| Infrastructure   | AWS CDK, cdk-nag, constructs                                         | Apache-2.0                                                                                                                                                           |
+| CLI              | Click, requests, boto3, pycognito                                    | BSD-3-Clause, Apache-2.0                                                                                                                                             |
 
 ### Optional LGPL-Licensed Components
 

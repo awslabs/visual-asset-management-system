@@ -1,8 +1,8 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Raster images (.png .jpg .jpeg .gif .webp, and any format Pillow opens): dimensions, mode and the
-embedded metadata -> sys_image; one PNG normalised for the vision model when the context asks for renders.
+"""Raster images (.png .jpg .jpeg .gif .webp .bmp .tga .tif .tiff, and any format Pillow opens): dimensions, mode and
+the embedded metadata -> sys_image; one PNG normalised for the vision model when the context asks for renders.
 
 `sys_image.exif` carries the curated keys the promotion catalogue reads (make, model, dateTimeOriginal, gps,
 ...) and, under `exif.tags`, every EXIF tag of the IFD0 and Exif IFDs by its TIFF name, so what the camera
