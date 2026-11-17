@@ -36,10 +36,18 @@ export const DEADLINE_TEMPLATE_TYPES = ["JSON", "YAML"];
 const MAX_DEADLINE_TEMPLATE_LENGTH = 256 * 1024;
 
 // Deadline job priority and task counts. The createJob task state casts each to an integer, so a
-// fractional value is not the value that would run, and a negative one is rejected outright.
+// fractional value is not the value that would run, and a negative one is rejected outright. Both
+// checks are refinements on an unknown value rather than z.number().int(): zod treats a non-number
+// or a failed .int() as fatal and then skips the object's superRefine, which would hide the
+// DeadlineCloud farmId, queueId and template messages until the next save. A value that fails both
+// (-1.5) shows "Cannot be negative", because validatePipeline keeps the last message per field and
+// the API truncates before it checks the sign.
 const deadlineCountSchema = z.preprocess(
     blankNumberToUndefined,
-    z.number().int("Must be a whole number").min(0, "Cannot be negative").optional()
+    z
+        .unknown()
+        .refine((val) => val === undefined || Number.isInteger(val), "Must be a whole number")
+        .refine((val) => typeof val !== "number" || val >= 0, "Cannot be negative")
 );
 
 // Mirrors of the backend resource patterns (common/validators.py: aws_partition_group and
