@@ -1,0 +1,152 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { RasterFileRef } from "./presignedUrl";
+import { MapLike, RasterLayerEntry, RasterLayerManager } from "./RasterLayerManager";
+import {
+    PrepareOptions,
+    PreparedRaster,
+    prepareRaster,
+    rasterId,
+    rasterLabel,
+} from "./rasterResolver";
+import { registerCogProtocol } from "./cogProtocol";
+
+/** A raster that could not be shown, with the sentence to show for it. */
+export interface RasterNotice {
+    id: string;
+    label: string;
+    text: string;
+    kind: "error" | "warning";
+}
+
+export interface UseRasterLayers {
+    entries: RasterLayerEntry[];
+    notices: RasterNotice[];
+    /** Number of rasters being prepared right now. */
+    busy: number;
+    addFile: (file: RasterFileRef, options?: PrepareOptions) => Promise<boolean>;
+    remove: (id: string) => void;
+    setOpacity: (id: string, opacity: number) => void;
+    move: (id: string, direction: "up" | "down") => void;
+    zoomTo: (id: string) => void;
+    dismissNotice: (id: string) => void;
+}
+
+export interface UseRasterLayersOptions {
+    /** Id of the first layer rasters must sit below; evaluated each time layers are placed. */
+    beforeLayerId?: () => string | undefined;
+}
+
+/**
+ * The raster layers on one map: one implementation for the file viewer and the Search map. The map is
+ * given once it has loaded; layers are removed and their blob URLs revoked when the map goes away or
+ * the component unmounts.
+ */
+export function useRasterLayers(
+    map: MapLike | null,
+    options: UseRasterLayersOptions = {}
+): UseRasterLayers {
+    const [entries, setEntries] = useState<RasterLayerEntry[]>([]);
+    const [notices, setNotices] = useState<RasterNotice[]>([]);
+    const [busy, setBusy] = useState(0);
+    const manager = useRef<RasterLayerManager | null>(null);
+    const mounted = useRef(true);
+    const beforeLayerId = useRef(options.beforeLayerId);
+    beforeLayerId.current = options.beforeLayerId;
+
+    useEffect(() => {
+        mounted.current = true;
+        return () => {
+            mounted.current = false;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!map) return undefined;
+        const created = new RasterLayerManager(map, {
+            beforeLayerId: () => beforeLayerId.current?.(),
+            onChange: (next) => {
+                if (mounted.current) setEntries(next);
+            },
+        });
+        manager.current = created;
+        return () => {
+            created.dispose();
+            if (manager.current === created) manager.current = null;
+        };
+    }, [map]);
+
+    const notice = useCallback((entry: RasterNotice) => {
+        if (!mounted.current) return;
+        setNotices((current) => [...current.filter((n) => n.id !== entry.id), entry]);
+    }, []);
+
+    const addFile = useCallback(
+        async (file: RasterFileRef, prepareOptions?: PrepareOptions): Promise<boolean> => {
+            const id = rasterId(file);
+            const label = rasterLabel(file.key);
+            if (!manager.current) return false;
+            if (manager.current.has(id)) return true;
+            setNotices((current) => current.filter((n) => n.id !== id));
+            setBusy((count) => count + 1);
+            try {
+                const prepared = await prepareRaster(file, prepareOptions);
+                if ("refused" in prepared && prepared.refused) {
+                    notice({ id, label, text: prepared.message, kind: "error" });
+                    return false;
+                }
+                const ready = prepared as PreparedRaster;
+                if (ready.mode === "tile") await registerCogProtocol();
+                // The map may have gone while the file was being read.
+                if (!mounted.current || !manager.current) return false;
+                // A source and its COG are one layer: the COG's id is what is shown.
+                const result = manager.current.add(ready);
+                if (!result.ok) {
+                    notice({ id, label, text: result.message, kind: "warning" });
+                    return false;
+                }
+                if (ready.usedCog && ready.staleCog) {
+                    notice({
+                        id: `${ready.id}#stale`,
+                        label: ready.label,
+                        text: "COG is from an earlier version of the source",
+                        kind: "warning",
+                    });
+                }
+                return true;
+            } catch (error: any) {
+                if (error?.name === "AbortError") return false;
+                notice({ id, label, text: "This raster could not be shown.", kind: "error" });
+                return false;
+            } finally {
+                if (mounted.current) setBusy((count) => count - 1);
+            }
+        },
+        [notice]
+    );
+
+    return {
+        entries,
+        notices,
+        busy,
+        addFile,
+        remove: useCallback((id: string) => manager.current?.remove(id), []),
+        setOpacity: useCallback(
+            (id: string, opacity: number) => manager.current?.setOpacity(id, opacity),
+            []
+        ),
+        move: useCallback(
+            (id: string, direction: "up" | "down") => manager.current?.move(id, direction),
+            []
+        ),
+        zoomTo: useCallback((id: string) => void manager.current?.zoomTo(id), []),
+        dismissNotice: useCallback(
+            (id: string) => setNotices((current) => current.filter((n) => n.id !== id)),
+            []
+        ),
+    };
+}

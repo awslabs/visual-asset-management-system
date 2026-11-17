@@ -38,6 +38,8 @@ export const VIEWER_COMPONENTS = {
         "SuperSplatViewerPlugin/SuperSplatViewerComponent",
     "./viewers/RoboticsDataViewerPlugin/RoboticsDataViewerComponent":
         "RoboticsDataViewerPlugin/RoboticsDataViewerComponent",
+    "./viewers/CogMapViewerPlugin/CogMapViewerComponent":
+        "CogMapViewerPlugin/CogMapViewerComponent",
 } as const;
 
 // Dependency manager paths - add new dependency managers here
@@ -53,6 +55,7 @@ export const DEPENDENCY_MANAGERS = {
     "./viewers/ThreeJSViewerPlugin/dependencies": "ThreeJSViewerPlugin/dependencies",
     "./viewers/ThatOpenWebIfcViewerPlugin/dependencies": "ThatOpenWebIfcViewerPlugin/dependencies",
     "./viewers/TextDiffViewerPlugin/dependencies": "TextDiffViewerPlugin/dependencies",
+    "./viewers/CogMapViewerPlugin/dependencies": "CogMapViewerPlugin/dependencies",
     // Add new dependency managers here as needed:
     // './viewers/MyViewerPlugin/dependencies': 'MyViewerPlugin/dependencies',
 } as const;
