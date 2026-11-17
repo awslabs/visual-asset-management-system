@@ -9,7 +9,9 @@ through ``redaction`` already. The row is the only thing the filters, the contai
 response and the export read: the raw record text and the request echo never leave the parser.
 """
 
+import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 # parseStatus: how much of the record could be read.
@@ -37,6 +39,38 @@ OTHER_ID_KEYS = (
     "sessionId", "targetDatabaseId", "targetAssetId", "targetFilePath", "schemaName", "cascadeId",
     "evaluationId",
 )
+
+
+# Two time formats reach a row: the Logs Insights ingestion time of a legacy record
+# (``2026-11-17 17:19:04.055``, UTC, no zone) and the ISO 8601 ``eventTime`` of a contract v1 record
+# (``2026-11-17T17:18:38.386Z``). Compared as text the two do not order, so both become one instant.
+_TIME_TEXT = re.compile(
+    r"\A(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.(\d{1,6}))?(?:Z|\+00:?00)?\Z")
+
+
+def time_ms(value: Any) -> Optional[int]:
+    """The UTC instant of a record time in epoch milliseconds, or None when it cannot be read."""
+    if not isinstance(value, str):
+        return None
+    match = _TIME_TEXT.match(value.strip())
+    if not match:
+        return None
+    year, month, day, hour, minute, second = (int(part) for part in match.groups()[:6])
+    fraction = (match.group(7) or "0")[:3].ljust(3, "0")
+    try:
+        moment = datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return int(moment.timestamp()) * 1000 + int(fraction)
+
+
+def normalize_time(value: Optional[str]) -> Optional[str]:
+    """A record time as ``YYYY-MM-DDTHH:MM:SS.mmmZ`` (UTC). An unreadable text is returned unchanged."""
+    epoch_ms = time_ms(value)
+    if epoch_ms is None:
+        return value
+    moment = datetime.fromtimestamp(epoch_ms // 1000, tz=timezone.utc)
+    return moment.strftime("%Y-%m-%dT%H:%M:%S") + ".%03dZ" % (epoch_ms % 1000)
 
 
 @dataclass

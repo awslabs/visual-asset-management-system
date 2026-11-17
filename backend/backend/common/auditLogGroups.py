@@ -65,7 +65,8 @@ CORE_AUDIT_LOG_GROUPS: Tuple[AuditLogGroup, ...] = (
     # The order is the order the writer resolves the group names in.
     AuditLogGroup(
         GROUP_AUTHENTICATION, "AUDIT_LOG_AUTHENTICATION", "Authentication",
-        "Sign-in events of the web application and the API authorizer.", "AUTHENTICATION", False,
+        "Reserved for sign-in events. No VAMS code writes this group yet: a sign-in appears as the API "
+        "authorizer's record in the Authorization group.", "AUTHENTICATION", False,
         PARSER_AUTHENTICATION, action_target=False, sensitivity=(SENSITIVITY_CONTAINS_PII,)),
     AuditLogGroup(
         GROUP_AUTHORIZATION, "AUDIT_LOG_AUTHORIZATION", "Authorization",

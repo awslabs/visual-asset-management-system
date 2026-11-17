@@ -79,10 +79,14 @@ class FakeTable:
         return {"Items": [dict(i) for i in self.items.values() if i.get("openKey") == "open"]}
 
     def update_item(self, Key, UpdateExpression, ExpressionAttributeValues=None, ExpressionAttributeNames=None,
-                    ConditionExpression=None):
+                    ConditionExpression=None, ReturnValues=None):
         item = self.items.get(Key["queryId"])
         values = ExpressionAttributeValues or {}
         names = ExpressionAttributeNames or {}
+        if Key["queryId"].startswith("slots#"):
+            return self._update_counter(Key["queryId"], UpdateExpression, ConditionExpression, values)
+        old = dict(item) if item is not None else None
+        result = {"Attributes": old} if ReturnValues == "ALL_OLD" and old is not None else {}
         if ConditionExpression and "attribute_exists(queryId)" in ConditionExpression and item is None:
             raise _conditional_failure()
         if ConditionExpression and "pollLeaseUntil <" in ConditionExpression:
@@ -90,7 +94,7 @@ class FakeTable:
             if lease is not None and not lease < values[":now"]:
                 raise _conditional_failure()
         if item is None:
-            return
+            return result
         set_part, _, remove_part = UpdateExpression.partition(" REMOVE ")
         if set_part.startswith("SET "):
             for assignment in set_part[4:].split(", "):
@@ -101,6 +105,25 @@ class FakeTable:
             set_part = ""
         for name in [n.strip() for n in remove_part.split(",") if n.strip()]:
             item.pop(names.get(name, name), None)
+        return result
+
+    def _update_counter(self, key, expression, condition, values):
+        """The slot counters: the handler's conditional increments and decrements, as DynamoDB decides them."""
+        item = self.items.get(key)
+        count = item.get("slotCount") if item else None
+        if "attribute_not_exists(#c) OR #c < :cap" in (condition or ""):
+            if count is not None and not count < values[":cap"]:
+                raise _conditional_failure()
+            self.items[key] = {"queryId": key, "slotCount": (count or 0) + 1, "expiresAt": values[":e"]}
+        elif "expiresAt < :now" in (condition or ""):
+            if item is None or not item["expiresAt"] < values[":now"]:
+                raise _conditional_failure()
+            self.items[key] = {"queryId": key, "slotCount": 1, "expiresAt": values[":e"]}
+        elif "#c > :zero" in (condition or ""):
+            if count is None or not count > 0:
+                raise _conditional_failure()
+            item["slotCount"] = count - 1
+        return {}
 
 
 def _conditional_failure():
@@ -115,6 +138,7 @@ class FakeLogs:
         self.status = "Complete"
         self.results = []
         self.running = []
+        self.matched = 5
 
     def start_query(self, **kwargs):
         self.started.append(kwargs)
@@ -123,7 +147,7 @@ class FakeLogs:
     def get_query_results(self, queryId):
         self.polls += 1
         return {"status": self.status, "results": list(self.results),
-                "statistics": {"recordsMatched": 5.0, "recordsScanned": 100.0, "bytesScanned": 2048.0}}
+                "statistics": {"recordsMatched": float(self.matched), "recordsScanned": 100.0, "bytesScanned": 2048.0}}
 
     def stop_query(self, queryId):
         self.stopped.append(queryId)
@@ -175,6 +199,9 @@ class FakeBatch:
         if not allowed:
             self.kept.append(obj)
         return allowed
+
+    def add_denial(self, obj, act):
+        self.kept.append(obj)
 
     def flush(self):
         FakeBatch.flushed.append(list(self.kept))
@@ -319,7 +346,10 @@ class TestAuthorization:
         assert status == 200
         assert [g["key"] for g in body["logGroups"]] == ["auditActions"]
         assert FakeBatch.probes == [svc.PROBE_ENDPOINT_LOG_GROUPS]
-        assert len(FakeBatch.flushed) == 1 and len(FakeBatch.flushed[0]) == len(auditLogGroups.AUDIT_LOG_GROUPS) - 1
+        # One summary denial for all hidden groups, not one record per hidden group.
+        assert len(FakeBatch.flushed) == 1 and len(FakeBatch.flushed[0]) == 1
+        hidden = sorted(g.key for g in auditLogGroups.AUDIT_LOG_GROUPS if g.key != "auditActions")
+        assert FakeBatch.flushed[0][0]["auditLogGroup"] == ",".join(hidden)
         assert FakeEnforcer.denials == []  # no unmarked per-group denial
         assert all(a["logGroup"] == "auditActions" for a in body["actions"])
         assert body["limits"]["maxRows"] == 1000 and body["limits"]["longPollWaitSeconds"] == 20
@@ -383,15 +413,15 @@ class TestStart:
 
     def test_a_handle_past_its_deadline_is_stopped_and_frees_its_slot(self, env):
         assert start(env)[0] == 202 and start(env)[0] == 202
-        for item in env.table.items.values():
+        for item in handle_items(env):
             item["deadlineAt"] = NOW - 1
         assert start(env)[0] == 202
         assert sorted(env.logs.stopped) == ["cw-1", "cw-2"]
-        assert {i["status"] for i in env.table.items.values()} == {"Timeout", "Running"}
+        assert {i["status"] for i in handle_items(env)} == {"Timeout", "Running"}
 
     def test_a_handle_cloudwatch_no_longer_runs_frees_its_slot(self, env):
         assert start(env)[0] == 202 and start(env)[0] == 202
-        for item in env.table.items.values():
+        for item in handle_items(env):
             item["createdAtEpoch"] = NOW - 60
         env.logs.running = []  # CloudWatch lists nothing as running
         assert start(env)[0] == 202
@@ -407,6 +437,11 @@ class TestStart:
 # ---------------------------------------------------------------------------------------------------
 # Handles: ownership, forgery, expiry
 # ---------------------------------------------------------------------------------------------------
+
+def handle_items(env):
+    """The stored search handles (the slot counters live in the same table)."""
+    return [item for key, item in env.table.items.items() if not key.startswith("slots#")]
+
 
 def started_handle(env, user=ALICE, **overrides):
     status, body = start(env, user=user, **overrides)
@@ -856,3 +891,164 @@ class TestTermsStayOutOfRecordsAndLogs:
             start(env, contains=[self.TERM + "`"], actions=["no such action"])
         assert self.TERM not in caplog.text
         assert self.TERM not in json.dumps([[c.args[1:], c.kwargs] for c in env.record.call_args_list], default=str)
+
+
+# ---------------------------------------------------------------------------------------------------
+# Round 2 of the review: no raw count, one instant per row, stop, atomic caps, one probe record
+# ---------------------------------------------------------------------------------------------------
+
+HIDDEN_TERM = "zzqchg9137xyz"
+
+
+def changes_record(term=HIDDEN_TERM, asset="a-9"):
+    """A record whose only occurrence of the term is inside ``changes``: not searchable by ``contains``."""
+    return ('[ACTIONS][type: assetCreate] [user: carol] [roles: ["editor"]] [mfaEnabled: True] '
+            '{"auditVersion": 1, "recordId": "r-%s", "action": "assetCreate", "outcome": "success", '
+            '"eventTime": "2026-11-17T01:00:00.000Z", "actor": {"userId": "carol"}, '
+            '"entity": {"type": "asset", "id": "%s"}, "assetId": "%s", "databaseId": "db-1", '
+            '"changes": {"assetName": "%s"}}' % (asset, asset, asset, term))
+
+
+def _whole_response(env, raw_matched, rows):
+    handle = started_handle(env, contains=[HIDDEN_TERM])
+    env.logs.matched = raw_matched
+    env.logs.results = rows
+    body = get(handle)[1]
+    body.pop("queryId")
+    return body
+
+
+class TestNoRawCountOracle:
+    def test_no_field_of_the_response_varies_with_the_number_of_dropped_rows(self, env):
+        """A term found only in hidden content must look exactly like an absent term."""
+        visible = result_row(action_record("carol", "a-1"))
+        hidden = [result_row(changes_record(asset="a-%d" % n)) for n in range(4)]
+        absent = _whole_response(env, raw_matched=1, rows=[visible])
+        present = _whole_response(env, raw_matched=5, rows=[visible] + hidden)
+        assert present == absent
+
+    def test_hidden_duplicates_are_not_counted_either(self, env):
+        record = result_row(changes_record())
+        absent = _whole_response(env, raw_matched=0, rows=[])
+        present = _whole_response(env, raw_matched=2, rows=[record, record])
+        assert present == absent and "duplicatesRemoved" in present["statistics"]
+
+    def test_the_statistics_name_only_filter_independent_figures(self, env):
+        body = _whole_response(env, raw_matched=7, rows=[result_row(action_record())])
+        assert "recordsMatched" not in json.dumps(body)
+        assert set(body["statistics"]) <= {"recordsScanned", "bytesScanned", "rowCount", "duplicatesRemoved",
+                                            "candidateLimitReached"}
+
+    def test_the_figure_does_not_leak_while_the_search_runs(self, env):
+        handle = started_handle(env, contains=[HIDDEN_TERM])
+        env.logs.status = "Running"
+        env.logs.matched = 123456
+        body = get(handle)[1]
+        assert body["status"] == "Running" and "123456" not in json.dumps(body)
+
+
+class TestTimeOrder:
+    def test_legacy_and_v1_rows_sort_by_the_same_instant(self, env):
+        handle = started_handle(env)
+        # Legacy ingestion times use a space and no zone; v1 uses ISO 8601 with a T and a Z. As text,
+        # every "T" row would sort before every " " row of the same day.
+        legacy = [result_row(action_record(asset="L%d" % n), stamp="2026-11-17 17:%02d:00.500" % (10 + 2 * n))
+                  for n in range(3)]                                   # 17:10, 17:12, 17:14
+        v1 = [result_row(changes_record(term="x", asset="V%d" % n).replace("2026-11-17T01:00:00.000Z",
+                                                                          "2026-11-17T17:%02d:30.250Z" % (11 + 2 * n)),
+                         stamp="2026-11-17 17:59:59.000") for n in range(3)]  # 17:11, 17:13, 17:15
+        env.logs.results = legacy + v1
+        items = get(handle, query={"sort": "asc"})[1]["Items"]
+        assert [i["assetId"] for i in items] == ["L0", "V0", "L1", "V1", "L2", "V2"]
+        assert all(i["timestamp"].endswith("Z") and "T" in i["timestamp"] for i in items)
+        newest = get(handle, query={"sort": "desc"})[1]["Items"]
+        assert [i["assetId"] for i in newest] == ["V2", "L2", "V1", "L1", "V0", "L0"]
+
+    def test_the_time_is_one_utc_format_with_milliseconds(self, env):
+        handle = started_handle(env)
+        env.logs.results = [result_row(action_record(), stamp="2026-11-17 17:19:04.055")]
+        assert get(handle)[1]["Items"][0]["timestamp"] == "2026-11-17T17:19:04.055Z"
+
+    def test_paging_keeps_the_instant_order_across_formats(self, env):
+        handle = started_handle(env)
+        env.logs.results = [result_row(action_record(asset="L%d" % n), stamp="2026-11-17 17:%02d:00.000" % (10 + n))
+                            for n in range(5)]
+        first = get(handle, query={"sort": "asc", "pageSize": "3"})[1]
+        second = get(handle, query={"sort": "asc", "pageSize": "3", "startingToken": first["NextToken"]})[1]
+        assert [i["assetId"] for i in first["Items"] + second["Items"]] == ["L0", "L1", "L2", "L3", "L4"]
+
+
+class TestStopKeepsNoRows:
+    """A stopped search returns no rows. CloudWatch hands out partial results only while a query runs, and
+    a row is shown only after the server recheck of a finished search, so the page says what is true."""
+
+    def test_a_stopped_search_reads_as_cancelled_with_no_rows(self, env):
+        handle = started_handle(env)
+        env.logs.results = [result_row(action_record())]
+        call(make_event("DELETE", "/audit/queries/" + handle, path_parameters={"queryId": handle}))
+        status, body = get(handle)
+        assert status == 200 and body["status"] == "Cancelled" and body["Items"] == []
+        assert "NextToken" not in body
+
+
+class TestAtomicCaps:
+    def test_starts_racing_past_a_stale_count_are_still_capped_per_user(self, env, monkeypatch):
+        """The open-handle listing is eventually consistent: even when it shows nothing, a user gets 2."""
+        monkeypatch.setattr(svc, "reconcile_open_handles", lambda: [])
+        statuses = [start(env)[0] for _ in range(6)]
+        assert statuses == [202, 202, 400, 400, 400, 400]
+        assert len(env.logs.started) == 2
+
+    def test_starts_racing_past_a_stale_count_are_capped_vams_wide(self, env, monkeypatch):
+        monkeypatch.setattr(svc, "reconcile_open_handles", lambda: [])
+        statuses = [start(env, user="user%d" % n)[0] for n in range(8)]
+        assert statuses.count(202) == 5 and len(env.logs.started) == 5
+
+    def test_a_refused_per_user_start_gives_the_vams_wide_slot_back(self, env, monkeypatch):
+        monkeypatch.setattr(svc, "reconcile_open_handles", lambda: [])
+        start(env), start(env)
+        assert start(env)[0] == 400
+        assert env.table.items[svc.SLOT_ALL_KEY]["slotCount"] == 2
+
+    def test_stop_gives_the_slots_back_once(self, env):
+        handle = started_handle(env)
+        stop = make_event("DELETE", "/audit/queries/" + handle, path_parameters={"queryId": handle})
+        call(stop), call(stop)
+        assert env.table.items[svc.SLOT_ALL_KEY]["slotCount"] == 0
+        assert env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE]["slotCount"] == 0
+
+    def test_a_finished_search_gives_its_slots_back(self, env):
+        handle = started_handle(env)
+        env.logs.results = []
+        get(handle)
+        assert env.table.items[svc.SLOT_ALL_KEY]["slotCount"] == 0
+
+    def test_a_failed_start_gives_the_slots_back(self, env, monkeypatch):
+        def broken(**kwargs):
+            raise RuntimeError("logs down")
+        monkeypatch.setattr(env.logs, "start_query", broken)
+        assert start(env)[0] == 500
+        assert env.table.items[svc.SLOT_ALL_KEY]["slotCount"] == 0
+
+    def test_an_expired_full_counter_starts_over(self, env, monkeypatch):
+        monkeypatch.setattr(svc, "reconcile_open_handles", lambda: [])
+        start(env), start(env)
+        env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE]["expiresAt"] = NOW - 1
+        assert start(env)[0] == 202
+
+    def test_the_counters_are_not_handles(self, env):
+        started_handle(env)
+        for key in (svc.SLOT_ALL_KEY, svc.SLOT_USER_KEY_PREFIX + ALICE):
+            assert "openKey" not in env.table.items[key]
+            assert not svc.validate_query_id(key)
+
+
+class TestOneProbeRecordPerCall:
+    def test_a_start_without_groups_writes_one_summary_denial(self, env):
+        FakeEnforcer.allowed_groups = {"auditActions"}
+        call(make_event("POST", "/audit/queries", body={"startTime": NOW - 600, "endTime": NOW}))
+        assert len(FakeBatch.flushed) == 1 and len(FakeBatch.flushed[0]) == 1
+
+    def test_a_caller_who_may_search_every_group_writes_none(self, env):
+        call(make_event("GET", "/audit/log-groups"))
+        assert FakeBatch.flushed == [[]]

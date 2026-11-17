@@ -46,7 +46,7 @@ from common.auditSearch.exportEncoding import encode_chunk
 from common.auditSearch.parsers import parse_record
 from common.auditSearch.queryBuilder import AuditSearchValidationError, SearchFilters, SearchLimits
 from common.auditSearch.recordMatcher import recheck
-from common.auditSearch.rowModel import OUTCOMES, dedupe_rows
+from common.auditSearch.rowModel import OUTCOMES, dedupe_rows, time_ms
 from common.resourceNames import ResourceKeys, get_log_group_name, get_table_name
 from customLogging.auditLogging import audited_handler, log_action
 from customLogging.logger import safeLogger
@@ -348,8 +348,10 @@ def _close_handle(query_id: str, status: str, row_count: Optional[int] = None,
     if status != STATUS_COMPLETE:
         remove += f", {TERMS_ATTRIBUTE}"  # no rows will ever be rechecked for a search that did not complete
     expression += f" REMOVE {remove}"
-    query_table.update_item(Key={"queryId": query_id}, UpdateExpression=expression,
-                            ExpressionAttributeNames=names, ExpressionAttributeValues=values)
+    response = query_table.update_item(Key={"queryId": query_id}, UpdateExpression=expression,
+                                       ExpressionAttributeNames=names, ExpressionAttributeValues=values,
+                                       ReturnValues="ALL_OLD")
+    _release_slots(response.get("Attributes") if isinstance(response, dict) else None)
 
 
 def _stop_cloudwatch_query(cwl_query_id: str) -> None:
@@ -409,18 +411,103 @@ def reconcile_open_handles() -> List[Dict[str, Any]]:
         age = now - int(item.get("createdAtEpoch", now))
         if running is not None and item.get("cwlQueryId") not in running and age > 15:
             # Finished (or gone) in CloudWatch; the status is read from CloudWatch by the next poll.
-            query_table.update_item(Key={"queryId": item["queryId"]}, UpdateExpression="REMOVE openKey")
+            response = query_table.update_item(Key={"queryId": item["queryId"]}, UpdateExpression="REMOVE openKey",
+                                               ReturnValues="ALL_OLD")
+            _release_slots(response.get("Attributes") if isinstance(response, dict) else None)
             continue
         still_open.append(item)
     return still_open
 
 
 def _check_caps(open_handles: List[Dict[str, Any]]) -> None:
+    """The first, cheap cap check against the open handles listed by the (eventually consistent) index.
+    It also counts handles started before the slot counters existed. The check that holds under
+    concurrent starts is :func:`_reserve_slots`."""
     wide, per_user = concurrency_caps()
     if len(open_handles) >= wide:
         raise AuditSearchBusy()
     if sum(1 for item in open_handles if item.get("userId") == _user_id()) >= per_user:
         raise AuditSearchBusy()
+
+
+# Slot counters. A start takes one slot in the VAMS-wide counter and one in the caller's counter with a
+# conditional update (``count < cap``), so two starts racing for the last slot cannot both get it: the
+# write is atomic in DynamoDB, unlike a count of the open handles followed by a put. A close gives the
+# slots back. The counters live in the handle table under keys that are not handle ids (a handle id is a
+# UUID, so no request can name them), carry no ``openKey`` (they are not in the open index) and expire:
+# ``expiresAt`` is the latest deadline of the handles that hold a slot, so a counter that drifted up (a
+# crash between reserving and storing a handle) heals itself once those handles are past their deadline.
+SLOT_ALL_KEY = "slots#all"
+SLOT_USER_KEY_PREFIX = "slots#user#"
+SLOT_COUNT = "slotCount"
+SLOTS_COUNTED = "slotsCounted"
+SLOT_EXPIRY_GRACE_SECONDS = 60
+
+
+def _slot_keys(user_id: str) -> Tuple[str, str]:
+    return SLOT_ALL_KEY, SLOT_USER_KEY_PREFIX + user_id
+
+
+def _take_slot(key: str, cap: int, expires_at: int) -> bool:
+    """Take one slot of a counter if it is below ``cap`` (or has expired). False when it is full."""
+    now = _now()
+    attempts = (
+        ("SET #c = if_not_exists(#c, :zero) + :one, expiresAt = :e",
+         "attribute_not_exists(#c) OR #c < :cap",
+         {":zero": 0, ":one": 1, ":cap": cap, ":e": expires_at}),
+        # A full counter past its expiry belongs to handles that are all past their deadline: start over.
+        ("SET #c = :one, expiresAt = :e", "attribute_exists(#c) AND expiresAt < :now",
+         {":one": 1, ":now": now, ":e": expires_at}),
+    )
+    for expression, condition, values in attempts:
+        try:
+            query_table.update_item(
+                Key={"queryId": key}, UpdateExpression=expression, ConditionExpression=condition,
+                ExpressionAttributeNames={"#c": SLOT_COUNT}, ExpressionAttributeValues=values)
+            return True
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
+    return False
+
+
+def _give_slot_back(key: str) -> None:
+    try:
+        query_table.update_item(
+            Key={"queryId": key}, UpdateExpression="SET #c = #c - :one",
+            ConditionExpression="attribute_exists(#c) AND #c > :zero",
+            ExpressionAttributeNames={"#c": SLOT_COUNT}, ExpressionAttributeValues={":one": 1, ":zero": 0})
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            logger.warning("Giving back an audit search slot failed")
+    except Exception:
+        logger.warning("Giving back an audit search slot failed")
+
+
+def _reserve_slots(user_id: str) -> None:
+    """Take one slot of the VAMS-wide cap and one of the caller's cap, atomically per counter.
+    Raises ``AuditSearchBusy`` (and keeps nothing) when either is full."""
+    wide, per_user = concurrency_caps()
+    expires_at = _now() + deadline_seconds() + SLOT_EXPIRY_GRACE_SECONDS
+    all_key, user_key = _slot_keys(user_id)
+    if not _take_slot(all_key, wide, expires_at):
+        raise AuditSearchBusy()
+    if not _take_slot(user_key, per_user, expires_at):
+        _give_slot_back(all_key)
+        raise AuditSearchBusy()
+
+
+def _give_back_user_slots(user_id: str) -> None:
+    for key in _slot_keys(user_id):
+        _give_slot_back(key)
+
+
+def _release_slots(old_item: Optional[Dict[str, Any]]) -> None:
+    """Give the slots of a handle back when this update is the one that closed it (the old item was
+    open and counted), so two closers of one handle give them back once."""
+    if not old_item or not old_item.get(SLOTS_COUNTED) or old_item.get("openKey") != OPEN_KEY_VALUE:
+        return
+    _give_back_user_slots(str(old_item.get("userId", "")))
 
 
 #######################
@@ -490,11 +577,12 @@ def build_rows(results: List[List[Dict[str, str]]], item: Dict[str, Any], filter
         except (TypeError, ValueError):
             length = None
         parsed.append(parse_record(fields.get("msg"), group, fields.get("@timestamp"), length))
-    parsed, duplicates = dedupe_rows(parsed)
 
     remaining = (context.get_remaining_time_in_millis() / 1000.0) if context is not None else 30.0
     budget = MatchBudget(deadline=time.monotonic() + max(1.0, remaining - RECHECK_HEADROOM_SECONDS))
-    rows = recheck(parsed, filters, budget)
+    # Rows are rechecked first and deduplicated after, so ``duplicatesRemoved`` counts only rows the
+    # caller may see: a duplicate pair that the recheck drops must not show in any figure.
+    rows, duplicates = dedupe_rows(recheck(parsed, filters, budget))
     limit = int(item.get("queryLimit", 0) or 0)
     facts = {
         "duplicatesRemoved": duplicates,
@@ -506,12 +594,16 @@ def build_rows(results: List[List[Dict[str, str]]], item: Dict[str, Any], filter
     return rows, facts
 
 
-def _row_timestamp(row: Any) -> str:
-    return row.timestamp or ""
+def _row_time(row: Any) -> int:
+    """The row's instant in epoch milliseconds (rows with no readable time sort first)."""
+    epoch_ms = time_ms(row.timestamp)
+    return epoch_ms if epoch_ms is not None else -1
 
 
 def sort_rows(rows: List[Any], order: str) -> List[Any]:
-    return sorted(rows, key=_row_timestamp, reverse=(order == "desc"))
+    """Rows in time order by instant, not by text: legacy and contract v1 records write the time in
+    different formats. The sort is stable, so equal instants keep their arrival order."""
+    return sorted(rows, key=_row_time, reverse=(order == "desc"))
 
 
 def _json_size(value: Any) -> int:
@@ -519,9 +611,13 @@ def _json_size(value: Any) -> int:
 
 
 def _statistics(response: Dict[str, Any]) -> Dict[str, Any]:
+    """The scan statistics of a response. Only figures that do not depend on the search filters are
+    returned (records and bytes scanned in the searched groups and window). CloudWatch's
+    ``recordsMatched`` counts records that matched the Insights prefilter on the raw message, before the
+    server recheck, so ``recordsMatched - rowCount`` would be the number of records whose hidden or
+    unsearched content matched a term: it is never returned, here or anywhere else."""
     stats = response.get("statistics") or {}
     return {
-        "recordsMatched": int(stats.get("recordsMatched", 0) or 0),
         "recordsScanned": int(stats.get("recordsScanned", 0) or 0),
         "bytesScanned": int(stats.get("bytesScanned", 0) or 0),
     }
@@ -547,14 +643,26 @@ def _start_changes(filters: SearchFilters) -> Dict[str, Any]:
 
 
 def authorized_group_keys(enforcer: CasbinEnforcer, probe_endpoint: str) -> Tuple[List[str], Dict[str, Tuple[AuditLogGroup, str]]]:
-    """The deployed groups the caller may search. Denials of the hidden groups are written as probe
-    records in one batch (the caller did not ask for those groups)."""
+    """The deployed groups the caller may search.
+
+    The caller did not ask for the groups it may not search, so those denials are not written one per
+    group: one summary denial (the hidden group keys, sorted) is written as a probe-marked record, so a
+    call writes at most one probe record however many groups are hidden.
+    """
     # Imported here: the batch helper lives with the permission-check endpoints of the auth routes
     # handler, which this handler needs only for this one probe-marked path.
     from handlers.auth.routes import _DenialAuditBatch
     deployed = deployed_groups()
     batch = _DenialAuditBatch(claims_and_roles, enforcer, probe_endpoint)
-    allowed = [key for key in deployed if batch.enforce(authorization_object(key), "GET")]
+    allowed: List[str] = []
+    hidden: List[str] = []
+    for key in deployed:
+        if enforcer.service_object.enforce(authorization_object(key), "GET"):
+            allowed.append(key)
+        else:
+            hidden.append(key)
+    if hidden:
+        batch.add_denial(authorization_object(",".join(sorted(hidden))), "GET")
     batch.flush()
     return allowed, deployed
 
@@ -590,18 +698,30 @@ def start_query(event: Dict[str, Any], enforcer: CasbinEnforcer, raw_filters: Di
 
     plan = queryBuilder.build_query(filters, limits)
 
+    user_id = _user_id()
     _check_caps(reconcile_open_handles())
+    _reserve_slots(user_id)
+    return _start_reserved(event, filters, plan, deployed, user_id)
 
+
+def _start_reserved(event: Dict[str, Any], filters: SearchFilters, plan: Any,
+                    deployed: Dict[str, Tuple[AuditLogGroup, str]], user_id: str) -> Dict[str, Any]:
+    """Start the Logs Insights query and store the handle. The caller holds this user's slots; they are
+    given back here when no handle is stored (the handle's close gives them back otherwise)."""
     log_group_names = [deployed[key][1] for key in filters.group_keys]
-    started = logs_client.start_query(
-        logGroupNames=log_group_names, startTime=plan.start_time, endTime=plan.end_time,
-        queryString=plan.query_string, limit=plan.limit)
+    try:
+        started = logs_client.start_query(
+            logGroupNames=log_group_names, startTime=plan.start_time, endTime=plan.end_time,
+            queryString=plan.query_string, limit=plan.limit)
+    except BaseException:
+        _give_back_user_slots(user_id)
+        raise
     cwl_query_id = started["queryId"]
 
     query_id = str(uuid.uuid4())
     now = _now()
     item = {
-        "queryId": query_id, "userId": _user_id(), "cwlQueryId": cwl_query_id,
+        "queryId": query_id, "userId": user_id, SLOTS_COUNTED: True, "cwlQueryId": cwl_query_id,
         "logGroupKeys": list(filters.group_keys), "filters": filters_to_json(filters),
         "containsLength": sum(len(term) for term in filters.contains), "containsCount": len(filters.contains),
         "startTime": plan.start_time, "endTime": plan.end_time, "queryLimit": plan.limit,
@@ -615,6 +735,7 @@ def start_query(event: Dict[str, Any], enforcer: CasbinEnforcer, raw_filters: Di
         query_table.put_item(Item=item, ConditionExpression="attribute_not_exists(queryId)")
     except Exception:
         _stop_cloudwatch_query(cwl_query_id)
+        _give_back_user_slots(user_id)
         raise
     log_action(event, "auditQueryStart", entity_id=query_id, changes=_start_changes(filters),
                details={"queryLimit": plan.limit})
