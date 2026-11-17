@@ -178,3 +178,65 @@ class TestResolveCrs:
         for spec in (4326, "EPSG:4326", "+proj=longlat +datum=WGS84 +no_defs"):
             assert gr.resolve_crs(spec) is not None
         assert gr.resolve_crs(32633).is_projected
+
+
+# EPSG codes whose CRS pyproj can build but cannot transform with the data in the wheel (no grids, no network).
+UNTRANSFORMABLE_EPSG = [3145, 3144, 3173, 2218, 2221, 2296, 2299, 2300, 2301, 2302, 2303, 2304, 2305, 2306, 2307,
+                        2963, 5017, 3052, 3053, 2985, 2986, 22300, 22700, 32600, 32700]
+
+
+class TestNeverRaises:
+    @pytest.mark.parametrize("code", UNTRANSFORMABLE_EPSG)
+    def test_a_crs_pyproj_cannot_transform_gives_no_footprint_and_no_exception(self, code):
+        footprint = gr.extent_to_wgs84_polygon(code, bounds=(100000.0, 100000.0, 200000.0, 200000.0))
+        assert footprint.geometry is None and footprint.bounds is None
+        assert footprint.note == gr.NOTE_UNKNOWN_CRS
+
+    def test_a_grid_in_such_a_crs_is_refused_the_same_way(self):
+        footprint = gr.extent_to_wgs84_polygon(3145, affine=(100.0, 0, 100000.0, 0, -100.0, 200000.0), columns=64,
+                                               rows=64)
+        assert footprint.note == gr.NOTE_UNKNOWN_CRS
+
+    def test_a_failing_pole_check_alone_is_caught(self, monkeypatch):
+        def broken(_crs):
+            raise RuntimeError("no operation")
+
+        monkeypatch.setattr(gr, "_to_native", broken)
+        footprint = gr.extent_to_wgs84_polygon(32633, bounds=(500000.0, 5000000.0, 510000.0, 5010000.0))
+        assert footprint.geometry is None and footprint.note == gr.NOTE_UNKNOWN_CRS
+
+
+class TestTransformerCache:
+    def test_the_cache_is_bounded_and_keeps_the_recent_ones(self):
+        gr._transformers.clear()
+        codes = list(range(32601, 32601 + gr.TRANSFORMER_CACHE_SIZE + 10))
+        for code in codes:
+            gr.extent_to_wgs84_polygon(code, bounds=(500000.0, 4000000.0, 500100.0, 4000100.0))
+        assert len(gr._transformers) <= gr.TRANSFORMER_CACHE_SIZE
+        last = gr.resolve_crs(codes[-1]).to_wkt()
+        assert last in gr._transformers
+
+    def test_a_cached_transformer_is_reused_and_marked_recent(self):
+        gr._transformers.clear()
+        gr.extent_to_wgs84_polygon(32633, bounds=(500000.0, 5000000.0, 500100.0, 5000100.0))
+        first = next(iter(gr._transformers.values()))
+        gr.extent_to_wgs84_polygon(32634, bounds=(500000.0, 5000000.0, 500100.0, 5000100.0))
+        gr.extent_to_wgs84_polygon(32633, bounds=(500000.0, 5000000.0, 500100.0, 5000100.0))
+        assert gr._transformers[gr.resolve_crs(32633).to_wkt()] is first
+
+
+class TestGlobalZeroTo360:
+    def test_a_0_to_360_grid_has_the_whole_globe_as_its_box(self):
+        footprint = gr.extent_to_wgs84_polygon(4326, affine=(1.0, 0, 0.0, 0, -1.0, 90.0), columns=360, rows=180)
+        assert footprint.geometry["type"] == "MultiPolygon"
+        assert footprint.bounds == [-180.0, -90.0, 180.0, 90.0]
+
+    def test_a_half_globe_across_the_antimeridian_keeps_its_narrow_box(self):
+        footprint = gr.extent_to_wgs84_polygon(4326, affine=(1.0, 0, 120.0, 0, -1.0, 60.0), columns=120, rows=60)
+        assert footprint.geometry["type"] == "MultiPolygon"
+        assert footprint.bounds == pytest.approx([120.0, 0.0, -120.0, 60.0])
+
+    def test_a_grid_just_over_half_the_globe_is_the_whole_range(self):
+        footprint = gr.extent_to_wgs84_polygon(4326, affine=(1.0, 0, 90.0, 0, -1.0, 60.0), columns=181 + 90,
+                                               rows=60)
+        assert footprint.bounds[0] == -180.0 and footprint.bounds[2] == 180.0

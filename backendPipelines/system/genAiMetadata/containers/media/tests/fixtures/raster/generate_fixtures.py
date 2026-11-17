@@ -114,6 +114,14 @@ CASES = [
     ("pixel_is_point_4326", dict(w=256, h=256, srs=4326, gt=(30.0, 0.01, 0, 20.0, 0, -0.01), kind="direct",
                                  point=True, options=["TILED=YES", "BLOCKXSIZE=128", "BLOCKYSIZE=128"]),
      dict(isCog=False, pixelIsPoint=True)),
+    # --- a global raster in 0..360 longitude (cut at the antimeridian into two halves, the box is the globe) ---
+    ("global_0to360_4326", dict(w=360, h=180, srs=4326, gt=(0.0, 1.0, 0, 90.0, 0, -1.0), kind="cog",
+                                options=["COMPRESS=DEFLATE", "BLOCKSIZE=128"]),
+     dict(isCog=True, footprint="MultiPolygon", wgs84Bounds=[-180.0, -90.0, 180.0, 90.0])),
+    # --- an EPSG code pyproj has no operation for in the bundled data (ETRS89 / Faroe Lambert) ---
+    ("unresolvable_crs_3145", dict(w=256, h=256, srs=3145, gt=(100000.0, 100.0, 0, 200000.0, 0, -100.0), kind="cog",
+                                   options=["COMPRESS=DEFLATE", "BLOCKSIZE=128"]),
+     dict(isCog=True, footprint=None, footprintNote="unknown-crs")),
     # --- sample types ---
     ("nodata_float32_4326", dict(w=256, h=256, dtype=gdal.GDT_Float32, nodata=-9999.0, srs=4326,
                                  gt=(40.0, 0.001, 0, 10.0, 0, -0.001), kind="cog",
@@ -175,7 +183,7 @@ def build(name, spec, hand):
         ring = extent[0]
         lons = [p[0] for p in ring]
         lats = [p[1] for p in ring]
-        wgs84 = [min(lons), min(lats), max(lons), max(lats)]
+        wgs84 = hand.get("wgs84Bounds") or [min(lons), min(lats), max(lons), max(lats)]
     gt = spec["gt"]
     expected = {
         "file": name + ".tif",

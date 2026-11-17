@@ -125,6 +125,32 @@ class TestGeoPackage:
         assert any("'ice'" in warning and "contains-pole" in warning for warning in result.warnings)
         assert any("no GeoPackage layer extent could be placed in WGS84" in warning for warning in result.warnings)
 
+    def test_a_layer_pyproj_cannot_transform_does_not_fail_the_file(self, tmp_path):
+        """EPSG:3145 (ETRS89 / Faroe Lambert) has no transformation in the bundled data. The #325 base recorded the
+        native extent and a warning for any non-WGS84 layer; the file must still do that, not raise."""
+        path, ctx = _gpkg(tmp_path, [{"name": "faroe", "geometry": "POINT", "srs_id": 3145,
+                                      "extent": (100000.0, 100000.0, 200000.0, 200000.0), "rows": 2}])
+        _edit(path, "INSERT INTO gpkg_spatial_ref_sys VALUES ('ETRS89 / Faroe Lambert', 3145, 'EPSG', 3145, 'x', NULL)")
+        result = gis.extract_geopackage(path, ctx)
+        geo = result.attributes["sys_geo"]
+        assert result.file_class == CLASS_DATA
+        assert geo["footprint"] is None and "wgs84Extent" not in geo["layers"][0]
+        assert geo["layers"][0]["nativeExtent"] == [100000.0, 100000.0, 200000.0, 200000.0]
+        assert geo["layers"][0]["crs"] == "EPSG:3145" and geo["featureCount"] == 2
+        assert any("'faroe'" in warning and "unknown-crs" in warning for warning in result.warnings)
+        assert any("no footprint is written" in warning for warning in result.warnings)
+
+    def test_a_mixed_file_keeps_the_footprint_of_the_layers_that_can_be_placed(self, tmp_path):
+        path, ctx = _gpkg(tmp_path, [
+            {"name": "sites", "geometry": "POINT", "srs_id": 4326, "extent": _SYDNEY, "rows": 1},
+            {"name": "faroe", "geometry": "POINT", "srs_id": 3145, "extent": (100000.0, 100000.0, 200000.0, 200000.0),
+             "rows": 1}])
+        _edit(path, "INSERT INTO gpkg_spatial_ref_sys VALUES ('ETRS89 / Faroe Lambert', 3145, 'EPSG', 3145, 'x', NULL)")
+        result = gis.extract_geopackage(path, ctx)
+        geo = result.attributes["sys_geo"]
+        assert geo["footprint"]["coordinates"][0][0] == [151.1, -33.9]
+        assert any("'faroe'" in warning for warning in result.warnings)
+
     def test_a_layer_across_the_antimeridian_is_left_out_of_the_box_footprint(self, tmp_path):
         path, ctx = _gpkg(tmp_path, [{"name": "pacific", "geometry": "POINT", "srs_id": 3832,
                                       "extent": (3200000.0, 744000.0, 3456000.0, 1000000.0), "rows": 1}])

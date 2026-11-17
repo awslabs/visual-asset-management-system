@@ -21,6 +21,7 @@ The module imports `pyproj` on first use, so an image that never reads a raster 
 """
 
 import math
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -50,7 +51,9 @@ class Footprint:
     note: Optional[str] = None
 
 
-_transformers: Dict[object, object] = {}
+# Transformers built for recent CRSs, least recently used first out: one costs about 0.2 MB, and a run meets a handful.
+TRANSFORMER_CACHE_SIZE = 16
+_transformers: "OrderedDict[object, object]" = OrderedDict()
 
 
 def _pyproj():
@@ -74,24 +77,30 @@ def resolve_crs(crs):
     return resolved
 
 
-def _to_wgs84(crs):
-    key = crs.to_wkt()
+def _cached_transformer(key, build):
     transformer = _transformers.get(key)
-    if transformer is None:
-        pyproj = _pyproj()
-        transformer = pyproj.Transformer.from_crs(crs, pyproj.CRS.from_epsg(4326), always_xy=True)
-        _transformers[key] = transformer
+    if transformer is not None:
+        _transformers.move_to_end(key)
+        return transformer
+    transformer = build()
+    _transformers[key] = transformer
+    while len(_transformers) > TRANSFORMER_CACHE_SIZE:
+        _transformers.popitem(last=False)
     return transformer
+
+
+def _to_wgs84(crs):
+    """The CRS -> WGS84 transformer. Raises when pyproj has no operation between them (about 20 EPSG codes, such as
+    3145, need grids or a network this image does not have); the caller turns that into `unknown-crs`."""
+    pyproj = _pyproj()
+    return _cached_transformer(
+        crs.to_wkt(), lambda: pyproj.Transformer.from_crs(crs, pyproj.CRS.from_epsg(4326), always_xy=True))
 
 
 def _to_native(crs):
-    key = ("native", crs.to_wkt())
-    transformer = _transformers.get(key)
-    if transformer is None:
-        pyproj = _pyproj()
-        transformer = pyproj.Transformer.from_crs(pyproj.CRS.from_epsg(4326), crs, always_xy=True)
-        _transformers[key] = transformer
-    return transformer
+    pyproj = _pyproj()
+    return _cached_transformer(
+        ("native", crs.to_wkt()), lambda: pyproj.Transformer.from_crs(pyproj.CRS.from_epsg(4326), crs, always_xy=True))
 
 
 def affine_for_bounds(bounds: Sequence[float]) -> Tuple[Affine, int, int]:
@@ -133,7 +142,7 @@ def _contains_pole(crs, ring: Sequence[Position]) -> bool:
     """Whether a pole of the Earth lies inside the (native) ring. A geographic CRS is checked on its latitude."""
     if crs.is_geographic:
         return False
-    transform = _to_native(crs)
+    transform = _to_native(crs)  # raises when pyproj has no operation: extent_to_wgs84_polygon guards the call
     for latitude in (90.0, -90.0):
         try:
             x, y = transform.transform(0.0, latitude)
@@ -228,12 +237,14 @@ def extent_to_wgs84_polygon(crs, *, affine: Optional[Affine] = None, columns: in
         c -= 0.5 * a + 0.5 * b
         f -= 0.5 * d + 0.5 * e
     native = _edge_ring((a, b, c, d, e, f), int(columns), int(rows), densify)
-    if _contains_pole(resolved, native):
-        return Footprint(note=NOTE_CONTAINS_POLE)
+    # Every pyproj call that can fail for a CRS it cannot transform sits in this guard (the helper never raises).
     try:
-        xs, ys = _to_wgs84(resolved).transform([p[0] for p in native], [p[1] for p in native])
-    except Exception:  # noqa: BLE001 - a transformation error from pyproj means no footprint, never a guess
-        return Footprint(note=NOTE_INVALID)
+        transformer = _to_wgs84(resolved)
+        if _contains_pole(resolved, native):
+            return Footprint(note=NOTE_CONTAINS_POLE)
+        xs, ys = transformer.transform([p[0] for p in native], [p[1] for p in native])
+    except Exception:  # noqa: BLE001 - pyproj's ProjError and friends: no operation, no footprint, never a guess
+        return Footprint(note=NOTE_UNKNOWN_CRS)
     ring = list(zip(xs, ys))
     if not all(math.isfinite(lon) and math.isfinite(lat) for lon, lat in ring):
         return Footprint(note=NOTE_INVALID)
@@ -270,14 +281,17 @@ def _split_at_antimeridian(ring: List[Position]) -> Footprint:
         return Footprint(note=NOTE_INVALID)
     if len(polygons) == 1:
         return Footprint(geometry={"type": "Polygon", "coordinates": polygons[0]}, bounds=_bounds(polygons[0][0]))
-    all_lons = [position[0] for polygon in polygons for position in polygon[0]]
     all_lats = [position[1] for polygon in polygons for position in polygon[0]]
-    # The two pieces touch the antimeridian from either side: the box runs from the western piece's west edge
-    # (the larger longitude) eastwards across +/-180 to the other piece's east edge.
-    western = [position[0] for position in polygons[0][0] if position[0] > 0] or all_lons
-    eastern = [position[0] for position in polygons[-1][0] if position[0] < 0] or all_lons
-    return Footprint(geometry={"type": "MultiPolygon", "coordinates": polygons},
-                     bounds=[min(western), min(all_lats), max(eastern), max(all_lats)])
+    # The box runs eastwards from the western piece's west edge across +/-180 to the eastern piece's east edge
+    # (west > east). When the two pieces together cover 180 degrees or more (a 0..360 global raster) no such box is
+    # narrower than the globe, so it is the whole longitude range.
+    west_edge = min(position[0] for position in polygons[0][0])
+    east_edge = max(position[0] for position in polygons[-1][0])
+    if (180.0 - west_edge) + (east_edge + 180.0) >= 180.0:
+        bounds = [-180.0, min(all_lats), 180.0, max(all_lats)]
+    else:
+        bounds = [west_edge, min(all_lats), east_edge, max(all_lats)]
+    return Footprint(geometry={"type": "MultiPolygon", "coordinates": polygons}, bounds=bounds)
 
 
 def _bounds(ring: Sequence[Sequence[float]]) -> List[float]:
