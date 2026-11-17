@@ -963,7 +963,7 @@ def check_preview_file_size(bucket_name, key, file_path):
         file_size = head_response.get('ContentLength', 0)
         
         if file_size > MAX_PREVIEW_FILE_SIZE:
-            error_message = f"Preview files exceeds maximum allowed size of 5MB"
+            error_message = f"Preview files exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
             return False, error_message
         
         return True, None
@@ -1413,7 +1413,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
 
         # Validate file size for preview files
         if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
-            raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5MB per file")
+            raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5 MiB (5,242,880 bytes) per file")
 
         # Determine final S3 key based on upload type
         if uploadType == "assetFile":
@@ -1749,7 +1749,7 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
                         relativeKey=file.relativeKey,
                         uploadIdS3="external",
                         success=False,
-                        error=f"Preview file {file.relativeKey} exceeds maximum allowed size of 5MB"
+                        error=f"Preview file {file.relativeKey} exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
                     ))
                     has_failures = True
                     continue
@@ -2451,7 +2451,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     relativeKey=file.relativeKey,
                     uploadIdS3=file.uploadIdS3,
                     success=False,
-                    error=f"Preview file exceeds maximum allowed size of 5MB"
+                    error=f"Preview file exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
                 ))
                 has_failures = True
                 continue
@@ -2572,7 +2572,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Preview file exceeds maximum allowed size of 5MB"
+                        error=f"Preview file exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
                     ))
                     has_failures = True
                     continue

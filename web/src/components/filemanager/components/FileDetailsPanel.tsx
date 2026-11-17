@@ -1773,7 +1773,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
 
                                     // If file format is previewable, show preview section
                                     if (isPreviewFormat) {
-                                        // Check if file size is less than 5MB
+                                        // A file is shown as its own preview only when it is strictly under 5 MiB
                                         const isSizeOk = isSelfPreviewable(
                                             fileName,
                                             selectedItem.size
@@ -1798,7 +1798,10 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     // Show message if file is too large
                                                     <Box padding="s" textAlign="center">
                                                         <div>
-                                                            File is too large to preview (over 5MB)
+                                                            This image is 5 MiB or larger, so it is
+                                                            not shown as its own preview. A
+                                                            generated preview appears here when
+                                                            media previews are enabled.
                                                         </div>
                                                     </Box>
                                                 )}

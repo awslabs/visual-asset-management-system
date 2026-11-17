@@ -1274,7 +1274,7 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
         # Check file size for preview files - both assetPreview type and .previewFile. files
         upload_type = file_info.get('uploadType')
         if (upload_type == "assetPreview" or is_preview_file(relative_key)) and file_size > MAX_PREVIEW_FILE_SIZE:
-            logger.error(f"Preview file {relative_key} exceeds maximum allowed size of 5MB")
+            logger.error(f"Preview file {relative_key} exceeds maximum allowed size of 5 MiB (5,242,880 bytes)")
             return False
 
         return True
