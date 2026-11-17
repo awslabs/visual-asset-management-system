@@ -24,9 +24,11 @@ REDACTED = "<redacted>"
 # (prompts, model configuration, file paths). The key is kept so the record still shows that the field
 # was submitted; the value is not. Every field that carries a template body belongs here, whichever
 # request delivers it: an execute request supplies one as customTemplateOverride, and a template record
-# holds the same content as configBody with its form definition in webFormJson.
+# holds the same content as configBody with its form definition in webFormJson. ``searchText`` is the one
+# key a search or text-filter read records the text its caller typed under (see
+# common/auditSearchText.py), so no generic name such as query or value is redacted elsewhere.
 CONTENT_KEYS = ("configBody", "templateTags", "tagValues",
-                "customTemplateOverride", "webFormJson", "inputInstructions")
+                "customTemplateOverride", "webFormJson", "inputInstructions", "searchText")
 
 # Keys whose value is the raw request payload, delivered either as a dict or as a JSON string.
 BODY_KEYS = ("body",)

@@ -19,6 +19,7 @@ import {
     buildDownloadAssetFunction,
     buildStreamAssetFunction,
     buildStreamAuxiliaryPreviewAssetFunction,
+    buildZipDownloadServiceFunction,
 } from "../../lib/lambdaBuilder/assetFunctions";
 import * as Config from "../../config/config";
 import * as Service from "../../lib/helper/service-helper";
@@ -55,12 +56,14 @@ const createMockConfig = (quarantineBlocksDownload: boolean): Config.Config => {
     return config;
 };
 
-/** The four Lambdas the quarantine guard runs in, keyed by the CDK function id each builder uses. */
+/** The five Lambdas the quarantine guard runs in, keyed by the CDK function id each builder uses. */
 const GUARDED_FUNCTIONS = [
     "downloadAsset",
     "streamAsset",
     "assetExportService",
     "streamAuxiliaryPreviewAsset",
+    // Download as Zip hands out the asset's file bytes as an archive (#1125 D35).
+    "zipDownloadService",
 ] as const;
 
 const buildFixture = (quarantineBlocksDownload: boolean) => {
@@ -133,6 +136,14 @@ const buildFixture = (quarantineBlocksDownload: boolean) => {
             vpc,
             subnets
         ),
+        zipDownloadService: buildZipDownloadServiceFunction(
+            stack,
+            layer,
+            resources,
+            config,
+            vpc,
+            subnets
+        ),
     };
 
     // Touch the asset-state table so it exists in the template for the negative case too.
@@ -191,7 +202,7 @@ const roleReadsStateTable = (fixture: Fixture, id: (typeof GUARDED_FUNCTIONS)[nu
     return false;
 };
 
-describe("quarantineBlocksDownload wiring on the four asset download Lambdas", () => {
+describe("quarantineBlocksDownload wiring on the five asset download Lambdas", () => {
     describe("with app.compliance.quarantineBlocksDownload: true", () => {
         let fixture: Fixture;
         beforeAll(() => {
@@ -212,7 +223,7 @@ describe("quarantineBlocksDownload wiring on the four asset download Lambdas", (
         });
 
         test("the state-table grant is read-only", () => {
-            // The guard performs one GetItem; none of the four Lambdas writes compliance state.
+            // The guard performs one GetItem; none of the five Lambdas writes compliance state.
             for (const type of ["AWS::IAM::Policy", "AWS::IAM::ManagedPolicy"]) {
                 for (const policy of Object.values(fixture.template.findResources(type)) as any[]) {
                     for (const statement of policy.Properties?.PolicyDocument?.Statement ?? []) {
@@ -255,7 +266,7 @@ describe("quarantineBlocksDownload wiring on the four asset download Lambdas", (
         );
 
         test("positive control: the env-var lookup sees the variables the builders always set", () => {
-            // PRESIGNED_URL_TIMEOUT_SECONDS is set on all four regardless of the flag, so an empty
+            // PRESIGNED_URL_TIMEOUT_SECONDS is set on all five regardless of the flag, so an empty
             // environment above would be a lookup failure rather than a passing negative.
             for (const id of GUARDED_FUNCTIONS) {
                 expect(environmentOf(fixture, id)).toHaveProperty("PRESIGNED_URL_TIMEOUT_SECONDS");

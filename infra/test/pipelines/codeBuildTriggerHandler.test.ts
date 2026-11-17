@@ -44,7 +44,7 @@ const CONSTRUCTS = codeBuildConstructs(PIPELINES_DIR);
 const HANDLER_SOURCE = fs.readFileSync(CODEBUILD_TRIGGER_HANDLER_PATH, "utf8");
 
 describe("CodeBuild build triggers", () => {
-    test("[control] the six CodeBuild constructs are found", () => {
+    test("[control] every CodeBuild construct is found", () => {
         expect(CONSTRUCTS.map((f) => path.basename(f)).sort()).toEqual([
             "cadStepAgentCodeBuild-construct.ts",
             "coordinateTransformCodeBuild-construct.ts",
@@ -54,6 +54,7 @@ describe("CodeBuild build triggers", () => {
             "isaacLabCodeBuild-construct.ts",
             "splatToolboxCodeBuild-construct.ts",
             "videoSopBomCodeBuild-construct.ts",
+            "zipArchiveCodeBuild-construct.ts",
         ]);
     });
 

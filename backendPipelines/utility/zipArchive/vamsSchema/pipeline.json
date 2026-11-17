@@ -1,0 +1,32 @@
+{
+    "pipelineName": "Zip Archive",
+    "category": "Utility",
+    "description": "Zip Archive System Pipeline - Streams selected files, folders or a whole asset into a zip (ZIP64), tar or tar.gz archive. Serves Download as Zip jobs, and as a workflow run writes the archive into the asset as a new file.",
+    "isSystem": true,
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "43200",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "multi",
+        "assetScope": {
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": true,
+            "folderAllowed": true
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false,
+            "databaseMetadata": false,
+            "assetFileMetadata": false,
+            "metadataSchema": false
+        },
+        "requireTemplate": false,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {}
+    }
+}

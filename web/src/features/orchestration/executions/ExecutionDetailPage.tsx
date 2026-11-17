@@ -27,6 +27,7 @@ import StoppedRunSubProcessesHint, {
     stillRunningSubProcessCount,
 } from "./StoppedRunSubProcessesHint";
 import ResultText from "./ResultText";
+import OutputIngestionProgress, { IngestedBadge } from "./OutputIngestionProgress";
 import SkippedLaunchPanel from "./SkippedLaunchPanel";
 import { ResultDownloadButton } from "./ResultDownloadButton";
 import type { ExecutionStatus } from "../types";
@@ -704,7 +705,16 @@ const databaseMetadataColumns: ColumnDef<any, any>[] = [
 ];
 
 const outputFileColumns: ColumnDef<any, any>[] = [
-    { accessorKey: "relativeFilePath", header: "Path" },
+    {
+        accessorKey: "relativeFilePath",
+        header: "Path",
+        cell: (c) => (
+            <>
+                {c.getValue()}
+                <IngestedBadge ingestionStatus={c.row.original?.ingestionStatus} />
+            </>
+        ),
+    },
     { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
     // No Asset/Database column: every output row shares the execution's single output target,
     // which the header states once. The row identifies the FILE (path + version).
@@ -1079,6 +1089,10 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                         </>
                     )}
                 </div>
+                <OutputIngestionProgress
+                    executionPhase={execution.executionPhase}
+                    outputIngestion={execution.outputIngestion}
+                />
                 {execution.executionError && (
                     <div className="orch-outline mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
                         <p className="text-sm font-semibold text-red-800 dark:text-red-300 mb-1">
