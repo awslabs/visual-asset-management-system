@@ -24,12 +24,26 @@ import uploadAndManageImageSrc from "../resources/img/upload_and_manage.png";
 import visualize3dVrImageSrc from "../resources/img/visualize_3d_vr.png";
 import Synonyms from "../synonyms";
 
-const CarouselRadio = ({ id, setSlide, slide }: { id: any; setSlide: any; slide: any }) => {
+// One radio per slide. The radios are the carousel's keyboard controls (#1573): Tab reaches the
+// selected one and the arrow keys change the slide, as in any radio group. The dot `label`s below
+// the image are their pointer targets and show which slide is selected and focused.
+const CarouselRadio = ({
+    id,
+    label,
+    setSlide,
+    slide,
+}: {
+    id: any;
+    label: string;
+    setSlide: any;
+    slide: any;
+}) => {
     return (
         <input
             type="radio"
             name="radio-buttons"
             id={id}
+            aria-label={label}
             onChange={(evt) => setSlide(evt.target.id)}
             checked={slide === id}
         />
@@ -170,6 +184,7 @@ const LandingPage = (props: any) => {
                                         >
                                             <CarouselRadio
                                                 id="img-1"
+                                                label={`Upload & Manage ${Synonyms.Assets}`}
                                                 setSlide={setSlide}
                                                 slide={slide}
                                             />
@@ -185,6 +200,7 @@ const LandingPage = (props: any) => {
                                             </div>
                                             <CarouselRadio
                                                 id="img-2"
+                                                label="Visualize in 3d & VR"
                                                 setSlide={setSlide}
                                                 slide={slide}
                                             />
@@ -198,6 +214,7 @@ const LandingPage = (props: any) => {
                                             </div>
                                             <CarouselRadio
                                                 id="img-3"
+                                                label="Add Pipelines"
                                                 setSlide={setSlide}
                                                 slide={slide}
                                             />
@@ -212,6 +229,7 @@ const LandingPage = (props: any) => {
                                             </div>
                                             <CarouselRadio
                                                 id="img-4"
+                                                label="Build Workflows"
                                                 setSlide={setSlide}
                                                 slide={slide}
                                             />

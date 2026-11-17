@@ -310,8 +310,19 @@ code {
     -webkit-touch-callout: none;
 }
 
+/* Hidden visually, not with display: none, so the radios stay in the tab order and keep their
+   accessible names: they are the carousel's keyboard controls (#1573). */
 .carousel .slides input {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
 }
 
 .carousel .slide-container {
@@ -369,6 +380,16 @@ code {
 .carousel input#img-3:checked ~ .carousel-dots label#img-dot-3,
 .carousel input#img-4:checked ~ .carousel-dots label#img-dot-4 {
     opacity: 1;
+}
+
+/* The focused radio is invisible, so its dot carries the focus indicator. */
+.carousel input#img-1:focus-visible ~ .carousel-dots label#img-dot-1,
+.carousel input#img-2:focus-visible ~ .carousel-dots label#img-dot-2,
+.carousel input#img-3:focus-visible ~ .carousel-dots label#img-dot-3,
+.carousel input#img-4:focus-visible ~ .carousel-dots label#img-dot-4 {
+    opacity: 1;
+    outline: 2px solid var(--vams-border-selected);
+    outline-offset: 2px;
 }
 
 .carousel input:checked + .slide-container .nav label {
