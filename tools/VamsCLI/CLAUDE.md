@@ -1132,17 +1132,17 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 
 ### Upload/Download Limits
 
-| Constant                      | Value  | Purpose                    |
-| ----------------------------- | ------ | -------------------------- |
-| `DEFAULT_CHUNK_SIZE_SMALL`    | 150 MB | Small file chunk size      |
-| `DEFAULT_CHUNK_SIZE_LARGE`    | 1 GB   | Large file chunk size      |
-| `MAX_FILE_SIZE_SMALL_CHUNKS`  | 15 GB  | Threshold for large chunks |
-| `MAX_SEQUENCE_SIZE`           | 3 GB   | Max sequence size          |
+| Constant                      | Value  | Purpose                                         |
+| ----------------------------- | ------ | ----------------------------------------------- |
+| `DEFAULT_CHUNK_SIZE_SMALL`    | 150 MB | Small file chunk size                           |
+| `DEFAULT_CHUNK_SIZE_LARGE`    | 1 GB   | Large file chunk size                           |
+| `MAX_FILE_SIZE_SMALL_CHUNKS`  | 15 GB  | Threshold for large chunks                      |
+| `MAX_SEQUENCE_SIZE`           | 3 GB   | Max sequence size                               |
 | `MAX_PREVIEW_FILE_SIZE`       | 5 MiB  | Preview image limit (exactly 5 MiB is accepted) |
-| `MAX_FILES_PER_REQUEST`       | 50     | Files per upload request   |
-| `MAX_TOTAL_PARTS_PER_REQUEST` | 1000   | Client parts per request   |
-| `MAX_PARTS_PER_FILE`          | 1000   | Client parts per file      |
-| `MAX_PART_SIZE`               | 5 GB   | S3 part size limit         |
+| `MAX_FILES_PER_REQUEST`       | 50     | Files per upload request                        |
+| `MAX_TOTAL_PARTS_PER_REQUEST` | 1000   | Client parts per request                        |
+| `MAX_PARTS_PER_FILE`          | 1000   | Client parts per file                           |
+| `MAX_PART_SIZE`               | 5 GB   | S3 part size limit                              |
 
 ### Retry Configuration
 
