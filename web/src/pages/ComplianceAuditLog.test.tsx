@@ -25,6 +25,12 @@ jest.mock("../features/orchestration/permissions/useAllowedRoutes", () => ({
     }),
 }));
 
+// The API's web-route decision for the Audit Log Search page.
+let mockSearchPageAllowed = false;
+jest.mock("../hooks/useWebRouteAllowed", () => ({
+    useWebRouteAllowed: () => mockSearchPageAllowed,
+}));
+
 const service = () =>
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     require("../services/ComplianceService");
@@ -343,5 +349,26 @@ describe("ComplianceAuditLog details", () => {
         render(<ComplianceAuditLog />);
         expect(await screen.findByText("Legacy part", { exact: false })).toBeInTheDocument();
         expect(screen.queryByText('{"reason":"Legacy part"}')).not.toBeInTheDocument();
+    });
+});
+
+describe("ComplianceAuditLog link to Audit Log Search", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        window.history.replaceState(null, "", "/");
+        service().fetchAuditLog.mockResolvedValue([true, { entries: [], nextToken: undefined }]);
+    });
+
+    it("is offered only when the web-route decision allows the search page", async () => {
+        mockSearchPageAllowed = false;
+        const { unmount } = render(<ComplianceAuditLog />);
+        await waitFor(() => expect(service().fetchAuditLog).toHaveBeenCalled());
+        expect(screen.queryByRole("link", { name: "Audit Log Search" })).toBeNull();
+        unmount();
+
+        mockSearchPageAllowed = true;
+        render(<ComplianceAuditLog />);
+        const link = await screen.findByRole("link", { name: "Audit Log Search" });
+        expect(link).toHaveAttribute("href", "#/auth/audit-log-search/");
     });
 });

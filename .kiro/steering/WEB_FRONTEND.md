@@ -207,7 +207,7 @@ web/
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx
       AssetUpload/          # Upload page and modify uploads
-      auth/                 # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys
+      auth/                 # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys, AuditLogSearch
         ApiKeys.tsx           # API key list page
         CreateApiKey.tsx      # Create API key modal
         UpdateApiKey.tsx      # Update API key modal
@@ -1829,3 +1829,14 @@ Development targets: Latest Chrome, Firefox, Safari.
 This project uses **React 18.3**. The entry point (`index.tsx`) mounts with `createRoot` from `react-dom/client`.
 
 React 18 APIs (`useId`, `useSyncExternalStore`, `useTransition`, `useDeferredValue`, automatic batching) are allowed in the orchestration module (`features/orchestration/`) but should be used sparingly elsewhere to stay consistent with the existing codebase conventions.
+
+### Audit Log Search (`pages/auth/AuditLogSearch.tsx`, `components/auditLogs/`)
+
+Core page at `#/auth/audit-log-search/` (Admin - Auth, no feature switch). The nav entry and the page appear only from the `POST /auth/routes` decision (the registry link and `routes.tsx` entry; a denied user gets `NoAccessPanel`). The Compliance Audit Log page links to it through `hooks/useWebRouteAllowed.ts`, which is false until that decision says yes. The page derives no permission: log groups, actions, entity types, outcomes and limits come only from `GET /audit/log-groups` (`fetchAuditLogGroups`), and a 403 or an empty list shows a panel that names no group.
+
+-   **Request model.** `auditSearchUrl.ts` (filters <-> hash query, defensive reading, a link restores filters and never runs the search), `auditSearchValidation.ts` (the server's value classes and the `limits` object, advisory only), `auditSearchApiModel.ts` (`buildStartBody`, response readers for the contract: `logGroups`, `Items`, `NextToken`, `statistics`, `warnings`), `auditFilterQuery.ts` (filters <-> `PropertyFilter` tokens and the `DateRangePicker` value; the picker works in UTC), `auditPollLoop.ts` (the long-poll loop: sequential calls, floor between calls, stops at once on 400/403/404, retries a dropped connection, client deadline), `useAuditSearch.ts` (start, poll, stop, server paging by `NextToken`, order change re-reads page 1).
+-   **Query text is never sent.** The body holds named filters only; the server builds the query.
+-   **Record content is untrusted text.** Render it only as React text nodes through `visibleText` (control, bidi and zero-width characters shown as `\uXXXX`) or `AuditValueTree` (depth and node bounded). No HTML sink, no link from a record value except an asset link built from validated ids with `encodeURIComponent`. The record time arrives as `2026-11-17 01:00:00.000` (UTC, no zone): read it with `auditTimeMs`, never `new Date(string)`.
+-   **Counts.** The page shows only what the API returns for the groups the caller may search. There is no count of rows the server removed on its recheck.
+-   **Export** joins the server's chunks (`csv`, `ndjson`) and downloads the file; the page rewrites no cell.
+-   **Tests.** Jest: `auditLogs/auditSearch.model.test.ts`, `pages/auth/AuditLogSearch.test.tsx`; e2e: `e2e/auth.auditlogsearch.spec.ts` with the scripted API in `e2e/support/auditSearchMocks.ts`.

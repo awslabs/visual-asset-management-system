@@ -81,6 +81,7 @@ const sidebars: SidebarsConfig = {
                 "user-guide/api-keys",
                 "user-guide/automating-vams",
                 "user-guide/audit-and-cost-attribution",
+                "user-guide/audit-logs",
                 "user-guide/user-management",
             ],
         },

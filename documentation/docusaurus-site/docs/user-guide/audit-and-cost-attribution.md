@@ -27,7 +27,7 @@ Reads are recorded by default. An administrator can turn read records off with t
 
 The records are written to the Amazon CloudWatch Logs audit log groups of the deployment, one group per kind of event (actions, file uploads, file downloads, authorization decisions, errors and changes to roles and access). Who can read them is decided by the AWS account's IAM permissions, not by VAMS roles. Records are kept for one year by default.
 
-Ask your administrator for read access to the audit log groups, or for a report.
+Ask your administrator for read access to the audit log groups, or for a report. If your role allows it, you can also search the records from the web interface under **Admin - Auth** > **Audit Log Search**. See [Audit Log Search](audit-logs.md).
 
 ---
 
