@@ -112,6 +112,32 @@ export const API_ORIGIN_VERIFY_ROTATION_DAYS = 45;
 // into `apiGatewayRest.apiGatewayTimeoutTime`; it doubles as the validation floor below.
 export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
 
+// Audit log search (`app.auditLogging.search.*`): defaults and ceilings of the limits the search Lambda
+// enforces. The Lambda reads the same ceilings (backend/backend/handlers/audit/auditLogService.py and
+// common/auditSearch/queryBuilder.py), so a value above a ceiling is refused here rather than being
+// held silently there. getConfig() validates the block; an absent block or key takes its default.
+export const AUDIT_SEARCH_DEFAULTS = {
+    maxQueryWindowDays: 31,
+    maxRows: 1000,
+    maxConcurrentQueries: 5,
+    maxConcurrentQueriesPerUser: 2,
+    queryDeadlineSeconds: 300,
+    longPollWaitSeconds: 20,
+    maxContainsTermLength: 64,
+    maxContainsTerms: 3,
+};
+export const AUDIT_SEARCH_CEILINGS = {
+    maxQueryWindowDays: 366,
+    maxRows: 10000,
+    maxConcurrentQueries: 20,
+    queryDeadlineSeconds: 900,
+    // The long-poll wait is at most this and at most the API timeout minus AUDIT_SEARCH_POLL_HEADROOM_SECONDS.
+    longPollWaitSeconds: 25,
+    maxContainsTermLength: 128,
+    maxContainsTerms: 5,
+};
+export const AUDIT_SEARCH_POLL_HEADROOM_SECONDS = 4;
+
 // GPUs each NVIDIA Cosmos 3 job reserves, and therefore the minimum its tier's instance types must
 // carry. The container shards the checkpoint's parameters across the devices the job holds, so the
 // reservation is what makes a multi-GPU instance's memory usable; a tier pointed at a smaller
@@ -961,32 +987,104 @@ export function validateZipDownloadsConfig(config: ConfigPublic): void {
 
 /**
  * Defaults and validates `app.auditLogging`: an absent block or `recordReads` key means `true`; any
- * value that is not a JSON boolean is a configuration error rather than being read as truthy.
- * Exported for the config tests.
+ * value that is not a JSON boolean is a configuration error rather than being read as truthy. The
+ * `search` block (audit log search limits, no on/off switch) fills each absent key with its default;
+ * a value that is not an integer in range is a configuration error. Exported for the config tests.
  */
 export function resolveAuditLoggingConfig(config: ConfigPublic): void {
     const app = config.app as ConfigPublic["app"] & { auditLogging?: unknown };
     if (app.auditLogging === undefined || app.auditLogging === null) {
         app.auditLogging = { recordReads: true };
-        return;
-    }
-    if (typeof app.auditLogging !== "object" || Array.isArray(app.auditLogging)) {
+    } else if (typeof app.auditLogging !== "object" || Array.isArray(app.auditLogging)) {
         throw new Error(
             "Configuration Error: app.auditLogging must be an object, for example " +
                 '{"recordReads": true}.'
         );
     }
-    const block = app.auditLogging as { recordReads?: unknown };
+    const block = app.auditLogging as { recordReads?: unknown; search?: unknown };
     if (block.recordReads === undefined || block.recordReads === null) {
         block.recordReads = true;
-        return;
-    }
-    if (typeof block.recordReads !== "boolean") {
+    } else if (typeof block.recordReads !== "boolean") {
         throw new Error(
             "Configuration Error: app.auditLogging.recordReads must be true or false (a JSON " +
                 `boolean), not ${JSON.stringify(block.recordReads)}.`
         );
     }
+    resolveAuditSearchConfig(block, config);
+}
+
+function auditSearchInteger(
+    search: Record<string, unknown>,
+    key: keyof typeof AUDIT_SEARCH_DEFAULTS,
+    min: number,
+    max: number
+): number {
+    const value = search[key];
+    if (value === undefined || value === null) {
+        return AUDIT_SEARCH_DEFAULTS[key];
+    }
+    if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+        throw new Error(
+            `Configuration Error: app.auditLogging.search.${key} must be an integer from ${min} to ` +
+                `${max}, not ${JSON.stringify(value)}.`
+        );
+    }
+    return value;
+}
+
+function resolveAuditSearchConfig(block: { search?: unknown }, config: ConfigPublic): void {
+    if (block.search === undefined || block.search === null) {
+        block.search = {};
+    } else if (typeof block.search !== "object" || Array.isArray(block.search)) {
+        throw new Error(
+            "Configuration Error: app.auditLogging.search must be an object of search limits, for " +
+                'example {"maxRows": 1000}.'
+        );
+    }
+    const search = block.search as Record<string, unknown>;
+    const known = new Set(Object.keys(AUDIT_SEARCH_DEFAULTS));
+    for (const key of Object.keys(search)) {
+        if (!known.has(key)) {
+            throw new Error(
+                `Configuration Error: app.auditLogging.search.${key} is not a known setting. ` +
+                    `Known settings: ${Array.from(known).join(", ")}.`
+            );
+        }
+    }
+    const resolved = {
+        maxQueryWindowDays: auditSearchInteger(search, "maxQueryWindowDays", 1, AUDIT_SEARCH_CEILINGS.maxQueryWindowDays),
+        maxRows: auditSearchInteger(search, "maxRows", 1, AUDIT_SEARCH_CEILINGS.maxRows),
+        maxConcurrentQueries: auditSearchInteger(search, "maxConcurrentQueries", 1, AUDIT_SEARCH_CEILINGS.maxConcurrentQueries),
+        maxConcurrentQueriesPerUser: 0,
+        queryDeadlineSeconds: auditSearchInteger(search, "queryDeadlineSeconds", 10, AUDIT_SEARCH_CEILINGS.queryDeadlineSeconds),
+        longPollWaitSeconds: 0,
+        maxContainsTermLength: auditSearchInteger(search, "maxContainsTermLength", 3, AUDIT_SEARCH_CEILINGS.maxContainsTermLength),
+        maxContainsTerms: auditSearchInteger(search, "maxContainsTerms", 1, AUDIT_SEARCH_CEILINGS.maxContainsTerms),
+    };
+    // The per-user cap can never exceed the VAMS-wide cap. A default per-user cap larger than a
+    // lowered VAMS-wide cap follows the VAMS-wide cap; an explicit one above it is an error.
+    const perUserExplicit = search.maxConcurrentQueriesPerUser;
+    resolved.maxConcurrentQueriesPerUser = auditSearchInteger(
+        search,
+        "maxConcurrentQueriesPerUser",
+        1,
+        resolved.maxConcurrentQueries
+    );
+    if (perUserExplicit === undefined || perUserExplicit === null) {
+        resolved.maxConcurrentQueriesPerUser = Math.min(
+            AUDIT_SEARCH_DEFAULTS.maxConcurrentQueriesPerUser,
+            resolved.maxConcurrentQueries
+        );
+    }
+    // The long poll holds one API request, so it stays below the API integration timeout.
+    const apiTimeout =
+        config.app.api?.apiGatewayRest?.apiGatewayTimeoutTime ?? API_GATEWAY_DEFAULT_TIMEOUT_SECONDS;
+    const longPollMax = Math.min(
+        AUDIT_SEARCH_CEILINGS.longPollWaitSeconds,
+        apiTimeout - AUDIT_SEARCH_POLL_HEADROOM_SECONDS
+    );
+    resolved.longPollWaitSeconds = auditSearchInteger(search, "longPollWaitSeconds", 0, longPollMax);
+    block.search = resolved;
 }
 
 export function getConfig(app: cdk.App): Config {
@@ -5413,6 +5511,17 @@ export interface ConfigPublic {
         auditLogging: {
             // Whether read actions (gets, lists, searches) write audit records. Absent = true.
             recordReads: boolean;
+            // Audit log search limits (core, no on/off switch). Absent block or key = the default.
+            search: {
+                maxQueryWindowDays: number; // days a search may span (default 31, ceiling 366)
+                maxRows: number; // rows a search returns (default 1000, ceiling 10000)
+                maxConcurrentQueries: number; // open searches VAMS-wide (default 5, ceiling 20)
+                maxConcurrentQueriesPerUser: number; // open searches per user (default 2, at most the VAMS-wide value)
+                queryDeadlineSeconds: number; // a search is stopped after this (default 300, ceiling 900)
+                longPollWaitSeconds: number; // server wait of one poll (default 20, ceiling min(25, API timeout - 4))
+                maxContainsTermLength: number; // characters of one contains term (default 64, ceiling 128)
+                maxContainsTerms: number; // contains terms per search (default 3, ceiling 5)
+            };
         };
         api: {
             apiType: string;

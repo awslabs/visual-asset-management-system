@@ -445,6 +445,16 @@ const COMMERCIAL: ConfigShape = {
         },
         auditLogging: {
             recordReads: true,
+            search: {
+                maxQueryWindowDays: 31,
+                maxRows: 1000,
+                maxConcurrentQueries: 5,
+                maxConcurrentQueriesPerUser: 2,
+                queryDeadlineSeconds: 300,
+                longPollWaitSeconds: 20,
+                maxContainsTermLength: 64,
+                maxContainsTerms: 3,
+            },
         },
         webUi: {
             optionalBannerHtmlMessage: "",

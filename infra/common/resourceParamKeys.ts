@@ -69,6 +69,7 @@ export const RESOURCE_PARAM_KEYS = {
         workflowExecutionLocksStorage: "dynamoTables/workflowExecutionLocksStorage",
         largeObjectCopyJobsStorage: "dynamoTables/largeObjectCopyJobsStorage",
         zipDownloadRequestsStorage: "dynamoTables/zipDownloadRequestsStorage",
+        auditLogQueriesStorage: "dynamoTables/auditLogQueriesStorage",
         // Compliance tables
         complianceSchemaStorage: "dynamoTables/complianceSchemaStorage",
         complianceAssetStateStorage: "dynamoTables/complianceAssetStateStorage",
