@@ -148,6 +148,8 @@ Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) to
 
 `backend/` and `backend/lambdaLayers/base/` lock every package they share at the same version, because the handler Lambdas load their packages from the base layer while the backend tests install `backend/requirements-dev.txt`. Update a shared package in both projects together; `backend/tests/test_base_layer_dependency_parity.py` fails when the two locks differ.
 
+The RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`) is attached to the pipeline Lambda together with the base layer, and both extract into the same `/opt/python` directory, so a package both layers carry at different versions ends up mixed from two releases. That layer declares no AWS SDK package (the base layer provides `boto3`, `botocore` and `s3transfer`) and locks every other package it shares with the base layer at the base layer's version. When you move such a package (for example `requests`, `urllib3`, `certifi` or `charset-normalizer`) in the base layer, re-lock the Kubernetes layer in the same change; `infra/test/pipelines/eksKubernetesLayerPackages.test.ts` fails until you do.
+
 ## Infrastructure Setup
 
 The VAMS infrastructure is defined as AWS CDK v2 TypeScript code.

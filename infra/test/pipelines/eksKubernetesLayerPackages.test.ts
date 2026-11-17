@@ -10,10 +10,9 @@
  * layer's files over the earlier one's. A package both layers carry at different versions therefore
  * ends up as a mix of two releases: the overwritten files are the later layer's, the files only the
  * earlier release has stay beside them, and both `*.dist-info` directories are present. For the AWS
- * SDK (the Kubernetes layer locked boto3/botocore 1.42.76 against the base layer's 1.43.x) the version
- * the function ran was decided by layer order, and `importlib.metadata` reported the older one. For
- * `charset-normalizer` (3.4.6 against 3.3.2) the mix does not import at all: the 3.4.6 compiled `cd`
- * module stays and reads a name the 3.3.2 `constant.py` does not define.
+ * SDK, the version the function runs is then decided by layer order, and `importlib.metadata` can
+ * report the other copy. For `charset-normalizer` the mix does not import at all: a newer release's
+ * compiled `cd` module stays and reads a constant an older release's `constant.py` does not define.
  *
  * Three claims are asserted:
  *
@@ -177,12 +176,20 @@ describe("RapidPipeline EKS Kubernetes layer: attached only with the base layer"
         expect(kubernetesLayers).toHaveLength(1);
         const kubernetesRef = `\${${kubernetesLayers[0].logicalId}}`;
 
+        // In the stack that defines the layer a function references it by its logical ID; in any other
+        // stack it would arrive as a nested-stack parameter whose name carries the same construct ID.
+        // Matching the construct ID finds both forms, in every stack.
+        const listsKubernetesLayer = (fn: Resource): boolean =>
+            layersOf(fn).some((layer) => /KubernetesLambdaLayer/.test(layer));
         const withKubernetesLayer = synth
             .ofType("AWS::Lambda::Function")
-            .filter((fn) => fn.stack === kubernetesLayers[0].stack)
-            .filter((fn) => layersOf(fn).includes(kubernetesRef));
+            .filter(listsKubernetesLayer);
         // Control: the pipeline Lambda is in this synth and lists the layer.
-        expect(withKubernetesLayer.length).toBeGreaterThan(0);
+        expect(withKubernetesLayer.map((fn) => fn.logicalId)).toEqual(
+            expect.arrayContaining([expect.stringMatching(/ConsolidatedHandler/)])
+        );
+        // Control: the match above finds the reference form the template actually emits.
+        expect(withKubernetesLayer.some((fn) => layersOf(fn).includes(kubernetesRef))).toBe(true);
 
         const missingBaseLayer = withKubernetesLayer
             .filter((fn) => !layersOf(fn).some((layer) => /VAMSLayerBase/.test(layer)))
