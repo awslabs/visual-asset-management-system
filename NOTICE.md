@@ -20,7 +20,7 @@ This software includes third party software subject to the following copyrights:
 | eslint-plugin-react              | ^7.32.2 | MIT          |
 | prettier                         | ^2.8.7  | MIT          |
 | standard-version                 | ^9.3.2  | ISC          |
-| @types/sanitize-html             | ^2.9.0  | MIT          |
+| @types/sanitize-html             | ^2.16.2 | MIT          |
 | minimist                         | ^1.2.7  | MIT          |
 
 ---
@@ -62,7 +62,7 @@ This software includes third party software subject to the following copyrights:
 | @types/three                        | ^0.180.0      | MIT                     |
 | @types/wicg-file-system-access      | 2020.9.6      | MIT                     |
 | arraybuffer-to-buffer               | ^0.0.7        | MIT                     |
-| autoprefixer                        | ^10.4.20      | MIT                     |
+| autoprefixer                        | ^10.6.2       | MIT                     |
 | aws-amplify                         | ^6.0.0        | Apache-2.0              |
 | axios                               | ^1.6.0        | MIT                     |
 | buffer                              | ^6.0.3        | MIT                     |
@@ -94,7 +94,7 @@ This software includes third party software subject to the following copyrights:
 | tailwindcss                         | ^3.4.14       | MIT                     |
 | tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
 | typescript                          | ^5.0.0        | Apache-2.0              |
-| vite                                | ^8.1.6        | MIT                     |
+| vite                                | 8.3.5         | MIT                     |
 | zod                                 | ^4.6.7        | MIT                     |
 
 `jodit` is not declared directly — it arrives with `jodit-react` and the version shown is the one resolved in the lockfile. `fast-xml-parser` is carried transitively and pinned by the `overrides` block in `web/package.json`.
@@ -328,6 +328,16 @@ Copyright (c) 2012, Howard Butler, hobu.inc at gmail.com
 Copyright (c) 2020, Thomas Montaigu, thomas.montaigu@laposte.net
 All rights reserved.
 ```
+
+### Zip Archive Pipeline
+
+**Zip Archive Pipeline Dependencies** (`backendPipelines/utility/zipArchive/container/requirements.txt`)
+
+| Name                     | Version | License    | Notes                                                                                                       |
+| :----------------------- | :------ | :--------- | :---------------------------------------------------------------------------------------------------------- |
+| boto3                    | 1.43.45 | Apache-2.0 | AWS SDK for Python                                                                                          |
+| botocore                 | 1.43.45 | Apache-2.0 | Low-level AWS SDK for Python                                                                                |
+| python (slim base image) | 3.11    | PSF-2.0    | Container base image; the zip, tar and gzip writers use only the Python standard library (`zlib`, `struct`) |
 
 ### GenAI CAD STEP Agent Pipeline
 
@@ -680,23 +690,21 @@ This software includes third party software subject to the following copyrights:
 
 | Package                          | Version          | License      |
 | :------------------------------- | :--------------- | :----------- |
-| @aws-cdk/aws-lambda-python-alpha | ^2.214.0-alpha.0 | Apache-2.0   |
-| @aws-sdk/client-iam              | ^3.883.0         | Apache-2.0   |
-| @aws-sdk/client-ssm              | ^3.883.0         | Apache-2.0   |
-| @opensearch-project/opensearch   | ^3.5.1           | Apache-2.0   |
-| @types/aws-lambda                | ^8.10.152        | MIT          |
+| @aws-cdk/aws-lambda-python-alpha | ^2.275.0-alpha.0 | Apache-2.0   |
+| @aws-sdk/client-iam              | ^3.1164.0        | Apache-2.0   |
+| @aws-sdk/client-ssm              | ^3.1164.0        | Apache-2.0   |
+| @opensearch-project/opensearch   | ^3.9.0           | Apache-2.0   |
+| @types/aws-lambda                | ^8.10.164        | MIT          |
 | @types/aws4                      | ^1.11.6          | MIT          |
-| aws-cdk-lib                      | ^2.215.0         | Apache-2.0   |
-| aws-lambda                       | ^1.0.7           | Apache-2.0   |
-| aws-sdk                          | ^2.1692.0        | Apache-2.0   |
+| aws-cdk-lib                      | ^2.275.0         | Apache-2.0   |
 | aws4                             | ^1.13.2          | MIT          |
-| cdk-nag                          | ^2.37.29         | Apache-2.0   |
-| constructs                       | ^10.4.2          | Apache-2.0   |
-| dotenv                           | ^17.2.2          | BSD-2-Clause |
+| cdk-nag                          | ^2.38.2          | Apache-2.0   |
+| constructs                       | ^10.8.1          | Apache-2.0   |
+| dotenv                           | ^17.4.2          | BSD-2-Clause |
 | source-map-support               | ^0.5.21          | MIT          |
-| aws-cdk                          | ^2.1029.2        | Apache-2.0   |
-| esbuild                          | ^0.25.10         | MIT          |
-| typescript                       | ^5.9.2           | Apache-2.0   |
+| aws-cdk                          | ^2.1148.0        | Apache-2.0   |
+| esbuild                          | ^0.28.2          | MIT          |
+| typescript                       | ^5.9.3           | Apache-2.0   |
 
 ---
 
