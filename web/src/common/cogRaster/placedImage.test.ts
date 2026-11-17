@@ -175,4 +175,16 @@ describe("readPlacedPixels on the fixtures", () => {
         const rgba = bandsToRgba(pixels);
         expect(rgba[(63 * 64 + 63) * 4]).toBeGreaterThan(rgba[0]);
     });
+
+    it("converts a JPEG YCbCr file to RGB rather than reading Y, Cb and Cr as colours", async () => {
+        const tiff = await loadFixtureTiff("utm13-jpeg-ycbcr.tif");
+        const pixels = await readPlacedPixels(tiff, await readTiffFacts(tiff));
+        expect(pixels.photometric).toBe(2);
+        const rgba = bandsToRgba(pixels);
+        const centre = (32 * 64 + 32) * 4;
+        // The source is pure red (220, 0, 0); JPEG keeps it close.
+        expect(rgba[centre]).toBeGreaterThan(190);
+        expect(rgba[centre + 1]).toBeLessThan(40);
+        expect(rgba[centre + 2]).toBeLessThan(40);
+    });
 });

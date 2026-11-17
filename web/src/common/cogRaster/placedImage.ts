@@ -218,17 +218,44 @@ export async function readPlacedPixels(
         }
     }
 
+    const resampleMethod = noData === null ? "bilinear" : "nearest";
+    // ExtraSamples 1 = associated alpha, 2 = unassociated alpha
+    const hasAlphaSample = extraList.some((value) => value === 1 || value === 2);
+
+    // YCbCr (JPEG), CMYK and CIELab files are converted to RGB by the reader, so their samples are not
+    // mistaken for red, green and blue.
+    if (photometric === 5 || photometric === 6 || photometric === 8) {
+        const rgb: any = await image.readRGB({
+            width,
+            height,
+            interleave: false,
+            resampleMethod,
+            enableAlpha: hasAlphaSample,
+            signal,
+        } as any);
+        const rgbBands = (Array.isArray(rgb) ? rgb : [rgb]) as NumberArray[];
+        return {
+            width,
+            height,
+            bands: rgbBands,
+            noData,
+            photometric: 2,
+            colorMap: null,
+            hasAlpha: rgbBands.length > 3,
+            typeMax: 255,
+        };
+    }
+
     const rasters = await image.readRasters({
         width,
         height,
         interleave: false,
         // A nearest-neighbour read keeps no-data samples from blending into their neighbours.
-        resampleMethod: noData === null ? "bilinear" : "nearest",
+        resampleMethod,
         signal,
     });
     const bands = Array.isArray(rasters) ? (rasters as NumberArray[]) : [rasters as NumberArray];
-    // ExtraSamples 1 = associated alpha, 2 = unassociated alpha
-    const hasAlpha = extraList.some((value) => value === 1 || value === 2);
+    const hasAlpha = hasAlphaSample;
     return {
         width,
         height,

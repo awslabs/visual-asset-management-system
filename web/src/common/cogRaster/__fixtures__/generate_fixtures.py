@@ -57,5 +57,11 @@ write("wgs84-wide.tif", grid(32, 32, 1), "EPSG:4326", from_origin(10.0, 50.0, 0.
 # No georeference at all.
 write("no-georeference.tif", grid(32, 32, 1), None, rasterio.Affine.identity())
 
+# JPEG in YCbCr, NAD83 / UTM 13N (the reader must convert it to RGB). Pure red, so a YCbCr read shows up.
+red = np.zeros((3, 64, 64), dtype="uint8")
+red[0] = 220
+write("utm13-jpeg-ycbcr.tif", red, "EPSG:26913", from_origin(500000.0, 4300000.0, 10.0, 10.0),
+      compress="JPEG", photometric="YCBCR", tiled=True, blockxsize=64, blockysize=64)
+
 import os
 os.remove("src-3857.tmp.tif")
