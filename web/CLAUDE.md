@@ -286,6 +286,8 @@ web/
 
 ---
 
+`common/constants/fileFormats.ts` is the one definition of the formats and size the web shows as a file's own preview: `previewFileFormats` (mirrors the backend's `ALLOWED_PREVIEW_FILE_EXTENSIONS`; `.tga`, `.tif` and `.tiff` are never in it because browsers cannot display them), `PREVIEW_FILE_SIZE_LIMIT_BYTES` (5 MiB) and `isSelfPreviewable(fileName, size)` (extension in the list and size known and STRICTLY under the limit). The search thumbnail (`FilePreviewThumbnailCell.tsx`) and the file details panel call the helper instead of repeating the check, and the 3D thumbnail pipeline writes no preview for such a file. Drift tests pin the lists and the limit to the backend and the container.
+
 ## 3. Critical Rules
 
 ### Rule 1: Preserve Copyright Headers

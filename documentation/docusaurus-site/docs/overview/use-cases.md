@@ -145,8 +145,9 @@ VAMS provides a unified library for all visual and media assets with dedicated v
 
 **Key features used:**
 
--   22 viewer plugins covering 3D, BIM/IFC, video, audio, image, document, and data formats
+-   24 viewer plugins covering 3D, BIM/IFC, video, audio, image, document, and data formats
 -   3D Preview Thumbnail pipeline for generating animated GIF previews of 3D assets
+-   Media Preview Thumbnail pipeline for previews of reference photos, TGA and TIFF textures and capture video (optional)
 -   Comment system with rich text for collaborative asset review
 -   Permission templates for external collaborator access (database-readonly, database-user)
 -   Asset versioning for tracking production iterations
@@ -236,6 +237,7 @@ VAMS centralizes both design models and as-built scan data in a versioned, searc
 -   Asset versioning for tracking design iterations and as-built captures
 -   Metadata schemas for build compliance tracking
 -   3D Preview Thumbnail pipeline for visual overview of scans
+-   Media Preview Thumbnail pipeline for previews of survey imagery, GeoTIFF and capture video (optional)
 -   Cross-database asset linking for relating design models to as-built scans
 -   Tag-based organization for tracking construction phases and zones
 

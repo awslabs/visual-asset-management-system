@@ -63,7 +63,7 @@ RUN apt-get update && apt-get upgrade -y \
 COPY requirements.lock /build/requirements.lock
 RUN chmod a+r /build/requirements.lock && \
     python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir --require-hashes -r /build/requirements.lock && \
+    /opt/venv/bin/pip install --no-cache-dir --require-hashes --only-binary=imagecodecs,av,tifffile -r /build/requirements.lock && \
     chmod -R a+rX /opt/venv
 
 # Node.js for the PlayCanvas splat-transform CLI, which converts .spz/.sog/.ksplat/.lcc/.compressed.ply
