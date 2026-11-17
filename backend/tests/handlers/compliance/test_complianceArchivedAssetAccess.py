@@ -22,6 +22,7 @@ and its live asset GET agree, that is the archived asset GET decision itself.
 """
 
 import json
+import time
 from unittest.mock import MagicMock, patch
 
 import boto3
@@ -34,6 +35,7 @@ from backend.tests.handlers.compliance import _cdkTables
 from backend.tests.handlers.compliance._harness import (
     RULES_SCHEMA_BODY, body_of, claims_for, mirror_engine, real_constants, rest_event, schema_row,
 )
+from common.compliance import listing
 from handlers.compliance import complianceAuditService as audit_svc
 from handlers.compliance import complianceCascadeService as cascade_svc
 from handlers.compliance import complianceEvaluateService as evaluate_svc
@@ -468,3 +470,26 @@ def test_a_deny_on_the_live_id_still_denies_the_archived_asset(role_enforcer, wo
                   "cascade listing", "cascade", "approve cascade"):
         assert found["live"][check] is False, check
         assert found["archived"][check] is False, check
+
+
+@pytest.mark.unit
+def test_a_host_stall_during_a_decision_changes_no_read(role_enforcer, world, decisions):
+    """The reads do not depend on how long the host takes to decide a row: with the host clock
+    jumping past the listings' decision budget on every engine call, the role reads what it reads
+    without the stall (each listing decides on a clock that does not move, conftest)."""
+    set_name = "template:database-admin.json"
+    found = _decisions_of(set_name, role_enforcer, world, decisions)
+    enforcer = role_enforcer(*_role_set(set_name))
+    engine = enforcer.service_object
+    real_enforce, real_clock, stalled = engine.enforce, time.monotonic, [0.0]
+
+    def stalling_enforce(obj, act):
+        stalled[0] += 2 * listing.DEFAULT_DECISION_BUDGET_SECONDS
+        return real_enforce(obj, act)
+
+    with patch.object(engine, "enforce", stalling_enforce), \
+            patch("time.monotonic", lambda: real_clock() + stalled[0]):
+        reads = world(enforcer, _reads)
+    assert stalled[0] > 0
+    for asset_id, side in ((LIVE, "live"), (ARCHIVED, "archived")):
+        assert reads[asset_id] == {check: found[side][check] for check in READS}, asset_id

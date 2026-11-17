@@ -417,3 +417,76 @@ describe("visualizerPlugin/CLAUDE.md catalog", () => {
         });
     });
 });
+
+describe("viewer counts in the documentation", () => {
+    const repoRoot = path.resolve(__dirname, "..", "..", "..", "..");
+    const read = (relative: string) => fs.readFileSync(path.join(repoRoot, relative), "utf8");
+    const total = viewers.length;
+    const gated = viewers.filter(
+        (viewer) => viewer.enabled === false || (viewer.featuresEnabledRestriction ?? []).length > 0
+    ).length;
+    const viewersPage = read("documentation/docusaurus-site/docs/concepts/viewers.md");
+
+    it("[control] counts every shipped viewer entry once", () => {
+        expect(total).toBe(
+            (viewerConfig as any).viewers.length + (addonViewerConfig as any).viewers.length
+        );
+    });
+
+    it("the viewers page states the shipped total and how many are always available", () => {
+        expect(viewersPage).toContain(`**${total} built-in viewer plugins**`);
+        expect(viewersPage).toContain(`lists all ${total};`);
+        const words = [
+            "Zero",
+            "One",
+            "Two",
+            "Three",
+            "Four",
+            "Five",
+            "Six",
+            "Seven",
+            "Eight",
+            "Nine",
+            "Ten",
+            "Eleven",
+            "Twelve",
+            "Thirteen",
+            "Fourteen",
+            "Fifteen",
+            "Sixteen",
+            "Seventeen",
+            "Eighteen",
+            "Nineteen",
+            "Twenty",
+        ];
+        expect(viewersPage).toContain(`${words[total - gated]} are available in every deployment`);
+        expect(viewersPage).toContain(
+            `The remaining ${words[gated].toLowerCase()} are conditional`
+        );
+    });
+
+    it("the viewers page's master table has one row per viewer", () => {
+        const section = viewersPage
+            .split("## Master viewer table")[1]
+            .split("## File extension")[0];
+        const rows = section.split("\n").filter((line) => line.startsWith("| **"));
+        expect(rows).toHaveLength(total);
+    });
+
+    it.each([
+        "README.md",
+        "documentation/docusaurus-site/docs/index.mdx",
+        "documentation/docusaurus-site/docs/additional/viewer-plugins.md",
+        "documentation/docusaurus-site/docs/concepts/files-and-versions.md",
+        "documentation/docusaurus-site/docs/overview/benefits.md",
+        "documentation/docusaurus-site/docs/overview/solution-overview.md",
+        "documentation/docusaurus-site/docs/overview/use-cases.md",
+        "documentation/docusaurus-site/docs/user-guide/web-interface.md",
+    ])("%s quotes the shipped total when it quotes a viewer count", (file) => {
+        const counts = [
+            ...read(file).matchAll(/\b(\d+) (?:built-in |interactive )?viewer(?: plugins|s)?\b/g),
+        ].map((match) => Number(match[1]));
+        expect(counts.length).toBeGreaterThan(0);
+        for (const count of counts) expect(count).toBe(total);
+    });
+});

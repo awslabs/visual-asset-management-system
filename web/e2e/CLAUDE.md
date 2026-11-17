@@ -304,7 +304,7 @@ Optional: `requiresFeature` (a string or list of `featuresEnabled` entries, such
 `PHYSNA_ADDON`; a case skips with a reason when the deployment lacks one) and `expect` (free-form values the
 case reads; `expect.minForegroundFraction` / `expect.minDistinctColours` lower a canvas case's render
 thresholds for a model that fills little of the canvas, such as the splat samples' unicorn at about
-0.6% of the pixels; `expect.vertexCount` makes a canvas case also assert the viewer reports
+0.6% of the pixels; `expect.canvasWidth` / `canvasHeight` pin the decoded size the TIFF/TGA viewer reports on its canvas, `expect.pages` / `lastPageWidth` check its page picker, `expect.solid` skips the pixel-variety check for a sample of solid-colour pages; `expect.vertexCount` makes a canvas case also assert the viewer reports
 `<n> vertices`, as the Three.js info box does for the `threejs-ply-points` point cloud). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
 time), so their cases must skip themselves when that viewer is not offered. Verify the licence at its
 source before adding a download; no sample binary is ever committed.
@@ -316,7 +316,7 @@ to one distributable asset (`e2e-viewers-db` / `e2e-viewers-samples`) and writes
 through `npm exec --min-release-age=7` at the pinned version.
 
 **A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
-opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `text-binary`, `text-encoding`, `not-offered`, `potree`, `refused` — the viewer's refusal message), and optionally
+opened, and a web jest test checks the name), `kind` (`canvas`, `image` (the Image Viewer's `<img>` decoded and showing content), `raster-notice` (the TIFF/TGA viewer's fallback notice, `expect.notice` names its text), `pdf`, `grid`, `text`, `text-binary`, `text-encoding`, `not-offered`, `potree`, `refused` — the viewer's refusal message), and optionally
 `select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
 must succeed for), `thresholds`, `cspAllowed`, `servedBundle` (a web path a disabled-by-default add-on
 serves only when enabled; the case skips when it is not served as JavaScript, as the VNTANA cases do), `consoleAllowed` (console lines that case alone may log,

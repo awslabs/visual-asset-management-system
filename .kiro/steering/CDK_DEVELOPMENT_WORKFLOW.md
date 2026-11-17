@@ -464,6 +464,9 @@ export interface ConfigPublic {
         // optional bucketAccountId/bucketRegion/bucketKmsKeyArn),
         // presignedUrlNetworkRestrictions (allowedIpRanges/allowedVpceIds; mutually exclusive;
         // non-empty list adds a presigned-only bucket policy Deny to the created asset + auxiliary buckets)
+        // pipelines.useMediaPreviews: {enabled, autoRegisterAutoTriggerOnFileUpload, downscaleSelfPreviewableImages}, a sibling of
+        // usePreview3dThumbnail. The thumbnail container deploys when either is enabled; the flags only choose the registered
+        // workflows. A missing block or key is off; booleans only; the trigger and the option need enabled.
         // pipelines.externalPipelineBridges: [{accountId, roleArnPattern, invokeTargets?}] — one
         // events:PutEvents statement per entry on the orchestration bus resource policy (bridge account
         // root + aws:PrincipalArn condition on the pattern) and the exact invokeTargets ARNs on the shared

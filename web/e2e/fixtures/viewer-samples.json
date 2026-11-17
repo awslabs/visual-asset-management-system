@@ -75,10 +75,7 @@
             "derivedFrom": "splat-ply",
             "transform": "splat-transform",
             "version": "3.10.3",
-            "args": [
-                "--spz-version",
-                "3"
-            ],
+            "args": ["--spz-version", "3"],
             "licence": "inherits splat-ply (CC-BY-4.0)",
             "source": "the splat-ply sample written as SPZ format version 3 (gzip) by @playcanvas/splat-transform",
             "expect": {
@@ -92,10 +89,7 @@
             "derivedFrom": "splat-ply",
             "transform": "splat-transform",
             "version": "3.10.3",
-            "args": [
-                "--spz-version",
-                "4"
-            ],
+            "args": ["--spz-version", "4"],
             "licence": "inherits splat-ply (CC-BY-4.0)",
             "source": "the splat-ply sample written as SPZ format version 4 (NGSP) by @playcanvas/splat-transform",
             "expect": {
@@ -156,7 +150,7 @@
             "size": 86848,
             "sha256": "634d18bef6bd59f266f0d72f33a38bb0c4e5734fdeacf98beb79d9d8be92a23c",
             "licence": "MIT",
-            "source": "https://github.com/kovacsv/Online3DViewer/blob/0.18.0/website/assets/models/README.md (Wojciech Radaczyński, dotbim)"
+            "source": "https://github.com/kovacsv/Online3DViewer/blob/0.18.0/website/assets/models/README.md (Wojciech Radaczy\u0144ski, dotbim)"
         },
         {
             "id": "online3d-off",
@@ -506,6 +500,186 @@
             "licence": "MIT",
             "source": "IFC4 structural model from the That Open engine_components repository (MIT licence; no separate licence for resources/ifc), https://github.com/ThatOpen/engine_components/tree/ecedeb613b08d624c0b545e39477c5ca9ce4f4e1/resources/ifc",
             "requiresFeature": "ALLOWUNSAFEEVAL"
+        },
+        {
+            "id": "tga-rgba-rle",
+            "viewer": "tiff-tga-viewer",
+            "path": "/raster/rgb32rle.tga",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/rgb32rle.tga",
+            "size": 129803,
+            "sha256": "eecda5ea4233631a1c55b6068b61d7e1fc6b3a3c1dc89b61dc6a153f5514f830",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images)",
+            "expect": {
+                "canvasWidth": 199,
+                "canvasHeight": 199
+            }
+        },
+        {
+            "id": "tga-rgb-rle-small",
+            "viewer": "tiff-tga-viewer",
+            "path": "/raster/200x32_rgb_bl_rle.tga",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/tga/common/200x32_rgb_bl_rle.tga",
+            "size": 19308,
+            "sha256": "48c1da70204d5b15bfda4dde9076a21c03d68d353a7f0cc6970871acea94fde3",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images)",
+            "expect": {
+                "canvasWidth": 200,
+                "canvasHeight": 32,
+                "minForegroundFraction": 0.05
+            }
+        },
+        {
+            "id": "tiff-lzw-rgb",
+            "viewer": "tiff-tga-viewer",
+            "path": "/raster/hopper_lzw.tif",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/hopper_lzw.tif",
+            "size": 38513,
+            "sha256": "246e5de06ed6f4c63d8389fcb3342b18909e0f362a5a22f76f779ad52f46090d",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images)",
+            "expect": {
+                "canvasWidth": 128,
+                "canvasHeight": 128
+            }
+        },
+        {
+            "id": "tiff-16bit-rgb",
+            "viewer": "tiff-tga-viewer",
+            "path": "/raster/tiff_16bit_RGB.tiff",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/tiff_16bit_RGB.tiff",
+            "size": 24245,
+            "sha256": "f96f39e61be80e5f9abfd47375200f807fc68f765cb0612deed895c5bb279cc9",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images)",
+            "expect": {
+                "canvasWidth": 100,
+                "canvasHeight": 40
+            }
+        },
+        {
+            "id": "tiff-12in16-grey",
+            "viewer": "tiff-tga-viewer",
+            "path": "/raster/12in16bit.tif",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/12in16bit.tif",
+            "size": 20274,
+            "sha256": "1ee4b1c3f82b6d17ff41ae62cdf189d53ed76886f928b6489cc2211a814f7c30",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images)",
+            "expect": {
+                "canvasWidth": 100,
+                "canvasHeight": 100,
+                "minDistinctColours": 8,
+                "minForegroundFraction": 0.005
+            }
+        },
+        {
+            "id": "tiff-cmyk-jpeg",
+            "viewer": "tiff-tga-viewer",
+            "path": "/raster/tiff_strip_cmyk_jpeg.tif",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/tiff_strip_cmyk_jpeg.tif",
+            "size": 30274,
+            "sha256": "a5fd8b842c1b6b4811fae7a67b96e62ba72dba269e837754540ba8aa7a33a3c3",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images)",
+            "expect": {
+                "canvasWidth": 100,
+                "canvasHeight": 100
+            }
+        },
+        {
+            "id": "tiff-multipage",
+            "viewer": "tiff-tga-viewer",
+            "path": "/raster/multipage-mmap.tiff",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/multipage-mmap.tiff",
+            "size": 5760,
+            "sha256": "686716559d1988d35a01f660e6c83e72efbbc183bd418c13773ea0711646c6d7",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images) (three solid-colour pages, so the case checks sizes and the page picker, not pixel variety)",
+            "expect": {
+                "canvasWidth": 10,
+                "canvasHeight": 10,
+                "pages": 3,
+                "lastPageWidth": 20,
+                "solid": true
+            }
+        },
+        {
+            "id": "tiff-large-8mp",
+            "viewer": "tiff-tga-viewer",
+            "path": "/raster/charcoal-sketch-large.tif",
+            "url": "https://upload.wikimedia.org/wikipedia/commons/1/14/1990_Charcoal_sketch_on_paper_of_a_dune_and_beach_view_near_Zandvoort%2C_The_Netherlands_by_Fons_Heijnsbroek.tif",
+            "size": 63856384,
+            "sha256": "c732857e14d141a3b29e7b4b6f686017177760806099eeac8789ec44a97950d7",
+            "licence": "CC0-1.0",
+            "source": "https://commons.wikimedia.org/wiki/File:1990_Charcoal_sketch_on_paper_of_a_dune_and_beach_view_near_Zandvoort,_The_Netherlands_by_Fons_Heijnsbroek.tif (a 3307 x 2480, 8-bit RGB, 64 MB real-world scan)",
+            "expect": {
+                "canvasWidth": 3307,
+                "canvasHeight": 2480
+            }
+        },
+        {
+            "id": "webp",
+            "viewer": "image-viewer",
+            "path": "/raster/hopper.webp",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/hopper.webp",
+            "size": 3282,
+            "sha256": "3ad1cd060bff97c8090ca68efe9e25724e830bf5383397ffe7f448d5b825c6ad",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images)"
+        },
+        {
+            "id": "bmp",
+            "viewer": "image-viewer",
+            "path": "/raster/hopper.bmp",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/hopper.bmp",
+            "size": 49290,
+            "sha256": "f1a94f3add0a2e54365dc94b51da099bd0de8289b955fc8304a8627b7b0d6aea",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images)"
+        },
+        {
+            "id": "mdl-core-definitions",
+            "viewer": "text-viewer",
+            "path": "/raster/core_definitions.mdl",
+            "url": "https://raw.githubusercontent.com/NVIDIA/MDL-SDK/1b9592c1b086b691b44d1a30eee4827d1ff55b8c/examples/mdl/nvidia/core_definitions.mdl",
+            "size": 166331,
+            "sha256": "f444cf349eb1750aba562ead8a246ac38a7cd018d968342925abfc4cb242cbf9",
+            "licence": "BSD-3-Clause",
+            "source": "https://github.com/NVIDIA/MDL-SDK/blob/1b9592c1b086b691b44d1a30eee4827d1ff55b8c/examples/mdl/nvidia/core_definitions.mdl (a 166 KB NVIDIA MDL module, larger than the 8 KiB sample so it is read in two requests)",
+            "expect": {
+                "line": "NVIDIA CORPORATION"
+            }
+        },
+        {
+            "id": "tiff-orientation-6",
+            "viewer": "tiff-tga-viewer",
+            "path": "/raster/g4_orientation_6.tif",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/g4_orientation_6.tif",
+            "size": 1024,
+            "sha256": "679f835a1741917b6235fc0870d0fca8d69ea5111a399312497122ce481342c5",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images)",
+            "expect": {
+                "canvasWidth": 590,
+                "canvasHeight": 88,
+                "minForegroundFraction": 0.02,
+                "minDistinctColours": 2
+            }
+        },
+        {
+            "id": "tga-truncated-rle",
+            "viewer": "tiff-tga-viewer",
+            "path": "/raster/cross_scan_line_truncated.tga",
+            "url": "https://raw.githubusercontent.com/python-pillow/Pillow/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images/cross_scan_line_truncated.tga",
+            "size": 4881,
+            "sha256": "1f5379d8deaaaa7b1a92faa2fc24e4a2e9075e1f9cdcfe69a7eb190c481efa40",
+            "licence": "HPND (Pillow licence, permissive)",
+            "source": "https://github.com/python-pillow/Pillow/tree/a106f67e44287e2e5e68130972eccfb6de05c164/Tests/images (Pillow test images)",
+            "expect": {
+                "notice": "truncated"
+            }
         }
     ]
 }

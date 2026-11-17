@@ -150,6 +150,47 @@ class TestFileProcessor:
         finally:
             tmp_path.unlink()
     
+    @pytest.mark.parametrize('suffix', ['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.bmp'])
+    def test_validate_file_for_upload_accepts_preview_extensions(self, suffix):
+        """Every image type the API takes as a preview passes validation (#1580)."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(b"test")
+            tmp_path = Path(tmp.name)
+
+        try:
+            validate_file_for_upload(tmp_path, "assetPreview")
+        finally:
+            tmp_path.unlink()
+
+    @pytest.mark.parametrize('suffix', ['.tga', '.tif', '.tiff'])
+    def test_validate_file_for_upload_rejects_non_displayable_previews(self, suffix):
+        """TGA and TIFF are not shown as their own preview, so they stay refused (#1580)."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(b"test")
+            tmp_path = Path(tmp.name)
+
+        try:
+            with pytest.raises(PreviewFileError, match="unsupported extension"):
+                validate_file_for_upload(tmp_path, "assetPreview")
+        finally:
+            tmp_path.unlink()
+
+    def test_validate_file_for_upload_preview_exactly_5_mib_is_accepted(self):
+        """A preview of exactly 5 MiB (5,242,880 bytes) passes, as at the API; one byte more fails."""
+        assert MAX_PREVIEW_FILE_SIZE == 5_242_880
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.webp') as tmp:
+            tmp.write(b"x" * MAX_PREVIEW_FILE_SIZE)
+            tmp_path = Path(tmp.name)
+
+        try:
+            validate_file_for_upload(tmp_path, "assetPreview")
+            with open(tmp_path, 'ab') as f:
+                f.write(b"x")
+            with pytest.raises(FileTooLargeError, match="exceeds maximum size"):
+                validate_file_for_upload(tmp_path, "assetPreview")
+        finally:
+            tmp_path.unlink()
+
     def test_validate_file_for_upload_invalid_preview_extension(self):
         """Test file validation for invalid preview file extensions."""
         with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:

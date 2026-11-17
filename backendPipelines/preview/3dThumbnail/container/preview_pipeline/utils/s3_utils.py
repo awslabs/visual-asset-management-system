@@ -236,18 +236,24 @@ def get_object_size(bucket_name, object_key, version_id=""):
         return None
 
 
-def head_object_size(bucket_name, object_key):
+# The codes a HeadObject of a missing key fails with (HEAD has no body, so usually the bare status).
+_NOT_FOUND_CODES = ("404", "NoSuchKey", "NotFound")
+
+
+def head_object_size(bucket_name, object_key, warn_if_missing=True):
     """The size in bytes of an object, or None when it does not exist or cannot be read.
 
     For optional objects (files an input references): a missing one is expected, so it is logged as
-    a warning without a traceback.
+    a warning without a traceback. With ``warn_if_missing`` false a missing object is not logged, for
+    a caller that logs what its absence means; any other error is still a warning.
     """
     try:
         response = client_for_bucket(bucket_name).head_object(Bucket=bucket_name, Key=object_key)
         return int(response["ContentLength"])
     except ClientError as e:
         code = e.response.get("Error", {}).get("Code", "")
-        logger.warning(f"HeadObject {bucket_name}/{object_key} failed: {code or e}")
+        if warn_if_missing or code not in _NOT_FOUND_CODES:
+            logger.warning(f"HeadObject {bucket_name}/{object_key} failed: {code or e}")
         return None
 
 

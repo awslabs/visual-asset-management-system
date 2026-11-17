@@ -1257,6 +1257,14 @@ export async function canvasStats(
     timeouts: CaptureTimeouts = {}
 ): Promise<CanvasStats> {
     const png = await captureCanvas(page, canvas, timeouts);
+    return await pngStats(page, png);
+}
+
+/**
+ * The same pixel statistics as `canvasStats`, for any PNG (an element screenshot of an `<img>`, say).
+ * The PNG is decoded in the page from bytes passed in, so nothing is fetched.
+ */
+export async function pngStats(page: Page, png: Buffer): Promise<CanvasStats> {
     return await page.evaluate(async (base64: string) => {
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);

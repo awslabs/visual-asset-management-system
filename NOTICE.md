@@ -73,6 +73,7 @@ This software includes third party software subject to the following copyrights:
 | jodit-react                         | ^5.3.21       | MIT                     |
 | localforage                         | ^1.10.0       | Apache-2.0              |
 | maplibre-gl                         | ^6.9.0        | BSD-3-Clause            |
+| pako                                | 1.0.11        | (MIT AND Zlib)          |
 | papaparse                           | ^5.7.0        | MIT                     |
 | postcss                             | ^8.4.47       | MIT                     |
 | prop-types                          | ^15.8.1       | MIT                     |
@@ -92,8 +93,10 @@ This software includes third party software subject to the following copyrights:
 | sanitize-html                       | ^2.11.0       | MIT                     |
 | semver                              | ^7.5.2        | ISC                     |
 | tailwindcss                         | ^3.4.14       | MIT                     |
+| tga-js                              | 1.1.1         | MIT                     |
 | tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
 | typescript                          | ^5.0.0        | Apache-2.0              |
+| utif2                               | 4.1.0         | MIT                     |
 | vite                                | 8.3.5         | MIT                     |
 | zod                                 | ^4.6.7        | MIT                     |
 
@@ -214,23 +217,40 @@ This software includes third party software subject to the following copyrights:
 
 **Preview 3D Thumbnail Pipeline Dependencies** (versions as pinned by `container/requirements.lock`, which the image installs)
 
-| Name     | Version | License                                          | Notes                                          |
-| :------- | :------ | :----------------------------------------------- | :--------------------------------------------- |
-| pyvista  | 0.49.0  | MIT                                              | 3D rendering and visualization                 |
-| vtk      | 9.6.2   | BSD-3-Clause                                     | Visualization Toolkit (rendering backend)      |
-| trimesh  | 5.1.0   | MIT                                              | Mesh loading (GLB, GLTF, OBJ, PLY, STL, OFF)   |
-| numpy    | 2.5.3   | BSD-3-Clause                                     | Numerical computing                            |
-| scipy    | 1.18.1  | BSD-3-Clause                                     | Scientific computing (used by trimesh)         |
-| laspy    | 2.7.0   | BSD-3-Clause                                     | LAS/LAZ point cloud format support             |
-| lazrs    | 0.8.2   | MIT                                              | LAZ decompression used by laspy                |
-| pye57    | 0.4.19  | MIT                                              | E57 point cloud format support                 |
-| cadquery | 2.8.0   | Apache-2.0/LGPL-2.1                              | STEP/STP CAD file tessellation                 |
-| imageio  | 2.37.4  | BSD-2-Clause                                     | GIF/image I/O                                  |
-| Pillow   | 12.3.0  | HPND                                             | Image optimization and processing              |
-| DracoPy  | 2.0.0   | Apache-2.0                                       | Draco compressed mesh (.drc) support           |
-| open3d   | 0.19.0  | MIT                                              | PCD point clouds and FBX meshes                |
-| usd-core | 26.8    | TOST-1.0 (Apache-2.0 with a different Section 6) | OpenUSD Python bindings for USD/USDA/USDC/USDZ |
-| boto3    | 1.43.93 | Apache-2.0                                       | AWS SDK for Python                             |
+| Name        | Version    | License                                                                     | Notes                                                 |
+| :---------- | :--------- | :-------------------------------------------------------------------------- | :---------------------------------------------------- |
+| pyvista     | 0.49.0     | MIT                                                                         | 3D rendering and visualization                        |
+| vtk         | 9.6.2      | BSD-3-Clause                                                                | Visualization Toolkit (rendering backend)             |
+| trimesh     | 5.1.0      | MIT                                                                         | Mesh loading (GLB, GLTF, OBJ, PLY, STL, OFF)          |
+| numpy       | 2.5.3      | BSD-3-Clause                                                                | Numerical computing                                   |
+| scipy       | 1.18.1     | BSD-3-Clause                                                                | Scientific computing (used by trimesh)                |
+| laspy       | 2.7.0      | BSD-3-Clause                                                                | LAS/LAZ point cloud format support                    |
+| lazrs       | 0.8.2      | MIT                                                                         | LAZ decompression used by laspy                       |
+| pye57       | 0.4.19     | MIT                                                                         | E57 point cloud format support                        |
+| cadquery    | 2.8.0      | Apache-2.0/LGPL-2.1                                                         | STEP/STP CAD file tessellation                        |
+| imageio     | 2.37.4     | BSD-2-Clause                                                                | GIF/image I/O                                         |
+| Pillow      | 12.3.0     | HPND                                                                        | Image optimization and processing                     |
+| tifffile    | 2026.11.12 | BSD-3-Clause                                                                | TIFF variants Pillow cannot read (media previews)     |
+| av (PyAV)   | 19.0.2     | BSD-3-Clause (wheels bundle LGPL-2.1+ FFmpeg libraries)                     | Video decoding (media previews)                       |
+| imagecodecs | 2026.11.11 | BSD-3-Clause (wheels bundle permissive codec libraries; see the list below) | TIFF compressions Pillow cannot read (media previews) |
+| DracoPy     | 2.0.0      | Apache-2.0                                                                  | Draco compressed mesh (.drc) support                  |
+| open3d      | 0.19.0     | MIT                                                                         | PCD point clouds and FBX meshes                       |
+| usd-core    | 26.8       | TOST-1.0 (Apache-2.0 with a different Section 6)                            | OpenUSD Python bindings for USD/USDA/USDC/USDZ        |
+| boto3       | 1.43.93    | Apache-2.0                                                                  | AWS SDK for Python                                    |
+
+**Preview 3D Thumbnail Pipeline: libraries bundled in the imagecodecs wheel** (imagecodecs 2026.11.11 is BSD-3-Clause; its manylinux wheel carries the libraries below, each with its own licence file under `imagecodecs/licenses/` in the wheel, none of them copyleft except the OpenMP runtime named last). The container installs the wheel only (`--only-binary`), reads TIFF strips and tiles through it (the pipeline allows the LZW, Deflate, PackBits, Zstandard, LZMA, JPEG and LERC compressions and refuses every other), and does not call the other codecs.
+
+| Name                                                                                                                                                                       | Version               | License                                                                                                                                                                                                                | Notes                                                                                                                                        |
+| :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------- |
+| libtiff                                                                                                                                                                    | 4.7.2                 | libtiff (permissive, BSD-like)                                                                                                                                                                                         | TIFF container and codec glue                                                                                                                |
+| zlib / zlib-ng / libdeflate                                                                                                                                                | 1.2.11 / 2.3.3 / 1.26 | zlib; zlib; MIT                                                                                                                                                                                                        | Deflate                                                                                                                                      |
+| zstd                                                                                                                                                                       | 1.5.7                 | BSD-3-Clause (dual BSD / GPL-2.0, BSD elected)                                                                                                                                                                         | Zstandard                                                                                                                                    |
+| liblzma (XZ Utils)                                                                                                                                                         | 5.8.4                 | 0BSD / public domain                                                                                                                                                                                                   | LZMA                                                                                                                                         |
+| libjpeg-turbo, libjpeg (IJG)                                                                                                                                               | 3.2.1 / 8             | IJG, BSD-3-Clause, zlib                                                                                                                                                                                                | JPEG                                                                                                                                         |
+| libpng, libspng, giflib, libwebp, libjxl, libavif, libaom, openjpeg, openjph, charls, jxrlib, openexr, libultrahdr, lcms2, libwavpack, libqoi                              | as in the wheel       | libpng; BSD-2-Clause; MIT; BSD-3-Clause; BSD-2-Clause (libaom adds the AOM patent licence 1.0); BSD-2-Clause; BSD-2-Clause; BSD-2-Clause; BSD-3-Clause; BSD-2-Clause; BSD-3-Clause; Apache-2.0; MIT; BSD-3-Clause; MIT | Image codecs the pipeline never selects (present because the wheel carries them)                                                             |
+| lerc, pcodec, sperr, zopfli, highway                                                                                                                                       | as in the wheel       | Apache-2.0                                                                                                                                                                                                             | Scientific and recompression codecs (LERC is used for GeoTIFF)                                                                               |
+| blosc, blosc2, brotli, bitshuffle, lz4, lzfse, lzf, lzham, lzokay, snappy, libaec, zfp, sz3, isa-l, meshoptimizer, fastlz, bzip2, netcdf-c, hdf5, cfitsio, postgresql pglz | as in the wheel       | BSD-2-Clause, BSD-3-Clause, MIT, public domain or a permissive NASA/PostgreSQL licence                                                                                                                                 | General-purpose and scientific codecs, not selected by the pipeline                                                                          |
+| libgomp (OpenMP runtime)                                                                                                                                                   | GCC 8.5               | GPL-3.0-or-later with the GCC Runtime Library Exception                                                                                                                                                                | Bundled by the wheel; the image already installs Debian `libgomp1` for Open3D. The exception permits linking into programs under any licence |
 
 **Preview 3D Thumbnail Pipeline transitive dependencies with weak-copyleft licenses** (pinned by `container/requirements.lock`; installed because a package above requires them, or compiled into one)
 

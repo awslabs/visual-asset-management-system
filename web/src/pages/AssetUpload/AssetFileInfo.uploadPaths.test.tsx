@@ -142,7 +142,7 @@ describe("Create Asset, Select Files step", () => {
             makeFile("scene.usda", "pack/scene.usda"),
             makeFile("model.gltf", "pack/model.gltf"),
             makeFile("model.gltf.previewFile.png", "pack/model.gltf.previewFile.png"),
-            makeFile("thumb.previewFile.bmp", "pack/thumb.previewFile.bmp"),
+            makeFile("thumb.previewFile.tif", "pack/thumb.previewFile.tif"),
         ]);
         expect(screen.getByText("Extension .gltf not allowed")).toBeTruthy();
         expect(screen.getByText(/^Preview files must be \.png/)).toBeTruthy();
