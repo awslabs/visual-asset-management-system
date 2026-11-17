@@ -37,7 +37,7 @@ MEDIA_CLASSES = (CLASS_IMAGE, CLASS_VIDEO, CLASS_AUDIO, CLASS_DOCUMENT, CLASS_TE
 # EXTENSION_CLASSES; that suite diffs the two.
 MEDIA_EXTENSION_CLASSES: Dict[str, str] = {
     ".png": CLASS_IMAGE, ".jpg": CLASS_IMAGE, ".jpeg": CLASS_IMAGE, ".gif": CLASS_IMAGE, ".webp": CLASS_IMAGE,
-    ".svg": CLASS_IMAGE,
+    ".bmp": CLASS_IMAGE, ".tga": CLASS_IMAGE, ".tif": CLASS_IMAGE, ".tiff": CLASS_IMAGE, ".svg": CLASS_IMAGE,
     ".mp4": CLASS_VIDEO, ".webm": CLASS_VIDEO, ".mov": CLASS_VIDEO, ".avi": CLASS_VIDEO, ".mkv": CLASS_VIDEO,
     ".flv": CLASS_VIDEO, ".wmv": CLASS_VIDEO, ".m4v": CLASS_VIDEO,
     ".mp3": CLASS_AUDIO, ".wav": CLASS_AUDIO, ".ogg": CLASS_AUDIO, ".aac": CLASS_AUDIO, ".flac": CLASS_AUDIO,
@@ -46,16 +46,15 @@ MEDIA_EXTENSION_CLASSES: Dict[str, str] = {
     ".txt": CLASS_TEXT, ".md": CLASS_TEXT, ".json": CLASS_TEXT, ".geojson": CLASS_TEXT, ".xml": CLASS_TEXT,
     ".yaml": CLASS_TEXT, ".yml": CLASS_TEXT, ".toml": CLASS_TEXT, ".ini": CLASS_TEXT, ".cfg": CLASS_TEXT,
     ".inf": CLASS_TEXT, ".log": CLASS_TEXT, ".py": CLASS_TEXT, ".js": CLASS_TEXT, ".ts": CLASS_TEXT, ".sql": CLASS_TEXT,
-    ".sh": CLASS_TEXT, ".ps1": CLASS_TEXT, ".ipynb": CLASS_TEXT, ".html": CLASS_TEXT, ".htm": CLASS_TEXT,
+    ".sh": CLASS_TEXT, ".ps1": CLASS_TEXT, ".mdl": CLASS_TEXT, ".ipynb": CLASS_TEXT, ".html": CLASS_TEXT,
+    ".htm": CLASS_TEXT,
     ".csv": CLASS_DATA, ".fcs": CLASS_DATA, ".xlsx": CLASS_DATA, ".gpkg": CLASS_DATA, ".lyrx": CLASS_DATA,
 }
 
-# Entries the pipeline's classifier treats differently from this table, each with its reason: `.webp` is a
-# supported image extension no viewer serves, so the allow list keeps it out of the pipeline (this image still handles
-# it on a direct invocation); `.json` and `.geojson` are sniffed by the classifier into `text` / `tiles3d` /
-# `data` (GeoJSON) / `other` rather than mapped. Every other extension here carries the classifier's class.
+# Entries the pipeline's classifier treats differently from this table, each with its reason: `.json` and
+# `.geojson` are sniffed by the classifier into `text` / `tiles3d` / `data` (GeoJSON) / `other` rather than
+# mapped. Every other extension here carries the classifier's class.
 CLASSIFIER_OVERRIDE_EXTENSIONS: Dict[str, str] = {
-    ".webp": "not allow-listed: no viewer declares it",
     ".json": "sniffed by the classifier: text / tiles3d / data (GeoJSON) / other",
     ".geojson": "sniffed by the classifier like .json: text / tiles3d / data (GeoJSON) / other",
 }
