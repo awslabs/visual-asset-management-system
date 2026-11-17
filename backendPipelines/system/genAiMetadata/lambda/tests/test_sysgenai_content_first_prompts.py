@@ -27,15 +27,23 @@ import test_sysgenai_asset_summary as summary_tests
 import test_sysgenai_generate_metadata as gm_tests
 
 # The new sentences, pinned as text.
-# D117: frames of a screen recording (a web application's screens) were taken for screenshots of the system that
-# stores the file, and the asset text was described instead. The system prompt and the closing line now say the
-# images are the file's own, and that a screen they show is what the file records.
+# D117: the frames of a screen recording of the VAMS web application were read as context about the system, and the
+# asset text was described instead. The system prompt says every image is taken from the file and that a software
+# screen in one, an asset management application like this one included, is what the file recorded; the line that
+# announces the images names them for the file's class and repeats that in a few words. An earlier wording, which
+# said the images were "not screenshots of the system that stores it", did not hold against the model (2026-11-17
+# eval) and is gone.
 FILE_IMAGES_SYSTEM = (
-    "The rendered views or frames come from the file itself (a video's frames, a document's pages, the image, or "
-    "views rendered from a 3D file), not screenshots of the system that stores it: when they show a software "
-    "window, web page or other user interface, the file records that screen, so the title and description name the "
-    "kind of application or screen and what it shows. ")
-FILE_IMAGES_NOTE = "They are the file's own content, not screenshots of the system that stores it."
+    "Every image that follows is taken from this file: a video's frames, a document's pages, the image itself, or "
+    "views rendered from a 3D file. The pipeline decodes them from the file and sends nothing else, so you are never "
+    "shown the interface of the system you work for: a screen in an image, an asset management application like "
+    "this one included, is what the file recorded. When an image shows a software screen (a window, web page, "
+    "dashboard or other user interface), the file is a screen recording if it is a video and a screenshot if it is "
+    "an image: say so in the title and description, name the kind of application, and describe what its screens "
+    "show. The asset text never overrides what the images show. ")
+FILE_IMAGES_NOTE = ("Each one was decoded from this file; a screen it shows is what the file recorded, not this "
+                    "system's interface.")
+EARLIER_WORDING = "not screenshots of the system that stores it"
 SYSTEM_CONTENT_FIRST = (
     "The asset's name, description and tags are context about the asset the file belongs to: they may describe the "
     "upload, a project or a test rather than this file, so do not present them as the file's content. "
@@ -149,29 +157,34 @@ class TestTheFileAnalysisPutsContentFirst:
 
 @pytest.mark.unit
 class TestTheImagesAreTheFilesOwn:
-    """D117: the images are the file's own content, also when they show a software screen."""
+    """D117: every image is taken from the file, and a software screen in one is what the file recorded."""
 
     def test_the_system_prompt_says_the_images_come_from_the_file(self):
         _mod, _s3, bedrock = _analyse()
         system = bedrock.calls[0]["system"][0]["text"]
         assert FILE_IMAGES_SYSTEM in system
+        assert EARLIER_WORDING not in system
         # Between the sentence that names the file's content and the one about a file that shows little.
         assert (system.index("its extracted text and its attributes show it. ") < system.index(FILE_IMAGES_SYSTEM)
                 < system.index("When the file shows little you can name"))
 
-    @pytest.mark.parametrize("manifest,state,count", [
-        (lambda: gm_tests._manifest(), {}, 2),
-        (lambda: gm_tests._image_manifest(), {"fileClass": "image", "renderBranch": "MEDIA"}, 1),
+    @pytest.mark.parametrize("manifest,state,line", [
+        (lambda: gm_tests._manifest(), {}, "2 view(s) rendered from this 3D file follow."),
+        (lambda: gm_tests._image_manifest(), {"fileClass": "image", "renderBranch": "MEDIA"},
+         "1 image(s) of this file follow."),
         (lambda: gm_tests._manifest(images=4, fileClass="video", renderBranch="MEDIA"),
-         {"fileClass": "video", "fileExt": ".mp4", "renderBranch": "MEDIA"}, 4),
+         {"fileClass": "video", "fileExt": ".mp4", "renderBranch": "MEDIA"}, "4 frame(s) taken from this video follow."),
+        (lambda: gm_tests._manifest(images=3, fileClass="document", renderBranch="MEDIA"),
+         {"fileClass": "document", "fileExt": ".pdf", "renderBranch": "MEDIA"}, "3 page(s) of this document follow."),
     ])
-    def test_the_closing_line_says_so_after_the_image_count(self, manifest, state, count):
+    def test_the_closing_line_names_the_images_and_says_where_they_come_from(self, manifest, state, line):
         s3 = gm_tests._seed(h.FakeS3(), manifest=manifest())
         bedrock = h.FakeBedrock([gm_tests._reply()])
         gm_tests._run(gm_tests._state(**state), s3, bedrock)
         text = gm_tests._user_text(bedrock)
-        closing = f"{count} rendered view(s) or frame(s) of the file follow. {FILE_IMAGES_NOTE}"
+        closing = f"{line} {FILE_IMAGES_NOTE}"
         assert closing in text
+        assert "rendered view(s) or frame(s) of the file follow" not in text and EARLIER_WORDING not in text
         # The closing line comes after the file-derived parts and before the content-first instruction.
         assert text.index("File attributes (JSON):") < text.index(closing) < text.index(USER_CONTENT_FIRST)
 
@@ -188,10 +201,13 @@ class TestTheImagesAreTheFilesOwn:
         _mod, _s3, bedrock = _analyse(env=gm_tests.GUARDRAIL_ENV)
         content = bedrock.calls[0]["messages"][0]["content"]
         plain, guarded = content[0]["text"], content[1]["guardContent"]["text"]["text"]
-        assert f"2 rendered view(s) or frame(s) of the file follow. {FILE_IMAGES_NOTE}" in plain
-        assert FILE_IMAGES_NOTE not in guarded and "screenshots" not in guarded
+        assert f"2 view(s) rendered from this 3D file follow. {FILE_IMAGES_NOTE}" in plain
+        assert FILE_IMAGES_NOTE not in guarded and "decoded from this file" not in guarded
         assert FILE_IMAGES_SYSTEM.strip() not in guarded
         assert FILE_IMAGES_SYSTEM in bedrock.calls[0]["system"][0]["text"]
+        # The images still follow the text blocks as the guardrail path builds them, one guardContent each.
+        assert all("guardContent" in block and "image" in block["guardContent"] for block in content[2:])
+        assert len(content) == 4
 
 
 @pytest.mark.unit

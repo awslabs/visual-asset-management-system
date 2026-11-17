@@ -229,23 +229,41 @@ EXISTING_SECTION_HEADERS = {
 }
 
 # Content first: the asset text is context about the asset, and the descriptive fields name what the file itself
-# shows or contains. The images are the file's own (D117: frames of a screen recording were taken for screenshots
-# of the system that stores the file, and the asset text was described instead). Restated for the video window
-# prompt (containers/media/segment_handler.py); the asset summary (summarizeAsset.py) takes no images.
+# shows or contains. Every image is taken from the file, and a software screen in one is what the file records
+# (D117: the frames of a screen recording of this kind of application were read as context about the system and
+# the asset text was described instead). Restated for the video window prompt (containers/media/segment_handler.py);
+# the asset summary (summarizeAsset.py) takes no images.
 CONTENT_FIRST_SYSTEM_TEXT = (
     "The asset's name, description and tags are context about the asset the file belongs to: they may describe the "
     "upload, a project or a test rather than this file, so do not present them as the file's content. "
     "The title, description and keywords must name what the file itself shows or contains, as its rendered views "
     "or frames, its extracted text and its attributes show it. "
-    "The rendered views or frames come from the file itself (a video's frames, a document's pages, the image, or "
-    "views rendered from a 3D file), not screenshots of the system that stores it: when they show a software "
-    "window, web page or other user interface, the file records that screen, so the title and description name the "
-    "kind of application or screen and what it shows. "
+    "Every image that follows is taken from this file: a video's frames, a document's pages, the image itself, or "
+    "views rendered from a 3D file. The pipeline decodes them from the file and sends nothing else, so you are never "
+    "shown the interface of the system you work for: a screen in an image, an asset management application like "
+    "this one included, is what the file recorded. When an image shows a software screen (a window, web page, "
+    "dashboard or other user interface), the file is a screen recording if it is a video and a screenshot if it is "
+    "an image: say so in the title and description, name the kind of application, and describe what its screens "
+    "show. The asset text never overrides what the images show. "
     "When the file shows little you can name, say so plainly rather than describe the asset text as the file's "
     "content. "
 )
 # Said again, in a few words, after the count of the images that follow (the user message's closing line).
-FILE_IMAGES_NOTE = "They are the file's own content, not screenshots of the system that stores it."
+FILE_IMAGES_NOTE = ("Each one was decoded from this file; a screen it shows is what the file recorded, not this "
+                    "system's interface.")
+# The line that announces the images names what they are for the file's class (image_modality), so a video's frames
+# are announced as frames of the video; FILE_IMAGES_NOTE follows it.
+IMAGES_LINE_BY_MODALITY = {
+    MODALITY_KEYFRAMES: "{count} frame(s) taken from this video follow.",
+    MODALITY_PAGES: "{count} page(s) of this document follow.",
+    MODALITY_IMAGE: "{count} image(s) of this file follow.",
+    MODALITY_RENDERS: "{count} view(s) rendered from this 3D file follow.",
+}
+
+
+def images_line(file_class, image_count):
+    """The closing line that announces ``image_count`` images of a file of ``file_class``, with FILE_IMAGES_NOTE."""
+    return (IMAGES_LINE_BY_MODALITY[image_modality(file_class)].format(count=image_count) + " " + FILE_IMAGES_NOTE)
 SYSTEM_PROMPT = (
     "You are a digital asset librarian describing one file from an asset management system so it can be "
     "searched and classified. You receive the asset's name, description and tags, the file's path and class, "
@@ -489,7 +507,7 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
         closing = (f"No rendered views are available (render skipped: {manifest['renderSkipped']}); "
                    "describe the file from its name, attributes and context.")
     elif image_count:
-        closing = f"{image_count} rendered view(s) or frame(s) of the file follow. {FILE_IMAGES_NOTE}"
+        closing = images_line(file_class, image_count)
     elif images_withheld:
         closing = ("No rendered views are sent (this analysis model takes no image input); describe the file "
                    "from its name, attributes and context.")

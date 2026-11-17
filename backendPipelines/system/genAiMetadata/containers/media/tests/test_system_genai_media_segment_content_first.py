@@ -13,13 +13,19 @@ from test_system_genai_media_segment_handler import (
     GUARDRAIL_ENV, FakeBedrockRuntime, FakeEvents, _load, _reply, _run, _seed,
 )
 
-# D117: frames of a screen recording were taken for screenshots of the system that stores the video. The window
-# prompt now says the frames are the video's own, also when they show a software screen.
+# D117: frames of a screen recording of the VAMS web application were read as context about the system. The window
+# prompt says the frames are taken from the video and that a software screen in them, an asset management
+# application like this one included, is what the video recorded; the earlier wording ("not screenshots of the
+# system that stores it") is gone.
 FRAMES_ARE_THE_VIDEO = (
-    "The frames come from the video itself, not screenshots of the system that stores it: when they show a "
-    "software window, web page or other user interface, the video records that screen, so the description names "
-    "the kind of application or screen and what it shows. ")
-FRAMES_NOTE = "They are the video's own frames, not screenshots of the system that stores it."
+    "The frames are taken from the video itself and the pipeline sends nothing else, so you are never shown the "
+    "interface of the system you work for: a screen in a frame, an asset management application like this one "
+    "included, is what the video recorded. When the frames show a software screen (a window, web page, dashboard "
+    "or other user interface), the window is a screen recording: say so, name the kind of application, and describe "
+    "what its screens show. The asset name and the whole video's values never override what the frames show. ")
+FRAMES_NOTE = ("Each one was decoded from the video; a screen it shows is what the video recorded, not this system's "
+               "interface.")
+EARLIER_WORDING = "not screenshots of the system that stores it"
 SYSTEM_CONTENT_FIRST = (
     "The asset's name and the whole video's title, category and description are context: they may describe the "
     "upload, a project or a test rather than this window, so do not present them as the window's content. "
@@ -79,7 +85,7 @@ class TestTheFramesAreTheVideosOwn:
         module = _load(monkeypatch, _seed(FakeS3()), bedrock, FakeEvents())
         _run(module)
         system = bedrock.calls[0]["system"][0]["text"]
-        assert FRAMES_ARE_THE_VIDEO in system
+        assert FRAMES_ARE_THE_VIDEO in system and EARLIER_WORDING not in system
         assert (system.index("must name what the frames of this window show. ") < system.index(FRAMES_ARE_THE_VIDEO)
                 < system.index("When the frames show little you can name"))
 
@@ -97,5 +103,5 @@ class TestTheFramesAreTheVideosOwn:
         _run(module)
         content = bedrock.calls[0]["messages"][0]["content"]
         plain, guarded = content[0]["text"], content[1]["guardContent"]["text"]["text"]
-        assert FRAMES_NOTE in plain and FRAMES_NOTE not in guarded and "screenshots" not in guarded
+        assert FRAMES_NOTE in plain and FRAMES_NOTE not in guarded and "decoded from the video" not in guarded
         assert FRAMES_ARE_THE_VIDEO in bedrock.calls[0]["system"][0]["text"]

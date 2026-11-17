@@ -153,20 +153,23 @@ FILE_CLASS_PHRASES: Dict[str, str] = {
 
 # Content first, as in the whole-file analysis (lambda/generateMetadata.py CONTENT_FIRST_SYSTEM_TEXT): the asset's
 # name and the whole video's values are context, and the window's fields name what its frames show. The frames are
-# the video's own, also when they show a software screen (D117).
+# taken from the video, and a software screen in one is what the video recorded (D117).
 SEGMENT_CONTENT_FIRST_TEXT = (
     "The asset's name and the whole video's title, category and description are context: they may describe the "
     "upload, a project or a test rather than this window, so do not present them as the window's content. "
     "The description, keywords, objects and actions must name what the frames of this window show. "
-    "The frames come from the video itself, not screenshots of the system that stores it: when they show a "
-    "software window, web page or other user interface, the video records that screen, so the description names "
-    "the kind of application or screen and what it shows. "
+    "The frames are taken from the video itself and the pipeline sends nothing else, so you are never shown the "
+    "interface of the system you work for: a screen in a frame, an asset management application like this one "
+    "included, is what the video recorded. When the frames show a software screen (a window, web page, dashboard "
+    "or other user interface), the window is a screen recording: say so, name the kind of application, and describe "
+    "what its screens show. The asset name and the whole video's values never override what the frames show. "
     "When the frames show little you can name, say so plainly rather than describe that context as the window's "
     "content. "
 )
 SEGMENT_CONTENT_FIRST_INSTRUCTION = ("The asset name and the whole video's title, category and description are "
-                                     "context; describe what these frames show. They are the video's own frames, "
-                                     "not screenshots of the system that stores it.")
+                                     "context; describe what these frames show. Each one was decoded from the "
+                                     "video; a screen it shows is what the video recorded, not this system's "
+                                     "interface.")
 SEGMENT_SYSTEM_PROMPT = (
     "You are a digital asset librarian describing one time window of a video from an asset management system "
     "so the video can be found by what happens in that window. You receive the asset's name, the file's type "
