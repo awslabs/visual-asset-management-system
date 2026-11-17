@@ -13,24 +13,24 @@ dependencies = [
     "opensearch-py (==2.7.1)",
     "casbin (==1.36.0)",
     "locked-dict (==2023.10.22)",
-    "boto3 (==1.43.89)",
-    "botocore (==1.43.89)",
+    "boto3 (==1.43.126)",
+    "botocore (==1.43.126)",
     "urllib3 (>=2.6.0,<3)"
 ]
 
 [tool.poetry]
 
 [tool.poetry.group.dev.dependencies]
-pytest = "9.0.3"
+pytest = "9.2.0"
 flake8 = "6.0.0"
-coverage = "7.1.0"
-pytest-mock = "3.12.0"
-moto = "5.1.0"
+coverage = "7.17.2"
+pytest-mock = "3.17.0"
+moto = "5.2.5"
 pytest-watch = "4.2.0"
 pytest-xdist = "3.8.0"
 mypy = "1.0"
-boto3 = "1.43.89"
-botocore = "1.43.89"
+boto3 = "1.43.126"
+botocore = "1.43.126"
 geojson = "3.2.0"
 joserfc = "1.7.6"
 pyjwt = { extras = ["crypto"], version = "2.15.1" }

@@ -27,7 +27,7 @@ import botocore.session
 import pytest
 
 VECTOR_API_FLOOR = (1, 43, 64)
-PINNED_VERSION = "1.43.89"
+PINNED_VERSION = "1.43.126"
 
 _BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
