@@ -33,6 +33,7 @@ Reference: https://github.com/beersandrew/usd-thumbnail-generator
 
 import io
 import os
+import re
 import zipfile
 import numpy as np
 import pyvista as pv
@@ -574,6 +575,9 @@ def _diffuse_texture(prim):
 
 
 _UV_NAMES = ("st", "UVMap", "st0", "texCoord_0", "Texture_uv", "uv")
+# A role-less two-component primvar is taken as a UV set only under a name that reads as one.
+_UV_SET_NAME = re.compile(r"^(st|uv|uvmap|map|texcoord)_?\d+$", re.IGNORECASE)
+_UV_SET_SCALAR_TYPES = ("float2", "double2", "half2")
 
 
 def _uv_primvar(prim, preferred, time):
@@ -590,14 +594,20 @@ def _uv_primvar(prim, preferred, time):
 
 
 def _other_texture_coordinate_primvars(prim, named):
-    """Names of the prim's texture coordinate array primvars that ``named`` does not list, sorted."""
+    """Names of the prim's UV-set array primvars that ``named`` does not list, sorted: those typed as
+    texture coordinates (``texCoord2f[]``), and role-less two-component ones (``float2[]``) whose name
+    reads as a UV set (``st_0``, ``uv1``, ``map1``), as some exporters write them."""
     from pxr import UsdGeom
 
     found = []
     for primvar in UsdGeom.PrimvarsAPI(prim).GetPrimvarsWithValues():
         type_name = primvar.GetTypeName()
         name = str(primvar.GetPrimvarName())
-        if type_name.isArray and type_name.role == "TextureCoordinate" and name not in named:
+        if not type_name.isArray or name in named:
+            continue
+        if type_name.role == "TextureCoordinate" or (
+                not type_name.role and str(type_name.scalarType) in _UV_SET_SCALAR_TYPES
+                and _UV_SET_NAME.match(name)):
             found.append(name)
     return sorted(found)
 

@@ -241,7 +241,7 @@ The USD handler walks the composed stage with `Usd.PrimRange(..., Usd.TraverseIn
 
 Each prim's colour comes from, in order: the diffuse texture of the `UsdUVTexture` connected to the bound `UsdPreviewSurface`'s `diffuseColor`; that input's constant value; when the bound material has no `UsdPreviewSurface`, its NVIDIA MDL shader (below); the `displayColor` primvar (indices applied; constant, uniform, vertex/varying and faceVarying interpolation averaged onto vertices). A prim with no colour in a stage where others are coloured gets a neutral grey. Other textures of the material (normal, roughness, occlusion) are never used as colour.
 
-1. Extracts UV coordinates from the primvar the texture's `UsdPrimvarReader` names, else a common name (`st`, `UVMap`, `st0`, `texCoord_0`, `Texture_uv`, `uv`), else the mesh's first other `texCoord2f[]` primvar by name (for example `st_0`)
+1. Extracts UV coordinates from the primvar the texture's `UsdPrimvarReader` names, else a common name (`st`, `UVMap`, `st0`, `texCoord_0`, `Texture_uv`, `uv`), else the mesh's first other UV set by name: a `texCoord2f[]` primvar, or a `float2[]` one named like a UV set (for example `st_0`)
 2. Traverses `MaterialBindingAPI` -> `UsdPreviewSurface` -> `diffuseColor` -> `UsdUVTexture` to find the texture file
 3. Loads the texture from the path USD resolved against the layer that authored it, only from inside the input's local asset directory, or from inside a USDZ archive (zip extraction), at most 1,024 pixels on its long side (a JPEG is decoded at a reduced scale, another format is decoded and reduced)
 4. Bakes texture colors to per-vertex RGB data for rendering

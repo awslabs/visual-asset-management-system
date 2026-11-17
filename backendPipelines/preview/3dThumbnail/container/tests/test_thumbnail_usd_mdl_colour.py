@@ -119,7 +119,7 @@ def Scope "Looks"
         _assert_close(_rgb(usd_handler.load(path)), [[200, 100, 0]] * 3)
 
     @pytest.mark.parametrize("uv_sets", [
-        ["st_0"],              # the warehouse forklifts' layout
+        ["st_0"],              # an exporter's set typed as texture coordinates
         ["st_1", "st_0"],      # several sets: the first by name is sampled
         ["map1"],
     ])
@@ -134,10 +134,33 @@ def Mesh "M" (prepend apiSchemas = ["MaterialBindingAPI"]) {{{tri}
 }}""" + _mdl_material("        asset inputs:diffuse_texture = @tex.png@")
         assert _rgb(usd_handler.load(_stage(tmp_path, body))) == [list(_RED)] * 3
 
-    def test_a_float2_primvar_that_is_not_a_texture_coordinate_is_not_sampled(self, tmp_path):
+    @pytest.mark.parametrize("decl", [
+        "float2[] primvars:st_0",      # the warehouse forklifts' layout: no texture-coordinate role
+        "float2[] primvars:st_1",
+        "float2[] primvars:UV2",
+        "double2[] primvars:map1",
+    ])
+    def test_a_role_less_uv_set_named_as_one_is_sampled(self, tmp_path, decl):
         _texture(tmp_path / "tex.png")
         tri = _TRI.split("\n        texCoord2f[]")[0] + (
-            '\n        float2[] primvars:wind = [(0.5, 0.5), (0.5, 0.5), (0.5, 0.5)] (interpolation = "vertex")')
+            f'\n        {decl} = [(0.5, 0.5), (0.5, 0.5), (0.5, 0.5)] (interpolation = "vertex")')
+        body = f"""
+def Mesh "M" (prepend apiSchemas = ["MaterialBindingAPI"]) {{{tri}
+    rel material:binding = </Mat>
+}}""" + _mdl_material("        asset inputs:diffuse_texture = @tex.png@")
+        assert _rgb(usd_handler.load(_stage(tmp_path, body))) == [list(_RED)] * 3
+
+    @pytest.mark.parametrize("decl", [
+        "float2[] primvars:wind",       # data, not a UV set name
+        "float2[] primvars:stretch_0",
+        "float3[] primvars:st_0",       # three components
+        "int2[] primvars:uv_0",
+    ])
+    def test_a_primvar_that_is_not_a_uv_set_is_not_sampled(self, tmp_path, decl):
+        _texture(tmp_path / "tex.png")
+        values = "[(0.5, 0.5, 0.5), (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)]" if "3" in decl.split("[")[0] else (
+            "[(1, 1), (1, 1), (1, 1)]" if decl.startswith("int") else "[(0.5, 0.5), (0.5, 0.5), (0.5, 0.5)]")
+        tri = _TRI.split("\n        texCoord2f[]")[0] + f'\n        {decl} = {values} (interpolation = "vertex")'
         body = f"""
 def Mesh "M" (prepend apiSchemas = ["MaterialBindingAPI"]) {{{tri}
     rel material:binding = </Mat>
