@@ -272,10 +272,12 @@ The key named log groups are:
 -   `/aws/vendedlogs/VAMSCloudWatchVPCLogs-{hash}` — VPC flow logs (conditional on `useGlobalVpc`)
 -   `/aws/vendedlogs/VAMSCloudTrailLogs-{hash}` — AWS CloudTrail logs (conditional on `addStackCloudTrailLogs`)
 -   `aws-waf-logs-vams-{hash}` — AWS WAF request logs, one per web ACL (conditional on `useWaf`). Outside the `/aws/vendedlogs/` namespace because AWS WAF requires the `aws-waf-logs-` prefix, and the CloudFront ACL's group is in us-east-1 rather than the deployment Region
--   `/aws/vendedlogs/VAMSstateMachine-*{hash}` and `/aws/vendedlogs/VAMSStateMachine-*{hash}` — Per-pipeline state machine logs. Both spellings are in use: the CoordTransform, Metadata3dLabelingPipeline, ModelOps, RapidPipeline, CadStepAgent and VideoSopBom pipelines use the upper-case `VAMSStateMachine-`, and the remaining pipelines use `VAMSstateMachine-`. The delete commands below match on the `/aws/vendedlogs/VAMS` prefix, so they already cover both
+-   `/aws/vendedlogs/VAMSstateMachine-*{hash}` and `/aws/vendedlogs/VAMSStateMachine-*{hash}` — Per-pipeline state machine logs. Both spellings are in use: the CoordTransform, Metadata3dLabelingPipeline, ModelOps, RapidPipeline, CadStepAgent and VideoSopBom pipelines use the upper-case `VAMSStateMachine-`, and the remaining pipelines use `VAMSstateMachine-`. The commands below read each group's name from the stack, so they cover both
 -   `/aws/vendedlogs/Pipelines/*` — Per-pipeline container logs. The AWS Fargate job groups are `CoordTransform{hash}`, `Metadata3dLabelingBlenderRenderer{hash}`, `Preview3dThumbnail{hash}`, `PcPotreeViewerPDAL{hash}`, `PcPotreeViewerPotree{hash}`, `VideoSopBom{hash}` and `CadStepAgent{hash}` (conditional on the matching pipeline flag; `CadStepAgent{hash}` on the GenAI CAD STEP agent's `fargate` runtime only); the RapidPipeline and ModelOps groups are named for their container
 
-The `/aws/codebuild/` build log groups of pipelines configured with `useCodeBuild: true` are not named by VAMS; the last command block below finds and deletes them.
+A pipeline configured with `useCodeBuild: true` also leaves one build log group per AWS CodeBuild project, `/aws/codebuild/<project name>`. AWS CodeBuild creates these groups on a project's first build, so AWS CloudFormation does not delete them with the stack, and they keep the CloudWatch Logs default retention of never expire. AWS CloudFormation generates the project names, so a leftover group does not block a redeploy, and the names do not carry the stack name.
+
+The REST API stage's execution logging writes to `API-Gateway-Execution-Logs_<REST_API_ID>/api`, a log group that Amazon API Gateway creates and no stack owns, so it also stays after the stack is deleted. A redeploy creates a new REST API ID, so a leftover group does not block it.
 
 The orchestration bus audit log group's resource policy belongs to the log group and is deleted with it, so deleting one deployment does not affect another deployment's audit logging. A deployment with a provisioned Amazon OpenSearch Service domain also has one account-level CloudWatch Logs resource policy for the domain's logs (its name contains `ESLogGroupPolicy`), which stack deletion removes. To confirm that none is left behind, list the account-level policies in the Region:
 
@@ -283,92 +285,63 @@ The orchestration bus audit log group's resource policy belongs to the log group
 aws logs describe-resource-policies --query 'resourcePolicies[].policyName' --output text
 ```
 
+The prefixes of the named log groups, such as `/aws/vendedlogs/VAMS`, `/aws/vendedlogs/vamsPipelineWorkflows` and `/aws/vendedlogs/Pipelines/`, are the same for every VAMS deployment; only the hash at the end tells one deployment's groups from another's. A deletion by prefix therefore also removes the log groups of every other VAMS deployment in the same account and Region, and of any other application that names its groups under `/aws/vendedlogs/Pipelines/`. Select the groups from the AWS CloudFormation record of the deleted stack instead. AWS CloudFormation keeps that record for 90 days and addresses a deleted stack by its stack ID, which the first command below resolves, as in [Identify the key](#identify-the-key). The commands then read the resources of the stack and of every nested stack, derive the log group name of each log group, Lambda function, AWS CodeBuild project and REST API among them, and write the names that still exist in the account and Region to `vams-log-groups-to-delete.txt`. They delete nothing:
+
 ```bash
-# List VAMS-related log groups
+# Resolve the stack ID (list-stacks includes stacks deleted within the last 90 days)
+aws cloudformation list-stacks \
+    --query "StackSummaries[?StackName=='<VAMS_STACK_NAME>'].[StackId,StackStatus,CreationTime]" \
+    --output text
+
+# Read the resources of the stack and of its nested stacks, one level at a time
+echo "<VAMS_STACK_ID>" > vams-stacks.txt
+: > vams-stack-resources.txt
+while [ -s vams-stacks.txt ]; do
+    for STACK in $(cat vams-stacks.txt); do
+        aws cloudformation list-stack-resources \
+            --stack-name "${STACK}" \
+            --query 'StackResourceSummaries[].[ResourceType,PhysicalResourceId]' \
+            --output text
+    done > vams-stack-level.txt
+    cat vams-stack-level.txt >> vams-stack-resources.txt
+    awk -F '\t' '$1 == "AWS::CloudFormation::Stack" { print $2 }' vams-stack-level.txt > vams-stacks.txt
+done
+
+# Derive the log group name of each log group, Lambda function, CodeBuild project and REST API
+awk -F '\t' '
+    $1 == "AWS::Logs::LogGroup"      { print $2 }
+    $1 == "AWS::Lambda::Function"    { print "/aws/lambda/" $2 }
+    $1 == "AWS::CodeBuild::Project"  { print "/aws/codebuild/" $2 }
+    $1 == "AWS::ApiGateway::RestApi" { print "API-Gateway-Execution-Logs_" $2 "/api" }
+' vams-stack-resources.txt > vams-log-group-candidates.txt
+
+# Keep the names that exist in the account and Region (exact match only), and show them
 aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/lambda/<STACK_NAME>" \
-    --query 'logGroups[].logGroupName' --output text
+    --query 'logGroups[].logGroupName' \
+    --output text | tr '\t' '\n' > vams-account-log-groups.txt
+awk 'NR == FNR { keep[$0] = 1; next } ($0 in keep)' \
+    vams-log-group-candidates.txt vams-account-log-groups.txt > vams-log-groups-to-delete.txt
+cat vams-log-groups-to-delete.txt
+```
 
-# List all VAMS named log groups (audit, workflow, orchestration,
-# VPC, CloudTrail, and per-pipeline state machine groups)
-aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/vendedlogs/VAMS" \
-    --query 'logGroups[].logGroupName' --output text
+Read `vams-log-groups-to-delete.txt` before you delete anything. Each line names a log group of a resource in this deployment's stacks. Remove the line of any group you want to keep, such as an audit log group that your records retention requires. An empty file means that no log group of the deployment is left, or that the stack ID was not found, which the `list-stack-resources` error reports. Then delete the groups that the file lists, and no others:
 
-aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/vendedlogs/vamsPipelineWorkflows" \
-    --query 'logGroups[].logGroupName' --output text
-
-# Delete Lambda log groups
-for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/lambda/<STACK_NAME>" \
-    --query 'logGroups[].logGroupName' --output text); do
-    echo "Deleting log group ${LG}..."
-    aws logs delete-log-group --log-group-name "${LG}"
-done
-
-# Delete all VAMS named vendedlogs groups (audit, orchestration bus,
-# VPC flow logs, per-pipeline state machine logs). Includes the conditional
-# CloudTrail (VAMSCloudTrailLogs) and VPC (VAMSCloudWatchVPCLogs) groups.
-for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/vendedlogs/VAMS" \
-    --query 'logGroups[].logGroupName' --output text); do
-    echo "Deleting log group ${LG}..."
-    aws logs delete-log-group --log-group-name "${LG}"
-done
-
-# Delete the workflow execution log group
-for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/vendedlogs/vamsPipelineWorkflows" \
-    --query 'logGroups[].logGroupName' --output text); do
-    echo "Deleting log group ${LG}..."
-    aws logs delete-log-group --log-group-name "${LG}"
-done
-
-# Delete container pipeline log groups (Fargate jobs, RapidPipeline, ModelOps), if present
-for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/vendedlogs/Pipelines/" \
-    --query 'logGroups[].logGroupName' --output text); do
-    echo "Deleting log group ${LG}..."
-    aws logs delete-log-group --log-group-name "${LG}"
-done
-
-# Delete API Gateway access log groups (if present)
-for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/apigateway/<STACK_NAME>" \
-    --query 'logGroups[].logGroupName' --output text); do
+```bash
+# Delete the log groups listed in vams-log-groups-to-delete.txt
+for LG in $(cat vams-log-groups-to-delete.txt); do
     echo "Deleting log group ${LG}..."
     aws logs delete-log-group --log-group-name "${LG}"
 done
 ```
 
-A pipeline configured with `useCodeBuild: true` also leaves one build log group per AWS CodeBuild project, `/aws/codebuild/<project name>`. AWS CodeBuild creates these groups on a project's first build, so AWS CloudFormation does not delete them with the stack, and they keep the CloudWatch Logs default retention of never expire. AWS CloudFormation generates the project names, so a leftover group does not block a redeploy, and the names do not carry the stack name. Read them from the AWS CloudFormation record of the deleted stack and its nested stacks, using the stack ID resolved as in [Identify the key](#identify-the-key):
+The stack record holds the resources the stack had when it was deleted. A Lambda function that an earlier update replaced, or that an earlier deployment of the same stack name created, left its log group under a function name that the record does not hold. AWS CloudFormation generates these function names from the stack name, so list the Lambda log groups whose names begin with it. The list can also include the groups of another deployment whose stack name begins with the same characters, so delete a group from it only by its full name:
 
 ```bash
-# Collect the CodeBuild project names from the stack and every nested stack
-# (list-stack-resources reads a deleted stack by its stack ID for 90 days)
-STACKS="<VAMS_STACK_ID>"
-PROJECTS=""
-while [ -n "${STACKS}" ]; do
-    NESTED=""
-    for STACK in ${STACKS}; do
-        PROJECTS="${PROJECTS} $(aws cloudformation list-stack-resources \
-            --stack-name "${STACK}" \
-            --query "StackResourceSummaries[?ResourceType=='AWS::CodeBuild::Project'].PhysicalResourceId" \
-            --output text)"
-        NESTED="${NESTED} $(aws cloudformation list-stack-resources \
-            --stack-name "${STACK}" \
-            --query "StackResourceSummaries[?ResourceType=='AWS::CloudFormation::Stack'].PhysicalResourceId" \
-            --output text)"
-    done
-    STACKS="${NESTED}"
-done
+aws logs describe-log-groups \
+    --log-group-name-prefix "/aws/lambda/<VAMS_STACK_NAME>-" \
+    --query 'logGroups[].logGroupName' --output text
 
-# Delete the build log group of each project (a project that never ran a build has none)
-for PROJECT in ${PROJECTS}; do
-    echo "Deleting log group /aws/codebuild/${PROJECT}..."
-    aws logs delete-log-group --log-group-name "/aws/codebuild/${PROJECT}"
-done
+aws logs delete-log-group --log-group-name "<LOG_GROUP_NAME>"
 ```
 
 The GenAI CAD STEP agent on its `agentcore` runtime also leaves log groups the stack never owned: Amazon Bedrock AgentCore creates `/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT` for each runtime the deployment had, so stack deletion does not remove them. Their names begin with the runtime name, `vams_cad_step_agent_<hash>`, which other VAMS deployments in the same account share except for the hash. Delete only the groups whose hash matches the runtime recorded in `vams-cad-agent-runtimes.txt`:
@@ -381,7 +354,7 @@ aws logs describe-log-groups \
 
 # Delete those of this deployment
 for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/bedrock-agentcore/runtimes/<CAD_RUNTIME_NAME>" \
+    --log-group-name-prefix "/aws/bedrock-agentcore/runtimes/<CAD_RUNTIME_NAME>-" \
     --query 'logGroups[].logGroupName' --output text); do
     echo "Deleting log group ${LG}..."
     aws logs delete-log-group --log-group-name "${LG}"
