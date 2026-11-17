@@ -121,12 +121,6 @@ describe("CSP AWS service-host wildcard, every partition", () => {
         const newBytes = wildcard.length * WILDCARD_DIRECTIVES.length;
         // The wildcard is shorter than the regional S3 host it replaces.
         expect(newBytes).toBeLessThan(oldS3Bytes(partition));
-        // eslint-disable-next-line no-console
-        console.log(
-            `[csp wildcard size] ${partition}: s3 entries ${oldS3Bytes(
-                partition
-            )} -> ${newBytes} bytes, policy ${csp.length}/${CAP(partition)}`
-        );
     });
 
     test.each(partitions)(
@@ -153,7 +147,6 @@ describe("CSP AWS service-host wildcard, every partition", () => {
                 }
                 // Not wider than the suffix: the bare suffix, a lookalike and a public suffix stay out.
                 for (const host of [suffix, `evil-${suffix}`, "example.com", "s3.example.eu"]) {
-                    if (host === "example.com" && suffix === "amazonaws.com") continue;
                     expect(directive(csp, d).some((src) => hostSourceMatches(src, host))).toBe(
                         false
                     );
