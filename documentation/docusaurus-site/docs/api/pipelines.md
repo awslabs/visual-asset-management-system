@@ -1095,6 +1095,7 @@ VAMS submits work to AWS Deadline Cloud. This is ideal for render-farm style bat
 
 -   Asynchronous only. A task token callback is mandatory, so `waitForCallback` is always enabled.
 -   The callback reports completion back to the Step Functions workflow.
+-   The optional job settings take the ranges Deadline Cloud `CreateJob` accepts: `deadlineCloud.priority` an integer from 0 to 100 (50 when absent), and `deadlineCloud.maxRetriesPerTask` and `deadlineCloud.maxFailedTasksCount` each an integer from 0 to 2147483647. A value outside its range, a fractional number, a boolean or text that is not a whole number is rejected with `400`, for example `deadlineCloud.priority must be an integer from 0 to 100`.
 
 :::warning[Deployment gate]
 `DeadlineCloud` is selectable only when the deployment enables `app.pipelines.deadlineCloudExecutionTypeEnabled` (default `false`). Create and update reject the type with `400` on a deployment that has it off. It is unavailable in the GovCloud and EU Sovereign partitions. See the [configuration reference](../deployment/configuration-reference.md).

@@ -13,6 +13,9 @@ All notable changes to this project will be documented in this file. See [standa
 ### Bug Fixes
 
 -   **Web** Fixed a file manager selection made with Ctrl- or Shift-click while the file list was still loading: when the next page of files arrived, every item but the first one clicked was dropped, so an action such as Export or Download got a smaller selection than the one shown. ([#1497](https://github.com/awslabs/visual-asset-management-system/issues/1497))
+-   **Pipelines** A DeadlineCloud pipeline whose priority, max retries per task or max failed tasks count is fractional, a boolean or outside the range AWS Deadline Cloud accepts (priority 0 to 100, the two counts 0 to 2,147,483,647) is refused with `400` and a message that names the range, instead of answering `500` for a fractional value or saving a value that fails every workflow run at job creation. ([#1582](https://github.com/awslabs/visual-asset-management-system/issues/1582), [#1581](https://github.com/awslabs/visual-asset-management-system/issues/1581))
+    -   Note: a boolean such as `true`, which earlier saved and ran as priority 1, is refused too; send the number instead. ([#1582](https://github.com/awslabs/visual-asset-management-system/issues/1582))
+    -   Note: a workflow that uses a DeadlineCloud pipeline saved earlier with an out-of-range value is refused when its state machine is next built; set the pipeline's value within the range. ([#1581](https://github.com/awslabs/visual-asset-management-system/issues/1581))
 
 ### Chores
 
