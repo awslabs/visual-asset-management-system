@@ -293,7 +293,6 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                                                 variant="primary"
                                                 onClick={onCommitChanges}
                                                 disabled={true}
-                                                ariaLabel="Commit all changes"
                                             >
                                                 <Icon
                                                     name={mode === "online" ? "upload" : "check"}
@@ -306,7 +305,6 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                                             variant="primary"
                                             onClick={onCommitChanges}
                                             disabled={!canCommit || loading}
-                                            ariaLabel="Commit all changes"
                                         >
                                             <Icon name={mode === "online" ? "upload" : "check"} />{" "}
                                             Commit Changes ({changesCount.total})

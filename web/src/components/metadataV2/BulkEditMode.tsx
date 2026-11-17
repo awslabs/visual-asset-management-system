@@ -514,17 +514,12 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
                                     <Button
                                         iconName="upload"
                                         onClick={() => setShowImportModal(true)}
-                                        ariaLabel="Import from CSV"
                                     >
                                         Import CSV
                                     </Button>
 
                                     {/* Export CSV */}
-                                    <Button
-                                        iconName="download"
-                                        onClick={handleExportCSV}
-                                        ariaLabel="Export to CSV"
-                                    >
+                                    <Button iconName="download" onClick={handleExportCSV}>
                                         Export CSV
                                     </Button>
 

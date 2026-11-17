@@ -7,16 +7,18 @@
  * The Asset Metadata buttons are named by their visible labels (#1591, WCAG 2.5.3 Label in Name).
  *
  * "Add Row" (the metadata table's toolbar and empty state, both Bulk Edit toolbars and the Bulk Edit
- * empty state) was named "Add new row", and "Schema Only" was named "Filter schema fields only", so a
- * speech-input user saying the label they see could not reach the button. Each button's accessible name
- * now contains its visible text.
+ * empty state) was named "Add new row", "Schema Only" was named "Filter schema fields only", "Clear
+ * Filters" was named "Clear all filters", "Commit Changes (n)" was named "Commit all changes", and Bulk
+ * Edit's "Import CSV" and "Export CSV" were named "Import from CSV" and "Export to CSV", so a speech-input
+ * user saying the label they see could not reach the button. Each button's accessible name now contains
+ * its visible text.
  *
  * The row and the value inputs are stubbed so this file never loads `MapMetadataPicker` (react-map-gl is
  * ESM-only under Jest).
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import MetadataTable from "./MetadataTable";
 import BulkEditMode from "./BulkEditMode";
 import MetadataSearchFilter from "./MetadataSearchFilter";
@@ -72,7 +74,7 @@ const row = {
 
 const noop = () => undefined;
 
-const renderTable = (rows: MetadataRowState[]) =>
+const renderTable = (rows: MetadataRowState[], { hasChanges = false, canCommit = false } = {}) =>
     render(
         <MetadataTable
             rows={rows}
@@ -88,8 +90,8 @@ const renderTable = (rows: MetadataRowState[]) =>
             onCommitChanges={noop}
             onCancelAllChanges={noop}
             onRefresh={noop}
-            hasChanges={false}
-            canCommit={false}
+            hasChanges={hasChanges}
+            canCommit={canCommit}
         />
     );
 
@@ -104,9 +106,29 @@ const renderBulk = (rows: MetadataRowState[], mode: "online" | "offline") =>
         />
     );
 
+/** A button's visible label: its text without a trailing count such as " (1)". */
+const labelOf = (element: Element) =>
+    (element.textContent || "")
+        .replace(/\s*\(\d+\)$/, "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+const renderFilter = () =>
+    render(
+        <MetadataSearchFilter
+            onSearchChange={noop}
+            onTypeFilter={noop}
+            onSchemaFilter={noop}
+            totalRows={2}
+            filteredRows={2}
+        />
+    );
+
 /** Every button that shows `label`, each checked to be named by it. */
 const expectNamedByLabel = (label: string) => {
-    const buttons = screen.getAllByText(label).map((text) => text.closest("button"));
+    const buttons = screen
+        .getAllByText((_, element) => element?.tagName === "BUTTON" && labelOf(element) === label)
+        .map((element) => element.closest("button"));
     expect(buttons.length).toBeGreaterThan(0);
     for (const button of buttons) {
         expect(button).not.toBeNull();
@@ -142,16 +164,40 @@ describe("Asset Metadata buttons are named by their visible labels (#1591)", () 
         expectNamedByLabel("Add Row");
     });
 
+    it.each(["online", "offline"] as const)("the Bulk Edit toolbar's Import CSV, %s", (mode) => {
+        renderBulk([row], mode);
+        expectNamedByLabel("Import CSV");
+    });
+
+    it.each(["online", "offline"] as const)("the Bulk Edit toolbar's Export CSV, %s", (mode) => {
+        renderBulk([row], mode);
+        expectNamedByLabel("Export CSV");
+    });
+
+    it("the table's Commit Changes, with changes to commit", () => {
+        renderTable([{ ...row, hasChanges: true, editValue: "iron" }], {
+            hasChanges: true,
+            canCommit: true,
+        });
+        expectNamedByLabel("Commit Changes");
+    });
+
+    it("the table's Commit Changes, held back by a validation error", () => {
+        renderTable([{ ...row, hasChanges: true, editValue: "", metadataSchemaRequired: true }], {
+            hasChanges: true,
+            canCommit: false,
+        });
+        expectNamedByLabel("Commit Changes");
+    });
+
     it("the search filter's Schema Only", () => {
-        render(
-            <MetadataSearchFilter
-                onSearchChange={noop}
-                onTypeFilter={noop}
-                onSchemaFilter={noop}
-                totalRows={2}
-                filteredRows={2}
-            />
-        );
+        renderFilter();
         expectNamedByLabel("Schema Only");
+    });
+
+    it("the search filter's Clear Filters", () => {
+        renderFilter();
+        fireEvent.click(screen.getByRole("button", { name: "Schema Only" }));
+        expectNamedByLabel("Clear Filters");
     });
 });

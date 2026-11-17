@@ -110,11 +110,7 @@ export const MetadataSearchFilter: React.FC<MetadataSearchFilterProps> = ({
 
                     {hasActiveFilters && (
                         <div style={{ flex: "0 0 auto" }}>
-                            <Button
-                                onClick={handleClearFilters}
-                                iconName="close"
-                                ariaLabel="Clear all filters"
-                            >
+                            <Button onClick={handleClearFilters} iconName="close">
                                 Clear Filters
                             </Button>
                         </div>
