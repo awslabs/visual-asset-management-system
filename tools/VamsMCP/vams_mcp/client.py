@@ -378,6 +378,9 @@ class VamsClient:
             "total_display": total_display,
             "returned": len(compact),
             "results": compact,
+            # A keyword answer's warnings (truncated:time: the search's time bound stopped the permission
+            # checks before the page was full, #1590), only when it sent any.
+            **({"warnings": list(raw["warnings"])} if isinstance(raw, dict) and raw.get("warnings") else {}),
         }
 
 

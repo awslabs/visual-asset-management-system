@@ -303,7 +303,7 @@ All search commands support three output formats via `--output-format` (default 
 -   **csv** — Comma-separated rows written directly to standard output, with list values joined by semicolons. Suitable for redirecting to a file.
 
 :::note[Minimum totals]
-Search totals count only the records you are permitted to open. When some of your permission rules can only be counted as a minimum, the API reports `hits.total.relation` as `gte`, and table output shows the total with a trailing plus sign (for example `Found 120+ assets`): at least that many records match. The JSON output is the API response unchanged, so `hits.total.value` stays a number and `hits.total.relation` carries `eq` or `gte`. The same marker appears in the VAMS MCP server's search results as `total_display`, with `total_is_lower_bound` set to `true`.
+Search totals count only the records you are permitted to open. When some of your permission rules can only be counted as a minimum, the API reports `hits.total.relation` as `gte`, and table output shows the total with a trailing plus sign (for example `Found 120+ assets`): at least that many records match. The JSON output is the API response unchanged, so `hits.total.value` stays a number and `hits.total.relation` carries `eq` or `gte`. The same marker appears in the VAMS MCP server's search results as `total_display`, with `total_is_lower_bound` set to `true`. When the search's time limit stopped the permission checks before the page was full, table output also prints `Warning: truncated:time: ...` under the results: the page shows fewer records than match; run the search again or narrow it. JSON output carries it in `warnings`.
 :::
 
 ---

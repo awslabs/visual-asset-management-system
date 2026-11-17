@@ -42,6 +42,7 @@ import { initializePluginRegistry } from "../../visualizerPlugin";
 import { resolveSearchModeCase, effectiveSearchMode } from "./utils/searchMode";
 import { EMPTY_NLP_RESPONSE, pageNlpResult, withNlpResultTotal } from "./utils/nlpResultPaging";
 import {
+    keywordWarningTexts,
     nlpSearchedNoDatabase,
     rareNlpWarningText,
     rareNlpWarningTexts,
@@ -92,16 +93,16 @@ const resultCountMessage = (result: SearchResponse) => {
 };
 
 /**
- * What a finished search announces to screen readers: its count, then, for a natural-language answer,
- * the text of the Search notice shown above the results ("Found 0 results. You don't have access to
- * any database this search covers. Ask your administrator for access."). The count alone when the
- * answer has no rare warning, and always for a keyword answer.
+ * What a finished search announces to screen readers: its count, then the text of the Search notice
+ * shown above the results ("Found 0 results. You don't have access to any database this search
+ * covers. Ask your administrator for access."). The count alone when the answer has no notice: a
+ * natural-language answer without a rare warning, a keyword answer without a keyword warning.
  */
 const searchAnnouncement = (result: SearchResponse, naturalLanguage: boolean) => {
     const count = resultCountMessage(result);
     const notice = naturalLanguage
         ? rareNlpWarningText((result as Partial<NlpSearchResponse>).warnings)
-        : "";
+        : keywordWarningTexts(result.warnings).join(" ");
     return notice ? `${count}. ${notice}` : count;
 };
 
@@ -189,12 +190,10 @@ const ModernSearchContainer: React.FC<
     // "Found N results", followed by the Search notice's text when the answer has one. Cleared when
     // the next search starts, so the same count is announced again.
     const [countAnnouncement, setCountAnnouncement] = useState("");
-    // The natural-language answer whose Search notice the user dismissed. The notice is hidden only
-    // while that answer is on screen; the next answer (a new search, Clear all filters, a mode or view
-    // switch) shows its own notice again.
-    const [dismissedNoticeAnswer, setDismissedNoticeAnswer] = useState<NlpSearchResponse | null>(
-        null
-    );
+    // The natural-language or keyword answer whose Search notice the user dismissed. The notice is hidden
+    // only while that answer is on screen; the next answer (a new search, Clear all filters, a mode or
+    // view switch) shows its own notice again.
+    const [dismissedNoticeAnswer, setDismissedNoticeAnswer] = useState<SearchResponse | null>(null);
     // The number of the newest search. Each search takes the next one, and only the newest applies its
     // answer, its error and the end of the loading state: an older search that answers later (a page
     // change, a refresh or an auto-refresh still running) never replaces a newer one. Clear all
@@ -617,18 +616,26 @@ const ModernSearchContainer: React.FC<
     const currentPage = 1 + Math.floor(searchState.pagination.from / preferences.pageSize);
     const pageCount = getPageCount(getPagedResultCount(displayedResult), preferences.pageSize);
 
-    // The Search notice above the results: the rare warnings of the natural-language answer on screen,
-    // in the page's own words. Derived from that answer, so it can't outlive it: a new search, Clear all
-    // filters or a mode switch replaces the answer, and a keyword answer never has one. Dismissing it
+    // The Search notice above the results, in the page's own words: the rare warnings of the
+    // natural-language answer on screen, or the keyword warnings of the keyword answer on screen
+    // (truncated:time, a page the search's time bound cut short). Derived from that answer, so it can't
+    // outlive it: a new search, Clear all filters or a mode switch replaces the answer. Dismissing it
     // hides it for that answer only.
+    const noticeAnswer: SearchResponse | null = !hasAnswer
+        ? null
+        : searchMode === "nlp"
+        ? nlpResult
+        : searchState.result;
     const searchNotices = useMemo(
         () =>
-            searchMode === "nlp" && answeredMode === "nlp" && nlpResult
-                ? rareNlpWarningTexts(nlpResult.warnings)
-                : [],
-        [searchMode, answeredMode, nlpResult]
+            !noticeAnswer
+                ? []
+                : searchMode === "nlp"
+                ? rareNlpWarningTexts(noticeAnswer.warnings)
+                : keywordWarningTexts(noticeAnswer.warnings),
+        [searchMode, noticeAnswer]
     );
-    const showSearchNotice = searchNotices.length > 0 && dismissedNoticeAnswer !== nlpResult;
+    const showSearchNotice = searchNotices.length > 0 && dismissedNoticeAnswer !== noticeAnswer;
 
     // The columns the list renders: the fallback set without OpenSearch (only the fields a
     // natural-language hit carries), the user's set otherwise, with relevance first in NLP mode.
@@ -918,7 +925,7 @@ const ModernSearchContainer: React.FC<
                             </Box>
                         )}
 
-                        {/* The rare natural-language warnings, in the page rather than a toast: the
+                        {/* The Search notice (rare natural-language or keyword warnings), in the page rather than a toast: the
                             toast stack sits over the title row's view switch and Clear all filters. */}
                         {showSearchNotice && (
                             <Box padding={{ bottom: "m" }}>
@@ -928,7 +935,7 @@ const ModernSearchContainer: React.FC<
                                     statusIconAriaLabel="Info"
                                     dismissible
                                     dismissAriaLabel="Dismiss search notice"
-                                    onDismiss={() => setDismissedNoticeAnswer(nlpResult)}
+                                    onDismiss={() => setDismissedNoticeAnswer(noticeAnswer)}
                                     data-testid="search-notice"
                                 >
                                     {searchNotices.map((text) => (

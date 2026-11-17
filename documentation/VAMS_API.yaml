@@ -20868,6 +20868,20 @@ components:
                     type: integer
                     nullable: true
                     description: "Sum of the str_databaseid aggregation buckets (or str_assetid when that aggregation is absent), counted the same way as aggregations, so it never exceeds the records the caller can open. Null when no aggregation buckets are returned."
+                warnings:
+                    type: array
+                    description: "Advisories of an otherwise successful answer; empty for a complete one. The keyword search sends code truncated:time when its time bound stopped the per-hit permission checks before the requested page was full: the page lists fewer records than match and hits.total.relation is gte."
+                    items:
+                        type: object
+                        properties:
+                            code:
+                                type: string
+                                enum: ["truncated:time"]
+                            message:
+                                type: string
+                        required:
+                            - code
+                            - message
             required:
                 - took
                 - timed_out

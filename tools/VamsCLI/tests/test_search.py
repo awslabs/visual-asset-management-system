@@ -1734,6 +1734,46 @@ class TestSearchLowerBoundTotal:
             assert json.loads(result.output) == response
             assert "12+" not in result.output
 
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ['search', 'assets', '-q', 'pump'],
+            ['search', 'files', '-q', 'pump'],
+            ['search', 'simple', '-q', 'pump'],
+        ],
+    )
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_table_output_prints_a_time_bound_warning(
+        self, mock_is_feature_enabled, cli_runner, search_command_mocks, args
+    ):
+        """#1590: a keyword page the search's time bound cut short reports a minimum total and a
+        truncated:time warning, which the table output prints under the results."""
+        message = ("The search reached its time limit before every match on this page was checked, so the "
+                   "page may list fewer records than match and the total is a minimum. Try again, or narrow "
+                   "the search.")
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.return_value = False
+            response = dict(self._result("gte"), warnings=[{"code": "truncated:time", "message": message}])
+            mocks['api_client'].search_query.return_value = response
+            mocks['api_client'].search_simple.return_value = response
+
+            result = cli_runner.invoke(cli, args)
+
+            assert result.exit_code == 0, result.output
+            assert "12+" in result.output
+            assert f"Warning: truncated:time: {message}" in result.output
+            assert result.output.index("Pump") < result.output.index("Warning: truncated:time")
+
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_table_output_without_warnings_prints_none(self, mock_is_feature_enabled, cli_runner,
+                                                       search_command_mocks):
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.return_value = False
+            mocks['api_client'].search_query.return_value = dict(self._result("eq"), warnings=[])
+            result = cli_runner.invoke(cli, ['search', 'assets', '-q', 'pump'])
+            assert result.exit_code == 0, result.output
+            assert "Warning:" not in result.output
+
 
 def _feature_switches(*on):
     return lambda feature, *_: feature in on

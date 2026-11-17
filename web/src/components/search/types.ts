@@ -165,6 +165,12 @@ export interface SearchResponse {
         };
         hits: SearchResult[];
     };
+    /**
+     * Advisories of the answer, `{code, message}`. A keyword answer sends `truncated:time` when the
+     * time bound stopped the permission checks before the page was full (utils/nlpWarnings.ts
+     * KEYWORD_WARNING_CODES); the natural-language codes are listed at NlpSearchWarning.
+     */
+    warnings?: NlpSearchWarning[];
     aggregations?: {
         [key: string]: {
             buckets: Array<{

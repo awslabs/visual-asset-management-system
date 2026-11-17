@@ -8,8 +8,10 @@
  * message, which is written for API and CLI callers. A code it does not know shows the message.
  */
 import {
+    KEYWORD_WARNING_CODES,
     NLP_WINDOW_WARNING_CODES,
     NO_ACCESSIBLE_DATABASE_CODE,
+    keywordWarningTexts,
     nlpSearchedNoDatabase,
     nlpWarningText,
     rareNlpWarningText,
@@ -139,5 +141,32 @@ describe("nlpSearchedNoDatabase", () => {
         expect(nlpSearchedNoDatabase([])).toBe(false);
         expect(nlpSearchedNoDatabase(undefined)).toBe(false);
         expect(nlpSearchedNoDatabase(null)).toBe(false);
+    });
+});
+
+describe("keywordWarningTexts (#1590)", () => {
+    const TIME_TEXT =
+        "The search ran out of time before every match on this page was checked, so it may show fewer results than match. Try again, or narrow the search.";
+
+    it("shows a keyword answer's truncated:time warning in the page's words, once, never the API's message", () => {
+        expect(KEYWORD_WARNING_CODES.has("truncated:time")).toBe(true);
+        const apiMessage =
+            "The search reached its time limit before every match on this page was checked";
+        expect(
+            keywordWarningTexts([
+                { code: "truncated:time", message: apiMessage },
+                { code: "truncated:time", message: apiMessage },
+            ])
+        ).toEqual([TIME_TEXT]);
+    });
+
+    it("ignores the natural-language codes and unknown codes in a keyword answer", () => {
+        expect(
+            keywordWarningTexts([
+                warning("databases:none_accessible"),
+                { code: "future:code", message: "A new kind of notice" },
+            ])
+        ).toEqual([]);
+        expect(keywordWarningTexts(undefined)).toEqual([]);
     });
 });

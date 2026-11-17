@@ -824,9 +824,9 @@ describe("ModernSearchContainer search modes", () => {
             expect(toastHeaders(container)).not.toContain("Search notice");
         });
 
-        it("never shows a Search notice for a keyword answer, and a mode switch brings the next natural-language notice back", async () => {
+        it("shows no Search notice for a natural-language code in a keyword answer, and a mode switch brings the next natural-language notice back", async () => {
             setFeatures(["VECTORSEARCH"]);
-            // A keyword answer carrying a warnings entry still shows no notice.
+            // A keyword answer carrying a natural-language warnings entry still shows no notice.
             (searchAssets as jest.Mock).mockResolvedValue([
                 true,
                 {
@@ -871,6 +871,33 @@ describe("ModernSearchContainer search modes", () => {
             await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(2), { timeout: 3000 });
             await waitFor(() => expect(noticeLines(container)).toEqual([ignoredText]));
             expect(toastHeaders(container)).toEqual([]);
+        });
+
+        it("shows a keyword page the time bound cut short in the Search notice, with a minimum count (#1590)", async () => {
+            const timeMessage =
+                "The search reached its time limit before every match on this page was checked, so the page may list fewer records than match and the total is a minimum. Try again, or narrow the search.";
+            const timeText =
+                "The search ran out of time before every match on this page was checked, so it may show fewer results than match. Try again, or narrow the search.";
+            setFeatures([]);
+            (searchAssets as jest.Mock).mockImplementation(async () => [
+                true,
+                {
+                    ...keywordRows,
+                    hits: { ...keywordRows.hits, total: { value: 50, relation: "gte" } },
+                    warnings: [{ code: "truncated:time", message: timeMessage }],
+                },
+            ]);
+            const { container } = renderContainer();
+            await screen.findByText("Keyword Alpha");
+            await waitFor(() => expect(noticeLines(container)).toEqual([timeText]));
+            const announcement = `Found 50+ results. ${timeText}`;
+            await waitFor(() => expect(countAnnouncement().textContent).toBe(announcement));
+            expect(toastHeaders(container)).toEqual([]);
+            expect(screen.queryByText(timeMessage)).toBeNull();
+
+            // Dismissed for this answer only.
+            dismissNotice(container);
+            await waitFor(() => expect(searchNotice(container)).toBeNull());
         });
     });
 

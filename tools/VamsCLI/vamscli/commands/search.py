@@ -203,6 +203,24 @@ def _format_total(result: Dict[str, Any]) -> str:
     return f"{value}+" if lower_bound else f"{value}"
 
 
+def _warning_lines(result: Dict[str, Any]) -> List[str]:
+    """``Warning: <code>: <message>`` lines for the response's ``warnings``, in the API's order.
+
+    The routes send ``{code, message}``; the message is what a person can act on. The keyword routes
+    send ``truncated:time`` when the search's time bound stopped the permission checks before the page
+    was full; the natural-language route sends its own codes.
+    """
+    lines = []
+    for warning in (result.get("warnings") if isinstance(result, dict) else None) or []:
+        if isinstance(warning, dict):
+            code, message = warning.get("code", ""), warning.get("message", "")
+            text = f"{code}: {message}" if code and message else (code or message)
+        else:
+            text = str(warning)
+        lines.append(f"Warning: {text}")
+    return lines
+
+
 def _format_table_output(result: Dict[str, Any], entity_type: str) -> str:
     """
     Format search results as a table.
@@ -643,6 +661,7 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
                 """Format assets search results for CLI display."""
                 lines = [f"\nFound {total} assets\n"]
                 lines.append(_format_table_output(data, "asset"))
+                lines.extend(_warning_lines(data))
                 return '\n'.join(lines)
             
             output_result(
@@ -815,6 +834,7 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
                 """Format files search results for CLI display."""
                 lines = [f"\nFound {total} files\n"]
                 lines.append(_format_table_output(data, "file"))
+                lines.extend(_warning_lines(data))
                 return '\n'.join(lines)
             
             output_result(
@@ -983,6 +1003,7 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
                 """Format simple search results for CLI display."""
                 lines = [f"\nFound {total} results\n"]
                 lines.append(_format_table_output(data, "mixed"))
+                lines.extend(_warning_lines(data))
                 return '\n'.join(lines)
             
             output_result(
@@ -1241,14 +1262,7 @@ def nlp(ctx: click.Context, query: str, entity_type: str, databases: tuple, incl
             def format_nlp_table(data):
                 """Format natural-language search results for CLI display."""
                 lines = [f"\nFound {total}{bound} {noun}\n", _format_nlp_table_output(data)]
-                for warning in data.get("warnings", []) or []:
-                    # The route sends {code, message}; the message is what a person can act on.
-                    if isinstance(warning, dict):
-                        code, message = warning.get("code", ""), warning.get("message", "")
-                        text = f"{code}: {message}" if code and message else (code or message)
-                    else:
-                        text = str(warning)
-                    lines.append(f"Warning: {text}")
+                lines.extend(_warning_lines(data))
                 return '\n'.join(lines)
 
             output_result(

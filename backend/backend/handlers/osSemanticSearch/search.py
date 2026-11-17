@@ -64,18 +64,35 @@ OPENSEARCH_MAX_RESULT_WINDOW = 10000
 # window can hold fewer readable hits than the requested page needs. The search then fetches a window
 # up to SEARCH_FILL_GROWTH_FACTOR times larger, until the page is full, the indexes have no more
 # candidates, or a bound is reached: OPENSEARCH_MAX_RESULT_WINDOW per index, and SEARCH_FILL_MAX_SECONDS
-# from the first fetch for the fetches and every per-hit check together. The number of windows is not
-# a bound: each window is at least twice the last and none exceeds OPENSEARCH_MAX_RESULT_WINDOW, so the
-# loop ends after a few fetches anyway. The next window is sized so its fetch and its new checks,
-# predicted from the time each has taken so far, end inside the bound; the checks stop at the bound,
-# and the answer is then the hits checked so far, in order. A search stopped by a bound reports its
-# total as a minimum. The bound sits well under the API's 29 s integration timeout; one fetch can still
-# run past it.
+# for the fetches and every per-hit check together. The number of windows is not a bound: each
+# window is at least twice the last and none exceeds OPENSEARCH_MAX_RESULT_WINDOW, so the loop ends
+# after a few fetches anyway. The next window is sized so its fetch and its new checks, predicted from
+# the time each has taken so far, end inside the bound; the checks stop at the bound, and the answer is
+# then the hits checked so far, in order. A search stopped by a bound reports its total as a minimum,
+# and one whose checks the time bound cut short also carries SEARCH_TIME_BOUND_WARNING_CODE.
+#
+# The fill bound runs from the start of the search, but a first fetch that ends late (a cold index after
+# idle hours: 10.4 s seen live, #1590) still gets SEARCH_FIRST_WINDOW_CHECK_SHARE of the bound after it
+# answers, so the hits it fetched for the requested page are checked rather than dropped unchecked; no
+# check runs past SEARCH_REQUEST_MAX_SECONDS from the start (_fill_deadline). That cap keeps the whole
+# request inside the API's 29 s integration timeout (API_GATEWAY_DEFAULT_TIMEOUT_SECONDS, the smallest
+# the deployment configuration allows) with 9 s left for the work after the bound: the response
+# processing, the batched refused-hit audit writes and the answer itself. One fetch started inside the
+# bound can still run past it.
 SEARCH_FILL_GROWTH_FACTOR = 4
 SEARCH_FILL_MAX_SECONDS = 10.0
+SEARCH_FIRST_WINDOW_CHECK_SHARE = 0.5
+SEARCH_REQUEST_MAX_SECONDS = 20.0
 # File hits' parent rows are read in groups of this many while the hits are checked, so the bound is
 # checked between reads rather than after one read of a whole window
 SEARCH_DECISION_CHUNK = 100
+# The warning a search answer carries when the time bound stopped the per-hit checks before the hits of
+# the requested page were all checked: the page lists fewer records than match, and the total is a minimum.
+# The same {code, message} shape as the natural-language search's warnings.
+SEARCH_TIME_BOUND_WARNING_CODE = "truncated:time"
+SEARCH_TIME_BOUND_WARNING_MESSAGE = ("The search reached its time limit before every match on this page was "
+                                     "checked, so the page may list fewer records than match and the total is "
+                                     "a minimum. Try again, or narrow the search.")
 
 # Load environment variables with error handling. The OpenSearch parameter names are optional: a
 # deployment without an OpenSearch mode sets OPENSEARCH_DISABLED and this module still imports.
@@ -2184,15 +2201,20 @@ class DualIndexResponseProcessor:
                 decided += 1
         return decided, readable
     
-    def process_dual_search_response(self, opensearch_response: Dict[str, Any], 
-                                   request: SearchRequestModel, claims_and_roles: Dict[str, Any],
-                                   authz_filters: Optional[Dict[str, SearchAuthzFilter]] = None) -> SearchResponseModel:
+    def process_dual_search_response(self, opensearch_response: Dict[str, Any],
+                                     request: SearchRequestModel, claims_and_roles: Dict[str, Any],
+                                     authz_filters: Optional[Dict[str, SearchAuthzFilter]] = None,
+                                     checks_cut_short: bool = False) -> SearchResponseModel:
         """Process dual-index search response with authorization filtering.
 
         `authz_filters` are the permission filters the queries were built with
         (apply_search_authz_filters). Without them OpenSearch's totals and aggregations are not the
         caller's, so the response carries no aggregations and its total is the number of hits that
         passed the per-hit check.
+
+        `checks_cut_short` (from _search_until_page_full) says the time bound stopped the per-hit checks
+        before the requested page was full: the total is then reported as a minimum whatever the filters,
+        and the answer carries SEARCH_TIME_BOUND_WARNING_CODE.
         """
         try:
             raw_hits = opensearch_response.get("hits", {}).get("hits", [])
@@ -2239,7 +2261,14 @@ class DualIndexResponseProcessor:
             total, relation, counts_usable = self._caller_total(
                 opensearch_response, request, authz_filters, len(raw_hits), len(filtered_hits), policy_refusals
             )
+            warnings = []
+            if checks_cut_short:
+                # The page lists fewer records than match: never an exact total (#1590).
+                relation = "gte"
+                warnings.append({"code": SEARCH_TIME_BOUND_WARNING_CODE,
+                                 "message": SEARCH_TIME_BOUND_WARNING_MESSAGE})
             response_data["hits"]["total"] = {"value": total, "relation": relation}
+            response_data["warnings"] = warnings
 
             aggregations = response_data.get("aggregations")
             if isinstance(aggregations, dict):
@@ -2696,10 +2725,20 @@ def _search_with_authz_fallback(search_manager: "DualIndexSearchManager", query_
         return response, None, (fallback[0], fallback[1])
 
 
+def _fill_deadline(started: float, first_fetch_done: float) -> float:
+    """When the fill loop's fetches and checks stop (``time.monotonic()`` seconds): SEARCH_FILL_MAX_SECONDS
+    after the search started, but at least SEARCH_FIRST_WINDOW_CHECK_SHARE of that bound after the first
+    fetch answered, and never more than SEARCH_REQUEST_MAX_SECONDS after the start (#1590)."""
+    first_window = min(first_fetch_done + SEARCH_FILL_MAX_SECONDS * SEARCH_FIRST_WINDOW_CHECK_SHARE,
+                       started + SEARCH_REQUEST_MAX_SECONDS)
+    return max(started + SEARCH_FILL_MAX_SECONDS, first_window)
+
+
 def _search_until_page_full(search_manager: "DualIndexSearchManager", query_builder: Any,
                             response_processor: "DualIndexResponseProcessor", asset_query: Dict[str, Any],
                             file_query: Dict[str, Any], entity_types: List[str], requested: int,
-                            claims_and_roles: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Dict[str, SearchAuthzFilter]]]:
+                            claims_and_roles: Dict[str, Any]
+                            ) -> Tuple[Dict[str, Any], Optional[Dict[str, SearchAuthzFilter]], bool]:
     """Search, then fetch larger windows while fewer than ``requested`` (from + size) hits pass the
     per-hit check and the indexes hold more candidates, within the SEARCH_FILL_* bounds.
 
@@ -2708,13 +2747,19 @@ def _search_until_page_full(search_manager: "DualIndexSearchManager", query_buil
     ``_ordered_prefix_length``) and, when the time bound stops the checks, only those checked, so
     every page sliced from it lists the same records in the same order as a request for one larger
     page would. A larger window OpenSearch refuses ends the search with the last answer it gave.
+
+    Returns ``(response, authz_filters, checks_cut_short)``: the last is True when the time bound left the
+    requested page short, by stopping the checks or by leaving no time for a larger window below the
+    per-index cap (the answer then reports a minimum total and SEARCH_TIME_BOUND_WARNING_CODE).
     """
     started = time.monotonic()
-    deadline = started + SEARCH_FILL_MAX_SECONDS
     response, authz_filters, (asset_q, file_q) = _search_with_authz_fallback(
         search_manager, query_builder, asset_query, file_query, entity_types
     )
-    fetch_seconds = time.monotonic() - started
+    first_fetch_done = time.monotonic()
+    fetch_seconds = first_fetch_done - started
+    deadline = _fill_deadline(started, first_fetch_done)
+    checks_cut_short = False
     fetch_hits = len(response.get("hits", {}).get("hits", []))
     decide_seconds = 0.0
     decisions = 0
@@ -2737,6 +2782,9 @@ def _search_until_page_full(search_manager: "DualIndexSearchManager", query_buil
         decisions += response_processor.decision_count - decided_before
         if checked < ordered:
             hits["hits"] = raw_hits[:checked]
+            # The page is short only when the check stopped before the requested page's hits were all
+            # decided; a stop past them leaves the page whole, and its total as the filters give it.
+            checks_cut_short = readable < requested
             logger.info(f"Search stopped at the time bound after {windows} window(s), with {checked} of "
                         f"{fetched} hits checked and {readable} of {requested} readable; the total is "
                         "reported as a minimum")
@@ -2754,6 +2802,9 @@ def _search_until_page_full(search_manager: "DualIndexSearchManager", query_buil
                 fetch_seconds / max(fetch_hits, 1), decide_seconds / max(decisions, 1),
             )
         if larger_window is None:
+            # Below the per-index cap, no window fits only because the time left is too short: the time
+            # bound cut a page that is not full short, as when it stops the checks.
+            checks_cut_short = window < OPENSEARCH_MAX_RESULT_WINDOW and readable < requested
             logger.info(f"Search stopped after {windows} window(s) of up to {window} hits with {readable} "
                         f"of {requested} readable; the total is reported as a minimum")
             break
@@ -2777,7 +2828,7 @@ def _search_until_page_full(search_manager: "DualIndexSearchManager", query_buil
     if windows > 1:
         response["aggregations"] = aggregations if aggregations is not None else {}
         response["took"] = took
-    return response, authz_filters
+    return response, authz_filters, checks_cut_short
 
 
 def _searched_indexes(entity_types: List[str]) -> List[str]:
@@ -2917,7 +2968,7 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
             asset_query, file_query = query_builder.build_dual_index_queries(request_model, claims_and_roles)
 
             # Execute dual-index search
-            opensearch_response, authz_filters = _search_until_page_full(
+            opensearch_response, authz_filters, checks_cut_short = _search_until_page_full(
                 search_manager, query_builder, response_processor, asset_query, file_query,
                 request_model.entityTypes or ["asset", "file"],
                 (request_model.from_ or 0) + (request_model.size or 100), claims_and_roles
@@ -2925,7 +2976,8 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
 
             # Process response with authorization filtering
             processed_response = response_processor.process_dual_search_response(
-                opensearch_response, request_model, claims_and_roles, authz_filters=authz_filters
+                opensearch_response, request_model, claims_and_roles, authz_filters=authz_filters,
+                checks_cut_short=checks_cut_short
             )
 
         _log_search(event, request_model, processed_response)
@@ -2979,7 +3031,7 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
             asset_query, file_query = simple_query_builder.build_simple_dual_index_queries(request_model, claims_and_roles)
 
             # Execute dual-index search
-            opensearch_response, authz_filters = _search_until_page_full(
+            opensearch_response, authz_filters, checks_cut_short = _search_until_page_full(
                 search_manager, simple_query_builder, response_processor, asset_query, file_query,
                 request_model.entityTypes or ["asset", "file"],
                 (request_model.from_ or 0) + (request_model.size or 100), claims_and_roles
@@ -3000,7 +3052,8 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
 
             # Process response with authorization filtering
             processed_response = response_processor.process_dual_search_response(
-                opensearch_response, compatible_request, claims_and_roles, authz_filters=authz_filters
+                opensearch_response, compatible_request, claims_and_roles, authz_filters=authz_filters,
+                checks_cut_short=checks_cut_short
             )
 
         _log_search(event, request_model, processed_response)

@@ -475,6 +475,15 @@ class AggregationModel(BaseModel, extra='ignore'):
     filtered_databaseid: Optional[Dict[str, Any]] = None
     filtered_tags: Optional[Dict[str, Any]] = None
 
+
+class SearchWarningModel(BaseModel, extra='ignore'):
+    """One warning of a search answer, in the `{code, message}` shape of the natural-language search's
+    warnings. The keyword search sends `truncated:time` when its time bound stopped the per-hit checks
+    before the requested page was full (#1590)."""
+    code: str
+    message: str
+
+
 class SearchResponseModel(BaseModel, extra='ignore', allow_population_by_field_name=True):
     """Response model for search operations.
 
@@ -489,6 +498,8 @@ class SearchResponseModel(BaseModel, extra='ignore', allow_population_by_field_n
     hits: SearchHitsModel
     aggregations: Optional[Dict[str, AggregationModel]] = None
     aggregationTotal: Optional[int] = None  # True total from aggregation bucket sums
+    # Empty for a complete answer; see SearchWarningModel.
+    warnings: List[SearchWarningModel] = Field(default_factory=list)
 
 ######################## Index Mapping Models ##########################
 

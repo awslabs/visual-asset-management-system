@@ -149,7 +149,7 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `searchPageHeading(page, databaseId?)`                        | The search page h1 every view shares (`… and Files`, `… for <databaseId>`)                         |
 | `searchCountBadge(page)`, `searchCountBadgeText(total)`       | The h1's result-count badge (any count, `+` or not) and its exact text for a `hits.total`          |
 | `searchSubmitButton(page)`                                    | The Search view's Search button, scoped to the query band (the switch has a `Search` too)          |
-| `searchNotice(page)`                                          | The dismissible Search notice above the results (rare natural-language warnings)                   |
+| `searchNotice(page)`                                          | The dismissible Search notice above the results (rare warnings, keyword `truncated:time`)          |
 | `readFeaturesEnabled(page)`                                   | Cached secure-config switches; `null` if none cached                                               |
 | `expectSearchRendered(page)`                                  | Rows, "No matches", or "No … to display" — any sandbox                                             |
 | `findNestedAssetFile(page, options)`                          | First file inside a folder via the API, plus its stored key when known, or `null`                  |
@@ -234,7 +234,7 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
     or exercise them when it returns `""`. Never assume the admin role.
 -   **The search page announces a finished search's count, it does not toast it.** "Found N
     results" goes to a visually hidden polite live region, followed by the Search notice's text
-    when the answer has one. Rare natural-language warnings show in that **Search notice**, a
+    when the answer has one. Rare natural-language warnings, and a keyword page the time bound cut short (`truncated:time`), show in that **Search notice**, a
     dismissible Alert above the results (`searchNotice(page)`), never in a toast; `truncated:window`
     and `segments:window_full` raise none, and the page states them under the results. Count
     toasts as a snapshot right after the answer: a toast hides after 5 s, so a polled

@@ -29,10 +29,29 @@ const RARE_WARNING_TEXT: Record<string, () => string> = {
         "Some filters aren't available for natural-language search in this deployment and weren't applied.",
     "truncated:targets": () =>
         `Not every ${Synonyms.database} you can access was searched. Choose a ${Synonyms.database} in the filters to search it fully.`,
+    // A keyword answer's: the time bound stopped the permission checks before the page was full.
+    "truncated:time": () =>
+        "The search ran out of time before every match on this page was checked, so it may show fewer results than match. Try again, or narrow the search.",
 };
 
 /** The warning an answer carries when none of the databases it covers is one the user can access. */
 export const NO_ACCESSIBLE_DATABASE_CODE = "databases:none_accessible";
+
+/**
+ * The codes a keyword (`POST /search`) answer sends. `truncated:time`: the search's time bound stopped the
+ * per-hit permission checks before the page was full, so the page lists fewer records than match and the
+ * total is a minimum (#1590). A keyword answer shows only these in the Search notice.
+ */
+export const KEYWORD_WARNING_CODES = new Set(["truncated:time"]);
+
+/** The Search notice lines of a keyword answer: each keyword warning's text, once each, in the API's order. */
+export function keywordWarningTexts(warnings: NlpSearchWarning[] | null | undefined): string[] {
+    const texts = (warnings ?? [])
+        .filter((w) => KEYWORD_WARNING_CODES.has(w.code))
+        .map(nlpWarningText)
+        .filter((text) => text.length > 0);
+    return Array.from(new Set(texts));
+}
 
 /**
  * True when a natural-language answer searched no database: its warnings carry

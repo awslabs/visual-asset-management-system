@@ -970,7 +970,7 @@ against any sandbox. The core spec for a page outside the orchestration module i
     with its reason (named by `aria-describedby`), and "Checking your permissions." until the
     allowed-routes check answers. Branch on `actionDisabledReason(button)`; never assume the admin role.
 -   **A finished search's count is announced, not toasted.** "Found N results" goes to a hidden polite
-    live region, followed by the Search notice's text. Rare natural-language warnings show in the
+    live region, followed by the Search notice's text. Rare natural-language warnings, and a keyword page the time bound cut short (`truncated:time`), show in the
     dismissible **Search notice** above the results (`searchNotice(page)`), never a toast. Count toasts
     as a snapshot right after the answer (a toast hides after 5 s); poll the notice.
 -   **A failed search is a toast, not a missing feature.** A `503` shows a **Search failed** toast with

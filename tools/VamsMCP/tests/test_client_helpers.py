@@ -410,3 +410,15 @@ def test_search_enabled_follows_the_noopensearch_feature_switch():
 
     client._profile.has_feature_switch.return_value = False
     assert client.search_enabled() is True
+
+
+def test_trim_search_results_keeps_a_keyword_answers_warnings():
+    """#1590: a keyword page the search's time bound cut short carries truncated:time; the trimmed
+    result keeps it beside the minimum total, and an answer without warnings gains no key."""
+    warning = {"code": "truncated:time", "message": "The search reached its time limit ..."}
+    raw = {"hits": {"total": {"value": 50, "relation": "gte"}, "hits": []}, "warnings": [warning]}
+    trimmed = VamsClient.trim_search_results(raw)
+    assert trimmed["warnings"] == [warning]
+    assert trimmed["total_display"] == "50+"
+    assert "warnings" not in VamsClient.trim_search_results(
+        {"hits": {"total": {"value": 1, "relation": "eq"}, "hits": []}, "warnings": []})
