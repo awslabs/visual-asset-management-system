@@ -1,0 +1,35 @@
+{
+  "bandCount": 1,
+  "bigTiff": false,
+  "blockHeight": 128,
+  "blockWidth": 128,
+  "compression": "deflate",
+  "crs": "EPSG:3857",
+  "dataType": "uint8",
+  "file": "epsg3857.tif",
+  "footprint": "Polygon",
+  "footprintNote": null,
+  "georeferenced": true,
+  "height": 256,
+  "isCog": true,
+  "layout": "tiled",
+  "nativeBounds": [
+    -13630000.0,
+    4544400.0,
+    -13604400.0,
+    4570000.0
+  ],
+  "nodata": null,
+  "overviewCount": 1,
+  "pixelIsPoint": false,
+  "pixelSizeX": 100.0,
+  "pixelSizeY": 100.0,
+  "rotated": false,
+  "wgs84Bounds": [
+    -122.4403732,
+    37.7516397,
+    -122.2104045,
+    37.933246
+  ],
+  "width": 256
+}
