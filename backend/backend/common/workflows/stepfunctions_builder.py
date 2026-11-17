@@ -818,10 +818,11 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
         return job_parameters
 
     @staticmethod
-    def _int_setting(field_name: str, setting: str, value: Any) -> int:
-        # Checked here as well as at pipeline save: a pipeline saved before the API checked the
-        # CreateJob ranges can still hold a value createJob refuses, and every run would fail there.
-        return deadline_job_setting(setting, value, f"DeadlineCloud pipeline setting {field_name}")
+    def _int_setting(pipeline_id: str, setting: str, value: Any) -> int:
+        # A stored pipeline is not re-validated when it is read, and createJob refuses a value
+        # outside its range, so the range is checked here too.
+        return deadline_job_setting(
+            setting, value, f"DeadlineCloud pipeline {pipeline_id}: deadlineCloud.{setting}")
 
     @classmethod
     def _client_token_expression(cls, state_name: str, payload: Dict[str, Any]) -> str:
@@ -865,13 +866,14 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
                 "deadlineTemplate on the pipeline resource.")
 
         priority = user_resource.get('deadlinePriority')
+        pipeline_id = pipeline.get('pipelineId', '')
         parameters = {
             "FarmId": farm_id,
             "QueueId": queue_id,
             "Template": template,
             "TemplateType": template_type,
             # 0 is a valid (lowest) priority — only fall back when unset/blank.
-            "Priority": (self._int_setting('deadlinePriority', 'priority', priority)
+            "Priority": (self._int_setting(pipeline_id, 'priority', priority)
                          if priority not in (None, '') else self.DEFAULT_PRIORITY),
             # Identifies the VAMS pipeline step in the Deadline monitor.
             "NameOverride": state_name,
@@ -884,12 +886,10 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
             parameters["StorageProfileId"] = user_resource['deadlineStorageProfileId']
         if user_resource.get('deadlineMaxRetriesPerTask') not in (None, ''):
             parameters["MaxRetriesPerTask"] = self._int_setting(
-                'deadlineMaxRetriesPerTask', 'maxRetriesPerTask',
-                user_resource['deadlineMaxRetriesPerTask'])
+                pipeline_id, 'maxRetriesPerTask', user_resource['deadlineMaxRetriesPerTask'])
         if user_resource.get('deadlineMaxFailedTasksCount') not in (None, ''):
             parameters["MaxFailedTasksCount"] = self._int_setting(
-                'deadlineMaxFailedTasksCount', 'maxFailedTasksCount',
-                user_resource['deadlineMaxFailedTasksCount'])
+                pipeline_id, 'maxFailedTasksCount', user_resource['deadlineMaxFailedTasksCount'])
 
         state = {
             "Type": "Task",

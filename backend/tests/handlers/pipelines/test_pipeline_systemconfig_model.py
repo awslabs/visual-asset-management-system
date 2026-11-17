@@ -208,11 +208,12 @@ class TestDeadlineCloudResourceValidation:
                 executionConfig=self._config(waitForCallback="Disabled"))
 
     @pytest.mark.parametrize("field", _DEADLINE_SETTINGS)
-    @pytest.mark.parametrize("value", [2.5, 2.0, True, False, "2.5", "abc", " ", [1], {"n": 1}])
+    @pytest.mark.parametrize("value", [2.5, 2.0, True, False, "2.5", "abc", " ", [1], {"n": 1},
+                                       float("inf"), float("-inf"), float("nan")])
     def test_non_integer_setting_rejected_with_its_range(self, field, value):
         # #1582: 2.5 passed int() and then failed the DynamoDB write, a 500. Any float is refused
         # (DynamoDB cannot store one, and the form never sends one), as are a bool and text that is
-        # not a whole number.
+        # not a whole number. JSON Infinity parses to a float that int() raised OverflowError on (500).
         with pytest.raises(ValidationError, match=_range_message(field)):
             self._create(self._with(field, value))
 
