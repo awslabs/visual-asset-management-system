@@ -8,7 +8,7 @@ import json
 import re
 import zipfile
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 RENDER_BRANCH = "MEDIA"
 
@@ -19,6 +19,7 @@ CLASS_DOCUMENT = "document"
 CLASS_TEXT = "text"
 CLASS_DATA = "data"
 CLASS_TILES3D = "tiles3d"
+CLASS_RASTER = "raster"
 CLASS_OTHER = "other"
 
 # The classes constructPipeline may route here. `tiles3d` is also reached by promotion from `text`;
@@ -26,7 +27,7 @@ CLASS_OTHER = "other"
 # file turns out not to be text at all) and takes the generic extractor, which probes the bytes for a
 # format this image reads and otherwise records the file's own facts.
 MEDIA_CLASSES = (CLASS_IMAGE, CLASS_VIDEO, CLASS_AUDIO, CLASS_DOCUMENT, CLASS_TEXT, CLASS_DATA, CLASS_TILES3D,
-                 CLASS_OTHER)
+                 CLASS_RASTER, CLASS_OTHER)
 
 # Extension -> fileClass, lower-case with the leading dot. `.svg` is `image` but takes the vector path;
 # a `.json` or `.geojson` (JSON_SNIFFED_EXTENSIONS) enters as `text` and is reclassified from its parsed root:
@@ -48,6 +49,7 @@ MEDIA_EXTENSION_CLASSES: Dict[str, str] = {
     ".inf": CLASS_TEXT, ".log": CLASS_TEXT, ".py": CLASS_TEXT, ".js": CLASS_TEXT, ".ts": CLASS_TEXT, ".sql": CLASS_TEXT,
     ".sh": CLASS_TEXT, ".ps1": CLASS_TEXT, ".ipynb": CLASS_TEXT, ".html": CLASS_TEXT, ".htm": CLASS_TEXT,
     ".csv": CLASS_DATA, ".fcs": CLASS_DATA, ".xlsx": CLASS_DATA, ".gpkg": CLASS_DATA, ".lyrx": CLASS_DATA,
+    ".tif": CLASS_RASTER, ".tiff": CLASS_RASTER,
 }
 
 # Entries the pipeline's classifier treats differently from this table, each with its reason: `.webp` is a
@@ -81,6 +83,7 @@ PROMOTION_SOURCE_KEYS: Dict[str, Tuple[str, ...]] = {
     "sys_data": ("columnCount", "rowCount", "columns"),
     "sys_tiles3d": ("geometricError", "tileCount", "region"),
     "sys_geo": ("featureCount", "geometryTypes", "footprint"),
+    "sys_raster": ("width", "height", "bandCount", "isCog", "crs", "georeferenced", "derivedCog"),
 }
 
 # Vision-model input bounds: Anthropic models on Bedrock accept 3.75 MB per image and downsize anything past
@@ -212,6 +215,9 @@ class ExtractContext:
     # The state's `renderImages`: false when the GenAI layer is off, so no extractor produces the PNGs
     # (normalised image, keyframes, page rasters) that exist only as analysis-model input.
     render_images: bool = True
+    # Raster only: a call that answers whether the source object of a `<source>.cog.tif` file exists beside it (one
+    # S3 HEAD). None where the handler binds none.
+    derived_source_exists: Optional[Callable[[], bool]] = None
 
 
 @dataclass

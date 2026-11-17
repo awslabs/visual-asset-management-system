@@ -26,6 +26,7 @@ SUPPORTED_MEDIA_EXTENSIONS = {
     "text": {".txt", ".md", ".json", ".geojson", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".inf", ".log",
              ".py", ".js", ".ts", ".sql", ".sh", ".ps1", ".ipynb", ".html", ".htm"},
     "data": {".csv", ".fcs", ".xlsx", ".gpkg", ".lyrx"},
+    "raster": {".tif", ".tiff"},
 }
 # The one supported extension no viewer serves; the allow-list rule (only viewer-served extensions enter the
 # pipeline) keeps it out of the pipeline's allow list, and the image still handles it should a viewer gain it.
@@ -33,12 +34,14 @@ _NOT_A_VIEWER_EXTENSION = {".webp"}
 # Formats no viewer renders, admitted by the pipeline's ADDITIONAL_EXTENSIONS for their extracted content: the
 # office formats for their text, the ffmpeg-decodable video containers no browser plays for their stream facts,
 # the GIS containers (GeoPackage, ArcGIS Pro layer file) for their layers and extents, and the GeoJSON extension
-# for its features (sniffed like a .json).
+# for its features (sniffed like a .json), and the TIFF extensions for the header facts and footprint of a GeoTIFF.
 _OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx"}
 _UNPLAYABLE_VIDEO_EXTENSIONS = {".avi", ".flv", ".wmv"}
 _GIS_EXTENSIONS = {".gpkg", ".lyrx"}
 _GEOJSON_EXTENSIONS = {".geojson"}
-_ADDITIONAL_EXTENSIONS = _OFFICE_EXTENSIONS | _UNPLAYABLE_VIDEO_EXTENSIONS | _GIS_EXTENSIONS | _GEOJSON_EXTENSIONS
+_RASTER_EXTENSIONS = {".tif", ".tiff"}
+_ADDITIONAL_EXTENSIONS = (_OFFICE_EXTENSIONS | _UNPLAYABLE_VIDEO_EXTENSIONS | _GIS_EXTENSIONS | _GEOJSON_EXTENSIONS
+                          | _RASTER_EXTENSIONS)
 _FILE_CLASSIFIER = os.path.join(_REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "lambda", "fileClassifier.py")
 
 
@@ -67,9 +70,10 @@ REGISTRY_PROMOTION_SOURCES = {
     "sys_data": ("columnCount", "rowCount", "columns"),
     "sys_tiles3d": ("geometricError", "tileCount", "region"),
     "sys_geo": ("featureCount", "geometryTypes", "footprint"),
+    "sys_raster": ("width", "height", "bandCount", "isCog", "crs", "georeferenced", "derivedCog"),
 }
 _MEDIA_ATTRIBUTE_GROUPS = {"sys_image", "sys_media", "sys_document", "sys_text", "sys_data", "sys_tiles3d", "sys_geo",
-                           "sys_archive"}
+                           "sys_archive", "sys_raster"}
 
 
 @pytest.mark.unit

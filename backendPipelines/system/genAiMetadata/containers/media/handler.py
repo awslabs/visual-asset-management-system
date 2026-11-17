@@ -21,13 +21,14 @@ from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
 import executionLogKeys
 
-from media_extractors import audio, data, documents, generic, gis, images, office, svg, text, video
+from media_extractors import audio, data, documents, generic, gis, images, office, raster, svg, text, video
 from media_extractors.common import (
     CLASS_AUDIO,
     CLASS_DATA,
     CLASS_DOCUMENT,
     CLASS_IMAGE,
     CLASS_OTHER,
+    CLASS_RASTER,
     CLASS_TEXT,
     CLASS_TILES3D,
     CLASS_VIDEO,
@@ -105,6 +106,7 @@ _EXTRACTORS: Dict[str, Callable[[str, ExtractContext], BranchResult]] = {
     CLASS_TEXT: text.extract_text,
     CLASS_TILES3D: text.extract_text,
     CLASS_DATA: data.extract_data,
+    CLASS_RASTER: raster.extract_raster_file,
     CLASS_OTHER: generic.extract_generic,
 }
 
@@ -374,6 +376,48 @@ def list_zip_by_range(bucket: str, key: str, version_id: Optional[str], file_siz
     return result
 
 
+def raster_source_exists(client, bucket: str, key: str) -> bool:
+    """Whether the object a `<source>.cog.tif` key derives from exists beside it: one HeadObject of the latest
+    version. A missing key (or one whose latest version is a delete marker) is False; any other failure raises."""
+    source_key = key[:-len(raster.DERIVED_COG_SUFFIX)]
+    try:
+        client.head_object(Bucket=bucket, Key=source_key)
+    except ClientError as exc:
+        if str(exc.response.get("Error", {}).get("Code")) in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
+    return True
+
+
+def read_raster_by_range(bucket: str, key: str, version_id: Optional[str], file_size: int,
+                         ctx: ExtractContext) -> BranchResult:
+    """The `raster` result for a TIFF of any size, read by ranged GETs of the input at its version (the header and
+    the directories only; no pixel is fetched, and nothing is downloaded). One log line counts the GETs and the
+    bytes. A failed read is re-raised scrubbed of URLs: a request error's text may name the endpoint and its
+    query string."""
+    reader = None
+    result = None
+    try:
+        client = client_for_bucket(bucket, s3_client)
+        if raster.derived_cog_source_name(ctx.file_name):
+            ctx.derived_source_exists = lambda: raster_source_exists(client, bucket, key)
+        reader = RangedS3Reader(client, bucket, key, version_id, size=file_size or None,
+                                max_bytes=raster.RANGED_READ_MAX_BYTES, max_gets=raster.RANGED_READ_MAX_GETS)
+        result = raster.extract_raster(reader, reader.size, ctx)
+    except Exception as exc:  # noqa: BLE001 - re-raised scrubbed
+        raise MediaTaskError(f"{ctx.file_name}: the raster header could not be read by range: "
+                             f"{type(exc).__name__}: {scrub_urls(exc)}") from None
+    finally:
+        if reader is not None:
+            sys_raster = (result.attributes.get("sys_raster") if result is not None else None) or {}
+            logger.info({"message": "Raster header read by range", "fileSize": reader.size,
+                         "rangedGets": reader.gets, "bytesRead": reader.bytes_read,
+                         "read": bool(sys_raster), "isCog": sys_raster.get("isCog"),
+                         "layout": sys_raster.get("layout")})
+    result.warnings = [scrub_urls(warning) for warning in result.warnings]
+    return result
+
+
 def presign_input(bucket: str, key: str, version_id: Optional[str]) -> str:
     """A presigned GET of the input at the run's version, signed for the bucket's own Region (a presigned URL
     is honoured only there). The URL is a credential: it never reaches a log line, a warning or an error
@@ -533,6 +577,9 @@ def lambda_handler(event, context):
             # A zip container of any size is listed from its central directory by ranged reads; one whose bytes
             # carry no end-of-central-directory record takes the usual path.
             result = list_zip_by_range(bucket, key, version_id, file_size, ctx)
+        if file_class == CLASS_RASTER:
+            # A TIFF of any size: its header is read by ranged GETs, never downloaded.
+            result = read_raster_by_range(bucket, key, version_id, file_size, ctx)
         if result is None:
             result = read_input(extractor, file_class, bucket, key, version_id, file_size, detected_format, ctx,
                                 input_name=str(payload.get("relativePath") or file_name))

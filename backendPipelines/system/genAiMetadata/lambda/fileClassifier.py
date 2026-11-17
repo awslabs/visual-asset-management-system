@@ -43,6 +43,7 @@ CLASS_DOCUMENT = "document"
 CLASS_TEXT = "text"
 CLASS_DATA = "data"
 CLASS_TILES3D = "tiles3d"
+CLASS_RASTER = "raster"
 CLASS_MESH = "mesh"
 CLASS_USD = "usd"
 CLASS_CAD = "cad"
@@ -51,7 +52,7 @@ CLASS_SPLAT = "splat"
 CLASS_IFC = "ifc"
 CLASS_OTHER = "other"
 FILE_CLASSES = (CLASS_IMAGE, CLASS_VIDEO, CLASS_AUDIO, CLASS_DOCUMENT, CLASS_TEXT, CLASS_DATA,
-                CLASS_TILES3D, CLASS_MESH, CLASS_USD, CLASS_CAD, CLASS_POINTCLOUD, CLASS_SPLAT,
+                CLASS_TILES3D, CLASS_RASTER, CLASS_MESH, CLASS_USD, CLASS_CAD, CLASS_POINTCLOUD, CLASS_SPLAT,
                 CLASS_IFC, CLASS_OTHER)
 
 # The words a user types when asking for a kind of file, per class. Embedded in every file's source
@@ -64,6 +65,7 @@ FILE_CLASS_PHRASES: Dict[str, str] = {
     CLASS_TEXT: "text file",
     CLASS_DATA: "data table (spreadsheet)",
     CLASS_TILES3D: "3D Tiles tileset",
+    CLASS_RASTER: "georeferenced raster (GeoTIFF)",
     CLASS_MESH: "3D model (mesh)",
     CLASS_USD: "3D model (USD scene)",
     CLASS_CAD: "CAD model",
@@ -95,8 +97,10 @@ EXCLUDED_EXTENSIONS: Set[str] = {".mcap", ".bag", ".db3", ".ulg", ".ulog", NO_EX
 # decodes but no browser plays (keyframes and stream facts on the MEDIA branch), the GIS containers an
 # open reader in the standard library serves (a GeoPackage's layers and extents, an ArcGIS Pro layer
 # file's layer and data source; both data on the MEDIA branch), and the GeoJSON extension (RFC 7946 §12),
-# sniffed like a .json: a GeoJSON root is data on the MEDIA branch, which writes its sys_geo.
-ADDITIONAL_EXTENSIONS = (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv", ".gpkg", ".lyrx", ".geojson")
+# sniffed like a .json: a GeoJSON root is data on the MEDIA branch, which writes its sys_geo, and the TIFF extensions
+# (`raster` on the MEDIA branch: the header's facts and, for a GeoTIFF, its CRS and WGS84 footprint).
+ADDITIONAL_EXTENSIONS = (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv", ".gpkg", ".lyrx", ".geojson", ".tif",
+                         ".tiff")
 
 # Point-cloud formats no viewer renders that the 3D render image reads without Open3D (PCD in all three
 # encodings, PTX, ASCII XYZ): point cloud on the RENDER3D branch, like the viewer-served LAS/LAZ/E57.
@@ -122,7 +126,7 @@ ALLOW_LIST: List[str] = [
     ".m4a",
     ".m4v", ".md", ".mkv", ".mov", ".mp3", ".mp4", ".obj", ".off", ".ogg", ".par", ".pcd", ".pdf", ".ply",
     ".png", ".pptx", ".prt", ".ps1", ".ptx", ".py", ".sh", ".sldasm", ".sldprt", ".sog", ".splat", ".spz",
-    ".sql", ".step", ".stl", ".stp", ".svg", ".toml", ".ts", ".txt", ".usd", ".usda", ".usdc", ".usdz",
+    ".sql", ".step", ".stl", ".stp", ".svg", ".tif", ".tiff", ".toml", ".ts", ".txt", ".usd", ".usda", ".usdc", ".usdz",
     ".wav", ".webm", ".wmv", ".wrl", ".x_b", ".x_t", ".xlsx", ".xml", ".xyz", ".yaml", ".yml",
 ]
 
@@ -147,6 +151,9 @@ for _extension in (".csv", ".fcs", ".xlsx"):
 # ArcGIS Pro layer file a CIM JSON document. Both carry the data class so sys_geo.footprint promotes to `location`.
 for _extension in (".gpkg", ".lyrx"):
     EXTENSION_CLASSES[_extension] = (CLASS_DATA, BRANCH_MEDIA)
+# A TIFF is read by its header alone (no pixels): the `raster` class carries sys_raster and, for a GeoTIFF, sys_geo.
+for _extension in (".tif", ".tiff"):
+    EXTENSION_CLASSES[_extension] = (CLASS_RASTER, BRANCH_MEDIA)
 for _extension in (".glb", ".gltf", ".fbx", ".obj", ".stl"):
     EXTENSION_CLASSES[_extension] = (CLASS_MESH, BRANCH_BLENDER)
 # COLLADA renders in the 3D render image (its hardened COLLADA loader): Blender 5.0 removed its importer.
