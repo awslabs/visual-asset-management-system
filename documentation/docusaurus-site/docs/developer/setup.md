@@ -113,14 +113,14 @@ pip install -r requirements-dev.txt
 
 ### Key Dependencies
 
-| Package                 | Version | Purpose                   |
-| ----------------------- | ------- | ------------------------- |
-| `aws-lambda-powertools` | 2.36.0  | Logger, Parser, BaseModel |
-| `boto3`                 | 1.43.45 | AWS SDK                   |
-| `pydantic`              | 1.10.13 | Data validation (v1 only) |
-| `casbin`                | 1.36.0  | ABAC/RBAC authorization   |
-| `moto`                  | 5.1.0   | AWS service mocking (dev) |
-| `pytest`                | 9.0.3   | Test framework (dev)      |
+| Package                 | Version  | Purpose                   |
+| ----------------------- | -------- | ------------------------- |
+| `aws-lambda-powertools` | 2.36.0   | Logger, Parser, BaseModel |
+| `boto3`                 | 1.43.126 | AWS SDK                   |
+| `pydantic`              | 1.10.13  | Data validation (v1 only) |
+| `casbin`                | 1.36.0   | ABAC/RBAC authorization   |
+| `moto`                  | 5.2.5    | AWS service mocking (dev) |
+| `pytest`                | 9.2.0    | Test framework (dev)      |
 
 :::warning[Pydantic Version]
 VAMS uses Pydantic **v1** (1.10.x). Never install or use Pydantic v2 APIs such as `model_validator`, `model_dump`, or `ConfigDict`. These will fail at Lambda import time. See the [Backend Development](backend.md) guide for correct patterns.
