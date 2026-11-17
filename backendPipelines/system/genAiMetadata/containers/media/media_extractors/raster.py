@@ -359,6 +359,12 @@ def extract_raster(reader, size: int, ctx: ExtractContext) -> BranchResult:
     return result
 
 
+def is_georeferenced(result: BranchResult) -> bool:
+    """Whether an `extract_raster` result is a georeferenced raster, the only TIFF the raster class keeps."""
+    return result.file_class == CLASS_RASTER and (result.attributes.get("sys_raster") or {}).get(
+        "georeferenced") is True
+
+
 def _unreadable(ctx: ExtractContext, reason: str) -> BranchResult:
     """The file keeps its stored `sys_file` attributes (the `other` class); the reason is the only addition."""
     return other_fallback(ctx, reason)

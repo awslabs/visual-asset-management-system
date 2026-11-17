@@ -578,8 +578,16 @@ def lambda_handler(event, context):
             # carry no end-of-central-directory record takes the usual path.
             result = list_zip_by_range(bucket, key, version_id, file_size, ctx)
         if file_class == CLASS_RASTER:
-            # A TIFF of any size: its header is read by ranged GETs, never downloaded.
+            # A TIFF of any size: its header is read by ranged GETs, never downloaded. Only a georeferenced file
+            # keeps the raster result. Any other TIFF (a photo, a scan, an unreadable or over-limit header) takes
+            # the path it took before the raster class existed: class `other`, the generic probe, which hands a
+            # Pillow-readable file to the image extractor (sys_image, the analysis picture), and the same size
+            # bound (over INPUT_MAX_DOWNLOAD_BYTES it keeps sys_file only).
             result = read_raster_by_range(bucket, key, version_id, file_size, ctx)
+            if not raster.is_georeferenced(result):
+                result = None
+                file_class = CLASS_OTHER
+                extractor = generic.extract_generic
         if result is None:
             result = read_input(extractor, file_class, bucket, key, version_id, file_size, detected_format, ctx,
                                 input_name=str(payload.get("relativePath") or file_name))

@@ -44,7 +44,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Added:**
 
--   The SYSTEM GenAI metadata pipeline reads GeoTIFF and Cloud Optimized GeoTIFF (`.tif`, `.tiff`) headers by ranged reads: size, bands, sample type, compression, layout, overviews, `isCog`, CRS and the WGS84 footprint, written as `sys_raster` and `sys_geo`, promoted to `ext_width`, `ext_height`, `ext_is_cog`, `ext_crs`, `ext_band_count` and `ext_georeferenced`, and to the file's `location` when `EXTRACT_GEO_LOCATION` is on. A new `raster` file class carries these files and is accepted by the natural-language search file-class filter. A GeoPackage layer in an EPSG reference other than WGS84 now contributes its reprojected extent to the file's footprint. ([#1600](https://github.com/awslabs/visual-asset-management-system/issues/1600))
+-   The SYSTEM GenAI metadata pipeline reads GeoTIFF and Cloud Optimized GeoTIFF (`.tif`, `.tiff`) headers by ranged reads: size, bands, sample type, compression, layout, overviews, `isCog`, CRS and the WGS84 footprint, written as `sys_raster` and `sys_geo`, promoted to `ext_width`, `ext_height`, `ext_is_cog`, `ext_crs`, `ext_band_count` and `ext_georeferenced`, and to the file's `location` when `EXTRACT_GEO_LOCATION` is on. A new `raster` file class carries georeferenced files (a TIFF with no georeference keeps its image analysis as before) and is accepted by the natural-language search file-class filter. A GeoPackage layer in an EPSG reference other than WGS84 now contributes its reprojected extent to the file's footprint. ([#1600](https://github.com/awslabs/visual-asset-management-system/issues/1600))
 
 **Key fixes:**
 

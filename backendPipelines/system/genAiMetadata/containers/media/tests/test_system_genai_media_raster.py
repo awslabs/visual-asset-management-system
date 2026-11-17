@@ -388,13 +388,13 @@ class TestHandlerReadsByRange:
         assert s3.downloads == []
         assert s3.manifest(_AUX, _MANIFEST_KEY)["attributes"]["sys_raster"]["width"] == 1024
 
-    def test_an_unreadable_tiff_keeps_the_stored_attributes_as_other(self, s3):
+    def test_an_unreadable_tiff_takes_the_path_it_took_before_the_raster_class(self, s3):
         _seed(s3, "scene.tif", b"not a tiff at all, just text.\n" * 20)
         module = _load(s3)
         module.lambda_handler(_tiff_event("scene.tif", 600), None)
         manifest = s3.manifest(_AUX, _MANIFEST_KEY)
-        assert manifest["fileClass"] == "other" and "sys_raster" not in manifest["attributes"]
-        assert any("not a TIFF file" in warning for warning in manifest["warnings"])
+        assert manifest["fileClass"] != "raster" and "sys_raster" not in manifest["attributes"]
+        assert s3.downloads == [(_ASSETS, "a1/scene.tif", "v1")]  # the generic probe reads a downloaded copy
 
     def test_a_derived_cog_checks_its_source_with_one_head(self, s3):
         data = _bytes("cog_small_4326")
@@ -475,3 +475,91 @@ class TestHandlerReadsByRange:
         path.write_bytes(_bytes("utm33"))
         result = raster.extract_raster_file(str(path), _ctx())
         assert result.attributes["sys_raster"]["crs"] == "EPSG:32633"
+
+
+# --- a TIFF that is not a georeferenced raster keeps its behaviour from before the raster class ---------------------
+
+def _photo_tiff(width=320, height=200):
+    """A plain RGB TIFF photo with an EXIF-style description, no GeoTIFF tags."""
+    from PIL import Image
+
+    out = io.BytesIO()
+    image = Image.new("RGB", (width, height), (200, 120, 40))
+    image.putpixel((3, 3), (1, 2, 3))
+    image.save(out, format="TIFF", description="holiday scan")
+    return out.getvalue()
+
+
+def _run(s3, name, data, state_class, size=None):
+    s3.objects.clear()
+    s3.objects[(_RUN, _CONFIG_KEY)] = json.dumps(_CONFIG_BODY).encode()
+    s3.puts.clear()
+    s3.downloads.clear()
+    s3.ranged_gets.clear()
+    s3.objects[(_AUX, _MANIFEST_KEY)] = json.dumps(_pre_manifest(state_class)).encode()
+    s3.objects[(_ASSETS, f"a1/{name}")] = data
+    event = _event(name, state_class, "image/tiff")
+    event["fileSize"] = size if size is not None else len(data)
+    module = _load(s3)
+    response = module.lambda_handler(event, None)
+    manifest = s3.manifest(_AUX, _MANIFEST_KEY)
+    renders = sorted(key for (bucket, key) in s3.objects if bucket == _AUX and key.endswith(".png"))
+    return module, response, manifest, renders
+
+
+@pytest.fixture
+def plain_s3():
+    return FakeS3()
+
+
+class TestPlainTiffKeepsItsBehaviour:
+    @pytest.mark.parametrize("make", [_photo_tiff, lambda: _bytes("no_georef")], ids=["photo", "plain-cog"])
+    def test_a_tiff_with_no_georeference_gets_what_the_other_class_gave_it(self, plain_s3, make):
+        data = make()
+        # Before the raster class a .tif was classified `other` and read by the generic probe.
+        _m, base_response, base, base_renders = _run(plain_s3, "scan.tif", data, "other")
+        _m, response, manifest, renders = _run(plain_s3, "scan.tif", data, "raster")
+        assert base["fileClass"] == "image" and "sys_image" in base["attributes"] and base_renders
+        assert manifest == base
+        assert renders == base_renders
+        assert response["fileClass"] == base_response["fileClass"] == "image"
+        assert "sys_raster" not in manifest["attributes"]
+
+    def test_the_photo_has_the_image_extractors_facts_and_a_render(self, plain_s3):
+        data = _photo_tiff()
+        _m, _r, manifest, renders = _run(plain_s3, "scan.tif", data, "raster")
+        sys_image = manifest["attributes"]["sys_image"]
+        assert (sys_image["width"], sys_image["height"], sys_image["format"]) == (320, 200, "TIFF")
+        assert manifest["renderSkipped"] is None and renders
+
+    def test_a_georeferenced_tiff_still_takes_the_raster_path_and_is_not_downloaded(self, plain_s3):
+        data = _bytes("cog_4326")
+        module, _r, manifest, renders = _run(plain_s3, "scene.tif", data, "raster")
+        assert manifest["fileClass"] == "raster" and "sys_image" not in manifest["attributes"]
+        assert plain_s3.downloads == [] and renders == []
+
+    def test_a_non_georeferenced_tiff_over_the_download_bound_keeps_sys_file_only_as_before(self, plain_s3, tmp_path):
+        path = tmp_path / "scan.tif"
+        with open(path, "wb") as handle:
+            handle.write(_bytes("no_georef"))
+            handle.truncate(4 * 1024 ** 3)
+        plain_s3.objects.clear()
+        results = {}
+        for state_class in ("other", "raster"):
+            plain_s3.files.clear()
+            plain_s3.objects[(_RUN, _CONFIG_KEY)] = json.dumps(_CONFIG_BODY).encode()
+            plain_s3.objects[(_AUX, _MANIFEST_KEY)] = json.dumps(_pre_manifest(state_class)).encode()
+            plain_s3.files[(_ASSETS, "a1/scan.tif")] = str(path)
+            plain_s3.downloads.clear()
+            plain_s3.ranged_gets.clear()
+            event = _event("scan.tif", state_class, "image/tiff")
+            event["fileSize"] = os.path.getsize(path)
+            _load(plain_s3).lambda_handler(event, None)
+            assert plain_s3.downloads == []  # never downloaded whole
+            results[state_class] = (plain_s3.manifest(_AUX, _MANIFEST_KEY), len(plain_s3.ranged_gets))
+        base, base_gets = results["other"]
+        manifest, gets = results["raster"]
+        assert manifest == base and base_gets == 0
+        assert manifest["fileClass"] == "other" and "sys_image" not in manifest["attributes"]
+        assert any("exceeds" in warning for warning in manifest["warnings"])
+        assert 1 <= gets <= 2  # only the header probe is new
