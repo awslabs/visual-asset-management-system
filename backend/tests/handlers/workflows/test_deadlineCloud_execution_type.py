@@ -231,8 +231,8 @@ class TestDeadlineCloudTaskBuilder:
 
     def test_stored_out_of_range_priority_never_reaches_createjob(self):
         # A stored pipeline can hold a value the API refuses, as a DynamoDB Decimal. Mapping the
-        # stored record keeps working (the pipeline can still be read, edited and fingerprinted),
-        # and building its createJob state refuses it.
+        # stored record keeps working (the pipeline can still be read and edited), and building its
+        # createJob state refuses it.
         from decimal import Decimal
         from backend.backend.common.workflows import workflowAsl as wa
         record = {"pipelineId": "renderPipeline", "databaseId": "db1",
@@ -241,10 +241,11 @@ class TestDeadlineCloudTaskBuilder:
                                                         "queueId": "queue-" + "0" * 32,
                                                         "template": "{}",
                                                         "priority": Decimal("500")}}}
-        assert wa.pipeline_asl_fingerprint(record)
+        mapped = wa.to_asl_pipeline_dict(record)
+        assert json.loads(mapped["userProvidedResource"])["deadlinePriority"] == 500
         with pytest.raises(ValueError, match=re.escape(
                 f"{_PIPE}deadlineCloud.priority must be an integer from 0 to 100")):
-            _build_state(pipeline=wa.to_asl_pipeline_dict(record))
+            _build_state(pipeline=mapped)
 
     def test_payload_without_pipeline_execution_id_ref(self):
         # Legacy path contexts without the ref still build (no VamsPipelineExecutionId param).
