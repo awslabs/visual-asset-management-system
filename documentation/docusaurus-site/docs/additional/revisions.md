@@ -207,6 +207,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Key fixes:**
 
+-   **API document parses strictly** — `VAMS_API.yaml` no longer defines `errorMessage` twice in the `complianceEvaluation` schema, so strict YAML and OpenAPI tools accept it. (issue #1498)
 -   A file manager selection made with Ctrl- or Shift-click while the file list is still loading keeps every selected item when more files arrive (#1497).
 -   **Version resolution errors** — Asset version resolution errors no longer repeat the requested asset version ID or alias. (issue #1134)
 -   **Metadata of large workflow outputs** — File metadata a workflow wrote for an output larger than 1 GiB is recorded as the workflow execution's change, as it is for smaller outputs, so a compliance pipeline rule no longer re-evaluates the asset on its own metadata output. (issue #1586)

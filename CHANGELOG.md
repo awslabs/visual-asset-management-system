@@ -237,6 +237,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Documentation** The OpenAPI document `VAMS_API.yaml` no longer defines `errorMessage` twice in the `complianceEvaluation` schema, so strict YAML and OpenAPI parsers accept it. ([#1498](https://github.com/awslabs/visual-asset-management-system/issues/1498))
 -   **Web** Fixed a file manager selection made with Ctrl- or Shift-click while the file list was still loading: when the next page of files arrived, every item but the first one clicked was dropped, so an action such as Download as Zip got a smaller selection than the one shown. ([#1497](https://github.com/awslabs/visual-asset-management-system/issues/1497))
 -   **Backend** Asset version resolution errors no longer repeat the requested asset version ID or alias. ([#1134](https://github.com/awslabs/visual-asset-management-system/issues/1134))
 -   **Backend** File metadata a workflow wrote for an output larger than 1 GiB is recorded as the workflow execution's change, as it is for smaller outputs, so a compliance pipeline rule no longer re-evaluates the asset on its own metadata output. ([#1586](https://github.com/awslabs/visual-asset-management-system/issues/1586))
