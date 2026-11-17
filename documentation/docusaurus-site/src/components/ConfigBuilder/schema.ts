@@ -468,6 +468,15 @@ const CORE_FIELDS: FieldMeta[] = [
         help: "Free-text terms in one search, combined with AND. Default 3, at most 5.",
     },
     {
+        path: "app.auditLogging.search.handleRetentionMinutes",
+        label: "Audit search: handle retention (minutes)",
+        input: "number",
+        section: "security",
+        advanced: true,
+        min: 5,
+        help: "Minutes a search handle, with the free-text terms in it, is kept after its last use. Default 60, from 5 to 1440.",
+    },
+    {
         path: "app.useKmsCmkEncryption.enabled",
         label: "Customer-managed KMS encryption",
         input: "boolean",

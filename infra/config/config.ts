@@ -125,6 +125,7 @@ export const AUDIT_SEARCH_DEFAULTS = {
     longPollWaitSeconds: 20,
     maxContainsTermLength: 64,
     maxContainsTerms: 3,
+    handleRetentionMinutes: 60,
 };
 export const AUDIT_SEARCH_CEILINGS = {
     maxQueryWindowDays: 366,
@@ -135,7 +136,9 @@ export const AUDIT_SEARCH_CEILINGS = {
     longPollWaitSeconds: 25,
     maxContainsTermLength: 128,
     maxContainsTerms: 5,
+    handleRetentionMinutes: 1440,
 };
+export const AUDIT_SEARCH_MIN_HANDLE_RETENTION_MINUTES = 5;
 export const AUDIT_SEARCH_POLL_HEADROOM_SECONDS = 4;
 
 // GPUs each NVIDIA Cosmos 3 job reserves, and therefore the minimum its tier's instance types must
@@ -1074,6 +1077,7 @@ function resolveAuditSearchConfig(block: { search?: unknown }, config: ConfigPub
             AUDIT_SEARCH_CEILINGS.queryDeadlineSeconds
         ),
         longPollWaitSeconds: 0,
+        handleRetentionMinutes: 0,
         maxContainsTermLength: auditSearchInteger(
             search,
             "maxContainsTermLength",
@@ -1115,6 +1119,12 @@ function resolveAuditSearchConfig(block: { search?: unknown }, config: ConfigPub
         "longPollWaitSeconds",
         0,
         longPollMax
+    );
+    resolved.handleRetentionMinutes = auditSearchInteger(
+        search,
+        "handleRetentionMinutes",
+        AUDIT_SEARCH_MIN_HANDLE_RETENTION_MINUTES,
+        AUDIT_SEARCH_CEILINGS.handleRetentionMinutes
     );
     block.search = resolved;
 }
@@ -5553,6 +5563,7 @@ export interface ConfigPublic {
                 longPollWaitSeconds: number; // server wait of one poll (default 20, ceiling min(25, API timeout - 4))
                 maxContainsTermLength: number; // characters of one contains term (default 64, ceiling 128)
                 maxContainsTerms: number; // contains terms per search (default 3, ceiling 5)
+                handleRetentionMinutes: number; // minutes a search handle (and its contains terms) lives after its last activity (default 60, 5 to 1440)
             };
         };
         api: {

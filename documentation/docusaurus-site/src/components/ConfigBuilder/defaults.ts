@@ -454,6 +454,7 @@ const COMMERCIAL: ConfigShape = {
                 longPollWaitSeconds: 20,
                 maxContainsTermLength: 64,
                 maxContainsTerms: 3,
+                handleRetentionMinutes: 60,
             },
         },
         webUi: {

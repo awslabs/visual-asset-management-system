@@ -68,6 +68,7 @@ describe.each(TEMPLATES)("audit log search infrastructure (%s)", (name) => {
             AUDIT_SEARCH_LONG_POLL_WAIT_SECONDS: "20",
             AUDIT_SEARCH_MAX_CONTAINS_TERM_LENGTH: "64",
             AUDIT_SEARCH_MAX_CONTAINS_TERMS: "3",
+            AUDIT_SEARCH_HANDLE_RETENTION_MINUTES: "60",
         });
     });
 

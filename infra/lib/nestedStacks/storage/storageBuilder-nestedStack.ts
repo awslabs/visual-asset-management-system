@@ -1769,7 +1769,9 @@ export function storageResourcesBuilder(
     // status, the deadline and the poll lease. OpenQueriesIndex (PK openKey = "open") is sparse: a row is
     // in it only while its search holds a concurrency slot, so counting the index counts the open
     // searches against app.auditLogging.search.maxConcurrentQueries. expiresAt (epoch seconds) is the TTL,
-    // seven days after the search started. Always deployed: audit log search is core VAMS with no
+    // app.auditLogging.search.handleRetentionMinutes after the last use of the search (the service writes
+    // it and treats a row past it as not found). The row also holds the contains terms of a search until
+    // the search is stopped or exported. Always deployed: audit log search is core VAMS with no
     // feature switch (access is decided only by authorization). Encrypted with the shared CMK when
     // app.useKmsCmkEncryption is on (dynamodbDefaultProps); removal policy RETAIN like every VAMS table,
     // and auto-named (no explicit tableName), so a retained table never collides with a redeploy.

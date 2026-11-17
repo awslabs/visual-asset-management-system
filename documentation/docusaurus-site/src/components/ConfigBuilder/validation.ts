@@ -834,6 +834,7 @@ const AUDIT_SEARCH_LIMITS: ReadonlyArray<readonly [string, number, number]> = [
     ["queryDeadlineSeconds", 10, 900],
     ["maxContainsTermLength", 3, 128],
     ["maxContainsTerms", 1, 5],
+    ["handleRetentionMinutes", 5, 1440],
 ];
 
 function auditSearchValue(c: ConfigShape, key: string): unknown {

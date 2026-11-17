@@ -68,6 +68,7 @@ export function auditSearchEnvironment(config: Config.Config): Record<string, st
         AUDIT_SEARCH_LONG_POLL_WAIT_SECONDS: String(search.longPollWaitSeconds),
         AUDIT_SEARCH_MAX_CONTAINS_TERM_LENGTH: String(search.maxContainsTermLength),
         AUDIT_SEARCH_MAX_CONTAINS_TERMS: String(search.maxContainsTerms),
+        AUDIT_SEARCH_HANDLE_RETENTION_MINUTES: String(search.handleRetentionMinutes),
     };
 }
 

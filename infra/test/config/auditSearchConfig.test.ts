@@ -61,6 +61,11 @@ describe("resolveAuditLoggingConfig: search limits", () => {
         ["maxContainsTermLength", 129],
         ["maxContainsTermLength", 2],
         ["maxContainsTerms", 6],
+        ["handleRetentionMinutes", 4],
+        ["handleRetentionMinutes", 1441],
+        ["handleRetentionMinutes", 0],
+        ["handleRetentionMinutes", 60.5],
+        ["handleRetentionMinutes", "60"],
         ["maxRows", 1.5],
         ["maxRows", "100"],
         ["maxRows", true],
@@ -101,6 +106,14 @@ describe("resolveAuditLoggingConfig: search limits", () => {
         );
         expect(() => resolved({ longPollWaitSeconds: 21 }, 20)).toThrow(/from 0 to 16/);
         expect(resolved({ longPollWaitSeconds: 0 }, 29).longPollWaitSeconds).toBe(0);
+    });
+
+    test("the handle retention defaults to 60 minutes and accepts 5 to 1440", () => {
+        expect(resolved({}).handleRetentionMinutes).toBe(60);
+        expect(Config.AUDIT_SEARCH_DEFAULTS.handleRetentionMinutes).toBe(60);
+        expect(resolved({ handleRetentionMinutes: 5 }).handleRetentionMinutes).toBe(5);
+        expect(resolved({ handleRetentionMinutes: 1440 }).handleRetentionMinutes).toBe(1440);
+        expect(resolved({ maxRows: 10 }).handleRetentionMinutes).toBe(60);
     });
 
     test("an upgrade whose config lacks the block behaves with the defaults", () => {
