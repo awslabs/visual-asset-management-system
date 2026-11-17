@@ -4,6 +4,7 @@
  */
 
 import {
+    DEADLINE_JOB_SETTING_RANGES,
     omitBlankEventBus,
     validatePipeline,
     withStoredWaitForCallback,
@@ -486,33 +487,50 @@ describe("pipelineValidation", () => {
             });
         });
 
-        it("rejects negative priority and retry counts", () => {
-            const r = validatePipeline(
-                dcConfig({
-                    template: "t:",
-                    priority: -5,
-                    maxRetriesPerTask: -3,
-                    maxFailedTasksCount: -1,
-                }) as any
+        // The ranges Deadline Cloud CreateJob accepts, with the message the API gives for each
+        // (backend DEADLINE_JOB_SETTING_RANGES); the form refuses exactly what the API refuses (#1581).
+        const RANGE_MESSAGE = {
+            priority: "Must be a whole number from 0 to 100",
+            maxRetriesPerTask: "Must be a whole number from 0 to 2,147,483,647",
+            maxFailedTasksCount: "Must be a whole number from 0 to 2,147,483,647",
+        };
+        const MAX = {
+            priority: 100,
+            maxRetriesPerTask: 2147483647,
+            maxFailedTasksCount: 2147483647,
+        };
+        const fields = ["priority", "maxRetriesPerTask", "maxFailedTasksCount"] as const;
+
+        it("names the same ranges as the API", () => {
+            expect(DEADLINE_JOB_SETTING_RANGES).toEqual({
+                priority: { min: 0, max: 100 },
+                maxRetriesPerTask: { min: 0, max: 2147483647 },
+                maxFailedTasksCount: { min: 0, max: 2147483647 },
+            });
+        });
+
+        describe.each(fields)("%s", (field) => {
+            it.each([0, MAX[field]])("accepts %d", (value) => {
+                expect(
+                    validatePipeline(dcConfig({ template: "t:", [field]: value }) as any).ok
+                ).toBe(true);
+            });
+
+            it.each([MAX[field] + 1, -1, 2.5, 1e20, Infinity, -Infinity, "high"])(
+                "refuses %p with the range message",
+                (value) => {
+                    const r = validatePipeline(dcConfig({ template: "t:", [field]: value }) as any);
+                    expect(r.errors).toEqual({
+                        [`executionConfig.deadlineCloud.${field}`]: RANGE_MESSAGE[field],
+                    });
+                }
             );
-            expect(r.ok).toBe(false);
-            const errors = r.errors as Record<string, string>;
-            expect(errors["executionConfig.deadlineCloud.priority"]).toMatch(/negative/);
-            expect(errors["executionConfig.deadlineCloud.maxRetriesPerTask"]).toMatch(/negative/);
-            expect(errors["executionConfig.deadlineCloud.maxFailedTasksCount"]).toMatch(/negative/);
-        });
 
-        it("rejects a fractional priority the createJob task would truncate", () => {
-            const r = validatePipeline(dcConfig({ template: "t:", priority: 12.5 }) as any);
-            expect(r.ok).toBe(false);
-            expect(
-                (r.errors as Record<string, string>)["executionConfig.deadlineCloud.priority"]
-            ).toMatch(/whole number/);
-        });
-
-        it("accepts zero, the lowest valid priority", () => {
-            const r = validatePipeline(dcConfig({ template: "t:", priority: 0 }) as any);
-            expect(r.ok).toBe(true);
+            it.each(["", NaN, undefined])("leaves %p unset", (value) => {
+                expect(
+                    validatePipeline(dcConfig({ template: "t:", [field]: value }) as any).ok
+                ).toBe(true);
+            });
         });
 
         it("requires farmId and queueId, and the callback Enabled", () => {
@@ -539,27 +557,32 @@ describe("pipelineValidation", () => {
             const r = validatePipeline(dcConfig({ farmId: "", queueId: "", priority: 2.5 }) as any);
             expect(r.ok).toBe(false);
             expect(r.errors).toEqual({
-                "executionConfig.deadlineCloud.priority": "Must be a whole number",
+                "executionConfig.deadlineCloud.priority": RANGE_MESSAGE.priority,
                 "executionConfig.deadlineCloud.farmId": "DeadlineCloud farmId is required",
                 "executionConfig.deadlineCloud.queueId": "DeadlineCloud queueId is required",
                 "executionConfig.deadlineCloud.template": "DeadlineCloud job template is required",
             });
         });
 
-        it("reports a count that is both negative and fractional as negative", () => {
+        it("reports counts above their maximum together with the missing fields", () => {
             const r = validatePipeline(
-                dcConfig({ template: "t:", maxRetriesPerTask: -1.5 }) as any
+                dcConfig({
+                    farmId: "",
+                    queueId: "",
+                    priority: 101,
+                    maxRetriesPerTask: 2147483648,
+                    maxFailedTasksCount: 2147483648,
+                }) as any
             );
             expect(r.errors).toEqual({
-                "executionConfig.deadlineCloud.maxRetriesPerTask": "Cannot be negative",
+                "executionConfig.deadlineCloud.priority": RANGE_MESSAGE.priority,
+                "executionConfig.deadlineCloud.maxRetriesPerTask": RANGE_MESSAGE.maxRetriesPerTask,
+                "executionConfig.deadlineCloud.maxFailedTasksCount":
+                    RANGE_MESSAGE.maxFailedTasksCount,
+                "executionConfig.deadlineCloud.farmId": "DeadlineCloud farmId is required",
+                "executionConfig.deadlineCloud.queueId": "DeadlineCloud queueId is required",
+                "executionConfig.deadlineCloud.template": "DeadlineCloud job template is required",
             });
-        });
-
-        it("accepts a whole count beyond Number.MAX_SAFE_INTEGER", () => {
-            const r = validatePipeline(
-                dcConfig({ template: "t:", maxFailedTasksCount: 1e20 }) as any
-            );
-            expect(r.ok).toBe(true);
         });
 
         it("refuses a non-finite count and still reports the missing fields", () => {
@@ -567,17 +590,10 @@ describe("pipelineValidation", () => {
                 dcConfig({ farmId: "", priority: Infinity, maxRetriesPerTask: -Infinity }) as any
             );
             expect(r.errors).toEqual({
-                "executionConfig.deadlineCloud.priority": "Must be a whole number",
-                "executionConfig.deadlineCloud.maxRetriesPerTask": "Cannot be negative",
+                "executionConfig.deadlineCloud.priority": RANGE_MESSAGE.priority,
+                "executionConfig.deadlineCloud.maxRetriesPerTask": RANGE_MESSAGE.maxRetriesPerTask,
                 "executionConfig.deadlineCloud.farmId": "DeadlineCloud farmId is required",
                 "executionConfig.deadlineCloud.template": "DeadlineCloud job template is required",
-            });
-        });
-
-        it("refuses a count that is not a number", () => {
-            const r = validatePipeline(dcConfig({ template: "t:", priority: "high" }) as any);
-            expect(r.errors).toEqual({
-                "executionConfig.deadlineCloud.priority": "Must be a whole number",
             });
         });
 
