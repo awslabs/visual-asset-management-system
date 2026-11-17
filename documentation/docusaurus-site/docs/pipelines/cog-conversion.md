@@ -77,15 +77,23 @@ If the COG was uploaded but its link attributes could not be written, the run is
 
 ## Limits and Sizing
 
-| Limit              | Value                                                                                                                                                                                                                                                                                            |
-| :----------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Input file size    | 100 GiB                                                                                                                                                                                                                                                                                          |
-| Uncompressed size  | 256 GiB (width x height x bands x bytes per sample)                                                                                                                                                                                                                                              |
-| Bands              | 16                                                                                                                                                                                                                                                                                               |
-| Free disk          | The container needs 3.5 times the input size free beside it: GDAL writes a temporary file of about the output size before the final one, and reprojecting into Web Mercator can enlarge the pixel grid. A run that does not fit is refused before the download with both figures in the message. |
-| Threads and memory | GDAL uses every CPU the task has and half of the task memory for its block cache. The task memory is passed to the container as `VAMS_TASK_MEMORY_MIB`.                                                                                                                                          |
+| Limit              | Value                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| :----------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Input file size    | 100 GiB, refused before the download                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Uncompressed size  | 256 GiB (width x height x bands x bytes per sample)                                                                                                                                                                                                                                                                                                                                                                                              |
+| Bands              | 16                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Disk               | The task volume is 200 GiB, the Fargate maximum. The file must fit with one GiB to spare; then the container estimates the output from the pixel grid GDAL will write (a warped view of the input, rounded up for the zoom level it picks) times the bands plus an alpha band, uncompressed, and needs twice that for the temporary and the final file. A run that does not fit is refused with the sizes in the message, before any conversion. |
+| Threads and memory | GDAL uses every CPU the task has and half of the task memory for its block cache. The task memory is passed to the container as `VAMS_TASK_MEMORY_MIB`.                                                                                                                                                                                                                                                                                          |
 
-The 3.5x headroom is an estimate that will be tightened against measured runs. A file over a limit fails the run with the limit named.
+The output is not sized from the input file: a compressed JPEG-in-TIFF of 152 MB (16,716 x 16,716 RGB) became a 1.44 GB RGBA DEFLATE COG, and the disk estimate allows for that. In practice the two limits that decide are the volume and the pixel grid, so the 100 GiB input limit is a ceiling that only a heavily compressed file can reach; a file whose estimated output needs more than the volume holds fails with a message to split or downsample it.
+
+## Nodata and Transparency
+
+A source with a nodata value and no alpha band is converted through a mask band: the nodata pixels become transparent (an alpha band is added) and the data bands carry no nodata value, so a valid pixel is never rewritten. A source that already has an alpha band, or a palette, is converted as it is. A one-band source gets an alpha band in the output.
+
+## Antimeridian
+
+A raster whose extent straddles longitude 180 (for example 178.75 E to 178.95 W) is refused. Reprojected into Web Mercator it would become a world-wide grid holding a few valid pixels. A whole-world raster (a 0 to 360 degree global grid) is accepted. Split the file at longitude 180 and convert each part.
 
 ## Configuration
 
@@ -122,7 +130,11 @@ The default template, `cog-convert-deflate`, carries `{"compression": "DEFLATE"}
 
 ## Container Security
 
-The image starts from a digest-pinned `condaforge/miniforge3` base in both stages. The GDAL packages come from `conda-explicit.txt`, which lists every package by URL and SHA-256 and is installed without a solver; Python packages come from a hash-locked `requirements.lock` installed with `--require-hashes`. The package manager is removed from the runtime image and the container runs as a non-root user.
+The image has two stages, each pinned by digest. The build stage (`condaforge/miniforge3`) installs the GDAL packages from `conda-explicit.txt`, which lists every package by URL and SHA-256 and is installed without a solver, and the Python packages from a hash-locked `requirements.lock` installed with `--require-hashes`. The runtime stage is a Debian slim image that receives only the finished `/opt/cog` environment, so conda, its own Python and its tools never run on an uploaded file. The package manager is removed from the environment and the container runs as a non-root user.
+
+The job role is read-only on the asset buckets (the input at its launch version) and can write only under the `pipelines/` run area of each registered bucket, where the workflow collects a run's output. It cannot overwrite an original, delete anything, or reach the auxiliary bucket. It carries no managed policies.
+
+When the container receives SIGTERM, which AWS Batch sends when a job is terminated, it stops GDAL, reports the failure on the task token and exits within a few seconds, so the workflow does not wait out its four-hour limit.
 
 GDAL is run with an argument list, never a shell, and only on two local paths the container creates. Its environment is a fixed allow-list that carries no AWS credentials or task token, sidecar discovery and the PROJ network are off, and the pipeline's compute has no route to the internet.
 

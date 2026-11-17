@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
--   **Pipelines** New COG Conversion pipeline (`app.pipelines.useCogConversion`, off by default, requires the global VPC). It converts a georeferenced `.tif` or `.tiff` into a tiled Cloud Optimized GeoTIFF in EPSG:3857 (Web Mercator, DEFLATE with predictor, overviews) with GDAL on AWS Batch Fargate and writes it beside the original as `<file name>.cog.tif` in the same asset, without changing the original. The conversion resamples the pixels into Web Mercator, which is the only coordinate system the Search map viewer draws. A COG already in EPSG:3857 and a TIFF with no georeference are skipped with a note in the run's results; a COG in another coordinate system is converted. Link attributes (`cog_link_cogOf`, `cog_link_cogOfVersionId`, `cog_link_sourceCrs`, `cog_link_outputCrs`, `cog_link_cogFile` and others) record which file was made from which, and the upload trigger ships disabled. ([#1601](https://github.com/awslabs/visual-asset-management-system/issues/1601))
+-   **Pipelines** New COG Conversion pipeline (`app.pipelines.useCogConversion`, off by default, requires the global VPC): converts a georeferenced `.tif` or `.tiff` into a Cloud Optimized GeoTIFF in EPSG:3857, written beside the original as `<file name>.cog.tif`. The original is never changed. The pixels are resampled into Web Mercator, the only coordinate system the Search map draws. Files that cross the antimeridian are refused. The upload trigger ships disabled. ([#1601](https://github.com/awslabs/visual-asset-management-system/issues/1601))
 
 ## [2.7.0] (2026-11-20)
 
