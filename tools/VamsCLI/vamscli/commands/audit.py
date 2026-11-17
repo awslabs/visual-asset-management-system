@@ -47,6 +47,7 @@ from ..utils.audit_search import (
     format_rows,
     is_final,
     raise_if_not_complete,
+    resolve_contains_limits,
     wait_for_audit_query,
 )
 from ..utils.decorators import get_profile_manager_from_context, requires_setup_and_auth
@@ -58,6 +59,7 @@ from ..utils.exceptions import (
     AuditSearchTimeoutError,
     InvalidAuditRequestError,
 )
+from ..utils.logging import LogMaskedOption
 from ..utils.json_output import output_error, output_info, output_result, output_status, output_warning
 
 
@@ -72,7 +74,8 @@ def _handle_audit_error(e: Exception, json_output: bool) -> None:
     if isinstance(e, AuditQueryNotFoundError):
         output_error(e, json_output, error_type="Audit Search Not Found",
                      helpful_message="Start a new search with 'vamscli audit search'. A handle "
-                                     "expires after a period without use.")
+                                     "expires after a period without use. A search that used "
+                                     "--contains cannot be read after it has been exported or stopped.")
     elif isinstance(e, AuditSearchNotSupportedError):
         output_error(e, json_output, error_type="Audit Search Not Supported")
     elif isinstance(e, InvalidAuditRequestError):
@@ -86,6 +89,25 @@ def _handle_audit_error(e: Exception, json_output: bool) -> None:
     else:
         output_error(e, json_output, error_type="Audit Search Error")
     raise click.ClickException(str(e))
+
+
+def _note_running_search(query_id: str, error: BaseException, json_output: bool) -> None:
+    """After a failure or an interrupt that follows the start of a search, say what its handle is.
+
+    The search keeps running on the server (a billable query that holds one of the caller's
+    concurrent-search slots until it ends), so the user needs the handle to stop or read it. The note
+    goes to stderr. A --json-output error carries `queryId` in its JSON document instead, which keeps
+    that output a single document; only an interrupt, which prints no document, still writes the note."""
+    if not json_output or not isinstance(error, Exception):
+        click.echo(f"The search {query_id} may still be running. Stop it with "
+                   f"'vamscli audit stop --handle {query_id}' or read it with "
+                   f"'vamscli audit results --handle {query_id}'.", err=True)
+    try:
+        fields = dict(getattr(error, 'json_fields', None) or {})
+        fields.setdefault('queryId', query_id)
+        error.json_fields = fields
+    except Exception:
+        pass
 
 
 def _effective_page_size(page_size: Optional[int], max_rows: int) -> int:
@@ -139,17 +161,18 @@ def groups(ctx: click.Context, json_output: bool):
 @click.option('--group', 'groups_', multiple=True, help='Log group key to search (repeatable; default: every group you may search)')
 @click.option('--action', 'actions', multiple=True, help='Action name, for example assetUpdate (repeatable)')
 @click.option('--entity-type', 'entity_types', multiple=True, help='Entity type, for example asset (repeatable)')
-@click.option('--entity-id', 'entity_ids', multiple=True, help='Entity ID (repeatable)')
-@click.option('--user', 'users', multiple=True, help='Acting user, on-behalf-of user (repeatable)')
-@click.option('--api-key-id', 'api_key_ids', multiple=True, help='API key ID that made the request (repeatable)')
+@click.option('--entity-id', 'entity_ids', multiple=True, help='Entity ID (repeatable)', cls=LogMaskedOption)
+@click.option('--user', 'users', multiple=True, help='Acting user, on-behalf-of user (repeatable)', cls=LogMaskedOption)
+@click.option('--api-key-id', 'api_key_ids', multiple=True, help='API key ID that made the request (repeatable)', cls=LogMaskedOption)
 @click.option('--database', 'databases', multiple=True, help='Database ID (repeatable)')
 @click.option('--asset', 'assets', multiple=True, help='Asset ID (repeatable)')
 @click.option('--outcome', 'outcomes', multiple=True, type=click.Choice(list(AUDIT_OUTCOMES)),
               help='Outcome (repeatable)')
 @click.option('--request-id', 'request_ids', multiple=True, help='Request ID (repeatable)')
 @click.option('--contains', 'contains', multiple=True,
-              help='Text the record must contain (repeatable, at most 3, all must match; 3-64 characters '
-                   'of letters, digits, space and . _ : @ + / -)')
+              help='Text the record must contain (repeatable, all must match; at least 3 characters of '
+                   'letters, digits, space and . _ : @ + / -; the most terms and the longest term are '
+                   "the limits 'audit groups' shows, 3 terms of 64 characters by default)", cls=LogMaskedOption)
 @click.option('--from', 'time_from', default=None,
               help=f'Start of the window: relative (90m, 24h, 7d, 2w), ISO 8601 or epoch seconds '
                    f'(default {AUDIT_DEFAULT_WINDOW} ago)')
@@ -189,13 +212,14 @@ def search(ctx: click.Context, groups_, actions, entity_types, entity_ids, users
     """
     # Setup/auth already validated by decorator
     try:
+        api_client = _api(ctx)
         body = build_filters(
             groups=groups_, actions=actions, entity_types=entity_types, entity_ids=entity_ids,
             users=users, api_key_ids=api_key_ids, databases=databases, assets=assets,
             outcomes=outcomes, request_ids=request_ids, contains=contains, time_from=time_from,
-            time_to=time_to, include_probes=include_probes, order=order)
+            time_to=time_to, include_probes=include_probes, order=order,
+            contains_limits=resolve_contains_limits(api_client, contains))
         effective_page_size = _effective_page_size(page_size, max_rows)
-        api_client = _api(ctx)
 
         output_status("Starting the audit search...", json_output)
         started = api_client.start_audit_query(body)
@@ -210,12 +234,20 @@ def search(ctx: click.Context, groups_, actions, entity_types, entity_ids, users
                                          f"Read it with: vamscli audit results --handle {r.get('queryId')}"))
             return
 
+        # The handle is shown at once: a failure or Ctrl-C while waiting would otherwise lose it.
+        output_status(f"Search handle: {query_id}", json_output)
         output_status("Waiting for the search to finish...", json_output)
-        final = wait_for_audit_query(api_client, query_id, timeout=timeout,
-                                     page_size=effective_page_size, sort=order)
-        raise_if_not_complete(final, query_id)
-        page = collect_rows(api_client, query_id, final, max_rows=max_rows,
-                            page_size=effective_page_size, sort=order)
+        try:
+            final = wait_for_audit_query(api_client, query_id, timeout=timeout,
+                                         page_size=effective_page_size, sort=order)
+            raise_if_not_complete(final, query_id)
+            page = collect_rows(api_client, query_id, final, max_rows=max_rows,
+                                page_size=effective_page_size, sort=order)
+        except (AuditSearchTimeoutError, AuditSearchFailedError):
+            raise  # these already name the handle or end the search
+        except (KeyboardInterrupt, click.Abort, Exception) as interrupted:
+            _note_running_search(query_id, interrupted, json_output)
+            raise
         page['queryId'] = query_id
         if started.get('warnings') and not page.get('warnings'):
             page['warnings'] = started['warnings']
@@ -291,6 +323,8 @@ def show(ctx: click.Context, query_id: str, record_id: str, json_output: bool):
 
     Reads the search's pages until it finds the row whose recordId matches. The API has no
     single-record route, so this works only on a Complete search whose handle has not expired.
+    Rows written before records carried a recordId cannot be addressed here; read them with
+    'audit results'. A search that used --contains cannot be read after it was exported or stopped.
 
     \b
     Example:
@@ -300,10 +334,15 @@ def show(ctx: click.Context, query_id: str, record_id: str, json_output: bool):
     try:
         api_client = _api(ctx)
         output_status("Looking for the record...", json_output)
-        row = find_record(api_client, query_id, record_id, page_size=AUDIT_MAX_PAGE_SIZE)
+        seen: Dict[str, int] = {}
+        row = find_record(api_client, query_id, record_id, page_size=AUDIT_MAX_PAGE_SIZE, stats=seen)
         if row is None:
-            raise AuditQueryNotFoundError(
-                "No record with that recordId in this search. Check the handle and the recordId.")
+            message = "No record with that recordId in this search. Check the handle and the recordId."
+            if seen.get('withoutId'):
+                message += (f" {seen['withoutId']} rows of this search have no recordId (written before "
+                            "records carried one), so 'audit show' cannot address them; read them with "
+                            "'audit results --json-output'.")
+            raise AuditQueryNotFoundError(message)
         output_result(row, json_output, cli_formatter=format_row_detail)
     except AuditSearchError as e:
         _handle_audit_error(e, json_output)
@@ -351,7 +390,9 @@ def export_(ctx: click.Context, query_id: str, export_format: str, output_path: 
 
     The text is written exactly as the API returns it. The API guards CSV cells that start with
     = + - @ against spreadsheet formulas; the CLI never evaluates or rewrites cells. Audit exports
-    may be sensitive: write them where only you can read them.
+    may be sensitive: write them where only you can read them. The folder of --output must exist.
+    A search that used --contains cannot be exported again after its export finished or after it was
+    stopped.
 
     \b
     Examples:
@@ -366,6 +407,11 @@ def export_(ctx: click.Context, query_id: str, export_format: str, output_path: 
                                            "otherwise share standard output with the JSON result")
         if output_path and os.path.exists(output_path) and not overwrite:
             raise InvalidAuditRequestError(f"'{output_path}' already exists; use --overwrite to replace it")
+        if output_path:
+            folder = os.path.dirname(os.path.abspath(output_path))
+            if not os.path.isdir(folder):
+                raise InvalidAuditRequestError(
+                    f"The folder for '{output_path}' does not exist. Create it first.")
         api_client = _api(ctx)
         if output_path:
             output_status("Exporting the audit search...", json_output)

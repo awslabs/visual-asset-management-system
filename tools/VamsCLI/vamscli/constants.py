@@ -231,8 +231,10 @@ API_AUDIT_QUERIES = "/audit/queries"
 API_AUDIT_QUERY = "/audit/queries/{queryId}"
 API_AUDIT_QUERY_EXPORT = "/audit/queries/{queryId}/export"
 
-# Client-side copies of the server's limits, used only to refuse an obviously bad value early: the
-# server stays authoritative and `audit groups` shows the deployment's own limits.
+# Defaults of the server's limits, used only to refuse an obviously bad value early. The operator can
+# configure the contains limits (up to 5 terms of 128 characters), so the CLI and the MCP tools read
+# them from `audit groups` (utils/audit_search.get_contains_limits) and fall back to these when that
+# read fails. The server stays authoritative.
 AUDIT_LONG_POLL_WAIT_SECONDS = 20
 AUDIT_MIN_POLL_GAP_SECONDS = 0.25
 AUDIT_MAX_POLL_GAP_SECONDS = 30

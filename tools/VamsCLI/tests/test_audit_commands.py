@@ -41,6 +41,14 @@ def _invoke(cli_runner, *args):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_limits_cache():
+    from vamscli.utils import audit_search
+    audit_search._limits_cache.clear()
+    yield
+    audit_search._limits_cache.clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_sleep():
     with patch("vamscli.utils.audit_search.time.sleep"):
         yield
@@ -447,3 +455,112 @@ class TestExitStatusThroughTheEntryPoint:
                 with pytest.raises(SystemExit) as exc:
                     main()
         assert exc.value.code == 1
+
+
+class TestContainsLimitsOfTheDeployment:
+    def _run(self, cli_runner, generic_command_mocks, limits, *terms):
+        with generic_command_mocks("audit") as mocks:
+            api = mocks["api_client"]
+            api.list_audit_log_groups.return_value = {"logGroups": [], "limits": limits}
+            api.start_audit_query.return_value = {"queryId": QID, "status": "Running"}
+            args = ["search", "--no-wait", "--json-output"]
+            for term in terms:
+                args += ["--contains", term]
+            return _invoke(cli_runner, *args), api
+
+    def test_five_terms_of_128_characters_are_sent_when_the_deployment_allows_them(
+            self, cli_runner, generic_command_mocks):
+        terms = ["a" * 128] + ["bcd"] * 4
+        result, api = self._run(cli_runner, generic_command_mocks,
+                                {"maxContainsTerms": 5, "maxContainsTermLength": 128}, *terms)
+        assert result.exit_code == 0, result.output
+        assert api.start_audit_query.call_args.args[0]["contains"] == terms
+
+    def test_a_deployment_with_lower_limits_is_enforced_before_sending(self, cli_runner,
+                                                                         generic_command_mocks):
+        result, api = self._run(cli_runner, generic_command_mocks,
+                                {"maxContainsTerms": 1, "maxContainsTermLength": 5}, "abc", "def")
+        assert result.exit_code == 1
+        assert "At most 1" in json.loads(result.output)["error"]
+        api.start_audit_query.assert_not_called()
+
+    def test_defaults_apply_when_audit_groups_is_not_available(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks("audit") as mocks:
+            api = mocks["api_client"]
+            api.list_audit_log_groups.side_effect = AuditSearchNotSupportedError("no routes")
+            api.start_audit_query.return_value = {"queryId": QID, "status": "Running"}
+            ok = _invoke(cli_runner, "search", "--no-wait", "--json-output", "--contains", "a" * 64)
+            too_long = _invoke(cli_runner, "search", "--no-wait", "--json-output", "--contains", "a" * 65)
+        assert ok.exit_code == 0 and too_long.exit_code == 1
+
+    def test_a_search_without_contains_makes_no_extra_request(self, cli_runner, generic_command_mocks):
+        result, api = self._run(cli_runner, generic_command_mocks, {})
+        assert result.exit_code == 0
+        api.list_audit_log_groups.assert_not_called()
+
+
+class TestExportFolderCheck:
+    def test_a_missing_folder_is_a_clear_error_before_any_request(self, cli_runner, generic_command_mocks,
+                                                                  tmp_path):
+        target = tmp_path / "no" / "such" / "x.csv"
+        with generic_command_mocks("audit") as mocks:
+            result = _invoke(cli_runner, "export", "--handle", QID, "-o", str(target), "--json-output")
+            mocks["api_client"].export_audit_query.assert_not_called()
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["error_type"] == "InvalidAuditRequestError"
+        assert f"The folder for '{target}' does not exist" in data["error"]
+        assert ".part" not in data["error"]
+
+
+class TestShowWithoutRecordIds:
+    def test_says_how_many_rows_cannot_be_addressed(self, cli_runner, generic_command_mocks):
+        legacy = {"timestamp": "t", "groupKey": "auditActions", "legacyType": "x", "user": "u"}
+        with generic_command_mocks("audit") as mocks:
+            mocks["api_client"].get_audit_query.return_value = _complete([legacy, legacy, _row(1)])
+            result = _invoke(cli_runner, "show", "--handle", QID, "--record-id", "nope", "--json-output")
+        assert result.exit_code == 1
+        assert "2 rows of this search have no recordId" in json.loads(result.output)["error"]
+
+
+class TestNotFoundHintNamesTheContainsRule:
+    def test_text_hint_after_a_contains_search_was_exported(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks("audit") as mocks:
+            mocks["api_client"].export_audit_query.side_effect = AuditQueryNotFoundError("gone")
+            result = _invoke(cli_runner, "export", "--handle", QID)
+        assert result.exit_code == 1
+        assert "--contains cannot be read after it has been exported or stopped" in result.output
+
+
+class TestHandleSurvivesAFailureWhileWaiting:
+    def _start(self, api):
+        api.start_audit_query.return_value = {"queryId": QID, "status": "Running", "warnings": []}
+
+    def test_json_error_carries_the_handle(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks("audit") as mocks:
+            api = mocks["api_client"]
+            self._start(api)
+            api.get_audit_query.side_effect = AuditSearchError("The audit search was throttled.")
+            result = _invoke(cli_runner, "search", "--json-output")
+        assert result.exit_code == 1
+        assert json.loads(result.output)["queryId"] == QID
+
+    def test_text_mode_prints_the_handle_at_the_start_and_after_the_failure(self, cli_runner,
+                                                                            generic_command_mocks):
+        with generic_command_mocks("audit") as mocks:
+            api = mocks["api_client"]
+            self._start(api)
+            api.get_audit_query.side_effect = AuditSearchError("The audit search was throttled.")
+            result = _invoke(cli_runner, "search")
+        assert result.exit_code == 1
+        assert f"Search handle: {QID}" in result.output
+        assert f"vamscli audit stop --handle {QID}" in result.output
+
+    def test_ctrl_c_prints_the_handle_with_the_stop_command(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks("audit") as mocks:
+            api = mocks["api_client"]
+            self._start(api)
+            api.get_audit_query.side_effect = KeyboardInterrupt()
+            result = _invoke(cli_runner, "search", "--json-output")
+        assert result.exit_code != 0
+        assert f"vamscli audit stop --handle {QID}" in result.output

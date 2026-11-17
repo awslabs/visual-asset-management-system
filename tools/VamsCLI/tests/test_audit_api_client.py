@@ -151,6 +151,16 @@ class TestFilters:
         with pytest.raises(InvalidAuditRequestError):
             aus.build_filters(outcomes=["fine"], now=NOW)
 
+    def test_contains_limits_follow_the_limits_given(self):
+        assert aus.validate_contains(["abcde"] * 5, limits=(5, 128)) == ["abcde"] * 5
+        assert aus.validate_contains(["a" * 128], limits=(3, 128)) == ["a" * 128]
+        with pytest.raises(InvalidAuditRequestError, match="At most 2"):
+            aus.validate_contains(["abc"] * 3, limits=(2, 64))
+        with pytest.raises(InvalidAuditRequestError, match="3 to 10 characters"):
+            aus.validate_contains(["a" * 11], limits=(3, 10))
+        with pytest.raises(InvalidAuditRequestError):
+            aus.validate_contains(["ab"], limits=(5, 128))  # the 3-character floor stays local
+
     def test_contains_limits_match_the_servers(self):
         assert aus.validate_contains(["abc", "a.b_c:d@e+f/g-h i"]) == ["abc", "a.b_c:d@e+f/g-h i"]
         for bad in (["ab"], ["x" * 65], ["a*bc"], ["abc"] * 4, ["a\nbc"]):
@@ -219,7 +229,15 @@ class TestLogFileKeepsAuditContentOut:
         text = redact_to_text({"startTime": 1, "endTime": 2, "contains": ["hunter2-secret", "other"],
                                "users": ["carol"]})
         assert "hunter2" not in text and "other" not in text
-        assert "2 terms omitted" in text and "carol" in text
+        assert "2 terms omitted" in text
+        assert "carol" not in text and "masked: 1 values, 5 characters" in text
+
+    def test_a_request_without_contains_still_hides_who_is_searched(self):
+        text = redact_to_text({"startTime": 1, "endTime": 2, "includeProbes": False,
+                               "users": ["carol"], "entityIds": ["e-secret"], "apiKeyIds": ["k-secret"],
+                               "actions": ["assetUpdate"]})
+        assert "carol" not in text and "e-secret" not in text and "k-secret" not in text
+        assert "assetUpdate" in text
 
     def test_rows_and_export_text_are_not_logged(self):
         page = {"queryId": QID, "status": "Complete", "Items": [{"user": "carol", "details": "pii-value"}] * 3}
@@ -236,3 +254,60 @@ class TestLogFileKeepsAuditContentOut:
     def test_other_payloads_are_unchanged(self):
         assert "hello" in redact_to_text({"contains": "hello"})
         assert "row" in redact_to_text({"Items": ["row"]})
+
+
+class TestContainsLimitsFromAuditGroups:
+    @pytest.fixture(autouse=True)
+    def _fresh_cache(self):
+        aus._limits_cache.clear()
+        yield
+        aus._limits_cache.clear()
+
+    def _api(self, limits, url="https://a.example/api", profile="p1"):
+        api = MagicMock()
+        api.base_url = url
+        api.profile_manager.profile_name = profile
+        api.list_audit_log_groups.return_value = {"limits": limits}
+        return api
+
+    def test_reads_the_deployments_limits(self):
+        api = self._api({"maxContainsTerms": 5, "maxContainsTermLength": 128})
+        assert aus.get_contains_limits(api) == (5, 128)
+
+    def test_cached_per_deployment_and_profile_and_expires(self):
+        api = self._api({"maxContainsTerms": 4, "maxContainsTermLength": 100})
+        clock = iter([0.0, 10.0, 20.0, 1000.0]).__next__
+        assert aus.get_contains_limits(api, clock) == (4, 100)
+        assert aus.get_contains_limits(api, clock) == (4, 100)
+        assert api.list_audit_log_groups.call_count == 1
+        other = self._api({"maxContainsTerms": 2, "maxContainsTermLength": 20}, profile="p2")
+        assert aus.get_contains_limits(other, clock) == (2, 20)
+        assert aus.get_contains_limits(api, clock) == (4, 100)  # read again after the cache time
+        assert api.list_audit_log_groups.call_count == 2
+
+    @pytest.mark.parametrize("limits", [{}, {"maxContainsTerms": "x"}, {"maxContainsTerms": 0},
+                                        {"maxContainsTerms": True}])
+    def test_missing_or_odd_values_use_the_defaults(self, limits):
+        assert aus.get_contains_limits(self._api(limits)) == (3, 64)
+
+    def test_a_failed_read_uses_the_defaults_and_is_not_cached(self):
+        api = self._api({})
+        api.list_audit_log_groups.side_effect = RuntimeError("boom")
+        assert aus.get_contains_limits(api) == (3, 64)
+        api.list_audit_log_groups.side_effect = None
+        api.list_audit_log_groups.return_value = {"limits": {"maxContainsTerms": 5}}
+        assert aus.get_contains_limits(api) == (5, 64)
+
+    def test_no_terms_means_no_request(self):
+        api = self._api({})
+        assert aus.resolve_contains_limits(api, []) is None
+        assert aus.resolve_contains_limits(api, ["  "]) is None
+        api.list_audit_log_groups.assert_not_called()
+        assert aus.resolve_contains_limits(api, ["abc"]) == (3, 64)
+
+    def test_find_record_counts_rows_without_an_id(self):
+        api = MagicMock()
+        api.get_audit_query.return_value = {"Items": [{"recordId": "a"}, {"user": "x"}, {"recordId": ""}]}
+        stats = {}
+        assert aus.find_record(api, QID, "nope", stats=stats) is None
+        assert stats == {"withoutId": 2}
