@@ -4,6 +4,7 @@
  */
 
 import { readTiffFacts, crsFromGeoKeys } from "./tiffHeader";
+import { decideRasterDisplay } from "./rasterEligibility";
 import { loadFixtureTiff, fixtureSize } from "./fixtures.testdata";
 
 describe("crsFromGeoKeys", () => {
@@ -70,5 +71,32 @@ describe("readTiffFacts", () => {
         const facts = await readTiffFacts(await loadFixtureTiff("unsupported-2056.tif"));
         expect(facts.crs).toBe("EPSG:2056");
         expect(facts.bboxWgs84).toBeNull();
+    });
+});
+
+describe("readTiffFacts decode plan (D1, D2)", () => {
+    it("plans the full image of a pixel bomb and refuses it from the header alone", async () => {
+        const facts = await readTiffFacts(await loadFixtureTiff("pixel-bomb-4326.tif"));
+        expect(facts.decode).toMatchObject({ width: 11000, height: 10000, bands: 1 });
+        // Over the decode cap, so its strip byte counts are not even read.
+        expect(facts.decode.fetchBytes).toBeNull();
+        expect(decideRasterDisplay({ ...facts, sizeBytes: 115_707 })).toMatchObject({
+            kind: "refuse",
+            reason: "too-many-pixels",
+        });
+    });
+
+    it("reads the strip byte counts of a small striped file, so its size is proven", async () => {
+        const facts = await readTiffFacts(await loadFixtureTiff("wgs84-striped.tif"));
+        expect(facts.decode.fetchBytes).toBeGreaterThan(0);
+        expect(facts.decode.fetchBytes).toBeLessThan(fixtureSize("wgs84-striped.tif"));
+        // No size from the caller or the source: the byte counts still let it through.
+        expect(decideRasterDisplay({ ...facts, sizeBytes: undefined }).kind).toBe("placed");
+    });
+
+    it("reads the tile byte counts of a tiled file and plans its smallest usable image", async () => {
+        const facts = await readTiffFacts(await loadFixtureTiff("cog-3857.tif"));
+        expect(facts.decodeIndex).toBe(0);
+        expect(facts.decode.fetchBytes).toBeGreaterThan(0);
     });
 });

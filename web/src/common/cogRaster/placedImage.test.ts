@@ -4,6 +4,7 @@
  */
 
 import {
+    RasterTooLarge,
     bandsToRgba,
     pickOverviewIndex,
     readPlacedPixels,
@@ -11,6 +12,18 @@ import {
     stretchRange,
 } from "./placedImage";
 import { readTiffFacts } from "./tiffHeader";
+
+describe("readPlacedPixels decode cap (D1)", () => {
+    it("refuses the pixel bomb before decoding a single strip", async () => {
+        const tiff = await loadFixtureTiff("pixel-bomb-4326.tif");
+        const facts = await readTiffFacts(tiff);
+        const image = await tiff.getImage(0);
+        const readRasters = jest.spyOn(image, "readRasters");
+        jest.spyOn(tiff, "getImage").mockResolvedValue(image);
+        await expect(readPlacedPixels(tiff, facts)).rejects.toBeInstanceOf(RasterTooLarge);
+        expect(readRasters).not.toHaveBeenCalled();
+    });
+});
 import { loadFixtureTiff } from "./fixtures.testdata";
 
 describe("pickOverviewIndex", () => {

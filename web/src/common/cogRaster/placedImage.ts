@@ -4,9 +4,12 @@
  */
 
 import type { GeoTIFF, GeoTIFFImage } from "geotiff";
-import { PLACED_IMAGE_MAX_PIXELS, PLACED_IMAGE_TARGET_PIXELS } from "./rasterEligibility";
+import { PLACED_IMAGE_MAX_PIXELS, decodeRefusal, pickOverviewIndex } from "./rasterEligibility";
 import { cornersToLonLat } from "./projections";
-import { TiffHeaderFacts } from "./tiffHeader";
+import { TiffHeaderFacts, readImageList } from "./tiffHeader";
+
+/** The image the header chose is larger than the placed path decodes. */
+export class RasterTooLarge extends Error {}
 
 type NumberArray = ArrayLike<number>;
 
@@ -27,22 +30,7 @@ export interface PixelBands {
     typeMax: number | null;
 }
 
-/**
- * Picks the image to read: the smallest one whose longest side is still at least `target`, so the
- * result is sharp enough without decoding more than needed. Images are given as longest sides in file
- * order (full resolution first). When none reaches the target the full-resolution image (index 0) is
- * used. Returns the index.
- */
-export function pickOverviewIndex(
-    longestSides: number[],
-    target: number = PLACED_IMAGE_TARGET_PIXELS
-): number {
-    let best = -1;
-    longestSides.forEach((side, index) => {
-        if (side >= target && (best === -1 || side < longestSides[best])) best = index;
-    });
-    return best === -1 ? 0 : best;
-}
+export { pickOverviewIndex };
 
 /** The size to read an image at: its own size, scaled down so the longest side is at most `cap`. */
 export function readSize(
@@ -195,13 +183,20 @@ export async function readPlacedPixels(
     facts: TiffHeaderFacts,
     signal?: AbortSignal
 ): Promise<PixelBands> {
-    const count = await tiff.getImageCount();
-    const images: GeoTIFFImage[] = [];
-    for (let i = 0; i < count; i++) images.push(await tiff.getImage(i));
-    const index = pickOverviewIndex(
-        images.map((image) => Math.max(image.getWidth(), image.getHeight()))
-    );
-    const image = images[index];
+    // The same image the header facts were decided on, so the caps checked there hold here. The
+    // check is repeated before any pixel is decoded: geotiff.js decodes the whole chosen image at
+    // full resolution before it scales it down.
+    const images = await readImageList(tiff, await tiff.getImage(0));
+    const image: GeoTIFFImage | undefined = images[facts.decodeIndex];
+    if (!image) throw new RasterTooLarge("The raster's image directory could not be read");
+    const refusal = decodeRefusal({
+        width: image.getWidth(),
+        height: image.getHeight(),
+        bands: image.getSamplesPerPixel(),
+        bytesPerSample: Math.max(1, Math.ceil(image.getBitsPerSample(0) / 8)),
+        fetchBytes: null,
+    });
+    if (refusal && refusal.kind === "refuse") throw new RasterTooLarge(refusal.message);
     const { width, height } = readSize(image.getWidth(), image.getHeight());
 
     const directory: any = image.fileDirectory;

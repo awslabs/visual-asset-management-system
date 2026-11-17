@@ -64,4 +64,12 @@ write("utm13-jpeg-ycbcr.tif", red, "EPSG:26913", from_origin(500000.0, 4300000.0
       compress="JPEG", photometric="YCBCR", tiled=True, blockxsize=64, blockysize=64)
 
 import os
+
+# Pixel bomb: 11000 x 10000 (110 Mpx, over the placed path's decode cap), striped, no overviews, a tiny
+# WGS84 extent. Deflated zeros keep it small on disk; decoding it would take the full 110 MB.
+with rasterio.open("pixel-bomb-4326.tif", "w", driver="GTiff", width=11000, height=10000, count=1,
+                   dtype="uint8", crs="EPSG:4326", transform=from_origin(10.0, 50.0, 1e-6, 1e-6),
+                   compress="DEFLATE", blockysize=64) as dst:
+    for row in range(0, 10000, 1000):
+        dst.write(np.zeros((1, 1000, 11000), dtype="uint8"), window=((row, row + 1000), (0, 11000)))
 os.remove("src-3857.tmp.tif")
