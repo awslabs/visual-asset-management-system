@@ -22,6 +22,8 @@ import {
 } from "../../../../../helper/security";
 import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
+import { NagSuppressions } from "cdk-nag";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
 import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
@@ -96,6 +98,25 @@ export interface OpenPipelineBatchLogProps {
     logGroup: logs.ILogGroup;
 }
 
+/**
+ * The result document a run records when it writes no preview (the Lambda for an image the web shows as
+ * its own preview, the container for the other no-preview outcomes). It must equal NO_PREVIEW_RESULT_FILENAME
+ * in backendPipelines/preview/3dThumbnail/lambda/openPipeline.py and container/preview_pipeline/media_preview.py;
+ * a drift test reads both.
+ */
+export const NO_PREVIEW_RESULT_FILENAME = "preview-not-generated.json";
+
+/**
+ * Media previews settings for openPipeline: the image extensions the web shows as their own preview,
+ * the size limit under which they are (strictly), and whether a smaller JPEG is still written for them.
+ * Always set: one deployment serves both the 3D and the media workflow.
+ */
+export interface OpenPipelineMediaProps {
+    selfPreviewableFileExtensions: string;
+    previewFileSizeLimitBytes: number;
+    downscaleSelfPreviewableImages: boolean;
+}
+
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -109,7 +130,8 @@ export function buildOpenPipelineFunction(
     stateMachineLogGroup: logs.ILogGroup,
     batchLogs: OpenPipelineBatchLogProps,
     largeTierThresholdBytes: number,
-    kmsKey?: kms.IKey
+    kmsKey: kms.IKey | undefined,
+    media: OpenPipelineMediaProps
 ): lambda.Function {
     const name = "openPipeline";
 
@@ -142,6 +164,10 @@ export function buildOpenPipelineFunction(
             BATCH_JOB_DEFINITION_NAME: batchLogs.jobDefinitionName,
             // Inputs at or above this size run on the large compute tier.
             LARGE_TIER_THRESHOLD_BYTES: String(largeTierThresholdBytes),
+            // An image the web already shows as its own preview ends its run in this function.
+            SELF_PREVIEWABLE_FILEEXTENSIONS: media.selfPreviewableFileExtensions,
+            PREVIEW_FILE_SIZE_LIMIT_BYTES: String(media.previewFileSizeLimitBytes),
+            DOWNSCALE_SELF_PREVIEWABLE_IMAGES: String(media.downscaleSelfPreviewableImages),
         },
     });
 
@@ -149,6 +175,59 @@ export function buildOpenPipelineFunction(
     // and the run's input configuration, which may force a tier.
     grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
+    // An image the web shows as its own preview ends its run here, and the Lambda records why as one
+    // small result document in the execution's results folder. That folder is in the RUN bucket, which
+    // is the default asset bucket (executeWorkflow.py resolves the manifest's outputs against it), at
+    // <baseAssetsPrefix>pipelines/<pipeline>/<job>/output/<execution>/results/ -- not in the auxiliary
+    // bucket. So the grant is s3:PutObject on exactly that object name, under that results path of
+    // each asset bucket (the run bucket is one of them), and nothing else: no abort, legal hold,
+    // retention, tagging or delete. The two generated segments are '*' (which also matches '/' in an S3
+    // ARN); the nag suppression below says exactly what that can match.
+    const resultsDocumentKey = (prefix: string) =>
+        `${prefix.replace(/^\/+/, "")}pipelines/*/output/*/results/${NO_PREVIEW_RESULT_FILENAME}`;
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["s3:PutObject"],
+            resources: s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
+                const prefix = record.prefix || "/";
+                const normalized = prefix.endsWith("/") ? prefix : prefix + "/";
+                return `${record.bucket.bucketArn}/${resultsDocumentKey(normalized)}`;
+            }),
+        })
+    );
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "s3:PutObject only, on one fixed object name (" +
+                    NO_PREVIEW_RESULT_FILENAME +
+                    "), at <baseAssetsPrefix>pipelines/<pipeline>/<job>/output/<execution>/results/ of an " +
+                    "asset bucket. The key has two segments that cannot be named at deploy time: " +
+                    "<pipeline>/<job>, which is the first pipeline of whichever workflow runs this step plus a " +
+                    "job id generated at launch, and <execution>, an execution id generated at launch. Each " +
+                    "is one '*'. In an S3 resource ARN a '*' matches any characters INCLUDING '/', so the " +
+                    "statement matches any key that starts with <baseAssetsPrefix>pipelines/, contains " +
+                    "'/output/' after it, and ends with '/results/" +
+                    NO_PREVIEW_RESULT_FILENAME +
+                    "'; it can match a deeper key of that shape, and nothing else: no other file name, no " +
+                    "object outside pipelines/, no asset file or preview. IAM has no narrower form for a " +
+                    "generated segment (a path-segment-only wildcard does not exist, and PutObject takes no " +
+                    "s3:prefix condition), and the generated parts are not known to this stack: the first " +
+                    "pipeline of a workflow is chosen by whoever builds the workflow. So this is the least " +
+                    "that works. The action is PutObject alone: no read, list, delete, abort, legal hold, " +
+                    "retention or tagging.",
+                appliesTo: [
+                    {
+                        // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
+                        regex: "/^Resource::.*\\/pipelines\\/\\*\\/output\\/\\*\\/results\\/preview-not-generated\\.json$/g",
+                    },
+                ],
+            },
+        ],
+        true
+    );
     pipelineStateMachine.grantStartExecution(fun);
     orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);

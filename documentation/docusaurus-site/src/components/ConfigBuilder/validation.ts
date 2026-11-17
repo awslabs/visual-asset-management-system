@@ -743,6 +743,12 @@ const VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
         appliesWhen: (c) => !!g(c, "app.pipelines.useIsaacLabTraining.enabled"),
     },
     {
+        id: "vpc-required-media-previews",
+        label: "pipelines.useMediaPreviews",
+        fieldPaths: ["app.pipelines.useMediaPreviews.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useMediaPreviews.enabled"),
+    },
+    {
         id: "vpc-required-preview-3d-thumbnail",
         label: "pipelines.usePreview3dThumbnail",
         fieldPaths: ["app.pipelines.usePreview3dThumbnail.enabled"],
@@ -1220,7 +1226,7 @@ const CORE_RULES: Rule[] = [
                 `app.pipelines.usePreview3dThumbnail.computeTiers.${tier}.memoryGiB`,
             ],
             appliesWhen: (c) => {
-                if (!g(c, "app.pipelines.usePreview3dThumbnail.enabled")) return false;
+                if (!containerDeploys(c)) return false;
                 const base = `app.pipelines.usePreview3dThumbnail.computeTiers.${tier}`;
                 const vcpu = g(c, `${base}.vcpu`);
                 const memoryGiB = g(c, `${base}.memoryGiB`);
@@ -1245,13 +1251,59 @@ const CORE_RULES: Rule[] = [
         severity: "error",
         fieldPaths: ["app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB"],
         appliesWhen: (c) => {
-            if (!g(c, "app.pipelines.usePreview3dThumbnail.enabled")) return false;
+            if (!containerDeploys(c)) return false;
             const threshold = g(c, "app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB");
             if (isAbsent(threshold)) return false;
             return typeof threshold !== "number" || !Number.isFinite(threshold) || threshold <= 0;
         },
         message: "usePreview3dThumbnail.largeTierThresholdGiB must be a positive number of GiB.",
     },
+
+    // ----- Media previews
+    // (config.ts: "Media previews (images, TGA/TIFF and video) share the 3D preview thumbnail container") -----
+    {
+        id: "media-previews-renamed",
+        severity: "error",
+        fieldPaths: ["app.pipelines.usePreview3dThumbnail.mediaPreviews"],
+        appliesWhen: (c) => g(c, "app.pipelines.usePreview3dThumbnail.mediaPreviews") !== undefined,
+        message:
+            "usePreview3dThumbnail.mediaPreviews has been renamed to pipelines.useMediaPreviews " +
+            "(a sibling of usePreview3dThumbnail with the same keys). Move the block and delete the old key.",
+    },
+    ...(
+        [
+            "enabled",
+            "autoRegisterAutoTriggerOnFileUpload",
+            "downscaleSelfPreviewableImages",
+        ] as const
+    ).map(
+        (key): Rule => ({
+            id: `media-previews-${key}-boolean`,
+            severity: "error",
+            fieldPaths: [`app.pipelines.useMediaPreviews.${key}`],
+            appliesWhen: (c) => {
+                const value = g(c, `app.pipelines.useMediaPreviews.${key}`);
+                return !isAbsent(value) && typeof value !== "boolean";
+            },
+            message: `useMediaPreviews.${key} must be true or false.`,
+        })
+    ),
+    ...(["autoRegisterAutoTriggerOnFileUpload", "downscaleSelfPreviewableImages"] as const).map(
+        (key): Rule => ({
+            id: `media-previews-${key}-needs-media`,
+            severity: "error",
+            fieldPaths: [
+                `app.pipelines.useMediaPreviews.${key}`,
+                "app.pipelines.useMediaPreviews.enabled",
+            ],
+            appliesWhen: (c) =>
+                g(c, `app.pipelines.useMediaPreviews.${key}`) === true &&
+                g(c, "app.pipelines.useMediaPreviews.enabled") !== true,
+            message:
+                `useMediaPreviews.${key} requires useMediaPreviews.enabled to be true. Enable ` +
+                `media previews, or set ${key} to false.`,
+        })
+    ),
 
     // ----- NVIDIA Cosmos 3
     // (config.ts: the `useNvidiaCosmos3.enabled` block, "Enable at least one model in
@@ -3621,6 +3673,11 @@ const CORE_RULES: Rule[] = [
             "app.compliance.autoLoadDefaultSchema is true but app.metadataSchema.autoLoadDefaultAssetSchema is false. The default compliance schema validates assets against the GLOBAL defaultAsset metadata schema, which only that flag seeds; without it every evaluation under the default schema ends in an error with no verdict (Metadata schema not found). Set autoLoadDefaultAssetSchema to true, or set autoLoadDefaultSchema to false.",
     },
 ];
+
+/** The 3D thumbnail container deploys when the 3D pipeline or media previews is enabled. */
+const containerDeploys = (c: ConfigShape): boolean =>
+    !!g(c, "app.pipelines.usePreview3dThumbnail.enabled") ||
+    !!g(c, "app.pipelines.useMediaPreviews.enabled");
 
 export const RULES: Rule[] = [...CORE_RULES, ...ADDON_RULES];
 
