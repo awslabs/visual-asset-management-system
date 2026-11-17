@@ -506,6 +506,93 @@
             "licence": "MIT",
             "source": "IFC4 structural model from the That Open engine_components repository (MIT licence; no separate licence for resources/ifc), https://github.com/ThatOpen/engine_components/tree/ecedeb613b08d624c0b545e39477c5ca9ce4f4e1/resources/ifc",
             "requiresFeature": "ALLOWUNSAFEEVAL"
+        },
+        {
+            "id": "geotiff-cog-3857-uint16",
+            "viewer": "geotiff-map-viewer",
+            "path": "/geotiff/web.tif",
+            "url": "https://raw.githubusercontent.com/cogeotiff/rio-tiler/9a54d03dceb26cb6e581d220fb6e7f98ad5c54f3/tests/fixtures/web.tif",
+            "size": 504321,
+            "sha256": "48381005ce560a917602a9e8983de93ec319cabb5975367fc15d1bc5cfadbe5c",
+            "licence": "BSD-3-Clause",
+            "source": "https://github.com/cogeotiff/rio-tiler/tree/main/tests/fixtures",
+            "requiresFeature": "LOCATIONSERVICES",
+            "expect": {
+                "mode": "tile"
+            }
+        },
+        {
+            "id": "geotiff-cog-3857-orthophoto",
+            "viewer": "geotiff-map-viewer",
+            "path": "/geotiff/orthophoto.tif",
+            "url": "https://raw.githubusercontent.com/geomatico/maplibre-cog-protocol/fe827eaffcd8d44319a9aa17bc7700d376794c66/examples/data/orthophoto.tif",
+            "size": 5677642,
+            "sha256": "b1261a3c2d9d2b4fa75ead992c1bf5941147105d5d51c7ffb5355edc1667a5e4",
+            "licence": "MIT",
+            "source": "https://github.com/geomatico/maplibre-cog-protocol/tree/main/examples/data",
+            "requiresFeature": "LOCATIONSERVICES",
+            "expect": {
+                "mode": "tile"
+            }
+        },
+        {
+            "id": "geotiff-nad83-utm13-jpeg",
+            "viewer": "geotiff-map-viewer",
+            "path": "/geotiff/cog_rgb.tif",
+            "url": "https://raw.githubusercontent.com/cogeotiff/rio-tiler/9a54d03dceb26cb6e581d220fb6e7f98ad5c54f3/tests/fixtures/cog_rgb.tif",
+            "size": 27738,
+            "sha256": "2cbb1e903d56dab02b1c9988f30d0de583e85dca652a6c0b7e88bd3cc17341bf",
+            "licence": "BSD-3-Clause",
+            "source": "https://github.com/cogeotiff/rio-tiler/tree/main/tests/fixtures",
+            "requiresFeature": "LOCATIONSERVICES",
+            "expect": {
+                "mode": "placed",
+                "approximate": true
+            }
+        },
+        {
+            "id": "geotiff-wgs84-striped",
+            "viewer": "geotiff-map-viewer",
+            "path": "/geotiff/image_web.tif",
+            "url": "https://raw.githubusercontent.com/cogeotiff/rio-cogeo/96fbdb168b9ffe1ea7a41e4ab4bb411163ca48c3/tests/fixtures/image_web.tif",
+            "size": 131784,
+            "sha256": "fcfdcc01a092bbc458f432e7ac6ff429130018b12527f84118ba572971785ee4",
+            "licence": "BSD-3-Clause",
+            "source": "https://github.com/cogeotiff/rio-cogeo/tree/main/tests/fixtures",
+            "requiresFeature": "LOCATIONSERVICES",
+            "expect": {
+                "mode": "placed",
+                "approximate": true
+            }
+        },
+        {
+            "id": "geotiff-3857-striped",
+            "viewer": "geotiff-map-viewer",
+            "path": "/geotiff/image_rgb.tif",
+            "url": "https://raw.githubusercontent.com/cogeotiff/rio-cogeo/96fbdb168b9ffe1ea7a41e4ab4bb411163ca48c3/tests/fixtures/image_rgb.tif",
+            "size": 637890,
+            "sha256": "5cad7d4233c2a222370db2831cde085d3c75a7858231f383378f4f11348c1c61",
+            "licence": "BSD-3-Clause",
+            "source": "https://github.com/cogeotiff/rio-cogeo/tree/main/tests/fixtures",
+            "requiresFeature": "LOCATIONSERVICES",
+            "expect": {
+                "mode": "placed",
+                "approximate": false
+            }
+        },
+        {
+            "id": "geotiff-custom-albers",
+            "viewer": "geotiff-map-viewer",
+            "path": "/geotiff/image_nodata.tif",
+            "url": "https://raw.githubusercontent.com/cogeotiff/rio-cogeo/96fbdb168b9ffe1ea7a41e4ab4bb411163ca48c3/tests/fixtures/image_nodata.tif",
+            "size": 501125,
+            "sha256": "b4c6cf8563f4df4839296c5361ef25067072aa198760513ed195a558a3715389",
+            "licence": "BSD-3-Clause",
+            "source": "https://github.com/cogeotiff/rio-cogeo/tree/main/tests/fixtures",
+            "requiresFeature": "LOCATIONSERVICES",
+            "expect": {
+                "notice": "unsupported CRS"
+            }
         }
     ]
 }
