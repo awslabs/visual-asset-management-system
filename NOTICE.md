@@ -370,6 +370,22 @@ release's PyPI metadata.
 | structlog | >=24.0  | Apache-2.0/MIT | Structured logging                       |
 | boto3     | latest  | Apache-2.0     | AWS SDK for Python                       |
 
+### COG Conversion Pipeline
+
+**COG Conversion Pipeline Dependencies**
+
+| Name                | Version | License                        | Notes                                                                        |
+| :------------------ | :------ | :----------------------------- | :--------------------------------------------------------------------------- |
+| GDAL (libgdal-core) | 3.13.3  | MIT                            | `gdal_translate` with the COG driver, run as a separate process              |
+| PROJ                | 9.9.0   | MIT                            | Coordinate reference system reprojection (GDAL dependency)                   |
+| libtiff             | 4.7.2   | libtiff (BSD-style)            | TIFF reading and writing (GDAL dependency)                                   |
+| GEOS                | 3.15.0  | LGPL-2.1                       | Geometry library loaded by GDAL as a shared library, unmodified              |
+| libspatialite       | 5.1.0   | MPL-1.1 OR GPL-2.0 OR LGPL-2.1 | The conda-forge `gpl` build of a GDAL dependency, loaded by GDAL, unmodified |
+| librttopo           | 1.1.0   | GPL-2.0                        | Loaded by libspatialite, unmodified                                          |
+| boto3               | 1.44.4  | Apache-2.0                     | AWS SDK for Python                                                           |
+
+The image is built from `condaforge/miniforge3` and installs the exact conda-forge packages named in `backendPipelines/conversion/cogConvert/container/conda-explicit.txt`. The pipeline runs only the GTiff and COG drivers. GEOS, libspatialite, librttopo and the other shared libraries GDAL links are present as unmodified shared libraries and are not called by this pipeline. No VAMS code is linked against them and none is modified or redistributed by this repository; each package's license files are kept in the image under `/opt/cog/licenses`.
+
 **laspy License Notice**
 
 laspy is distributed under a 3-clause BSD license (BSD-3-Clause), a standard permissive license functionally equivalent to the MIT and Apache-2.0 licenses with no copyleft obligations:
