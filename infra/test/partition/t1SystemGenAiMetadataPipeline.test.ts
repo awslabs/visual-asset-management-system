@@ -417,8 +417,14 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
             )
         ).toEqual([]);
 
-        // The reader's and writer's grants name the auxiliary bucket, never `*`.
-        const s3Writes = statementsWith(on, "s3:ListMultipartUploadParts");
+        // The reader's and writer's grants name the auxiliary bucket, never `*`. Scoped to the
+        // pipeline's own policies: other functions hold the same multipart actions on their own
+        // prefixes (the zip download service on `vams.preparedDownloads/*`, #1160).
+        const s3Writes = on
+            .ofType("AWS::IAM::Policy")
+            .filter((p) => p.logicalId.startsWith(CONSTRUCT_PREFIX))
+            .flatMap((p) => ((p.properties as any).PolicyDocument?.Statement ?? []) as any[])
+            .filter((st) => JSON.stringify(st.Action).includes("s3:ListMultipartUploadParts"));
         expect(s3Writes.length).toBeGreaterThan(0);
         for (const st of s3Writes) {
             expect(SynthResult.flatten(st.Resource)).toMatch(
