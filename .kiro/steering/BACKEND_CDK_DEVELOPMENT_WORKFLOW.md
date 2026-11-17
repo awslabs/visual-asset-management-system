@@ -431,6 +431,25 @@ no central partition helper in the backend — these four rules are the contract
     `CopyObject`. Ratchet: `backend/tests/handlers/databases/test_buckets_listing_region.py`;
     mock parity: `backend/tests/common/test_s3_region_routing.py`.
 
+    **S3 Transfer Acceleration is decided in `common.s3`, never in a handler.** A
+    bucket row with `isAccelerated: true` (BOOL, missing is false) makes the router
+    sign `get_object`, `upload_part` and `put_object` presigned URLs for
+    `<bucket>.s3-accelerate.amazonaws.com`, in the commercial partition (`aws`)
+    only; the flag is ignored and a warning logged elsewhere. Every other operation
+    keeps the ordinary client, and a bucket without the flag signs the same
+    path-style URL as before. An accelerate problem (a name with a period or one
+    botocore cannot virtual-host, a FIPS endpoint setting, any signing error) is
+    logged once per bucket per cache window and the ordinary URL is returned.
+    `s3_accelerated_client_for_region(region)` is `S3_ASSET_CLIENT_CONFIG` plus
+    `use_accelerate_endpoint`, one per Region. `bucket_is_accelerated(name)` reads
+    the row through `bucketNameGSI` and caches it for 600 s (the Region cache never
+    expires, the flag must); a failed read keeps the last known value and is retried
+    after 30 s. The auxiliary bucket has no row and follows the effective default
+    asset bucket; the artefacts and staging buckets are never accelerated.
+    Server-side consumers never presign. Tests:
+    `backend/tests/common/test_s3_transfer_acceleration.py` (includes a ratchet that
+    every presigning module holds `region_routing_s3_client()`).
+
 3. **New ARN/URL validators must accept every partition.** Compose them from
    `aws_partition_group` (`aws`, `-us-gov`, `-cn`, `-eusc`, `-iso[-x]`) and
    `aws_dns_suffix_group` in `common/validators.py`; never inline `arn:aws:`. A
