@@ -176,9 +176,8 @@ class TestTheImagesAreTheFilesOwn:
         assert text.index("File attributes (JSON):") < text.index(closing) < text.index(USER_CONTENT_FIRST)
 
     def test_without_images_the_note_is_not_given(self):
-        s3 = gm_tests._seed(h.FakeS3(), manifest=gm_tests._manifest(images=0, fileClass="other",
-                                                                      renderBranch="MEDIA",
-                                                                      renderSkipped="unsupported"))
+        manifest = gm_tests._manifest(images=0, fileClass="other", renderBranch="MEDIA", renderSkipped="unsupported")
+        s3 = gm_tests._seed(h.FakeS3(), manifest=manifest)
         bedrock = h.FakeBedrock([gm_tests._reply()])
         gm_tests._run(gm_tests._state(fileClass="other", renderBranch="MEDIA", renderSkipped="unsupported"), s3,
                       bedrock)
