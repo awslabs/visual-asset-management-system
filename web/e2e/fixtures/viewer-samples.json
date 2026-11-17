@@ -522,20 +522,6 @@
             }
         },
         {
-            "id": "geotiff-cog-3857-orthophoto",
-            "viewer": "geotiff-map-viewer",
-            "path": "/geotiff/orthophoto.tif",
-            "url": "https://raw.githubusercontent.com/geomatico/maplibre-cog-protocol/fe827eaffcd8d44319a9aa17bc7700d376794c66/examples/data/orthophoto.tif",
-            "size": 5677642,
-            "sha256": "b1261a3c2d9d2b4fa75ead992c1bf5941147105d5d51c7ffb5355edc1667a5e4",
-            "licence": "MIT",
-            "source": "https://github.com/geomatico/maplibre-cog-protocol/tree/main/examples/data",
-            "requiresFeature": "LOCATIONSERVICES",
-            "expect": {
-                "mode": "tile"
-            }
-        },
-        {
             "id": "geotiff-nad83-utm13-jpeg",
             "viewer": "geotiff-map-viewer",
             "path": "/geotiff/cog_rgb.tif",

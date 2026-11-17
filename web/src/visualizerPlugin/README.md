@@ -337,6 +337,19 @@ All plugin behavior is defined in `viewerConfig.json`:
     -   `maxWholeFileBytes`: Size limit for the files downloaded whole (`.db3`, `.ulg`, `.ulog`), applied to the selection's total (default: `1073741824`, 1 GiB)
 -   **Note**: The presigned URLs reach the app only in the iframe's URL fragment (`roboticsDeepLink.ts`), the reference for `CLAUDE.md` → "A Framed Viewer Must Not Receive a Signed URL in the Query String".
 
+### 22. CogMapViewerPlugin (GeoTIFF Map Viewer)
+
+-   **ID**: `geotiff-map-viewer`
+-   **Extensions**: `.tif`, `.tiff`
+-   **Features**: Georeferenced rasters on the Location Service basemap. A Cloud Optimized GeoTIFF in EPSG:3857 streams as map tiles (`@geomatico/maplibre-cog-protocol`, ranged reads of a presigned URL); a small file in another bundled coordinate system is placed approximately on four corners (geotiff.js, proj4). Layer list with opacity, order, zoom and remove, shared with the Search map's **Show raster** action (`src/common/cogRaster/`).
+-   **Multi-file**: Yes, up to 8 rasters at once, each under its own asset
+-   **Dependencies**: `@geomatico/maplibre-cog-protocol`, `geotiff`, `proj4` (lazy chunks)
+-   **Priority**: 2
+-   **Category**: data
+-   **Feature restriction**: `LOCATIONSERVICES`
+-   **Limits**: placed path up to 128 MiB, 100 km across, 100 Mpx / 256 MiB decoded (`rasterEligibility.ts`)
+-   **Note**: Only EPSG:3857 COGs take the tile path; the tile library does not reproject. See `CLAUDE.md` for the eligibility rules.
+
 ## 🚀 Usage
 
 ### Basic Integration

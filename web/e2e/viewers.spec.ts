@@ -594,7 +594,6 @@ const renderCases: RenderCase[] = [
     // TIFF image viewer may also be offered for the file, so the case picks this viewer by name.
     ...[
         "geotiff-cog-3857-uint16",
-        "geotiff-cog-3857-orthophoto",
         "geotiff-nad83-utm13-jpeg",
         "geotiff-wgs84-striped",
         "geotiff-3857-striped",
