@@ -6693,7 +6693,7 @@ def permanent_delete_execution(event, execution_id):
                 error_code = e.response.get('Error', {}).get('Code', '')
                 if error_code != 'ExecutionDoesNotExist':
                     # A failed lookup (throttling, a denied DescribeExecution) is a service fault, not a
-                    # caller error, and the 400 below logs at WARNING, so this line is the ERROR (#1440).
+                    # caller error, and the 400 below logs at WARNING, so this line is the ERROR.
                     logger.error(f"Could not confirm execution terminal state for {execution_id} "
                                  f"(error code {error_code or 'unknown'}; continuing to guard): {e}")
                     return validation_error(body={
