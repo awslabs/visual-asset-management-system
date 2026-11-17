@@ -21,7 +21,6 @@ from ..constants import (
     AUDIT_CONTAINS_ALLOWED_PATTERN,
     AUDIT_CONTAINS_MAX_LENGTH,
     AUDIT_CONTAINS_MIN_LENGTH,
-    AUDIT_DEFAULT_PAGE_SIZE,
     AUDIT_DEFAULT_WAIT_TIMEOUT_SECONDS,
     AUDIT_DEFAULT_WINDOW,
     AUDIT_EXPORT_FORMATS,
@@ -121,21 +120,66 @@ def _values(name: str, values: Optional[Iterable[str]]) -> List[str]:
     return cleaned
 
 
-def validate_contains(terms: Optional[Iterable[str]]) -> List[str]:
-    """Check --contains terms against the server's limits (the server stays authoritative).
+_limits_cache: Dict[Tuple[str, str], Tuple[float, Tuple[int, int]]] = {}
+_LIMITS_CACHE_SECONDS = 300
 
-    Each term is 3 to 64 characters from letters, digits, space and `. _ : @ + / -`; at most 3
-    terms, all of which must match (case-insensitive). The term itself is never echoed in the
-    error: it may be the sensitive value being searched for."""
+
+def _positive_int(value: Any) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def get_contains_limits(api_client, clock: Callable[[], float] = time.monotonic) -> Tuple[int, int]:
+    """The (most terms, longest term) this deployment accepts, as `audit groups` reports them.
+
+    The operator sets both (`app.auditLogging.search.maxContainsTerms` and `maxContainsTermLength`),
+    so a client that fixed the defaults would refuse input the server accepts. The answer is read once
+    per deployment and profile and kept for a few minutes (a command run is one process; a long-lived
+    MCP server refreshes it). Any failure, or a missing or odd value, falls back to the defaults for
+    that value: the server stays authoritative and answers its own generic 400 for anything it refuses.
+    """
+    profile = getattr(getattr(api_client, 'profile_manager', None), 'profile_name', '') or ''
+    base = getattr(api_client, 'base_url', '')
+    key = (str(base), str(profile))
+    now = clock()
+    cached = _limits_cache.get(key)
+    if cached and now - cached[0] < _LIMITS_CACHE_SECONDS:
+        return cached[1]
+    max_terms, max_length = AUDIT_MAX_CONTAINS_TERMS, AUDIT_CONTAINS_MAX_LENGTH
+    try:
+        limits = (api_client.list_audit_log_groups() or {}).get('limits') or {}
+        max_terms = _positive_int(limits.get('maxContainsTerms')) or max_terms
+        max_length = _positive_int(limits.get('maxContainsTermLength')) or max_length
+    except Exception:
+        # Not cached: a later call in the same process may succeed.
+        return (AUDIT_MAX_CONTAINS_TERMS, AUDIT_CONTAINS_MAX_LENGTH)
+    max_length = max(max_length, AUDIT_CONTAINS_MIN_LENGTH)
+    _limits_cache[key] = (now, (max_terms, max_length))
+    return max_terms, max_length
+
+
+def resolve_contains_limits(api_client, terms: Optional[Iterable[str]]) -> Optional[Tuple[int, int]]:
+    """The limits to validate `terms` against, or None when no term was given (no extra request)."""
+    if not any((term or '').strip() for term in (terms or ())):
+        return None
+    return get_contains_limits(api_client)
+
+
+def validate_contains(terms: Optional[Iterable[str]],
+                      limits: Optional[Tuple[int, int]] = None) -> List[str]:
+    """Check --contains terms before sending them (the server stays authoritative).
+
+    Each term is at least 3 characters from letters, digits, space and `. _ : @ + /-`; the most terms
+    and the longest term come from `limits` (see get_contains_limits), or the defaults of 3 terms and
+    64 characters when none are given. All terms must match (case-insensitive). The term itself is
+    never echoed in the error: it may be the sensitive value being searched for."""
+    max_terms, max_length = limits or (AUDIT_MAX_CONTAINS_TERMS, AUDIT_CONTAINS_MAX_LENGTH)
     cleaned = [(term or '').strip() for term in (terms or ())]
-    if len(cleaned) > AUDIT_MAX_CONTAINS_TERMS:
-        raise InvalidAuditRequestError(
-            f"At most {AUDIT_MAX_CONTAINS_TERMS} contains terms are allowed")
+    if len(cleaned) > max_terms:
+        raise InvalidAuditRequestError(f"At most {max_terms} contains terms are allowed")
     for term in cleaned:
-        if not (AUDIT_CONTAINS_MIN_LENGTH <= len(term) <= AUDIT_CONTAINS_MAX_LENGTH):
+        if not (AUDIT_CONTAINS_MIN_LENGTH <= len(term) <= max_length):
             raise InvalidAuditRequestError(
-                f"Each contains term must be {AUDIT_CONTAINS_MIN_LENGTH} to "
-                f"{AUDIT_CONTAINS_MAX_LENGTH} characters")
+                f"Each contains term must be {AUDIT_CONTAINS_MIN_LENGTH} to {max_length} characters")
         if not _CONTAINS_RE.match(term):
             raise InvalidAuditRequestError(
                 "A contains term may hold only letters, digits, spaces and . _ : @ + / -")
@@ -146,7 +190,8 @@ def build_filters(*, groups=None, actions=None, entity_types=None, entity_ids=No
                   api_key_ids=None, databases=None, assets=None, outcomes=None, request_ids=None,
                   contains=None, time_from: Optional[str] = None, time_to: Optional[str] = None,
                   include_probes: bool = False, order: Optional[str] = None,
-                  now: Optional[datetime] = None) -> Dict[str, Any]:
+                  now: Optional[datetime] = None,
+                  contains_limits: Optional[Tuple[int, int]] = None) -> Dict[str, Any]:
     """Build the POST /audit/queries body from the command's options.
 
     Only filters that were given are sent. `includeProbes` is always sent (False hides the
@@ -170,7 +215,7 @@ def build_filters(*, groups=None, actions=None, entity_types=None, entity_ids=No
                     f"outcome must be one of: {', '.join(AUDIT_OUTCOMES)}")
         if values:
             body[key] = values
-    terms = validate_contains(contains)
+    terms = validate_contains(contains, contains_limits)
     if terms:
         body['contains'] = terms
     body['includeProbes'] = bool(include_probes)
@@ -286,14 +331,19 @@ def collect_rows(api_client, query_id: str, first_page: Optional[Dict[str, Any]]
 
 
 def find_record(api_client, query_id: str, record_id: str, *, page_size: Optional[int] = None,
-                max_pages: int = 50) -> Optional[Dict[str, Any]]:
-    """Find one row of a Complete search by its `recordId`, reading pages in order. None if absent."""
+                max_pages: int = 50, stats: Optional[Dict[str, int]] = None) -> Optional[Dict[str, Any]]:
+    """Find one row of a Complete search by its `recordId`, reading pages in order. None if absent.
+
+    Rows written before records carried a `recordId` can never match; when `stats` is given it
+    receives their count under `withoutId`, so a caller can say so."""
     token = None
     for _ in range(max_pages):
         page = api_client.get_audit_query(query_id, page_size=page_size, starting_token=token)
         for row in page.get('Items') or []:
             if row.get('recordId') == record_id:
                 return row
+            if stats is not None and not row.get('recordId'):
+                stats['withoutId'] = stats.get('withoutId', 0) + 1
         token = page.get('NextToken')
         if not token:
             return None
