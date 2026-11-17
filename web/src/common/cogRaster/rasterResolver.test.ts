@@ -25,6 +25,7 @@ import { fetchFileInfo, fetchFileMetadata } from "../../services/APIService";
 import { RasterDownloadRefused, requestPresignedUrl } from "./presignedUrl";
 import { buildPlacedImage } from "./placedImage";
 import {
+    RASTER_ATTRIBUTE_KEYS,
     attributeFacts,
     clearRasterAttributeCache,
     cogKeyFor,
@@ -33,7 +34,8 @@ import {
     prepareRaster,
 } from "./rasterResolver";
 
-const FILE = { databaseId: "db", assetId: "a1", key: "maps/site.tif" };
+const FILE = { databaseId: "db", assetId: "a1", key: "/maps/site.tif" };
+const COG_KEY = "/maps/site.tif.cog.tif";
 const rows = (values: Record<string, unknown>) => ({
     metadata: Object.entries(values).map(([metadataKey, metadataValue]) => ({
         metadataKey,
@@ -47,11 +49,20 @@ function attributesByKey(map: Record<string, Record<string, unknown>>) {
     );
 }
 
+/** The header each presigned URL opens, by the file key in the URL. */
+function headers(map: Record<string, string>) {
+    (fromUrl as jest.Mock).mockImplementation(async (url: string) => {
+        const key = Object.keys(map).find((candidate) => url.includes(`${candidate}?`));
+        if (!key) throw new Error(`no fixture for ${url}`);
+        return loadFixtureTiff(map[key]);
+    });
+}
+
 beforeEach(() => {
     jest.clearAllMocks();
     clearRasterAttributeCache();
     (requestPresignedUrl as jest.Mock).mockImplementation(
-        async (f: any) => `https://s3/${f.key}?X-Amz-Date=20261117T170000Z&X-Amz-Expires=3600`
+        async (f: any) => `https://s3${f.key}?X-Amz-Date=20261117T170000Z&X-Amz-Expires=3600`
     );
     (fetchFileInfo as jest.Mock).mockResolvedValue([true, { size: 1000, versions: [] }]);
     (buildPlacedImage as jest.Mock).mockResolvedValue({
@@ -75,12 +86,22 @@ describe("attributeFacts", () => {
             )
         ).toEqual({ isCog: true, crs: "EPSG:3857", georeferenced: true });
     });
-    it("reads the COG link", () => {
+    it("reads the COG link under the flat cog_link_* keys the COG pipeline writes", () => {
+        expect(RASTER_ATTRIBUTE_KEYS.cogFile).toBe("cog_link_cogFile");
         expect(
             attributeFacts(
-                rows({ cogFile: "maps/site.tif.cog.tif", cogOfVersionId: "v1" }).metadata
+                rows({
+                    cog_link_cogFile: COG_KEY,
+                    cog_link_cogOfVersionId: "v1",
+                    cog_link_outputCrs: "EPSG:3857",
+                }).metadata
             )
-        ).toEqual({ cogFile: "maps/site.tif.cog.tif", cogOfVersionId: "v1" });
+        ).toEqual({ cogFile: COG_KEY, cogOfVersionId: "v1", cogOutputCrs: "EPSG:3857" });
+    });
+    it("ignores the bare names an earlier draft of the contract used", () => {
+        expect(attributeFacts(rows({ cogFile: COG_KEY, cogOfVersionId: "v1" }).metadata)).toEqual(
+            {}
+        );
     });
     it("is empty for no rows", () => {
         expect(attributeFacts(undefined)).toEqual({});
@@ -88,22 +109,22 @@ describe("attributeFacts", () => {
 });
 
 describe("naming", () => {
-    it("recognises a converted COG name and a stored link", () => {
+    it("recognises a converted COG name and keeps the asset-relative leading slash", () => {
         expect(isCogFileName("a/b.tif.cog.tif")).toBe(true);
         expect(isCogFileName("a/b.tif")).toBe(false);
-        expect(cogKeyFor("/maps/site.tif.cog.tif")).toBe("maps/site.tif.cog.tif");
+        expect(cogKeyFor("/maps/site.tif.cog.tif")).toBe("/maps/site.tif.cog.tif");
+        expect(cogKeyFor("maps/site.tif.cog.tif")).toBe("/maps/site.tif.cog.tif");
     });
 });
 
-describe("prepareRaster from attributes", () => {
-    it("draws a Web Mercator COG on the tile path without opening the file", async () => {
-        attributesByKey({
-            [FILE.key]: { ext_is_cog: true, ext_crs: "EPSG:3857", ext_georeferenced: true },
-        });
-        const result: any = await prepareRaster(FILE);
-        expect(result.mode).toBe("tile");
-        expect(result.usedCog).toBe(false);
-        expect(fromUrl).not.toHaveBeenCalled();
+describe("attributes", () => {
+    it("reads the attribute snapshot of a pinned asset version", async () => {
+        attributesByKey({});
+        headers({ [FILE.key]: "cog-3857.tif" });
+        await prepareRaster({ ...FILE, assetVersionId: "3" });
+        expect(fetchFileMetadata).toHaveBeenCalledWith(
+            expect.objectContaining({ filePath: FILE.key, assetVersionId: "3" })
+        );
     });
 
     it("refuses a file with no georeference without requesting it", async () => {
@@ -122,12 +143,36 @@ describe("prepareRaster from attributes", () => {
         expect(result).toMatchObject({ refused: true, reason: "unsupported-crs" });
         expect(fromUrl).not.toHaveBeenCalled();
     });
+});
+
+describe("the header decides what is drawn (D4)", () => {
+    it("tiles a Web Mercator COG and carries its extent for framing", async () => {
+        attributesByKey({
+            [FILE.key]: { ext_is_cog: true, ext_crs: "EPSG:3857", ext_georeferenced: true },
+        });
+        headers({ [FILE.key]: "cog-3857.tif" });
+        const result: any = await prepareRaster(FILE);
+        expect(result.mode).toBe("tile");
+        expect(result.bboxWgs84).toHaveLength(4);
+        expect(result.bboxWgs84[0]).toBeLessThanOrEqual(10);
+    });
+
+    it("does not tile a file whose attributes wrongly claim a Web Mercator COG", async () => {
+        attributesByKey({
+            [FILE.key]: { ext_is_cog: true, ext_crs: "EPSG:3857", ext_georeferenced: true },
+        });
+        headers({ [FILE.key]: "wgs84-striped.tif" });
+        const result: any = await prepareRaster(FILE, {
+            sizeBytes: fixtureSize("wgs84-striped.tif"),
+        });
+        expect(result).toMatchObject({ mode: "placed", approximate: true });
+    });
 
     it("places a small file in a bundled system, opening it for its pixels", async () => {
         attributesByKey({
             [FILE.key]: { ext_is_cog: false, ext_crs: "EPSG:32633", ext_georeferenced: true },
         });
-        (fromUrl as jest.Mock).mockResolvedValue(await loadFixtureTiff("utm33-float-nodata.tif"));
+        headers({ [FILE.key]: "utm33-float-nodata.tif" });
         const result: any = await prepareRaster(FILE, {
             sizeBytes: fixtureSize("utm33-float-nodata.tif"),
         });
@@ -141,52 +186,86 @@ describe("prepareRaster from the header", () => {
     beforeEach(() => attributesByKey({}));
 
     it("reads the header when there are no attributes, and tiles a Web Mercator COG", async () => {
-        (fromUrl as jest.Mock).mockResolvedValue(await loadFixtureTiff("cog-3857.tif"));
+        headers({ [FILE.key]: "cog-3857.tif" });
         const result: any = await prepareRaster(FILE, { sizeBytes: 5 * 1024 ** 3 });
         expect(result.mode).toBe("tile");
         expect(buildPlacedImage).not.toHaveBeenCalled();
     });
 
     it("refuses a large striped file as not cloud-optimized", async () => {
-        (fromUrl as jest.Mock).mockResolvedValue(await loadFixtureTiff("striped-3857.tif"));
+        headers({ [FILE.key]: "striped-3857.tif" });
         const result: any = await prepareRaster(FILE, { sizeBytes: 500 * 1024 ** 2 });
         expect(result).toMatchObject({ refused: true, reason: "not-cloud-optimized" });
         expect(result.message).toMatch(/TIF-to-COG pipeline/);
     });
 
     it("refuses a file over the extent limit with the convert message", async () => {
-        (fromUrl as jest.Mock).mockResolvedValue(await loadFixtureTiff("wgs84-wide.tif"));
+        headers({ [FILE.key]: "wgs84-wide.tif" });
         const result: any = await prepareRaster(FILE, { sizeBytes: 1000 });
         expect(result).toMatchObject({ refused: true, reason: "too-large-to-place" });
     });
 
     it("refuses a file with no georeference found in the header", async () => {
-        (fromUrl as jest.Mock).mockResolvedValue(await loadFixtureTiff("no-georeference.tif"));
+        headers({ [FILE.key]: "no-georeference.tif" });
         const result: any = await prepareRaster(FILE, { sizeBytes: 1000 });
         expect(result).toMatchObject({ refused: true, reason: "no-georeference" });
     });
+});
 
-    it("looks up the size when the caller does not know it", async () => {
-        (fromUrl as jest.Mock).mockResolvedValue(await loadFixtureTiff("wgs84-striped.tif"));
-        (fetchFileInfo as jest.Mock).mockResolvedValue([true, { size: 200 * 1024 ** 2 }]);
+describe("decode cap (D1)", () => {
+    it("refuses a pixel bomb with a tiny extent and file size before any pixel is decoded", async () => {
+        attributesByKey({});
+        headers({ [FILE.key]: "pixel-bomb-4326.tif" });
+        const result: any = await prepareRaster(FILE, {
+            sizeBytes: fixtureSize("pixel-bomb-4326.tif"),
+        });
+        expect(result).toMatchObject({ refused: true, reason: "too-many-pixels" });
+        expect(result.message).toMatch(/11,000 x 10,000 pixels/);
+        expect(buildPlacedImage).not.toHaveBeenCalled();
+    });
+});
+
+describe("the size guard fails closed (D2)", () => {
+    beforeEach(() => attributesByKey({}));
+
+    it("uses the size the header read reported (Content-Range) when the caller has none", async () => {
+        const tiff: any = await loadFixtureTiff("wgs84-striped.tif");
+        Object.defineProperty(tiff.source, "fileSize", { get: () => 177 * 1024 ** 2 });
+        (fromUrl as jest.Mock).mockResolvedValue(tiff);
+        (fetchFileInfo as jest.Mock).mockResolvedValue([false, "unavailable"]);
         const result: any = await prepareRaster(FILE);
         expect(result).toMatchObject({ refused: true, reason: "too-large-to-place" });
+        expect(buildPlacedImage).not.toHaveBeenCalled();
+    });
+
+    it("needs no size lookup when the header's byte counts prove the file small", async () => {
+        headers({ [FILE.key]: "wgs84-striped.tif" });
+        (fetchFileInfo as jest.Mock).mockResolvedValue([true, { size: 200 * 1024 ** 2 }]);
+        const result: any = await prepareRaster(FILE);
+        expect(result).toMatchObject({ mode: "placed" });
+        expect(fetchFileInfo).not.toHaveBeenCalled();
+    });
+
+    it("places a file of unknown size whose byte counts prove it small", async () => {
+        headers({ [FILE.key]: "wgs84-striped.tif" });
+        (fetchFileInfo as jest.Mock).mockResolvedValue([false, "unavailable"]);
+        const result: any = await prepareRaster(FILE);
+        expect(result).toMatchObject({ mode: "placed" });
     });
 });
 
 describe("prefer the converted COG", () => {
-    const COG_KEY = "maps/site.tif.cog.tif";
-
-    it("draws the COG beside the source when the link is recorded", async () => {
+    it("draws the COG named by cog_link_cogFile when it is recorded", async () => {
         attributesByKey({
-            [FILE.key]: { ext_is_cog: false, ext_crs: "EPSG:32633", cogFile: COG_KEY },
+            [FILE.key]: { ext_is_cog: false, ext_crs: "EPSG:32633", cog_link_cogFile: COG_KEY },
             [COG_KEY]: {
                 ext_is_cog: true,
                 ext_crs: "EPSG:3857",
                 ext_georeferenced: true,
-                cogOfVersionId: "v2",
+                cog_link_cogOfVersionId: "v2",
             },
         });
+        headers({ [COG_KEY]: "cog-3857.tif" });
         (fetchFileInfo as jest.Mock).mockResolvedValue([
             true,
             { versions: [{ versionId: "v2", isLatest: true }] },
@@ -199,13 +278,15 @@ describe("prefer the converted COG", () => {
             sourceKey: FILE.key,
         });
         expect(result.file.key).toBe(COG_KEY);
+        expect(requestPresignedUrl).toHaveBeenCalledWith(expect.objectContaining({ key: COG_KEY }));
     });
 
     it("flags a COG made from an earlier version of its source", async () => {
         attributesByKey({
-            [FILE.key]: { cogFile: COG_KEY },
-            [COG_KEY]: { ext_is_cog: true, ext_crs: "EPSG:3857", cogOfVersionId: "v1" },
+            [FILE.key]: { cog_link_cogFile: COG_KEY },
+            [COG_KEY]: { cog_link_cogOfVersionId: "v1", cog_link_outputCrs: "EPSG:3857" },
         });
+        headers({ [COG_KEY]: "cog-3857.tif" });
         (fetchFileInfo as jest.Mock).mockResolvedValue([
             true,
             { versions: [{ versionId: "v2", isLatest: true }] },
@@ -217,17 +298,11 @@ describe("prefer the converted COG", () => {
     });
 
     it("falls back to the source when the COG is refused", async () => {
-        attributesByKey({
-            [FILE.key]: {
-                ext_is_cog: true,
-                ext_crs: "EPSG:3857",
-                ext_georeferenced: true,
-                cogFile: COG_KEY,
-            },
-        });
+        attributesByKey({ [FILE.key]: { cog_link_cogFile: COG_KEY } });
+        headers({ [FILE.key]: "cog-3857.tif" });
         (requestPresignedUrl as jest.Mock).mockImplementation(async (f: any) => {
             if (f.key === COG_KEY) throw new RasterDownloadRefused("not found");
-            return `https://s3/${f.key}`;
+            return `https://s3${f.key}?X-Amz-Expires=3600`;
         });
         const result: any = await prepareRaster(FILE);
         expect(result).toMatchObject({ mode: "tile", usedCog: false });
@@ -236,18 +311,16 @@ describe("prefer the converted COG", () => {
 
     it("does not look for a COG when a COG is opened directly", async () => {
         const direct = { ...FILE, key: COG_KEY };
-        attributesByKey({
-            [COG_KEY]: { ext_is_cog: true, ext_crs: "EPSG:3857", cogFile: "other.cog.tif" },
-        });
+        attributesByKey({ [COG_KEY]: { cog_link_cogFile: "/other.cog.tif" } });
+        headers({ [COG_KEY]: "cog-3857.tif" });
         const result: any = await prepareRaster(direct);
         expect(result.file.key).toBe(COG_KEY);
         expect(result.usedCog).toBe(false);
     });
 
     it("can be switched off", async () => {
-        attributesByKey({
-            [FILE.key]: { ext_is_cog: true, ext_crs: "EPSG:3857", cogFile: COG_KEY },
-        });
+        attributesByKey({ [FILE.key]: { cog_link_cogFile: COG_KEY } });
+        headers({ [FILE.key]: "cog-3857.tif" });
         const result: any = await prepareRaster(FILE, { preferCog: false });
         expect(result.usedCog).toBe(false);
     });

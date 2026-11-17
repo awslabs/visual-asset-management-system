@@ -6,26 +6,23 @@
 import { fromUrl } from "geotiff";
 import { fetchFileInfo, fetchFileMetadata } from "../../services/APIService";
 import { RasterDownloadRefused, RasterFileRef, requestPresignedUrl } from "./presignedUrl";
-import { PlacedImage, buildPlacedImage } from "./placedImage";
-import {
-    RasterDecision,
-    RasterFacts,
-    RefusalReason,
-    decideRasterDisplay,
-} from "./rasterEligibility";
+import { PlacedImage, RasterTooLarge, buildPlacedImage } from "./placedImage";
+import { RasterFacts, RefusalReason, decideRasterDisplay } from "./rasterEligibility";
 import { readTiffFacts } from "./tiffHeader";
 
 /**
  * Attribute keys the viewer reads. `ext_*` are the promoted raster facts the system metadata pipeline
- * writes for a TIFF (#1600); `cog*` link a source to its converted COG (#1601). Both are looked up
- * by key in one place so a rename in either pipeline is a one-line change here.
+ * writes for a TIFF (#1600). `cog_link_*` are the flat keys the TIF-to-COG pipeline (#1601) writes:
+ * `cog_link_cogFile` on the source, and `cog_link_cogOfVersionId` and `cog_link_outputCrs` on the
+ * COG. All are looked up by key in one place so a rename in either pipeline is a one-line change here.
  */
 export const RASTER_ATTRIBUTE_KEYS = {
     isCog: "ext_is_cog",
     crs: "ext_crs",
     georeferenced: "ext_georeferenced",
-    cogFile: "cogFile",
-    cogOfVersionId: "cogOfVersionId",
+    cogFile: "cog_link_cogFile",
+    cogOfVersionId: "cog_link_cogOfVersionId",
+    cogOutputCrs: "cog_link_outputCrs",
 } as const;
 
 /** The suffix #1601 appends to a source's file name for its converted COG. */
@@ -34,6 +31,8 @@ export const COG_SUFFIX = ".cog.tif";
 export interface RasterAttributes extends RasterFacts {
     cogFile?: string;
     cogOfVersionId?: string;
+    /** The CRS the COG pipeline wrote the COG in (on a converted COG). */
+    cogOutputCrs?: string;
 }
 
 function asBoolean(value: unknown): boolean | undefined {
@@ -62,6 +61,10 @@ export function attributeFacts(rows: any[] | undefined | null): RasterAttributes
     if (typeof cogOfVersionId === "string" && cogOfVersionId.trim()) {
         facts.cogOfVersionId = cogOfVersionId.trim();
     }
+    const cogOutputCrs = byKey.get(RASTER_ATTRIBUTE_KEYS.cogOutputCrs);
+    if (typeof cogOutputCrs === "string" && cogOutputCrs.trim()) {
+        facts.cogOutputCrs = cogOutputCrs.trim();
+    }
     return facts;
 }
 
@@ -75,11 +78,13 @@ export function isTiffName(key: string): boolean {
     return /\.tiff?$/i.test(key);
 }
 
-/** The key of a COG that sits beside its source, relative to the asset, as the contract names it. */
+/**
+ * The download key of a COG named by `cog_link_cogFile`. The pipeline writes the COG's path relative to
+ * the asset with a leading slash (`/maps/a.tif.cog.tif`), the asset-relative shape the download route
+ * accepts, so the slash is kept (added when missing).
+ */
 export function cogKeyFor(cogFile: string): string {
-    // The link holds the COG's path relative to the asset root; keys elsewhere in the web carry the
-    // same relative form, so it is used as given (a leading slash is not part of a key).
-    return cogFile.replace(/^\/+/, "");
+    return `/${cogFile.replace(/^\/+/, "")}`;
 }
 
 export interface RasterRefusal {
@@ -129,8 +134,13 @@ export function clearRasterAttributeCache(): void {
     attributeCache.clear();
 }
 
+/**
+ * The file's attributes. With an asset version the snapshot taken with that version is read. The
+ * attribute route has no per-file version parameter, so a file pinned only by its file version id is
+ * read with its current attributes.
+ */
 export function readRasterAttributes(file: RasterFileRef): Promise<RasterAttributes> {
-    const cacheKey = rasterId(file);
+    const cacheKey = `${rasterId(file)}#${file.assetVersionId ?? ""}`;
     const cached = attributeCache.get(cacheKey);
     if (cached) return cached;
     const request = fetchFileMetadata({
@@ -138,6 +148,7 @@ export function readRasterAttributes(file: RasterFileRef): Promise<RasterAttribu
         assetId: file.assetId,
         filePath: file.key,
         type: "attribute",
+        assetVersionId: file.assetVersionId,
     })
         .then((result: any) => attributeFacts(result?.metadata))
         // A file whose attributes cannot be read is read from its header instead.
@@ -162,8 +173,7 @@ function refusal(reason: RasterRefusal["reason"], message: string): RasterRefusa
     return { refused: true, reason, message };
 }
 
-async function lookupSize(file: RasterFileRef, known?: number): Promise<number | undefined> {
-    if (known !== undefined) return known;
+async function lookupSize(file: RasterFileRef): Promise<number | undefined> {
     try {
         const [ok, info] = await fetchFileInfo({
             databaseId: file.databaseId,
@@ -202,14 +212,14 @@ export async function isStaleCog(
 /**
  * Works out how to show one raster file and gets everything the map needs for it.
  *
- *  1. Reads the file's attributes. When a converted COG is recorded (`cogFile`) and the caller did not
- *     open a COG directly, the COG is requested through the same download route; if the API refuses it
- *     or it is gone, the source is used.
- *  2. Decides from the attributes (ext_crs, ext_is_cog, ext_georeferenced) before the file is opened:
- *     a Web Mercator COG goes straight to the tile path and a file with no georeference or an
- *     unsupported system is refused without a read.
- *  3. Only a file that must be placed is opened, by ranged reads. When the attributes are absent the
- *     TIFF header is read here instead.
+ *  1. Reads the file's attributes. When a converted COG is recorded (`cog_link_cogFile`) and the caller
+ *     did not open a COG directly, the COG is requested through the same download route; if the API
+ *     refuses it or it is gone, the source is used.
+ *  2. Refuses from the attributes (ext_crs, ext_georeferenced) before the file is opened: no
+ *     georeference, or a coordinate system the viewer cannot place.
+ *  3. Reads the TIFF header by ranged reads and decides from it, so wrong or stale attributes cannot
+ *     send a file to the tile path. Only a Web Mercator COG is tiled; a small file is placed, its
+ *     decode size, fetch size and extent checked first (the placed path fails closed).
  *
  * Access is decided by the API at every request; nothing here derives a permission.
  */
@@ -248,71 +258,54 @@ export async function prepareRaster(
 
     const attributes = usedCog ? await readRasterAttributes(target) : sourceAttributes;
     const sizeKnown = usedCog ? undefined : options.sizeBytes;
-    let facts: RasterFacts = {
+    // Refusals the attributes settle without opening the file: no georeference, or a coordinate
+    // system the viewer cannot place. Anything that would be drawn is checked against the header.
+    const early = decideRasterDisplay({
         georeferenced: attributes.georeferenced,
-        crs: attributes.crs,
+        crs: attributes.crs ?? attributes.cogOutputCrs,
         isCog: attributes.isCog,
-        sizeBytes: sizeKnown,
-    };
-    // A converted COG is Web Mercator by construction, so its own attributes may be missing for a moment
-    // after the pipeline wrote it; the header read below settles it.
-    const haveAttributeAnswer =
-        facts.georeferenced !== undefined || facts.crs !== undefined || facts.isCog !== undefined;
-
-    let decision: RasterDecision | null = null;
-    if (haveAttributeAnswer && facts.crs !== undefined && facts.isCog !== undefined) {
-        const early = decideRasterDisplay(facts);
-        if (early.kind !== "placed") decision = early;
-    } else if (facts.georeferenced === false) {
-        decision = decideRasterDisplay(facts);
+    });
+    if (
+        early.kind === "refuse" &&
+        (early.reason === "no-georeference" || early.reason === "unsupported-crs") &&
+        (attributes.georeferenced === false || (attributes.crs ?? attributes.cogOutputCrs))
+    ) {
+        return refusal(early.reason, early.message);
     }
 
-    const buildTile = async (): Promise<PreparedRaster> => ({
-        id: rasterId(target),
-        label: rasterLabel(target.key),
-        mode: "tile",
-        file: target,
-        sourceKey,
-        usedCog,
-        staleCog,
-        approximate: false,
-        approximateNote: null,
-        bboxWgs84: null,
-        url: url ?? (url = await requestPresignedUrl(target)),
-    });
-
     try {
-        if (decision?.kind === "tile") return await buildTile();
-        if (decision?.kind === "refuse") return refusal(decision.reason, decision.message);
-
-        // The file has to be opened: no usable attributes, or it is to be placed.
+        // The header decides the path: the attributes can be stale or wrong, and the tile library
+        // draws a blank layer, with no error, for a file that is not a Web Mercator COG.
         url = url ?? (await requestPresignedUrl(target));
         const tiff = await fromUrl(url, { allowFullFile: false }, options.signal);
-        const header = await readTiffFacts(tiff, await lookupSize(target, sizeKnown));
-        facts = {
-            georeferenced: header.georeferenced,
-            crs: header.crs,
-            isCog: attributes.isCog ?? header.isCog,
-            sizeBytes: header.sizeBytes,
-            bboxWgs84: header.bboxWgs84,
-        };
-        const final = decideRasterDisplay(facts);
+        const header = await readTiffFacts(tiff, sizeKnown);
+        let final = decideRasterDisplay(header);
+        if (final.kind === "refuse" && final.reason === "size-unknown") {
+            // Neither the caller nor the header read knew the size: ask the API once more.
+            header.sizeBytes = await lookupSize(target);
+            final = decideRasterDisplay(header);
+        }
         if (final.kind === "refuse") return refusal(final.reason, final.message);
-        if (final.kind === "tile") return await buildTile();
 
-        const placed = await buildPlacedImage(tiff, header, options.signal);
-        return {
+        const common = {
             id: rasterId(target),
             label: rasterLabel(target.key),
-            mode: "placed",
             file: target,
             sourceKey,
             usedCog,
             staleCog,
-            approximate: final.approximate,
-            approximateNote: final.approximateNote,
             bboxWgs84: header.bboxWgs84 ?? null,
             url,
+        };
+        if (final.kind === "tile") {
+            return { ...common, mode: "tile", approximate: false, approximateNote: null };
+        }
+        const placed = await buildPlacedImage(tiff, header, options.signal);
+        return {
+            ...common,
+            mode: "placed",
+            approximate: final.approximate,
+            approximateNote: final.approximateNote,
             placed,
         };
     } catch (error: any) {
@@ -320,6 +313,7 @@ export async function prepareRaster(
             return refusal("download-refused", error.message);
         }
         if (error?.name === "AbortError") throw error;
+        if (error instanceof RasterTooLarge) return refusal("too-many-pixels", error.message);
         return refusal("unreadable", "This raster could not be read.");
     }
 }
