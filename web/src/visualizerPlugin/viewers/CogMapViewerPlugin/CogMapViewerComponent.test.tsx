@@ -25,19 +25,24 @@ const mockConfig: { value: any } = { value: { locationServiceApiUrl: "https://ma
 jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: () => mockConfig.value },
 }));
+const mockLayers: { value: any } = { value: null };
+const freshLayers = () => ({
+    entries: [] as any[],
+    notices: [],
+    busy: 0,
+    addFile: jest.fn(),
+    remove: jest.fn(),
+    setOpacity: jest.fn(),
+    move: jest.fn(),
+    zoomTo: jest.fn(() => false),
+    dismissNotice: jest.fn(),
+});
 jest.mock("../../../common/cogRaster/useRasterLayers", () => ({
-    useRasterLayers: () => ({
-        entries: [],
-        notices: [],
-        busy: 0,
-        addFile: jest.fn(),
-        remove: jest.fn(),
-        setOpacity: jest.fn(),
-        move: jest.fn(),
-        zoomTo: jest.fn(),
-        dismissNotice: jest.fn(),
-    }),
+    useRasterLayers: () => mockLayers.value,
 }));
+beforeEach(() => {
+    mockLayers.value = freshLayers();
+});
 
 const base = {
     assetId: "a1",
@@ -88,6 +93,37 @@ describe("filesToShow", () => {
 });
 
 describe("CogMapViewerComponent", () => {
+    it("frames the first raster once its extent is known, not before (D3)", () => {
+        const layers = mockLayers.value;
+        const entry = { id: "r1", label: "x.tif", framable: false, failed: null };
+        layers.entries = [entry];
+        const { rerender } = render(<CogMapViewerComponent {...base} assetKey="x.tif" />);
+        // Not framable yet (a tile source whose extent is not loaded): nothing to zoom to.
+        layers.zoomTo.mockReturnValue(false);
+        expect(layers.zoomTo).not.toHaveBeenCalled();
+        // The extent arrives: the entries change and framing happens then.
+        layers.entries = [{ ...entry, framable: true }];
+        layers.zoomTo.mockReturnValue(true);
+        rerender(<CogMapViewerComponent {...base} assetKey="x.tif" />);
+        expect(layers.zoomTo).toHaveBeenCalledWith("r1");
+        // Once framed it does not frame again.
+        layers.entries = [
+            { ...entry, framable: true },
+            { id: "r2", framable: true, failed: null },
+        ];
+        rerender(<CogMapViewerComponent {...base} assetKey="x.tif" />);
+        expect(layers.zoomTo).toHaveBeenCalledTimes(1);
+    });
+
+    it("tries again when the first zoom finds no bounds", () => {
+        const layers = mockLayers.value;
+        layers.entries = [{ id: "r1", framable: true, failed: null }];
+        layers.zoomTo.mockReturnValueOnce(false).mockReturnValue(true);
+        const { rerender } = render(<CogMapViewerComponent {...base} assetKey="x.tif" />);
+        layers.entries = [{ id: "r1", framable: true, failed: null }];
+        rerender(<CogMapViewerComponent {...base} assetKey="x.tif" />);
+        expect(layers.zoomTo).toHaveBeenCalledTimes(2);
+    });
     it("renders the map and the layer list", () => {
         render(<CogMapViewerComponent {...base} assetKey="x.tif" />);
         expect(screen.getByTestId("cog-map-viewer")).toBeInTheDocument();

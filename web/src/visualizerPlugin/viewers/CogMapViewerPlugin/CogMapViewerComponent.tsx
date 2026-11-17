@@ -96,14 +96,14 @@ const CogMapViewerComponent: React.FC<ViewerPluginProps> = (props) => {
         setMap(mapRef.current?.getMap() ?? null);
     }, []);
 
-    // Frame the first raster that appears.
+    // Frame the first raster that can be framed. A tile layer's extent can arrive after the layer is
+    // listed (from its source once maplibre has read it), so framing waits until zoomTo succeeds.
     const framed = useRef(false);
     const { entries, zoomTo } = layers;
     useEffect(() => {
-        if (!framed.current && entries.length > 0) {
-            framed.current = true;
-            zoomTo(entries[0].id);
-        }
+        if (framed.current) return;
+        const first = entries.find((entry) => entry.framable && !entry.failed);
+        if (first && zoomTo(first.id)) framed.current = true;
     }, [entries, zoomTo]);
 
     if (!mapStyleUrl) {

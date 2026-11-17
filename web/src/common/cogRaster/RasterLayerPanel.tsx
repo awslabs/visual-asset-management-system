@@ -65,6 +65,11 @@ const LayerRow: React.FC<{
                 )}
                 {entry.usedCog && <Badge>Converted COG</Badge>}
             </SpaceBetween>
+            {entry.failed && (
+                <Alert type="error" data-testid="raster-layer-failed">
+                    {entry.failed}
+                </Alert>
+            )}
             {entry.approximateNote && (
                 <Box variant="small" color="text-status-warning">
                     {entry.approximateNote}

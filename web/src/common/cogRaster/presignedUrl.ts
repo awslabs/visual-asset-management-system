@@ -82,20 +82,30 @@ export async function requestPresignedUrl(file: RasterFileRef): Promise<string> 
         : new RasterDownloadRefused(message);
 }
 
+/** Failed refreshes in a row after which the layer is given up, with a message. */
+export const MAX_REFRESH_FAILURES = 3;
+
+/** Delay before the first retry of a failed refresh; it doubles with each further failure. */
+export const RETRY_BASE_MS = FALLBACK_REFRESH_MS / 4;
+
 /**
  * Keeps a presigned URL fresh. `onRefresh` is called with each replacement URL, about 80% of the
- * way through the previous one's lifetime; `refreshNow` is for an expired read (a 403 from a tile
- * request). Returns a stop function. A failed refresh is retried after FALLBACK_REFRESH_MS / 4.
+ * way through the previous one's lifetime (at most MAX_REFRESH_MS); `refreshNow` is for a failed read.
+ * A failed refresh is retried after RETRY_BASE_MS, then twice and four times that; after
+ * MAX_REFRESH_FAILURES failures in a row it stops and calls `onGiveUp` (the API keeps refusing, or
+ * cannot be reached). Returns a stop function.
  */
 export function keepFresh(
     file: RasterFileRef,
     firstUrl: string,
     onRefresh: (url: string) => void,
-    request: (file: RasterFileRef) => Promise<string> = requestPresignedUrl
+    request: (file: RasterFileRef) => Promise<string> = requestPresignedUrl,
+    onGiveUp?: () => void
 ): { stop: () => void; refreshNow: () => Promise<void> } {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let inFlight: Promise<void> | null = null;
+    let failures = 0;
 
     const schedule = (url: string, delay?: number) => {
         if (stopped) return;
@@ -109,10 +119,21 @@ export function keepFresh(
         inFlight = request(file)
             .then((url) => {
                 if (stopped) return;
+                failures = 0;
                 onRefresh(url);
                 schedule(url);
             })
-            .catch(() => schedule(firstUrl, FALLBACK_REFRESH_MS / 4))
+            .catch(() => {
+                if (stopped) return;
+                failures += 1;
+                if (failures >= MAX_REFRESH_FAILURES) {
+                    stopped = true;
+                    if (timer) clearTimeout(timer);
+                    onGiveUp?.();
+                    return;
+                }
+                schedule(firstUrl, RETRY_BASE_MS * 2 ** (failures - 1));
+            })
             .finally(() => {
                 inFlight = null;
             });

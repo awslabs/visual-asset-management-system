@@ -35,7 +35,17 @@ export interface RasterLayerEntry {
     staleCog: boolean;
     sourceKey: string;
     file: RasterFileRef;
+    /** Why the raster could not be drawn, once it has failed; null while it draws. */
+    failed: string | null;
+    /** The raster's extent is known, so "Zoom to layer" (and framing on open) can act. */
+    framable: boolean;
 }
+
+export const TILE_READ_FAILED_MESSAGE =
+    "This raster could not be drawn: its map tiles could not be read or decoded. The file may be damaged, or not a Web Mercator COG.";
+
+export const REFRESH_GAVE_UP_MESSAGE =
+    "The download link for this raster could not be renewed. Remove it and open the file again.";
 
 export type AddResult = { ok: true } | { ok: false; message: string };
 
@@ -49,7 +59,11 @@ interface Internal {
     bounds: [[number, number], [number, number]] | null;
     stopRefresh?: () => void;
     refreshNow?: () => Promise<void>;
-    lastTileErrorAt: number;
+    /** A refresh asked for after a read error is in flight. */
+    errorRefreshInFlight: boolean;
+    /** When the last error-triggered refresh put a fresh URL on the map. */
+    errorRefreshDoneAt: number;
+    errorRefreshes: number;
 }
 
 export interface ManagerOptions {
@@ -62,8 +76,13 @@ export interface ManagerOptions {
 }
 
 const ID_PREFIX = "vams-raster";
-/** A tile error from the same layer is acted on at most this often. */
-const TILE_ERROR_COOLDOWN_MS = 30 * 1000;
+/**
+ * A read error this soon after a fresh URL was put on the map means the URL was not the problem: the
+ * file cannot be read or decoded, and the layer is marked failed instead of refreshed again.
+ */
+const TILE_FAIL_WINDOW_MS = 30 * 1000;
+/** Error-triggered refreshes allowed over a layer's life before it is marked failed. */
+const MAX_ERROR_REFRESHES = 3;
 
 function boundsOfCorners(corners: [number, number][]): [[number, number], [number, number]] {
     const lons = corners.map((corner) => corner[0]);
@@ -88,10 +107,12 @@ export class RasterLayerManager {
     private disposed = false;
     private readonly max: number;
     private readonly onMapError = (event: any) => this.handleMapError(event);
+    private readonly onSourceData = (event: any) => this.handleSourceData(event);
 
     constructor(private readonly map: MapLike, private readonly options: ManagerOptions = {}) {
         this.max = options.maxOverlays ?? MAX_RASTER_OVERLAYS;
         map.on("error", this.onMapError);
+        map.on("sourcedata", this.onSourceData);
     }
 
     /** The shown rasters, bottom to top. */
@@ -126,19 +147,31 @@ export class RasterLayerManager {
                 staleCog: prepared.staleCog,
                 sourceKey: prepared.sourceKey,
                 file: prepared.file,
+                failed: null,
+                framable: false,
             },
             sourceId: `${ID_PREFIX}-src-${n}`,
             layerId: `${ID_PREFIX}-layer-${n}`,
             url: prepared.url,
             bounds: null,
-            lastTileErrorAt: 0,
+            errorRefreshInFlight: false,
+            errorRefreshDoneAt: 0,
+            errorRefreshes: 0,
         };
 
         if (prepared.mode === "placed" && prepared.placed) {
             item.blobUrl = URL.createObjectURL(prepared.placed.blob);
             item.corners = prepared.placed.corners;
             item.bounds = boundsOfCorners(prepared.placed.corners);
+        } else if (prepared.bboxWgs84) {
+            // The extent read from the COG's header frames the layer before any tile has loaded.
+            const [west, south, east, north] = prepared.bboxWgs84;
+            item.bounds = [
+                [west, south],
+                [east, north],
+            ];
         }
+        item.entry.framable = item.bounds !== null;
 
         this.addToMap(item);
         this.items.push(item);
@@ -148,7 +181,8 @@ export class RasterLayerManager {
                 prepared.file,
                 prepared.url,
                 (url) => this.replaceTileUrl(item, url),
-                this.options.requestUrl ?? requestPresignedUrl
+                this.options.requestUrl ?? requestPresignedUrl,
+                () => this.fail(item, REFRESH_GAVE_UP_MESSAGE)
             );
             item.stopRefresh = handle.stop;
             item.refreshNow = handle.refreshNow;
@@ -199,7 +233,7 @@ export class RasterLayerManager {
     /** Re-adds every layer after the map's style was replaced (a style change drops custom layers). */
     restore(): void {
         for (const item of this.items) {
-            if (!this.map.getSource(item.sourceId)) this.addToMap(item);
+            if (!item.entry.failed && !this.map.getSource(item.sourceId)) this.addToMap(item);
         }
         this.applyOrder();
     }
@@ -208,6 +242,7 @@ export class RasterLayerManager {
         if (this.disposed) return;
         this.disposed = true;
         this.map.off("error", this.onMapError);
+        this.map.off("sourcedata", this.onSourceData);
         for (const item of this.items) this.release(item);
         this.items = [];
         this.notify();
@@ -257,11 +292,21 @@ export class RasterLayerManager {
 
     /** Replaces a tile source with one over a fresh URL, keeping its place in the order and its opacity. */
     private replaceTileUrl(item: Internal, url: string): void {
-        if (this.disposed || !this.items.includes(item)) return;
+        if (this.disposed || !this.items.includes(item) || item.entry.failed) return;
         item.url = url;
         this.removeFromMap(item);
         this.addToMap(item);
         this.applyOrder();
+        if (item.errorRefreshInFlight) item.errorRefreshDoneAt = Date.now();
+    }
+
+    /** Marks a raster failed: its layer leaves the map, its row stays with the reason. */
+    private fail(item: Internal, message: string): void {
+        if (item.entry.failed || !this.items.includes(item)) return;
+        item.entry.failed = message;
+        item.stopRefresh?.();
+        this.removeFromMap(item);
+        this.notify();
     }
 
     private anchor(): string | undefined {
@@ -279,15 +324,36 @@ export class RasterLayerManager {
 
     private handleMapError(event: any): void {
         const item = this.items.find((candidate) => candidate.sourceId === event?.sourceId);
-        if (!item || item.entry.mode !== "tile" || !item.refreshNow) return;
-        // A read failed. The usual cause is an expired or revoked presigned URL, and maplibre reports a
-        // failed cog:// tile only as "Request failed" (geotiff.js drops the HTTP status), so any error
-        // on this raster's own source asks for a fresh URL, at most once per cool-down, so a file that
-        // really is denied or broken does not loop.
+        if (!item || item.entry.mode !== "tile" || item.entry.failed || !item.refreshNow) return;
+        // A read failed. maplibre reports a failed cog:// tile only as "Request failed" (geotiff.js
+        // drops the HTTP status), so the cause is told apart by what happens next: the first error asks
+        // for a fresh URL (an expired or revoked presigned URL); an error soon after that fresh URL is
+        // on the map, or too many refreshes, means the file itself cannot be read or decoded, and the
+        // row is marked failed rather than left as a blank layer.
+        if (item.errorRefreshInFlight) return;
         const now = Date.now();
-        if (now - item.lastTileErrorAt < TILE_ERROR_COOLDOWN_MS) return;
-        item.lastTileErrorAt = now;
-        void item.refreshNow();
+        const soonAfterRefresh =
+            item.errorRefreshDoneAt > 0 && now - item.errorRefreshDoneAt < TILE_FAIL_WINDOW_MS;
+        if (soonAfterRefresh || item.errorRefreshes >= MAX_ERROR_REFRESHES) {
+            this.fail(item, TILE_READ_FAILED_MESSAGE);
+            return;
+        }
+        item.errorRefreshes += 1;
+        item.errorRefreshInFlight = true;
+        void item.refreshNow().finally(() => {
+            item.errorRefreshInFlight = false;
+        });
+    }
+
+    /** A tile source's own extent, once maplibre has read it, makes a layer without one framable. */
+    private handleSourceData(event: any): void {
+        const item = this.items.find((candidate) => candidate.sourceId === event?.sourceId);
+        if (!item || item.bounds) return;
+        const bounds = this.boundsFromSource(item);
+        if (!bounds) return;
+        item.bounds = bounds;
+        item.entry.framable = true;
+        this.notify();
     }
 
     private notify(): void {

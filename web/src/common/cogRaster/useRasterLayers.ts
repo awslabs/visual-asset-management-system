@@ -32,7 +32,8 @@ export interface UseRasterLayers {
     remove: (id: string) => void;
     setOpacity: (id: string, opacity: number) => void;
     move: (id: string, direction: "up" | "down") => void;
-    zoomTo: (id: string) => void;
+    /** Frames the raster; false while its extent is not known yet. */
+    zoomTo: (id: string) => boolean;
     dismissNotice: (id: string) => void;
 }
 
@@ -143,7 +144,7 @@ export function useRasterLayers(
             (id: string, direction: "up" | "down") => manager.current?.move(id, direction),
             []
         ),
-        zoomTo: useCallback((id: string) => void manager.current?.zoomTo(id), []),
+        zoomTo: useCallback((id: string) => manager.current?.zoomTo(id) ?? false, []),
         dismissNotice: useCallback(
             (id: string) => setNotices((current) => current.filter((n) => n.id !== id)),
             []

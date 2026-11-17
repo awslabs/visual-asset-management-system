@@ -5,8 +5,10 @@
 
 import {
     FALLBACK_REFRESH_MS,
+    MAX_REFRESH_FAILURES,
     MAX_REFRESH_MS,
     MIN_REFRESH_MS,
+    RETRY_BASE_MS,
     RasterDownloadRefused,
     keepFresh,
     presignedLifetime,
@@ -119,5 +121,26 @@ describe("keepFresh", () => {
         await jest.advanceTimersByTimeAsync(FALLBACK_REFRESH_MS / 4 + 10);
         expect(onRefresh).toHaveBeenCalledWith("https://s3/new");
         handle.stop();
+    });
+
+    it("backs off between failed refreshes and gives up after the cap, with no further requests", async () => {
+        const request = jest.fn().mockRejectedValue(new Error("refused"));
+        const onRefresh = jest.fn();
+        const onGiveUp = jest.fn();
+        const handle = keepFresh(FILE, "https://s3/old", onRefresh, request, onGiveUp);
+        await handle.refreshNow();
+        expect(request).toHaveBeenCalledTimes(1);
+        await jest.advanceTimersByTimeAsync(RETRY_BASE_MS + 10);
+        expect(request).toHaveBeenCalledTimes(2);
+        // The second retry waits twice as long.
+        await jest.advanceTimersByTimeAsync(RETRY_BASE_MS + 10);
+        expect(request).toHaveBeenCalledTimes(2);
+        await jest.advanceTimersByTimeAsync(RETRY_BASE_MS + 10);
+        expect(request).toHaveBeenCalledTimes(MAX_REFRESH_FAILURES);
+        expect(onGiveUp).toHaveBeenCalledTimes(1);
+        await jest.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+        await handle.refreshNow();
+        expect(request).toHaveBeenCalledTimes(MAX_REFRESH_FAILURES);
+        expect(onRefresh).not.toHaveBeenCalled();
     });
 });

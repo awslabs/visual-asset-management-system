@@ -167,21 +167,104 @@ describe("RasterLayerManager", () => {
         manager.dispose();
     });
 
-    it('refreshes on the status-less "Request failed" maplibre reports, once per cool-down', async () => {
+    it("marks a tile layer failed when reads still fail right after a fresh URL (D4)", async () => {
         const map = new FakeMap();
+        const changes: any[] = [];
         const request = jest.fn().mockResolvedValue("https://s3/fresh");
+        const manager = new RasterLayerManager(map, {
+            ...OPTIONS(map),
+            requestUrl: request,
+            onChange: (entries) => changes.push(entries),
+        });
+        manager.add(prepared("1.tif"));
+        const sourceId = [...map.sources.keys()][0];
+        // maplibre reports a failed cog:// tile as "Request failed", with no status.
+        map.listeners.get("error")!({ sourceId, error: new Error("Request failed") });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(manager.entries()[0].failed).toBeNull();
+        // The fresh URL fails too: the file cannot be decoded, not an expired link.
+        map.listeners.get("error")!({
+            sourceId,
+            error: new RangeError("Invalid typed array length"),
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(request).toHaveBeenCalledTimes(1);
+        const [entry] = manager.entries();
+        expect(entry.failed).toMatch(/could not be drawn/);
+        // Its layer leaves the map; its row stays with the reason, and later errors are ignored.
+        expect(map.sources.size).toBe(0);
+        expect(changes[changes.length - 1][0].failed).toMatch(/could not be drawn/);
+        map.listeners.get("error")!({ sourceId, error: new Error("Request failed") });
+        expect(request).toHaveBeenCalledTimes(1);
+        manager.dispose();
+    });
+
+    it("ignores further errors while a refresh is in flight", async () => {
+        const map = new FakeMap();
+        let resolve: (url: string) => void = () => undefined;
+        const request = jest.fn(() => new Promise<string>((r) => (resolve = r)));
         const manager = new RasterLayerManager(map, { ...OPTIONS(map), requestUrl: request });
         manager.add(prepared("1.tif"));
         const sourceId = [...map.sources.keys()][0];
         map.listeners.get("error")!({ sourceId, error: new Error("Request failed") });
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        const freshId = [...map.sources.keys()][0];
-        map.listeners.get("error")!({
-            sourceId: freshId,
-            error: new Error("Request failed"),
-        });
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        map.listeners.get("error")!({ sourceId, error: new Error("Request failed") });
         expect(request).toHaveBeenCalledTimes(1);
+        resolve("https://s3/fresh");
+        await new Promise((r) => setTimeout(r, 0));
+        expect(manager.entries()[0].failed).toBeNull();
+        manager.dispose();
+    });
+
+    it("marks a tile layer failed when its link cannot be renewed", async () => {
+        jest.useFakeTimers();
+        try {
+            const map = new FakeMap();
+            const request = jest.fn().mockRejectedValue(new Error("refused"));
+            const manager = new RasterLayerManager(map, { ...OPTIONS(map), requestUrl: request });
+            manager.add(prepared("1.tif"));
+            const sourceId = [...map.sources.keys()][0];
+            map.listeners.get("error")!({ sourceId, error: new Error("Request failed") });
+            await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
+            expect(request).toHaveBeenCalledTimes(3);
+            expect(manager.entries()[0].failed).toMatch(/could not be renewed/);
+            manager.dispose();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    it("frames a tile layer from the extent its header gave (D3)", () => {
+        const map = new FakeMap();
+        const manager = new RasterLayerManager(map, OPTIONS(map));
+        manager.add({ ...prepared("t.cog.tif"), bboxWgs84: [1, 2, 3, 4] });
+        expect(manager.entries()[0].framable).toBe(true);
+        expect(manager.zoomTo("db/a/t.cog.tif")).toBe(true);
+        expect(map.fit).toHaveBeenLastCalledWith(
+            [
+                [1, 2],
+                [3, 4],
+            ],
+            expect.anything()
+        );
+        manager.dispose();
+    });
+
+    it("becomes framable once the tile source reports its extent (D3)", () => {
+        const map = new FakeMap();
+        const changes: any[] = [];
+        const manager = new RasterLayerManager(map, {
+            ...OPTIONS(map),
+            onChange: (entries) => changes.push(entries),
+        });
+        manager.add(prepared("t.cog.tif"));
+        expect(manager.entries()[0].framable).toBe(false);
+        expect(manager.zoomTo("db/a/t.cog.tif")).toBe(false);
+        const [sourceId, source] = [...map.sources.entries()][0];
+        source.bounds = [5, 6, 7, 8];
+        map.listeners.get("sourcedata")!({ sourceId });
+        expect(changes[changes.length - 1][0].framable).toBe(true);
+        expect(manager.zoomTo("db/a/t.cog.tif")).toBe(true);
         manager.dispose();
     });
 
