@@ -33,6 +33,9 @@ DESTRUCTIVE_COMMANDS = [
      ["role", "user", "delete", "-u", "user@example.com"], "delete_user_roles"),
     ("user cognito delete", "user",
      ["user", "cognito", "delete", "-u", "user@example.com"], "delete_cognito_user"),
+    ("zip-download delete", "zip_download",
+     ["zip-download", "delete", "-d", "test-db", "-a", "test-asset", "-r", "r1"],
+     "delete_zip_download"),
 ]
 
 IDS = [c[0] for c in DESTRUCTIVE_COMMANDS]

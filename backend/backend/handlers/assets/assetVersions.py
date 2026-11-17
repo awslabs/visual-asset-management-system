@@ -25,6 +25,7 @@ from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVAL
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
@@ -120,6 +121,18 @@ file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribu
 # Utility Functions
 #######################
 
+# Resolver error text (#1134). Fixed strings: an error reaches the caller through str(e) in the
+# download, stream and zip download handlers, so it never echoes the requested asset version id,
+# alias or file key; the specifics go to the log.
+MSG_ASSET_VERSION_NOT_FOUND = "Asset version not found for asset"
+MSG_ASSET_VERSION_NO_FILES = "No files found in the requested asset version"
+MSG_ASSET_VERSION_FILE_NOT_FOUND = "File not found in the requested asset version"
+MSG_ASSET_VERSION_FILE_NO_VERSION = "No version ID recorded for the file in the requested asset version"
+MSG_ASSET_VERSIONS_NONE = "No asset versions found for asset"
+MSG_ASSET_VERSION_ALIAS_NOT_FOUND = "No asset version found with the requested alias"
+MSG_ASSET_VERSION_ALIAS_AMBIGUOUS = "Ambiguous alias: multiple versions share this alias"
+
+
 def validate_asset_version_exists(databaseId: str, assetId: str, assetVersionId: str) -> bool:
     """Validate that an asset version exists by checking the asset versions table.
 
@@ -142,7 +155,9 @@ def validate_asset_version_exists(databaseId: str, assetId: str, assetVersionId:
             }
         )
         if not response.get('Item'):
-            raise VAMSGeneralErrorResponse(f"Asset version '{assetVersionId}' not found for asset")
+            # The requested id stays in the log only: error text never echoes caller input (#1134).
+            logger.warning(f"Asset version {assetVersionId!r} not found for {databaseId}:{assetId}")
+            raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_NOT_FOUND)
         return True
     except VAMSGeneralErrorResponse:
         raise
@@ -670,7 +685,8 @@ def resolve_file_version_from_asset_version(databaseId: str, assetId: str, asset
     # Get the file versions for this asset version
     file_versions = get_asset_file_versions(databaseId, assetId, assetVersionId)
     if not file_versions or not file_versions.get('files'):
-        raise VAMSGeneralErrorResponse(f"No files found in asset version '{assetVersionId}'")
+        logger.warning(f"No files recorded in asset version {assetVersionId!r} of {databaseId}:{assetId}")
+        raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_NO_FILES)
 
     # Build a lookup map with normalized keys (strip leading /)
     file_map = {f['relativeKey'].lstrip('/'): f for f in file_versions['files']}
@@ -682,11 +698,14 @@ def resolve_file_version_from_asset_version(databaseId: str, assetId: str, asset
     file_entry = file_map.get(normalized_key)
 
     if not file_entry:
-        raise VAMSGeneralErrorResponse(f"File not found in asset version '{assetVersionId}'")
+        logger.warning(f"File not in asset version {assetVersionId!r} of {databaseId}:{assetId}")
+        raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_FILE_NOT_FOUND)
 
     version_id = file_entry.get('versionId')
     if not version_id:
-        raise VAMSGeneralErrorResponse(f"No version ID recorded for file in asset version '{assetVersionId}'")
+        logger.warning(f"No S3 version recorded for a file in asset version {assetVersionId!r} of "
+                       f"{databaseId}:{assetId}")
+        raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_FILE_NO_VERSION)
 
     return version_id
 
@@ -707,15 +726,17 @@ def resolve_asset_version_id_from_alias(databaseId: str, assetId: str, alias: st
     """
     all_versions = get_all_asset_versions(databaseId, assetId)
     if not all_versions:
-        raise VAMSGeneralErrorResponse(f"No asset versions found for asset")
+        raise VAMSGeneralErrorResponse(MSG_ASSET_VERSIONS_NONE)
 
     # Filter for versions matching the alias (exact match)
     matches = [v for v in all_versions if v.get('versionAlias') == alias]
 
     if len(matches) == 0:
-        raise VAMSGeneralErrorResponse(f"No asset version found with alias '{alias}'")
+        logger.warning(f"No asset version of {databaseId}:{assetId} has alias {alias!r}")
+        raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_ALIAS_NOT_FOUND)
     elif len(matches) > 1:
-        raise VAMSGeneralErrorResponse(f"Ambiguous alias '{alias}': multiple versions share this alias")
+        logger.warning(f"Alias {alias!r} matches {len(matches)} versions of {databaseId}:{assetId}")
+        raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_ALIAS_AMBIGUOUS)
 
     return matches[0]['assetVersionId']
 
@@ -2386,7 +2407,7 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
             revertMetadata=body.get('revertMetadata', False)
         )
         
-        logger.info(f"Parsed request model - revertMetadata: {request_model.revertMetadata}, comment: {request_model.comment}")
+        logger.info(f"Parsed request model - revertMetadata: {request_model.revertMetadata}, comment provided: {bool(request_model.comment)}")
         
         # Process request
         response = revert_asset_version(
@@ -2944,8 +2965,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
         # Log incoming request
         logger.info(f"Asset versions lambda handler invoked: {method} {path}")
-        logger.debug(f"Event path parameters: {event.get('pathParameters', {})}")
-        logger.debug(f"Event query parameters: {event.get('queryStringParameters', {})}")
+        logger.debug(f"Event: {event_log_summary(event)}")
         
         # Route to appropriate handler based on the master API route definitions
         if method == 'POST' and API_CREATE_ASSET_VERSION.matches(path):

@@ -33,6 +33,8 @@ import Synonyms from "../synonyms";
 import { addonNavAdminSections, addonNavMainSections } from "../addons/addonNavigation";
 import { customNavSections } from "../custom/customNavigation";
 import { isApiRouteAllowed } from "../common/constants/authRoutes";
+import { featuresEnabled } from "../common/constants/featuresEnabled";
+import { DOWNLOAD_QUEUE_PAGE_TITLE } from "../components/zipDownloads/zipDownloads";
 import type { WebRouteCheck } from "../services/webRoutesCheck";
 import { API_KEYS_ADMIN_NAV_HREF, API_KEYS_USER_NAV_HREF } from "./activeNavHref";
 
@@ -169,6 +171,13 @@ function coreProfileNavEntries(): NavEntry[] {
             text: "Your pages",
             placement: "profile",
             items: [
+                {
+                    // Download as Zip (My Download Queue): the deployment has the page only with the ZIPDOWNLOADS switch
+                    type: "link",
+                    text: DOWNLOAD_QUEUE_PAGE_TITLE,
+                    href: "#/zipdownloads/",
+                    featuresEnabledRestriction: [featuresEnabled.ZIPDOWNLOADS],
+                },
                 {
                     type: "link",
                     text: "API Key Management",

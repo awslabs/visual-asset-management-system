@@ -30,6 +30,8 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import deferred_authorization_audit, audited_handler, log_action
+from common.auditSearchText import search_text_parameters
+from common.eventLogSummary import exception_log_summary, query_clause_log_summary
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.search import (
     SearchRequestModel, SimpleSearchRequestModel, SearchResponseModel, SearchHitModel, SearchHitExplanationModel,
@@ -374,7 +376,9 @@ class DualIndexSearchManager:
             return results
             
         except Exception as e:
-            logger.exception(f"Error executing dual-index search: {e}")
+            # The engine's error text can quote a fragment of the query (a parse error names the
+            # typed text), and logger.exception adds it again in the traceback: log class and status.
+            logger.error(f"Error executing dual-index search: {exception_log_summary(e)}")
             raise VAMSGeneralErrorResponse("Error executing search query")
 
     @classmethod
@@ -989,8 +993,8 @@ class SimpleSearchQueryBuilder:
             # Build base query structure
             query_clause = self._build_simple_query_clause(request, accessible_databases, index_type)
             
-            # Log the generated query for debugging
-            logger.info(f"[SimpleSearch] Generated {index_type} query clause: {json.dumps(query_clause, indent=2)}")
+            # Log the shape of the generated query, never its values: they are typed search text.
+            logger.info(f"[SimpleSearch] Generated {index_type} query clause: {query_clause_log_summary(query_clause)}")
 
             # Fetch from offset 0 with a buffer and page in Python, matching the complex
             # path. Applying the offset here as well would skip the requested page twice.
@@ -2600,11 +2604,39 @@ def handle_get_request(event: Dict[str, Any], search_manager: DualIndexSearchMan
         return internal_error(event=event)
 
 
+# The request fields that hold text the caller typed. They are recorded under the redacted searchText
+# key; the ids, options and paging of the request stay as they are.
+_SEARCH_TEXT_FIELDS = ("query", "metadataQuery", "metadataKey", "metadataValue", "assetName", "fileKey", "tags")
+
+
+def _search_request_parameters(request_model: Any) -> Dict[str, Any]:
+    """The request a search asked, with every free-text field moved under the redacted searchText key:
+    the text fields above, each token's value and each filter's query_string options."""
+    parameters = request_model.dict(by_alias=True, exclude_none=True)
+    text: Dict[str, Any] = {}
+    for field in _SEARCH_TEXT_FIELDS:
+        value = parameters.pop(field, None)
+        if value:
+            text[field] = value
+    tokens = parameters.get("tokens")
+    if isinstance(tokens, list):
+        text["tokens"] = [token.get("value") for token in tokens if isinstance(token, dict)]
+        parameters["tokens"] = [{key: value for key, value in token.items() if key != "value"}
+                                for token in tokens if isinstance(token, dict)]
+    filters = parameters.pop("filters", None)
+    if isinstance(filters, list):
+        text["filters"] = [item.get("query_string") for item in filters if isinstance(item, dict)]
+        if filters:
+            parameters["filterCount"] = len(filters)
+    return search_text_parameters(parameters, text)
+
+
 def _log_search(event: Dict[str, Any], request_model: Any, processed_response: Any) -> None:
-    """Record a search: the request it asked and the number of hits returned, never the hits."""
+    """Record a search: the request it asked (its text redacted) and the number of hits returned,
+    never the hits."""
     hits = getattr(getattr(processed_response, "hits", None), "hits", None)
     log_action(event, "search", item_count=len(hits) if isinstance(hits, list) else None,
-               request_parameters=request_model.dict(by_alias=True, exclude_none=True))
+               request_parameters=_search_request_parameters(request_model))
 
 
 def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchManager, 

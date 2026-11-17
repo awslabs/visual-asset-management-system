@@ -375,3 +375,15 @@ class TestCreatedValue:
         assert routeAudit.created_value(_answer(200, cascadeId={"x": 1}), "cascadeId") is None
         too_long = "c" * (routeAudit.CREATED_VALUE_MAX_CHARS + 1)
         assert routeAudit.created_value(_answer(200, cascadeId=too_long), "cascadeId") is None
+
+
+@pytest.mark.unit
+def test_the_text_filter_is_recorded_under_the_redacted_search_text_key():
+    recorded = routeAudit.request_parameters({"text": "typed-text-marker", "databaseId": "db1", "maxItems": "5"},
+                                             ("databaseId", "text", "maxItems"))
+    assert recorded == {"databaseId": "db1", "maxItems": "5", "searchText": {"text": "typed-text-marker"},
+                        "searchTextFields": ["text"], "searchTextLength": len("typed-text-marker")}
+    assert "text" not in recorded
+    from backend.backend.customLogging.logger import REDACTED, mask_sensitive_data
+    masked = mask_sensitive_data(recorded)
+    assert masked["searchText"] == REDACTED and "typed-text-marker" not in json.dumps(masked)
