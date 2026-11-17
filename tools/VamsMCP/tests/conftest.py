@@ -126,7 +126,7 @@ def server_with_switches():
     (`addon_tools.register_addon_tools`), so a test of which add-on tools a server lists must not
     depend on the profile of the machine running the suite. The returned context manager builds the
     server's client as a mock whose `has_feature` answers from `switches` (the real `require_feature`
-    and `unwrap_message` on top of it), applies the gate variables, reloads, yields the module, and
+    and `unwrap_message` on top of it), applies the gate variables (and, when given, `toolsets`), reloads, yields the module, and
     reloads it again on exit with the client restored and the gates cleared.
     """
     import contextlib
@@ -140,7 +140,7 @@ def server_with_switches():
     real_client_class = client_module.VamsClient
 
     @contextlib.contextmanager
-    def _reloaded(switches, enable_writes=False, enable_destructive=False):
+    def _reloaded(switches, enable_writes=False, enable_destructive=False, toolsets=None):
         def _client(config):
             mock = MagicMock()
             mock.config = config
@@ -155,6 +155,9 @@ def server_with_switches():
                 os.environ[name] = "true"
             else:
                 os.environ.pop(name, None)
+        if toolsets:
+            # `toolsets` is VAMS_MCP_TOOLSETS for the reload ("all,audit": every tool, audit included).
+            os.environ["VAMS_MCP_TOOLSETS"] = toolsets
         client_module.VamsClient = _client
         try:
             importlib.reload(server_module)
@@ -163,6 +166,7 @@ def server_with_switches():
             client_module.VamsClient = real_client_class
             for name in gates:
                 os.environ.pop(name, None)
+            os.environ.pop("VAMS_MCP_TOOLSETS", None)
             importlib.reload(server_module)
 
     return _reloaded

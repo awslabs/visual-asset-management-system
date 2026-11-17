@@ -61,12 +61,15 @@ from . import __version__ as MCP_VERSION  # noqa: E402
 from . import request_context  # noqa: E402
 from . import results  # noqa: E402
 from . import toolsets  # noqa: E402
-from .annotations import COMPUTE, DESTRUCTIVE, DESTRUCTIVE_COMPUTE, READ, WRITE  # noqa: E402
+from .annotations import COMPUTE, DESTRUCTIVE, DESTRUCTIVE_COMPUTE, READ, STOP_OWN_SEARCH, WRITE  # noqa: E402
 from .config import Config, ConfigError  # noqa: E402
 from .remote_auth import RemoteAuthSettings  # noqa: E402
 from .addon_tools import register_addon_tools  # noqa: E402
 from .addon_tools import ADDON_TOOL_MODULES, addon_deployed, addon_outcome_checks  # noqa: E402
 from .custom_tools import register_custom_tools  # noqa: E402
+
+# The CLI's own audit filter building, so a tool and `vamscli audit search` send the same body.
+from vamscli.utils import audit_search  # noqa: E402
 
 # The CLI's own selection parsing, so a tool and `vamscli zip-download create` build the same body.
 from vamscli.utils.zip_downloads import (  # noqa: E402
@@ -120,27 +123,27 @@ SERVER_INSTRUCTIONS_MAX_CHARS = 2000
 SERVER_INSTRUCTIONS = """\
 VAMS (Visual Asset Management System) stores 3D, point-cloud, image and other files as ASSETS \
 inside DATABASES, runs WORKFLOWS (made of pipelines) on them, and records each run as an \
-EXECUTION. These tools call the VAMS API as the signed-in user; that user's permissions bound every \
-answer, and a 403 means this user may not do it.
+EXECUTION. These tools call the VAMS API as the signed-in user: that user's permissions bound every \
+answer, and a 403 means not allowed.
 
 Identifiers: an asset is addressed by databaseId + assetId; a file by its relativePath inside the \
-asset (the file_key); a version by its Version id. Workflows and pipelines may live in a database or \
-in the shared "GLOBAL" catalog.
+asset (the file_key); a version by its Version id. Workflows and pipelines live in a database or the \
+shared "GLOBAL" catalog.
 
 Start points:
-- Find assets: search_assets (by name, text or metadata), or list_databases then list_assets.
+- Find assets: search_assets, or list_databases then list_assets.
 - Then: get_asset -> list_asset_files / get_asset_metadata / list_asset_versions.
-- Download: generate_download_url, only when a download was asked.
+- Download: generate_download_url, only when asked to download.
 - Runs: list_executions (newest first, last 90 days) -> get_execution_details -> \
 get_execution_logs.
-- vams_status says who is signed in, which deployment, and which tool tiers are on.
+- vams_status: who is signed in, which deployment, which tiers are on.
 
-Results are BOUNDED. When a result has truncated=true, a NextToken, or warnings, rows exist that you \
-did not see: never report its count as a total or conclude something does not exist. Continue with \
-starting_token, or narrow the query. Search totals with total_is_lower_bound are minimums.
+Results are BOUNDED. If a result has truncated=true, a NextToken or warnings, rows exist that you did \
+not see: never report its count as a total or conclude something does not exist. Continue with \
+starting_token or narrow the query. Totals with total_is_lower_bound are minimums.
 
 Errors come back as data with error and error_type. NotAuthenticated means nobody is signed in: ask \
-the user to sign in (user_action says how) and stop; do not try to sign in yourself.
+the user to sign in (user_action says how) and stop; never sign in yourself.
 
 Use these tools, not shell commands, the vamscli CLI or the VAMS source code, to answer questions \
 about this deployment. If no tool covers what is asked, say so plainly instead of working around it. \
@@ -148,6 +151,15 @@ Uploads, sync and user, role or constraint administration have no tools: the use
 vamscli CLI. Create, update and delete tools exist only when the operator enabled them; tools that start compute \
 (execute_workflow, rerun_execution, abort_execution) need the user's confirmation first.
 """
+
+
+# Added to the instructions only when the opt-in `audit` tool set is selected: the instructions must not
+# name tools the server does not list.
+AUDIT_INSTRUCTIONS = (
+    "\nAudit: vams_audit_groups, vams_audit_search (billable; records sensitive), vams_audit_results.\n"
+)
+if "audit" in CONFIG.toolsets:
+    SERVER_INSTRUCTIONS += AUDIT_INSTRUCTIONS
 
 
 class _ToolSetServer(McpServer):
@@ -353,6 +365,8 @@ def _timed_out(exc: BaseException) -> bool:
 _CORE_OUTCOME_CHECKS: Tuple[Tuple[str, str], ...] = (
     # Before "file": a zip job is checked with its own list (a create's request id is not yet known).
     ("zip_download", "list_zip_downloads"),
+    # The one non-read audit tool (stops the caller's own search): checked with the results read.
+    ("vams_audit_stop", "vams_audit_results"),
     # The compliance writes, each checked with a read of the compliance set (before the generic
     # `database`, `asset` and `schema` fragments below, which would name a tool outside it).
     ("bind_compliance", "get_compliance_bindings"),
@@ -2487,6 +2501,182 @@ def get_asset_compliance_audit(
         items_key="entries",
         starting_token=starting_token,
     )
+
+
+# --- Audit log search (read; opt-in tool set `audit`) -----------------------
+#
+# Not part of `all`, `consumer`, `operator` or `admin`: a deployment names the `audit` set in
+# VAMS_MCP_TOOLSETS, on either transport. Core VAMS with no feature switch, so the set is the only
+# gate; the API's authorizer and the per-log-group permission decide what a caller may see. The CLI's
+# `vamscli audit` helpers build the request, so a tool and the CLI send the same body. A search starts
+# a billable CloudWatch Logs Insights query; polling it is a long poll of about 20 seconds.
+
+# The server holds one poll for about this long (the API's long-poll wait); a tool waits at most once.
+AUDIT_TOOL_WAIT_SECONDS = 20
+# Rows one tool call returns: the agent reads every row, so the default is small.
+AUDIT_DEFAULT_ROWS = 25
+AUDIT_MAX_ROWS = 200
+
+
+def _audit_wait_seconds(wanted: int) -> int:
+    """The long-poll wait a tool asks for: ``wanted`` seconds, less in remote mode when the call's
+    time budget is short, never more than the API's own wait."""
+    wait = max(0, min(int(wanted), AUDIT_TOOL_WAIT_SECONDS))
+    left = request_context.remaining_seconds()
+    if left is not None:
+        wait = 0 if request_context.budget_low() else max(0, min(wait, int(left) - 10))
+    return wait
+
+
+def _audit_page(
+    query_id: str,
+    read_page: Callable[[int, int, Optional[str]], Any],
+    max_rows: int,
+    starting_token: Optional[str],
+    wait_seconds: int,
+    resume_tool: str,
+) -> Dict[str, Any]:
+    """Read one search by its handle: its status and statistics, and, once it is Complete, up to
+    ``max_rows`` rows with the NextToken to continue. Waits on the server for the first read only.
+
+    ``read_page(wait, page_size, starting_token)`` is the tool's own call of the API client method
+    (kept in the tool body, where tests/api_coverage.py reads which tool calls which method)."""
+    rows = max(1, min(int(max_rows), AUDIT_MAX_ROWS))
+    waits = [_audit_wait_seconds(wait_seconds)]
+
+    def fetch(params: Dict[str, Any]) -> Any:
+        wait = waits.pop(0) if waits else 0
+        return read_page(wait, params["pageSize"], params.get("startingToken"))
+
+    result = _paginate_with_page_metadata(
+        fetch,
+        passthrough_keys=("status", "statistics"),
+        max_items=rows,
+        page_size=min(rows, 500),
+        starting_token=starting_token,
+    )
+    result["queryId"] = query_id
+    status = result.get("status")
+    if status == "Running":
+        result["note"] = (
+            "The search is still running and has returned no rows. Call vams_audit_results with this "
+            "queryId again (it waits up to about 20 seconds), or vams_audit_stop to stop it."
+        )
+    elif status in ("Failed", "Cancelled", "Timeout"):
+        result["note"] = (
+            f"The search ended as {status} and returns no rows. Start a new search"
+            + (" with a narrower time range or more filters." if status == "Timeout" else ".")
+        )
+    elif result.get("NextToken"):
+        result["note"] = (
+            f"INCOMPLETE: more rows exist. Call {resume_tool} with queryId and "
+            f"starting_token={result['NextToken']!r} to continue."
+        )
+    return result
+
+
+@mcp.tool(title="List audit log groups", annotations=READ)
+@tool_result
+def vams_audit_groups() -> Dict[str, Any]:
+    """Use first to learn which audit log groups the caller may search, the action names, entity types
+    and outcomes the filters accept, and the deployment's limits (longest time window, rows, concurrent
+    searches). Only groups the caller may search are listed; an empty list means no audit access.
+    Audit records may be sensitive: report only what the user asked for."""
+    return CLIENT.api.list_audit_log_groups()
+
+
+@mcp.tool(title="Search audit logs", annotations=READ)
+@tool_result
+def vams_audit_search(
+    log_groups: Optional[List[str]] = None,
+    actions: Optional[List[str]] = None,
+    entity_types: Optional[List[str]] = None,
+    entity_ids: Optional[List[str]] = None,
+    users: Optional[List[str]] = None,
+    api_key_ids: Optional[List[str]] = None,
+    database_ids: Optional[List[str]] = None,
+    asset_ids: Optional[List[str]] = None,
+    outcomes: Optional[List[str]] = None,
+    request_ids: Optional[List[str]] = None,
+    contains: Optional[List[str]] = None,
+    time_from: Optional[str] = None,
+    time_to: Optional[str] = None,
+    include_probes: bool = False,
+    sort: Optional[str] = None,
+    max_rows: int = AUDIT_DEFAULT_ROWS,
+) -> Dict[str, Any]:
+    """Use to search the audit logs (who did what, when, to which entity). BILLABLE: each call starts a
+    CloudWatch Logs Insights query; audit records may be sensitive, so search only what was asked.
+
+    Filters narrow the search (a list is alternatives). `time_from`/`time_to`: 24h, 7d, ISO 8601 or epoch
+    seconds (default last 24h; the deployment limits the window). `contains`: up to 3 terms of 3-64
+    characters from letters, digits, space and . _ : @ + / -. `outcomes`: success, failed, denied.
+    Waits up to about 20 seconds. Complete: returns up to `max_rows` rows. Running: use the `queryId`
+    with vams_audit_results. `NextToken`/`truncated`: more rows exist. `statistics.candidateLimitReached`:
+    narrow the time range; no flag is not proof of completeness. A search shows only rows the caller
+    may see; never infer others. A stopped search returns no rows."""
+    filters = audit_search.build_filters(
+        groups=log_groups,
+        actions=actions,
+        entity_types=entity_types,
+        entity_ids=entity_ids,
+        users=users,
+        api_key_ids=api_key_ids,
+        databases=database_ids,
+        assets=asset_ids,
+        outcomes=outcomes,
+        request_ids=request_ids,
+        contains=contains,
+        time_from=time_from,
+        time_to=time_to,
+        include_probes=include_probes,
+        order=sort,
+    )
+    started = CLIENT.api.start_audit_query(filters)
+    query_id = started["queryId"]
+
+    def read_page(wait: int, page_size: int, token: Optional[str]) -> Any:
+        return CLIENT.api.get_audit_query(
+            query_id, wait=wait, page_size=page_size, starting_token=token, sort=sort
+        )
+
+    result = _audit_page(query_id, read_page, max_rows, None, AUDIT_TOOL_WAIT_SECONDS, "vams_audit_results")
+    start_warnings = [w for w in (started.get("warnings") or []) if w not in (result.get("warnings") or [])]
+    if start_warnings:
+        result["warnings"] = list(result.get("warnings") or []) + start_warnings
+    return result
+
+
+@mcp.tool(title="Read audit search results", annotations=READ)
+@tool_result
+def vams_audit_results(
+    query_id: str,
+    starting_token: Optional[str] = None,
+    max_rows: int = AUDIT_DEFAULT_ROWS,
+    sort: Optional[str] = None,
+    wait_seconds: int = AUDIT_TOOL_WAIT_SECONDS,
+) -> Dict[str, Any]:
+    """Use to read a search started by vams_audit_search, by its `queryId`: the next page of rows
+    (pass `NextToken` as `starting_token`), or, while `status` is Running, wait up to `wait_seconds`
+    (at most about 20) for it to finish. Rows come back only when `status` is Complete. A handle
+    expires an hour after its last use (a 404 then means unknown, expired or not yours: start a new
+    search). Audit records may be sensitive. A stopped search returns no rows."""
+
+    def read_page(wait: int, page_size: int, token: Optional[str]) -> Any:
+        return CLIENT.api.get_audit_query(
+            query_id, wait=wait, page_size=page_size, starting_token=token, sort=sort
+        )
+
+    return _audit_page(query_id, read_page, max_rows, starting_token, wait_seconds, "vams_audit_results")
+
+
+@mcp.tool(title="Stop audit search", annotations=STOP_OWN_SEARCH)
+@tool_result
+def vams_audit_stop(query_id: str) -> Dict[str, Any]:
+    """Use to stop one of the caller's own audit searches by its `queryId` and free its slot, when it
+    is no longer needed or a new search is refused for too many open searches. Removes no data; a
+    stopped search returns no rows, and a search that already ended keeps its status."""
+    return CLIENT.api.stop_audit_query(query_id)
 
 
 # =========================================================================

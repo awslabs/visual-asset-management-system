@@ -22,7 +22,9 @@ ALL_SWITCHES = ["AUTHPROVIDER_COGNITO", addon_constants.FEATURE_EDH_WORKSTATIONS
 @pytest.fixture
 async def every_tool(server_with_switches):
     """Every tool a server registers with both gates and every add-on on, by name."""
-    with server_with_switches(ALL_SWITCHES, enable_writes=True, enable_destructive=True) as server:
+    # "all,audit": the audit tools are opt-in and not part of `all`.
+    with server_with_switches(ALL_SWITCHES, enable_writes=True, enable_destructive=True,
+                              toolsets="all,audit") as server:
         return {tool.name: tool for tool in await server.mcp.list_tools()}
 
 
@@ -95,9 +97,9 @@ async def test_an_add_on_outside_the_selection_is_not_reported_registered(server
     assert seen["status"]["gates"]["addons"] == []
 
 
-async def test_all_registers_every_tool(server_with_switches, every_tool):
+async def test_all_registers_every_tool_except_the_opt_in_audit_tools(server_with_switches, every_tool):
     _, names = await _tools_with(server_with_switches, "all")
-    assert names == set(every_tool)
+    assert names == set(every_tool) - toolsets.AUDIT_TOOLS
 
 
 def test_custom_selects_only_the_tools_of_no_named_set():
