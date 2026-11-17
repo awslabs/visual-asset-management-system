@@ -12,6 +12,7 @@ decides what the caller may see.
 
 import json
 import re
+import textwrap
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -341,11 +342,16 @@ def format_groups(result: Dict[str, Any]) -> str:
                 lines.append(f"      {group['description']}")
     actions = result.get('actions') or []
     if actions:
-        lines.append("")
-        lines.append("Actions:")
+        by_group: Dict[str, List[str]] = {}
         for action in actions:
-            lines.append(f"  {action.get('name')}  ({action.get('kind')}, "
-                         f"{action.get('entityType')}, {action.get('logGroup')})")
+            by_group.setdefault(str(action.get('logGroup')), []).append(
+                f"{action.get('name')} ({action.get('kind')})")
+        lines.append("")
+        lines.append("Actions by log group (the --action values):")
+        for group_key, names in by_group.items():
+            lines.append(f"  {group_key}:")
+            lines.extend(textwrap.wrap(", ".join(names), width=96, initial_indent="    ",
+                                       subsequent_indent="    "))
     if result.get('entityTypes'):
         lines.append("")
         lines.append("Entity types: " + ", ".join(result['entityTypes']))
