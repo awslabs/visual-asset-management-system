@@ -498,8 +498,9 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
                      target_lines=(), keep_previous_wording=False):
     """The prompt's parts by name. ``intro``, ``contextLabel`` (CONTEXT_LABEL, with any asset text),
     ``vocabularyOpening``, ``vocabularyClosing``, ``instructions`` and ``imagesNote`` (the line that announces the
-    images, or says why none follows) are the pipeline's own words; ``context``, ``identity``, ``attributes``, ``facts``, ``existing``, ``previous`` and
-    ``excerpt`` come from the file and its metadata, and ``vocabularyOptions`` from the template's operator-edited
+    images, or says why none follows) are the pipeline's own words; ``context``, ``identity``, ``attributes``,
+    ``facts``, ``existing``, ``previous`` and ``excerpt`` come from the file and its metadata, and
+    ``vocabularyOptions`` from the template's operator-edited
     configuration. ``vocabulary_parts`` is the ``(opening, options, closing)`` tuple ``vocabulary_prompt_parts``
     returns. ``images_withheld`` says the file has, or would have had, rendered views the analysis model cannot
     take, so none follows. ``previous_lines`` are the ``field: value`` lines of the pipeline's earlier result for this subject.
