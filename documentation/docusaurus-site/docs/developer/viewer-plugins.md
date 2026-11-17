@@ -212,6 +212,17 @@ When using a dependency manager, add the configuration fields to `viewerConfig.j
 }
 ```
 
+### Decoding in a Web Worker (optional)
+
+A viewer that decodes a large file in JavaScript can run the decoder in a worker so the page stays responsive. The TIFF/TGA Image Viewer (`viewers/RasterImageViewerPlugin/`) is the reference:
+
+-   `rasterWorker.ts` imports the decoders statically and answers `open` and `decode` messages with the same `RasterEngine` that the page can run. It posts `{ type: "ready" }` as its last statement.
+-   `createRasterWorker.ts` creates the worker with `new Worker(new URL("./rasterWorker.ts", import.meta.url), { type: "module" })`. Keep `import.meta.url` in a module of its own: jest's CommonJS transform cannot evaluate it, so unit tests replace the module with `jest.mock`.
+-   `rasterSession.ts` waits for `ready` before it sends the file, and decodes on the page with the same engine and caps when the worker cannot be created, its script cannot be loaded (blocked, 404 after a redeploy, no module worker support) or it does not start within 15 s. Only a worker that dies after it started is reported as a failure. `dispose()` rejects any request still in flight and terminates the worker.
+-   The worker is a same-origin file under `assets/`, so it runs under the existing `worker-src 'self' blob: data:` directive and needs no CSP change. A decoder that expects `require` (such as `utif2`, which looks up `pako` through `require` or `self.pako`) needs its dependency placed on the global first; `pakoGlobal.ts` does this and is imported before `utif2`.
+-   A viewer that relies on a worker for a decoder the page cannot run must say so in its documentation; this one can, so module workers (Chrome and Edge 80, Firefox 114, Safari 15) only improve responsiveness.
+-   Treat the file as untrusted input: check header sizes against pixel and byte caps before allocating, and refuse a variant the decoder draws wrongly rather than showing wrong pixels.
+
 ### Step 5 (Optional): Custom Install Script
 
 If your viewer requires build-time dependency installation beyond standard npm packages, create a custom install script:
@@ -366,7 +377,7 @@ interface ViewerPluginProps {
 }
 ```
 
-A multi-file selection can span assets. Build each file's URL from its `multiFiles` entry's `assetId` and `databaseId`, and fall back to the top-level pair when the entry carries none.
+`fileInfo` is set only for a single-file selection. It carries the file's `size` and its generated preview key (`previewFile`), when the host listed them, so a viewer can check a size cap before it downloads the file and show the generated preview when it cannot open the file itself (the TIFF/TGA Image Viewer does both). A multi-file selection can span assets. Build each file's URL from its `multiFiles` entry's `assetId` and `databaseId`, and fall back to the top-level pair when the entry carries none.
 
 ### Custom Parameters
 
@@ -379,6 +390,8 @@ const MyViewer: React.FC<ViewerPluginProps> = ({ customParameters }) => {
     // Use parameters to configure the viewer
 };
 ```
+
+The TIFF/TGA Image Viewer reads two parameters, set on the `tiff-tga-viewer` entry in `viewerConfig.json`: `maxDecodeBytes` (default 268435456, the largest file it downloads to decode) and `maxDecodePixels` (default 100000000, the most pixels it decodes for one image or TIFF page). Both are checked from the file size or header before any pixel is decoded. They are build-time values in the shipped viewer configuration: there is no deployment configuration key for them, and a fork cannot override a shipped viewer's entry from `customViewerConfig.json` (a repeated `id` is skipped), so changing a cap means editing `viewerConfig.json` in the fork. A missing or invalid value keeps the default.
 
 ## DynamicViewer and ViewerErrorBoundary
 

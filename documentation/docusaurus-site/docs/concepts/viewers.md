@@ -2,33 +2,13 @@
 
 VAMS includes a plugin-based viewer system that enables browser-based visualization of 3D models, point clouds, media files, documents, and data -- without requiring desktop software or specialized licenses. This page is the single source of truth for all built-in viewers and their supported file extensions.
 
-VAMS ships **22 built-in viewer plugins** across five categories. Fifteen are available in every deployment. The remaining seven are conditional:
+VAMS ships **24 built-in viewer plugins** across five categories: 13 in 3D, 4 in Media, 4 in Document, 2 in Data and the Preview viewer. Sixteen are available in every deployment. The remaining eight are conditional:
 
 -   **Two licensed viewers** — VNTANA and VEERUM, both [add-ons](../developer/addons-overview.md) — ship disabled and require both a vendor license and enabling them in the viewer configuration.
--   **Four viewers require `app.webUi.allowUnsafeEvalFeatures`** — Needle USD, the SuperSplat Editor, ThatOpen IFC BIM, and the Robotics Data Viewer. Their loaders use `eval`, so VAMS does not offer them at all when a deployment has not enabled that setting.
+-   **Five viewers require `app.webUi.allowUnsafeEvalFeatures`** — Needle USD, the SuperSplat Editor, ThatOpen IFC BIM, the Robotics Data Viewer and the Online 3D Viewer for Rhinoceros 3D (`.3dm`). Their loaders use `eval`, so VAMS does not offer them at all when a deployment has not enabled that setting.
 -   **The Physna Viewer** appears only when the Physna Sync add-on is enabled.
 
-The [master viewer table](#master-viewer-table) lists all 22; any other page quoting a viewer count is checked against this one.
-
-## What are file viewers
-
-File viewers are browser-based rendering components that display asset files directly in the VAMS web interface. When you open a file from the file manager, VAMS finds the viewers that support its file extension. If only one viewer supports it, VAMS opens the file in that viewer. If several do, VAMS lists them in a dropdown in the viewer UI and opens the file once you choose one; you can switch between them from the same dropdown.
-
-The viewer system is built on a **plugin architecture**. Each viewer is an independent module with its own dependencies, configuration, and supported file types. New viewers can be added without modifying any core system code -- only a configuration entry and the viewer component are required.
-
-### How viewer selection works
-
-1. VAMS reads the file extension (e.g., `.glb`, `.e57`, `.pdf`) from the last part of the file name. A leading dot does not start an extension and a trailing dot leaves none, so `README`, `LICENSE`, `.gitignore` and `file.` have no extension, `.eslintrc.json` has `.json`, and `.env.example` has `.example`.
-2. All enabled viewers that support that extension are identified. A file with no extension is matched by the viewers that accept files without one: the Text Viewer, and the Text Diff Viewer for comparisons.
-3. If exactly one viewer matches, VAMS opens the file in it.
-4. If multiple viewers match, the dropdown lists them with the **lowest priority number** first, and VAMS loads none of them until you choose one. You can then switch between them from the same dropdown.
-5. If the file has a preview image, the file page also offers a **Preview** option that shows the image in the **Preview Viewer**, including for a file whose extension no viewer matches.
-
-### Compare mode
-
-A viewer can also declare a compare mode, which shows two or more files side by side. **Compare Selected** in the search results, **Compare Selected Files** in the asset file manager and the **Compare** actions in the version lists open the file viewer in compare mode. Compare mode offers only the viewers whose compare settings admit the selection: the number of files, whether they are versions of one file or different files, and whether they belong to different assets. A compare-only viewer, such as the Text Diff Viewer, is offered only in compare mode. Each compare action appears only when a registered viewer admits the selection.
-
----
+The [master viewer table](#master-viewer-table) lists all 24; any other page quoting a viewer count is checked against this one. The count is the number of entries in `viewerConfig.json` (21) and `addonViewerConfig.json` (3); the Online 3D Viewer appears twice, once for the formats that need no `eval` and once for `.3dm`.
 
 ## Viewer categories
 

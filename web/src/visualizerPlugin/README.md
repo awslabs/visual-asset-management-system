@@ -114,9 +114,9 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 -   **ID**: `tiff-tga-viewer`
 -   **Extensions**: `.tga`, `.tif`, `.tiff`
--   **Features**: Decodes in the browser with `utif2` (TIFF) and `tga-js` (TGA), pure JavaScript drawn to a canvas, so no CSP change and no `ALLOWUNSAFEEVAL`. Multi-page TIFF page picker; 16-bit, floating-point and CMYK data converted for display. `customParameters.maxDecodeBytes` (default 268435456) and `maxDecodePixels` (default 100000000) are checked from the file size and the header before decoding; above a cap or on a decode failure the file's generated preview (`fileInfo.previewFile`) is shown with a notice, else a message. Decoding runs in a same-origin worker (`rasterWorker.ts`, no CSP change) and the TIFF Orientation tag is applied. BigTIFF, separate-colour-plane TIFF and old-style JPEG TIFF are not decoded
+-   **Features**: Decodes in the browser with `utif2` (TIFF) and `tga-js` (TGA), pure JavaScript drawn to a canvas, so no CSP change and no `ALLOWUNSAFEEVAL`. Multi-page TIFF page picker; 16-bit, floating-point and CMYK data converted for display. `customParameters.maxDecodeBytes` (default 268435456) and `maxDecodePixels` (default 100000000) are checked from the file size and the header before decoding; above a cap or on a decode failure the file's generated preview (`fileInfo.previewFile`) is shown with a notice, else a message. Decoding runs in a same-origin module worker (`rasterWorker.ts`; the base `worker-src 'self'` covers it, so no CSP change) behind `rasterSession.ts`, which decodes on the page with the same engine and caps when the worker cannot be created, its script cannot be loaded or it does not start in 15 s (module workers: Chrome/Edge 80, Firefox 114, Safari 15). The TIFF Orientation tag is applied. BigTIFF, separate-colour-plane TIFF and old-style JPEG TIFF are not decoded
 -   **Multi-file**: No
--   **Dependencies**: `utif2`, `tga-js`, `pako` (lazy-loaded by `RasterImageDependencyManager`)
+-   **Dependencies**: `utif2`, `tga-js`, `pako` (loaded inside the worker; `RasterImageDependencyManager` loads them on the page for the fallback). Receives the single selected file as `fileInfo`
 
 ### 2. Online3dViewerPlugin
 
@@ -196,7 +196,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 ### 10. TextViewerPlugin
 
 -   **ID**: `text-viewer`
--   **Extensions**: `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`, and files with no extension (`(none)`: `README`, `LICENSE`, `.gitignore`)
+-   **Extensions**: `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`, `.mdl` (NVIDIA MDL material files), and files with no extension (`(none)`: `README`, `LICENSE`, `.gitignore`)
 -   **Features**: View and syntax highlight text-based files with advanced formatting options. Reads the first 8 KiB through `core/textContent.ts` and shows a notice instead of binary content or an unsupported encoding; decodes UTF-16 with a byte-order mark
 -   **Multi-file**: No
 -   **Dependencies**: `react-syntax-highlighter`
