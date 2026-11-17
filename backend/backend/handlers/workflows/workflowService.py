@@ -42,6 +42,7 @@ from common.dynamodb import validate_pagination_info, to_update_expr, batch_get_
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler, log_action, log_actions
 from models.common import (
     APIGatewayProxyResponseV2,
@@ -409,7 +410,11 @@ def _deploy_fields(database_id, workflow_id, ref_records, item=None):
         "jobNames": job_names or [],
         "pipelineFingerprints": workflowAsl.workflow_pipeline_fingerprints(
             [rec for _ref, rec in ref_records]),
+        # The schema the definition was generated with; an older one is redeployed at next launch.
         "aslSchemaVersion": str(workflowAsl.ASL_SCHEMA_VERSION),
+        # The maximum output-ingestion wait the definition was generated with (compared by the
+        # deployment check, like the schema version).
+        "outputIngestionWaitHours": str(workflowAsl._max_wait_hours()),
         "deploymentRevision": int(item.get("deploymentRevision") or 0) + 1,
         "deploymentStale": False,
         "deploymentStaleReason": "",
@@ -469,6 +474,8 @@ def _deployment_view(item):
         "workflowVersionArn": item.get("workflowVersionArn", ""),
         "jobNames": list(item.get("jobNames") or []),
         "pipelineFingerprints": dict(item.get("pipelineFingerprints") or {}),
+        "aslSchemaVersion": str(item.get("aslSchemaVersion") or ""),
+        "outputIngestionWaitHours": str(item.get("outputIngestionWaitHours") or ""),
     }
 
 
@@ -1243,7 +1250,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 raise
             return internal_error()
     normalize_event(event)
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     try:
         path_parameters = event.get("pathParameters", {}) or {}
         query_parameters = event.get("queryStringParameters", {}) or {}

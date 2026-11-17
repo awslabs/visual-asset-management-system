@@ -74,11 +74,13 @@ CONSUMER: FrozenSet[str] = frozenset(
         "list_asset_version_comments",
         "get_comment",
         "check_subscription",
+        "list_zip_downloads",
+        "get_zip_download",
     }
 )
 
 # The consumer set plus the writes and deletes of asset content: assets, files, metadata, versions,
-# links, comments, subscriptions, and running workflows.
+# links, comments, subscriptions, Download as Zip jobs, and running workflows.
 OPERATOR: FrozenSet[str] = CONSUMER | frozenset(
     {
         "create_asset",
@@ -110,6 +112,10 @@ OPERATOR: FrozenSet[str] = CONSUMER | frozenset(
         "delete_comment",
         "delete_subscription",
         "unsubscribe",
+        "create_zip_download",
+        "get_zip_download_url",
+        "cancel_zip_download",
+        "delete_zip_download",
     }
 )
 

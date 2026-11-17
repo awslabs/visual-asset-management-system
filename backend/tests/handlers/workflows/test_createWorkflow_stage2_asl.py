@@ -128,7 +128,13 @@ class TestCreateWorkflowStage2ASL:
             if k in ("HandleExecutionError", "WorkflowProcessingJobFailed"):
                 continue
             for c in s.get("Catch", []):
-                assert c["Next"] == "HandleExecutionError"
+                # The output-ingestion wait's timeout passes through a Pass state that names the
+                # timeout in $.errorInfo, then reaches the handler like every other Catch.
+                target = c["Next"]
+                if states[target]["Type"] == "Pass":
+                    assert states[target]["ResultPath"] == "$.errorInfo"
+                    target = states[target]["Next"]
+                assert target == "HandleExecutionError"
                 assert c.get("ResultPath") == "$.errorInfo"
 
     def test_interim_state_between_each_pipeline_pair(self):

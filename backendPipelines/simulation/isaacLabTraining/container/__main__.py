@@ -17,6 +17,7 @@ import glob
 import traceback
 import boto3
 from utils.aws.s3 import S3Client
+from utils.aws.staging import STAGED_ASSET_FILES_ENV, stage_asset_files
 from utils.training.config import PipelineConfig
 from botocore.config import Config
 
@@ -229,6 +230,10 @@ def run_pipeline():
     # Sign each asset bucket's requests for its own Region before any S3 call (see utils/aws/s3.py).
     s3.register_bucket_regions(job_config.get("bucketRegions"))
 
+    # Stage the asset files the task reads from disk, before any package code runs in the container
+    if config.stage_asset_files:
+        stage_assets(s3, config)
+
     # Download and install custom environment if provided
     if config.custom_environment_s3_uri:
         print(f"Downloading custom environment: {config.custom_environment_s3_uri}")
@@ -320,6 +325,22 @@ def download_policy(s3: S3Client, config: PipelineConfig) -> str:
     s3.client_for_bucket(bucket).download_file(bucket, key, policy_path)
     print(f"Policy downloaded to {policy_path}")
     return policy_path
+
+
+def stage_assets(s3: S3Client, config: PipelineConfig) -> dict:
+    """Stage the run's asset files (trainingConfig.stageAssetPaths) and export their folder.
+
+    The files keep their asset-relative paths under the staging folder, which the Isaac Lab process
+    inherits as STAGED_ASSET_FILES_ENV; see utils/aws/staging.py.
+    """
+    paths = config.stage_asset_files.get("paths")
+    shown = ", ".join(str(p) or "/" for p in paths) if isinstance(paths, list) else repr(paths)
+    print(f"Staging asset files: {shown}")
+    staged = stage_asset_files(s3, config.stage_asset_files)
+    os.environ[STAGED_ASSET_FILES_ENV] = staged["path"]
+    print(f"Staged {staged['files']} asset files ({staged['bytes']} bytes) in {staged['seconds']} s; "
+          f"{STAGED_ASSET_FILES_ENV}={staged['path']}")
+    return staged
 
 
 def setup_checkpoint_dir(config: PipelineConfig) -> str:
