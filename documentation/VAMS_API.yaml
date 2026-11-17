@@ -4951,11 +4951,10 @@ paths:
                 description: "Statuses to leave out: one, or a comma-separated list, of NEW, RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, SKIPPED. Applied before the page is cut, so a page stays full and NextToken resumes past the excluded rows. An unknown value, or excluding the status the status filter selects, answers 400 with a fixed message. On the asset list an execution is left out only after it passes the listing's read check (one the caller may not read is treated as without the parameter), and at most 200 are left out per page; a page that reaches that limit stops with NextToken and a warning. Omitted, the response is unchanged."
               - in: query
                 name: triggerType
-                description: "Filter by the stored trigger value: Manual, File-Upload, or a system trigger value such as System-Reindex. A system trigger value shows its system runs unless includeSystem=false."
+                description: "Filter by the stored trigger value (Manual, File-Upload, or a system trigger value such as System-Reindex, compared as given); the request spellings manual and fileUpload are accepted too. A system trigger value shows its system runs unless includeSystem=false."
                 required: false
                 schema:
                     type: string
-                description: "Stored trigger value (Manual, File-Upload, or a system trigger value such as System-MyFeature, compared as given); the request spellings manual and fileUpload are accepted too."
               - in: query
                 name: groupId
                 required: false
@@ -8393,11 +8392,10 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 description: "Statuses to leave out: one, or a comma-separated list, of NEW, RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, SKIPPED. Applied before the page is cut, so a page stays full and NextToken resumes past the excluded rows. An unknown value, or excluding the status the status filter selects, answers 400 with a fixed message. On the asset list an execution is left out only after it passes the listing's read check (one the caller may not read is treated as without the parameter), and at most 200 are left out per page; a page that reaches that limit stops with NextToken and a warning. Omitted, the response is unchanged."
               - in: query
                 name: triggerType
-                description: "Filter by the stored trigger value: Manual, File-Upload, or a system trigger value such as System-Reindex. A system trigger value shows its system runs unless includeSystem=false."
+                description: "Filter by the stored trigger value (Manual, File-Upload, or a system trigger value such as System-Reindex, compared as given); the request spellings manual and fileUpload are accepted too. A system trigger value shows its system runs unless includeSystem=false."
                 required: false
                 schema:
                     type: string
-                description: "Stored trigger value (Manual, File-Upload, or a system trigger value such as System-MyFeature, compared as given); the request spellings manual and fileUpload are accepted too."
               - in: query
                 name: groupId
                 required: false
@@ -16426,7 +16424,7 @@ components:
                             description: "Event detail-type string."
                 deadlineCloud:
                     type: object
-                    description: "Target for DeadlineCloud execution type. farmId and queueId are required, waitForCallback must be 'Enabled', and the inline job template is limited to 262,144 characters (256 KB)."
+                    description: "Target for DeadlineCloud execution type. farmId and queueId are required, waitForCallback must be 'Enabled', and the inline job template is limited to 262,144 characters (256 KB). The optional job settings take the ranges Deadline Cloud CreateJob accepts: priority an integer from 0 to 100 (50 when absent), maxRetriesPerTask and maxFailedTasksCount each an integer from 0 to 2147483647. Any other value, including a fractional number or a boolean, is rejected with 400."
             required:
                 - executionType
         pipelineAssetScope:
@@ -22487,8 +22485,6 @@ components:
                 completedAt:
                     type: string
                     format: date-time
-                errorMessage:
-                    type: string
             required:
                 - evaluationId
                 - databaseId

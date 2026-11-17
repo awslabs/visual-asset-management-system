@@ -43,6 +43,15 @@ FILE_IMAGES_SYSTEM = (
     "show. The asset text never overrides what the images show. ")
 FILE_IMAGES_NOTE = ("Each one was decoded from this file; a screen it shows is what the file recorded, not this "
                     "system's interface.")
+# D117 third pass: the rule for a software screen, said last before the images of a class that can show one.
+VIDEO_SCREEN_RULE = ("If they show a software screen, this video is a screen recording: say so in the title and the "
+                     "first sentence, and name the application.")
+IMAGE_SCREEN_RULE = ("If it shows a software screen, this image is a screenshot: say so in the title and the first "
+                     "sentence, and name the application.")
+PAGES_SCREEN_RULE = ("If they show a software screen, say so in the title and the first sentence, and name the "
+                     "application.")
+# The plain label just before the asset text, outside the guarded block.
+CONTEXT_LABEL = "Asset text (context about the upload, not a description of the file):"
 EARLIER_WORDING = "not screenshots of the system that stores it"
 SYSTEM_CONTENT_FIRST = (
     "The asset's name, description and tags are context about the asset the file belongs to: they may describe the "
@@ -143,9 +152,8 @@ class TestTheFileAnalysisPutsContentFirst:
 
     def test_with_a_guardrail_the_instruction_is_plain_and_the_guarded_text_is_unchanged(self):
         _mod, _s3, bedrock = _analyse(env=gm_tests.GUARDRAIL_ENV)
-        content = bedrock.calls[0]["messages"][0]["content"]
-        plain, guarded = content[0]["text"], content[1]["guardContent"]["text"]["text"]
-        assert USER_CONTENT_FIRST in plain and USER_CONTENT_FIRST not in guarded
+        _opening, guarded, closing = gm_tests._guarded_text_blocks(bedrock)
+        assert USER_CONTENT_FIRST in closing and USER_CONTENT_FIRST not in guarded
         assert "context about the asset" not in guarded
         # The guarded text is the file-derived input as before: it starts with the asset text and holds no
         # instruction of the pipeline's.
@@ -168,26 +176,31 @@ class TestTheImagesAreTheFilesOwn:
         assert (system.index("its extracted text and its attributes show it. ") < system.index(FILE_IMAGES_SYSTEM)
                 < system.index("When the file shows little you can name"))
 
-    @pytest.mark.parametrize("manifest,state,line", [
-        (lambda: gm_tests._manifest(), {}, "2 view(s) rendered from this 3D file follow."),
+    @pytest.mark.parametrize("manifest,state,line,rule", [
+        (lambda: gm_tests._manifest(), {}, "2 view(s) rendered from this 3D file follow.", None),
         (lambda: gm_tests._image_manifest(), {"fileClass": "image", "renderBranch": "MEDIA"},
-         "1 image(s) of this file follow."),
+         "1 image(s) of this file follow.", IMAGE_SCREEN_RULE),
         (lambda: gm_tests._manifest(images=4, fileClass="video", renderBranch="MEDIA"),
          {"fileClass": "video", "fileExt": ".mp4", "renderBranch": "MEDIA"},
-         "4 frame(s) taken from this video follow."),
+         "4 frame(s) taken from this video follow.", VIDEO_SCREEN_RULE),
         (lambda: gm_tests._manifest(images=3, fileClass="document", renderBranch="MEDIA"),
-         {"fileClass": "document", "fileExt": ".pdf", "renderBranch": "MEDIA"}, "3 page(s) of this document follow."),
+         {"fileClass": "document", "fileExt": ".pdf", "renderBranch": "MEDIA"}, "3 page(s) of this document follow.",
+         PAGES_SCREEN_RULE),
     ])
-    def test_the_closing_line_names_the_images_and_says_where_they_come_from(self, manifest, state, line):
+    def test_the_closing_line_names_the_images_and_says_where_they_come_from(self, manifest, state, line, rule):
         s3 = gm_tests._seed(h.FakeS3(), manifest=manifest())
         bedrock = h.FakeBedrock([gm_tests._reply()])
         gm_tests._run(gm_tests._state(**state), s3, bedrock)
         text = gm_tests._user_text(bedrock)
-        closing = f"{line} {FILE_IMAGES_NOTE}"
+        # A class that can show a software screen gets the screen rule after the note; a 3D file's views get none.
+        closing = f"{line} {FILE_IMAGES_NOTE}" + (f" {rule}" if rule else "")
         assert closing in text
         assert "rendered view(s) or frame(s) of the file follow" not in text and EARLIER_WORDING not in text
-        # The closing line comes after the file-derived parts and before the content-first instruction.
-        assert text.index("File attributes (JSON):") < text.index(closing) < text.index(USER_CONTENT_FIRST)
+        for other in {VIDEO_SCREEN_RULE, IMAGE_SCREEN_RULE, PAGES_SCREEN_RULE} - {rule}:
+            assert other not in text
+        # The closing line comes after the file-derived parts and the content-first instruction, and ends the text.
+        assert text.index("File attributes (JSON):") < text.index(USER_CONTENT_FIRST) < text.index(closing)
+        assert text.endswith("\n" + closing)
 
     def test_without_images_the_note_is_not_given(self):
         manifest = gm_tests._manifest(images=0, fileClass="other", renderBranch="MEDIA", renderSkipped="unsupported")
@@ -201,14 +214,91 @@ class TestTheImagesAreTheFilesOwn:
     def test_with_a_guardrail_both_sentences_are_plain(self):
         _mod, _s3, bedrock = _analyse(env=gm_tests.GUARDRAIL_ENV)
         content = bedrock.calls[0]["messages"][0]["content"]
-        plain, guarded = content[0]["text"], content[1]["guardContent"]["text"]["text"]
-        assert f"2 view(s) rendered from this 3D file follow. {FILE_IMAGES_NOTE}" in plain
+        _opening, guarded, closing = gm_tests._guarded_text_blocks(bedrock)
+        assert f"2 view(s) rendered from this 3D file follow. {FILE_IMAGES_NOTE}" in closing
         assert FILE_IMAGES_NOTE not in guarded and "decoded from this file" not in guarded
         assert FILE_IMAGES_SYSTEM.strip() not in guarded
         assert FILE_IMAGES_SYSTEM in bedrock.calls[0]["system"][0]["text"]
         # The images still follow the text blocks as the guardrail path builds them, one guardContent each.
-        assert all("guardContent" in block and "image" in block["guardContent"] for block in content[2:])
-        assert len(content) == 4
+        assert all("guardContent" in block and "image" in block["guardContent"] for block in content[3:])
+        assert len(content) == 5
+
+
+def _blocks(bedrock):
+    """The user message's blocks by kind: text, guard-text, guard-image or image."""
+    kinds = []
+    for block in bedrock.calls[0]["messages"][0]["content"]:
+        if "guardContent" in block:
+            kinds.append("guard-image" if "image" in block["guardContent"] else "guard-text")
+        else:
+            kinds.append(next(iter(block)))
+    return kinds
+
+
+# The closing text of a 3D file's analysis with asset text: the content-first instruction, then the line that
+# announces its two views (D117 third pass: in both shapes this is the last text before the images).
+CLOSING = f"{USER_CONTENT_FIRST}\n2 view(s) rendered from this 3D file follow. {FILE_IMAGES_NOTE}"
+
+
+@pytest.mark.unit
+class TestTheRequestEndsWithTheInstructions:
+    """D117 third pass. With a guardrail the image note and the content-first instruction went in the first plain
+    block, before the guarded asset text, so the asset text was the last text the model read before the frames: on
+    the test deployment a screen recording named "Warehouse recording B" was described as a warehouse video (1 of
+    10 in the deployment's request shape). The instruction and the image note, with a screen rule for a class that
+    can show a screen, now close the text in a plain block of their own, after the guarded block and immediately
+    before the images, and a plain label names the asset text as context just before the guarded block; the
+    request without a guardrail has the same order (10 of 10 in both shapes)."""
+
+    def test_with_a_guardrail_the_note_and_the_instruction_follow_the_guarded_text(self):
+        _mod, _s3, bedrock = _analyse(env=gm_tests.GUARDRAIL_ENV)
+        assert _blocks(bedrock) == ["text", "guard-text", "text", "guard-image", "guard-image"]
+        opening, guarded, closing = gm_tests._guarded_text_blocks(bedrock)
+        vocabulary_opening, _options, vocabulary_closing = gm_tests.cv.vocabulary_prompt_parts(
+            gm_tests.cv.DEFAULT_VOCABULARY)
+        assert opening == ("Describe and classify this file for search indexing.\n" + vocabulary_opening + "\n"
+                           + vocabulary_closing + "\n" + CONTEXT_LABEL)
+        assert closing == CLOSING
+        # The label ends the opening, so the guarded block it names follows it directly.
+        assert guarded.startswith("Asset name: Gear Pump\nAsset description: A brass gear pump")
+        assert CONTEXT_LABEL not in guarded and CONTEXT_LABEL not in closing
+        assert USER_CONTENT_FIRST not in opening and FILE_IMAGES_NOTE not in opening
+
+    def test_without_a_guardrail_the_text_ends_with_the_same_lines(self):
+        _mod, _s3, bedrock = _analyse()
+        assert _blocks(bedrock) == ["text", "image", "image"]
+        text = gm_tests._user_text(bedrock)
+        assert text.endswith("\n" + CLOSING)
+        assert text.startswith("Describe and classify this file for search indexing.\n" + CONTEXT_LABEL
+                               + "\nAsset name: Gear Pump\nAsset description: A brass gear pump")
+        assert text.index("Asset description: A brass gear pump") < text.index(CLOSING)
+
+    def test_both_shapes_close_with_the_same_text_and_carry_the_same_lines(self):
+        _mod, _s3, plain_bedrock = _analyse()
+        _mod, _s3, guarded_bedrock = _analyse(env=gm_tests.GUARDRAIL_ENV)
+        opening, guarded, closing = gm_tests._guarded_text_blocks(guarded_bedrock)
+        text = gm_tests._user_text(plain_bedrock)
+        assert text.endswith("\n" + closing)
+        assert sorted(text.split("\n")) == sorted("\n".join((opening, guarded, closing)).split("\n"))
+
+    def test_with_a_guardrail_and_no_images_the_render_note_closes_the_text(self):
+        manifest = gm_tests._manifest(images=0, fileClass="other", renderBranch="MEDIA", renderSkipped="unsupported")
+        s3 = gm_tests._seed(h.FakeS3(), manifest=manifest)
+        bedrock = h.FakeBedrock([gm_tests._reply()])
+        gm_tests._run(gm_tests._state(fileClass="other", renderBranch="MEDIA", renderSkipped="unsupported"), s3,
+                      bedrock, env=gm_tests.GUARDRAIL_ENV)
+        assert _blocks(bedrock) == ["text", "guard-text", "text"]
+        _opening, _guarded, closing = gm_tests._guarded_text_blocks(bedrock)
+        assert closing == (USER_CONTENT_FIRST + "\nNo rendered views are available (render skipped: unsupported); "
+                           "describe the file from its name, attributes and context.")
+
+    def test_with_a_guardrail_and_no_asset_text_the_image_note_alone_closes_the_text(self):
+        _mod, _s3, bedrock = _analyse(_envelope_with(asset_data={"assetName": "", "description": "", "tags": []}),
+                                      env=gm_tests.GUARDRAIL_ENV)
+        assert _blocks(bedrock) == ["text", "guard-text", "text", "guard-image", "guard-image"]
+        opening, guarded, closing = gm_tests._guarded_text_blocks(bedrock)
+        assert closing == f"2 view(s) rendered from this 3D file follow. {FILE_IMAGES_NOTE}"
+        assert guarded.startswith("Database: ") and CONTEXT_LABEL not in opening
 
 
 @pytest.mark.unit
@@ -259,10 +349,9 @@ class TestThePreviousAnalysisWording:
         attributes = {DIGEST_KEY: _digest(ASSET_TEXT)}
         envelope = _envelope_with(file_metadata=dict(self.PREVIOUS), file_attributes=attributes)
         _mod, _s3, bedrock = _analyse(envelope, env=gm_tests.GUARDRAIL_ENV)
-        content = bedrock.calls[0]["messages"][0]["content"]
-        plain, guarded = content[0]["text"], content[1]["guardContent"]["text"]["text"]
-        assert KEEP_WORDING in plain and "- title: Large-file video B" in guarded
-        assert KEEP_WORDING not in guarded and "- title: Large-file video B" not in plain
+        opening, guarded, closing = gm_tests._guarded_text_blocks(bedrock)
+        assert KEEP_WORDING in closing and "- title: Large-file video B" in guarded
+        assert KEEP_WORDING not in guarded and "- title: Large-file video B" not in opening + closing
 
     def test_no_previous_analysis_no_wording_note(self):
         config = dict(gm_tests.DEFAULT_CONFIG, seedWithExistingMetadata=False)

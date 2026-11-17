@@ -515,6 +515,72 @@ describe("pipelineValidation", () => {
             expect(r.ok).toBe(true);
         });
 
+        it("requires farmId and queueId, and the callback Enabled", () => {
+            const r = validatePipeline({
+                pipelineName: "x",
+                executionConfig: {
+                    executionType: "DeadlineCloud",
+                    waitForCallback: "Disabled",
+                    deadlineCloud: { template: "t:" },
+                },
+            } as any);
+            expect(r.ok).toBe(false);
+            expect(r.errors).toEqual({
+                "executionConfig.deadlineCloud.farmId": "DeadlineCloud farmId is required",
+                "executionConfig.deadlineCloud.queueId": "DeadlineCloud queueId is required",
+                "executionConfig.waitForCallback":
+                    "DeadlineCloud requires waitForCallback to be Enabled",
+            });
+        });
+
+        // A bad count is reported in the same pass as the other DeadlineCloud messages; a fatal
+        // check on the count would skip the superRefine that adds them (#1574).
+        it("reports a fractional count together with the missing farmId, queueId and template", () => {
+            const r = validatePipeline(dcConfig({ farmId: "", queueId: "", priority: 2.5 }) as any);
+            expect(r.ok).toBe(false);
+            expect(r.errors).toEqual({
+                "executionConfig.deadlineCloud.priority": "Must be a whole number",
+                "executionConfig.deadlineCloud.farmId": "DeadlineCloud farmId is required",
+                "executionConfig.deadlineCloud.queueId": "DeadlineCloud queueId is required",
+                "executionConfig.deadlineCloud.template": "DeadlineCloud job template is required",
+            });
+        });
+
+        it("reports a count that is both negative and fractional as negative", () => {
+            const r = validatePipeline(
+                dcConfig({ template: "t:", maxRetriesPerTask: -1.5 }) as any
+            );
+            expect(r.errors).toEqual({
+                "executionConfig.deadlineCloud.maxRetriesPerTask": "Cannot be negative",
+            });
+        });
+
+        it("accepts a whole count beyond Number.MAX_SAFE_INTEGER", () => {
+            const r = validatePipeline(
+                dcConfig({ template: "t:", maxFailedTasksCount: 1e20 }) as any
+            );
+            expect(r.ok).toBe(true);
+        });
+
+        it("refuses a non-finite count and still reports the missing fields", () => {
+            const r = validatePipeline(
+                dcConfig({ farmId: "", priority: Infinity, maxRetriesPerTask: -Infinity }) as any
+            );
+            expect(r.errors).toEqual({
+                "executionConfig.deadlineCloud.priority": "Must be a whole number",
+                "executionConfig.deadlineCloud.maxRetriesPerTask": "Cannot be negative",
+                "executionConfig.deadlineCloud.farmId": "DeadlineCloud farmId is required",
+                "executionConfig.deadlineCloud.template": "DeadlineCloud job template is required",
+            });
+        });
+
+        it("refuses a count that is not a number", () => {
+            const r = validatePipeline(dcConfig({ template: "t:", priority: "high" }) as any);
+            expect(r.errors).toEqual({
+                "executionConfig.deadlineCloud.priority": "Must be a whole number",
+            });
+        });
+
         it("rejects a template beyond the state-machine definition budget", () => {
             const r = validatePipeline(dcConfig({ template: "y".repeat(256 * 1024 + 1) }) as any);
             expect(r.ok).toBe(false);

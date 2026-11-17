@@ -723,6 +723,37 @@ DEADLINE_TASK_TOKEN_PARAMETER = "VamsTaskToken"
 DEADLINE_PIPELINE_EXECUTION_ID_PARAMETER = "VamsPipelineExecutionId"
 DEADLINE_WORKFLOW_EXECUTION_ID_PARAMETER = "VamsWorkflowExecutionId"
 
+# The ranges Deadline Cloud CreateJob accepts for the job settings a DeadlineCloud pipeline carries,
+# keyed by the pipeline's deadlineCloud setting name. The pipeline API and the createJob task state
+# both check against them, so a value createJob would refuse is caught when the pipeline is saved and
+# again before a definition that carries it is deployed.
+DEADLINE_JOB_SETTING_RANGES = {
+    "priority": (0, 100),
+    "maxRetriesPerTask": (0, 2147483647),
+    "maxFailedTasksCount": (0, 2147483647),
+}
+
+
+def deadline_job_setting(setting: str, value: Any, label: str) -> int:
+    """`value` as an int when it is a whole number in the CreateJob range of `setting`; otherwise a
+    ValueError that names `label` and the range.
+
+    Accepts an int, or a string that int() reads as one (the pipeline API has always stored such a
+    string as given). Refuses a bool, any float (2.5, and 2.0, which DynamoDB cannot store as a
+    float) and any other text."""
+    low, high = DEADLINE_JOB_SETTING_RANGES[setting]
+    number = None
+    if isinstance(value, int) and not isinstance(value, bool):
+        number = value
+    elif isinstance(value, str):
+        try:
+            number = int(value)
+        except ValueError:
+            number = None
+    if number is None or not low <= number <= high:
+        raise ValueError(f"{label} must be an integer from {low} to {high}")
+    return number
+
 
 class DeadlineCloudTaskBuilder(TaskStateBuilder):
     """Builder for AWS Deadline Cloud createJob task states.
@@ -787,11 +818,11 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
         return job_parameters
 
     @staticmethod
-    def _int_setting(field_name: str, value: Any) -> int:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            raise ValueError(f"DeadlineCloud pipeline setting {field_name} must be an integer")
+    def _int_setting(pipeline_id: str, setting: str, value: Any) -> int:
+        # A stored pipeline is not re-validated when it is read, and createJob refuses a value
+        # outside its range, so the range is checked here too.
+        return deadline_job_setting(
+            setting, value, f"DeadlineCloud pipeline {pipeline_id}: deadlineCloud.{setting}")
 
     @classmethod
     def _client_token_expression(cls, state_name: str, payload: Dict[str, Any]) -> str:
@@ -835,13 +866,14 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
                 "deadlineTemplate on the pipeline resource.")
 
         priority = user_resource.get('deadlinePriority')
+        pipeline_id = pipeline.get('pipelineId', '')
         parameters = {
             "FarmId": farm_id,
             "QueueId": queue_id,
             "Template": template,
             "TemplateType": template_type,
             # 0 is a valid (lowest) priority — only fall back when unset/blank.
-            "Priority": (self._int_setting('deadlinePriority', priority)
+            "Priority": (self._int_setting(pipeline_id, 'priority', priority)
                          if priority not in (None, '') else self.DEFAULT_PRIORITY),
             # Identifies the VAMS pipeline step in the Deadline monitor.
             "NameOverride": state_name,
@@ -854,10 +886,10 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
             parameters["StorageProfileId"] = user_resource['deadlineStorageProfileId']
         if user_resource.get('deadlineMaxRetriesPerTask') not in (None, ''):
             parameters["MaxRetriesPerTask"] = self._int_setting(
-                'deadlineMaxRetriesPerTask', user_resource['deadlineMaxRetriesPerTask'])
+                pipeline_id, 'maxRetriesPerTask', user_resource['deadlineMaxRetriesPerTask'])
         if user_resource.get('deadlineMaxFailedTasksCount') not in (None, ''):
             parameters["MaxFailedTasksCount"] = self._int_setting(
-                'deadlineMaxFailedTasksCount', user_resource['deadlineMaxFailedTasksCount'])
+                pipeline_id, 'maxFailedTasksCount', user_resource['deadlineMaxFailedTasksCount'])
 
         state = {
             "Type": "Task",
