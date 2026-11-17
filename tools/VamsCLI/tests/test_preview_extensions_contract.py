@@ -53,7 +53,7 @@ class TestBackendDrift:
         backend = _backend_preview_extensions()
         if not {".webp", ".bmp"} <= backend:
             pytest.skip(
-                "backend ALLOWED_PREVIEW_FILE_EXTENSIONS lacks .webp/.bmp until #1550 / PR #1575 "
-                "lands on this branch; remove this skip once it has"
+                "backend ALLOWED_PREVIEW_FILE_EXTENSIONS lacks .webp/.bmp until PR #1575 (#1550) "
+                "is merged into this branch; from then on this test enforces equality"
             )
         assert set(ALLOWED_PREVIEW_EXTENSIONS) == backend

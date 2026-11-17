@@ -283,7 +283,7 @@ DEFAULT_CHUNK_SIZE_SMALL = 150 * 1024 * 1024  # 150MB
 DEFAULT_CHUNK_SIZE_LARGE = 1024 * 1024 * 1024  # 1GB
 MAX_FILE_SIZE_SMALL_CHUNKS = 15 * 1024 * 1024 * 1024  # 15GB
 MAX_SEQUENCE_SIZE = 3 * 1024 * 1024 * 1024  # 3GB
-MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5 MiB; a preview of exactly this size is accepted, as the API does
 DEFAULT_PARALLEL_UPLOADS = 10
 DEFAULT_RETRY_ATTEMPTS = 3
 # How long `file upload --wait-async` waits for files over 1 GiB to be ingested.
@@ -319,6 +319,8 @@ DEFAULT_IGNORE_FILE_NAME = ".vamsignore"
 SYNC_MTIME_TOLERANCE_SECONDS = 2  # Filesystem timestamp granularity tolerance (FAT32 = 2s)
 
 # File Extensions
+# Mirrors ALLOWED_PREVIEW_FILE_EXTENSIONS in backend/backend/common/s3PathPatterns.py
+# (tests/test_preview_extensions_contract.py checks it). .tga/.tif/.tiff are not previews of their own.
 ALLOWED_PREVIEW_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.bmp']
 
 # Profile Configuration

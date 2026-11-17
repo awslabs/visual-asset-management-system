@@ -357,7 +357,8 @@ def upload_status(ctx: click.Context, database_id: str, asset_id: str, upload_id
 @click.option('--directory', type=click.Path(exists=True, file_okay=False, dir_okay=True),
               help='Directory to upload')
 @click.option('--asset-preview', is_flag=True,
-              help='Upload as asset preview (single file only)')
+              help='Upload as asset preview (single file only; .png, .jpg, .jpeg, .svg, .gif, .webp or .bmp, '
+                   'at most 5 MiB)')
 @click.option('--asset-location', default='/',
               help='Base asset location (default: "/")')
 @click.option('--recursive', is_flag=True,

@@ -175,6 +175,22 @@ class TestFileProcessor:
         finally:
             tmp_path.unlink()
 
+    def test_validate_file_for_upload_preview_exactly_5_mib_is_accepted(self):
+        """A preview of exactly 5 MiB (5,242,880 bytes) passes, as at the API; one byte more fails."""
+        assert MAX_PREVIEW_FILE_SIZE == 5_242_880
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.webp') as tmp:
+            tmp.write(b"x" * MAX_PREVIEW_FILE_SIZE)
+            tmp_path = Path(tmp.name)
+
+        try:
+            validate_file_for_upload(tmp_path, "assetPreview")
+            with open(tmp_path, 'ab') as f:
+                f.write(b"x")
+            with pytest.raises(FileTooLargeError, match="exceeds maximum size"):
+                validate_file_for_upload(tmp_path, "assetPreview")
+        finally:
+            tmp_path.unlink()
+
     def test_validate_file_for_upload_invalid_preview_extension(self):
         """Test file validation for invalid preview file extensions."""
         with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:

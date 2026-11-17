@@ -108,7 +108,7 @@ An `--asset-preview` upload fails validation.
 
 **Cause:**
 
-Asset preview images must be no larger than 5 MB and must use one of the supported extensions: `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, `.bmp`. A `.tga`, `.tif` or `.tiff` file is refused.
+Asset preview images must be no larger than 5 MiB (5,242,880 bytes; a file of exactly that size is accepted) and must use one of the supported extensions: `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, `.bmp`. A `.tga`, `.tif` or `.tiff` file is refused as an uploaded preview. To get a preview for such an image, enable the media preview pipeline, which writes a JPEG preview for it.
 
 **Resolution:**
 

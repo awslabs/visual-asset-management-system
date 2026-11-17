@@ -28,23 +28,23 @@ Upload files or a directory to an asset with automatic chunking, multi-sequence 
 vamscli file upload [FILES_OR_DIRECTORY] [OPTIONS]
 ```
 
-| Option               | Type    | Required    | Description                                                                                 |
-| -------------------- | ------- | ----------- | ------------------------------------------------------------------------------------------- |
-| `FILES_OR_DIRECTORY` | PATH    | Conditional | One or more file paths or a single directory (omit when using `--directory`/`--json-input`) |
-| `-d`, `--database`   | TEXT    | Yes         | Database ID                                                                                 |
-| `-a`, `--asset`      | TEXT    | Yes         | Asset ID                                                                                    |
-| `--directory`        | PATH    | No          | Directory to upload (mutually exclusive with file arguments)                                |
-| `--asset-preview`    | FLAG    | No          | Upload as the asset preview (single file only; not valid with a directory)                  |
-| `--asset-location`   | TEXT    | No          | Base asset location (default: `/`)                                                          |
-| `--recursive`        | FLAG    | No          | Include subdirectories when uploading a directory                                           |
-| `--parallel-uploads` | INTEGER | No          | Maximum parallel part uploads (default: 10)                                                 |
-| `--retry-attempts`   | INTEGER | No          | Retry attempts per part (default: 3)                                                        |
-| `--force-skip`       | FLAG    | No          | Auto-skip failed parts after retries are exhausted                                          |
-| `--hide-progress`    | FLAG    | No          | Hide the upload progress display                                                            |
-| `--wait-async`       | FLAG    | No          | Wait until files over 1 GiB, which are processed asynchronously, have landed or failed      |
-| `--async-timeout`    | INTEGER | No          | Seconds `--wait-async` waits (default: 3600)                                                |
-| `--json-input`       | TEXT    | No          | JSON parameters as a string or `@file` path; overrides matching command-line options        |
-| `--json-output`      | FLAG    | No          | Output raw JSON response (implies `--hide-progress`)                                        |
+| Option               | Type    | Required    | Description                                                                                                                                           |
+| -------------------- | ------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FILES_OR_DIRECTORY` | PATH    | Conditional | One or more file paths or a single directory (omit when using `--directory`/`--json-input`)                                                           |
+| `-d`, `--database`   | TEXT    | Yes         | Database ID                                                                                                                                           |
+| `-a`, `--asset`      | TEXT    | Yes         | Asset ID                                                                                                                                              |
+| `--directory`        | PATH    | No          | Directory to upload (mutually exclusive with file arguments)                                                                                          |
+| `--asset-preview`    | FLAG    | No          | Upload as the asset preview (single file only; not valid with a directory; `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp` or `.bmp`, at most 5 MiB) |
+| `--asset-location`   | TEXT    | No          | Base asset location (default: `/`)                                                                                                                    |
+| `--recursive`        | FLAG    | No          | Include subdirectories when uploading a directory                                                                                                     |
+| `--parallel-uploads` | INTEGER | No          | Maximum parallel part uploads (default: 10)                                                                                                           |
+| `--retry-attempts`   | INTEGER | No          | Retry attempts per part (default: 3)                                                                                                                  |
+| `--force-skip`       | FLAG    | No          | Auto-skip failed parts after retries are exhausted                                                                                                    |
+| `--hide-progress`    | FLAG    | No          | Hide the upload progress display                                                                                                                      |
+| `--wait-async`       | FLAG    | No          | Wait until files over 1 GiB, which are processed asynchronously, have landed or failed                                                                |
+| `--async-timeout`    | INTEGER | No          | Seconds `--wait-async` waits (default: 3600)                                                                                                          |
+| `--json-input`       | TEXT    | No          | JSON parameters as a string or `@file` path; overrides matching command-line options                                                                  |
+| `--json-output`      | FLAG    | No          | Output raw JSON response (implies `--hide-progress`)                                                                                                  |
 
 ```bash
 # Single file
