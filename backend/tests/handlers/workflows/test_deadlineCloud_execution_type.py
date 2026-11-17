@@ -7,6 +7,7 @@ and the deadlineCloudJobCallback lambda (token resolution from default-bus job s
 non-VAMS job no-ops, token-gone swallowing, sub-process registration)."""
 
 import os
+import re
 import json
 import pytest
 from unittest.mock import MagicMock, patch
@@ -23,9 +24,14 @@ from backend.backend.common.workflows.stepfunctions_builder import (
 )
 
 
+# The prefix of a builder error: the pipeline id, then the deadlineCloud field the operator edits.
+_PIPE = "DeadlineCloud pipeline renderPipeline: "
+
+
 def _deadline_pipeline(**overrides):
     pipeline = {
         "name": "renderPipeline",
+        "pipelineId": "renderPipeline",
         "pipelineExecutionType": "DeadlineCloud",
         "waitForCallback": "Enabled",
         "taskTimeout": "7200",
@@ -183,7 +189,7 @@ class TestDeadlineCloudTaskBuilder:
             "deadlineTemplate": "{}",
             "deadlinePriority": "high",
         }))
-        with pytest.raises(ValueError, match="deadlinePriority"):
+        with pytest.raises(ValueError, match=re.escape(f"{_PIPE}deadlineCloud.priority must be an integer")):
             _build_state(pipeline=pipeline)
 
     @staticmethod
@@ -198,19 +204,20 @@ class TestDeadlineCloudTaskBuilder:
         return _deadline_pipeline(userProvidedResource=json.dumps(resource))
 
     @pytest.mark.parametrize("key,value,message", [
-        ("deadlinePriority", 101, "deadlinePriority must be an integer from 0 to 100"),
-        ("deadlinePriority", -1, "deadlinePriority must be an integer from 0 to 100"),
-        ("deadlinePriority", True, "deadlinePriority must be an integer from 0 to 100"),
+        ("deadlinePriority", 101, f"{_PIPE}deadlineCloud.priority must be an integer from 0 to 100"),
+        ("deadlinePriority", -1, f"{_PIPE}deadlineCloud.priority must be an integer from 0 to 100"),
+        ("deadlinePriority", True, f"{_PIPE}deadlineCloud.priority must be an integer from 0 to 100"),
         ("deadlineMaxRetriesPerTask", 2 ** 31,
-         "deadlineMaxRetriesPerTask must be an integer from 0 to 2147483647"),
+         f"{_PIPE}deadlineCloud.maxRetriesPerTask must be an integer from 0 to 2147483647"),
         ("deadlineMaxFailedTasksCount", 2.5,
-         "deadlineMaxFailedTasksCount must be an integer from 0 to 2147483647"),
+         f"{_PIPE}deadlineCloud.maxFailedTasksCount must be an integer from 0 to 2147483647"),
         ("deadlineMaxFailedTasksCount", -1,
-         "deadlineMaxFailedTasksCount must be an integer from 0 to 2147483647"),
+         f"{_PIPE}deadlineCloud.maxFailedTasksCount must be an integer from 0 to 2147483647"),
     ])
     def test_setting_outside_the_createjob_range_rejected(self, key, value, message):
         # #1581: createJob refuses these, so the definition is refused instead of failing each run.
-        with pytest.raises(ValueError, match=message):
+        # The message names the pipeline and the field the operator edits.
+        with pytest.raises(ValueError, match=re.escape(message)):
             _build_state(pipeline=self._with_settings(**{key: value}))
 
     def test_settings_at_the_createjob_limits_accepted(self):
@@ -223,9 +230,9 @@ class TestDeadlineCloudTaskBuilder:
         assert params["MaxFailedTasksCount"] == 2 ** 31 - 1
 
     def test_stored_out_of_range_priority_never_reaches_createjob(self):
-        # A pipeline saved before the API checked the range still holds the value, as a DynamoDB
-        # Decimal. Mapping the stored record keeps working (the pipeline can still be read, edited
-        # and fingerprinted), and building its createJob state refuses it.
+        # A stored pipeline can hold a value the API refuses, as a DynamoDB Decimal. Mapping the
+        # stored record keeps working (the pipeline can still be read, edited and fingerprinted),
+        # and building its createJob state refuses it.
         from decimal import Decimal
         from backend.backend.common.workflows import workflowAsl as wa
         record = {"pipelineId": "renderPipeline", "databaseId": "db1",
@@ -235,7 +242,8 @@ class TestDeadlineCloudTaskBuilder:
                                                         "template": "{}",
                                                         "priority": Decimal("500")}}}
         assert wa.pipeline_asl_fingerprint(record)
-        with pytest.raises(ValueError, match="deadlinePriority must be an integer from 0 to 100"):
+        with pytest.raises(ValueError, match=re.escape(
+                f"{_PIPE}deadlineCloud.priority must be an integer from 0 to 100")):
             _build_state(pipeline=wa.to_asl_pipeline_dict(record))
 
     def test_payload_without_pipeline_execution_id_ref(self):
