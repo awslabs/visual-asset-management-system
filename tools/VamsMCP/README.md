@@ -174,10 +174,17 @@ most 100 tools per connection.
 | `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, zip downloads, and running workflows                        |
 | `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions, API keys                                         |
 | `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades, the compliance audit trail                        |
+| `audit`      | Audit log search: `vams_audit_groups`, `vams_audit_search`, `vams_audit_results`, `vams_audit_stop`. Opt-in, see below                        |
 | `edh`        | EDH Workstations add-on: workstations, catalog and container jobs                                                                             |
 | `edh-admin`  | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances, settings                                                      |
 | `custom`     | The tools a fork adds in `custom_tools.py`                                                                                                    |
-| `all`        | Every tool the gates allow (the stdio default)                                                                                                |
+| `all`        | Every tool the gates allow, except the `audit` tools (the stdio default)                                                                      |
+
+The `audit` set is opt-in on both transports: name it (`VAMS_MCP_TOOLSETS=consumer,audit`) and the four
+audit tools register. It is not part of `consumer`, `operator`, `admin` or `all`, because a search starts a
+billable Amazon CloudWatch Logs Insights query and audit records may be sensitive. Audit search is core
+VAMS with no feature switch and the tools need no write or destructive gate; the API decides which log
+groups and rows a caller may see.
 
 `vams_status` reports the selected sets in `gates.toolsets`. `vams_mcp/toolsets.py` lists each set's
 tools; `tests/test_toolsets.py` holds every set to the limits.
@@ -356,6 +363,25 @@ CANCELLED), `progress` and, on failure, `errorMessage`. On a deployment without
 zip downloads (no `ZIPDOWNLOADS` feature switch in the vamscli profile, or the
 API's 404) every zip tool returns `error_type` `ZipDownloadDisabledError` with
 "Zip downloads are not available for this deployment".
+
+Audit log search (the opt-in `audit` set): `vams_audit_groups`, `vams_audit_search`,
+`vams_audit_results`, `vams_audit_stop`. `vams_audit_groups` lists the log groups the caller may search,
+the action names, entity types and outcomes the filters accept, and the deployment's limits.
+`vams_audit_search` starts a search with the same filters as `vamscli audit search` (log groups, actions,
+entity types and ids, users, API key ids, databases, assets, outcomes, request ids, up to three
+`contains` terms, a time range such as `24h` or ISO 8601, probe records, sort) and waits on the server
+for about 20 seconds; when the search is Complete it returns up to `max_rows` rows (25 by default, at
+most 200) with `statistics`, and `NextToken` and `truncated` when more exist. A search still Running
+returns its `queryId`: `vams_audit_results` waits up to about 20 seconds more, or pages a Complete search
+(`starting_token`). `vams_audit_stop` stops the caller's own search and frees its slot; it removes no
+data and is not read-only, but it is registered with the set alone, like the three reads. A stopped
+search returns no rows, a handle expires an hour after its last use, and a refusal for an unknown,
+expired or not-yours handle is one generic not-found. No tool reports a count of records the caller may
+not see: `statistics.candidateLimitReached` says the search reached its row limit with a filter the query
+could not apply itself, so narrow the time range. Over the remote server each call carries the signed-in
+user's own token, runs inside the call's time budget (`VAMS_MCP_TOOL_TIMEOUT`) and counts toward the
+per-user limit of concurrent calls. Exports (CSV, NDJSON) stay in `vamscli audit export` and the web page.
+All four stay out of `autoApprove`: a search is billable and the records may be sensitive.
 
 Compliance: `list_compliance_schemas`, `get_compliance_schema`,
 `get_compliance_bindings`, `get_asset_compliance_state`,

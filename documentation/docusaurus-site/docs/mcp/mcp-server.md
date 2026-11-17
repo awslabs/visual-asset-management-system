@@ -145,6 +145,7 @@ Keep these tools off the list:
 -   `generate_download_url` and `generate_download_urls_bulk` return presigned Amazon S3 URLs. Each URL is a bearer credential: anyone holding it can download the file until it expires (24 hours by default), and it is stored wherever the client keeps its conversation log.
 -   `get_api_key`, `get_user_api_key`, `list_api_keys`, `list_user_api_keys` and `list_subscriptions` return API key inventory or other users' identifiers.
 -   `get_zip_download_url` returns a presigned URL to a whole Download as Zip archive, a bearer credential like the file download URLs.
+-   The four audit tools (`vams_audit_groups`, `vams_audit_search`, `vams_audit_results`, `vams_audit_stop`). A search starts a billable Amazon CloudWatch Logs Insights query, and audit records may be sensitive.
 -   Every write and destructive tool, and above all the tools that start, stop or extend billed compute (`execute_workflow`, `rerun_execution`, `abort_execution`, `create_zip_download`, `cancel_zip_download`). `create_api_key` and `create_user_api_key` return a usable API key.
 
 :::warning[Approval by hint]
@@ -173,7 +174,7 @@ The server registers each tool in one of three tiers (see [Tool tiers and annota
 
 `delete_file` and `delete_asset` remove data permanently; `archive_file` and `archive_asset` are the reversible soft deletes. `export_asset` reads one page per call (25 assets and 500 files by default, at most 100 and 1000) and never returns download URLs; pass its `NextToken` back as `starting_token` for the next page.
 
-File uploads, sync, and user, role and constraint administration have no tools. They stay in the [VAMS CLI](../cli/getting-started.md), and the server's instructions tell the agent to leave them to you. With both gates on, the server registers 147 core tools, and 190 with the EDH Workstations add-on. [Tool sets](#tool-sets) select fewer.
+File uploads, sync, and user, role and constraint administration have no tools. They stay in the [VAMS CLI](../cli/getting-started.md), and the server's instructions tell the agent to leave them to you. With both gates on, the server registers 147 core tools, and 190 with the EDH Workstations add-on; the four opt-in audit tools are additional. [Tool sets](#tool-sets) select fewer.
 
 ## Configure
 
@@ -200,6 +201,7 @@ The `VAMS_MCP_TRANSPORT`, `VAMS_MCP_AUTH_CONFIG`, `VAMS_MCP_HOST`, `VAMS_MCP_POR
 | `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, zip downloads, and running workflows                        |
 | `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions and API keys                                      |
 | `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades and the compliance audit trail                     |
+| `audit`      | Audit log search: `vams_audit_groups`, `vams_audit_search`, `vams_audit_results`, `vams_audit_stop` (opt-in, see below)                       |
 | `edh`        | EDH Workstations add-on: workstations, the catalog and container jobs                                                                         |
 | `edh-admin`  | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances and settings                                                   |
 | `custom`     | The tools a fork adds                                                                                                                         |
@@ -218,6 +220,19 @@ Each named set holds at most 100 tools with every tier and add-on on, for client
 Tools that start, stop or extend billed compute also carry `openWorldHint: true`. A tool of a tier that is off is not registered at all, so the agent never sees it. Every tool also has a title, and the most-used reads (databases, assets, files, versions, metadata, search, executions, download URLs) publish an output schema and return structured content alongside the same JSON text.
 
 The annotations are advice to the client. What a call may do is decided by the tiers above and by the user's VAMS permissions.
+
+### Audit log search tools
+
+The `audit` [tool set](#tool-sets) lets an agent search the VAMS audit logs: who did what, when, and to which entity. It is opt-in on both the local and the remote server: name it in `VAMS_MCP_TOOLSETS` (for example `consumer,audit`). It is not part of `consumer`, `operator`, `admin` or `all`, because a search starts a billable Amazon CloudWatch Logs Insights query and audit records may be sensitive. Audit log search is core VAMS with no feature switch, and the tools need neither the write nor the destructive tier. The VAMS API decides which log groups and records the signed-in user may see, as for the [web page](../user-guide/audit-logs.md) and the [`vamscli audit` commands](../cli/commands/audit.md).
+
+| Tool                 | What it does                                                                                                                                                                                                                                                                         |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `vams_audit_groups`  | Lists the log groups the user may search, the action names, entity types and outcomes the filters accept, and the deployment's limits                                                                                                                                                |
+| `vams_audit_search`  | Starts a search with filters (log groups, actions, entities, users, API keys, databases, assets, outcomes, request IDs, up to three `contains` terms, time range) and waits about 20 seconds. Returns up to `max_rows` rows (25 by default, at most 200) once the search is Complete |
+| `vams_audit_results` | Waits up to about 20 seconds for a Running search, or reads the next page of a Complete one with `starting_token`                                                                                                                                                                    |
+| `vams_audit_stop`    | Stops the user's own search and frees its slot. It removes no data and is not read-only; it is registered with the set, with no write tier                                                                                                                                           |
+
+A result carries `queryId`, `status`, `statistics` and `warnings`. `truncated` and `NextToken` mean more rows exist. `statistics.candidateLimitReached` means the search reached its row limit with a filter the query could not apply itself: narrow the time range, and do not read a result without it as proof of completeness. A stopped search returns no rows, and a handle expires an hour after its last use. The tools never report a count of records the user may not see. They are not in the recommended `autoApprove` list. CSV and NDJSON export stays in `vamscli audit export` and the web page.
 
 ### Add-on tools
 
