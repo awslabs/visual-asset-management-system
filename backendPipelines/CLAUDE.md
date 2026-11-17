@@ -807,13 +807,14 @@ entry whose `fileKeyTypeRestriction` lists its extension, else the one with an e
     `autoRegisterAutoTriggerOnFileUpload`). The durable way to stop a system pipeline is the deployment
     configuration (`autoRegisterWithVAMS: false` archives it, `autoRegisterAutoTriggerOnFileUpload:
 false` keeps its trigger off); for the zipArchive bundle (`utility/zipArchive/`, below) it is
-    `app.pipelines.useZipDownloads.enabled`. Pair the flag with a
-    `SYSTEM - <Area>` category — the shipped bundles are `system/genAiMetadata` and its second registration
-    `system/genAiMetadata/vamsSchema/assetSummary` (both `SYSTEM - GenAI`) and
-    `preview/3dThumbnail` (`SYSTEM - Preview`) — and list the pipeline in
-    `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`. The zipArchive bundle is also a
-    shipped system bundle and keeps the `Utility` category: marking a bundle system changes nothing
-    about its `category`, which role constraints may scope on. Tests:
+    `app.pipelines.useZipDownloads.enabled`. Every shipped system bundle pairs the flag with a
+    `SYSTEM - <Area>` category, so a role constraint on `category` selects the system records together
+    and never matches a deployment's own pipelines: `system/genAiMetadata` and its second registration
+    `system/genAiMetadata/vamsSchema/assetSummary` (both `SYSTEM - GenAI`), `preview/3dThumbnail`
+    (`SYSTEM - Preview`) and `utility/zipArchive` (`SYSTEM - Utility`). The record names, ids and bundle
+    folders stay as they are; the next deployment re-asserts a changed category on records it registered
+    before (`backend/tests/handlers/zipDownloads/test_zip_bundle_category.py`). List the pipeline in
+    `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`. Tests:
     `backend/tests/common/workflows/test_systemRecords.py`, `test_vamsSchemaImport_isSystem.py` and
     the `test_*_isSystem*.py` handler modules.
 

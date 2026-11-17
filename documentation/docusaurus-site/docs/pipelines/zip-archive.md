@@ -2,7 +2,7 @@
 
 The Zip Archive pipeline (`utility-zip-archive`) streams selected files, folders, or a whole asset into one zip, tar, or tar.gz archive. It serves the [Download as Zip](../user-guide/zip-downloads.md) feature, and it can also be run as an ordinary workflow that writes the archive back into the asset as a new file. The pipeline runs as an AWS Batch Fargate container that reads the selected file versions from Amazon S3 and writes the archive to Amazon S3 as a multipart upload, without staging data on disk, so an archive can reach the 5 TiB Amazon S3 object limit.
 
-The pipeline and its workflow are **system** records: VAMS registers them in the `GLOBAL` database with the fixed IDs `utility-zip-archive` when `app.pipelines.useZipDownloads.enabled` is `true`, and they are read-only through the API except for their `enabled` toggles and template content. Runs of the workflow are hidden from the execution lists unless system runs are included.
+The pipeline and its workflow are **system** records: VAMS registers them in the `GLOBAL` database with the fixed IDs `utility-zip-archive` and the `SYSTEM - Utility` category when `app.pipelines.useZipDownloads.enabled` is `true`, and they are read-only through the API except for their `enabled` toggles and template content. Runs of the workflow are hidden from the execution lists unless system runs are included.
 
 ## Archive Formats
 
