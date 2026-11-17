@@ -413,6 +413,42 @@ class TestPipelineServiceV2:
             _event("POST", "/database/db1/pipelines", {"databaseId": "db1"}, body), MagicMock())
         assert resp["statusCode"] == 400
 
+    @pytest.mark.parametrize("method", ["POST", "PUT"])
+    @pytest.mark.parametrize("field,value,message", [
+        ("priority", 2.5, "deadlineCloud.priority must be an integer from 0 to 100"),
+        ("priority", 101, "deadlineCloud.priority must be an integer from 0 to 100"),
+        ("maxRetriesPerTask", 2 ** 31,
+         "deadlineCloud.maxRetriesPerTask must be an integer from 0 to 2147483647"),
+    ])
+    @patch(f"{MOD}._pipeline_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_bad_deadline_count_is_a_400_before_any_write(
+            self, mock_enforcer, mock_claims, mock_table, field, value, message, method):
+        # #1582 / #1581: a fractional count passed validation and then failed the DynamoDB write
+        # (Float types are not supported) with a 500; an out-of-range one was stored and failed at
+        # createJob. Create and update share the validation.
+        import backend.backend.handlers.pipelines.pipelineService as ps
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        table = MagicMock()
+        mock_table.return_value = table
+        execution_config = _deadline_execution_config()
+        execution_config["deadlineCloud"][field] = value
+        if method == "POST":
+            event = _event("POST", "/database/db1/pipelines", {"databaseId": "db1"},
+                           {"databaseId": "db1", "pipelineName": "P", "pipelineId": "dc-pipe",
+                            "executionConfig": execution_config})
+        else:
+            event = _event("PUT", "/database/db1/pipelines/dc-pipe",
+                           {"databaseId": "db1", "pipelineId": "dc-pipe"},
+                           {"executionConfig": execution_config})
+        with patch.object(ps, "DEADLINE_CLOUD_EXECUTION_TYPE_ENABLED", True):
+            resp = ps.lambda_handler(event, MagicMock())
+        assert resp["statusCode"] == 400
+        assert json.loads(resp["body"])["message"] == message
+        table.put_item.assert_not_called()
+
 
 def _real_validate_pagination_info():
     """The genuine common.dynamodb.validate_pagination_info. The suite replaces common.dynamodb with

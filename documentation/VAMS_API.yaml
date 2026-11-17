@@ -10538,7 +10538,7 @@ components:
                             description: "Event detail-type string."
                 deadlineCloud:
                     type: object
-                    description: "Target for DeadlineCloud execution type. farmId and queueId are required, waitForCallback must be 'Enabled', and the inline job template is limited to 262,144 characters (256 KB)."
+                    description: "Target for DeadlineCloud execution type. farmId and queueId are required, waitForCallback must be 'Enabled', and the inline job template is limited to 262,144 characters (256 KB). The optional job settings take the ranges Deadline Cloud CreateJob accepts: priority an integer from 0 to 100 (50 when absent), maxRetriesPerTask and maxFailedTasksCount each an integer from 0 to 2147483647. Any other value, including a fractional number or a boolean, is rejected with 400."
             required:
                 - executionType
         pipelineAssetScope:
