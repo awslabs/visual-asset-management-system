@@ -142,6 +142,13 @@ describe("LandingPage carousel keyboard access (#1573)", () => {
             expect(radio["clip-path"]).toBe("inset(50%)");
         });
 
+        it("anchors the radios at the bottom edge, so focusing one scrolls the dots into view", () => {
+            // At the top (their static position) a focused radio left the dots below the window.
+            expect(radio.position).toBe("absolute");
+            expect(radio.bottom).toBe("0");
+            expect(radio.top).toBeUndefined();
+        });
+
         it("outlines the dot of the focused slide control", () => {
             [1, 2, 3, 4].forEach((n) => {
                 const focusRule = declarations(

@@ -311,9 +311,11 @@ code {
 }
 
 /* Hidden visually, not with display: none, so the radios stay in the tab order and keep their
-   accessible names: they are the carousel's keyboard controls (#1573). */
+   accessible names: they are the carousel's keyboard controls (#1573). They sit at the bottom
+   edge, by the dots, because focusing one scrolls it into view, and the dots must be in view. */
 .carousel .slides input {
     position: absolute;
+    bottom: 0;
     width: 1px;
     height: 1px;
     margin: -1px;
