@@ -732,7 +732,8 @@ class TestAnAbsentRendererMdlModuleIsNotMissing:
 
     def test_a_missing_referenced_file_keeps_its_warning_and_count(self, tmp_path, monkeypatch, caplog):
         bucket = self._scene(tmp_path, monkeypatch)
-        _fetch_through_head_object(tmp_path, bucket, "xid/scene/root.refs", ".refs", caplog)
+        report, _ = _fetch_through_head_object(tmp_path, bucket, "xid/scene/root.refs", ".refs", caplog)
+        assert report.missing == ["scene/materials/Custom.mdl"]
         assert _warnings(caplog, f"HeadObject {BUCKET}/xid/scene/materials/Custom.mdl failed: 404")
         assert _warnings(caplog, "Referenced file not found in the asset: scene/materials/Custom.mdl")
 
