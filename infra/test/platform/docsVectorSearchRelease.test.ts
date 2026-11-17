@@ -1558,7 +1558,8 @@ describe("changelog, revision history, and notices", () => {
 
     test("CHANGELOG.md's newest release heading is the package version", () => {
         const changelog = readRepo("CHANGELOG.md");
-        const first = changelog.match(/^## \[(\d+\.\d+\.\d+)\]/m);
+        // A section for the next, unreleased version may sit above it, marked `(Unreleased)`.
+        const first = changelog.match(/^## \[(\d+\.\d+\.\d+)\](?! \(Unreleased\))/m);
         expect(first && first[1]).toBe(version);
         const release = section(changelog, `## [${version}]`);
         expect(release).toContain("### Major Change Summary:");

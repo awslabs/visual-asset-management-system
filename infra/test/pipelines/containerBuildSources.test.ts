@@ -56,6 +56,14 @@ const COORD_DOCKERFILE = path.join(
     "Dockerfile"
 );
 
+const COG_DOCKERFILE = path.join(
+    PIPELINES_DIR,
+    "conversion",
+    "cogConvert",
+    "container",
+    "Dockerfile"
+);
+
 /** Every buildspec.yml under `dir`, recursively. */
 function buildspecs(dir: string): string[] {
     const out: string[] = [];
@@ -235,6 +243,32 @@ describe("the coordinateTransform image", () => {
         expect(userAt).toBeGreaterThan(-1);
         // Order is the substance: a USER before the last COPY leaves the copied files root-owned, and a
         // USER after ENTRYPOINT is a no-op for the running process.
+        const lastCopyAt = lines.reduce((acc, l, i) => (/^COPY\s/.test(l) ? i : acc), -1);
+        const entrypointAt = lines.findIndex((l) => /^ENTRYPOINT\s/.test(l));
+        expect(userAt).toBeGreaterThan(lastCopyAt);
+        if (entrypointAt > -1) expect(userAt).toBeLessThan(entrypointAt);
+    });
+});
+
+describe("the cogConvert image", () => {
+    const text = fs.readFileSync(COG_DOCKERFILE, "utf-8");
+    const lines = text.split(/\r?\n/);
+
+    it("is pinned to a digest, not only a tag, in both stages", () => {
+        expect(text).toMatch(/^ARG BASE_IMAGE=condaforge\/miniforge3:[\w.-]+@sha256:[0-9a-f]{64}/m);
+        const froms = lines.filter((l) => /^FROM\s/.test(l));
+        expect(froms).toHaveLength(2);
+        for (const from of froms) expect(from).toContain("${BASE_IMAGE}");
+    });
+
+    it("installs the GDAL stack from a hash-listed explicit file and Python from the hash lock", () => {
+        expect(text).toContain("--file conda-explicit.txt");
+        expect(text).toContain("--require-hashes");
+    });
+
+    it("drops root before the entrypoint", () => {
+        const userAt = lines.findIndex((l) => /^USER\s+\w/.test(l));
+        expect(userAt).toBeGreaterThan(-1);
         const lastCopyAt = lines.reduce((acc, l, i) => (/^COPY\s/.test(l) ? i : acc), -1);
         const entrypointAt = lines.findIndex((l) => /^ENTRYPOINT\s/.test(l));
         expect(userAt).toBeGreaterThan(lastCopyAt);

@@ -135,7 +135,7 @@ than looking for files.
 
 The GenAI CAD STEP agent's `BedrockAgentCoreEndpoint` is a Lambda-side gate of the same kind, placed above the Bedrock Runtime booleans and outside the scanned text: `useForAllLambdas && useGenAiCadStepAgent.enabled && runtime === "agentcore"`, because its caller is the invoke Lambda (commercial partition only, as the `agentcore` runtime is). Which flags belong where is read from the source, and the two lists below are asserted against it by `infra/test/platform/steeringVectorSearchRelease.test.ts` (the block anchors are shared with `infra/test/security/vpcEndpointsAndAuthGrants.test.ts`):
 
-Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `useGenAiVideoSopBom`, `usePreview3dThumbnail`, `usePreviewPcPotreeViewer`, `useSystemGenAiMetadata.useFargateRenderer`, `useZipDownloads`.
+Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `useCogConversion`, `useGenAiVideoSopBom`, `usePreview3dThumbnail`, `usePreviewPcPotreeViewer`, `useSystemGenAiMetadata.useFargateRenderer`, `useZipDownloads`.
 
 Private-subnet flags (all three blocks): `useGenAiCadStepAgent.runtime`, `useImageTo3d`, `useModelOps`, `useNvidiaCosmos`, `useNvidiaCosmos3`, `useNvidiaGr00t`, `useRapidPipeline.useEcs`, `useRapidPipeline.useEks`, `useSplatToolbox`.
 

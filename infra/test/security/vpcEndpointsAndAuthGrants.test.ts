@@ -180,6 +180,7 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
 
     const isolatedSubnetBatchFlags = [
         "useConversionCoordinateTransform",
+        "useCogConversion",
         "usePreviewPcPotreeViewer",
         "usePreview3dThumbnail",
         "useSystemGenAiMetadata.useFargateRenderer",

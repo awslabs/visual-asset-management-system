@@ -37,6 +37,7 @@ function fargatePipelines(c: any) {
     c.app.useGlobalVpc.addVpcEndpoints = true;
     for (const flag of [
         "useConversionCoordinateTransform",
+        "useCogConversion",
         "useSystemGenAiMetadata",
         "usePreview3dThumbnail",
         "usePreviewPcPotreeViewer",
