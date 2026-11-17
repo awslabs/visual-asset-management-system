@@ -173,7 +173,8 @@ class TestTheImagesAreTheFilesOwn:
         (lambda: gm_tests._image_manifest(), {"fileClass": "image", "renderBranch": "MEDIA"},
          "1 image(s) of this file follow."),
         (lambda: gm_tests._manifest(images=4, fileClass="video", renderBranch="MEDIA"),
-         {"fileClass": "video", "fileExt": ".mp4", "renderBranch": "MEDIA"}, "4 frame(s) taken from this video follow."),
+         {"fileClass": "video", "fileExt": ".mp4", "renderBranch": "MEDIA"},
+         "4 frame(s) taken from this video follow."),
         (lambda: gm_tests._manifest(images=3, fileClass="document", renderBranch="MEDIA"),
          {"fileClass": "document", "fileExt": ".pdf", "renderBranch": "MEDIA"}, "3 page(s) of this document follow."),
     ])
