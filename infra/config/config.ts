@@ -672,7 +672,6 @@ export function deriveVectorIndexName(
     return `vec-${slugModelId(embeddingModelId)}-${embeddingDimensions}`;
 }
 
-
 /** Bounds of each numeric app.pipelines.useZipDownloads key (inclusive integers). */
 export const ZIP_DOWNLOADS_BOUNDS: Record<
     Exclude<keyof typeof ZIP_DOWNLOADS_DEFAULTS, "enabled" | "useCodeBuild">,
