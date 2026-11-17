@@ -10,6 +10,8 @@ Audit records are grouped into audit log groups, for example Actions, Authentica
 
 The log groups, actions and entity types you can choose come from the deployment itself, so a group or action added later appears without an update of the web interface.
 
+A record becomes searchable about a minute after the action it describes, because CloudWatch Logs indexes it first. A search run right after an action may not show that action yet.
+
 ## Run a search
 
 1. Open **Audit Log Search**.
