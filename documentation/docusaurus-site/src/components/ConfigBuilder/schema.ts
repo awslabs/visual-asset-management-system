@@ -981,7 +981,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "ip-range-list",
         section: "auth",
         advanced: true,
-        help: "Restrict API access to IP ranges. Each is a [min, max] IPv4 pair. Empty allows all.",
+        help: "Restrict API access to IP ranges. Each is a [min, max] IPv4 pair. Empty allows all. With ranges set, the authorizer runs on every API request (no cached decision).",
     },
     {
         path: "app.authProvider.authorizerOptions.defaultUserRoleName",

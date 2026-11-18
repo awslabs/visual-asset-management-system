@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as path from "path";
 import { HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { buildOpenApiSpec } from "../../lib/nestedStacks/apiLambda/constructs/buildOpenApiSpec";
 
@@ -138,5 +140,72 @@ describe("buildOpenApiSpec", () => {
             "vpce-123"
         );
         expect(spec["x-amazon-apigateway-policy"]).toBeDefined();
+    });
+
+    describe("authorizer result cache with an IP allow-list", () => {
+        const routes = [
+            { path: "/database", method: HttpMethod.GET, lambdaFn: fakeFn("a") },
+            {
+                path: "/api/amplify-config",
+                method: HttpMethod.GET,
+                lambdaFn: fakeFn("c"),
+                allowAnonymous: true,
+            },
+        ];
+        const authorizers = (spec: any) => ({
+            authed: spec.components.securitySchemes.VamsAuthorizer[
+                "x-amazon-apigateway-authorizer"
+            ],
+            anon: spec.components.securitySchemes.VamsAnonymousAuthorizer[
+                "x-amazon-apigateway-authorizer"
+            ],
+        });
+
+        it("turns the cache off on both schemes when authorizerCacheDisabled is set", () => {
+            const { authed, anon } = authorizers(
+                buildOpenApiSpec(routes, { ...baseOpts, authorizerCacheDisabled: true })
+            );
+            expect(authed.authorizerResultTtlInSeconds).toBe(0);
+            expect(anon.authorizerResultTtlInSeconds).toBe(0);
+            // The identity sources are unchanged, so a missing Authorization header is still
+            // refused by API Gateway and the anonymous routes still invoke the authorizer.
+            expect(authed.identitySource).toBe("method.request.header.Authorization");
+            expect(anon.identitySource).toBe("context.identity.sourceIp");
+        });
+
+        it("keeps the 30 s and 900 s caches when it is not set or false", () => {
+            for (const opts of [baseOpts, { ...baseOpts, authorizerCacheDisabled: false }]) {
+                const { authed, anon } = authorizers(buildOpenApiSpec(routes, opts));
+                expect(authed.authorizerResultTtlInSeconds).toBe(30);
+                expect(anon.authorizerResultTtlInSeconds).toBe(900);
+            }
+        });
+    });
+});
+
+describe("REST API construct: authorizer cache follows allowedIpRanges", () => {
+    // Asserted against the source, as restApiTlsPolicy.test.ts does: building the construct needs
+    // a fully-populated config and the cross-stack route registry. The synthesized TTLs were checked
+    // with `cdk synth` with the list empty and set.
+    const flat = fs
+        .readFileSync(
+            path.join(
+                __dirname,
+                "..",
+                "..",
+                "lib",
+                "nestedStacks",
+                "apiLambda",
+                "constructs",
+                "rest-api-gateway-construct.ts"
+            ),
+            "utf-8"
+        )
+        .replace(/\s+/g, " ");
+
+    it("disables the cache exactly when the allow-list is non-empty", () => {
+        expect(flat).toContain(
+            "authorizerCacheDisabled: (config.app.authProvider.authorizerOptions.allowedIpRanges || []).length > 0"
+        );
     });
 });

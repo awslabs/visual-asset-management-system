@@ -15,9 +15,16 @@ export interface OpenApiSpecOptions {
     title: string;
     /** Integration timeout applied to every Lambda proxy integration, in seconds. */
     timeoutSeconds: number;
+    /**
+     * Turn off the authorizer result cache on both schemes (TTL 0). Set when the authorizer
+     * restricts callers by address (`allowedIpRanges`): its decision then depends on the request's
+     * client address, which neither scheme's identity source carries.
+     */
+    authorizerCacheDisabled?: boolean;
 }
 
 // Authenticated routes: cache keyed by the Authorization header (per-token), short TTL.
+// With an IP allow-list both schemes run with TTL 0 instead (`authorizerCacheDisabled`).
 const SECURITY_SCHEME_NAME = "VamsAuthorizer";
 const AUTH_CACHE_TTL_SECONDS = 30;
 
@@ -81,6 +88,8 @@ function corsOptionsOperation(opts: OpenApiSpecOptions): object {
 
 export function buildOpenApiSpec(routes: ApiRouteDescriptor[], opts: OpenApiSpecOptions): object {
     const paths: Record<string, any> = {};
+    const authCacheTtlSeconds = opts.authorizerCacheDisabled ? 0 : AUTH_CACHE_TTL_SECONDS;
+    const anonAuthCacheTtlSeconds = opts.authorizerCacheDisabled ? 0 : ANON_AUTH_CACHE_TTL_SECONDS;
 
     for (const r of routes) {
         const verb = r.method.toLowerCase();
@@ -130,7 +139,7 @@ export function buildOpenApiSpec(routes: ApiRouteDescriptor[], opts: OpenApiSpec
                             opts.authorizerFnArn
                         ),
                         authorizerCredentials: opts.authorizerRole,
-                        authorizerResultTtlInSeconds: AUTH_CACHE_TTL_SECONDS,
+                        authorizerResultTtlInSeconds: authCacheTtlSeconds,
                     },
                 },
                 // Anonymous routes: SAME authorizer Lambda, but keyed on the source IP so
@@ -153,7 +162,7 @@ export function buildOpenApiSpec(routes: ApiRouteDescriptor[], opts: OpenApiSpec
                             opts.authorizerFnArn
                         ),
                         authorizerCredentials: opts.authorizerRole,
-                        authorizerResultTtlInSeconds: ANON_AUTH_CACHE_TTL_SECONDS,
+                        authorizerResultTtlInSeconds: anonAuthCacheTtlSeconds,
                     },
                 },
             },
