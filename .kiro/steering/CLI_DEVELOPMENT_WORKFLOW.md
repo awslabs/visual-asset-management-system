@@ -56,7 +56,7 @@ compliance
 `zip-download` (`create`, `list`, `get`, `download`, `cancel`, `delete`) drives the Download as Zip API. It is
 gated on `FEATURE_ZIPDOWNLOADS` from the profile's feature switches first and the API's 404 body second, and
 raises `ZipDownloadDisabledError` (`Zip downloads are not available for this deployment`). `download` streams the
-archive from the URL route and never prints the URL. `list --all-users` (with `-d`/`-a`) calls the all-users list route. MCP mirrors it as `list_zip_downloads`
+archive from the URL route and never prints the URL (the `--verbose` echo shows it with its `X-Amz-Signature` and `X-Amz-Security-Token` masked). `list --all-users` (with `-d`/`-a`) calls the all-users list route. MCP mirrors it as `list_zip_downloads`
 (`all_users=True` for the all-users route) and `get_zip_download` (read), `create_zip_download` and `get_zip_download_url` (write tier, not in `autoApprove`), and
 `cancel_zip_download` and `delete_zip_download` (destructive tier). Command file
 `vamscli/commands/zip_download.py`, helpers `vamscli/utils/zip_downloads.py`.
@@ -2037,8 +2037,10 @@ The three existing sinks are wired: `output_result` (`utils/json_output.py`), `l
 
 **Two properties that must not be broken** (both pinned by `tests/test_log_redaction.py`):
 
-1. **Redaction applies to the log file only — never to console or `--json-output`.** A newly created API key is displayed exactly once and cannot be retrieved again, so leaking redaction into the output path would make `api-key create` useless. `redact_sensitive` returns a **copy** and never mutates its input.
+1. **Full redaction applies to the log file only — never to command output or `--json-output`.** A newly created API key is displayed exactly once and cannot be retrieved again, so leaking redaction into the output path would make `api-key create` useless. `redact_sensitive` returns a **copy** and never mutates its input.
 2. **Non-secret keys must survive.** This CLI logs S3 object keys constantly (`s3Key`, `objectKey`, `keyName`, `bucketExistingKey`). Over-redaction destroys the diagnostic value the log exists for, which is why the key-fragment list spells out credential names rather than matching a bare `key`.
+
+**The `--verbose` echo masks presigned-URL secrets and nothing else.** Every line `utils/logging.py` writes to the console goes through `_echo`, which applies `mask_presigned_url_secrets`: the values of `X-Amz-Signature` and `X-Amz-Security-Token` become `***REDACTED***` in a query string (plain or percent-encoded), a header or a mapping entry, and the parameter names stay. The rest of the echo is printed as received. A new console write in that module calls `_echo`, not `click.echo`; pinned by `tests/test_log_redaction.py::TestVerboseEchoMasksPresignedUrlSecrets`, which also scans the module for a write that bypasses it.
 
 > **One predicate, every per-key filter:** `redact_mapping_for_log()` wraps `_is_sensitive_key`, and `log_command_start`, `log_api_request`'s header filter, `log_config_info`, `log_config_diagnostic` and `log_auth_diagnostic` all use it. A new per-key log filter must call it rather than keep its own list. Each of those sites previously matched with `key.lower() in ['password', 'token', 'secret', 'key']`, which missed every parameter name the CLI actually declares -- `new_password`, `old_password`, `token_override`, `access_token` -- while the redaction visibly fired for `password` on the same line. Pinned by `tests/test_log_redaction.py::TestPerKeyLogFiltersShareOnePredicate`, which asserts both directions (the secrets are masked, and `starting_token` / `tokenType` / `apiKeyId` survive).
 

@@ -43,6 +43,8 @@ Add `--verbose` to any command for detailed console output, including the active
 vamscli --verbose assets get my-asset -d my-db
 ```
 
+Verbose output shows each request and response as the CLI sends and receives it, with one exception: the values of the `X-Amz-Signature` and `X-Amz-Security-Token` parameters of a presigned Amazon S3 URL, and of a header or field with either name, are replaced with `***REDACTED***`. The parameter names stay, so the output still shows which URLs were presigned. Other values appear in full, so review verbose output before you share it.
+
 :::tip
 Verbose log messages are written to the rotating log file and do not interfere with `--json-output`, so both flags can be combined safely in scripts.
 :::

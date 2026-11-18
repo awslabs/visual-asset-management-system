@@ -4,7 +4,8 @@ A zip download is a server-side job that archives a selection of one asset's fil
 tar.gz). The job and its archive can be downloaded until the job's expiresAt (7 days after it was
 created); the archive file is then removed by an S3 lifecycle rule. Jobs belong to the user who
 created them. The archive is fetched through a short-lived presigned URL, which these commands
-stream straight to a local file and never print.
+stream straight to a local file and never print; the `--verbose` echo shows it with its signature
+and security token masked.
 """
 
 from builtins import list as builtin_list  # Avoid namespace collision with the 'list' command
@@ -338,8 +339,8 @@ def download(ctx: click.Context, database_id: str, asset_id: str, request_id: st
              wait: bool, timeout: Optional[int], overwrite: bool, json_output: bool):
     """Download a finished archive to a local file.
 
-    The archive streams from a short-lived presigned URL that is never printed. A partial
-    transfer leaves no file behind.
+    The archive streams from a short-lived presigned URL that is never printed (--verbose shows
+    it with its signature and security token masked). A partial transfer leaves no file behind.
 
     Examples:
         vamscli zip-download download -d my-db -a my-asset -r <request-id> -o ./downloads
