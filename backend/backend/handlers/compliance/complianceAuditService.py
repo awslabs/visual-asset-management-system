@@ -26,6 +26,7 @@ than the parent's only where the caller may read that database and its assets, t
 
 import base64
 import json
+from datetime import datetime
 
 import boto3
 from aws_lambda_powertools.utilities.parser import ValidationError
@@ -358,11 +359,29 @@ def _encode_token(last_evaluated_key):
     return base64.b64encode(json.dumps(last_evaluated_key, default=str).encode("utf-8")).decode("utf-8")
 
 
+# The answer to a `startDate` or `endDate` that is not an ISO-8601 date or date and time.
+INVALID_DATE_MESSAGE = "startDate and endDate must be ISO-8601 dates or date-times"
+
+
 def _validate_dates(start_date, end_date):
-    return validate({
+    """`(valid, message)` for the optional `startDate` / `endDate` filters: each must be an
+    ISO-8601 date or date-time (`datetime.fromisoformat`), since the window compares them with the
+    stored timestamps as strings."""
+    (valid, message) = validate({
         "startDate": {"value": start_date, "validator": "STRING_256", "optional": True},
         "endDate": {"value": end_date, "validator": "STRING_256", "optional": True},
     })
+    if not valid:
+        return valid, message
+    for value in (start_date, end_date):
+        if not value:
+            continue
+        try:
+            datetime.fromisoformat(value)
+        except ValueError:
+            logger.info("Audit date filter rejected: not an ISO-8601 date or date-time")
+            return False, INVALID_DATE_MESSAGE
+    return True, None
 
 
 #######################
