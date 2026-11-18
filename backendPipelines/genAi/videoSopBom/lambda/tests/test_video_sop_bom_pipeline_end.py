@@ -207,6 +207,17 @@ class TestFailureCauses:
         assert cause == mod.ATTEMPT_TIMEOUT_CAUSE
         assert cause == "the container did not finish within the 6 h bound; last stage per the container log"
 
+    def test_a_batch_state_timeout_names_the_queue_wait(self):
+        # The Batch state's own bound ends a job that waited in the queue; Step Functions gives that
+        # States.Timeout no cause, so the token gets one that says what the bound counts.
+        mod = _load()
+        _, success, failure = _run(mod, _event(error={"Error": "States.Timeout"}))
+        success.assert_not_called()
+        code, cause = _failure(failure)
+        assert code == "VideoSopBomPipelineError"
+        assert cause == mod.STATE_TIMEOUT_CAUSE
+        assert "AWS Batch queue" in cause
+
     def test_camel_case_job_keys_are_read_too(self):
         mod = _load()
         job = {"jobId": "x", "status": "FAILED", "statusReason": "Task failed to start",

@@ -21,6 +21,7 @@ import { storageResources } from "../../../../storage/storageBuilder-nestedStack
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
+import { StateTimeoutBatchSubmitJob } from "../../../constructs/stateTimeoutBatchSubmitJob";
 import {
     NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
@@ -57,6 +58,18 @@ export interface VideoSopBomConstructProps extends cdk.StackProps {
  * it before it records SUCCEEDED.
  */
 const REPORTER_MARKER = "video_sop_bom_pipeline";
+
+/**
+ * Timeout chain, innermost first: the 6-hour Batch attempt (from the attempt's start), the Batch
+ * state's own bound (queue wait plus the attempt), the 8-hour state machine, which leaves 15 minutes
+ * past the Batch state for ConstructPipelineTask and PipelineEndTask (5-minute Lambda timeouts
+ * each), and the bundle's taskTimeout (VIDEO_SOP_BOM_BUNDLE_TASK_TIMEOUT_SECONDS).
+ */
+const VIDEO_SOP_BOM_BATCH_ATTEMPT_DURATION = cdk.Duration.hours(6);
+const VIDEO_SOP_BOM_STATE_MACHINE_TIMEOUT = cdk.Duration.hours(8);
+const VIDEO_SOP_BOM_BATCH_STATE_TIMEOUT = VIDEO_SOP_BOM_STATE_MACHINE_TIMEOUT.minus(
+    cdk.Duration.minutes(15)
+);
 
 /** The record's key prefix with a trailing slash and no leading one, so `${bucketArn}/${prefix}…` joins cleanly. */
 const objectPrefixOf = (record: s3AssetBuckets.S3AssetBucketRecord): string => {
@@ -144,7 +157,8 @@ export class VideoSopBomConstruct extends Construct {
         });
 
         // The container's final act completes the .sync task on its inner token. No heartbeat: the
-        // container never sends one, so the timeout chain (attempt < state machine < bundle) is the bound.
+        // container never sends one, so the timeout chain (attempt < Batch state < state machine <
+        // bundle) is the bound.
         const stateTaskPolicy = new iam.PolicyDocument({
             statements: [
                 new iam.PolicyStatement({
@@ -290,11 +304,10 @@ export class VideoSopBomConstruct extends Construct {
             this,
             "BatchFargatePipeline_VideoSopBom",
             {
-                // AWS Batch's own bound on one attempt, measured from the attempt's start. The state
-                // machine's 8-hour timeout below envelopes it; the 2-hour gap absorbs a RUNNABLE wait
-                // behind the Fargate On-Demand vCPU quota, during which the execution clock runs and
-                // the attempt clock does not.
-                attemptDuration: cdk.Duration.hours(6),
+                // AWS Batch's own bound on one attempt, measured from the attempt's start. The Batch
+                // state's bound below envelopes it; the gap absorbs a RUNNABLE wait behind the Fargate
+                // On-Demand vCPU quota, during which the state clock runs and the attempt clock does not.
+                attemptDuration: VIDEO_SOP_BOM_BATCH_ATTEMPT_DURATION,
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -420,11 +433,13 @@ export class VideoSopBomConstruct extends Construct {
         });
 
         // A .sync submission: Step Functions owns the job, and the container completes the task by
-        // calling SendTaskSuccess/SendTaskFailure on TASK_TOKEN as its final act. No task timeout prop —
-        // on a BatchSubmitJob it renders as a SubmitJob attempt-duration override, not a task clock, so
-        // the state machine timeout below is the Step Functions bound. resultPath keeps
+        // calling SendTaskSuccess/SendTaskFailure on TASK_TOKEN as its final act. No taskTimeout prop:
+        // on a BatchSubmitJob it renders as a SubmitJob attempt-duration override, not a task clock.
+        // The state's own bound (stateTimeout) covers the queue wait plus the attempt, and its
+        // States.Timeout reaches pipelineEnd through the Catch. resultPath keeps
         // externalSfnTaskToken and batchJobName beside the callback output for pipelineEnd.
-        const videoSopBomBatchJob = new tasks.BatchSubmitJob(this, "VideoSopBomBatchJob", {
+        const videoSopBomBatchJob = new StateTimeoutBatchSubmitJob(this, "VideoSopBomBatchJob", {
+            stateTimeout: VIDEO_SOP_BOM_BATCH_STATE_TIMEOUT,
             jobName: sfn.JsonPath.stringAt("$.batchJobName"),
             jobDefinitionArn: batchPipeline.batchJobDefinition.jobDefinitionArn,
             jobQueueArn: batchPipeline.batchJobQueue.jobQueueArn,
@@ -465,10 +480,10 @@ export class VideoSopBomConstruct extends Construct {
 
         const stateMachine = new sfn.StateMachine(this, "VideoSopBomProcessing-StateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(definition),
-            // Envelopes the 6-hour Batch attempt so an overrunning container is ended by Batch and
-            // reaches pipelineEnd through the task's Catch -- which releases the external task token --
-            // rather than being cut short by an execution-level States.Timeout.
-            timeout: cdk.Duration.hours(8),
+            // Envelopes the Batch state's bound and the Lambda states around it, so an overrunning or
+            // long-queued job reaches pipelineEnd through the task's Catch -- which releases the
+            // external task token -- rather than being cut short by an execution-level States.Timeout.
+            timeout: VIDEO_SOP_BOM_STATE_MACHINE_TIMEOUT,
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,

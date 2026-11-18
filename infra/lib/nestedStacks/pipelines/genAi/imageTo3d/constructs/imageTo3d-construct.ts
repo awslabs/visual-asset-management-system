@@ -37,6 +37,7 @@ import {
     kmsKeyPolicyStatementGenerator,
 } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import { StateTimeoutBatchSubmitJob } from "../../../constructs/stateTimeoutBatchSubmitJob";
 import { ImageTo3dModelImage } from "./imageTo3dCodeBuild-construct";
 import { populateHuggingFaceTokenSecret } from "../../nvidia/customResources/populateHuggingFaceTokenSecret";
 
@@ -169,6 +170,19 @@ const EFS_MOUNT_PATH = "/mnt/efs/imageto3d-models";
 
 /** Host/container volume name for the shared model cache. */
 const EFS_VOLUME_NAME = "imageto3d-models";
+
+/**
+ * Timeout chain, innermost first. AWS Batch bounds one attempt from the moment it starts. The Batch
+ * state's own Step Functions bound covers the queue wait plus that attempt, so a job that waits for
+ * GPU capacity ends in a States.Timeout the state's Catch routes to pipelineEnd. The state machine
+ * leaves 15 minutes past the Batch state for ConstructPipelineTask and PipelineEndTask (5-minute
+ * Lambda timeouts each), and the bundle's 4-hour taskTimeout envelopes the state machine.
+ */
+const IMAGE_TO_3D_BATCH_ATTEMPT_DURATION = Duration.hours(2);
+const IMAGE_TO_3D_STATE_MACHINE_TIMEOUT = Duration.hours(3);
+const IMAGE_TO_3D_BATCH_STATE_TIMEOUT = IMAGE_TO_3D_STATE_MACHINE_TIMEOUT.minus(
+    Duration.minutes(15)
+);
 
 export class ImageTo3dConstruct extends Construct {
     public pipelineVamsLambdaFunctionName: string;
@@ -890,7 +904,7 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
                     attempts: 1,
                 },
                 timeout: {
-                    attemptDurationSeconds: 7200,
+                    attemptDurationSeconds: IMAGE_TO_3D_BATCH_ATTEMPT_DURATION.toSeconds(),
                 },
             });
         };
@@ -959,7 +973,8 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
             const jobDefinition = createModelJobDefinition(modelKey);
             batchJobDefinitionNames[modelKey] = jobDefinitionNameFromRef(jobDefinition.ref);
 
-            const batchJob = new tasks.BatchSubmitJob(this, `ImageTo3dBatchJob-${modelKey}`, {
+            const batchJob = new StateTimeoutBatchSubmitJob(this, `ImageTo3dBatchJob-${modelKey}`, {
+                stateTimeout: IMAGE_TO_3D_BATCH_STATE_TIMEOUT,
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: jobDefinition.attrJobDefinitionArn,
                 jobQueueArn: queueForModel(modelKey),
@@ -1011,9 +1026,10 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
          */
         const pipelineStateMachine = new sfn.StateMachine(this, "ImageTo3d-StateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(sfnPipelineDefinition),
-            // Envelopes the 2h Batch attempt so pipelineEnd always runs and closes the token; the
-            // pipeline's own 4h task timeout in turn envelopes this.
-            timeout: Duration.hours(3),
+            // Envelopes the Batch state's own bound (queue wait plus the 2h attempt) and the Lambda
+            // states around it, so pipelineEnd always runs and closes the token; the pipeline's own
+            // 4h task timeout in turn envelopes this.
+            timeout: IMAGE_TO_3D_STATE_MACHINE_TIMEOUT,
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,

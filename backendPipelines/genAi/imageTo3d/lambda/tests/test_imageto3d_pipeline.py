@@ -897,6 +897,24 @@ class TestPipelineEnd:
         assert failure.call_args.kwargs["cause"] == "Essential container in task exited"
         assert out == event
 
+    def test_a_batch_state_timeout_names_the_queue_wait(self):
+        # The Batch state's own bound ends a job that waited for GPU capacity; Step Functions gives
+        # that States.Timeout no cause, so the waiting task gets one that says what the limit counts.
+        mod = self._load()
+        event = {
+            "jobName": "ImageTo3dJob_x",
+            "externalSfnTaskToken": "tok-123",
+            "error": {"Error": "States.Timeout"},
+        }
+        success, failure = MagicMock(), MagicMock()
+        with patch.object(mod.sfn, "send_task_success", success), \
+                patch.object(mod.sfn, "send_task_failure", failure):
+            mod.lambda_handler(event, MagicMock())
+        success.assert_not_called()
+        assert failure.call_args.kwargs["error"] == "States.Timeout"
+        assert "AWS Batch queue" in failure.call_args.kwargs["cause"]
+        assert failure.call_args.kwargs["cause"] == mod.STATE_TIMEOUT_CAUSE
+
     def test_truncates_an_oversized_error_and_cause(self):
         mod = self._load()
         event = {

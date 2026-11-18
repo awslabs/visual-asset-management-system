@@ -8,16 +8,16 @@ The pipeline's unit, contract, and CDK test suites cover every stage; live smoke
 
 ## Overview
 
-| Property                    | Value                                                                                                                                                                       |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Pipeline ID**             | `genai-video-sop-bom` (the workflow carries the same id)                                                                                                                    |
-| **Configuration flag**      | `app.pipelines.useGenAiVideoSopBom.enabled`                                                                                                                                 |
-| **Category**                | `GenAI`                                                                                                                                                                     |
-| **Execution type**          | Lambda (asynchronous with callback)                                                                                                                                         |
-| **Input**                   | 1 to 4 explicitly selected video files from one asset (`inputFileArity: multi`)                                                                                             |
-| **Supported input formats** | `.mp4`, `.mov`, `.m4v`, `.webm`, `.mkv` (matched case-insensitively)                                                                                                        |
-| **Output**                  | Files under `sop-bom/<executionId>/` on the asset, asset-level metadata (`sopBom_*` keys), and a results summary                                                            |
-| **Timeout**                 | 8.5 hours for the workflow task (`VIDEO_SOP_BOM_BUNDLE_TASK_TIMEOUT_SECONDS`, 30600); the container attempt is bounded at 6 hours and the pipeline state machine at 8 hours |
+| Property                    | Value                                                                                                                                                                                                                                                 |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Pipeline ID**             | `genai-video-sop-bom` (the workflow carries the same id)                                                                                                                                                                                              |
+| **Configuration flag**      | `app.pipelines.useGenAiVideoSopBom.enabled`                                                                                                                                                                                                           |
+| **Category**                | `GenAI`                                                                                                                                                                                                                                               |
+| **Execution type**          | Lambda (asynchronous with callback)                                                                                                                                                                                                                   |
+| **Input**                   | 1 to 4 explicitly selected video files from one asset (`inputFileArity: multi`)                                                                                                                                                                       |
+| **Supported input formats** | `.mp4`, `.mov`, `.m4v`, `.webm`, `.mkv` (matched case-insensitively)                                                                                                                                                                                  |
+| **Output**                  | Files under `sop-bom/<executionId>/` on the asset, asset-level metadata (`sopBom_*` keys), and a results summary                                                                                                                                      |
+| **Timeout**                 | 8.5 hours for the workflow task (`VIDEO_SOP_BOM_BUNDLE_TASK_TIMEOUT_SECONDS`, 30600); the container attempt is bounded at 6 hours, the AWS Batch state (queue wait plus the attempt) at 7 hours 45 minutes, and the pipeline state machine at 8 hours |
 
 ## Supported Input Formats
 
@@ -270,7 +270,7 @@ You must enable access to the configured Amazon Bedrock model in your deployment
 -   **Amazon Transcribe** — Available in the deployment Region. The pipeline uses batch transcription with the job role's own identity, writes the transcript and subtitle files to the auxiliary bucket, and deletes the transcription job record once its output is downloaded.
 -   **VPC and interface endpoints** — The pipeline runs in the isolated subnets, which have no internet route. With `app.useGlobalVpc.addVpcEndpoints` enabled, the VPC builder creates Amazon Transcribe and Amazon Bedrock Runtime interface endpoints when this pipeline is enabled, in addition to the shared AWS Batch, Amazon ECR API, and Amazon ECR Docker endpoints and the always-present Amazon S3, Amazon CloudWatch Logs, and AWS Step Functions endpoints. An imported VPC must already provide them; a missing endpoint surfaces as a connect timeout in the container's preflight, reported as `VideoSopBomConnectivityError`.
 -   **Asset buckets in another Region** — The pipeline reads its input videos from the bucket Region the workflow manifest names and writes its outputs to the output bucket's Region. Because its compute runs in the isolated subnets, an input in a Region other than the deployment Region is accepted only when the VPC has a cross-Region Amazon S3 interface endpoint for that Region (`app.useGlobalVpc.addCrossRegionS3Endpoints` with the bucket registered); an input anywhere else is refused before any download with an execution error naming both Regions and both remedies. See [External Amazon S3 buckets](../deployment/external-s3-setup.md#pipelines-and-cross-region-inputs).
--   **AWS Fargate On-Demand vCPU quota** — Each job reserves 4 vCPU and 16 GiB of memory. The default AWS Fargate On-Demand vCPU quota is 6 per account and Region, so two concurrent runs serialize: the second waits in `RUNNABLE` until the first finishes. The pipeline's timeout chain absorbs one such wait (the container attempt is bounded at 6 hours and the state machine at 8 hours); raise the quota through Service Quotas for deployments that expect concurrent runs.
+-   **AWS Fargate On-Demand vCPU quota** — Each job reserves 4 vCPU and 16 GiB of memory. The default AWS Fargate On-Demand vCPU quota is 6 per account and Region, so two concurrent runs serialize: the second waits in `RUNNABLE` until the first finishes. The pipeline's timeout chain absorbs one such wait (the container attempt is bounded at 6 hours and the AWS Batch state, which counts the wait, at 7 hours 45 minutes); raise the quota through Service Quotas for deployments that expect concurrent runs.
 -   **CodeBuild internet access** — When `useCodeBuild` is enabled, the CodeBuild project runs outside the VPC to pull the public base image and reaches Amazon ECR and Amazon S3 through IAM credentials.
 -   **Partition** — Commercial and AWS GovCloud (US) only, as described under [Configuration](#configuration).
 
@@ -439,7 +439,7 @@ Aborting a run stops the pipeline state machine and terminates the AWS Batch job
 
 ### Run waits in RUNNABLE
 
-A job that stays `RUNNABLE` while another run is `RUNNING` is waiting on the AWS Fargate On-Demand vCPU quota (see [Prerequisites](#prerequisites)). The wait counts against the 8-hour state-machine timeout, not against the 6-hour attempt bound.
+A job that stays `RUNNABLE` while another run is `RUNNING` is waiting on the AWS Fargate On-Demand vCPU quota (see [Prerequisites](#prerequisites)). The wait counts against the AWS Batch state's 7 hour 45 minute bound, not against the 6-hour attempt bound. A run still waiting or running at that bound fails with a cause that names the queue wait.
 
 ### Container fails to start
 
