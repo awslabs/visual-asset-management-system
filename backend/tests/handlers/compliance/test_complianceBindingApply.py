@@ -265,7 +265,8 @@ class TestTheTriggerAppliesItPageByPage:
         assert record["applyStatus"] == "applying" and record["cursor"]
         assert binding_apply.counts_of(record)["assetsProcessed"] == 2
         runs = 1 + world.drain()
-        assert runs == 4
+        # The live asset rows, then one run for the archived assets' partition (empty here).
+        assert runs == 5
         record = world.apply_record()
         assert (record["applyStatus"], record.get("cursor")) == ("applied", None)
         assert binding_apply.counts_of(record) == {
