@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Pipelines** The RapidPipeline EKS Lambda signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud and `amazonaws.com.cn` in the China Regions. Previously the token always named an `amazonaws.com` STS host. ([#1593](https://github.com/awslabs/visual-asset-management-system/issues/1593))
+
 ### Chores
 
 ### Known Outstanding Issues
