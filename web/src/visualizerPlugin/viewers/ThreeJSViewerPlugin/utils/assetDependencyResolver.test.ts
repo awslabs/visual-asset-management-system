@@ -22,6 +22,7 @@ import {
 } from "./assetDependencyResolver";
 import { downloadAsset } from "../../../../services/APIService";
 import { clearPresignedUrlCache } from "../../../core/presignedFetch";
+import fileNotFound from "../../../core/fileNotFoundBody.testdata.json";
 
 jest.mock("../../../../services/APIService", () => ({
     downloadAsset: jest.fn(async ({ key }: { key: string }) => [
@@ -196,8 +197,13 @@ describe("AssetDependencyResolver.resolveDependencies", () => {
     // a signed URL that S3 then refuses.
     it("records a file the download route says is not in the bucket as not found", async () => {
         installFetch({});
-        const missing = "VAMS General Error: File not found in S3";
-        (downloadAsset as jest.Mock).mockResolvedValueOnce([false, missing, 400, missing]);
+        const missing = fileNotFound.body.message;
+        (downloadAsset as jest.Mock).mockResolvedValueOnce([
+            false,
+            missing,
+            fileNotFound.statusCode,
+            missing,
+        ]);
         const resolver = new AssetDependencyResolver(CONTEXT);
 
         await resolver.resolveDependencies("m/scene.obj", ["tex.png"]);

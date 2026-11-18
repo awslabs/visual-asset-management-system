@@ -22,6 +22,7 @@ import {
 import { loadFile } from "./fileLoaders";
 import { clearPresignedUrlCache } from "../../../core/presignedFetch";
 import { downloadAsset } from "../../../../services/APIService";
+import fileNotFound from "../../../core/fileNotFoundBody.testdata.json";
 
 jest.mock("../../../../services/APIService", () => ({
     downloadAsset: jest.fn(async ({ key }: { key: string }) => [
@@ -50,7 +51,7 @@ class FakeLoadingManager {
 }
 
 /** The download route's answer for a key that is not in the bucket: it checks before it signs. */
-const MISSING_FILE = "VAMS General Error: File not found in S3";
+const MISSING_FILE = fileNotFound.body.message;
 
 /**
  * Serves `files` by key: the presign answers as the download route does (a URL for a stored key,
@@ -62,7 +63,7 @@ function installFetch(files: Record<string, string>): string[] {
     (downloadAsset as jest.Mock).mockImplementation(async ({ key }: { key: string }) => {
         requested.push(key);
         return files[key] === undefined
-            ? [false, MISSING_FILE, 400, MISSING_FILE]
+            ? [false, MISSING_FILE, fileNotFound.statusCode, MISSING_FILE]
             : [true, `https://s3.test/${encodeURIComponent(key)}?X-Amz-Signature=sig`];
     });
     global.fetch = jest.fn(async (url: string) => {

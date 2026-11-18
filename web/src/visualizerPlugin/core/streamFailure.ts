@@ -38,7 +38,9 @@ export function downloadResponseApiMessage(response: unknown): string | undefine
 /**
  * The reason the download route gives for a key that is not in the bucket. The route checks the
  * object before it signs a URL and answers a missing one with a `400` carrying this text
- * (`MSG_FILE_NOT_FOUND` in `backend/backend/common/downloadEligibility.py`; keep the two in step).
+ * (`MSG_FILE_NOT_FOUND` in `backend/backend/common/downloadEligibility.py`). The route's whole answer
+ * is in `fileNotFoundBody.testdata.json`, which a web test and a backend handler test both compare,
+ * so the two cannot drift apart unnoticed.
  */
 export const DOWNLOAD_ROUTE_FILE_NOT_FOUND = "File not found in S3";
 
