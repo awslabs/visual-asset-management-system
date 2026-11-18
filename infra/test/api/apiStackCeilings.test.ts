@@ -5,7 +5,8 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { expectAbsent, synthTemplate, SynthResult } from "../support/templateSynth";
+import * as cxapi from "aws-cdk-lib/cx-api";
+import { expectAbsent, synthTemplate, SynthResult, TemplateName } from "../support/templateSynth";
 
 /**
  * Grounds the numbers the API-stack-split rationale states in the synthesized templates rather than
@@ -39,8 +40,87 @@ jest.setTimeout(600_000);
 /** CloudFormation: maximum resources in one template. Hard limit, per template. */
 const CFN_RESOURCES_PER_TEMPLATE = 500;
 
-/** CloudFormation: maximum template body in an Amazon S3 object. Hard limit, per template. */
-const CFN_TEMPLATE_BODY_BYTES = 1024 * 1024;
+/**
+ * CloudFormation: maximum template body in an Amazon S3 object, 1,000,000 bytes. Hard limit, per
+ * template; CDK's `Template size exceeds limit` warning checks the same figure, and a nested stack
+ * over it fails to deploy (#1647).
+ */
+const CFN_TEMPLATE_BODY_BYTES = 1_000_000;
+
+/**
+ * The budget each API stack's template body is held to in the worst-case cells: 90% of the
+ * CloudFormation limit, so a few more routes, a longer stack name or a configuration the cells do not
+ * combine still fit.
+ */
+const API_TEMPLATE_BODY_BUDGET = 900_000;
+
+/**
+ * The metadata `cdk synth` and `cdk deploy` write into every template and `app.synth()` does not: each
+ * resource's construct path, the asset path of each Lambda and image, and the CDK version-reporting
+ * resource. Synthesized with these on, a template is the size of the one a deployment uploads.
+ */
+const DEPLOYED_METADATA_CONTEXT = {
+    [cxapi.PATH_METADATA_ENABLE_CONTEXT]: true,
+    [cxapi.ASSET_RESOURCE_METADATA_ENABLED_CONTEXT]: true,
+    [cxapi.ANALYTICS_REPORTING_ENABLED_CONTEXT]: true,
+};
+
+/**
+ * The cells in which the API stacks' templates are largest (#1647): a customer managed key, every
+ * Lambda in the VPC (one security group per function) and Download as Zip in all three partitions,
+ * plus the Deadline Cloud execution type, which only the commercial partition offers. Before #1647
+ * `ApiBuilder2` was over 1,000,000 bytes in each of them.
+ */
+interface WorstCaseCell {
+    name: string;
+    template: TemplateName;
+    mutate: (c: any) => void;
+}
+const WORST_CASE_CELLS: WorstCaseCell[] = [
+    {
+        name: "commercial-worst-zip",
+        template: "commercial",
+        mutate: (c) => {
+            c.app.useKmsCmkEncryption.enabled = true;
+            c.app.pipelines.deadlineCloudExecutionTypeEnabled = true;
+            c.app.useGlobalVpc.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+            c.app.pipelines.useZipDownloads.enabled = true;
+        },
+    },
+    {
+        name: "govcloud-worst-zip",
+        template: "govcloud",
+        mutate: (c) => {
+            c.app.useGlobalVpc.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+            c.app.pipelines.useZipDownloads.enabled = true;
+        },
+    },
+    {
+        name: "eusovereign-worst-zip",
+        template: "eusovereign",
+        mutate: (c) => {
+            c.app.useGlobalVpc.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+            c.app.pipelines.useZipDownloads.enabled = true;
+        },
+    },
+];
+
+/** The two API stacks every size and count below is taken from. */
+const API_STACKS = ["ApiBuilder", "ApiBuilder2"];
+
+/** One worst-case cell, synthesized with the metadata a deployment writes. */
+const worstSynth = (cell: WorstCaseCell): SynthResult =>
+    synthTemplate(cell.template, {
+        mutate: cell.mutate,
+        mutateKey: `${cell.name}-deployed-metadata`,
+        context: DEPLOYED_METADATA_CONTEXT,
+    });
+
+/** The worst-case commercial cell, whose figures the documented ceilings table states. */
+const documentedSynth = (): SynthResult => worstSynth(WORST_CASE_CELLS[0]);
 
 /** API Gateway: resources per REST API. Default quota, adjustable, per REST API. */
 const APIGW_RESOURCES_PER_REST_API = 300;
@@ -85,10 +165,11 @@ const resourceCount = (s: SynthResult, key: string): number =>
  * Serialized size of one emitted template, in bytes.
  *
  * CDK writes `*.template.json` minified, so `JSON.stringify` of the parsed template is byte-for-byte
- * the object CloudFormation reads from Amazon S3 — not an approximation of it.
+ * the object CloudFormation reads from Amazon S3 — not an approximation of it — provided the synth
+ * wrote the metadata a deployment writes (`worstSynth`).
  */
 const templateBytes = (s: SynthResult, key: string): number =>
-    JSON.stringify(s.templates[key]).length;
+    Buffer.byteLength(JSON.stringify(s.templates[key]), "utf8");
 
 /** The inline OpenAPI paths of the single `SpecRestApi`. */
 function restApiPaths(s: SynthResult): string[] {
@@ -180,6 +261,74 @@ describe("API stack split — the ceilings the rationale names", () => {
             description: "the assembly emits a REST API with a non-empty path tree",
             count: restApiPathNodes(s),
         });
+    });
+});
+
+/**
+ * The template body of each API stack in the cells where it is largest, against a budget below the
+ * CloudFormation limit (#1647).
+ *
+ * `ApiBuilder2` crossed 1,000,000 bytes in these cells, and roughly half of each API template was
+ * cdk-nag suppression metadata copied onto resources the suppressed rules never read. The budget
+ * catches the next large step before it reaches the limit, and the placement test catches the
+ * mechanism coming back on its own.
+ */
+describe("API stack template bodies in the worst-case cells (#1647)", () => {
+    test("the measured templates carry the metadata a deployment writes", () => {
+        // Control. Without the construct-path metadata the measured template is smaller than the one
+        // a deployment uploads, and the budget below could pass on a template that does not deploy.
+        const s = documentedSynth();
+        const resources = Object.values(
+            s.templates[nestedTemplateKeyFor(s, "ApiBuilder2")].Resources ?? {}
+        ) as { Metadata?: Record<string, unknown> }[];
+        expect(resources.length).toBeGreaterThan(0);
+        expect(resources.filter((r) => typeof r.Metadata?.["aws:cdk:path"] !== "string")).toEqual(
+            []
+        );
+    });
+
+    test.each(
+        WORST_CASE_CELLS.flatMap((cell) =>
+            API_STACKS.map((stack) => ({ name: cell.name, stack, cell }))
+        )
+    )("$name: $stack is under the template body budget", ({ stack, cell }) => {
+        const s = worstSynth(cell);
+        expect(templateBytes(s, nestedTemplateKeyFor(s, stack))).toBeLessThan(
+            API_TEMPLATE_BODY_BUDGET
+        );
+    });
+
+    test("no IAM suppression in an API stack sits on a resource its rule does not read", () => {
+        // cdk-nag AwsSolutions-IAM4 reads roles, users and groups; AwsSolutions-IAM5 reads those and
+        // policies. A copy anywhere else is the `applyToChildren` stamping #1647 removed.
+        const reads: Record<string, string[]> = {
+            "AwsSolutions-IAM4": ["AWS::IAM::Role", "AWS::IAM::User", "AWS::IAM::Group"],
+            "AwsSolutions-IAM5": [
+                "AWS::IAM::Role",
+                "AWS::IAM::User",
+                "AWS::IAM::Group",
+                "AWS::IAM::Policy",
+                "AWS::IAM::ManagedPolicy",
+            ],
+        };
+        const s = documentedSynth();
+        const misplaced: string[] = [];
+        let iamSuppressions = 0;
+        for (const stack of API_STACKS) {
+            const resources = s.templates[nestedTemplateKeyFor(s, stack)].Resources ?? {};
+            for (const [id, r] of Object.entries<any>(resources)) {
+                for (const rule of r.Metadata?.cdk_nag?.rules_to_suppress ?? []) {
+                    if (!reads[rule.id]) continue;
+                    iamSuppressions++;
+                    if (!reads[rule.id].includes(r.Type)) {
+                        misplaced.push(`${stack}/${id} (${r.Type}): ${rule.id}`);
+                    }
+                }
+            }
+        }
+        // Control: the API stacks' Lambda roles and policies do carry IAM suppressions.
+        expect(iamSuppressions).toBeGreaterThan(100);
+        expect(misplaced).toEqual([]);
     });
 });
 
@@ -297,7 +446,7 @@ describe("the documented API-stack figures match the synthesized templates", () 
     });
 
     test("the documented resource counts are the counts emitted", () => {
-        const s = synth();
+        const s = documentedSynth();
         const doc = documentedCeilings();
         const actual = {
             ApiBuilder: resourceCount(s, nestedTemplateKeyFor(s, "ApiBuilder")),
@@ -309,7 +458,7 @@ describe("the documented API-stack figures match the synthesized templates", () 
     test("the documented template body sizes are the sizes emitted", () => {
         // Compared at the precision the table states (two decimals of a MB, ~10 kB), because that is
         // the claim being made. A change too small to move the second decimal is not a stale table.
-        const s = synth();
+        const s = documentedSynth();
         const doc = documentedCeilings();
         const round = (bytes: number): number =>
             Math.round((bytes / CFN_TEMPLATE_BODY_BYTES) * 100) / 100;
@@ -321,7 +470,7 @@ describe("the documented API-stack figures match the synthesized templates", () 
     });
 
     test("the documented path-tree and OpenAPI path counts are the counts emitted", () => {
-        const s = synth();
+        const s = documentedSynth();
         const doc = documentedCeilings();
         expect(restApiPathNodes(s)).toBe(doc.pathNodes);
         expect(restApiPaths(s)).toHaveLength(doc.openApiPaths);
@@ -331,7 +480,7 @@ describe("the documented API-stack figures match the synthesized templates", () 
         // Rule 11 duplicates these numbers into the Kiro steering document, so both are checked
         // against the synthesized templates. Each source must state at least one figure: a copy that
         // drops the numbers entirely would otherwise pass by having nothing to disagree with.
-        const s = synth();
+        const s = documentedSynth();
         const actual = {
             resources: {
                 ApiBuilder: resourceCount(s, nestedTemplateKeyFor(s, "ApiBuilder")),
