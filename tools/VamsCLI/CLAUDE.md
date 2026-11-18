@@ -33,7 +33,7 @@ tools/VamsCLI/
       base.py                # BaseAuthenticator abstract class
       cognito.py             # CognitoAuthenticator (SRP, USER_PASSWORD_AUTH)
     commands/
-      setup.py               # Initial CLI configuration
+      setup.py               # Initial CLI configuration; validate_base_url accepts https, or http for a loopback host only (also used by vams-mcp setup-remote)
       auth.py                # Login, change-password, forgot-password, logout, status, refresh, set-override, routes (API route listing)
       apiKey.py              # API key management (admin: list/get/create/update/delete) + 'user' sub-group (self-service own keys)
       zip_download.py        # Download as Zip jobs (create, list, get, download, cancel, delete); the archive URL is streamed, never printed
