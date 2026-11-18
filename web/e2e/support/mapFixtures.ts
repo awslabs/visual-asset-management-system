@@ -4,9 +4,9 @@
  */
 
 /**
- * Helpers for specs that look at a MapLibre map in the live app: its camera, whether a coordinate is in
- * view. The live bundle exposes no map
- * global, so the map is found through the React fiber tree behind its `.maplibregl-map` element.
+ * Helpers for specs that look at a MapLibre map in the live app: its camera and whether a coordinate is
+ * in view. The live bundle exposes no map global, so the map is found through the React fiber tree
+ * behind its `.maplibregl-map` element.
  */
 
 import { Page } from "@playwright/test";
