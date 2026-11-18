@@ -8,6 +8,11 @@ candidates the per-hit check refuses. The search keeps fetching larger windows u
 page is full or the indexes are exhausted, within the SEARCH_FILL_* bounds; a search stopped by a bound
 reports its total as a minimum. Driven end to end against the in-memory OpenSearch of
 ``opensearch_dsl_oracle``.
+
+Every test runs on a fake monotonic clock (the autouse ``fake_clock`` fixture): each fetch and each
+per-hit decision advances it by a set cost, so the window sizes and the time bound follow those costs and
+never how fast the runner is (#1633). A test that is about the time bound sets its own costs with
+``fake_clock.costs``; the others keep the defaults of a fast runner.
 """
 
 import contextlib
@@ -32,6 +37,55 @@ READABLE_IDS = [f"a{n}" for n in READABLE_AT]
 @pytest.fixture(scope="module")
 def search_module():
     return load_search_module("search_under_test_paging")
+
+
+class _FakeClock:
+    """A monotonic clock the test advances: each fetch and each per-hit decision costs a set time.
+
+    The defaults are a fast runner's: 10 ms a fetch and 0.1 ms a decision, so 2,020 candidates are
+    fetched and checked in well under a second of the 10 s bound and every window grows the full
+    SEARCH_FILL_GROWTH_FACTOR."""
+
+    FETCH_SECONDS = 0.01
+    FETCH_SECONDS_PER_HIT = 0.0
+    DECISION_SECONDS = 0.0001
+
+    def __init__(self):
+        self.now = 1000.0
+        self.costs(self.FETCH_SECONDS, self.FETCH_SECONDS_PER_HIT, self.DECISION_SECONDS)
+
+    def costs(self, fetch_seconds, fetch_seconds_per_hit, decision_seconds):
+        """Set what each fetch (plus a per-hit share) and each decision costs; returns the clock."""
+        self.fetch_seconds = fetch_seconds
+        self.fetch_seconds_per_hit = fetch_seconds_per_hit
+        self.decision_seconds = decision_seconds
+        return self
+
+    def monotonic(self):
+        return self.now
+
+
+@pytest.fixture(autouse=True)
+def fake_clock(search_module, monkeypatch):
+    """The search under test reads this clock, every in-memory fetch and every per-hit decision advances it."""
+    clock = _FakeClock()
+    monkeypatch.setattr(search_module, "time", clock)
+    fetch = FakeSearchManager.search_dual_index
+
+    def timed_fetch(self, asset_query, file_query, entity_types):
+        response = fetch(self, asset_query, file_query, entity_types)
+        clock.now += clock.fetch_seconds + clock.fetch_seconds_per_hit * len(response["hits"]["hits"])
+        return response
+
+    monkeypatch.setattr(FakeSearchManager, "search_dual_index", timed_fetch)
+    decide = search_module.DualIndexResponseProcessor._hit_decision
+
+    def timed_decision(self, hit, claims):
+        clock.now += clock.decision_seconds
+        return decide(self, hit, claims)
+
+    monkeypatch.setattr(search_module.DualIndexResponseProcessor, "_hit_decision", timed_decision)
+    return clock
 
 
 def _sparse_assets(count=300, readable_at=READABLE_AT):
@@ -204,38 +258,6 @@ class TestCombinedAssetAndFilePaging:
             "a5", "f5", "a6", "f6", "a7", "f7", "a8", "f8", "a9", "f9"]
 
 
-class _FakeClock:
-    """A monotonic clock the test advances: each fetch and each per-hit decision costs a set time."""
-
-    def __init__(self):
-        self.now = 1000.0
-
-    def monotonic(self):
-        return self.now
-
-
-def _timed(module, monkeypatch, fake, fetch_seconds, fetch_seconds_per_hit, decision_seconds):
-    """Run every fetch and every per-hit decision on a fake clock; returns the clock."""
-    clock = _FakeClock()
-    monkeypatch.setattr(module, "time", clock)
-    answer = fake.search_dual_index
-
-    def timed_fetch(asset_query, file_query, entity_types):
-        response = answer(asset_query, file_query, entity_types)
-        clock.now += fetch_seconds + fetch_seconds_per_hit * len(response["hits"]["hits"])
-        return response
-
-    fake.search_dual_index = timed_fetch
-    original = module.DualIndexResponseProcessor._hit_decision
-
-    def timed_decision(self, hit, claims):
-        clock.now += decision_seconds
-        return original(self, hit, claims)
-
-    monkeypatch.setattr(module.DualIndexResponseProcessor, "_hit_decision", timed_decision)
-    return clock
-
-
 @pytest.mark.unit
 class TestTimeBudget:
     """The time bound covers the whole fill loop: the fetches and every per-hit check after them."""
@@ -249,10 +271,11 @@ class TestTimeBudget:
         return assets
 
     @pytest.mark.parametrize("size", [2, 10, 100])
-    def test_a_request_ends_within_the_bound_when_each_check_is_slow(self, search_module, monkeypatch, size):
+    def test_a_request_ends_within_the_bound_when_each_check_is_slow(self, search_module, monkeypatch,
+                                                                     fake_clock, size):
         assets = self._large(search_module, monkeypatch)
         fake = FakeSearchManager(search_module, assets, [])
-        clock = _timed(search_module, monkeypatch, fake, 0.2, 0.0002, 0.015)
+        clock = fake_clock.costs(0.2, 0.0002, 0.015)
         started = clock.now
         with policies(REGEX_ONLY, (ROLE,)):
             result = _run(search_module, monkeypatch, fake, _browse(size))
@@ -263,12 +286,13 @@ class TestTimeBudget:
         assert ids == [f"a{n}" for n in self.LARGE_READABLE_AT][: len(ids)]
         assert result["hits"]["total"]["relation"] == "gte"
 
-    def test_a_window_is_not_fetched_when_its_checks_cannot_finish_in_time(self, search_module, monkeypatch):
+    def test_a_window_is_not_fetched_when_its_checks_cannot_finish_in_time(self, search_module, monkeypatch,
+                                                                           fake_clock):
         """The next window is planned with the per-hit check time measured so far, not the fetch time
         alone: at 15 ms a check a 1,280-hit window cannot be checked in 10 s, so it is not requested."""
         assets = self._large(search_module, monkeypatch)
         fake = FakeSearchManager(search_module, assets, [])
-        _timed(search_module, monkeypatch, fake, 0.2, 0.0002, 0.015)
+        fake_clock.costs(0.2, 0.0002, 0.015)
         with policies(REGEX_ONLY, (ROLE,)):
             _run(search_module, monkeypatch, fake, _browse(10))
 
@@ -277,15 +301,15 @@ class TestTimeBudget:
         # every requested window could be checked inside the bound
         assert sum(s - prev for prev, s in zip([0] + sizes, sizes)) * 0.015 <= search_module.SEARCH_FILL_MAX_SECONDS
 
-    def test_cheap_checks_still_reach_every_readable_asset(self, search_module, monkeypatch):
+    def test_cheap_checks_still_reach_every_readable_asset(self, search_module, monkeypatch, fake_clock):
         """With the per-hit check at 1 ms (no audit write in line), 2,020 candidates fit the bound."""
         assets = self._large(search_module, monkeypatch)
         expected = [f"a{n}" for n in self.LARGE_READABLE_AT]
+        fake_clock.costs(0.2, 0.0002, 0.001)
         for size in (2, 10):
             ids, offset = [], 0
             while True:
                 fake = FakeSearchManager(search_module, assets, [])
-                _timed(search_module, monkeypatch, fake, 0.2, 0.0002, 0.001)
                 with policies(REGEX_ONLY, (ROLE,)):
                     answer = _run(search_module, monkeypatch, fake, _browse(size, offset))
                 page = [h["_id"] for h in answer["hits"]["hits"]]
@@ -300,15 +324,15 @@ class TestTimeBudget:
 
     @pytest.mark.parametrize("size", [2, 10])
     def test_small_pages_reach_records_ranked_near_the_end_within_the_bound(self, search_module, monkeypatch,
-                                                                             size):
+                                                                            fake_clock, size):
         """The number of windows does not end the search: windows grow until the index is exhausted, so
         a page of 2 or 10 reaches records ranked ~1,800 of 2,020, and every request ends within the bound."""
         assets = _sparse_assets(count=2020, readable_at=self.DEEP_READABLE_AT)
         _install_rows(search_module, monkeypatch, assets)
+        clock = fake_clock.costs(0.2, 0.0002, 0.001)
         ids, offset = [], 0
         while True:
             fake = FakeSearchManager(search_module, assets, [])
-            clock = _timed(search_module, monkeypatch, fake, 0.2, 0.0002, 0.001)
             started = clock.now
             with policies(REGEX_ONLY, (ROLE,)):
                 answer = _run(search_module, monkeypatch, fake, _browse(size, offset))
@@ -323,13 +347,14 @@ class TestTimeBudget:
 
         assert ids == [f"a{n}" for n in self.DEEP_READABLE_AT]
 
-    def test_a_search_stopped_by_the_bound_reports_a_lower_bound_total(self, search_module, monkeypatch):
+    def test_a_search_stopped_by_the_bound_reports_a_lower_bound_total(self, search_module, monkeypatch,
+                                                                       fake_clock):
         """At 15 ms a check, 2,020 candidates cannot be checked in the bound: the page holds the readable
         records reached, in order, and the total is a minimum."""
         assets = _sparse_assets(count=2020, readable_at=self.DEEP_READABLE_AT)
         _install_rows(search_module, monkeypatch, assets)
         fake = FakeSearchManager(search_module, assets, [])
-        clock = _timed(search_module, monkeypatch, fake, 0.2, 0.0002, 0.015)
+        clock = fake_clock.costs(0.2, 0.0002, 0.015)
         started = clock.now
         with policies(REGEX_ONLY, (ROLE,)):
             result = _run(search_module, monkeypatch, fake, _browse(2))
@@ -339,11 +364,11 @@ class TestTimeBudget:
         assert ids == [f"a{n}" for n in self.DEEP_READABLE_AT][: len(ids)]
         assert result["hits"]["total"]["relation"] == "gte"
 
-    def test_the_first_window_is_bounded_too(self, search_module, monkeypatch):
+    def test_the_first_window_is_bounded_too(self, search_module, monkeypatch, fake_clock):
         """Even the first window's checks stop at the bound; the page is the checked prefix, in order."""
         assets = self._large(search_module, monkeypatch)
         fake = FakeSearchManager(search_module, assets, [])
-        clock = _timed(search_module, monkeypatch, fake, 0.2, 0.0, 0.015)
+        clock = fake_clock.costs(0.2, 0.0, 0.015)
         monkeypatch.setattr(search_module, "SEARCH_FILL_MAX_SECONDS", 1.0)
         started = clock.now
         with policies(REGEX_ONLY, (ROLE,)):
@@ -399,18 +424,24 @@ class TestBounds:
         assert len(result["hits"]["hits"]) == 10
         assert result["hits"]["total"] == {"value": 300, "relation": "eq"}
 
-    def test_windows_grow_until_the_index_is_exhausted(self, search_module, monkeypatch):
+    def test_windows_grow_until_the_index_is_exhausted(self, search_module, monkeypatch, fake_clock):
         """With time to spare, the count of windows does not stop the search: a page of 2 whose only
-        readable asset is the last candidate grows its window until the index has no more candidates."""
+        readable asset is the last candidate grows its window until the index has no more candidates.
+        On the fake clock at a fast runner's costs (10 ms a fetch, 0.1 ms a check), so a slow runner's
+        measured check time cannot shrink the last window (#1633)."""
         assets = _sparse_assets(count=2020, readable_at=(2019,))
         _install_rows(search_module, monkeypatch, assets)
         fake = FakeSearchManager(search_module, assets, [])
+        clock = fake_clock.costs(0.01, 0.0, 0.0001)
+        started = clock.now
         with policies(REGEX_ONLY, (ROLE,)):
             result = _run(search_module, monkeypatch, fake, _browse(2))
 
         assert [q[0]["size"] for q in fake.queries] == [4, 16, 64, 256, 1024, 4096]
         assert [h["_id"] for h in result["hits"]["hits"]] == ["a2019"]
         assert result["hits"]["total"] == {"value": 1, "relation": "eq"}
+        # six fetches and 2,020 checks: well inside the bound, so no window was sized down for time
+        assert clock.now - started == pytest.approx(6 * 0.01 + 2020 * 0.0001)
 
     def test_the_time_bound_stops_further_windows(self, search_module, monkeypatch):
         assets = _sparse_assets()
