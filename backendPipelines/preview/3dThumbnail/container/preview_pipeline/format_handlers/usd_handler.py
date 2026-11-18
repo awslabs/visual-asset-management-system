@@ -31,6 +31,7 @@ The composed stage is walked the way a renderer sees it:
 Reference: https://github.com/beersandrew/usd-thumbnail-generator
 """
 
+import functools
 import io
 import os
 import re
@@ -66,10 +67,16 @@ MAX_POINTS = 30_000_000
 _RENDERED_PURPOSES = ("default", "render")
 _IMPLICIT_RESOLUTION = 24
 
-# The names of the root prims the last ``load`` left out because it drew the default prim only; empty
-# when it drew the whole stage. The caller reads it to leave out of the incomplete-preview report the
-# referenced files only those prims use.
-left_out_root_prims = []
+# A root prim beside the default prim is left out of the preview only when it clearly is a rig: the
+# largest root of the stage, at least RIG_SCALE_STRONG times larger than the next largest root, or at
+# least RIG_SCALE times larger and holding lights or cameras (a thumbnail rig is a huge environment with
+# its own lights and camera). Any other root, however small or large, is drawn as before.
+RIG_SCALE = 50.0
+RIG_SCALE_STRONG = 1000.0
+# A root of this share of the largest root's size or more is judged with it, at the same scale.
+RIG_SAME_SCALE_SHARE = 0.1
+# Prims the independence check of a left-out root visits at most; past it the root counts as used.
+MAX_DEPENDENCY_PRIMS = 200_000
 
 # MDL material families whose base colour is read from the shader's inputs, by the lower-case file
 # name prefix of the module (OmniPBR.mdl, OmniPBR_ClearCoat.mdl, OmniSurface.mdl, OmniSurfaceLite.mdl):
@@ -98,18 +105,17 @@ def texture_cache_limit(memory_bytes: int) -> int:
     return int(memory_bytes * TEXTURE_MEMORY_FRACTION)
 
 
-def load(file_path: str, asset_root: str = None) -> pv.PolyData:
+def load(file_path: str, asset_root: str = None, report: dict = None) -> pv.PolyData:
     """
     Load a USD file and return a PyVista PolyData object for rendering.
     Supports: .usd, .usda, .usdc, .usdz
 
     ``asset_root`` is the local directory the input's referenced files were fetched into; texture
-    files are read only from inside it (default: the input file's directory).
+    files are read only from inside it (default: the input file's directory). ``report``, when given, is
+    filled with ``leftOut``: the names of the root prims that look like a rig and were not drawn.
     """
     from pxr import Usd, UsdGeom
 
-    global left_out_root_prims
-    left_out_root_prims = []
     ext = os.path.splitext(file_path)[1].lower()
     logger.info(f"Loading USD file: {file_path} (format: {ext})")
 
@@ -121,28 +127,21 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
     xform_cache = UsdGeom.XformCache(time)
     context = _LoadContext(file_path, asset_root or os.path.dirname(os.path.abspath(file_path)), time)
 
-    # What the default prim composes is the stage's content (what another file gets when it references
-    # this one); the other root prims are a thumbnail rig, a lights or camera set, scratch geometry.
-    # When it draws nothing, the whole stage is drawn as a stage without a default prim is.
-    parts = []
+    # The default prim is the stage's content (what another file gets when it references this one). A
+    # root prim beside it that clearly is a rig (a huge environment with its own lights and camera) is
+    # not drawn; every other root prim is, as it is for a stage without a default prim.
+    parts, part_roots = _collect_scene(stage.GetPseudoRoot(), xform_cache, context)
     default_prim = _default_prim(stage)
-    if default_prim is not None:
-        parts = _collect_scene(default_prim, xform_cache, context)
-        if parts:
-            others = [child.GetName() for child in stage.GetPseudoRoot().GetChildren()
-                      if child.GetPath() != default_prim.GetPath()]
-            left_out_root_prims = list(others)
-            if others:
-                logger.info(f"Drawing the default prim {default_prim.GetPath()} only; "
-                            f"root prims left out: {', '.join(others[:MAX_SUMMARY_ENTRIES])}"
-                            + (f" and {len(others) - MAX_SUMMARY_ENTRIES} more"
-                               if len(others) > MAX_SUMMARY_ENTRIES else ""))
-        else:
-            logger.info(f"The default prim {default_prim.GetPath()} draws no geometry; "
-                        f"drawing the whole stage")
-            context.points_total = 0
-    if not parts:
-        parts = _collect_scene(stage.GetPseudoRoot(), xform_cache, context)
+    if default_prim is not None and parts:
+        rigs = _find_rigs(stage, default_prim, parts, part_roots)
+        if rigs:
+            parts = [part for part, root in zip(parts, part_roots) if root not in rigs]
+            if report is not None:
+                report["leftOut"] = sorted(rigs)
+            logger.info("Leaving out the root prims that look like a thumbnail rig: "
+                        + "; ".join(f"/{name} ({why})" for name, why in sorted(rigs.items())))
+    elif default_prim is not None:
+        logger.info(f"The default prim {default_prim.GetPath()} draws no geometry; drawing the whole stage")
 
     if not parts:
         raise ValueError("No valid mesh geometry found in USD stage")
@@ -181,8 +180,14 @@ def _default_prim(stage):
     return prim
 
 
+def _root_name(prim):
+    """The name of the root prim that ``prim`` is at or under."""
+    return prim.GetPath().GetPrefixes()[0].name
+
+
 def _collect_parts(root, xform_cache, context, plan=None):
-    """The (points, triangles, colours) parts of the gprims at and under ``root``, in traversal order.
+    """(parts, roots): the (points, triangles, colours) parts of the gprims at and under ``root`` in
+    traversal order, and the name of the root prim each part came from.
 
     With a ``plan`` (``_sample_plan``) only the gprims and instances it keeps are read; without one the
     walk stops once the stage passes MAX_POINTS vertices and ``context.capped`` is set."""
@@ -190,6 +195,7 @@ def _collect_parts(root, xform_cache, context, plan=None):
 
     time = context.time
     parts = []
+    roots = []
     gprim_index = -1
     iterator = iter(Usd.PrimRange(root, Usd.TraverseInstanceProxies()))
     for prim in iterator:
@@ -199,7 +205,9 @@ def _collect_parts(root, xform_cache, context, plan=None):
             iterator.PruneChildren()
             continue
         if prim.IsA(UsdGeom.PointInstancer):
-            parts.extend(_expand_point_instancer(prim, xform_cache, context, plan))
+            expanded = _expand_point_instancer(prim, xform_cache, context, plan)
+            parts.extend(expanded)
+            roots.extend([_root_name(prim)] * len(expanded))
             iterator.PruneChildren()
             if plan is None and context.capped:
                 break
@@ -213,68 +221,75 @@ def _collect_parts(root, xform_cache, context, plan=None):
         part = _gprim_part(prim, np.array(xform_cache.GetLocalToWorldTransform(prim)), context)
         if part is not None:
             parts.append(part)
+            roots.append(_root_name(prim))
         if context.points_total > MAX_POINTS:
             context.capped = True
             if plan is not None:
                 logger.warning(f"The sampled preview still passes {MAX_POINTS} vertices; "
                                f"remaining prims are skipped")
             break
-    return parts
+    return parts, roots
 
 
 def _collect_scene(root, xform_cache, context):
-    """``_collect_parts`` of ``root``; when the stage passes MAX_POINTS vertices, the parts of an evenly
-    spaced sample of its gprims and instances instead, so the preview covers the whole scene rather
-    than the first prims in traversal order."""
-    parts = _collect_parts(root, xform_cache, context)
+    """``_collect_parts`` of ``root``; when the stage passes MAX_POINTS vertices, the parts of a
+    deterministic sample of its gprims and instances instead, so the preview covers the whole scene
+    rather than the first prims in traversal order."""
+    parts, roots = _collect_parts(root, xform_cache, context)
     if not context.capped:
-        return parts
-    parts = None
+        return parts, roots
+    del parts, roots
     context.reset_counts()
     plan = _sample_plan(root, xform_cache, context)
     context.reset_counts()
-    parts = _collect_parts(root, xform_cache, context, plan)
+    parts, roots = _collect_parts(root, xform_cache, context, plan)
     logger.warning(f"Stage expands past {MAX_POINTS} vertices (about {plan.total_vertices:,} in "
                    f"{plan.total_items:,} gprims and instances); the preview shows {plan.kept_items:,} of "
-                   f"them, every {plan.stride}th in traversal order plus the outermost, so it covers the "
-                   f"whole scene")
-    return parts
+                   f"them: every small one, the outermost ones and an evenly spread "
+                   f"{plan.fraction:.0%} of the rest, so it covers the whole scene")
+    return parts, roots
+
+
+# Share of MAX_POINTS the sampled preview aims at; the rest absorbs the outermost items kept beside
+# the sample and the estimate's rounding.
+SAMPLE_BUDGET_SHARE = 0.9
+# An item whose vertex count is at most this share of the stage's average per item is always kept: a
+# small, distinct object costs the budget next to nothing and the sample must not drop it.
+LIGHT_ITEM_SHARE = 0.25
+_GOLDEN = 0.6180339887498949
+
+
+def _spread(count, fraction):
+    """A boolean array of ``count`` flags, about ``fraction`` of them set, spread evenly and
+    deterministically along the index (the fractional part of index * golden ratio, which has no
+    period, so a regular grid keeps no rows or columns)."""
+    return (np.arange(count, dtype=np.float64) * _GOLDEN) % 1.0 < fraction
 
 
 class _SamplePlan:
-    """Which gprims (by traversal index) and point-instancer instances a sampled load keeps: every
-    ``stride``th, plus the ones holding the scene's outermost positions, so the sample spans the
-    scene's full footprint."""
+    """The gprims (by traversal index) and point-instancer instances a sampled load reads."""
 
-    def __init__(self, stride, forced_gprims, forced_instances, total_vertices, total_items, kept_items):
-        self.stride = stride
-        self.forced_gprims = forced_gprims
-        self.forced_instances = forced_instances
+    def __init__(self, fraction, gprim_keep, instancer_keep, total_vertices, total_items):
+        self.fraction = fraction
+        self.gprim_keep = gprim_keep
+        self.instancer_keep = instancer_keep
         self.total_vertices = total_vertices
         self.total_items = total_items
-        self.kept_items = kept_items
+        self.kept_items = int(gprim_keep.sum()) + sum(int(mask.sum()) for mask in instancer_keep.values())
 
     def keeps_gprim(self, index):
-        return index % self.stride == 0 or index in self.forced_gprims
+        return index >= len(self.gprim_keep) or bool(self.gprim_keep[index])
 
     def instance_mask(self, path, count):
-        keep = np.zeros(count, dtype=bool)
-        keep[::self.stride] = True
-        forced = self.forced_instances.get(str(path))
-        if forced is not None and len(forced):
-            keep[np.asarray(forced, dtype=np.int64)] = True
-        return keep
-
-
-# Vertices assumed for an implicit gprim when counting a stage (its tessellation is a few hundred).
-_IMPLICIT_VERTEX_ESTIMATE = 300
-# Share of MAX_POINTS the sampled preview aims at; the rest absorbs the estimate's error and the
-# outermost items kept beside the stride.
-SAMPLE_BUDGET_SHARE = 0.9
+        mask = self.instancer_keep.get(str(path))
+        if mask is None or len(mask) != count:
+            return np.ones(count, dtype=bool)
+        return mask
 
 
 def _local_extent(prim, cache, context):
-    """(vertex count, local min, local max) of one gprim, counted once per prototype prim."""
+    """(vertex count, local min, local max) of one gprim, from its real tessellation, once per
+    prototype prim or implicit shape."""
     from pxr import UsdGeom
 
     key = prim.GetPrimInPrototype().GetPath() if prim.IsInstanceProxy() else prim.GetPath()
@@ -288,12 +303,13 @@ def _local_extent(prim, cache, context):
             array = np.asarray(points, dtype=np.float64).reshape(-1, 3)
             result = (len(array), array.min(axis=0), array.max(axis=0))
     else:
-        extent = UsdGeom.Boundable(prim).GetExtentAttr().Get(context.time)
-        if extent is not None and len(extent) == 2:
-            result = (_IMPLICIT_VERTEX_ESTIMATE, np.array(extent[0], dtype=np.float64),
-                      np.array(extent[1], dtype=np.float64))
+        shape_key = _implicit_key(prim, context.time)
+        if shape_key is None:
+            result = (0, None, None)
         else:
-            result = (_IMPLICIT_VERTEX_ESTIMATE, None, None)
+            shape = _implicit_shape(shape_key)
+            bounds = np.asarray(shape.bounds, dtype=np.float64).reshape(3, 2)
+            result = (int(shape.n_points), bounds[:, 0], bounds[:, 1])
     cache[key] = result
     return result
 
@@ -305,16 +321,17 @@ def _world_box(lo, hi, matrix):
 
 
 def _sample_plan(root, xform_cache, context):
-    """Count the gprims and instances under ``root`` without tessellating them and choose the stride
-    that brings the sample under MAX_POINTS, plus the items that hold the scene's outermost bounds."""
+    """Count the gprims and instances under ``root`` without tessellating them and choose what to read:
+    every item whose cost is small, the items holding the scene's outermost bounds, and an evenly
+    spread fraction of the rest chosen so the sample stays within the budget."""
     from pxr import Usd, UsdGeom
 
     time = context.time
     cache = {}
-    boxes = []          # (gprim index, world min, world max)
-    instancers = []     # (path, per-instance vertices, world translations)
-    total_vertices = 0
-    total_gprims = 0
+    gprim_costs = []
+    low_pick = [(np.inf, -1)] * 3     # per axis: lowest world minimum and the gprim holding it
+    high_pick = [(-np.inf, -1)] * 3
+    instancers = []                   # (path, per-instance vertex cost, world translations)
     gprim_index = -1
     iterator = iter(Usd.PrimRange(root, Usd.TraverseInstanceProxies()))
     for prim in iterator:
@@ -328,45 +345,54 @@ def _sample_plan(root, xform_cache, context):
             entry = _count_instancer(prim, xform_cache, context, cache)
             if entry is not None:
                 instancers.append(entry)
-                total_vertices += entry[1] * len(entry[2])
             continue
         if not prim.IsA(UsdGeom.Gprim):
             continue
         gprim_index += 1
-        total_gprims += 1
         count, lo, hi = _local_extent(prim, cache, context)
-        total_vertices += count
+        gprim_costs.append(count)
         if lo is not None:
             matrix = np.array(xform_cache.GetLocalToWorldTransform(prim))
             wlo, whi = _world_box(lo, hi, matrix)
-            boxes.append((gprim_index, wlo, whi))
+            for axis in range(3):
+                if wlo[axis] < low_pick[axis][0]:
+                    low_pick[axis] = (wlo[axis], gprim_index)
+                if whi[axis] > high_pick[axis][0]:
+                    high_pick[axis] = (whi[axis], gprim_index)
 
-    total_items = total_gprims + sum(len(entry[2]) for entry in instancers)
+    gprim_costs = np.asarray(gprim_costs, dtype=np.int64)
+    total_items = len(gprim_costs) + sum(len(entry[1]) for entry in instancers)
+    total_vertices = int(gprim_costs.sum()) + sum(int(entry[1].sum()) for entry in instancers)
+    average = total_vertices / max(total_items, 1)
+    threshold = average * LIGHT_ITEM_SHARE
+
+    light_vertices = int(gprim_costs[gprim_costs <= threshold].sum()) + sum(
+        int(entry[1][entry[1] <= threshold].sum()) for entry in instancers)
+    heavy_vertices = total_vertices - light_vertices
     budget = MAX_POINTS * SAMPLE_BUDGET_SHARE
-    stride = max(2, int(np.ceil(total_vertices / budget))) if total_vertices > 0 else 2
+    if heavy_vertices <= 0:
+        fraction = 1.0
+    else:
+        fraction = float(min(1.0, max(0.02, (budget - light_vertices) / heavy_vertices)))
 
-    forced_gprims = set()
-    if boxes:
-        lows = np.array([box[1] for box in boxes])
-        highs = np.array([box[2] for box in boxes])
+    gprim_keep = (gprim_costs <= threshold) | _spread(len(gprim_costs), fraction)
+    for axis in range(3):
+        for index in (low_pick[axis][1], high_pick[axis][1]):
+            if index >= 0:
+                gprim_keep[index] = True
+    instancer_keep = {}
+    for path, costs, translations in instancers:
+        keep = (costs <= threshold) | _spread(len(costs), fraction)
         for axis in range(3):
-            forced_gprims.add(boxes[int(lows[:, axis].argmin())][0])
-            forced_gprims.add(boxes[int(highs[:, axis].argmax())][0])
-    forced_instances = {}
-    for path, _, translations in instancers:
-        forced = set()
-        for axis in range(3):
-            forced.add(int(translations[:, axis].argmin()))
-            forced.add(int(translations[:, axis].argmax()))
-        forced_instances[str(path)] = sorted(forced)
-    kept = len({i for i in range(0, total_gprims, stride)} | forced_gprims) + sum(
-        len(set(range(0, len(entry[2]), stride)) | set(forced_instances[str(entry[0])]))
-        for entry in instancers)
-    return _SamplePlan(stride, forced_gprims, forced_instances, int(total_vertices), total_items, kept)
+            keep[int(translations[:, axis].argmin())] = True
+            keep[int(translations[:, axis].argmax())] = True
+        instancer_keep[str(path)] = keep
+    return _SamplePlan(fraction, gprim_keep, instancer_keep, total_vertices, total_items)
 
 
 def _count_instancer(prim, xform_cache, context, cache):
-    """(path, vertices per instance, world translations of the instances) of a PointInstancer, or None."""
+    """(path, vertex cost of each instance, world translations of the instances) of a PointInstancer,
+    or None."""
     from pxr import Usd, UsdGeom
 
     instancer = UsdGeom.PointInstancer(prim)
@@ -388,10 +414,118 @@ def _count_instancer(prim, xform_cache, context, cache):
         per_prototype.append(vertices)
     indices = np.asarray(proto_indices, dtype=np.int64)
     valid = (indices >= 0) & (indices < len(per_prototype))
-    mean_vertices = float(np.asarray(per_prototype, dtype=np.float64)[indices[valid]].mean()) if valid.any() else 0.0
+    costs = np.zeros(len(indices), dtype=np.int64)
+    costs[valid] = np.asarray(per_prototype, dtype=np.int64)[indices[valid]]
     instancer_to_world = np.array(xform_cache.GetLocalToWorldTransform(prim))
     world = np.array(transforms, dtype=np.float64).reshape(-1, 4, 4) @ instancer_to_world
-    return prim.GetPath(), int(round(mean_vertices)), world[:, 3, :3]
+    if len(world) != len(costs):
+        return None
+    return prim.GetPath(), costs, world[:, 3, :3]
+
+
+# --------------------------------------------------------------------------------------------------
+# Root prims beside the default prim
+# --------------------------------------------------------------------------------------------------
+
+def _holds_rig_content(stage, name):
+    """True when the root prim ``name`` holds a light or a camera."""
+    from pxr import Usd, UsdGeom
+
+    root = stage.GetPrimAtPath("/" + name)
+    for prim in Usd.PrimRange(root, Usd.TraverseInstanceProxies()):
+        if prim.IsA(UsdGeom.Camera) or str(prim.GetTypeName()).endswith("Light"):
+            return True
+    return False
+
+
+def _find_rigs(stage, default_prim, parts, part_roots):
+    """The root prims beside the default prim that clearly are a rig, as {name: why}.
+
+    Each root's size is the largest side of the bounds of what it draws. The largest root, when it is
+    not the default prim, is a rig if it is at least RIG_SCALE_STRONG times larger than every root
+    below its scale class, or at least RIG_SCALE times larger and holds lights or cameras; roots of
+    its own scale class (at least RIG_SAME_SCALE_SHARE of its size) are judged with it. Nothing else is
+    left out: a placeholder default prim, peer roots and a site plan beside a building are all drawn.
+    """
+    bounds = {}
+    for (points, _, _), root in zip(parts, part_roots):
+        low, high = points.min(axis=0), points.max(axis=0)
+        if root in bounds:
+            low, high = np.minimum(low, bounds[root][0]), np.maximum(high, bounds[root][1])
+        bounds[root] = (low, high)
+    sizes = {root: float((high - low).max()) for root, (low, high) in bounds.items()}
+    default_name = default_prim.GetName()
+    if len(sizes) < 2 or default_name not in sizes:
+        return {}
+    largest = max(sizes.values())
+    if sizes[default_name] >= largest * RIG_SAME_SCALE_SHARE:
+        return {}
+    top_class = [name for name, size in sizes.items() if size >= largest * RIG_SAME_SCALE_SHARE]
+    below = [size for name, size in sizes.items() if name not in top_class]
+    reference = max(below) if below else 0.0
+    if reference <= 0.0:
+        return {}
+    ratio = min(sizes[name] for name in top_class) / reference
+    if ratio < RIG_SCALE:
+        return {}
+    rigs = {}
+    for name in top_class:
+        if ratio >= RIG_SCALE_STRONG:
+            rigs[name] = f"{sizes[name]:.4g} units across, {ratio:,.0f} times the largest other root"
+        elif _holds_rig_content(stage, name):
+            rigs[name] = (f"{sizes[name]:.4g} units across, {ratio:,.0f} times the largest other root, "
+                          f"holds lights or cameras")
+    return rigs
+
+
+def left_out_roots_unused(file_path, left_out):
+    """The names in ``left_out`` that nothing in the rest of the stage depends on, so the files only
+    they name add nothing to the preview. A root counts as used when any prim outside the left-out
+    roots has a composition arc (internal reference, payload, inherit, specialize), a relationship
+    target or an attribute connection into it, or when that cannot be established."""
+    from pxr import Sdf, Usd
+
+    try:
+        stage = Usd.Stage.Open(file_path)
+        if stage is None:
+            return []
+        rig_paths = {name: Sdf.Path("/" + name) for name in left_out}
+        used = set()
+
+        def into(path):
+            for name, rig_path in rig_paths.items():
+                if path.HasPrefix(rig_path):
+                    used.add(name)
+
+        visited = 0
+        for child in stage.GetPseudoRoot().GetChildren():
+            if child.GetName() in rig_paths:
+                continue
+            predicate = Usd.TraverseInstanceProxies(Usd.PrimAllPrimsPredicate)
+            for prim in Usd.PrimRange(child, predicate):
+                visited += 1
+                if visited > MAX_DEPENDENCY_PRIMS:
+                    return []
+                for spec in prim.GetPrimStack():
+                    for arcs in (spec.referenceList, spec.payloadList):
+                        for arc in arcs.GetAddedOrExplicitItems():
+                            if arc.primPath and not arc.assetPath:
+                                into(arc.primPath)
+                    for arcs in (spec.inheritPathList, spec.specializesList):
+                        for path in arcs.GetAddedOrExplicitItems():
+                            into(path)
+                for relationship in prim.GetAuthoredRelationships():
+                    for path in relationship.GetTargets():
+                        into(path)
+                for attribute in prim.GetAuthoredAttributes():
+                    if attribute.HasAuthoredConnections():
+                        for path in attribute.GetConnections():
+                            into(path)
+        return [name for name in left_out if name not in used]
+    except Exception as e:
+        logger.info(f"Could not check what depends on the left-out root prims ({type(e).__name__}); "
+                    f"every skipped file stays reported")
+        return []
 
 
 class _LoadContext:
@@ -416,16 +550,12 @@ class _LoadContext:
         # Set when a walk stopped at MAX_POINTS vertices; ``_collect_scene`` then samples the stage.
         self.capped = False
 
-
-def _reset_counts(self):
-    """Forget what a discarded walk counted, so a second walk of the stage starts clean."""
-    self.points_total = 0
-    self.capped = False
-    self.mdl_unread.clear()
-    self.mdl_approximated.clear()
-
-
-_LoadContext.reset_counts = _reset_counts
+    def reset_counts(self):
+        """Forget what a discarded walk counted, so a second walk of the stage starts clean."""
+        self.points_total = 0
+        self.capped = False
+        self.mdl_unread.clear()
+        self.mdl_approximated.clear()
 
 
 def _counted(counts):
@@ -564,41 +694,60 @@ def fan_triangulate(counts, indices, n_points):
     return triangles[keep], face[keep], corners[keep]
 
 
-def _implicit_geometry(prim, context):
-    """Tessellate a Cube, Sphere, Cylinder, Cone or Capsule in its local space."""
+def _implicit_key(prim, time):
+    """The kind and parameters that decide an implicit gprim's tessellation, or None for another prim."""
     from pxr import UsdGeom
 
-    time = context.time
-    shape = None
     if prim.IsA(UsdGeom.Cube):
-        size = float(UsdGeom.Cube(prim).GetSizeAttr().Get(time) or 2.0)
+        return ("Cube", float(UsdGeom.Cube(prim).GetSizeAttr().Get(time) or 2.0))
+    if prim.IsA(UsdGeom.Sphere):
+        return ("Sphere", float(UsdGeom.Sphere(prim).GetRadiusAttr().Get(time) or 1.0))
+    for kind, schema_type in (("Cylinder", UsdGeom.Cylinder), ("Cone", UsdGeom.Cone),
+                              ("Capsule", UsdGeom.Capsule)):
+        if prim.IsA(schema_type):
+            schema = schema_type(prim)
+            return (kind, float(schema.GetRadiusAttr().Get(time) or 1.0),
+                    float(schema.GetHeightAttr().Get(time) or 2.0),
+                    str(schema.GetAxisAttr().Get(time) or "Z"))
+    return None
+
+
+@functools.lru_cache(maxsize=512)
+def _implicit_shape(key):
+    """The triangulated, cleaned tessellation of an implicit shape in its local space. Shared between
+    prims of the same kind and size: callers must not change it."""
+    kind = key[0]
+    if kind == "Cube":
+        size = key[1]
         shape = pv.Cube(x_length=size, y_length=size, z_length=size)
-    elif prim.IsA(UsdGeom.Sphere):
-        radius = float(UsdGeom.Sphere(prim).GetRadiusAttr().Get(time) or 1.0)
-        shape = pv.Sphere(radius=radius, theta_resolution=_IMPLICIT_RESOLUTION,
+    elif kind == "Sphere":
+        shape = pv.Sphere(radius=key[1], theta_resolution=_IMPLICIT_RESOLUTION,
                           phi_resolution=_IMPLICIT_RESOLUTION // 2)
-    elif prim.IsA(UsdGeom.Cylinder) or prim.IsA(UsdGeom.Cone) or prim.IsA(UsdGeom.Capsule):
-        schema = (UsdGeom.Cylinder if prim.IsA(UsdGeom.Cylinder)
-                  else UsdGeom.Cone if prim.IsA(UsdGeom.Cone) else UsdGeom.Capsule)(prim)
-        radius = float(schema.GetRadiusAttr().Get(time) or 1.0)
-        height = float(schema.GetHeightAttr().Get(time) or 2.0)
-        axis = str(schema.GetAxisAttr().Get(time) or "Z")
+    else:
+        _, radius, height, axis = key
         direction = {"X": (1.0, 0.0, 0.0), "Y": (0.0, 1.0, 0.0)}.get(axis, (0.0, 0.0, 1.0))
-        if prim.IsA(UsdGeom.Cone):
+        if kind == "Cone":
             shape = pv.Cone(direction=direction, height=height, radius=radius,
                             resolution=_IMPLICIT_RESOLUTION)
         else:
             shape = pv.Cylinder(direction=direction, radius=radius, height=height,
                                 resolution=_IMPLICIT_RESOLUTION, capping=True)
-            if prim.IsA(UsdGeom.Capsule):
+            if kind == "Capsule":
                 offset = np.asarray(direction) * height / 2.0
                 for sign in (1.0, -1.0):
                     shape = shape.merge(pv.Sphere(radius=radius, center=tuple(sign * offset),
                                                   theta_resolution=_IMPLICIT_RESOLUTION,
                                                   phi_resolution=_IMPLICIT_RESOLUTION // 2))
-    if shape is None:
+    return shape.triangulate().clean()
+
+
+def _implicit_geometry(prim, context):
+    """Tessellate a Cube, Sphere, Cylinder, Cone or Capsule in its local space."""
+    time = context.time
+    key = _implicit_key(prim, time)
+    if key is None:
         return None
-    shape = shape.triangulate().clean()
+    shape = _implicit_shape(key)
     points = np.asarray(shape.points, dtype=np.float64)
     triangles = np.asarray(shape.faces).reshape(-1, 4)[:, 1:].astype(np.int64)
     colours = _material_base_colour(prim, len(points))

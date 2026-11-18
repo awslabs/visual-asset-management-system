@@ -36,14 +36,21 @@ _MODEL = """
             uniform token[] xformOpOrder = ["xformOp:translate"]
         }
     }"""
-_RIG = """
+
+
+def _rig(radius=5000, lights=False):
+    light = '    def DistantLight "Sun"\n    {\n    }\n' if lights else ""
+    return f"""
 def Xform "Rig"
-{
+{{
     def Sphere "environment"
-    {
-        double radius = 5000
-    }
-}"""
+    {{
+        double radius = {radius}
+    }}
+{light}}}"""
+
+
+_RIG = _rig()
 
 
 def _stage(tmp_path, body, default='"World"', name="scene.usda"):
@@ -63,14 +70,16 @@ def _extent(data):
 class TestDefaultPrim:
     def test_root_prims_beside_the_default_prim_are_not_drawn(self, tmp_path):
         path = _stage(tmp_path, f'def Xform "World"\n{{{_MODEL}\n}}\n{_RIG}')
-        data = usd_handler.load(path)
+        report = {}
+        data = usd_handler.load(path, report=report)
         assert _extent(data) < 5, "the rig's environment mesh was drawn"
-        assert usd_handler.left_out_root_prims == ["Rig"]
+        assert report["leftOut"] == ["Rig"]
 
     def test_a_stage_without_a_default_prim_draws_every_root_prim(self, tmp_path):
         path = _stage(tmp_path, f'def Xform "World"\n{{{_MODEL}\n}}\n{_RIG}', default=None)
-        assert _extent(usd_handler.load(path)) > 5000
-        assert usd_handler.left_out_root_prims == []
+        report = {}
+        assert _extent(usd_handler.load(path, report=report)) > 5000
+        assert report == {}
 
     def test_a_default_prim_that_names_no_prim_draws_every_root_prim(self, tmp_path):
         path = _stage(tmp_path, f'def Xform "World"\n{{{_MODEL}\n}}\n{_RIG}', default='"Missing"')
@@ -83,9 +92,10 @@ class TestDefaultPrim:
     def test_a_default_prim_that_draws_nothing_falls_back_to_the_whole_stage(self, tmp_path):
         body = 'def Xform "World"\n{\n    def Xform "Lights"\n    {\n    }\n}\n' + _MODEL.replace(
             'def Xform "Model"', 'def Xform "Model"', 1)
-        data = usd_handler.load(_stage(tmp_path, body))
+        report = {}
+        data = usd_handler.load(_stage(tmp_path, body), report=report)
         assert data.n_points > 0 and _extent(data) < 5
-        assert usd_handler.left_out_root_prims == []
+        assert report == {}
 
     def test_a_default_prim_beside_geometry_only_in_other_roots_keeps_that_geometry(self, tmp_path):
         data = usd_handler.load(_stage(tmp_path, f'def Xform "World"\n{{\n}}\n{_RIG}'))
@@ -95,17 +105,17 @@ class TestDefaultPrim:
         ground = ('def Mesh "Ground"\n{\n    int[] faceVertexCounts = [4]\n'
                   '    int[] faceVertexIndices = [0, 1, 2, 3]\n'
                   '    point3f[] points = [(-500, 0, -500), (500, 0, -500), (500, 0, 500), (-500, 0, 500)]\n}')
-        path = _stage(tmp_path, f'def Xform "World"\n{{{_MODEL}\n{ground}\n}}\n{_RIG}')
+        path = _stage(tmp_path, f'def Xform "World"\n{{{_MODEL}\n{ground}\n}}\n{_rig(500000)}')
         assert _extent(usd_handler.load(path)) < 5
 
     def test_two_distant_objects_in_the_default_prim_are_both_kept(self, tmp_path):
         far = _MODEL.replace('def Xform "Model"', 'def Xform "Far"\n    (\n    )\n    ', 1)
         far = far.replace('{\n        def Cube', '{\n        double3 xformOp:translate = (300, 0, 0)\n'
                           '        uniform token[] xformOpOrder = ["xformOp:translate"]\n        def Cube', 1)
-        data = usd_handler.load(_stage(tmp_path, f'def Xform "World"\n{{{_MODEL}\n{far}\n}}\n{_RIG}'))
+        data = usd_handler.load(_stage(tmp_path, f'def Xform "World"\n{{{_MODEL}\n{far}\n}}\n{_rig(500000)}'))
         assert 250 < _extent(data) < 400
 
-    def test_point_instancer_prototypes_outside_the_default_prim_are_drawn_only_through_it(self, tmp_path):
+    def test_point_instancer_prototypes_in_another_root_draw_as_they_do_for_a_stage_without_a_default_prim(self, tmp_path):
         body = f"""
 def Xform "Protos"
 {{
@@ -124,11 +134,12 @@ def Xform "World"
     }}
 }}"""
         data = usd_handler.load(_stage(tmp_path, body))
-        assert data.n_points == 16, "the prototype was drawn on its own, or an instance was lost"
+        # two instances, plus the prototype root itself, which is a root prim that draws like any other
+        assert data.n_points == 24
 
     def test_native_instances_in_the_default_prim_are_drawn_at_every_instance(self, tmp_path):
         body = f"""
-def Xform "Lib"
+class Xform "Lib"
 {{{_MODEL}
 }}
 def Xform "World"

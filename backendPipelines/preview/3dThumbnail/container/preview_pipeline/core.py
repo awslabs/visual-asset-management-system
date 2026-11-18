@@ -349,6 +349,7 @@ def _run_preview_stage(
     incomplete = None
     fetch_report = None
     fetch_error = None
+    usd_report = {}
     if not localTest and not streamed and dependencies.has_references(ext):
         fetch_report = dependencies.FetchReport()
         try:
@@ -372,10 +373,13 @@ def _run_preview_stage(
         only a root prim the USD handler left out reaches is not reported."""
         if fetch_report is None:
             return None
-        if ext in usd_handler.SUPPORTED_EXTENSIONS and usd_handler.left_out_root_prims:
-            dependencies.drop_left_out_references(
-                fetch_report, dependencies.relative_to_root(stage_input.objectKey, reference_root_key),
-                local_filepath, usd_handler.left_out_root_prims)
+        left_out = usd_report.get("leftOut") if usd_report else None
+        if left_out and (fetch_report.skipped or fetch_report.not_followed):
+            unused = usd_handler.left_out_roots_unused(local_filepath, left_out)
+            if unused:
+                dependencies.drop_left_out_references(
+                    fetch_report, dependencies.relative_to_root(stage_input.objectKey, reference_root_key),
+                    local_filepath, unused)
         summary = dependencies.incomplete_preview(fetch_report, fetch_error)
         if summary is not None:
             summary.log()
@@ -392,7 +396,8 @@ def _run_preview_stage(
             else:
                 pv_data = _load_file(local_filepath, ext,
                                      asset_root=None if localTest else reference_local_root,
-                                     budgets=budgets)
+                                     budgets=budgets,
+                                     **({"usd_report": usd_report} if usd_handler.can_handle(ext) else {}))
             pv_data = geometry_budget.apply_budgets(pv_data, budgets)
     except MemoryError:
         logger.exception("Out of memory while loading the input")
@@ -670,7 +675,7 @@ def _relative_subdir(stage_input: StageInput, stage_output: StageOutput, assetId
     return "/".join(input_parts[asset_id_idx + 1:-1])
 
 
-def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None):
+def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None, usd_report: dict = None):
     """
     Load a 3D file with the appropriate format handler.
     Returns a PyVista PolyData object. ``asset_root`` is the local directory the input's referenced
@@ -712,7 +717,7 @@ def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None):
     elif cad_handler.can_handle(ext):
         return cad_handler.load(file_path, max_triangles=max_triangles)
     elif usd_handler.can_handle(ext):
-        return usd_handler.load(file_path, asset_root=asset_root)
+        return usd_handler.load(file_path, asset_root=asset_root, report=usd_report)
     else:
         raise ValueError(
             f"Unsupported file format: {ext}. "
