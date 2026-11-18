@@ -153,6 +153,8 @@ class TestTheWorkflowCallback:
                 patch.object(store, "asset_removal_reason", return_value=removed), \
                 patch.object(store, "superseded_failure", return_value=False), \
                 patch.object(store, "close_evaluation_of_removed_asset"), \
+                patch.object(callback, "read_execution_record",
+                             return_value={"executionStatus": status}), \
                 patch.object(callback, "read_execution_failure_reason", return_value="boom"), \
                 patch.object(callback, "read_compliance_output", return_value=None), \
                 patch.object(store, "complete_pipeline_rule", return_value=outcome):
@@ -183,6 +185,8 @@ class TestTheWorkflowCallback:
                 patch.object(store, "resolve_pipeline_execution",
                              return_value=(dict(self.EVALUATION), "rule-1")), \
                 patch.object(store, "superseded_failure", return_value=True), \
+                patch.object(callback, "read_execution_record",
+                             return_value={"executionStatus": "SUCCEEDED"}), \
                 patch.object(store, "asset_removal_reason", return_value=None), \
                 patch.object(callback, "read_compliance_output", return_value=None), \
                 patch.object(store, "supersede_pipeline_rule_outcome", return_value=outcome), \

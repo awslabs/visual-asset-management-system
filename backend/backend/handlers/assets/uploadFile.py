@@ -1824,6 +1824,10 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
                             has_failures = True
                         continue
 
+                    # Track the file before it is queued, so an outcome the consumer records while
+                    # this completion still runs is kept.
+                    uploadStatus.track_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
+
                     # Try to queue the file for asynchronous processing with comprehensive error handling
                     try:
                         if queue_large_file_for_processing(file_info, large_file_processing_queue_url):
@@ -1839,11 +1843,13 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
                         else:
                             # Failed to queue - fall back to synchronous processing
                             logger.warning(f"Failed to queue large external file {file.relativeKey}, falling back to synchronous processing")
+                            uploadStatus.untrack_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
                             process_async = False
                     except Exception as e:
                         # SQS queuing error - fall back to synchronous processing
                         logger.warning(f"Error queuing large external file {file.relativeKey} for asynchronous processing: {e}")
                         logger.info(f"Falling back to synchronous processing for external file {file.relativeKey}")
+                        uploadStatus.untrack_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
                         process_async = False
                 
             except Exception as e:
@@ -2184,8 +2190,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                                    request_model.files, refusal.reason)
         raise VAMSGeneralErrorResponse(refusal.reason)
 
-    # A record kept to report its asynchronously ingested files has been completed already.
-    if upload_details.get('asyncFiles') is not None:
+    # A record kept to report its asynchronously ingested files has been completed already. Files are
+    # tracked while a completion runs, before it marks the record, so only a record marked kept
+    # (processing_async, or settled from it) with tracked files counts.
+    if upload_details.get('asyncFiles') and upload_details.get('status') in (
+            uploadStatus.STATUS_PROCESSING_ASYNC, uploadStatus.STATUS_COMPLETED,
+            uploadStatus.STATUS_COMPLETED_WITH_ERRORS):
         deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
                                request_model.files, "Upload has already been completed.")
     
@@ -2479,6 +2489,10 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     "changeUserId": user_id
                 }
                 
+                # Track the file before it is queued, so an outcome the consumer records while this
+                # completion still runs is kept.
+                uploadStatus.track_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
+
                 # Try to queue the file for asynchronous processing
                 if queue_large_file_for_processing(file_info, large_file_processing_queue_url):
                     # Successfully queued - mark as successful with async flag
@@ -2494,6 +2508,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 else:
                     # Failed to queue - fall back to synchronous processing
                     logger.warning(f"Failed to queue large file {file.relativeKey}, falling back to synchronous processing")
+                    uploadStatus.untrack_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
                     process_async = False
             
             # Complete multipart upload synchronously (for small files or fallback)
@@ -2938,23 +2953,24 @@ def get_upload_status(event):
     """GET /uploads/{uploadId}?assetId=&databaseId=: the upload's status and the outcome of each file
     it accepted for asynchronous ingestion.
 
-    Tier 1 (the route) and Tier 2 (GET on the upload's asset) are decided before the record is read.
-    A missing record, a record of another database, a missing asset and a refused asset all answer
-    the same 404, so the route cannot tell an upload that does not exist from one the caller may not
-    see. One GetItem on the asset and one on the upload record."""
-    params = event.get('queryStringParameters') or {}
-    request_model = parse({
-        'uploadId': (event.get('pathParameters') or {}).get('uploadId', ''),
-        'assetId': params.get('assetId', ''),
-        'databaseId': params.get('databaseId', ''),
-    }, model=GetUploadStatusRequestModel)
-
+    Tier 1 (the route) is decided before the parameters are validated, and Tier 2 (GET on the
+    upload's asset) before the record is read. A missing record, a record of another database, a
+    missing asset and a refused asset all answer the same 404, so the route cannot tell an upload
+    that does not exist from one the caller may not see. One GetItem on the asset and one on the
+    upload record."""
     # Fail closed: with no authenticated identity no authorization can be evaluated.
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
     if not casbin_enforcer.enforceAPI(event):
         return authorization_error()
+
+    params = event.get('queryStringParameters') or {}
+    request_model = parse({
+        'uploadId': (event.get('pathParameters') or {}).get('uploadId', ''),
+        'assetId': params.get('assetId', ''),
+        'databaseId': params.get('databaseId', ''),
+    }, model=GetUploadStatusRequestModel)
 
     not_found = general_error(status_code=404, body={'message': UPLOAD_NOT_FOUND_MESSAGE}, event=event)
     asset = get_asset_details(request_model.databaseId, request_model.assetId)

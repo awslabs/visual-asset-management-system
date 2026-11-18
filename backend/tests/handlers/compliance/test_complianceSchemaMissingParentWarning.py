@@ -83,7 +83,7 @@ def _create(body, **kwargs):
 
 def _expected(name=PARENT):
     return [{"code": "extendsSchemaNotFound",
-             "message": svc.MISSING_PARENT_WARNING_MESSAGE.format(name=name), "extends": name}]
+             "message": svc.MISSING_PARENT_WARNING_MESSAGE, "extends": name}]
 
 
 @pytest.mark.unit
@@ -95,6 +95,7 @@ class TestTheMissingParentWarning:
         assert json.loads(put_items(schema_table)[0]["schemaBody"])["extends"] == PARENT
         assert body_of(response)["warnings"] == _expected()
         assert "evaluated with its own rules only" in body_of(response)["warnings"][0]["message"]
+        assert PARENT not in body_of(response)["warnings"][0]["message"]
 
     def test_a_parent_of_another_format_warns(self):
         response, _, _, _ = _create(_child(), rows_by_name={

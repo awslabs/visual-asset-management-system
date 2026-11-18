@@ -143,7 +143,7 @@ When the body's `extends` names a parent that was not found as a `vams-rules-v1`
 :::
 
 :::note[Saving a pipeline rule needs the right to run its workflow]
-Each evaluation launches a pipeline rule's workflow, so saving the rule needs the rights to run it: the workflow's execute route and a read of the workflow and its pipelines (the `compliance-admin.json` 2.1 and `compliance-global-admin.json` 1.1 templates include them). Without them the command fails with `Access forbidden. Not authorized to run the workflow of pipeline rule '<name>'`, the same whether the workflow is missing or refused. `schema update` checks only the pipeline rules whose `pipelineRef` it changes. See [Authorization model](../../concepts/compliance.md#authorization-model).
+Each evaluation launches a pipeline rule's workflow, so saving the rule needs the rights to run it: the workflow's execute route and a read of the workflow and its pipelines (the `compliance-admin.json` 2.1 and `compliance-global-admin.json` 1.1 templates include them). Without them the command fails with `Access forbidden. Not authorized to run the workflow of pipeline rule rules[<n>]` (`<n>` is the rule's position in the body's `rules`, counting from 0), the same whether the workflow is missing or refused. `schema update` checks only the pipeline rules whose `pipelineRef` it changes. See [Authorization model](../../concepts/compliance.md#authorization-model).
 :::
 
 ---

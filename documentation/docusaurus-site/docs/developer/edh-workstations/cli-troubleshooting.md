@@ -815,8 +815,8 @@ Take the recipe id from `vamscli edh admin ami-recipe list` and the version from
 -   The command fails with `AMI recipe creation rejected (400)` or `AMI recipe update rejected (400)` and the field the API refused
 -   The command fails with `AMI recipe creation rejected (400)` or `AMI recipe update rejected (400)` and `Windows recipes support x86_64 only`
 -   `edh admin ami-recipe create`, `update` or `duplicate` fails with `AMI recipe creation rejected (400)` or `AMI recipe update rejected (400)` and `buildInstanceType does not match the recipe's architecture` or `parentImage does not match the recipe's architecture`
--   The command fails with HTTP 409 `assets are only supported on shipped recipes`, `the assets of a duplicated recipe cannot be changed`, `recipeId is already in use` or `stackName is already used by recipe '<id>'`
--   The command fails with HTTP 409 `unresolved placeholder(s) in component document: ...`, `deployment value(s) not in the expected form for: ...` or `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`
+-   The command fails with HTTP 409 `assets are only supported on shipped recipes`, `the assets of a duplicated recipe cannot be changed`, `recipeId is already in use` or `stackName is already used by another recipe`
+-   The command fails with HTTP 409 `a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form` or `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`
 
 **Cause:**
 
@@ -830,7 +830,7 @@ Correct the file and run the command again: keep component files in or below the
 
 **Symptoms:**
 
--   `edh admin ami-recipe build` fails with `AMI recipe build start refused (409)` and `the recipe is disabled`, `SSM parameter <name> could not be read (<code>)`, `EDH lists no <kind> stack named '<name>'`, `the parent image could not be found`, `the parent image's architecture does not match the recipe's architecture`, `buildInstanceType does not match the recipe's architecture`, `unresolved placeholder(s) in component document: ...`, `deployment value(s) not in the expected form for: ...`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`, or `recipe declares assets but EDH_AMI_BUILD_ARTEFACTS_BUCKET or assetPrefix is not set`
+-   `edh admin ami-recipe build` fails with `AMI recipe build start refused (409)` and `the recipe is disabled`, `the parent image's SSM parameter could not be read`, `EDH lists no stack of the recipe's kind with the parent image's name`, `the parent image could not be found`, `the parent image's architecture does not match the recipe's architecture`, `buildInstanceType does not match the recipe's architecture`, `a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`, or `recipe declares assets but EDH_AMI_BUILD_ARTEFACTS_BUCKET or assetPrefix is not set`
 -   `edh admin ami-recipe build` fails with `AMI recipe build start refused (409)` and `the recipe is being deleted`, `the recipe no longer exists`, or `the recipe's builds changed while the request was placed; try again`
 -   A build ends `FAILED` with `launch did not complete`
 -   A build stays `QUEUED` after the recipe's other builds have settled, with `not started: <reason>` in its `error`
@@ -872,7 +872,7 @@ A successful retry makes the build `AVAILABLE` and retires the recipe's other `A
 **Symptoms:**
 
 -   `edh admin ami-recipe duplicate` fails with `Recipe Not Found: AMI recipe '<SOURCE_ID>' not found`
--   The command fails with `AMI recipe creation refused (409)` and `recipeId is already in use`, `stackName is already used by recipe '<id>'` or `the recipe to duplicate does not exist`
+-   The command fails with `AMI recipe creation refused (409)` and `recipeId is already in use`, `stackName is already used by another recipe` or `the recipe to duplicate does not exist`
 -   The command fails with `AMI recipe creation rejected (400)` and the display name or stack name field
 -   The command fails with `Permission Denied: Access forbidden. Not Authorized` (HTTP 403)
 -   The command fails with `Request Blocked:` and names the deployment's AWS WAF web ACL

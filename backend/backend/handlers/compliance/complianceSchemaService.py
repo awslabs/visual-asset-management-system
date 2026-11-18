@@ -22,6 +22,7 @@ from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from common.apiRoutes import API_COMPLIANCE_SCHEMA_BY_NAME, API_COMPLIANCE_SCHEMAS
 from common.compliance import databaseRetirement, knownDatabase
@@ -101,10 +102,11 @@ DELETED_DATABASE_SCHEMA_MESSAGE = "The schema belongs to a deleted database and 
 # Pipeline rules: who may save one
 #######################
 
-# The answer to a save naming a pipeline rule whose workflow the caller may not run: the rule's name
-# only, the same whether the workflow or a pipeline is missing or the caller is refused, so the
-# answer says nothing of what exists.
-PIPELINE_RULE_REFUSED_MESSAGE = "Not authorized to run the workflow of pipeline rule '{rule}'"
+# The answer to a save naming a pipeline rule whose workflow the caller may not run: the rule's
+# position in the body's `rules` only (as body validation locates a rule), the same whether the
+# workflow or a pipeline is missing or the caller is refused, so the answer says nothing of what
+# exists.
+PIPELINE_RULE_REFUSED_MESSAGE = "Not authorized to run the workflow of pipeline rule rules[{position}]"
 EXECUTE_ROUTE = "/workflows/{workflowDatabaseId}/{workflowId}/execute"
 
 
@@ -175,18 +177,21 @@ def _record_missing(object_type, keys):
 
 def pipeline_rules_refused(event, casbin_enforcer, schema_body, stored_body=None):
     """The `403` refusing a save whose new or changed pipeline rule names a workflow the caller may
-    not run (`may_run_workflow`), naming that rule only; None when every such rule passes. The system
-    user (the default schema seed, a registration of a system schema) is not checked: evaluations,
-    sweeps and cascades run as it whatever the schema says."""
+    not run (`may_run_workflow`), locating that rule by its position in the body's `rules`
+    (`rulePosition`); None when every such rule passes. The system user (the default schema seed, a
+    registration of a system schema) is not checked: evaluations, sweeps and cascades run as it
+    whatever the schema says."""
     if claims_and_roles["tokens"][0] == SYSTEM_USER:
         return None
+    positions = {name: position for position, name
+                 in enumerate(((schema_body or {}).get("rules") or {}).keys())}
     for rule_name, ref in changed_pipeline_rules(schema_body, stored_body):
         if not may_run_workflow(casbin_enforcer, ref):
             logger.info(f"Schema save refused: the caller may not run the workflow of pipeline "
                         f"rule '{rule_name}'")
             return authorization_error(body={
-                "message": PIPELINE_RULE_REFUSED_MESSAGE.format(rule=rule_name),
-                "ruleName": rule_name})
+                "message": PIPELINE_RULE_REFUSED_MESSAGE.format(position=positions[rule_name]),
+                "rulePosition": positions[rule_name]})
     return None
 
 
@@ -328,8 +333,8 @@ MISSING_PARENT_WARNING_CODE = "extendsSchemaNotFound"
 # One message whether the parent is missing, is not vams-rules-v1, or exists but the caller may not
 # read it, so the warning confirms nothing about a schema the caller may not read.
 MISSING_PARENT_WARNING_MESSAGE = (
-    "The parent schema '{name}' was not found as a vams-rules-v1 schema you may read. If it does "
-    "not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.")
+    "The parent schema named in `extends` was not found as a vams-rules-v1 schema you may read. If "
+    "it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.")
 
 
 def missing_parent_warnings(casbin_enforcer, schema_body):
@@ -357,7 +362,7 @@ def missing_parent_warnings(casbin_enforcer, schema_body):
         return []
     return [{
         "code": MISSING_PARENT_WARNING_CODE,
-        "message": MISSING_PARENT_WARNING_MESSAGE.format(name=parent_name),
+        "message": MISSING_PARENT_WARNING_MESSAGE,
         "extends": parent_name,
     }]
 
@@ -712,6 +717,9 @@ def register_schema(event, request: CreateSchemaRequestModel):
     current = _latest_schema_item(request.schemaName)
     if current and not _enforce(request.schemaName, _scope_of(current), "PUT"):
         return authorization_error()
+    # A new version of a system schema is written by the system user only, as an update is.
+    if current and current.get("isSystem") and claims_and_roles["tokens"][0] != SYSTEM_USER:
+        return general_error(body={"message": "System schemas cannot be modified"}, event=event)
 
     if current and databaseRetirement.is_deleted_scope(_scope_of(current)):
         return general_error(body={"message": DELETED_DATABASE_SCHEMA_MESSAGE}, event=event)
@@ -756,22 +764,37 @@ def _schema_body_rejected(event, err):
     return validation_error(body={"message": message}, event=event)
 
 
+# The answer to a save that lost the race for its version number to a concurrent save of the schema.
+SCHEMA_VERSION_CONFLICT_MESSAGE = (
+    "The schema was saved by another request at the same time. Reload it and save again.")
+
+
 def _write_schema_version(event, schema_name, database_id, description, schema_body, is_system):
-    """Write the next internalVersion row of a schema."""
+    """Write the next internalVersion row of a schema. The row is written only if no row has that
+    version yet, so of two concurrent saves of one schema the second answers `409` instead of
+    replacing the first's version (an exception granted on a version keeps applying to its body)."""
     current = _latest_schema_item(schema_name)
     next_version = int(current["internalVersion"]) + 1 if current else 1
     now = datetime.now(timezone.utc).isoformat()
 
-    schema_table.put_item(Item={
-        "schemaName": schema_name,
-        "internalVersion": next_version,
-        "databaseId": database_id,
-        "description": description,
-        "schemaBody": json.dumps(schema_body),
-        "registeredAt": now,
-        "registeredBy": claims_and_roles["tokens"][0],
-        "isSystem": is_system,
-    })
+    try:
+        schema_table.put_item(Item={
+            "schemaName": schema_name,
+            "internalVersion": next_version,
+            "databaseId": database_id,
+            "description": description,
+            "schemaBody": json.dumps(schema_body),
+            "registeredAt": now,
+            "registeredBy": claims_and_roles["tokens"][0],
+            "isSystem": is_system,
+        }, ConditionExpression="attribute_not_exists(internalVersion)")
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+        logger.info(f"Schema '{schema_name}' v{next_version} was written by a concurrent save; "
+                    "this save is refused")
+        return general_error(status_code=409, body={"message": SCHEMA_VERSION_CONFLICT_MESSAGE},
+                             event=event)
 
     warnings = (shared_workflow_warnings(schema_body)
                 + missing_parent_warnings(CasbinEnforcer(claims_and_roles), schema_body))
