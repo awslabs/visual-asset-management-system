@@ -47,6 +47,19 @@ class TestStsHostForRegion:
         with patch.dict(os.environ, {"AWS_STS_REGIONAL_ENDPOINTS": "legacy"}):
             assert kubernetes_utils.sts_host_for_region("us-west-2") == "sts.us-west-2.amazonaws.com"
 
+    @pytest.mark.parametrize(
+        "variable, value",
+        [
+            ("AWS_USE_FIPS_ENDPOINT", "true"),
+            ("AWS_USE_DUALSTACK_ENDPOINT", "true"),
+            ("AWS_ENDPOINT_URL_STS", "https://sts.cn-north-1.example.invalid"),
+        ],
+    )
+    def test_endpoint_settings_do_not_change_the_host(self, variable, value):
+        # The token names the partition's Regional STS host whatever endpoint settings the environment carries.
+        with patch.dict(os.environ, {variable: value}):
+            assert kubernetes_utils.sts_host_for_region("cn-north-1") == "sts.cn-north-1.amazonaws.com.cn"
+
     def test_resolution_failure_falls_back_to_the_regional_host(self):
         with patch.object(kubernetes_utils.boto3, "client", side_effect=RuntimeError("no endpoint data")):
             assert kubernetes_utils.sts_host_for_region("us-west-2") == "sts.us-west-2.amazonaws.com"

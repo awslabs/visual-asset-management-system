@@ -241,8 +241,12 @@ def sts_host_for_region(region):
     from urllib.parse import urlparse
 
     regional_prefix = f'sts.{region}.'
+    # Only the partition's DNS suffix is wanted, so FIPS, dual-stack and configured endpoint URLs are ignored.
+    endpoint_config = Config(
+        use_fips_endpoint=False, use_dualstack_endpoint=False, ignore_configured_endpoint_urls=True
+    )
     try:
-        host = urlparse(boto3.client('sts', region_name=region).meta.endpoint_url).hostname or ''
+        host = urlparse(boto3.client('sts', region_name=region, config=endpoint_config).meta.endpoint_url).hostname or ''
     except Exception as e:
         logger.warning(f"Could not resolve the STS endpoint for {region}: {e}")
         host = ''
