@@ -60,7 +60,7 @@ def _patched(graph, cascade_item, schema_for=None, evaluation=None, cascade_tabl
         patch(f"{STORE}.get_child_links", side_effect=graph.children),
         patch(f"{STORE}.get_parent_links", side_effect=graph.parents),
         patch(f"{STORE}.get_compliance_record",
-              side_effect=lambda db, asset: {"schemaName": schema_for(asset)}),
+              side_effect=lambda db, asset, consistent_read=False: {"schemaName": schema_for(asset)}),
         patch(f"{STORE}.run_evaluation", side_effect=evaluation),
         patch(f"{STORE}.write_audit"),
         # Every descendant is live: the executor evaluates it rather than skipping it as archived.
@@ -414,14 +414,15 @@ class TestExecuteCascade:
 @pytest.mark.unit
 class TestNodeNames:
     """The executor records each node's asset name (`nodeNames`, JSON map of node key to name)
-    from the compliance record it already reads for the node's schema: one read per node, none
-    for a node outside the starting caller's reach, which is not named."""
+    from the compliance record it reads up front for every node in the starting caller's reach;
+    a node outside it is neither read nor named."""
 
     def _run(self, cascade_item, records):
         graph = Graph([(ASSET, "B"), (ASSET, "C")])
         cascade_table, patches = _patched(graph, cascade_item)
         patches[3] = patch(f"{STORE}.get_compliance_record",
-                           side_effect=lambda db, asset: dict(records.get(asset, {})))
+                           side_effect=lambda db, asset, consistent_read=False: dict(
+                               records.get(asset, {})))
         started = [p.start() for p in patches]
         try:
             executor.execute_cascade(CASCADE_ID)
@@ -436,7 +437,7 @@ class TestNodeNames:
         table, read = self._run(EXECUTING, records)
         first = next(u for u in update_values(table) if "executionOrder" in u)
         assert json.loads(first["nodeNames"]) == {f"{DB}:B": "Rotor", f"{DB}:C": "Blade"}
-        assert read.call_count == 2
+        assert {call.args[1] for call in read.call_args_list} == {"B", "C"}
 
     def test_a_node_without_a_name_is_recorded_with_an_empty_one(self):
         table, _ = self._run(EXECUTING, {"B": {"schemaName": "schema-1"}, "C": {}})
@@ -449,3 +450,20 @@ class TestNodeNames:
         first = next(u for u in update_values(table) if "executionOrder" in u)
         assert json.loads(first["nodeNames"]) == {}
         read.assert_not_called()
+
+    def test_a_node_is_evaluated_against_the_binding_its_record_holds_when_its_turn_comes(self):
+        # The record's binding changed after the cascade read the names up front.
+        graph = Graph([(ASSET, "B")])
+        cascade_table, patches = _patched(graph, EXECUTING)
+        patches[3] = patch(f"{STORE}.get_compliance_record",
+                           side_effect=lambda db, asset, consistent_read=False: {
+                               "schemaName": "schema-new" if consistent_read else "schema-old"})
+        started = [p.start() for p in patches]
+        try:
+            executor.execute_cascade(CASCADE_ID)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+        evaluated = {(call.args[1], call.args[2]) for call in started[4].call_args_list}
+        assert ("B", "schema-new") in evaluated
+        assert ("B", "schema-old") not in evaluated
