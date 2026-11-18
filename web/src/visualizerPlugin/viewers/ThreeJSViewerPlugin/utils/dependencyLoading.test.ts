@@ -434,6 +434,29 @@ describe("loadWithDependencies", () => {
         expect(result.dependencyCount).toBe(1);
     });
 
+    it("decodes a glTF's percent-encoded URIs before resolving them, and keeps an invalid one as written", async () => {
+        installFetch({ "m/my texture.png": "PNG", "m/100%.png": "PNG" });
+        installBundle();
+        mockedLoadFile.mockResolvedValue({ object: {} });
+
+        const result = await loadWithDependencies({
+            arrayBuffer: buffer(
+                JSON.stringify({ images: [{ uri: "my%20texture.png" }, { uri: "100%.png" }] })
+            ),
+            extension: "gltf",
+            fileKey: "m/a.gltf",
+            fileName: "a.gltf",
+            resolver: newResolver(),
+        });
+
+        const passed = JSON.parse(new TextDecoder().decode(mockedLoadFile.mock.calls[0][0]));
+        expect(passed.images.map((image: any) => image.uri)).toEqual([
+            "blob:test/1",
+            "blob:test/2",
+        ]);
+        expect(result.warnings).toBeUndefined();
+    });
+
     it("loads self-contained formats through an isolating manager without downloads", async () => {
         const requested = installFetch({});
         installBundle();
