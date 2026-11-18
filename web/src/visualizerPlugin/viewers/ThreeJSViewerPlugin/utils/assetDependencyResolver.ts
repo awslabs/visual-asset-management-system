@@ -382,10 +382,14 @@ export class AssetDependencyResolver {
         return Array.from(this.blobUrls.values());
     }
 
-    /** The key a percent-encoded name decodes to, when it decodes to another in-asset key. */
+    /**
+     * The key a percent-encoded name decodes to, when it decodes to another in-asset key. Decoded as
+     * the glTF rewrite decodes a URI (`decodeURIComponent`), so an encoded `#`, `?`, `&` or `,` is
+     * recorded under the same key as the name the rewrite asked for.
+     */
     private decodedKey(url: string, baseFileKey: string): string | undefined {
         try {
-            const decoded = decodeURI(url);
+            const decoded = decodeURIComponent(url);
             if (decoded === url) return undefined;
             const normalized = this.normalize(decoded, baseFileKey);
             return normalized.kind === "key" ? normalized.key : undefined;
