@@ -196,6 +196,17 @@ class TestCreate:
             assert result.exit_code == 0, result.output
             assert json.loads(result.output)["localPath"] == str(tmp_path / "Asset.zip")
 
+    def test_download_wait_of_a_job_it_cannot_read_says_it_may_not_exist(self, cli_runner, generic_command_mocks,
+                                                                         tmp_path):
+        """The job read answers not found alike for another user's job and for a mistyped id."""
+        with generic_command_mocks("zip_download") as mocks:
+            api = mocks["api_client"]
+            api.get_zip_download.side_effect = ZipDownloadNotFoundError("Zip download not found")
+            api.get_zip_download_url.side_effect = ZipDownloadNotFoundError("Zip download not found")
+            result = _invoke(cli_runner, "download", *SCOPE, "-r", "r1", "-o", str(tmp_path), "--wait")
+            assert result.exit_code == 1
+            assert "is not one of your jobs or does not exist" in result.output
+
     def test_download_wait_of_another_users_unfinished_job_is_refused_by_the_url_route(
             self, cli_runner, generic_command_mocks, tmp_path):
         with generic_command_mocks("zip_download") as mocks:

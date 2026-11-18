@@ -375,8 +375,8 @@ def download(ctx: click.Context, database_id: str, asset_id: str, request_id: st
             except ZipDownloadNotFoundError:
                 # The job read answers only the caller's own jobs. Another user's job is fetched through
                 # the URL route, which answers for a shared finished job and refuses an unfinished one.
-                output_status(f"Zip download '{request_id}' is not one of your jobs, so it cannot be "
-                              "followed; requesting its archive.", json_output)
+                output_status(f"Zip download '{request_id}' is not one of your jobs or does not exist, "
+                              "so it cannot be followed; requesting its archive.", json_output)
         result = _fetch_archive(api_client, database_id, asset_id, request_id, output,
                                 overwrite, json_output)
         output_result(result, json_output, success_message="✓ Archive downloaded!",
