@@ -347,7 +347,8 @@ export async function load3DS(
 
 /**
  * Load a 3MF file. A 3MF is a zip package: its entry count and declared size are checked against
- * ZIP_LIMITS before it is parsed, as a .usdz is.
+ * ZIP_LIMITS before it is parsed, whatever its first bytes are, and it is not parsed when the
+ * bundle has no zip reader to check it with.
  */
 export async function load3MF(
     arrayBuffer: ArrayBuffer,
@@ -358,10 +359,10 @@ export async function load3MF(
 ): Promise<LoaderResult> {
     return new Promise((resolve, reject) => {
         try {
-            const bytes = new Uint8Array(arrayBuffer);
-            if (isUsdzBytes(bytes) && unzipSync) {
-                checkZipSize(bytes, unzipSync, "3MF");
+            if (!unzipSync) {
+                throw new Error("this viewer bundle cannot check the 3MF package's size");
             }
+            checkZipSize(new Uint8Array(arrayBuffer), unzipSync, "3MF");
             const loader = new ThreeMFLoader(manager);
             const object = loader.parse(arrayBuffer);
             resolve({ object });
