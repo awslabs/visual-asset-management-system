@@ -1129,3 +1129,21 @@ describe("focus when the recipe form or the builds panel closes", () => {
         }
     );
 });
+
+describe("a failed poll of a listed recipe table", () => {
+    it("keeps the listed recipes and says the list could not be refreshed", () => {
+        (amiRecipeQueries.useEdhAmiRecipes as jest.Mock).mockReturnValue({
+            ...query(RECIPES),
+            error: new Error("Service unavailable"),
+        });
+        render(<AmiRecipesTab can={() => true} />);
+
+        expect(screen.getByText("AL2023 desktop")).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "Could not refresh: Service unavailable. The list shows the last answer."
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/Error loading AMI recipes/)).not.toBeInTheDocument();
+    });
+});

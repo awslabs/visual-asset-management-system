@@ -56,6 +56,7 @@ import {
     useRemovedRowRef,
 } from "../../../features/orchestration/components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
+import RefreshFailedNotice from "../components/RefreshFailedNotice";
 import {
     RecordCard,
     RecordCardFields,
@@ -775,11 +776,13 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                 </div>
             )}
 
+            {!loading && error && data && <RefreshFailedNotice error={error} />}
+
             {loading ? (
                 <div role="status" className="p-8 text-center text-text-secondary">
                     Loading workstations...
                 </div>
-            ) : error ? (
+            ) : error && !data ? (
                 <div role="alert" className="p-4 text-vams-error">
                     Error loading workstations: {toastErrorMessage(error)}
                 </div>

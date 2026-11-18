@@ -316,3 +316,23 @@ describe("a search that matches no session", () => {
         expect(cardNames()).toEqual(["cad-1", "cad-2"]);
     });
 });
+
+describe("a failed poll of a listed Sessions tab", () => {
+    it("keeps the listed sessions and says the list could not be refreshed", () => {
+        viewport(1024);
+        (adminQueries.useEdhAdminInstances as jest.Mock).mockReturnValue({
+            ...query([RESERVED]),
+            error: new Error("Service unavailable"),
+        });
+        render(<InstancesTab can={() => true} />);
+
+        expect(screen.getByRole("table")).toBeInTheDocument();
+        expect(screen.getAllByText("cad-1").length).toBeGreaterThan(0);
+        expect(
+            screen.getByText(
+                "Could not refresh: Service unavailable. The list shows the last answer."
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/Error loading sessions/)).not.toBeInTheDocument();
+    });
+});

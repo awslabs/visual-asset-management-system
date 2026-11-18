@@ -275,6 +275,36 @@ describe("WorkstationsPage", () => {
         expect(screen.getByRole("button", { name: "Launch Workstation" })).toBeInTheDocument();
     });
 
+    it("keeps the listed workstations when a later poll fails, and says the list could not be refreshed", () => {
+        (queries.useWorkstations as jest.Mock).mockReturnValue({
+            ...list([activeRow]),
+            error: new Error("Service unavailable"),
+        });
+        renderPage();
+
+        expect(screen.getByText("Dev box")).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "Could not refresh: Service unavailable. The list shows the last answer."
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/Error loading workstations/)).not.toBeInTheDocument();
+    });
+
+    it("shows the error panel when the first read fails and there is nothing to keep", () => {
+        (queries.useWorkstations as jest.Mock).mockReturnValue({
+            ...list([]),
+            data: undefined,
+            error: new Error("Service unavailable"),
+        });
+        renderPage();
+
+        expect(
+            screen.getByText("Error loading workstations: Service unavailable")
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/Could not refresh/)).not.toBeInTheDocument();
+    });
+
     it("renders the not-enabled panel and reads nothing when the flag is absent", () => {
         const { appCache } = require("../../../services/appCache");
         appCache.getItem.mockReturnValue({ featuresEnabled: [] });
