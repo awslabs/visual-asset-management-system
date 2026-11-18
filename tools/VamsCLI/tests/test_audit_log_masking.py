@@ -109,7 +109,7 @@ class TestRealLogFile:
         assert "Command arguments" in text
         assert "masked: 1 values, 15 characters" in text  # the term
 
-    def test_the_filter_values_are_absent_from_the_verbose_echo(self, cli_runner, generic_command_mocks,
+    def test_the_filter_values_are_absent_from_the_verbose_argument_echo(self, cli_runner, generic_command_mocks,
                                                                 real_logging):
         result = self._search(cli_runner, generic_command_mocks, verbose=True)
         assert result.exit_code == 0, result.output
