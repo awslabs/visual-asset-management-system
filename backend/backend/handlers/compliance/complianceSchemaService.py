@@ -96,6 +96,10 @@ pipeline_table = dynamodb.Table(pipeline_table_name)
 # A schema of a deleted database (its scope moved to `<databaseId>#deleted`) is part of that
 # database's history: it is listed and read, never changed or deleted.
 DELETED_DATABASE_SCHEMA_MESSAGE = "The schema belongs to a deleted database and cannot be changed"
+# A move to a database scope while the schema is bound in another database (`_narrowing_refused`).
+SCOPE_NARROWING_BOUND_MESSAGE = (
+    "The schema is bound in a database the new scope does not include. Remove those bindings "
+    "first, or make the schema available to every database (GLOBAL).")
 
 
 #######################
@@ -727,6 +731,9 @@ def register_schema(event, request: CreateSchemaRequestModel):
         return databaseRetirement.moving_response(event)
     if request.databaseId != GLOBAL_DATABASE_ID and not _database_exists(request.databaseId):
         return general_error(body={"message": "Database not found"}, event=event)
+    refused = _narrowing_refused(event, request.schemaName, current, request.databaseId)
+    if refused is not None:
+        return refused
 
     valid, err = validate_schema_body(request.schemaBody)
     if not valid:
@@ -837,6 +844,9 @@ def update_schema(event, schema_name, request: UpdateSchemaRequestModel):
         return databaseRetirement.moving_response(event)
     if database_id != GLOBAL_DATABASE_ID and not _database_exists(database_id):
         return general_error(body={"message": "Database not found"}, event=event)
+    refused = _narrowing_refused(event, schema_name, current, database_id)
+    if refused is not None:
+        return refused
 
     if request.schemaBody is not None:
         schema_body = request.schemaBody
@@ -909,6 +919,45 @@ def delete_schema(event, schema_name):
         "schemaName": schema_name,
         "versionsDeleted": len(rows),
     })
+
+
+def _bound_outside(schema_name, scope):
+    """Whether the schema is bound in a database other than `scope`: a database row binds it, or an
+    asset-state record of another database names it (the database binding it inherited or an asset
+    override). A deleted database's records (`<databaseId>#deleted`) are history and do not count.
+    Read for a move to a database scope only, so a save that keeps the scope costs nothing."""
+    deleted_marker = DELETED_DATABASE_MARKER
+    if query_has_match(
+        asset_state_table,
+        IndexName="SchemaNameIndex",
+        KeyConditionExpression=Key("schemaName").eq(schema_name),
+        FilterExpression=Attr("databaseId").ne(scope) & ~Attr("databaseId").contains(deleted_marker),
+        ProjectionExpression="databaseId",
+    ):
+        return True
+    scan_kwargs = {
+        "FilterExpression": Attr("complianceSchemaName").eq(schema_name) & Attr("databaseId").ne(scope),
+        "ProjectionExpression": "databaseId",
+    }
+    while True:
+        response = database_table.scan(**scan_kwargs)
+        if response.get("Items"):
+            return True
+        if "LastEvaluatedKey" not in response:
+            return False
+        scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
+def _narrowing_refused(event, schema_name, current, new_scope):
+    """The 400 of a move to a database scope while the schema is bound in another database (those
+    bindings could no longer be changed or evaluated as the bind rule allows); None when the move
+    is allowed. A move to GLOBAL widens the schema and is always allowed; so is keeping the scope."""
+    if not current or new_scope == GLOBAL_DATABASE_ID or new_scope == _scope_of(current):
+        return None
+    if not _bound_outside(schema_name, new_scope):
+        return None
+    logger.info(f"Schema '{schema_name}' is bound outside the scope it would move to; refused")
+    return general_error(body={"message": SCOPE_NARROWING_BOUND_MESSAGE}, event=event)
 
 
 def _schema_is_bound(schema_name):
