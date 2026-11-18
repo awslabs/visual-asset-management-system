@@ -157,4 +157,50 @@ describe("ViewFile preview tab", () => {
         });
         expect(screen.queryByText(new RegExp(NOTICE))).not.toBeInTheDocument();
     });
+
+    describe("when the latest version cannot be read", () => {
+        const failLookup = () => {
+            const { fetchFileInfo } = require("../../services/APIService");
+            fetchFileInfo.mockResolvedValue([false, "Request failed", 500]);
+        };
+        const openWithSearch = async (search: string) => {
+            mockLocation = {
+                pathname: "/databases/db1/assets/asset1/file",
+                search,
+                state: state(undefined, "source-v1"),
+            };
+            render(<ViewFile />);
+            await waitFor(() => expect(screen.getByTestId("viewer")).toBeInTheDocument());
+            const tab = await screen.findByText("Preview");
+            await act(async () => {
+                fireEvent.click(tab);
+            });
+        };
+
+        it("shows the notice when the link names a file version", async () => {
+            failLookup();
+            await openWithSearch("?version=source-v1");
+            expect(await screen.findByText(new RegExp(NOTICE))).toBeInTheDocument();
+            expect(lastFile().versionId).toBeUndefined();
+        });
+
+        it("shows no notice when the link names no file version", async () => {
+            failLookup();
+            const { fetchFileInfo } = require("../../services/APIService");
+            await openWithSearch("");
+            await waitFor(() => expect(fetchFileInfo).toHaveBeenCalled());
+            await act(async () => {
+                await Promise.resolve();
+            });
+            expect(screen.queryByText(new RegExp(NOTICE))).not.toBeInTheDocument();
+        });
+
+        it("shows no notice while the lookup is still running", async () => {
+            const { fetchFileInfo } = require("../../services/APIService");
+            fetchFileInfo.mockReturnValue(new Promise(() => undefined));
+            await openWithSearch("?version=source-v1");
+            await waitFor(() => expect(fetchFileInfo).toHaveBeenCalled());
+            expect(screen.queryByText(new RegExp(NOTICE))).not.toBeInTheDocument();
+        });
+    });
 });

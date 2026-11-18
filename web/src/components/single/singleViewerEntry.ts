@@ -35,26 +35,38 @@ export function buildSingleViewerEntry<T extends ViewerEntrySource>(
 export const OLDER_VERSION_PREVIEW_NOTICE =
     "This preview belongs to the latest version of the file, not the version you are viewing.";
 
+/** What the page knows about the file's latest version. */
+export interface LatestVersionKnowledge {
+    /** The latest version's ID, when the page has it. */
+    latestVersionId?: string;
+    /** The page has stopped trying to learn it (the lookup finished or failed). */
+    settled: boolean;
+    /** The link names a file version (`?version=`), so the viewed version is not simply the latest. */
+    versionInUrl: boolean;
+}
+
 /**
- * Whether the Preview tab shows a preview that belongs to a different file version than the one
+ * Whether the Preview tab shows a preview that may belong to a different file version than the one
  * being viewed. A preview file is requested without a version ID, so it is always the preview of the
  * file's latest version. That is the right one for the latest file version and for a view through an
  * asset version (the API picks the preview for that asset version); for an older file version it is
- * not, and the page says so. An unknown latest version (not loaded yet, or the lookup failed) gives
- * no notice, because the page cannot tell.
+ * not, and the page says so.
+ *
+ * When the latest version is known, the notice shows if it differs from the viewed one. When the page
+ * has given up learning it and the link names a file version, the notice shows too: the page cannot
+ * prove that version is the latest, so it never presents the preview as that version's. A link that
+ * names no version opens the latest one, and a page still looking up the latest version shows nothing
+ * yet.
  */
 export function previewIsOfLatestVersionOnly(
     file: ViewerEntrySource,
     viewType: string | null,
-    assetVersionId?: string,
-    latestVersionId?: string
+    assetVersionId: string | undefined,
+    latest: LatestVersionKnowledge
 ): boolean {
-    return (
-        viewType === "preview" &&
-        !!file.previewFile &&
-        !assetVersionId &&
-        !!file.versionId &&
-        !!latestVersionId &&
-        file.versionId !== latestVersionId
-    );
+    if (viewType !== "preview" || !file.previewFile || assetVersionId || !file.versionId) {
+        return false;
+    }
+    if (latest.latestVersionId) return file.versionId !== latest.latestVersionId;
+    return latest.settled && latest.versionInUrl;
 }

@@ -38,27 +38,65 @@ describe("buildSingleViewerEntry", () => {
 });
 
 describe("previewIsOfLatestVersionOnly", () => {
+    const known = (latestVersionId: string) => ({
+        latestVersionId,
+        settled: true,
+        versionInUrl: false,
+    });
+    const unknown = { settled: true, versionInUrl: true };
+
     it("is true on the preview tab of a file version that is not the latest", () => {
-        expect(previewIsOfLatestVersionOnly(file, "preview", undefined, "source-v2")).toBe(true);
+        expect(previewIsOfLatestVersionOnly(file, "preview", undefined, known("source-v2"))).toBe(
+            true
+        );
     });
 
     it("is false for the latest file version", () => {
-        expect(previewIsOfLatestVersionOnly(file, "preview", undefined, "source-v1")).toBe(false);
+        expect(previewIsOfLatestVersionOnly(file, "preview", undefined, known("source-v1"))).toBe(
+            false
+        );
     });
 
     it("is false on the file tab, through an asset version, without a preview file", () => {
-        expect(previewIsOfLatestVersionOnly(file, "file", undefined, "source-v2")).toBe(false);
-        expect(previewIsOfLatestVersionOnly(file, "preview", "3", "source-v2")).toBe(false);
-        const noPreview = { ...file, previewFile: undefined };
-        expect(previewIsOfLatestVersionOnly(noPreview, "preview", undefined, "source-v2")).toBe(
+        expect(previewIsOfLatestVersionOnly(file, "file", undefined, known("source-v2"))).toBe(
             false
         );
+        expect(previewIsOfLatestVersionOnly(file, "preview", "3", known("source-v2"))).toBe(false);
+        const noPreview = { ...file, previewFile: undefined };
+        expect(
+            previewIsOfLatestVersionOnly(noPreview, "preview", undefined, known("source-v2"))
+        ).toBe(false);
+        expect(previewIsOfLatestVersionOnly(file, "file", undefined, unknown)).toBe(false);
+        expect(previewIsOfLatestVersionOnly(file, "preview", "3", unknown)).toBe(false);
     });
 
-    it("is false while the latest version is unknown", () => {
-        expect(previewIsOfLatestVersionOnly(file, "preview", undefined, undefined)).toBe(false);
-        expect(previewIsOfLatestVersionOnly({ ...file, versionId: undefined }, "preview")).toBe(
-            false
-        );
+    it("is true when the latest version is unknown after the lookup and the link names a version", () => {
+        expect(previewIsOfLatestVersionOnly(file, "preview", undefined, unknown)).toBe(true);
+    });
+
+    it("is false while the lookup is still running, or when the link names no version", () => {
+        expect(
+            previewIsOfLatestVersionOnly(file, "preview", undefined, {
+                settled: false,
+                versionInUrl: true,
+            })
+        ).toBe(false);
+        expect(
+            previewIsOfLatestVersionOnly(file, "preview", undefined, {
+                settled: true,
+                versionInUrl: false,
+            })
+        ).toBe(false);
+    });
+
+    it("is false when the viewed file version is not known", () => {
+        expect(
+            previewIsOfLatestVersionOnly(
+                { ...file, versionId: undefined },
+                "preview",
+                undefined,
+                unknown
+            )
+        ).toBe(false);
     });
 });

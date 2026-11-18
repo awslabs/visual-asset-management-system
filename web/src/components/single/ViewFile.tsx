@@ -389,19 +389,37 @@ function ViewFileForAsset() {
             viewType,
         ]
     );
-    // The file's latest version, read while the Preview tab shows a file version, so the tab can say
-    // when its preview belongs to a different (the latest) version than the one being viewed.
-    const [latestFileVersionId, setLatestFileVersionId] = useState<string | undefined>(undefined);
+    // The file's latest version, so the Preview tab can say when its preview belongs to a different
+    // (the latest) version than the one being viewed. The direct-path load already reads the file's
+    // versions, so its answer is reused; only a page opened from the file manager's state (no direct
+    // load) asks once, and only while the Preview tab is showing.
+    const [loadedLatest, setLoadedLatest] = useState<{ key: string; versionId: string } | null>(
+        null
+    );
+    const [lookedUpLatest, setLookedUpLatest] = useState<{
+        key: string;
+        versionId?: string;
+    } | null>(null);
     const previewKeyForLookup = !isMultiFileMode ? singleFileInfo?.key : undefined;
+    const knownLatestVersionId =
+        loadedLatest && loadedLatest.key === previewKeyForLookup
+            ? loadedLatest.versionId
+            : lookedUpLatest && lookedUpLatest.key === previewKeyForLookup
+            ? lookedUpLatest.versionId
+            : undefined;
+    const lookupSettled =
+        !!knownLatestVersionId || (!!lookedUpLatest && lookedUpLatest.key === previewKeyForLookup);
     const lookupLatestVersion =
         viewType === "preview" &&
         !!previewKeyForLookup &&
         !!singleFileInfo?.previewFile &&
         !!singleFileInfo?.versionId &&
-        !effectiveAssetVersionId;
+        !effectiveAssetVersionId &&
+        !knownLatestVersionId &&
+        !lookupSettled &&
+        !isLoadingDirectPath;
     useEffect(() => {
-        setLatestFileVersionId(undefined);
-        if (!lookupLatestVersion || !databaseId || !assetId) return;
+        if (!lookupLatestVersion || !databaseId || !assetId || !previewKeyForLookup) return;
         let cancelled = false;
         (async () => {
             try {
@@ -411,13 +429,20 @@ function ViewFileForAsset() {
                     fileKey: previewKeyForLookup,
                     includeVersions: true,
                 });
-                if (cancelled || !success) return;
+                if (cancelled) return;
+                if (!success) {
+                    setLookedUpLatest({ key: previewKeyForLookup });
+                    return;
+                }
                 const info = typeof response === "string" ? JSON.parse(response) : response;
                 const latest = info?.versions?.find((v: any) => v.isLatest);
-                setLatestFileVersionId(latest?.versionId || info?.versionId || undefined);
+                setLookedUpLatest({
+                    key: previewKeyForLookup,
+                    versionId: latest?.versionId || info?.versionId || undefined,
+                });
             } catch (error) {
-                // Without the latest version the page cannot tell, so it shows no notice.
                 console.error("Could not read the latest file version:", error);
+                if (!cancelled) setLookedUpLatest({ key: previewKeyForLookup });
             }
         })();
         return () => {
@@ -427,12 +452,11 @@ function ViewFileForAsset() {
     const showOlderVersionPreviewNotice =
         !isMultiFileMode &&
         !!singleFileInfo &&
-        previewIsOfLatestVersionOnly(
-            singleFileInfo,
-            viewType,
-            effectiveAssetVersionId,
-            latestFileVersionId
-        );
+        previewIsOfLatestVersionOnly(singleFileInfo, viewType, effectiveAssetVersionId, {
+            latestVersionId: knownLatestVersionId,
+            settled: lookupSettled,
+            versionInUrl: !!urlVersion,
+        });
     const canCompareSingleFile =
         viewerRegistryReady &&
         viewType === "file" &&
@@ -634,6 +658,15 @@ function ViewFileForAsset() {
                     primaryType: fileInfo.primaryType || null,
                     previewFile: fileInfo.previewFile,
                 };
+
+                const latestEntry = Array.isArray(fileInfo.versions)
+                    ? fileInfo.versions.find((v: any) => v.isLatest)
+                    : undefined;
+                setLoadedLatest(
+                    latestEntry?.versionId
+                        ? { key: fileInfo.key, versionId: latestEntry.versionId }
+                        : null
+                );
 
                 console.log("Loaded file info:", loadedFile);
                 setLoadedFileInfo(loadedFile);
