@@ -671,32 +671,37 @@ describe("ZipDownloadsTable — Show all users (asset tab)", () => {
         await screen.findByText("archive-1.zip");
         expect(screen.queryByText("Show all users")).toBeNull();
         expect(mockAllUsersList).not.toHaveBeenCalled();
-        // Nothing is rendered in the right-aligned tools group either.
+        // The list toolbar has no filters group, and the table's pagination slot stays empty.
+        expect(document.querySelector('[data-list-toolbar-group="filters"]')).toBeNull();
         expect(createWrapper(document.body).findTable()!.findPagination()).toBeNull();
     });
 
-    it("places the toggle right-aligned in the filter row, away from search and refresh", async () => {
+    it("lays out the list toolbar: search and refresh on the left, the toggle in the filters group", async () => {
         mockAllowed = { ...ALL, [ALL_USERS_ROUTE]: true };
         mockAssetList.mockResolvedValue(page([job("1", "SUCCEEDED")]));
         renderTable();
         await screen.findByText("archive-1.zip");
         const table = createWrapper(document.body).findTable()!;
-        // The tools slot sits inside Cloudscape's right-aligned group of the filter row.
-        const toolsSlot = table.findPagination()!.getElement();
-        expect(toolsSlot.parentElement!.className).toMatch(/tools-align-right/);
-        const control = createWrapper(toolsSlot).findSegmentedControl()!;
+        // The whole toolbar is the table's filter slot (ListToolbar), not split across slots.
+        const filterSlot = table.findFilterSlot()!.getElement();
+        const toolbar = filterSlot.querySelector("[data-list-toolbar]") as HTMLElement;
+        expect(toolbar).not.toBeNull();
+        expect(table.findPagination()).toBeNull();
+        const searchGroup = toolbar.querySelector(
+            '[data-list-toolbar-group="search"]'
+        ) as HTMLElement;
+        const filters = toolbar.querySelector('[data-list-toolbar-group="filters"]') as HTMLElement;
+        expect(searchGroup).toContainElement(
+            screen.getByRole("searchbox", { name: "Search download jobs" })
+        );
+        expect(searchGroup).toContainElement(
+            screen.getByRole("button", { name: "Refresh download queue" })
+        );
+        const control = createWrapper(filters).findSegmentedControl()!;
         expect(control).not.toBeNull();
         // Default: My jobs.
         expect(control.findSelectedSegment()!.getElement()).toHaveTextContent("My jobs");
-        // Search and refresh stay on the left, in the filter slot; the toggle is not there.
-        const filterSlot = table.findFilterSlot()!.getElement();
-        expect(filterSlot).not.toContainElement(control.getElement());
-        expect(filterSlot).toContainElement(
-            screen.getByRole("searchbox", { name: "Search download jobs" })
-        );
-        expect(filterSlot).toContainElement(
-            screen.getByRole("button", { name: "Refresh download queue" })
-        );
+        expect(searchGroup).not.toContainElement(control.getElement());
         expect(mockAllUsersList).not.toHaveBeenCalled();
     });
 

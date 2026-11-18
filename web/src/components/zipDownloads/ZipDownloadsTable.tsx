@@ -25,6 +25,7 @@ import {
     fetchZipDownloads,
     getZipDownloadUrl,
 } from "../../services/APIService";
+import ListToolbar from "../list/ListToolbar";
 import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
 import { routeDisabledReason } from "../../features/orchestration/permissions/routeDisabledReason";
 import Synonyms from "../../synonyms";
@@ -638,48 +639,45 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                 loadingText="Loading download jobs"
                 wrapLines
                 variant={assetScoped ? "embedded" : "container"}
-                // Filter row layout (web/CLAUDE.md "Table filter row"): search and refresh on the
-                // left in the filter slot, view toggles right-aligned in the tools slot, as the
-                // Versions tab (AssetVersionList) does.
+                // The list toolbar (web/CLAUDE.md "List Toolbar"): the search with the refresh beside
+                // it on the left, and the whose-jobs toggle in the filters group on the right.
                 filter={
-                    <SpaceBetween direction="horizontal" size="xs">
-                        <TextFilter
-                            filteringText={filterText}
-                            filteringPlaceholder="Find by asset ID, request ID or archive name"
-                            filteringAriaLabel="Search download jobs"
-                            filteringClearAriaLabel="Clear search text"
-                            onChange={({ detail }) => setFilterText(detail.filteringText)}
-                            countText={
-                                filtering
-                                    ? `${shownJobs.length} ${
-                                          shownJobs.length === 1 ? "match" : "matches"
-                                      }`
-                                    : undefined
-                            }
-                        />
-                        <Button
-                            iconName="refresh"
-                            variant="icon"
-                            ariaLabel="Refresh download queue"
-                            onClick={() => load(false)}
-                            loading={loading}
-                        />
-                    </SpaceBetween>
-                }
-                pagination={
-                    canListAllUsers ? (
-                        <SegmentedControl
-                            selectedId={scope}
-                            label="Whose download jobs to show"
-                            onChange={({ detail }) =>
-                                setScope(detail.selectedId === "all" ? "all" : "mine")
-                            }
-                            options={[
-                                { id: "mine", text: "My jobs" },
-                                { id: "all", text: "Show all users" },
-                            ]}
-                        />
-                    ) : undefined
+                    <ListToolbar
+                        search={
+                            <TextFilter
+                                filteringText={filterText}
+                                filteringPlaceholder="Find by asset ID, request ID or archive name"
+                                filteringAriaLabel="Search download jobs"
+                                filteringClearAriaLabel="Clear search text"
+                                onChange={({ detail }) => setFilterText(detail.filteringText)}
+                                countText={
+                                    filtering
+                                        ? `${shownJobs.length} ${
+                                              shownJobs.length === 1 ? "match" : "matches"
+                                          }`
+                                        : undefined
+                                }
+                            />
+                        }
+                        onRefresh={() => load(false)}
+                        refreshing={loading}
+                        refreshLabel="Refresh download queue"
+                        filters={
+                            canListAllUsers ? (
+                                <SegmentedControl
+                                    selectedId={scope}
+                                    label="Whose download jobs to show"
+                                    onChange={({ detail }) =>
+                                        setScope(detail.selectedId === "all" ? "all" : "mine")
+                                    }
+                                    options={[
+                                        { id: "mine", text: "My jobs" },
+                                        { id: "all", text: "Show all users" },
+                                    ]}
+                                />
+                            ) : undefined
+                        }
+                    />
                 }
                 header={
                     <Header
