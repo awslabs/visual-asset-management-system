@@ -387,7 +387,8 @@ class Job:
                                                    manifest.get("entries"), manifest.get("pinnedFiles"))
             check_members(self.clients.for_bucket, members,
                           tuple(manifest.get("blockedExtensions") or CORE_BLOCKED_EXTENSIONS),
-                          tuple(manifest.get("blockedContentTypes") or CORE_BLOCKED_CONTENT_TYPES))
+                          tuple(manifest.get("blockedContentTypes") or CORE_BLOCKED_CONTENT_TYPES),
+                          empty_dirs)
             limits = manifest.get("limits") or {}
             total = enforce_limits(members, limits.get("maxFiles"), limits.get("maxTotalBytes"))
             check_archive_fits(members, empty_dirs, manifest["archiveFormat"],
@@ -524,7 +525,7 @@ class Job:
                 members, empty_dirs = expand_selection(client, bucket, base_key, entries)
             members = filter_patterns(members, config.get("includePatterns"), config.get("excludePatterns"))
             check_members(self.clients.for_bucket, members, CORE_BLOCKED_EXTENSIONS,
-                          CORE_BLOCKED_CONTENT_TYPES)
+                          CORE_BLOCKED_CONTENT_TYPES, empty_dirs)
             enforce_limits(members, None, S3_MAX_OBJECT_BYTES)
             check_archive_fits(members, empty_dirs, archive_format, compression)
         except Refusal as r:
