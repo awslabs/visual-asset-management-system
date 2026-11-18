@@ -104,7 +104,7 @@ describe("seeded admin constraints", () => {
         expect(types).toEqual(
             expect.arrayContaining(["database", "asset", "api", "web", "complianceSchema"])
         );
-        expect(types.length).toBeGreaterThanOrEqual(15);
+        expect(types.length).toBeGreaterThanOrEqual(16);
         expect(constraints.length).toBeGreaterThanOrEqual(types.length);
     });
 
@@ -121,6 +121,37 @@ describe("seeded admin constraints", () => {
         expect(seeded).toHaveLength(1);
         expect(seeded[0].id).toBe("allow_all_compliancebindings");
         expect(seeded[0].criteria[0].field).toBe("databaseId");
+    });
+
+    it("scopes the auditLog constraint on auditLogGroup and seeds it for admin only", () => {
+        const seeded = constraints.filter((c) => c.objectType === "auditLog");
+        expect(seeded).toHaveLength(1);
+        expect(seeded[0].id).toBe("allow_auditlog");
+        expect(seeded[0].criteria).toEqual([
+            { field: "auditLogGroup", operator: "contains", value: ".*" },
+        ]);
+        // Every group is allowed through the admin role only: no other seeded role gets the type.
+        const start = ADMIN_CONSTRUCT.indexOf('S: "initial_admin_allow_auditlog"');
+        const segment = ADMIN_CONSTRUCT.slice(
+            start,
+            ADMIN_CONSTRUCT.indexOf('S: "auditLog"', start)
+        );
+        const groupIds = [...segment.matchAll(/groupId: \{\s*S: ([A-Za-z]+)/g)].map((m) => m[1]);
+        expect(groupIds).toHaveLength(4);
+        expect(new Set(groupIds)).toEqual(new Set(["roleNameAdmin"]));
+        const readOnlyConstruct = fs.readFileSync(
+            path.join(
+                REPO_ROOT,
+                "infra",
+                "lib",
+                "nestedStacks",
+                "auth",
+                "constructs",
+                "dynamodb-authdefaults-ro-construct.ts"
+            ),
+            "utf-8"
+        );
+        expect(readOnlyConstruct).not.toMatch(/auditLog|\/audit/);
     });
 
     it("seeds no object type the backend does not accept", () => {

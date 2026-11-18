@@ -934,6 +934,51 @@ class TestDatabaseListBucketsCommand:
             assert payload['Items'][0]['bucketRegion'] == 'us-east-1'
             assert payload['Items'][0]['bucketAccountId'] == '222222222222'
     
+    def test_list_buckets_shows_the_acceleration_status(self, cli_runner, generic_command_mocks):
+        """Accelerated reads Yes for true, No for false and for a row from an API without the field."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [
+                    {'bucketId': 'b1', 'bucketName': 'fast', 'baseAssetsPrefix': '/', 'isAccelerated': True},
+                    {'bucketId': 'b2', 'bucketName': 'slow', 'baseAssetsPrefix': '/', 'isAccelerated': False},
+                    {'bucketId': 'b3', 'bucketName': 'old', 'baseAssetsPrefix': '/'},
+                ]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets'])
+
+            assert result.exit_code == 0
+            lines = [l for l in result.output.splitlines() if l.startswith('Accelerated:')]
+            assert lines == ['Accelerated: Yes', 'Accelerated: No', 'Accelerated: No']
+
+    def test_list_buckets_counts_only_a_real_true_as_accelerated(self, cli_runner, generic_command_mocks):
+        """A stored string, 1 or None is not acceleration, matching the backend rule."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [
+                    {'bucketId': 'b1', 'bucketName': 'a', 'baseAssetsPrefix': '/', 'isAccelerated': 'true'},
+                    {'bucketId': 'b2', 'bucketName': 'b', 'baseAssetsPrefix': '/', 'isAccelerated': 1},
+                    {'bucketId': 'b3', 'bucketName': 'c', 'baseAssetsPrefix': '/', 'isAccelerated': None},
+                ]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets'])
+
+            assert result.exit_code == 0
+            lines = [l for l in result.output.splitlines() if l.startswith('Accelerated:')]
+            assert lines == ['Accelerated: No'] * 3
+
+    def test_list_buckets_json_output_carries_the_acceleration_flag(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [{'bucketId': 'b1', 'bucketName': 'fast', 'isAccelerated': True}]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets', '--json-output'])
+
+            assert result.exit_code == 0
+            assert json.loads(result.output)['Items'][0]['isAccelerated'] is True
+
     def test_list_buckets_empty(self, cli_runner, generic_command_mocks):
         """Test bucket listing with no buckets."""
         with generic_command_mocks('database') as mocks:
