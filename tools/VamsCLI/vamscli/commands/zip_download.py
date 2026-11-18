@@ -351,7 +351,10 @@ def download(ctx: click.Context, database_id: str, asset_id: str, request_id: st
     """Download a finished archive to a local file.
 
     The archive streams from a short-lived presigned URL that is never printed. A partial
-    transfer leaves no file behind.
+    transfer leaves no file behind. Another user's finished archive, listed by
+    'zip-download list --all-users', downloads the same way when you may download files from the
+    asset; --wait follows only your own jobs, so for another user's job it requests the archive
+    directly (refused while the job is not finished).
 
     Examples:
         vamscli zip-download download -d my-db -a my-asset -r <request-id> -o ./downloads
@@ -365,9 +368,15 @@ def download(ctx: click.Context, database_id: str, asset_id: str, request_id: st
             raise InvalidZipDownloadRequestError("--timeout applies with --wait")
         if wait:
             output_status(f"Waiting for zip download '{request_id}'...", json_output)
-            wait_for_zip_download(api_client, database_id, asset_id, request_id,
-                                  timeout or ZIP_DOWNLOAD_DEFAULT_WAIT_TIMEOUT_SECONDS,
-                                  on_update=_status_printer(json_output))
+            try:
+                wait_for_zip_download(api_client, database_id, asset_id, request_id,
+                                      timeout or ZIP_DOWNLOAD_DEFAULT_WAIT_TIMEOUT_SECONDS,
+                                      on_update=_status_printer(json_output))
+            except ZipDownloadNotFoundError:
+                # The job read answers only the caller's own jobs. Another user's job is fetched through
+                # the URL route, which answers for a shared finished job and refuses an unfinished one.
+                output_status(f"Zip download '{request_id}' is not one of your jobs, so it cannot be "
+                              "followed; requesting its archive.", json_output)
         result = _fetch_archive(api_client, database_id, asset_id, request_id, output,
                                 overwrite, json_output)
         output_result(result, json_output, success_message="✓ Archive downloaded!",

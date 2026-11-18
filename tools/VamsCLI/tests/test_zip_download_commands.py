@@ -183,6 +183,31 @@ class TestCreate:
             assert result.exit_code == 1
             mocks["api_client"].create_zip_download.assert_not_called()
 
+    def test_download_wait_fetches_another_users_finished_archive(self, cli_runner, generic_command_mocks, tmp_path):
+        """The job read answers only your own jobs; the URL route answers for a shared one."""
+        with generic_command_mocks("zip_download") as mocks:
+            api = mocks["api_client"]
+            api.get_zip_download.side_effect = ZipDownloadNotFoundError("Zip download not found")
+            api.get_zip_download_url.return_value = {"url": PRESIGNED, "archiveFileName": "Asset.zip",
+                                                     "archiveSizeBytes": 4}
+            api.download_zip_archive.return_value = 4
+            result = _invoke(cli_runner, "download", *SCOPE, "-r", "r1", "-o", str(tmp_path), "--wait",
+                             "--json-output")
+            assert result.exit_code == 0, result.output
+            assert json.loads(result.output)["localPath"] == str(tmp_path / "Asset.zip")
+
+    def test_download_wait_of_another_users_unfinished_job_is_refused_by_the_url_route(
+            self, cli_runner, generic_command_mocks, tmp_path):
+        with generic_command_mocks("zip_download") as mocks:
+            api = mocks["api_client"]
+            api.get_zip_download.side_effect = ZipDownloadNotFoundError("Zip download not found")
+            api.get_zip_download_url.side_effect = ZipDownloadNotReadyError("The archive is not ready for download")
+            result = _invoke(cli_runner, "download", *SCOPE, "-r", "r1", "-o", str(tmp_path), "--wait",
+                             "--json-output")
+            assert result.exit_code == 1
+            assert json.loads(result.output)["error"] == "The archive is not ready for download"
+            api.download_zip_archive.assert_not_called()
+
     def test_active_cap(self, cli_runner, generic_command_mocks):
         with generic_command_mocks("zip_download") as mocks:
             mocks["api_client"].create_zip_download.side_effect = ZipDownloadLimitError(
