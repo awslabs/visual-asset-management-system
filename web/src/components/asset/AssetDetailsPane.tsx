@@ -5,7 +5,6 @@
 
 import React, { useState, useEffect } from "react";
 import {
-    Alert,
     Box,
     Button,
     Container,
@@ -17,8 +16,9 @@ import {
     Popover,
     Icon,
     Spinner,
-    Badge,
 } from "@cloudscape-design/components";
+import Alert from "@cloudscape-design/components/alert";
+import Badge from "@cloudscape-design/components/badge";
 import { useNavigate } from "react-router";
 import {
     createSubscription,
