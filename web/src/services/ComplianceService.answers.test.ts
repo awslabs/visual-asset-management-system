@@ -285,9 +285,15 @@ describe("a compliance call reads the API's answer, not its message text (D188)"
         "%s: a refused request (non-2xx) reads as a failure with the API's message",
         async (_name, entry) => {
             mocked(entry.method).mockRejectedValue(new ApiError("Not Authorized", 403));
-            expect(await entry.call()).toEqual([false, "Not Authorized"]);
+            // A read may add the status after the message (getDatabaseBindings).
+            expect((await entry.call()).slice(0, 2)).toEqual([false, "Not Authorized"]);
         }
     );
+
+    it("getDatabaseBindings: a refused read carries its status", async () => {
+        mocked("get").mockRejectedValue(new ApiError("Not Authorized", 403));
+        expect(await getDatabaseBindings("db1")).toEqual([false, "Not Authorized", 403]);
+    });
 });
 
 describe("binding a schema named error-budget", () => {

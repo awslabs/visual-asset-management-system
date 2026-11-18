@@ -1563,10 +1563,15 @@ export interface DatabaseBindings {
     apply?: ComplianceBindingApply | null;
 }
 
+/**
+ * The database's binding and its asset overrides. A failed read carries the HTTP status as its
+ * third element when the API answered, so a caller can tell a final refusal (403, 404) from a
+ * failure that may pass.
+ */
 export const getDatabaseBindings = async (
     databaseId: string,
     paging?: PagingParams
-): Promise<[boolean, DatabaseBindings | string]> => {
+): Promise<[boolean, DatabaseBindings | string, number?]> => {
     try {
         const response = await apiClient.get(`compliance/bind/${databaseId}`, {
             queryStringParameters: pagingQuery(paging),
@@ -1587,7 +1592,11 @@ export const getDatabaseBindings = async (
         ];
     } catch (error: any) {
         console.log("getDatabaseBindings error:", error);
-        return [false, error?.message || "Failed to get database bindings"];
+        return [
+            false,
+            error?.message || "Failed to get database bindings",
+            typeof error?.status === "number" ? error.status : undefined,
+        ];
     }
 };
 
