@@ -172,7 +172,7 @@ most 100 tools per connection.
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `consumer`   | Read-only: databases, assets, files, metadata, versions, links, search, download links, workflows and runs, tags, comments, zip download jobs |
 | `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, zip downloads, and running workflows                        |
-| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions, API keys                                         |
+| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, executions, the subscription list, API keys                     |
 | `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades, the compliance audit trail                        |
 | `edh`        | EDH Workstations add-on: workstations, catalog and container jobs                                                                             |
 | `edh-admin`  | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances, settings                                                      |
