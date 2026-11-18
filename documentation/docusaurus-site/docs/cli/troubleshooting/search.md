@@ -36,7 +36,7 @@ The `NOOPENSEARCH` feature switch is enabled in the deployment, so Amazon OpenSe
 
     ```bash
     vamscli assets list
-    vamscli database list-assets -d my-database
+    vamscli assets list -d my-database
     ```
 
 3. To enable full-text and metadata search, ask your VAMS administrator to provision Amazon OpenSearch Service for the deployment.
@@ -56,7 +56,7 @@ The Amazon OpenSearch Service domain is temporarily unreachable, or the deployme
 
 -   Retry after a short delay, or confirm domain health with your administrator.
 -   Verify the deployment version with `vamscli version`. The dual-index search system requires VAMS 2.2 or later.
--   Fall back to `vamscli assets list` or `vamscli database list-assets -d <database-id>` while the service is recovering.
+-   Fall back to `vamscli assets list` or `vamscli assets list -d <database-id>` while the service is recovering.
 
 ---
 
