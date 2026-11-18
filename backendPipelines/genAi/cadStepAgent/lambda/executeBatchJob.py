@@ -134,7 +134,7 @@ def lambda_handler(event, context):
                 {"name": DEFINITION_ENV, "value": definition_document(definition)},
                 {
                     "name": "AWS_REGION",
-                    "value": os.environ.get("AWS_REGION", "us-east-1"),
+                    "value": os.environ["AWS_REGION"],
                 },
             ],
         },

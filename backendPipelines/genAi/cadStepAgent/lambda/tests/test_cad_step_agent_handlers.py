@@ -31,6 +31,10 @@ _ENV = {
     "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
 }
 
+# Lambda always sets AWS_REGION, and the handlers read it with no fallback, at call time as well as at
+# import, so it stays set for the whole suite rather than only while _load imports a module.
+os.environ.setdefault("AWS_REGION", _ENV["AWS_REGION"])
+
 
 def _load(module_file, env_overrides=None):
     """Load a handler module by path under a suite-private name, with the env it reads at import."""

@@ -32,7 +32,7 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="InvokeAgentRuntime-CadStepAgent")
 agentcore = boto3.client("bedrock-agentcore", config=retry_config)
-sfn = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION", "us-east-1"), config=retry_config)
+sfn = boto3.client("stepfunctions", region_name=os.environ["AWS_REGION"], config=retry_config)
 
 AGENT_RUNTIME_ARN = os.environ["AGENT_RUNTIME_ARN"]
 AGENT_RUNTIME_QUALIFIER = os.environ.get("AGENT_RUNTIME_QUALIFIER", "DEFAULT")
