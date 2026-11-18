@@ -118,14 +118,20 @@ describe("ComplianceSchemas row actions", () => {
         await screen.findByText("old-json-schema");
 
         const legacyRow = rowOf("old-json-schema");
-        expect(within(legacyRow).getByRole("button", { name: "Edit" })).toBeDisabled();
-        expect(within(legacyRow).getByRole("button", { name: "Sweep" })).toBeDisabled();
+        expect(
+            within(legacyRow).getByRole("button", { name: "Edit old-json-schema" })
+        ).toBeDisabled();
+        expect(
+            within(legacyRow).getByRole("button", { name: "Sweep old-json-schema" })
+        ).toBeDisabled();
 
         const rulesRow = rowOf("cad-quality");
-        expect(within(rulesRow).getByRole("button", { name: "Edit" })).toBeEnabled();
-        expect(within(rulesRow).getByRole("button", { name: "Sweep" })).toBeEnabled();
+        expect(within(rulesRow).getByRole("button", { name: "Edit cad-quality" })).toBeEnabled();
+        expect(within(rulesRow).getByRole("button", { name: "Sweep cad-quality" })).toBeEnabled();
 
-        await userEvent.click(within(legacyRow).getByRole("button", { name: "Sweep" }));
+        await userEvent.click(
+            within(legacyRow).getByRole("button", { name: "Sweep old-json-schema" })
+        );
         expect(service().sweepSchema).not.toHaveBeenCalled();
     });
 
@@ -140,7 +146,9 @@ describe("ComplianceSchemas row actions", () => {
 
         // Two flashes raised back to back: one success, one error.
         const sweep = () =>
-            userEvent.click(within(rowOf("cad-quality")).getByRole("button", { name: "Sweep" }));
+            userEvent.click(
+                within(rowOf("cad-quality")).getByRole("button", { name: "Sweep cad-quality" })
+            );
         await sweep();
         const successText = `Sweep of schema "cad-quality": 0 ${Synonyms.assets} evaluated.`;
         expect(await screen.findByText(successText)).toBeInTheDocument();
@@ -194,7 +202,9 @@ describe("ComplianceSchemas row actions", () => {
         render(<ComplianceSchemas />);
         await screen.findByText("cad-quality");
         const sweep = () =>
-            userEvent.click(within(rowOf("cad-quality")).getByRole("button", { name: "Sweep" }));
+            userEvent.click(
+                within(rowOf("cad-quality")).getByRole("button", { name: "Sweep cad-quality" })
+            );
         await sweep();
         expect(await screen.findByText(/313 not reached yet/)).toBeInTheDocument();
         await sweep();

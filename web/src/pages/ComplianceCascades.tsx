@@ -627,6 +627,9 @@ const ComplianceCascades: React.FC = () => {
                                                   {canApprove && (
                                                       <Button
                                                           variant="inline-link"
+                                                          ariaLabel={`Approve cascade ${shortId(
+                                                              item.cascadeId
+                                                          )}`}
                                                           onClick={() => setApproveTarget(item)}
                                                       >
                                                           Approve
@@ -635,6 +638,9 @@ const ComplianceCascades: React.FC = () => {
                                                   {canReject && (
                                                       <Button
                                                           variant="inline-link"
+                                                          ariaLabel={`Reject cascade ${shortId(
+                                                              item.cascadeId
+                                                          )}`}
                                                           onClick={() => setRejectTarget(item)}
                                                       >
                                                           Reject

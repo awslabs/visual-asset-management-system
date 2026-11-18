@@ -173,7 +173,7 @@ describe("ComplianceQuarantine", () => {
 
         render(<ComplianceQuarantine />);
         await screen.findByText("Name of asset-1");
-        await userEvent.click(screen.getByRole("button", { name: "Exception" }));
+        await userEvent.click(screen.getByRole("button", { name: /^Exception for / }));
 
         expect(screen.getByText("Grant exception for Name of asset-1")).toBeInTheDocument();
         await userEvent.type(
@@ -292,7 +292,7 @@ describe("ComplianceQuarantine release", () => {
         ]);
         render(<ComplianceQuarantine />);
         await screen.findByText("Name of asset-1");
-        await userEvent.click(screen.getAllByRole("button", { name: "Release" })[0]);
+        await userEvent.click(screen.getAllByRole("button", { name: /^Release Name of / })[0]);
         expect(screen.getByText("Release Name of asset-1 from quarantine")).toBeInTheDocument();
 
         const confirm = () =>
