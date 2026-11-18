@@ -3,14 +3,13 @@
 
 """The Physna conftest's ``handlers.auth`` stub carries every name the backend imports from it (#1451).
 
-The stub is installed into ``sys.modules`` at collection time and reinstalled before every test in this
-directory, so for the rest of the session any module that imports ``handlers.auth`` gets it. It held only
-``request_to_claims``; ``customLogging.auditLogging`` also imports ``AUTH_METHOD_API_KEY``, so a run that
-collected the Physna tests before the first real ``auditLogging`` import (``tests/handlers`` alone, or the
-Physna tests together with a handler test) failed at collection with ``ImportError``.
+The conftest installs the stub into ``sys.modules`` at collection time and reinstalls it before every
+test in this directory. A backend module imported while the stub is in place, such as
+``customLogging.auditLogging`` with ``AUTH_METHOD_API_KEY``, takes its ``handlers.auth`` names from
+the stub.
 
-The names are read from the backend source rather than listed here, so a new import cannot leave the stub
-behind again.
+The names are read from the backend source rather than listed here, so each name the backend imports
+from ``handlers.auth`` is checked against the stub.
 """
 
 import ast
