@@ -161,7 +161,7 @@ export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
                     alignItems: "flex-start",
                 }}
             >
-                <div data-testid="audit-filter-column" style={{ flex: "1 1 420px", minWidth: 0 }}>
+                <div data-testid="audit-filter-column" style={{ flex: "1 1 300px", minWidth: 0 }}>
                     <SpaceBetween size="s">
                         <FormField
                             label="Filters"
