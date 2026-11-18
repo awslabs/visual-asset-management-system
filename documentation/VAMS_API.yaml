@@ -9873,7 +9873,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/edhWorkstationRecord"
                 "400":
-                    description: "Validation failed (`Request body is not valid JSON`), the instance type is outside the deployment allow-list, the image is not a registered desktop image with a determinable OS family equal to `osFamily` (`imageId is not a registered VDI image`, `The image's OS family cannot be determined`, `osFamily does not match the image`), the image's EDH profile lists the instance type only under architectures of another family than the image's, with `x86_64` and `i386` one family (`instanceType does not match the image's architecture`), an AMI recipe whose `AVAILABLE` build registered the image lists `launchInstanceTypes` that leave the instance type out (`instanceType is not offered for this image`; a recipe read that fails refuses nothing), or `leaseHours` is outside what the lease policy allows (`leaseHours must be 1-<cap>`, `Leases are disabled for this deployment`), or `rootSizeGb` is below the image's registered root size (`Root disk size must be at least <n> GB for this image`); or the named capacity reservation is not registered or is disabled (`capacityReservationId is not registered`), is not `active` or EC2 holds no such reservation (`The capacity reservation is not active`), is in an Availability Zone EDH has no private subnet in (`The capacity reservation's Availability Zone (<az>) has no EDH private subnet; choose another reservation or On-demand`), is of another instance type (`instanceType does not match the capacity reservation`), or has a platform that does not suit the image's OS family (`The capacity reservation's platform does not match the image`)."
+                    description: "Validation failed (`Request body is not valid JSON`), the instance type is outside the deployment allow-list, the image is not a registered desktop image with a determinable OS family equal to `osFamily` (`imageId is not a registered VDI image`, `The image's OS family cannot be determined`, `osFamily does not match the image`), the image's EDH profile lists the instance type only under architectures of another family than the image's, with `x86_64` and `i386` one family (`instanceType does not match the image's architecture`), an AMI recipe whose `AVAILABLE` build registered the image lists `launchInstanceTypes` that leave the instance type out (`instanceType is not offered for this image`; a recipe read that fails refuses nothing), or `leaseHours` is outside what the lease policy allows (`leaseHours must be 1-<cap>`, `Leases are disabled for this deployment`), or `rootSizeGb` is below the image's registered root size (`Root disk size must be at least <n> GB for this image`); or the named capacity reservation is not registered or is disabled (`capacityReservationId is not registered`; for a role with `GET` or `POST` on the id, any other role receives `403`), is not `active` or EC2 holds no such reservation (`The capacity reservation is not active`), is in an Availability Zone EDH has no private subnet in (`The capacity reservation's Availability Zone (<az>) has no EDH private subnet; choose another reservation or On-demand`), is of another instance type (`instanceType does not match the capacity reservation`), or has a platform that does not suit the image's OS family (`The capacity reservation's platform does not match the image`)."
                     content:
                         application/json:
                             schema:
@@ -10664,7 +10664,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "The session does not exist."
+                    description: "The session does not exist (answered only to a caller allowed on a session of every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -10715,7 +10715,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "The session does not exist."
+                    description: "The session does not exist (answered only to a caller allowed on a session of every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11032,7 +11032,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "`recipeId is already in use`, the `duplicateOf` recipe does not exist (`the recipe to duplicate does not exist`), another recipe uses the `stackName` (`stackName is already used by recipe '<id>'`), the body carries `assets` without `duplicateOf` (`assets are only supported on shipped recipes`) or `assets` that are not the source's (`the assets of a duplicated recipe cannot be changed`), or a component document cannot be materialized (`a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`)."
+                    description: "`recipeId is already in use`, the `duplicateOf` recipe does not exist (`the recipe to duplicate does not exist`; answered only to a caller allowed to read a recipe with that id for every OS family, any other caller receives `403`), another recipe uses the `stackName` (`stackName is already used by recipe '<id>'`), the body carries `assets` without `duplicateOf` (`assets are only supported on shipped recipes`) or `assets` that are not the source's (`the assets of a duplicated recipe cannot be changed`), or a component document cannot be materialized (`a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`)."
                     content:
                         application/json:
                             schema:
@@ -11072,7 +11072,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11108,7 +11108,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11144,7 +11144,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11190,7 +11190,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11226,7 +11226,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11286,7 +11286,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "`Recipe not found` or `Build not found`."
+                    description: "`Recipe not found` (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`) or `Build not found`."
                     content:
                         application/json:
                             schema:
@@ -11346,7 +11346,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "`Recipe not found` or `Build not found`."
+                    description: "`Recipe not found` (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`) or `Build not found`."
                     content:
                         application/json:
                             schema:
@@ -15235,7 +15235,7 @@ components:
                     minLength: 2
                     maxLength: 40
                     pattern: "^[a-z0-9][a-z0-9-]{1,39}$"
-                    description: "POST only: the recipeId of the recipe to duplicate, shipped or administrator-defined. The new recipe takes that recipe's `assets` and `assetPrefix` and records its id as `duplicatedFrom`; a source that does not exist answers 409 (`the recipe to duplicate does not exist`), and the caller needs object-tier GET on the source. Ignored on PUT."
+                    description: "POST only: the recipeId of the recipe to duplicate, shipped or administrator-defined. The new recipe takes that recipe's `assets` and `assetPrefix` and records its id as `duplicatedFrom`; a source that does not exist answers 409 (`the recipe to duplicate does not exist`) to a caller allowed to read a recipe with that id for every OS family and 403 to any other caller, and the caller needs object-tier GET on the source. Ignored on PUT."
         edhAmiRecipe:
             type: object
             description: "An AMI recipe view: the recipe fields plus latestBuild. `baseOs` is present on vdi recipes only; `description` and `parameters` when set; `assets` and `assetPrefix` on a seeded recipe that declares assets and on a recipe duplicated from any recipe that holds them; `duplicatedFrom` on a duplicated recipe; `latestVersion` once a build has been started or queued; `imageBuilder` once a build has started; `deletingAt` while a delete runs."
