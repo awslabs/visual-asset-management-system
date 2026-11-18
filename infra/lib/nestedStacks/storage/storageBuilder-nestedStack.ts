@@ -1041,7 +1041,10 @@ export function storageResourcesBuilder(
             // its own on success and its pipelineEnd Lambda deletes them on failure; the objects a
             // crashed run leaves behind expire here. The bucket is versioned, so a delete only writes a
             // delete marker: the noncurrent expiry is what reclaims the storage, and the expired
-            // delete markers go with it. Other pipelines' working prefixes are untouched.
+            // delete markers go with it. Other pipelines' working prefixes are untouched. A lifecycle
+            // filter takes a literal prefix, so these rules cover runs under the registered pipeline id
+            // only; a workflow step with its own jobName writes under pipelines/<jobName>/, which no rule
+            // here expires.
             ...(config.app.pipelines.useGenAiVideoSopBom?.enabled
                 ? [
                       {
