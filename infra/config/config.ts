@@ -2323,7 +2323,7 @@ export function getConfig(app: cdk.App): Config {
     if (!codeBuildSupportedPartitions.includes(resolvedPartition)) {
         const pipelines = config.app.pipelines as unknown as Record<
             string,
-            { useCodeBuild?: boolean } | undefined
+            { enabled?: boolean; useCodeBuild?: boolean } | undefined
         >;
         const codeBuildPipelinePaths = [
             "useConversionCoordinateTransform",
@@ -2336,8 +2336,10 @@ export function getConfig(app: cdk.App): Config {
             "useGenAiVideoSopBom",
             "useImageTo3d",
         ];
+        //A disabled pipeline builds nothing, so only enabled ones are named (an upgraded config's
+        //backfilled blocks carry useCodeBuild true with the pipeline off).
         const enabledOutsideSupport = codeBuildPipelinePaths
-            .filter((name) => pipelines[name]?.useCodeBuild === true)
+            .filter((name) => !!pipelines[name]?.enabled && pipelines[name]?.useCodeBuild === true)
             .map((name) => `app.pipelines.${name}`);
         if (
             config.app.pipelines.useZipDownloads?.enabled &&
