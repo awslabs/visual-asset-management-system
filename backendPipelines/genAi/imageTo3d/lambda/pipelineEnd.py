@@ -15,6 +15,14 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="EndImageTo3dPipeline")
 
+# The Batch state's own Step Functions bound counts the time a job waits in the AWS Batch queue as
+# well as its run, and Step Functions gives that States.Timeout no cause of its own.
+STATE_TIMEOUT_ERROR = "States.Timeout"
+STATE_TIMEOUT_CAUSE = (
+    "The Image to 3D job did not finish within the pipeline's time limit. The limit counts the time "
+    "the job waited in the AWS Batch queue for GPU capacity as well as its run time."
+)
+
 sfn = boto3.client(
     'stepfunctions',
     region_name=os.environ["AWS_REGION"],
@@ -45,10 +53,13 @@ def lambda_handler(event, context):
         error_info = error if isinstance(error, dict) else {"Error": "PipelineFailure", "Cause": str(error)}
         logger.error("Pipeline Failure")
         logger.error(error)
+        cause = error_info.get("Cause", "See AWS CloudWatch logs for error cause.")
+        if error_info.get("Error") == STATE_TIMEOUT_ERROR:
+            cause = STATE_TIMEOUT_CAUSE
         sfn.send_task_failure(
             taskToken=externalSfnTaskToken,
             error=str(error_info.get("Error", "PipelineFailure"))[:256],
-            cause=str(error_info.get("Cause", "See AWS CloudWatch logs for error cause."))[:32000],
+            cause=str(cause)[:32000],
         )
     else:
         logger.info("Pipeline Success")

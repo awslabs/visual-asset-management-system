@@ -49,6 +49,12 @@ ALREADY_REPORTED_CODES = frozenset({"TaskDoesNotExist", "TaskTimedOut", "Invalid
 ATTEMPT_TIMEOUT_MARKER = "attempt duration exceeded timeout"
 ATTEMPT_TIMEOUT_CAUSE = ("the container did not finish within the 6 h bound; last stage per the "
                          "container log")
+# The Batch state's own Step Functions bound, which counts the time the job waited in the AWS Batch
+# queue as well as its run; Step Functions gives that States.Timeout no cause of its own.
+STATE_TIMEOUT_ERROR = "States.Timeout"
+STATE_TIMEOUT_CAUSE = ("the job did not finish within the pipeline's 7 h 45 min bound, which counts the "
+                       "time it waited in the AWS Batch queue (for example behind the Fargate vCPU "
+                       "quota) as well as its run")
 # The stored executionError budget; the SendTaskFailure API itself accepts 32768.
 MAX_CAUSE_CHARS = 16384
 
@@ -114,6 +120,8 @@ def failure_for(error_block):
     cause = str(error_block.get("Cause") or "")
     if error in KNOWN_ERROR_CODES:
         return error, (cause or "the container reported a failure without a cause")[:MAX_CAUSE_CHARS]
+    if error == STATE_TIMEOUT_ERROR:
+        return ERROR_PIPELINE, STATE_TIMEOUT_CAUSE
     parsed = _parse_json_object(cause)
     if parsed is not None:
         if parsed.get("errorMessage"):
