@@ -396,6 +396,11 @@ def get_asset_audit(event, database_id, asset_id, params):
     page_size, exclusive_start_key, error = _page_arguments(event, params, ASSET_INDEX_KEY_ATTRIBUTES)
     if error:
         return error
+    # A token of another asset's trail names another partition of the index, which DynamoDB
+    # refuses as a start key.
+    if exclusive_start_key and \
+            exclusive_start_key["databaseId:assetId"] != f"{database_id}:{asset_id}":
+        return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
     # Every entry still under the live id of a deleted database whose move is running is the
     # deleted database's (`databaseRetirement`): none is the asset's of the live id.
     if databaseRetirement.move_in_progress(evaluation_table, database_id):
@@ -744,7 +749,8 @@ def _route_page(page, token, starting_token, database_id, asset_id, event_type, 
         start_key = None
         if starting_token:
             start_key = listing.decode_token(starting_token, ASSET_INDEX_KEY_ATTRIBUTES)
-            if start_key is None:
+            if start_key is None or \
+                    start_key["databaseId:assetId"] != f"{database_id}:{asset_id}":
                 return None
         entries, next_key = page.single(
             "AssetIndex", ASSET_INDEX_KEY_ATTRIBUTES,

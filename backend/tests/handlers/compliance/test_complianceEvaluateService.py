@@ -713,7 +713,9 @@ class TestListings:
         {"offset": 5},
         {"evaluationId": "e2", "databaseId:assetId": f"{DB}:{ASSET}"},
         {"evaluationId": 7, "databaseId:assetId": f"{DB}:{ASSET}", "evaluatedAt": "t"},
-    ], ids=["quarantine-listing-key", "offset-token", "missing-sort-key", "non-string-key"])
+        {"evaluationId": "e2", "databaseId:assetId": f"{DB}:another-asset", "evaluatedAt": "t"},
+    ], ids=["quarantine-listing-key", "offset-token", "missing-sort-key", "non-string-key",
+            "another-assets-key"])
     def test_a_history_token_from_another_listing_is_rejected_before_any_read(self, token):
         """A key that is not the AssetIndex's never reaches ExclusiveStartKey, where DynamoDB would
         fail it as an internal error."""
