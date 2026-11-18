@@ -345,3 +345,16 @@ def test_a_published_plain_http_discovery_url_is_refused(external, tmp_path, cap
     code, output = _run(external, tmp_path, "--audience", "api://vams")
     assert code == 1 and not output.exists()
     assert published in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("host", [
+    "localhost", "LOCALHOST", "127.0.0.1", "127.8.9.10", "::1", "[::1]", " localhost ",
+    "", "0.0.0.0", "10.0.0.1", "192.168.1.1", "localhost.example.com", "example.com", "::ffff:127.0.0.1",
+])
+def test_the_server_and_the_cli_agree_on_which_hosts_are_loopback(host):
+    """`setup-remote` checks URLs with the CLI's rule and the server checks its own bind and resource
+    URL with its own copy: the two must answer alike."""
+    from vamscli.commands.setup import is_loopback_host as cli_rule
+    from vams_mcp.config import is_loopback_host as server_rule
+
+    assert cli_rule(host) == server_rule(host)

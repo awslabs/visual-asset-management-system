@@ -340,7 +340,7 @@ from ..constants import (
 )
 from ..version import get_version
 from .exceptions import (
-    APIError, VersionMismatchError, AuthenticationError, OverrideTokenError, 
+    APIError, ConfigurationError, VersionMismatchError, AuthenticationError, OverrideTokenError,
     TokenExpiredError, PermissionDeniedError, RequestBlockedError,
     APIUnavailableError, AssetNotFoundError, AssetAlreadyExistsError,
     DatabaseNotFoundError, DatabaseAlreadyExistsError, DatabaseDeletionError,
@@ -1036,9 +1036,21 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             raise APIError(f"Failed to check API version: {e}")
             
     def get_amplify_config(self) -> Dict[str, Any]:
-        """Get Amplify configuration from API."""
+        """Get Amplify configuration from API.
+
+        A redirect that moves the read to plain http is refused, unless the base URL is itself http
+        and the redirect stays on its host: `setup` accepts plain http only for a loopback base URL.
+        """
         try:
             response = self.get(API_AMPLIFY_CONFIG, include_auth=False)
+            history = getattr(response, 'history', None)
+            final_url = getattr(response, 'url', None)
+            if isinstance(history, list) and history and isinstance(final_url, str):
+                final, base = urlparse(final_url), urlparse(self.base_url)
+                if final.scheme == 'http' and (base.scheme != 'http' or final.hostname != base.hostname):
+                    raise ConfigurationError(
+                        f"The deployment redirected the configuration read to plain http ({final.hostname}). "
+                        "Run setup with the deployment's https URL.")
             return response.json()
         except GlobalInfrastructureError:
             raise

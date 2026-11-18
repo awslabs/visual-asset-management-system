@@ -122,3 +122,77 @@ def test_setup_accepts_a_loopback_http_base_url(cli_runner, setup_mocks):
             result = cli_runner.invoke(cli, ["setup", "http://localhost:3001"])
         assert result.exit_code == 0, result.output
         mocks["profile_manager"].save_config.assert_called_once()
+
+
+class _RedirectingAdapter:
+    """A transport that answers the first request with a 302 to `target` (when set), and every other
+    request with the configuration."""
+
+    def __init__(self, target):
+        self.target = target
+        self.urls = []
+
+    def send(self, request, **kwargs):
+        import json
+
+        from requests.models import Response
+
+        self.urls.append(request.url)
+        response = Response()
+        response.request, response.url = request, request.url
+        if len(self.urls) == 1 and self.target:
+            response.status_code = 302
+            response.headers["Location"] = self.target
+            response._content = b""
+        else:
+            response.status_code = 200
+            response.headers["Content-Type"] = "application/json"
+            response._content = json.dumps(AMPLIFY).encode("utf-8")
+        return response
+
+    def close(self):
+        pass
+
+
+def _amplify_read(base_url, target):
+    from unittest.mock import MagicMock
+
+    from vamscli.utils.api_client import APIClient
+
+    client = APIClient(base_url, profile_manager=MagicMock())
+    adapter = _RedirectingAdapter(target)
+    client.session.mount("https://", adapter)
+    client.session.mount("http://", adapter)
+    return client, adapter
+
+
+@pytest.mark.parametrize(
+    "base_url, target",
+    [
+        ("https://vams.example.com", "http://vams.example.com/api/amplify-config"),
+        ("https://vams.example.com", "http://other.example.com/api/amplify-config"),
+        ("http://localhost:3001", "http://vams.example.com/api/amplify-config"),
+    ],
+    ids=["https-to-http", "https-to-http-elsewhere", "loopback-to-http-elsewhere"],
+)
+def test_a_config_read_redirected_to_plain_http_is_refused(base_url, target):
+    from vamscli.utils.exceptions import ConfigurationError
+
+    client, adapter = _amplify_read(base_url, target)
+    with pytest.raises(ConfigurationError, match="redirected the configuration read to plain http"):
+        client.get_amplify_config()
+    assert len(adapter.urls) == 2  # the redirect was followed, so the refusal is about where it went
+
+
+@pytest.mark.parametrize(
+    "base_url, target",
+    [
+        ("https://vams.example.com", None),
+        ("https://vams.example.com", "https://cdn.example.com/api/amplify-config"),
+        ("http://localhost:3001", "http://localhost:3001/other/amplify-config"),
+    ],
+    ids=["no-redirect", "https-to-https", "loopback-same-host"],
+)
+def test_a_config_read_that_stays_on_https_or_its_loopback_host_is_read(base_url, target):
+    client, _ = _amplify_read(base_url, target)
+    assert client.get_amplify_config()["api"] == AMPLIFY["api"]
