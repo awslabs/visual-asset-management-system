@@ -188,7 +188,7 @@ Amazon S3 delivers a bucket's event notifications only to a destination in the b
 
 The core stack in the deployment Region receives the topic ARNs through CloudFormation cross-Region references and subscribes its existing Amazon SQS queues — bucket sync, the file and asset indexers, the add-on indexers and the workflow trigger queues — to those topics with an `AWS::SNS::Subscription` whose `Region` is the bucket Region. The notification envelope the queues receive is the same as for a same-Region bucket, so every consumer downstream is unchanged. The core stack depends on the per-Region stacks, so `cdk deploy --all` creates them first and deletes them last.
 
-The S3 Asset Buckets table row for every bucket carries `bucketRegion` and, for a cross-account bucket, `bucketAccountId`; `GET /buckets`, the web create-database bucket picker, `vamscli database list-buckets` and the MCP `list_buckets` tool show both. For a bucket flagged with `useS3TransferAcceleration`, `GET /buckets` and the web picker also show `isAccelerated` (the picker marks it `(accelerated)`).
+The S3 Asset Buckets table row for every bucket carries `bucketRegion` and, for a cross-account bucket, `bucketAccountId`; `GET /buckets`, the web create-database bucket picker, `vamscli database list-buckets` and the MCP `list_buckets` tool show both. For a bucket with Transfer Acceleration on (the `useS3TransferAcceleration` key of an external bucket entry, or `app.assetBuckets.useS3TransferAcceleration` for the VAMS-created bucket), `GET /buckets` and the web picker also show `isAccelerated` (the picker marks it `(accelerated)`).
 
 ### The regional encryption key
 

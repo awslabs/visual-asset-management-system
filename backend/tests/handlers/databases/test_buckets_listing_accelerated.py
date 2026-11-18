@@ -60,6 +60,26 @@ class TestBucketsListingIsAccelerated:
         result = _list([_row("odd-bucket", isAccelerated="true")])
         assert result.Items[0].isAccelerated is False
 
+    def test_null_and_numeric_values_read_as_false(self):
+        # A stored NULL and a DynamoDB number are not the boolean true; a later switch to bool()
+        # would turn the number 1 into true.
+        rows = [
+            {"bucketId": "aa11bb22-c092-475f-978a-d39e5d5a2657", "bucketName": "null-bucket",
+             "baseAssetsPrefix": "/", "isAccelerated": None},
+            {"bucketId": "cc33dd44-c092-475f-978a-d39e5d5a2657", "bucketName": "number-bucket",
+             "baseAssetsPrefix": "/", "isAccelerated": 1},
+        ]
+        typed = [
+            {"bucketId": {"S": rows[0]["bucketId"]}, "bucketName": {"S": "null-bucket"},
+             "baseAssetsPrefix": {"S": "/"}, "isAccelerated": {"NULL": True}},
+            {"bucketId": {"S": rows[1]["bucketId"]}, "bucketName": {"S": "number-bucket"},
+             "baseAssetsPrefix": {"S": "/"}, "isAccelerated": {"N": "1"}},
+        ]
+        with patch("backend.backend.handlers.databases.databaseService.dbClient") as db:
+            db.scan.return_value = {"Items": typed}
+            result = get_buckets({}, {})
+        assert [i.isAccelerated for i in result.Items] == [False, False]
+
     def test_field_survives_serialization_and_other_fields_are_unchanged(self):
         row = _row("fast-bucket", isAccelerated=True, bucketRegion="us-west-2",
                    bucketAccountId="123456789012", isDefault=True)
