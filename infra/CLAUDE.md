@@ -393,11 +393,11 @@ Two consequences worth holding onto:
 The path tree counts **nodes, not routes**: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `test/api/apiStackCeilings.test.ts` asserts every figure above against the synthesized templates, so this table cannot silently go stale.
 
 **A fourth ceiling governs the storage stack: 200 Outputs per template, not adjustable.**
-`StorageResourcesBuilder` emits 141 of them where the next highest stack emits 32 — every table a
+`StorageResourcesBuilder` emits 153 of them (commercial template) where the next highest stack emits 32 — every table a
 sibling nested stack references contributes a `tableName` Output for its SSM parameter, plus a
 `tableArn` where a cross-stack grant needs one, and `ResourceNamesBuilder` consumes 74 as its own
 Parameters. Exceeding 200 is rejected at ValidateTemplate, the same class of failure that forced the
-API stack split, so roughly 30 more cross-stack-referenced storage resources would hit it.
+API stack split, so roughly 45 more cross-stack-referenced storage resources would hit it.
 `test/api/apiStackCeilings.test.ts` fails above 170, which leaves headroom to design a split rather than
 discovering the limit at the deploy that crosses it. Counted from a fresh synth, not from `cdk.out`.
 
