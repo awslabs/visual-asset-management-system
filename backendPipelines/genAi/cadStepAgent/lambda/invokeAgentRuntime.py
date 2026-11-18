@@ -116,6 +116,8 @@ def definition_summary(definition):
 
 
 def lambda_handler(event, context):
+    # Named first, so a malformed event still leaves the run's identifier in the log.
+    logger.info(f"Event: job={event.get('jobName')}")
     job_name = event["jobName"]
     definition = event["definition"]
     task_token = event.get("taskToken", "")
@@ -123,7 +125,7 @@ def lambda_handler(event, context):
     definition_obj = json.loads(definition[0]) if isinstance(definition, list) else definition
     if isinstance(definition_obj, str):
         definition_obj = json.loads(definition_obj)
-    logger.info(f"Event: job={job_name} {definition_summary(definition_obj)}")
+    logger.info(f"Definition: job={job_name} {definition_summary(definition_obj)}")
 
     payload = {
         "jobName": job_name,

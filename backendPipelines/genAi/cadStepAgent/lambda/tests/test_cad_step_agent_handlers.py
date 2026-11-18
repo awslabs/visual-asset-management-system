@@ -530,6 +530,12 @@ class TestExecuteBatchJob:
         assert _PROMPT not in logged
         assert "job=CadStepAgent_x mode=modify provider=bedrock" in logged
 
+    def test_a_malformed_event_still_logs_the_run_before_it_fails(self):
+        mod = _load("executeBatchJob.py")
+        with patch.object(mod, "logger", MagicMock()) as logger, pytest.raises(KeyError):
+            mod.lambda_handler({"jobName": "CadStepAgent_x"}, MagicMock())
+        assert "job=CadStepAgent_x" in str(logger.mock_calls)
+
 
 # ---------------------------------------------------------------------------------------------------
 # invokeAgentRuntime
@@ -621,6 +627,12 @@ class TestInvokeAgentRuntime:
         logged = str(logger.mock_calls)
         assert _PROMPT not in logged
         assert "job=CadStepAgent_x mode=modify provider=bedrock" in logged
+
+    def test_a_malformed_event_still_logs_the_run_before_it_fails(self):
+        mod = _load("invokeAgentRuntime.py")
+        with patch.object(mod, "logger", MagicMock()) as logger, pytest.raises(KeyError):
+            mod.lambda_handler({"jobName": "CadStepAgent_x"}, MagicMock())
+        assert "job=CadStepAgent_x" in str(logger.mock_calls)
 
 
 # ---------------------------------------------------------------------------------------------------
