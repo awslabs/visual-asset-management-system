@@ -951,6 +951,23 @@ class TestDatabaseListBucketsCommand:
             lines = [l for l in result.output.splitlines() if l.startswith('Accelerated:')]
             assert lines == ['Accelerated: Yes', 'Accelerated: No', 'Accelerated: No']
 
+    def test_list_buckets_counts_only_a_real_true_as_accelerated(self, cli_runner, generic_command_mocks):
+        """A stored string, 1 or None is not acceleration, matching the backend rule."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [
+                    {'bucketId': 'b1', 'bucketName': 'a', 'baseAssetsPrefix': '/', 'isAccelerated': 'true'},
+                    {'bucketId': 'b2', 'bucketName': 'b', 'baseAssetsPrefix': '/', 'isAccelerated': 1},
+                    {'bucketId': 'b3', 'bucketName': 'c', 'baseAssetsPrefix': '/', 'isAccelerated': None},
+                ]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets'])
+
+            assert result.exit_code == 0
+            lines = [l for l in result.output.splitlines() if l.startswith('Accelerated:')]
+            assert lines == ['Accelerated: No'] * 3
+
     def test_list_buckets_json_output_carries_the_acceleration_flag(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('database') as mocks:
             mocks['api_client'].list_buckets.return_value = {

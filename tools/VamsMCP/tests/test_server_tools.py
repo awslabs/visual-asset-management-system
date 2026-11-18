@@ -6,6 +6,7 @@ No live VAMS deployment or vamscli profile is required.
 
 import dataclasses
 import json
+import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -54,7 +55,10 @@ def test_list_buckets_passes_the_acceleration_flag_through(real_paginate_client)
     result = server.list_buckets()
     assert [r.get("isAccelerated") for r in result["Items"]] == [True, False, None]
     assert result["Items"][0]["bucketRegion"] == "us-west-2"
-    assert "isAccelerated" in (server.list_buckets.__doc__ or "")
+    # The agent reads the field name from the description; the wording around it is free.
+    assert re.search(r"\bisAccelerated\b", server.list_buckets.__doc__ or ""), (
+        "list_buckets description must name isAccelerated"
+    )
 
 
 def test_get_asset_calls_api(mock_client):
