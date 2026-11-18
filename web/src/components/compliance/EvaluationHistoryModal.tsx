@@ -29,7 +29,12 @@ import { StatusLabel } from "./complianceStateBadge";
 import BreakableIdentifier from "./BreakableIdentifier";
 import ExecutionFailureReasons from "./ExecutionFailureReasons";
 import { useLatestRequest } from "./listingFilters";
-import { ListingLoadFailed, loadFailureMessage } from "./listingStates";
+import {
+    ListingLoadFailed,
+    loadFailureMessage,
+    pageReachable,
+    tokenPagerCounts,
+} from "./listingStates";
 import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../list/tableSorting";
 
 const VERDICTS: Record<string, { type: string; label: string }> = {
@@ -214,10 +219,10 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
                     pagination={
                         <Pagination
                             currentPageIndex={currentPageIndex}
-                            pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                            openEnd={hasMore}
+                            {...tokenPagerCounts(tokens, loadedPages)}
                             disabled={loading}
                             onChange={({ detail }) => {
+                                if (!pageReachable(tokens, detail.currentPageIndex)) return;
                                 setCurrentPageIndex(detail.currentPageIndex);
                                 loadPage(
                                     detail.currentPageIndex - 1,

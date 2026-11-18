@@ -74,6 +74,8 @@ import {
     listedBefore,
     listingEmptyText,
     loadFailureMessage,
+    pageReachable,
+    tokenPagerCounts,
 } from "../components/compliance/listingStates";
 import ComplianceAssetCell from "../components/compliance/ComplianceAssetCell";
 import {
@@ -618,6 +620,7 @@ const DatabaseCompliancePage: React.FC = () => {
 
     const handlePageChange = ({ detail }: { detail: { currentPageIndex: number } }) => {
         const newIndex = detail.currentPageIndex;
+        if (!pageReachable(tokens, newIndex)) return;
         setCurrentPageIndex(newIndex);
         loadPage(newIndex - 1, tokens[newIndex - 1]);
     };
@@ -1188,8 +1191,7 @@ const DatabaseCompliancePage: React.FC = () => {
                         pagination={
                             <Pagination
                                 currentPageIndex={currentPageIndex}
-                                pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                                openEnd={hasMore}
+                                {...tokenPagerCounts(tokens, loadedPages)}
                                 onChange={handlePageChange}
                                 disabled={loading}
                                 ariaLabels={{

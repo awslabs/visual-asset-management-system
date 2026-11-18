@@ -59,6 +59,29 @@ export const listingEmptyText = (walk: ListingWalk, rows: string, nothing: strin
 };
 
 /**
+ * The Cloudscape Pagination counts of a token-paged walk. `tokens[i]` is the startingToken of page
+ * i (0-based; page 0 has none) and `loadedPages` how many pages the walk has fetched. The pager
+ * offers a page past the furthest one loaded only while that page reported a NextToken; the page
+ * shown does not decide it, so stepping back after the walk ended offers no page beyond its end.
+ */
+export const tokenPagerCounts = (
+    tokens: Record<number, string | undefined>,
+    loadedPages: number
+): { pagesCount: number; openEnd: boolean } => {
+    const more = tokens[loadedPages] !== undefined;
+    return { pagesCount: more ? loadedPages + 1 : loadedPages, openEnd: more };
+};
+
+/**
+ * Whether page `pageIndex` (1-based) can be loaded: the first page, or a page the walk holds a
+ * token for. A later page without one would load the first page again under its number.
+ */
+export const pageReachable = (
+    tokens: Record<number, string | undefined>,
+    pageIndex: number
+): boolean => pageIndex === 1 || tokens[pageIndex - 1] !== undefined;
+
+/**
  * The flash of a listing whose load failed: what could not be loaded, then the reason the service
  * or the browser gave ("Could not load the audit log: Failed to fetch").
  */
