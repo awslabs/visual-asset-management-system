@@ -115,6 +115,9 @@ describe("CogMapViewerComponent layout (D2)", () => {
         // The map fills the frame it is placed in; no fixed height of its own (UAT B).
         expect(mapColumn.style.height).toBe("100%");
         expect(root.style.height).toBe("100%");
+        // A host with no definite height cannot make the viewer grow without bound (uat-D2).
+        expect(root.style.contain).toBe("size");
+        expect(root.style.maxHeight).toBe("100vh");
         expect(listColumn.style.maxHeight).toBe("100%");
         // Opaque, so the frame's striped backdrop never shows behind the map or the layer list.
         expect(root.style.background).not.toBe("");

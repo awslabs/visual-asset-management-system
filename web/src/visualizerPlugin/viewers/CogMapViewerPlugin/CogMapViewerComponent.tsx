@@ -76,6 +76,12 @@ const VIEWER_STYLE: React.CSSProperties = {
     height: "100%",
     minWidth: 0,
     minHeight: `${MAP_MIN_HEIGHT_PX}px`,
+    // In a host that gives no definite height, `height: 100%` computes to auto, the map would size
+    // its own column and the column the map, and the viewer would grow without bound. Size containment
+    // makes the root ignore its content's size (it takes the frame's height, or the minimum), and the
+    // cap keeps it on screen in any case.
+    contain: "size",
+    maxHeight: "100vh",
     overflowX: "hidden",
     overflowY: "auto",
     boxSizing: "border-box",
