@@ -91,7 +91,7 @@ The AMIs and snapshots VAMS built, the EC2 Image Builder objects, the AWS Batch 
 
 The add-on's image builds write to two families of log groups that the services create themselves rather than the stack, so their retention is **never expire** and `cdk destroy` leaves them in place:
 
--   `/aws/codebuild/<project name>` — AWS CodeBuild build logs, one per entry of `app.addons.useEdhWorkstations.containers.buildAndPushImages[]`. The project names are among those recorded in [Record stack resource identifiers](../../deployment/uninstall.md#record-stack-resource-identifiers), so the AWS CodeBuild loop in [Step 4](../../deployment/uninstall.md#step-4-delete-amazon-cloudwatch-log-groups) deletes them.
+-   `/aws/codebuild/<project name>` — AWS CodeBuild build logs, one per entry of `app.addons.useEdhWorkstations.containers.buildAndPushImages[]`. The project names are among those recorded in [Record stack resource identifiers](../../deployment/uninstall.md#record-stack-resource-identifiers), and the log group list in [Step 4](../../deployment/uninstall.md#step-4-delete-amazon-cloudwatch-log-groups) includes them.
 -   `/aws/imagebuilder/<prefix>-<recipeId>` — EC2 Image Builder build logs of the EDH AMI recipes, where the prefix is `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-edh` lower-cased.
 
 ```bash

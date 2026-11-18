@@ -183,6 +183,10 @@ Two templates set up compliance roles:
 
 Both templates require `DATABASE_ID` and `ROLE_NAME` variables. For details on compliance permissions including the four compliance object types (`complianceSchema`, `complianceBinding`, `complianceEvaluation`, `complianceCascade`), see [User Guide: Compliance > Permissions](compliance.md#permissions).
 
+### Audit log permissions
+
+Access to audit log records is set per audit log group through the `auditLog` object type, whose one field, `auditLogGroup`, is the group key. The seeded `admin` role holds it for every group. No other role does, including custom roles that mirror `admin` by listing each object type, until an administrator adds a constraint on `auditLog` or imports the **Audit Reader** template (`ROLE_NAME` and `ALLOWED_GROUPS`, a pattern matched against the whole group key; the default `.*` allows every group). Audit records can name users and request details, so give the role to few people and prefer an MFA-required role.
+
 For template details, JSON format, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 
 ## Troubleshooting: why can't I access a resource?

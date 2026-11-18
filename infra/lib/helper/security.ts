@@ -566,14 +566,15 @@ export function generateContentSecurityPolicy(
     // Load additional CSP configuration
     const additionalCSPConfig = loadCSPAdditionalConfig();
 
+    // Presigned URLs reach asset buckets in any Region (an external bucket can sit outside the
+    // deployment Region), and the Region is a label inside the S3 host, so no single regional host
+    // covers them. A CSP wildcard matches only the leading label, so the source is the partition's
+    // service DNS suffix. It also admits virtual-hosted and S3 Transfer Acceleration hosts. The
+    // trade-off is documented in docs/architecture/security.md.
+    const awsServiceHosts = `https://*.${Service("S3", false).DnsSuffix}`;
+
     // Base CSP sources
-    let connectSrc = [
-        "'self'",
-        "blob:",
-        "data:",
-        `https://${apiUrl}`,
-        `https://${Service("S3", false).Endpoint}/`,
-    ];
+    let connectSrc = ["'self'", "blob:", "data:", `https://${apiUrl}`, awsServiceHosts];
 
     // The REST API custom domain, which amplify-config hands the clients when it is enabled. The
     // execute-api host above stays allowed for a browser still holding the earlier base URL.
@@ -617,9 +618,9 @@ export function generateContentSecurityPolicy(
 
     let workerSrc = ["'self'", "blob:", "data:"];
 
-    let imgSrc = ["'self'", "blob:", "data:", `https://${Service("S3", false).Endpoint}/`];
+    let imgSrc = ["'self'", "blob:", "data:", awsServiceHosts];
 
-    let mediaSrc = ["'self'", "blob:", "data:", `https://${Service("S3", false).Endpoint}/`];
+    let mediaSrc = ["'self'", "blob:", "data:", awsServiceHosts];
 
     let fontSrc = ["'self'"];
     let styleSrc = ["'self'", "'unsafe-inline'"];
@@ -633,7 +634,7 @@ export function generateContentSecurityPolicy(
     // presigned S3 URL, and without the origin the frame is blocked and the panel
     // renders empty. A viewer that frames a third-party document needs that
     // document's origin added, as the add-on sources below do.
-    let frameSrc = ["'self'", "blob:", `https://${Service("S3", false).Endpoint}/`];
+    let frameSrc = ["'self'", "blob:", awsServiceHosts];
 
     //Add cognito
     if (config.app.authProvider.useCognito.enabled) {
@@ -986,8 +987,10 @@ export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
                     },
                     {
                         // The same grant on an imported external asset bucket, whose ARN is a
-                        // configured literal rather than a stack reference.
-                        regex: "/^Resource::arn:[a-z-]+:s3:::[^/]+/\\*$/g",
+                        // configured literal rather than a stack reference. The bucket name
+                        // excludes `*` and `?`, so a wildcard bucket ARN is still reported as a
+                        // finding: this entry covers only a grant on one named bucket.
+                        regex: "/^Resource::arn:[a-z-]+:s3:::[^/\\*?]+/\\*$/g",
                     },
                 ],
             },

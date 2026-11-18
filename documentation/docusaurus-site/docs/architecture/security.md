@@ -257,34 +257,35 @@ flowchart TD
 
 **Tier 1 -- API Route Authorization** controls which API endpoints a user's role can access. Policies use `api` and `web` object types to gate route-level access.
 
-**Tier 2 -- Object Entity Authorization** controls which specific data entities a user can access. Policies use entity-type constraints (`database`, `asset`, `pipeline`, `workflow`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`, `complianceSchema`, `complianceEvaluation`, `complianceCascade`, `complianceBinding`) with attribute-based rules. API keys have no object type: access to them is governed at Tier 1 through `api` constraints on `/auth/api-keys` and `/auth/user/api-keys`.
+**Tier 2 -- Object Entity Authorization** controls which specific data entities a user can access. Policies use entity-type constraints (`database`, `asset`, `pipeline`, `workflow`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`, `complianceSchema`, `complianceEvaluation`, `complianceCascade`, `complianceBinding`, `auditLog`) with attribute-based rules. API keys have no object type: access to them is governed at Tier 1 through `api` constraints on `/auth/api-keys` and `/auth/user/api-keys`.
 
 ### Constraint Fields
 
 The following fields can be used in ABAC policy rules:
 
-| Field                      | Description                                                                   |
-| -------------------------- | ----------------------------------------------------------------------------- |
-| `databaseId`               | Database identifier                                                           |
-| `assetName`                | Asset name                                                                    |
-| `assetType`                | Asset type classification                                                     |
-| `tags`                     | Asset tags -- a **list** of values, so it takes `is_one_of` / `is_not_one_of` |
-| `tagName`                  | Tag name                                                                      |
-| `tagTypeName`              | Tag type name                                                                 |
-| `roleName`                 | Role name                                                                     |
-| `userId`                   | User identifier                                                               |
-| `pipelineId`               | Pipeline identifier                                                           |
-| `pipelineExecutionType`    | Pipeline execution type (`Lambda`, `SQS`, `EventBridge`, `DeadlineCloud`)     |
-| `workflowId`               | Workflow identifier                                                           |
-| `category`                 | Pipeline or workflow category, the grouping label assigned when it is created |
-| `name`                     | Pipeline name or workflow name (the display name, not the identifier)         |
-| `metadataSchemaName`       | Metadata schema name                                                          |
-| `metadataSchemaEntityType` | Metadata entity type                                                          |
-| `complianceSchemaName`     | Compliance schema name                                                        |
-| `complianceState`          | Asset compliance state (for example `quarantined`)                            |
-| `cascadeId`                | Compliance cascade identifier                                                 |
-| `object__type`             | Entity type for Tier 2 enforcement                                            |
-| `route__path`              | API route path for Tier 1 enforcement                                         |
+| Field                      | Description                                                                                                           |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`               | Database identifier                                                                                                   |
+| `assetName`                | Asset name                                                                                                            |
+| `assetType`                | Asset type classification                                                                                             |
+| `tags`                     | Asset tags -- a **list** of values, so it takes `is_one_of` / `is_not_one_of`                                         |
+| `tagName`                  | Tag name                                                                                                              |
+| `tagTypeName`              | Tag type name                                                                                                         |
+| `roleName`                 | Role name                                                                                                             |
+| `userId`                   | User identifier                                                                                                       |
+| `pipelineId`               | Pipeline identifier                                                                                                   |
+| `pipelineExecutionType`    | Pipeline execution type (`Lambda`, `SQS`, `EventBridge`, `DeadlineCloud`)                                             |
+| `workflowId`               | Workflow identifier                                                                                                   |
+| `category`                 | Pipeline or workflow category, the grouping label assigned when it is created                                         |
+| `name`                     | Pipeline name or workflow name (the display name, not the identifier)                                                 |
+| `metadataSchemaName`       | Metadata schema name                                                                                                  |
+| `metadataSchemaEntityType` | Metadata entity type                                                                                                  |
+| `complianceSchemaName`     | Compliance schema name                                                                                                |
+| `complianceState`          | Asset compliance state (for example `quarantined`)                                                                    |
+| `cascadeId`                | Compliance cascade identifier                                                                                         |
+| `auditLogGroup`            | Audit log group key, on the `auditLog` object type; the seeded `admin` role is the only role that holds it by default |
+| `object__type`             | Entity type for Tier 2 enforcement                                                                                    |
+| `route__path`              | API route path for Tier 1 enforcement                                                                                 |
 
 Each object type accepts only the fields that are meaningful for it. `category` and `name` are valid on the
 `pipeline` and `workflow` object types, which lets a role be scoped to a family of pipelines or workflows
@@ -449,15 +450,34 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | `default-src`     | `'none'`                                                                     |
 | `script-src`      | `'self'`, `'unsafe-hashes'`, `'wasm-unsafe-eval'`, per-script SHA-256 hashes |
 | `style-src`       | `'self'`, `'unsafe-inline'`                                                  |
-| `connect-src`     | `'self'`, `blob:`, `data:`, API Gateway URL, Amazon S3 endpoint              |
+| `connect-src`     | `'self'`, `blob:`, `data:`, API Gateway URL, AWS service hosts wildcard      |
 | `worker-src`      | `'self'`, `blob:`, `data:`                                                   |
-| `img-src`         | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                               |
-| `media-src`       | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                               |
+| `img-src`         | `'self'`, `blob:`, `data:`, AWS service hosts wildcard                       |
+| `media-src`       | `'self'`, `blob:`, `data:`, AWS service hosts wildcard                       |
 | `object-src`      | `'none'`                                                                     |
-| `frame-src`       | `'self'`, `blob:`                                                            |
+| `frame-src`       | `'self'`, `blob:`, AWS service hosts wildcard                                |
 | `frame-ancestors` | `'self'`                                                                     |
 | `font-src`        | `'self'`                                                                     |
 | `manifest-src`    | `'self'`                                                                     |
+
+:::note[AWS service hosts wildcard]
+`connect-src`, `img-src`, `media-src` and `frame-src` carry one source, `https://*.<suffix>`, where `<suffix>` is the DNS suffix of the deployment's partition (`amazonaws.com` in the commercial and GovCloud partitions, `amazonaws.com.cn`, `amazonaws.eu` and the isolated partitions' own suffixes elsewhere). The browser fetches presigned Amazon S3 URLs directly, and an asset bucket can be in any Region of the partition (see [Cross-Region buckets](../deployment/external-s3-setup.md#cross-region-buckets)). A CSP wildcard matches only the leading label, and the Region is a label inside the S3 host (`s3.us-west-2.amazonaws.com`), so no narrower single source covers every Region. The wildcard also covers virtual-hosted bucket hosts and `s3-accelerate` hosts.
+
+| Partition                 | Wildcard source in the four directives |
+| ------------------------- | -------------------------------------- |
+| `aws` (commercial)        | `https://*.amazonaws.com`              |
+| `aws-us-gov` (GovCloud)   | `https://*.amazonaws.com`              |
+| `aws-cn` (China)          | `https://*.amazonaws.com.cn`           |
+| `aws-eusc` (EU Sovereign) | `https://*.amazonaws.eu`               |
+| `aws-iso`                 | `https://*.c2s.ic.gov`                 |
+| `aws-iso-b`               | `https://*.sc2s.sgov.gov`              |
+| `aws-iso-e`               | `https://*.cloud.adc-e.uk`             |
+| `aws-iso-f`               | `https://*.csp.hci.ic.gov`             |
+
+The suffix comes from the partition's Amazon S3 hostname in the service table. The source admits every service host under that suffix. Synthesis fails, naming the partition, if a table row does not have the shape `s3.{region}.<suffix>` or its suffix has fewer than two labels or is a bare public suffix such as `com`, so a bad row can never emit `https://*.com`. Only the commercial partition has been verified in a live browser; the other partitions are verified by synthesis-time tests of the emitted policy.
+
+Trade-off: in those four directives the policy admits every AWS service host in the partition, including a bucket or API in another account. The earlier rule already admitted any bucket in the deployment Region, including one in another account. `script-src`, `worker-src`, `object-src`, `style-src` and `font-src` do not carry the wildcard, so a page cannot load script from these hosts. Operators who added another Region's S3 host to `cspAdditionalConfig.json` can remove it.
+:::
 
 :::note[Web workers]
 `worker-src` permits `'self'`, so a viewer can run a decoder in a same-origin web worker. The TIFF/TGA Image Viewer does: its worker is a content-hashed file served from the web application's own `assets/` path (`rasterWorker-<hash>.js`), not a `blob:` or `data:` script, and it loads no other origin. It needs no CSP change and no `allowUnsafeEvalFeatures`: the decoders (`utif2`, `tga-js`, `pako`) are pure JavaScript. If the worker file is blocked or stale, the viewer decodes on the page instead.
@@ -526,9 +546,13 @@ Entries are screened when the file is read at synthesis time. A non-string or em
 
 ### Policy size on the Application Load Balancer path
 
-The two web distributions deliver the policy by different mechanisms with different size limits, and the tighter of the two belongs to the Application Load Balancer. The ALB carries the whole policy in a single listener attribute, whose value Elastic Load Balancing limits to 1 KB; a CloudFront response-headers policy allows 1,783 bytes. The shipped policy measures 858 bytes, leaving roughly 166 bytes on the ALB path — about three further inline-script hashes, or two to three further host sources.
+The two web distributions deliver the policy by different mechanisms with different size limits, and the tighter of the two belongs to the Application Load Balancer. The ALB carries the whole policy in a single listener attribute, whose value Elastic Load Balancing limits to 1 KB; a CloudFront response-headers policy allows 1,783 bytes. The shipped policy measures 794 bytes (GovCloud) and 790 bytes (EU Sovereign), leaving roughly 230 bytes on the ALB path — about three further inline-script hashes, or two to three further host sources.
 
 A policy that exceeds the limit is rejected at synthesis time with a message naming its measured size, so the constraint surfaces before deployment rather than as a load balancer error or a truncated header. Because the limit belongs to the delivery mechanism rather than to the policy, the check applies only where an ALB serves the web front. Restricted partitions use the ALB exclusively, so a deployment that adds several CSP sources should confirm the size there.
+
+### Amazon S3 Transfer Acceleration and the CSP
+
+When [Amazon S3 Transfer Acceleration](../deployment/s3-transfer-acceleration.md) is on for an asset bucket, the browser loads files from `<bucket>.s3-accelerate.amazonaws.com`. The `https://*.amazonaws.com` source for the partition that the S3 entries in `connect-src`, `img-src`, `media-src` and `frame-src` use (fix #1616) admits that host, so the feature adds no source and does not change the policy length.
 
 ## Web Response Security Headers
 
@@ -561,6 +585,8 @@ The two restriction types are mutually exclusive — configuration validation re
 Enforcement occurs at URL use time. Restriction changes applied through a redeployment take effect immediately for all URLs, including those that were issued before the restriction change and have not yet expired.
 
 For external (imported) asset buckets, VAMS does not apply resource policies to buckets it does not own. To restrict presigned URLs on an external bucket, the bucket owner applies an equivalent deny statement manually to the bucket policy. See [External Amazon S3 bucket setup](../deployment/external-s3-setup.md) for the complete statement and instructions.
+
+Transfer Acceleration changes how these restrictions apply. A request through the accelerate endpoint reaches S3 from the client's public address, never through a VPC endpoint, so `allowedVpceIds` cannot be combined with an accelerated bucket (configuration validation rejects it). See the restrictions section of the [Transfer Acceleration page](../deployment/s3-transfer-acceleration.md#presigned-url-network-restrictions) for `allowedIpRanges`, and for which buckets the restriction covers.
 
 For custom bucket policy statements beyond network restrictions, `infra/config/policy/s3AdditionalBucketPolicyConfig.json` applies an operator-defined statement to all VAMS-created buckets. See the [configuration reference](../deployment/configuration-reference.md) for details.
 
