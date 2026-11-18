@@ -7,8 +7,8 @@
  * An over-long Content-Security-Policy must fail at synthesis, naming itself.
  *
  * The ALB delivers the whole policy as one listener attribute, and Elastic Load Balancing caps an
- * attribute value at 1 KB. The shipped policy measures 858 bytes on both restricted templates, so there
- * is roughly 166 bytes of margin — about three more inline-script hashes, or two or three more host
+ * attribute value at 1 KB. The shipped policy measures 794 (GovCloud) and 790 (EU Sovereign) bytes, so there
+ * is roughly 230 bytes of margin — about three more inline-script hashes, or two or three more host
  * sources added through `config/csp/cspAdditionalConfig.json`. Past the cap the deployment fails, and
  * the failure arrives from CloudFormation naming a listener attribute rather than the policy.
  *
@@ -65,7 +65,7 @@ describe("ALB CSP listener-attribute size guard", () => {
     });
 
     test("additions that push the policy past 1 KB throw, and the message names the size", () => {
-        // ~400 bytes of extra sources against 166 bytes of margin.
+        // ~400 bytes of extra sources against about 190 bytes of margin.
         serveCspAdditions({ connectSrc: [hostSource(200)], imgSrc: [hostSource(200)] });
         let thrown: Error | undefined;
         try {

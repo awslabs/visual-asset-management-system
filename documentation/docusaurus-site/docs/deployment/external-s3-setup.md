@@ -207,6 +207,10 @@ The deployment-Region queues keep their own CMK; a cross-Region topic delivers i
 
 A generated regional key is retained when the stack is deleted ([Uninstall](./uninstall.md)) and is listed under the cross-Region stack in the [AWS resources](../architecture/aws-resources.md) reference.
 
+### The browser needs no CSP change
+
+The browser downloads and uploads through presigned Amazon S3 URLs, so the web application's Content Security Policy must admit the bucket's host. It does for a bucket in any Region: `connect-src`, `img-src`, `media-src` and `frame-src` carry the partition's AWS service-host wildcard (see [Content Security Policy](../architecture/security.md#content-security-policy-csp)). If you added a bucket Region's S3 host to `cspAdditionalConfig.json` to work around earlier blocking, you can remove it.
+
 ### What the bucket owner grants
 
 The cross-account steps in this guide apply unchanged to a cross-Region bucket: the bucket policy ([Step 1](#step-1-configure-the-s3-bucket-policy)), CORS ([Step 2](#step-2-configure-cors)), the bucket key policy ([Step 3a](#3a-external-bucket-cmk-in-account-b-if-the-bucket-uses-sse-kms)) and the IAM policy ([Step 4](#step-4-configure-cross-account-iam-conditional)). Two details differ:
@@ -381,6 +385,8 @@ Apply a Cross-Origin Resource Sharing (CORS) configuration to the external bucke
 ```
 
 `AllowedMethods` accepts only `GET`, `PUT`, `POST`, `DELETE`, and `HEAD`. Amazon S3 answers the browser's `OPTIONS` preflight request from these rules, so `OPTIONS` is not listed. `ExposeHeaders` makes response headers readable by the VAMS web application: `ETag` for multipart uploads, which read each part's ETag from the upload response, and `Accept-Ranges`, `Content-Range`, `Content-Length`, and `Content-Encoding`, the range and streaming headers the VAMS-created asset bucket exposes, so a ranged read returns the same readable headers from either bucket. The Robotics Data Viewer reads `.mcap` and `.bag` files through these range headers.
+
+A viewer that reads a file straight from the bucket through a presigned URL, such as the Three.js viewer, sends the VAMS web origin with each request, so the single origin listed in `AllowedOrigins` is all the rule needs for it.
 
 Apply the CORS configuration using the AWS Command Line Interface (AWS CLI):
 
