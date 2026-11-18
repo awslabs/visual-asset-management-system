@@ -213,6 +213,7 @@ export const downloadAsset = async ({
     versionId,
     assetVersionId = undefined,
     downloadType = "assetFile",
+    signal = undefined,
 }: any) => {
     try {
         // Build request body with new model structure
@@ -229,6 +230,7 @@ export const downloadAsset = async ({
 
         const response = await apiClient.post(`database/${databaseId}/assets/${assetId}/download`, {
             body: body,
+            ...(signal ? { signal } : {}),
         });
 
         // Handle new response structure
