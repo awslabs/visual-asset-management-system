@@ -352,7 +352,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
                 ...schemaRows,
                 ...(nonSchemaImported.map((row) => ({
                     ...row,
-                    isNew: canDelete || !stored.has(row.metadataKey),
+                    isNew: canDelete || !stored.has(row.metadataKey ?? ""),
                     hasChanges: true,
                     isEditing: false,
                     isDeleted: false,
