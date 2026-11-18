@@ -436,10 +436,13 @@ def delete_database(database_id, claims_and_roles=None):
         logger.info(f"Deleting database: {database_id}")
         # The compliance data moves under `<databaseId>#deleted` with the row. The move starts
         # before the row moves (its record keeps a re-created database from showing or changing
-        # the deleted one's data until it is done); a failure here fails the delete.
+        # the deleted one's data until it is done); a failure here fails the delete, and a failure
+        # moving the row undoes the record (`databaseRetirement.cancel`).
         from common.compliance import databaseRetirement
+        tables = compliance_tables()
+        previous_record = databaseRetirement.get_record(tables.evaluation, database_id)
         try:
-            databaseRetirement.begin(compliance_tables(), database_id, claims_and_roles["tokens"][0])
+            databaseRetirement.begin(tables, database_id, claims_and_roles["tokens"][0])
         except databaseRetirement.WaitIndexNotReady:
             # Right after an update that adds the compliance wait index: nothing was changed, and
             # the delete works once the index is active.
@@ -452,8 +455,15 @@ def delete_database(database_id, claims_and_roles=None):
         # The Casbin type marker is not part of the stored record
         database.pop("object__type", None)
         database['databaseId'] = database_id + "#deleted"
-        table.put_item(Item=database)
-        table.delete_item(Key={'databaseId': database_id})
+        try:
+            table.put_item(Item=database)
+            table.delete_item(Key={'databaseId': database_id})
+        except Exception:
+            # The database stays live, so its retirement record must not hide its compliance data.
+            logger.exception(f"Delete of database {database_id} failed moving its row; its "
+                             "compliance retirement record is restored")
+            databaseRetirement.cancel(tables, database_id, previous_record)
+            raise
         hand_off_compliance_move(database_id)
         
         return DeleteDatabaseResponseModel(

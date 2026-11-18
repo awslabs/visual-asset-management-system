@@ -311,6 +311,8 @@ The dependency check runs after the database is found and the caller is authoriz
 
 The `503` occurs only right after an update that adds the compliance evaluation table's `PipelineRuleWaitIndex`, while Amazon DynamoDB still builds that index: the delete changes nothing and works once the index is active (see [v2.6 to v2.7](../deployment/update-the-solution.md#v26-to-v27)).
 
+A delete that fails after it has started leaves the database in place with its compliance data readable and changeable, as before the delete. Compliance cascades awaiting approval and pipeline rules waiting to start that the delete already closed stay closed.
+
 ---
 
 ## Related resources
