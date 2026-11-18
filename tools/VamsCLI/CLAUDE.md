@@ -91,7 +91,7 @@ tools/VamsCLI/
       retry_config.py        # Retry settings with env var overrides
       features.py            # Feature switch utilities
       upload_manager.py      # Multi-part upload orchestration
-      download_manager.py    # Parallel download orchestration (atomic writes, size verify, mtime preservation)
+      download_manager.py    # Parallel download orchestration (atomic writes, size verify, mtime preservation; confined_local_path keeps each file under the download directory)
       file_processor.py      # File validation and processing
       sync_engine.py         # Sync plan computation (local/remote diff)
       vamsignore.py          # .vamsignore gitignore-style pattern matching
