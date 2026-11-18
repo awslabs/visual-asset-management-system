@@ -38,6 +38,7 @@ from models.compliance import (
     RULE_STATUS_ERROR,
     RULE_STATUS_EVALUATED,
     RULE_TYPE_MODELS,
+    RESERVED_RULE_NAME_PREFIX,
     Tolerance,
     ToleranceOperator,
     VersionCoverageRule,
@@ -198,7 +199,8 @@ def schema_format(schema_body: Any) -> str:
 # a rule that does not parse, and the rules of a parent `extends` names that was not found. The
 # messages name no schema and no rule content.
 UNREADABLE_RULE_MESSAGE = "The rule definition could not be read"
-UNRESOLVED_PARENT_RULE_NAME = "extends"
+# Under the reserved prefix, so no rule of the schema can carry the same name.
+UNRESOLVED_PARENT_RULE_NAME = f"{RESERVED_RULE_NAME_PREFIX}extends"
 UNRESOLVED_PARENT_MESSAGE = ("The parent schema was not found as a vams-rules-v1 schema, or the "
                              "inheritance chain is too deep; its rules were not evaluated")
 

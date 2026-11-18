@@ -21109,7 +21109,7 @@ components:
                     description: "Name of a parent schema whose rules are inherited. A rule of the same name in this schema replaces the parent's."
                 rules:
                     type: object
-                    description: "Rules keyed by rule name. At least one rule is required."
+                    description: "Rules keyed by rule name. At least one rule is required. A rule name may not start with `$` (reserved for results an evaluation records itself)."
                     additionalProperties:
                         oneOf:
                             - $ref: "#/components/schemas/compliancePipelineRule"
