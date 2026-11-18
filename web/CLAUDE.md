@@ -288,6 +288,8 @@ web/
 
 `common/constants/fileFormats.ts` is the one definition of the formats and size the web shows as a file's own preview: `previewFileFormats` (mirrors the backend's `ALLOWED_PREVIEW_FILE_EXTENSIONS`; `.tga`, `.tif` and `.tiff` are never in it because browsers cannot display them), `PREVIEW_FILE_SIZE_LIMIT_BYTES` (5 MiB) and `isSelfPreviewable(fileName, size)` (extension in the list and size known and STRICTLY under the limit). The search thumbnail (`FilePreviewThumbnailCell.tsx`) and the file details panel call the helper instead of repeating the check, and the 3D thumbnail pipeline writes no preview for such a file. Drift tests pin the lists and the limit to the backend and the container.
 
+The file page (`components/single/ViewFile.tsx`) builds the viewer's single-file entry with `buildSingleViewerEntry` (`components/single/singleViewerEntry.ts`). On the Preview tab the entry carries the preview file's key and NO version ID: a preview file is its own S3 object, the source file's S3 version ID does not exist for it, and an empty version ID asks for its current version. Every viewer takes the entry from that one place; never pass the source version ID with a preview key. Because a preview is requested without a version, it is the preview of the file's latest version, so for an older file version the tab shows the `OLDER_VERSION_PREVIEW_NOTICE` alert (`previewIsOfLatestVersionOnly`, decided from the file's version list; no notice for the latest version, an asset-version view, or an unknown latest version).
+
 ## 3. Critical Rules
 
 ### Rule 1: Preserve Copyright Headers
