@@ -491,6 +491,9 @@ export class RasterLayerManager {
     private handleMapError(event: any): void {
         const item = this.items.find((candidate) => candidate.sourceId === event?.sourceId);
         if (!item || item.entry.mode !== "tile" || item.entry.failed || !item.refreshNow) return;
+        // A hidden layer has no source on the map: an error that still arrives for it is from a read
+        // that was in flight when it was hidden, and says nothing about the file.
+        if (!item.entry.visible) return;
         // A read failed. maplibre reports a failed cog:// tile only as "Request failed" (geotiff.js
         // drops the HTTP status), so the cause is told apart by what happens next: the first error asks
         // for a fresh URL (an expired or revoked presigned URL); an error soon after that fresh URL is

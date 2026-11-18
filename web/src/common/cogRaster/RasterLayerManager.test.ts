@@ -426,6 +426,31 @@ describe("RasterLayerManager", () => {
         }
     });
 
+    it("ignores map errors that still arrive for a hidden layer (r5-D3)", async () => {
+        jest.useFakeTimers();
+        try {
+            const map = new FakeMap();
+            const request = jest.fn().mockResolvedValue("https://s3/fresh");
+            const manager = new RasterLayerManager(map, { ...OPTIONS(map), requestUrl: request });
+            manager.add(prepared("1.tif"));
+            const sourceId = [...map.sources.keys()][0];
+            const [entry] = manager.entries();
+            await manager.setVisible(entry.id, false);
+            for (let i = 0; i < 6; i++) {
+                map.listeners.get("error")!({ sourceId, error: new Error("Request failed") });
+                await jest.advanceTimersByTimeAsync(AUTO_RETRY_DELAY_MS);
+            }
+            expect(manager.entries()[0].failed).toBeNull();
+            expect(request).not.toHaveBeenCalled();
+            // Shown again, it reads as usual.
+            await expect(manager.setVisible(entry.id, true)).resolves.toBe(true);
+            expect(manager.entries()[0].failed).toBeNull();
+            manager.dispose();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
     it("keeps a hidden placed image's blob URL until the layer is removed or the map goes (item 1)", async () => {
         const map = new FakeMap();
         const manager = new RasterLayerManager(map, OPTIONS(map));
