@@ -699,8 +699,9 @@ Every AWS Fargate job definition carries an explicit name: each construct choose
 ## AWS CodeArtifact
 
 Deployed with the Image to 3D pipeline when it builds with AWS CodeBuild (`useCodeBuild: true`) in a
-Region that offers AWS CodeArtifact (13 commercial Regions; not AWS GovCloud (US) or the AWS European
-Sovereign Cloud). Each build installs its Python dependencies from source, so a build is only as
+Region that offers AWS CodeArtifact (some commercial Regions, see the
+[AWS CodeArtifact endpoints page](https://docs.aws.amazon.com/general/latest/gr/codeartifact.html); not AWS
+GovCloud (US) or the AWS European Sovereign Cloud). Each build installs its Python dependencies from source, so a build is only as
 reliable as the public package index is reachable from the build subnet. Fetching through a
 pull-through cache makes a rebuild reproducible. In a Region without CodeArtifact no domain is created
 and the builds install from the public index (`pypi.org`, `files.pythonhosted.org`), which the build
