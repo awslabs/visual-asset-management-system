@@ -1349,7 +1349,7 @@ Known feature flags:
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
 -   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval). The Three.js viewer opens USD (.usd/.usda/.usdc/.usdz) without it; with it, Needle and Three.js both match USD and the user picks.
--   Three.js referenced files (textures, `.mtl`, USD layers) are fetched only through `ThreeJSViewerPlugin/utils/assetDependencyResolver.ts` (path rules, limits, URL modifier with placeholder); see "Three.js Referenced Files" in `web/src/visualizerPlugin/CLAUDE.md`.
+-   Three.js referenced files (textures, `.mtl`, USD layers) are fetched only through `ThreeJSViewerPlugin/utils/assetDependencyResolver.ts` (path rules, limits, URL modifier with placeholder) and, like the main file, read from presigned URLs of the download route through `core/presignedFetch.ts` rather than the redirecting streaming route (#1623); see "Three.js Referenced Files" in `web/src/visualizerPlugin/CLAUDE.md`.
 -   Add-on flags (`addons/addonFeatures.ts`) are described in each add-on's own steering
 -   Additional flags may exist in deployed configurations
 

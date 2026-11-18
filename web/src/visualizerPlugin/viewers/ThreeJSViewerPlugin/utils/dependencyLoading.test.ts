@@ -20,6 +20,14 @@ import {
     USD_NO_GEOMETRY_MESSAGE,
 } from "./dependencyLoading";
 import { loadFile } from "./fileLoaders";
+import { clearPresignedUrlCache } from "../../../core/presignedFetch";
+
+jest.mock("../../../../services/APIService", () => ({
+    downloadAsset: jest.fn(async ({ key }: { key: string }) => [
+        true,
+        `https://s3.test/${encodeURIComponent(key)}?X-Amz-Signature=sig`,
+    ]),
+}));
 
 jest.mock("./fileLoaders", () => ({
     ...jest.requireActual("./fileLoaders"),
@@ -41,9 +49,12 @@ class FakeLoadingManager {
 }
 
 function installFetch(files: Record<string, string>): string[] {
+    clearPresignedUrlCache();
     const requested: string[] = [];
     global.fetch = jest.fn(async (url: string) => {
-        const key = decodeURIComponent(url.replace(/^.*\/download\/stream\//, ""));
+        const key = decodeURIComponent(
+            url.replace(/^https:\/\/s3\.test\//, "").replace(/\?.*$/, "")
+        );
         requested.push(key);
         if (files[key] === undefined) {
             return { ok: false, status: 403, headers: { get: (): string | null => null } };
@@ -62,8 +73,6 @@ function newResolver() {
     return new AssetDependencyResolver({
         assetId: "asset-1",
         databaseId: "db-1",
-        apiEndpoint: "https://api.example.test/",
-        getAuthHeader: () => Promise.resolve("Bearer t"),
     });
 }
 

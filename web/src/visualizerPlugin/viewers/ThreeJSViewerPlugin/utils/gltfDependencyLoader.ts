@@ -16,7 +16,6 @@ interface DependencyLoaderConfig {
     assetId: string;
     databaseId: string;
     baseFileKey: string;
-    apiEndpoint: string;
     assetVersionId?: string;
     // Note: versionId is intentionally NOT included here.
     // Dependencies are always loaded without versionId because they are
@@ -136,7 +135,6 @@ export async function preloadGLTFDependencies(
     const resolver = new AssetDependencyResolver({
         assetId: config.assetId,
         databaseId: config.databaseId,
-        apiEndpoint: config.apiEndpoint,
         assetVersionId: config.assetVersionId,
     });
     return resolveGLTFDependencies(gltfArrayBuffer, config.baseFileKey, resolver, onProgress);
