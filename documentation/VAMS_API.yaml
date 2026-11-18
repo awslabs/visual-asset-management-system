@@ -12124,7 +12124,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or a binding change of the database is still being applied (`The compliance schema binding of this database is still being applied; try again when it finishes`)."
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or a binding change of the database is still being applied (`The compliance schema binding of this database is still being applied; try again when it finishes`; a stalled one: `The compliance schema binding of this database stopped while it was being applied; repeat the same change to resume it`)."
                     content:
                         application/json:
                             schema:
