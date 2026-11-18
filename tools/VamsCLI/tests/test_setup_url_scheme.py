@@ -125,11 +125,11 @@ def test_setup_accepts_a_loopback_http_base_url(cli_runner, setup_mocks):
 
 
 class _RedirectingAdapter:
-    """A transport that answers the first request with a 302 to `target` (when set), and every other
-    request with the configuration."""
+    """A transport that answers each request with a 302 to the next of `target` (one URL, a list of
+    URLs, or None), then with the configuration."""
 
     def __init__(self, target):
-        self.target = target
+        self.targets = [] if target is None else [target] if isinstance(target, str) else list(target)
         self.urls = []
 
     def send(self, request, **kwargs):
@@ -140,9 +140,9 @@ class _RedirectingAdapter:
         self.urls.append(request.url)
         response = Response()
         response.request, response.url = request, request.url
-        if len(self.urls) == 1 and self.target:
+        if len(self.urls) <= len(self.targets):
             response.status_code = 302
-            response.headers["Location"] = self.target
+            response.headers["Location"] = self.targets[len(self.urls) - 1]
             response._content = b""
         else:
             response.status_code = 200
@@ -172,16 +172,24 @@ def _amplify_read(base_url, target):
         ("https://vams.example.com", "http://vams.example.com/api/amplify-config"),
         ("https://vams.example.com", "http://other.example.com/api/amplify-config"),
         ("http://localhost:3001", "http://vams.example.com/api/amplify-config"),
+        (
+            "https://vams.example.com",
+            ["http://plain.example.com/api/amplify-config", "https://other.example.com/api/amplify-config"],
+        ),
     ],
-    ids=["https-to-http", "https-to-http-elsewhere", "loopback-to-http-elsewhere"],
+    ids=["https-to-http", "https-to-http-elsewhere", "loopback-to-http-elsewhere", "https-to-http-to-https"],
 )
 def test_a_config_read_redirected_to_plain_http_is_refused(base_url, target):
     from vamscli.utils.exceptions import ConfigurationError
 
     client, adapter = _amplify_read(base_url, target)
-    with pytest.raises(ConfigurationError, match="redirected the configuration read to plain http"):
+    with pytest.raises(ConfigurationError, match="redirected the configuration read to plain http") as excinfo:
         client.get_amplify_config()
-    assert len(adapter.urls) == 2  # the redirect was followed, so the refusal is about where it went
+    # Every redirect was followed, so the refusal is about where the chain went, and it names the
+    # plain-http hop rather than the last one.
+    assert len(adapter.urls) == len(adapter.targets) + 1
+    http_hop = next(url for url in adapter.targets if url.startswith("http://"))
+    assert f"({http_hop.split('/')[2]})" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(

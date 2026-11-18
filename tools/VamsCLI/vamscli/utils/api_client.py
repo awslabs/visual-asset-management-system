@@ -1038,19 +1038,24 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def get_amplify_config(self) -> Dict[str, Any]:
         """Get Amplify configuration from API.
 
-        A redirect that moves the read to plain http is refused, unless the base URL is itself http
-        and the redirect stays on its host: `setup` accepts plain http only for a loopback base URL.
+        A redirect hop to plain http is refused, unless the base URL is itself http and the hop stays
+        on its host: `setup` accepts plain http only for a loopback base URL. Every hop is checked, not
+        only the last, because a reply on an http hop can steer the rest of the chain.
         """
         try:
             response = self.get(API_AMPLIFY_CONFIG, include_auth=False)
             history = getattr(response, 'history', None)
             final_url = getattr(response, 'url', None)
             if isinstance(history, list) and history and isinstance(final_url, str):
-                final, base = urlparse(final_url), urlparse(self.base_url)
-                if final.scheme == 'http' and (base.scheme != 'http' or final.hostname != base.hostname):
-                    raise ConfigurationError(
-                        f"The deployment redirected the configuration read to plain http ({final.hostname}). "
-                        "Run setup with the deployment's https URL.")
+                base = urlparse(self.base_url)
+                # history[0] is the request the caller made; each later entry and the final response
+                # is a hop a redirect chose.
+                for hop_url in [getattr(r, 'url', '') for r in history[1:]] + [final_url]:
+                    hop = urlparse(hop_url if isinstance(hop_url, str) else '')
+                    if hop.scheme == 'http' and (base.scheme != 'http' or hop.hostname != base.hostname):
+                        raise ConfigurationError(
+                            f"The deployment redirected the configuration read to plain http ({hop.hostname}). "
+                            "Run setup with the deployment's https URL.")
             return response.json()
         except GlobalInfrastructureError:
             raise
