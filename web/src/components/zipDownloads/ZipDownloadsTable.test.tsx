@@ -685,4 +685,63 @@ describe("ZipDownloadsTable — Show all users (asset tab)", () => {
         await screen.findByText("archive-1.zip");
         expect(screen.queryByText("Show all users")).toBeNull();
     });
+
+    /** A list call that answers only when the test says so. */
+    const deferred = () => {
+        let resolve: (value: unknown) => void = () => undefined;
+        const promise = new Promise((r) => {
+            resolve = r;
+        });
+        return { promise, resolve };
+    };
+
+    it("drops a late answer for the list the user switched away from", async () => {
+        mockAllowed = { ...ALL, [ALL_USERS_ROUTE]: true };
+        const mine = deferred();
+        mockAssetList.mockReturnValueOnce(mine.promise);
+        mockAllUsersList.mockResolvedValue(
+            page([job("2", "SUCCEEDED", { requestedBy: "bob", isOwn: false })])
+        );
+        renderTable();
+        await waitFor(() => expect(mockAssetList).toHaveBeenCalledTimes(1));
+
+        await userEvent.click(screen.getByText("Show all users"));
+        expect(await screen.findByText("archive-2.zip")).toBeInTheDocument();
+        // The caller's own list answers after the switch, with a page token of its own route.
+        await act(async () => {
+            mine.resolve(page([job("1", "SUCCEEDED")], "mine-token"));
+        });
+
+        expect(screen.queryByText("archive-1.zip")).toBeNull();
+        expect(screen.getByText("archive-2.zip")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    });
+
+    it("drops a late Load more for the list the user switched away from", async () => {
+        mockAllowed = { ...ALL, [ALL_USERS_ROUTE]: true };
+        mockAssetList.mockResolvedValueOnce(page([job("3", "SUCCEEDED")], "mine-token"));
+        const more = deferred();
+        mockAssetList.mockReturnValueOnce(more.promise);
+        mockAllUsersList.mockResolvedValue(
+            page([job("2", "SUCCEEDED", { requestedBy: "bob", isOwn: false })], "all-token")
+        );
+        renderTable();
+        await screen.findByText("archive-3.zip");
+        await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+
+        await userEvent.click(screen.getByText("Show all users"));
+        expect(await screen.findByText("archive-2.zip")).toBeInTheDocument();
+        await act(async () => {
+            more.resolve(page([job("1", "SUCCEEDED")], null));
+        });
+
+        expect(screen.queryByText("archive-1.zip")).toBeNull();
+        expect(screen.queryByText("archive-3.zip")).toBeNull();
+        // The page token is still the all-users list's own.
+        mockAllUsersList.mockResolvedValueOnce(page([], null));
+        await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+        expect(mockAllUsersList).toHaveBeenLastCalledWith(
+            expect.objectContaining({ startingToken: "all-token" })
+        );
+    });
 });

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
@@ -198,6 +198,25 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         };
     }, []);
 
+    // The list the rows, the page token and every answer in flight belong to: the scope toggle and
+    // the asset. A reused asset page hands the table another asset without remounting it. When the
+    // list changes, the rows and token go, and an answer sent for the previous list is dropped, so
+    // a late answer never replaces the rows or sends another route's token with Load more.
+    const listKey = `${showAllUsers ? "all" : "mine"}|${databaseId ?? ""}|${assetId ?? ""}`;
+    const [shownListKey, setShownListKey] = useState(listKey);
+    if (shownListKey !== listKey) {
+        setShownListKey(listKey);
+        setJobs([]);
+        setNextToken(null);
+        setLoaded(false);
+        setLoading(false);
+        setLoadingMore(false);
+    }
+    const currentListKey = useRef(listKey);
+    useLayoutEffect(() => {
+        currentListKey.current = listKey;
+    }, [listKey]);
+
     const fetchPage = useCallback(
         (startingToken?: string | null) =>
             assetScoped && showAllUsers
@@ -229,7 +248,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         async (quiet = false) => {
             if (!quiet) setLoading(true);
             const result: any = await fetchPage(null);
-            if (!mounted.current) return;
+            if (!mounted.current || currentListKey.current !== listKey) return;
             if (!quiet) setLoading(false);
             if (!Array.isArray(result) || result[0] !== true) {
                 const message = (Array.isArray(result) && result[1]) || "";
@@ -251,7 +270,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                 setNextToken(page.NextToken);
             }
         },
-        [fetchPage]
+        [fetchPage, listKey]
     );
 
     // Load when the surface becomes active, and again when the parent asks.
@@ -270,9 +289,10 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
 
     const loadMore = async () => {
         if (!nextToken) return;
+        const sentFor = listKey;
         setLoadingMore(true);
         const result: any = await fetchPage(nextToken);
-        if (!mounted.current) return;
+        if (!mounted.current || currentListKey.current !== sentFor) return;
         setLoadingMore(false);
         if (!Array.isArray(result) || result[0] !== true) {
             setNotice({
@@ -603,12 +623,9 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                         <SegmentedControl
                             selectedId={scope}
                             label="Whose download jobs to show"
-                            onChange={({ detail }) => {
-                                setScope(detail.selectedId === "all" ? "all" : "mine");
-                                setLoaded(false);
-                                setJobs([]);
-                                setNextToken(null);
-                            }}
+                            onChange={({ detail }) =>
+                                setScope(detail.selectedId === "all" ? "all" : "mine")
+                            }
                             options={[
                                 { id: "mine", text: "My jobs" },
                                 { id: "all", text: "Show all users" },
