@@ -186,6 +186,13 @@ describe("stopped run with sub-processes still running (#1020)", () => {
         expect(confirm).toHaveAttribute("aria-disabled", "true");
         expect(confirm).not.toBeDisabled();
         expect(confirm).toHaveFocus();
+        // The hint's own button (behind the open dialog) reads the same busy text as the dialog.
+        expect(
+            within(screen.getByTestId("stopped-run-subprocesses-hint")).getByRole("button", {
+                name: "Aborting...",
+                hidden: true,
+            })
+        ).toBeInTheDocument();
     });
 
     it("keeps the hint but hides the button for a caller who cannot abort", async () => {

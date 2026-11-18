@@ -96,7 +96,7 @@ const StoppedRunSubProcessesHint: React.FC<{
                 <BusyButton
                     onClick={() => setConfirmOpen(true)}
                     busy={busy}
-                    busyLabel="Aborting…"
+                    busyLabel="Aborting..."
                     className="orch-outline mt-2 px-3 py-1 text-sm font-semibold rounded border border-yellow-700 dark:border-yellow-400 text-yellow-800 dark:text-yellow-200 hover:bg-yellow-100 dark:hover:bg-yellow-900/40"
                 >
                     Abort
