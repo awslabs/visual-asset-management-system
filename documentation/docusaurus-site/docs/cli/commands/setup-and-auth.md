@@ -177,7 +177,7 @@ Username/password sign-in works only for users that exist natively in the Amazon
 -   **Amazon Cognito federated to OIDC** (`useCognito.useOidc`) — same as SAML; the identity lives in the external provider.
 
 ```bash
-vamscli auth login --user-id user@example.com --token-override "your-token"
+echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin
 ```
 
 Obtain the token from the identity provider or from the VAMS web application after signing in through the federated login button. Token override validates the token against the VAMS API rather than against a specific issuer, so a token from any of these providers works. A user pool with federation enabled still accepts username/password for its **native** users (for example the initial administrator), so an administrator can keep using `--username`.
@@ -599,7 +599,7 @@ vamscli profile switch production
 
 ```bash
 # Set override token
-vamscli auth login --user-id user@example.com --token-override "external_token" --expires-at "+7200"
+echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin --expires-at "+7200"
 
 # Use commands normally
 vamscli assets list -d my-database

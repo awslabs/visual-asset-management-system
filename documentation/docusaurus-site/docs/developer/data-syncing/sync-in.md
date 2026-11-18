@@ -115,7 +115,7 @@ profile once, then log in with the key:
 
 ```bash
 vamscli setup https://your-vams-api-url --skip-version-check
-vamscli auth login --user-id sync-bot@example.com --token-override "$VAMS_API_KEY"
+printenv VAMS_API_KEY | vamscli auth login --user-id sync-bot@example.com --token-override-stdin
 ```
 
 `--user-id` is the VAMS user the key was issued for. Unlike a Cognito password login, an
@@ -443,7 +443,7 @@ vamscli() { command vamscli --profile "$VAMS_PROFILE" "$@"; }
 
 # Authenticate with the integration's API key (injected as a secret)
 vamscli setup "$VAMS_URL" --skip-version-check
-vamscli auth login --user-id sync-bot@example.com --token-override "$VAMS_API_KEY"
+printenv VAMS_API_KEY | vamscli auth login --user-id sync-bot@example.com --token-override-stdin
 
 # 1. Pull the latest from the external source into the staging directory
 #    (implement fetch_from_source for your system: rsync, S3 copy, API download, ...)

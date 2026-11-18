@@ -118,10 +118,10 @@ The deployment uses an external identity provider rather than Amazon Cognito, so
 
 **Resolution:**
 
-Use an override token instead. Obtain a valid token from your identity provider and supply it with `--user-id` and `--token-override`, or store it with `vamscli auth set-override`.
+Use an override token instead. Obtain a valid token from your identity provider and pipe it to `--token-override-stdin` with `--user-id`, or store it with `vamscli auth set-override --token-stdin`.
 
 ```bash
-vamscli auth login --user-id user@example.com --token-override "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin
 ```
 
 ### MFA Code Rejected
@@ -216,8 +216,8 @@ Override tokens are used directly and are never refreshed. VamsCLI performs a pr
 
 **Resolution:**
 
-1. Set a fresh token: `vamscli auth set-override -u user@example.com --token "<new-token>"`.
-2. For a single command, pass the token inline: `vamscli auth login --user-id user@example.com --token-override "<new-token>"`.
+1. Set a fresh token: `echo "$VAMS_TOKEN" | vamscli auth set-override -u user@example.com --token-stdin`.
+2. Or sign in with it, which also validates it: `echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin`.
 3. To return to Amazon Cognito authentication, clear the override: `vamscli auth clear-override`.
 
 :::tip
