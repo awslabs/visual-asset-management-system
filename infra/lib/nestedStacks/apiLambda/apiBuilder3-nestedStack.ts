@@ -33,7 +33,9 @@ export interface ApiBuilder3NestedStackProps {
  * security group and ApiBuilder2 sat at 986,768 bytes of the 1,000,000 byte CloudFormation
  * template-body limit; adding the audit log search made it 1,009,044 and a deploy stopped at
  * change-set creation with "Template may not exceed 1000000 bytes". Resource count is not the
- * constraint; the body is, and only a new template adds body budget.
+ * constraint; the body is, and only a new template adds body budget. The shared IAM suppressions
+ * have since moved to `addIamNagSuppressions` (#1647), which brought ApiBuilder2 down to about
+ * 0.65 MB in that cell, so this stack now adds headroom and no longer prevents a failing deploy.
  * `test/api/nestedTemplateSizeGuard.test.ts` fails the build when a template nears the limit in the
  * shipped cells, so the next stack to fill up is caught before a deploy.
  *

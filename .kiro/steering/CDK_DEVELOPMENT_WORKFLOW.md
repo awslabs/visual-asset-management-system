@@ -616,22 +616,26 @@ The worked example is the orchestration bus audit rule in `storageBuilder-nested
 #### **Rule 6: CDK Nag Compliance Required**
 
 ```typescript
-// ✅ CORRECT - Add justified suppressions
-NagSuppressions.addResourceSuppressions(
-    myResource,
-    [
-        {
-            id: "AwsSolutions-IAM5",
-            reason: "This role requires wildcard permissions for dynamic resource access in the VAMS asset management system. The scope is limited to VAMS-specific resources within the deployment account.",
-        },
-    ],
-    true
-);
+// ✅ CORRECT - Add justified suppressions. IAM4/IAM5 go through addIamNagSuppressions
+// (lib/helper/security.ts), which writes them only on the IAM resources under the scope that
+// the rule reads.
+addIamNagSuppressions(myFunction, [
+    {
+        id: "AwsSolutions-IAM5",
+        reason: "Index ARNs of one named table: a table grant covers its global secondary indexes.",
+        appliesTo: [{ regex: "/^Resource::<.*Table.*\\.Arn>/index/\\*$/g" }],
+    },
+]);
 
 // ❌ INCORRECT - Don't suppress without justification
 NagSuppressions.addResourceSuppressions(myResource, [
     { id: "AwsSolutions-IAM5", reason: "Suppressed" }, // BAD - no justification
 ]);
+
+// ❌ INCORRECT - applyToChildren copies an IAM suppression onto every resource under the scope
+// (the function, its security group, its permissions), which cdk-nag never reads there and which
+// counts against the 1,000,000-byte template limit (#1647)
+NagSuppressions.addResourceSuppressions(myFunction, [iamSuppression], true);
 ```
 
 #### **Rule 7: Encryption Standards**
@@ -2436,8 +2440,9 @@ Every deploy-time seed `AwsCustomResource` (the auth defaults, the system and ad
 -   **`setupSecurityAndLoggingEnvironmentAndPermissions`**: Grants read on auth/constraints/userRoles/roles tables. Grants CloudWatch PutLogEvents on all 9 audit log groups. **No longer injects table or log group environment variables** (non-pipeline handlers resolve these from SSM).
 -   **`globalLambdaEnvironmentsAndPermissions`**: Adds `VAMS_RESOURCE_PARAM_PREFIX` env var (SSM parameter prefix for resource name resolution) and grants ssm:GetParameter, ssm:GetParameters, ssm:GetParametersByPath on the deployment's resource-name parameter prefix.
 -   **`isCognitoMfaCheckEnabled`** (used by the authorizer builder only): computes whether the API Gateway authorizer can reach Cognito for the MFA-preference check (Cognito enabled and the authorizer running **outside** the VPC — `FALSE` when Lambdas run in the VPC via `useForAllLambdas`, regardless of partition, because VAMS creates no Cognito VPC interface endpoints). Sets `COGNITO_AUTH_ENABLED` on the **authorizer Lambda only**; the authorizer resolves MFA status via `AdminGetUser` and passes `vams:mfaEnabled` to handlers through the authorizer context, so handler Lambdas need no Cognito access.
--   **`suppressCdkNagLambda`**: Applies the standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS actions), scoped to the function instead of the whole stack
--   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards
+-   **`suppressCdkNagLambda`**: Applies the standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS actions) on the function's role and policies, instead of the whole stack
+-   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards, on the IAM policies under the scope
+-   **`addIamNagSuppressions`**: Adds IAM4/IAM5 suppressions to the IAM resources under a scope that each rule reads (roles for IAM4; policies, and roles with inline policies, for IAM5) instead of `NagSuppressions.addResourceSuppressions(scope, ..., true)`, which copies them onto every resource (#1647). Throws on any other rule id
 -   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies the same IAM4/IAM5 suppressions only to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach
 
 **IAM inline policy budget** (mirrors `infra/CLAUDE.md`): IAM refuses a role whose inline policies exceed 10,240 characters, and deployed sizes grow with the stack name, the partition and Region names, a customer managed key and an enabled execution type, so a role that fits in a commercial synth can fail a GovCloud deploy. CDK's own overflow split moves what does not fit into generated `OverflowPolicy<n>` managed policies by its size estimate; `cdk.json` sets `@aws-cdk/aws-iam.arnSizeEstimate` to 280 (CDK's default 150 is below real table ARNs of about 200) so that split keeps every role's inline total under the budget in every partition (#1499). Every role in `apiBuilder` and `apiBuilder2` stays at or under 9,216 (90%) in the commercial, CMK, GovCloud, EU Sovereign and worst-case cells (`infra/test/security/iamInlinePolicyBudget.test.ts`, estimator `infra/test/support/iamPolicySize.ts`; a role already above it is a named, shrink-only exception). On a large role, write DynamoDB grants as exact statements (each table once, only the actions the handler calls, only the indexes it queries), pinned by a backend test that records the handler's calls and a synth test of the same list; and split routes needing grants the rest do not onto their own function: the execution service handler runs as `executionService` (lists, abort, re-run), `executionDetails` (details and its pages), `executionLogs` (logs) and `executionPermanentDelete` (permanent delete), with `EXECUTION_SERVICE_ROUTES` selecting the routes each function serves. The workflow-lock statements of the lock handlers (the execution service and the execution details function among them) stay in a role-inline `ExecutionLockPolicy` (`attachExecutionLockPolicy`) of their own and never in a role's default or overflow policy: CDK splits only the default policy, and CloudFormation updates the default and overflow policies separately during a deploy, so a lock call could be refused mid-deploy. `workflowExecutionLockGrants.test.ts` pins it in every shipped template, the customer-managed-key cell and the worst-case cell (owner decision 2026-11-14).

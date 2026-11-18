@@ -14,9 +14,8 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
-import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
-import { generateUniqueNameHash } from "../../helper/security";
+import { addIamNagSuppressions, generateUniqueNameHash } from "../../helper/security";
 import { buildTagService, buildCreateTagFunction } from "../../lambdaBuilder/tagFunctions";
 import {
     buildTagTypeService,
@@ -1008,21 +1007,17 @@ export class ApiBuilder2NestedStack extends NestedStack {
         // in the stack: it only covers the constraint/auth-table read wildcards and the CDK-generated
         // BucketNotifications/LogRetention custom-resource roles. Per-function log/S3 wildcards are
         // suppressed at their own builder (suppressCdkNagErrorsByGrantReadWrite(fun)).
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason:
-                        "Auth/constraint-table reads and CDK-generated custom-resource roles use " +
-                        "action/resource wildcards scoped to VAMS resources.",
-                    appliesTo: [
-                        { regex: "/Action::(dynamodb|logs|s3):.*/g" },
-                        { regex: "/^Resource::.*/g" },
-                    ],
-                },
-            ],
-            true
-        );
+        addIamNagSuppressions(this, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Auth/constraint-table reads and CDK-generated custom-resource roles use " +
+                    "action/resource wildcards scoped to VAMS resources.",
+                appliesTo: [
+                    { regex: "/Action::(dynamodb|logs|s3):.*/g" },
+                    { regex: "/^Resource::.*/g" },
+                ],
+            },
+        ]);
     }
 }
