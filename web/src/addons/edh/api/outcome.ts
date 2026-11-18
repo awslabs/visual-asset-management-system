@@ -8,6 +8,7 @@ import {
     ServiceCallError,
     unwrapMessage,
 } from "../../../features/orchestration/api/client";
+import { requestFailureMessage } from "../../../services/networkFailure";
 
 /** The parsed body of a failed EDH request. */
 export interface EdhErrorBody {
@@ -58,9 +59,16 @@ export async function callService<T>(
     return data as T;
 }
 
-/** An `apiClient` rejection as an `EdhRequestError`, keeping whatever status and body it carried. */
+/**
+ * An `apiClient` rejection as an `EdhRequestError`, keeping whatever status and body it carried. A
+ * request that got no response carries `NETWORK_FAILURE_MESSAGE` and no status.
+ */
 export function edhRequestError(e: any): EdhRequestError {
-    return new EdhRequestError(e?.message || "Request failed", e?.status, e?.body ?? undefined);
+    return new EdhRequestError(
+        requestFailureMessage(e, "Request failed"),
+        e?.status,
+        e?.body ?? undefined
+    );
 }
 
 /**
