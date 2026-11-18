@@ -54,6 +54,38 @@ def _no_sleep():
         yield
 
 
+class TestDeploymentWithoutAuditSearch:
+    """With the deployment's feature list lacking AUDITLOGSEARCH every audit command says so and
+    makes no API call, as the other feature-gated commands do."""
+
+    COMMANDS = [
+        ["groups"],
+        ["search"],
+        ["results", "--handle", QID],
+        ["stop", "--handle", QID],
+        ["export", "--handle", QID],
+        ["show", "--handle", QID, "--record-id", "r1"],
+    ]
+
+    @pytest.mark.parametrize("args", COMMANDS, ids=lambda a: a[0])
+    def test_not_enabled_message_and_no_api_call(self, cli_runner, generic_command_mocks, args):
+        with generic_command_mocks("audit") as mocks:
+            mocks["profile_manager"].has_feature_switch.side_effect = lambda name: name != "AUDITLOGSEARCH"
+            mocks["profile_manager"].get_feature_switches_info.return_value = {
+                "has_feature_switches": True, "enabled": ["GOVCLOUD"]}
+            result = _invoke(cli_runner, *args)
+        assert result.exit_code != 0
+        assert "Audit Log Search is not enabled on this deployment" in result.output
+        assert mocks["api_client"].method_calls == []
+
+    def test_enabled_deployment_runs_the_command(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks("audit") as mocks:
+            mocks["profile_manager"].has_feature_switch.side_effect = lambda name: name == "AUDITLOGSEARCH"
+            mocks["api_client"].list_audit_log_groups.return_value = {"logGroups": [], "limits": {}}
+            result = _invoke(cli_runner, "groups", "--json-output")
+        assert "not enabled on this deployment" not in result.output
+
+
 class TestGroups:
     def test_json_shape_is_the_api_answer(self, cli_runner, generic_command_mocks):
         answer = {"logGroups": [{"key": "auditActions", "label": "Actions", "prefix": "ACTIONS",
