@@ -1341,6 +1341,77 @@ def clear_cascade_pending_marker(table, cascade: Dict[str, Any]) -> bool:
         return False
 
 
+# The executor's last progress on an `executing` cascade (each node, each hand-over). A cascade
+# whose run made none for this long has no run left (a run hands over before its 15-minute Lambda
+# timeout, and Lambda does not retry the executor), so a reader aborts it.
+CASCADE_HEARTBEAT_FIELD = "heartbeatAt"
+CASCADE_RUN_STALE_SECONDS = 1200
+CASCADE_RUN_STOPPED_REASON = "The cascade stopped before it finished; start it again"
+
+
+def _cascade_progress_at(cascade: Dict[str, Any]) -> Tuple[str, Any]:
+    """`(attribute, value)` of the cascade's last progress: its heartbeat, else its approval (the
+    moment it began executing), else its creation (a cascade started without approval)."""
+    for attribute in (CASCADE_HEARTBEAT_FIELD, "approvedAt", "createdAt"):
+        if cascade.get(attribute):
+            return attribute, cascade[attribute]
+    return CASCADE_HEARTBEAT_FIELD, None
+
+
+def cascade_run_stopped(cascade: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """Whether a cascade is still `executing` with no progress for CASCADE_RUN_STALE_SECONDS: its
+    run ended without writing a terminal state (a timeout) and nothing will continue it. A cascade
+    whose progress time cannot be read is not judged stopped."""
+    if cascade.get("state") != "executing":
+        return False
+    progress = engine.parse_timestamp(_cascade_progress_at(cascade)[1])
+    if progress is None:
+        return False
+    return (now or datetime.now(timezone.utc)) - progress >= timedelta(
+        seconds=CASCADE_RUN_STALE_SECONDS)
+
+
+def expire_stopped_cascade(table, cascade: Dict[str, Any],
+                           now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Abort an `executing` cascade whose run stopped (`cascade_run_stopped`) with abortReason
+    CASCADE_RUN_STOPPED_REASON and a `cascade_timed_out` audit entry naming that reason. The update
+    is conditional on the row still executing with the progress time read, so a run that made
+    progress meanwhile keeps it, and of several readers one aborts it; the others get the row as it
+    stands."""
+    cascade_id = cascade.get("cascadeId")
+    attribute, value = _cascade_progress_at(cascade)
+    completed_at = (now or datetime.now(timezone.utc)).isoformat()
+    try:
+        response = table.update_item(
+            Key={"cascadeId": cascade_id},
+            UpdateExpression="SET #s = :aborted, abortReason = :reason, completedAt = :now",
+            ConditionExpression="#s = :executing AND #p = :progress",
+            ExpressionAttributeNames={"#s": "state", "#p": attribute},
+            ExpressionAttributeValues={":aborted": CASCADE_STATE_ABORTED,
+                                       ":reason": CASCADE_RUN_STOPPED_REASON,
+                                       ":now": completed_at, ":executing": "executing",
+                                       ":progress": value},
+            ReturnValues="ALL_NEW",
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+        current = table.get_item(Key={"cascadeId": cascade_id}).get("Item")
+        return current or cascade
+    write_audit(
+        cascade.get("triggeredByDatabaseId", ""),
+        cascade.get("triggeredByAssetId", ""),
+        event_type=AUDIT_CASCADE_TIMED_OUT,
+        actor=SYSTEM_ACTOR,
+        cascade_id=cascade_id,
+        details={"reason": CASCADE_RUN_STOPPED_REASON, "lastProgressAt": value},
+    )
+    logger.info(f"Cascade {cascade_id} aborted: its run stopped before it finished")
+    return response.get("Attributes") or {**cascade, "state": CASCADE_STATE_ABORTED,
+                                          "abortReason": CASCADE_RUN_STOPPED_REASON,
+                                          "completedAt": completed_at}
+
+
 def cascade_approval_timed_out(cascade: Dict[str, Any], now: Optional[datetime] = None) -> bool:
     """Whether a cascade is still `pending_approval` at or after its `approvalTimeoutAt`. A
     cascade without a timeout (created with `requireApproval: false`) or with an unreadable one
@@ -1362,7 +1433,11 @@ def cascade_approval_timed_out(cascade: Dict[str, Any], now: Optional[datetime] 
 
 def expire_timed_out_cascade(table, cascade: Dict[str, Any],
                              now: Optional[datetime] = None) -> Dict[str, Any]:
-    """The cascade as it stands once its approval timeout is enforced.
+    """The cascade as it stands once its approval timeout, and the staleness of its run, are
+    enforced.
+
+    A cascade still `executing` whose run stopped (`cascade_run_stopped`) is aborted with
+    abortReason CASCADE_RUN_STOPPED_REASON (`expire_stopped_cascade`).
 
     A cascade still `pending_approval` past its `approvalTimeoutAt` is aborted with abortReason
     "approval timed out" and a `cascade_timed_out` audit entry. The update is conditional on the
@@ -1370,6 +1445,8 @@ def expire_timed_out_cascade(table, cascade: Dict[str, Any],
     timed out (a listing, a get, an approve or reject, the trigger's pending check) exactly one
     aborts it, writes the entry and releases its parent's pending-cascade marker; the others re-read
     the row it left. Any other cascade is returned unchanged."""
+    if cascade_run_stopped(cascade, now):
+        return expire_stopped_cascade(table, cascade, now)
     if not cascade_approval_timed_out(cascade, now):
         return cascade
     cascade_id = cascade.get("cascadeId")
