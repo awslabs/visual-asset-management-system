@@ -21,6 +21,7 @@ import {
 } from "./dependencyLoading";
 import { loadFile } from "./fileLoaders";
 import { clearPresignedUrlCache } from "../../../core/presignedFetch";
+import { downloadAsset } from "../../../../services/APIService";
 
 jest.mock("../../../../services/APIService", () => ({
     downloadAsset: jest.fn(async ({ key }: { key: string }) => [
@@ -48,17 +49,26 @@ class FakeLoadingManager {
     }
 }
 
+/** The download route's answer for a key that is not in the bucket: it checks before it signs. */
+const MISSING_FILE = "VAMS General Error: File not found in S3";
+
+/**
+ * Serves `files` by key: the presign answers as the download route does (a URL for a stored key,
+ * its missing-file 400 for any other), and S3 serves the signed URLs. Returns the keys presigned.
+ */
 function installFetch(files: Record<string, string>): string[] {
     clearPresignedUrlCache();
     const requested: string[] = [];
+    (downloadAsset as jest.Mock).mockImplementation(async ({ key }: { key: string }) => {
+        requested.push(key);
+        return files[key] === undefined
+            ? [false, MISSING_FILE, 400, MISSING_FILE]
+            : [true, `https://s3.test/${encodeURIComponent(key)}?X-Amz-Signature=sig`];
+    });
     global.fetch = jest.fn(async (url: string) => {
         const key = decodeURIComponent(
             url.replace(/^https:\/\/s3\.test\//, "").replace(/\?.*$/, "")
         );
-        requested.push(key);
-        if (files[key] === undefined) {
-            return { ok: false, status: 403, headers: { get: (): string | null => null } };
-        }
         return {
             ok: true,
             status: 200,

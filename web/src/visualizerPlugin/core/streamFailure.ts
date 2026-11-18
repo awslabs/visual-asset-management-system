@@ -33,6 +33,22 @@ export function downloadResponseApiMessage(response: unknown): string | undefine
     return undefined;
 }
 
+/**
+ * The reason the download route gives for a key that is not in the bucket. The route checks the
+ * object before it signs a URL and answers a missing one with a `400` carrying this text
+ * (`MSG_FILE_NOT_FOUND` in `backend/backend/common/downloadEligibility.py`; keep the two in step).
+ */
+export const DOWNLOAD_ROUTE_FILE_NOT_FOUND = "File not found in S3";
+
+/** Whether a failed download answer is the route's missing-file refusal (a `400` naming it). */
+export function isFileNotFoundAnswer(status: number | undefined, apiMessage: unknown): boolean {
+    return (
+        status === 400 &&
+        typeof apiMessage === "string" &&
+        apiMessage.trim().endsWith(DOWNLOAD_ROUTE_FILE_NOT_FOUND)
+    );
+}
+
 /** Statuses whose sentence the viewers word themselves (below), whatever the API's body says. */
 const STATUSES_WORDED_HERE = new Set([401, 403, 404, 410, 429]);
 

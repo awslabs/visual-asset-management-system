@@ -545,17 +545,21 @@ export class AssetDependencyResolver {
 }
 
 /**
- * Why a referenced file's read failed, from the status the API or S3 answered. A 404 is "not
- * found", and so is S3's 403 on a freshly presigned URL, which S3 also answers for a key that is
- * not there. The API's own refusal (401, 403, or a refusal with its reason) is "refused". Anything
- * else (a 5xx, a throttle, no response) is "failed".
+ * Why a referenced file's read failed, from the answer the API or S3 gave. The API checks the
+ * object before it signs a URL, so a file missing from the asset is the API's own missing-file
+ * answer (a `400` naming it, flagged `fileNotFound`) or a 404; either is "not found", and so is
+ * S3's 404. S3's 403 on a URL the API just signed means S3 refused the read of a file that exists
+ * (bucket policy, KMS, expired signing credentials), so it is "failed". The API's own refusal (401,
+ * 403, or a refusal with its reason) is "refused". Anything else (a 5xx, a throttle, no response)
+ * is "failed".
  */
 function failedReadReason(error: unknown): UnloadedReason {
-    const status = (error as { status?: unknown } | null)?.status;
+    const failure = error as { status?: unknown; fileNotFound?: unknown } | null;
+    const status = failure?.status;
     if (error instanceof PresignedReadError) {
-        return status === 403 || status === 404 ? "not-found" : "failed";
+        return status === 404 ? "not-found" : "failed";
     }
-    if (status === 404) return "not-found";
+    if (status === 404 || failure?.fileNotFound === true) return "not-found";
     if (status === 401 || status === 403 || isApiRefusalError(error)) return "refused";
     return "failed";
 }
