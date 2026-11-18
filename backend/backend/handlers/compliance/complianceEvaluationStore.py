@@ -350,20 +350,51 @@ def all_database_ids() -> List[str]:
 
 def register_unrecorded_assets(database_id: str, schema_name: str) -> int:
     """Register under the database binding every live asset of the database that has no
-    asset-state row yet (`register_under_database_binding`); returns how many were registered. An
-    asset created after the binding in a database whose auto-evaluation is off is registered by the
-    trigger when it is created; this catches one whose creation event was not processed."""
+    asset-state row yet (`register_unrecorded_assets_page`, page by page); returns how many were
+    registered."""
+    total, start_key = 0, None
+    while True:
+        registered, start_key = register_unrecorded_assets_page(database_id, schema_name, start_key)
+        total += registered
+        if not start_key:
+            return total
+
+
+# The asset rows one registration page reads (`register_unrecorded_assets_page`).
+REGISTRATION_PAGE_SIZE = 100
+
+
+def register_unrecorded_assets_page(database_id: str, schema_name: str,
+                                    start_key: Optional[Dict[str, Any]] = None,
+                                    limit: int = REGISTRATION_PAGE_SIZE,
+                                    ) -> Tuple[int, Optional[Dict[str, Any]]]:
+    """One page of the database's live asset rows from `start_key`: each asset of the page that has
+    no asset-state row yet is registered under the database binding
+    (`register_under_database_binding`). The records of the page are read with one query over the
+    page's id range (both tables are keyed by database and asset id), so a page costs two reads
+    whatever the database's size. Returns `(registered, the key to resume after, None at the end)`.
+    An asset created after the binding in a database whose auto-evaluation is off is registered by
+    the trigger when it is created; this catches one whose creation event was not processed."""
+    kwargs: Dict[str, Any] = {"KeyConditionExpression": Key("databaseId").eq(database_id),
+                              "ProjectionExpression": "assetId", "Limit": limit}
+    if start_key:
+        kwargs["ExclusiveStartKey"] = start_key
+    response = asset_table.query(**kwargs)
+    next_key = response.get("LastEvaluatedKey")
+    asset_ids = [row["assetId"] for row in response.get("Items", []) if row.get("assetId")]
+    if not asset_ids:
+        return 0, next_key
     recorded = {row["assetId"] for row in query_all_items(
-        asset_state_table, KeyConditionExpression=Key("databaseId").eq(database_id),
-        ProjectionExpression="assetId")}
+        asset_state_table,
+        KeyConditionExpression=(Key("databaseId").eq(database_id)
+                                & Key("assetId").between(asset_ids[0], asset_ids[-1])),
+        ProjectionExpression="assetId") if row.get("assetId")}
     registered = 0
-    for row in query_all_items(asset_table, KeyConditionExpression=Key("databaseId").eq(database_id),
-                               ProjectionExpression="assetId"):
-        asset_id = row.get("assetId")
-        if asset_id and asset_id not in recorded:
+    for asset_id in asset_ids:
+        if asset_id not in recorded:
             register_under_database_binding(database_id, asset_id, schema_name)
             registered += 1
-    return registered
+    return registered, next_key
 
 
 def get_compliance_record(database_id: str, asset_id: str,

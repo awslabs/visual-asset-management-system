@@ -325,7 +325,10 @@ def test_evaluate_all_reads_the_live_partition_once(world, caller):
           f"{body.get('skippedNotAuthorized')}")
     assert cost["asset BatchGetItem"] == 0
     if caller == TAG_DENY:
-        assert body["skippedNotAuthorized"] == LIVE_COUNT // 10
+        # The call reads the records a page at a time up to its cap, so it counts the refused
+        # assets of the pages it read (one in ten), not of the whole database.
+        assert body["NextToken"]
+        assert 0 < body["skippedNotAuthorized"] <= LIVE_COUNT // 10
         assert cost["asset checks"] <= 4
     else:
         assert body["skippedNotAuthorized"] == 0

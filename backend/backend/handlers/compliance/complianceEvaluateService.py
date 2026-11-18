@@ -41,7 +41,6 @@ from common.compliance.assetAccess import (
 )
 from common.compliance import knownDatabase
 from common.compliance.knownDatabase import database_not_found
-from common.dynamodb import query_all_items
 from common.validators import validate
 from common.compliance.routeAudit import (
     audit_outcome, created_value, failure_outcome, request_parameters, response_count,
@@ -490,24 +489,27 @@ def sweep_schema(event, schema_name, starting_token=None):
     assets of the databases that administrator may evaluate only. Every evaluation runs as the
     caller, never with the system identity.
 
-    One call evaluates at most MAX_SWEEP_ASSETS assets and stops launching once
-    SWEEP_TIME_BUDGET_SECONDS has elapsed. A sweep is continued across calls: while assets remain,
-    the response carries `NextToken`, and a call that passes it back as `startingToken` evaluates
-    only the assets not evaluated since the sweep started (`_sweep_candidates`), so the calls
-    advance and the sweep ends; `assetsRemaining` counts the assets still to evaluate after this
-    call. `pending_evaluation` rows go first, then the least recently evaluated. A record whose
-    asset no longer exists is not evaluated: it is removed as the asset's permanent deletion
-    removes it and counted under `removedOrphans`. An asset whose
-    evaluation found a newer one of it already started (a trigger evaluation running at the same
-    time) is listed with verdict `superseded` and `superseded: true` and counted under
-    `superseded`: its state is that evaluation's, and the listed `evaluationId` names no evaluation
-    record."""
-    started_at = monotonic()
+    A sweep is a walk over consecutive calls (`_SweepWalk`): each call reads a page at a time, first
+    the asset rows of each bound database the caller may evaluate (an asset the binding does not
+    record yet is registered under it, `registered`), then the schema's records, and stops once
+    SWEEP_TIME_BUDGET_SECONDS has elapsed or MAX_SWEEP_ASSETS assets were evaluated. While anything
+    is left to read the response carries `NextToken`; a call that passes it back as
+    `startingToken` goes on from there and evaluates only the assets not evaluated since the sweep
+    started (`_sweep_candidates`). `assetsRemaining` counts the assets of the pages this call read
+    that it did not reach: it can be 0 while a `NextToken` is present. Within a page,
+    `pending_evaluation` rows go first, then the least recently evaluated. A record whose asset no
+    longer exists is not evaluated: it is removed as the asset's permanent deletion removes it and
+    counted under `removedOrphans`. An asset whose evaluation found a newer one of it already
+    started (a trigger evaluation running at the same time) is listed with verdict `superseded` and
+    `superseded: true` and counted under `superseded`: its state is that evaluation's, and the
+    listed `evaluationId` names no evaluation record."""
+    walk = _SweepWalk()
     (valid, message) = validate({"schemaName": {"value": schema_name, "validator": "ID"}})
     if not valid:
         return validation_error(body={"message": message}, event=event)
-    sweep_started_at, token_ok = _sweep_started_at(starting_token)
-    if not token_ok:
+    position = _sweep_position(starting_token, SCHEMA_NAME_INDEX_KEYS,
+                               lambda cursor: cursor["schemaName"] == schema_name)
+    if position is None:
         return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
 
     if len(claims_and_roles["tokens"]) == 0:
@@ -522,151 +524,124 @@ def sweep_schema(event, schema_name, starting_token=None):
 
     # The evaluation object depends only on the database, so one verdict serves every asset in it.
     database_allowed = {}
+
+    def allowed(database_id):
+        if database_id not in database_allowed:
+            database_allowed[database_id] = _enforce_evaluation(database_id, "POST")
+        return database_allowed[database_id]
+
     # A database binding governs every asset of the database: an asset it does not record yet (one
     # whose creation event was not processed) is registered under it first, in each bound database
     # the caller may evaluate, so the sweep reaches it.
-    registered = 0
-    for database_id in store.databases_bound_to_schema(schema_name):
-        if database_id not in database_allowed:
-            database_allowed[database_id] = _enforce_evaluation(database_id, "POST")
-        if database_allowed[database_id]:
-            registered += store.register_unrecorded_assets(database_id, schema_name)
+    if position.phase == SWEEP_PHASE_REGISTER:
+        databases = sorted(store.databases_bound_to_schema(schema_name))
+        if position.database_id:
+            databases = [database_id for database_id in databases
+                         if database_id >= position.database_id]
+        cursor = position.cursor
+        for database_id in databases:
+            if database_id != position.database_id:
+                cursor = None
+            if not allowed(database_id):
+                continue
+            cursor = walk.register(database_id, schema_name, cursor)
+            if cursor is not None:
+                return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_REGISTER,
+                                                      database_id, cursor),
+                                   schemaName=schema_name)
+        position = position.evaluating()
 
-    bound_assets, evaluated_earlier = _sweep_candidates(
-        _bound_assets(schema_name), sweep_started_at, _asset_key)
     actor = claims_and_roles["tokens"][0]
-
-    triggered = []
-    skipped = 0
-    skipped_archived = 0
-    hidden_archived = 0
-    superseded = 0
-    removed_orphans = 0
-    beyond_cap = 0
-    beyond_budget = 0
-    budget_spent = False
     archived = _asset_access()
-    # The live rows of a database's candidates are read together, when a decision first needs one
-    # (a caller whose asset rules read asset fields only), and only for a database the caller may
-    # evaluate.
-    candidates_by_database = {}
-    for asset in bound_assets:
-        candidates_by_database.setdefault(asset["databaseId"], []).append(asset["assetId"])
-    expected_databases = set()
-    for asset in bound_assets:
-        # A database the caller may not evaluate is skipped whatever the bounds: its assets are
-        # never this caller's to evaluate, so they are not counted as remaining either.
-        database_id = asset["databaseId"]
-        if database_id not in database_allowed:
-            database_allowed[database_id] = _enforce_evaluation(database_id, "POST")
-        # An archived asset the caller may not see is counted nowhere in the response, whatever
-        # the reason it is not evaluated (only the operator log counts it).
-        if _hidden_archived(archived, database_id, asset["assetId"]):
-            hidden_archived += 1
-            continue
-        if not database_allowed[database_id]:
-            skipped += 1
-            continue
-        if database_id not in expected_databases:
-            expected_databases.add(database_id)
-            archived.expect((database_id, asset_id)
-                            for asset_id in candidates_by_database[database_id])
-        # A live asset the caller may not read is skipped as not authorized, as the asset routes
-        # refuse it.
-        if _live_not_readable(archived, database_id, asset["assetId"]):
-            skipped += 1
-            continue
-        if len(triggered) >= MAX_SWEEP_ASSETS:
-            beyond_cap += 1
-            continue
-        if not budget_spent and monotonic() - started_at > SWEEP_TIME_BUDGET_SECONDS:
-            budget_spent = True
-        if budget_spent:
-            beyond_budget += 1
-            continue
-        target = automatic_evaluation_target(database_id, asset["assetId"], detected_by="sweep")
-        if target == EVALUATION_TARGET_REMOVED:
-            removed_orphans += 1
-            continue
-        if target == EVALUATION_TARGET_ARCHIVED:
-            # Archived and visible to the caller, or archived since the archive was read.
-            if _archived_visible(archived, database_id, asset["assetId"]):
-                skipped_archived += 1
-            else:
-                hidden_archived += 1
-            continue
-        result = run_evaluation_for_asset(database_id, asset["assetId"], schema_name, actor)
-        entry = {
-            "databaseId": database_id,
-            "assetId": asset["assetId"],
-            "evaluationId": result.get("evaluationId"),
-            "verdict": result.get("verdict"),
-        }
-        if result.get("superseded"):
-            entry["superseded"] = True
-            superseded += 1
-        triggered.append(entry)
-
-    remaining = beyond_cap + beyond_budget
-    logger.info(f"Sweep of schema {schema_name}: {registered} registered under a database binding")
-    logger.info(f"Sweep of schema {schema_name}: {len(triggered)} triggered ({superseded} "
-                f"superseded by a newer evaluation), {skipped} skipped as not authorized, "
-                f"{skipped_archived + hidden_archived} skipped as archived ({hidden_archived} in "
-                f"archived assets the caller may not see, not in the response), {remaining} remaining "
-                f"({beyond_cap} beyond the cap, {beyond_budget} beyond the time budget), "
-                f"{evaluated_earlier} evaluated earlier in this sweep, {removed_orphans} records of deleted "
-                f"assets removed")
-    body = {
-        "message": f"Sweep triggered for {len(triggered)} assets",
-        "schemaName": schema_name,
-        "assetsTriggered": triggered,
-        "assetsRemaining": remaining,
-        "skipped": skipped + skipped_archived,
-        "skippedNotAuthorized": skipped,
-        "skippedArchived": skipped_archived,
-        "superseded": superseded,
-        "removedOrphans": removed_orphans,
-    }
-    if remaining:
-        body["NextToken"] = _sweep_token(sweep_started_at)
-    return success(body=body)
+    cursor = position.cursor
+    while not walk.done():
+        kwargs = {"IndexName": "SchemaNameIndex", "Limit": SWEEP_PAGE_SIZE,
+                  "KeyConditionExpression": Key("schemaName").eq(schema_name)}
+        if cursor:
+            kwargs["ExclusiveStartKey"] = cursor
+        response = asset_state_table.query(**kwargs)
+        # A deleted database's records (under `<databaseId>#deleted`) are never evaluated again.
+        rows, evaluated_earlier = _sweep_candidates(
+            [row for row in response.get("Items", [])
+             if not databaseRetirement.is_deleted_scope(row.get("databaseId"))],
+            position.started_at, _asset_key)
+        walk.evaluated_earlier += evaluated_earlier
+        # The live rows of a database's candidates are read together, when a decision first needs
+        # one (a caller whose asset rules read asset fields only), and only for a database the
+        # caller may evaluate.
+        candidates_by_database = {}
+        for row in rows:
+            candidates_by_database.setdefault(row["databaseId"], []).append(row["assetId"])
+        expected_databases = set()
+        for row in rows:
+            database_id, asset_id = row["databaseId"], row["assetId"]
+            may_evaluate = allowed(database_id)
+            # An archived asset the caller may not see is counted nowhere in the response, whatever
+            # the reason it is not evaluated (only the operator log counts it).
+            if _hidden_archived(archived, database_id, asset_id):
+                walk.hidden_archived += 1
+                continue
+            # A database the caller may not evaluate is skipped whatever the bounds: its assets are
+            # never this caller's to evaluate, so they are not counted as remaining either.
+            if not may_evaluate:
+                walk.skipped_not_authorized += 1
+                continue
+            if database_id not in expected_databases:
+                expected_databases.add(database_id)
+                archived.expect((database_id, candidate)
+                                for candidate in candidates_by_database[database_id])
+            # A live asset the caller may not read is skipped as not authorized, as the asset
+            # routes refuse it.
+            if _live_not_readable(archived, database_id, asset_id):
+                walk.skipped_not_authorized += 1
+                continue
+            walk.evaluate(archived, database_id, asset_id, schema_name, actor)
+        if walk.stopped_in_page:
+            # The page is read again by the next call, which skips what this one evaluated.
+            return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_EVALUATE,
+                                                   None, cursor), schemaName=schema_name)
+        cursor = response.get("LastEvaluatedKey")
+        if cursor is None:
+            return walk.answer(event, None, schemaName=schema_name)
+    return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_EVALUATE, None, cursor),
+                       schemaName=schema_name)
 
 
 def evaluate_database(event, database_id, starting_token=None):
     """Evaluate every tracked asset of one database — every asset-state row of it, each against
     the schema its row binds (the database binding or the asset's own override) — with the sweep's
-    bounds and continuation: at most MAX_SWEEP_ASSETS evaluations and no launch after
-    SWEEP_TIME_BUDGET_SECONDS per call, `pending_evaluation` rows first and then the least recently
-    evaluated, a `NextToken` while assets remain that the next call passes back as `startingToken`
-    to evaluate only the assets not evaluated since the evaluation started, and `assetsRemaining`
-    the tracked assets still to evaluate after this call (`_sweep_candidates`). A record whose
-    asset no longer exists is removed rather than evaluated, as in a sweep (`removedOrphans`), and
-    an archived asset is skipped with its record left as it is (`skipped`, `skippedArchived`). As
-    in a sweep, only the archived assets the caller may see are counted (`_archived_visible`): an
-    archived asset the caller may not see is counted nowhere in the response (`withoutSchema` and
-    `assetsRemaining` included). A live asset the caller may not read (a caller whose policy has
-    asset rules needs the asset GET on its row) is not evaluated and is counted in `skipped` and
+    bounds and continuation (`sweep_schema`): a page at a time, at most MAX_SWEEP_ASSETS
+    evaluations and no launch after SWEEP_TIME_BUDGET_SECONDS per call, a `NextToken` while anything
+    is left to read that the next call passes back as `startingToken` to evaluate only the assets
+    not evaluated since the evaluation started, and `assetsRemaining` the assets of the pages this
+    call read that it did not reach (`_sweep_candidates`). A record whose asset no longer exists is
+    removed rather than evaluated, as in a sweep (`removedOrphans`), and an archived asset is
+    skipped with its record left as it is (`skipped`, `skippedArchived`). As in a sweep, only the
+    archived assets the caller may see are counted (`_archived_visible`): an archived asset the
+    caller may not see is counted nowhere in the response (`withoutSchema` and `assetsRemaining`
+    included). A live asset the caller may not read (a caller whose policy has asset rules needs
+    the asset GET on its row) is not evaluated and is counted in `skipped` and
     `skippedNotAuthorized`; for a caller whose rules read an asset's own fields, so is a record
     whose asset has no row (it is not removed then: `removedOrphans` counts only the records the
     caller may read).
 
     A database binding governs every asset of the database, so an asset of a bound database that
-    has no compliance record yet is registered under the binding first (`registered`). A tracked
-    asset whose row names no schema (an on-demand evaluation against a named schema in a database
-    without a binding records one) cannot be evaluated without a schema and is counted under
-    `withoutSchema`. An asset whose evaluation found a newer one of it already started is listed
-    with verdict `superseded` and counted under `superseded`, as in a sweep.
+    has no compliance record yet is registered under the binding first (`registered`), page by
+    page. A tracked asset whose row names no schema cannot be evaluated without a schema and is
+    counted under `withoutSchema`. An asset whose evaluation found a newer one of it already
+    started is listed with verdict `superseded` and counted under `superseded`, as in a sweep.
 
     Authorized on the database's compliance evaluation object, like the evaluation of one asset;
     no other database is read or evaluated."""
-    started_at = monotonic()
+    walk = _SweepWalk()
     (valid, message) = validate({
         "databaseId": {"value": database_id, "validator": "ID"},
     })
     if not valid:
         return validation_error(body={"message": message}, event=event)
-    sweep_started_at, token_ok = _sweep_started_at(starting_token)
-    if not token_ok:
+    position = _sweep_position(starting_token, listing.BASE_STATE_KEYS,
+                               lambda cursor: cursor["databaseId"] == database_id)
+    if position is None or (position.database_id and position.database_id != database_id):
         return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
 
     if len(claims_and_roles["tokens"]) == 0:
@@ -685,113 +660,173 @@ def evaluate_database(event, database_id, starting_token=None):
     if not db_item:
         return general_error(body={"message": "Database not found"}, event=event)
 
-    registered = 0
-    if db_item.get("complianceSchemaName"):
-        registered = store.register_unrecorded_assets(database_id, db_item["complianceSchemaName"])
+    if position.phase == SWEEP_PHASE_REGISTER:
+        if db_item.get("complianceSchemaName"):
+            cursor = walk.register(database_id, db_item["complianceSchemaName"], position.cursor)
+            if cursor is not None:
+                return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_REGISTER,
+                                                      database_id, cursor),
+                                   databaseId=database_id, database=True)
+        position = position.evaluating()
 
     actor = claims_and_roles["tokens"][0]
-    triggered = []
-    superseded = 0
-    removed_orphans = 0
-    skipped_archived = 0
-    hidden_archived = 0
-    skipped_not_authorized = 0
-    without_schema = 0
-    beyond_cap = 0
-    beyond_budget = 0
-    budget_spent = False
     archived = _asset_access()
-    rows, evaluated_earlier = _sweep_candidates(
-        _database_rows(database_id), sweep_started_at, lambda row: row.get("assetId", ""))
     if archived.reads_asset_rows():
         # Decided on each asset's own row: the database's live rows are read once, projected, and
         # after its records, so every record read names an asset whose row was written before it
         # (the trigger records an asset after its row is written).
         archived.live_rows(database_id)
-    for row in rows:
-        if _hidden_archived(archived, database_id, row.get("assetId", "")):
-            hidden_archived += 1
-            continue
-        # A live asset the caller may not read is not evaluated, as the asset routes refuse it.
-        if _live_not_readable(archived, database_id, row.get("assetId", "")):
-            skipped_not_authorized += 1
-            continue
-        schema_name = row.get("schemaName")
-        if not schema_name:
-            without_schema += 1
-            continue
-        if len(triggered) >= MAX_SWEEP_ASSETS:
-            beyond_cap += 1
-            continue
-        if not budget_spent and monotonic() - started_at > SWEEP_TIME_BUDGET_SECONDS:
-            budget_spent = True
-        if budget_spent:
-            beyond_budget += 1
-            continue
-        target = automatic_evaluation_target(database_id, row["assetId"], detected_by="sweep")
+    cursor = position.cursor
+    while not walk.done():
+        kwargs = {"KeyConditionExpression": Key("databaseId").eq(database_id),
+                  "Limit": SWEEP_PAGE_SIZE}
+        if cursor:
+            kwargs["ExclusiveStartKey"] = cursor
+        response = asset_state_table.query(**kwargs)
+        rows, evaluated_earlier = _sweep_candidates(
+            response.get("Items", []), position.started_at, lambda row: row.get("assetId", ""))
+        walk.evaluated_earlier += evaluated_earlier
+        for row in rows:
+            asset_id = row.get("assetId", "")
+            if _hidden_archived(archived, database_id, asset_id):
+                walk.hidden_archived += 1
+                continue
+            # A live asset the caller may not read is not evaluated, as the asset routes refuse it.
+            if _live_not_readable(archived, database_id, asset_id):
+                walk.skipped_not_authorized += 1
+                continue
+            if not row.get("schemaName"):
+                walk.without_schema += 1
+                continue
+            walk.evaluate(archived, database_id, asset_id, row["schemaName"], actor,
+                          name_schema=True)
+        if walk.stopped_in_page:
+            return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_EVALUATE,
+                                                   None, cursor),
+                               databaseId=database_id, database=True)
+        cursor = response.get("LastEvaluatedKey")
+        if cursor is None:
+            return walk.answer(event, None, databaseId=database_id, database=True)
+    return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_EVALUATE, None, cursor),
+                       databaseId=database_id, database=True)
+
+
+# A sweep's or Evaluate All's walk: the asset rows of the bound databases (registration), then the
+# records to evaluate, each read a page at a time.
+SWEEP_PHASE_REGISTER = "register"
+SWEEP_PHASE_EVALUATE = "evaluate"
+SWEEP_PAGE_SIZE = MAX_SWEEP_ASSETS
+# The key of a SchemaNameIndex page (the index's keys and the table's).
+SCHEMA_NAME_INDEX_KEYS = ("schemaName", "complianceState", "databaseId", "assetId")
+
+
+class _SweepWalk:
+    """One call of a sweep or of Evaluate All: its time budget (SWEEP_TIME_BUDGET_SECONDS from its
+    start), its counts, and the evaluations it ran. `evaluate` decides one candidate record within
+    the bounds; once the cap or the budget is reached the rest of the page is counted in
+    `assetsRemaining` and `stopped_in_page` is set, so the call ends after that page."""
+
+    def __init__(self):
+        self.started = monotonic()
+        self.registered = 0
+        self.triggered = []
+        self.superseded = 0
+        self.removed_orphans = 0
+        self.skipped_archived = 0
+        self.hidden_archived = 0
+        self.skipped_not_authorized = 0
+        self.without_schema = 0
+        self.beyond_cap = 0
+        self.beyond_budget = 0
+        self.evaluated_earlier = 0
+        self.budget_spent = False
+
+    def spent(self):
+        if not self.budget_spent and monotonic() - self.started > SWEEP_TIME_BUDGET_SECONDS:
+            self.budget_spent = True
+        return self.budget_spent
+
+    def done(self):
+        """Whether the call reads no further page: its budget is spent or its cap reached."""
+        return self.spent() or len(self.triggered) >= MAX_SWEEP_ASSETS
+
+    @property
+    def stopped_in_page(self):
+        return bool(self.beyond_cap or self.beyond_budget)
+
+    def register(self, database_id, schema_name, cursor):
+        """Register the database's unrecorded assets a page at a time from `cursor`, within the
+        budget; returns the cursor to go on from, None when the database's rows are done."""
+        while True:
+            registered, cursor = store.register_unrecorded_assets_page(
+                database_id, schema_name, cursor)
+            self.registered += registered
+            if cursor is None or self.spent():
+                return cursor
+
+    def evaluate(self, archived, database_id, asset_id, schema_name, actor, name_schema=False):
+        """Evaluate one candidate record within the call's bounds (counted beyond them otherwise),
+        unless its asset is gone (the record is removed) or archived (skipped)."""
+        if len(self.triggered) >= MAX_SWEEP_ASSETS:
+            self.beyond_cap += 1
+            return
+        if self.spent():
+            self.beyond_budget += 1
+            return
+        target = automatic_evaluation_target(database_id, asset_id, detected_by="sweep")
         if target == EVALUATION_TARGET_REMOVED:
-            removed_orphans += 1
-            continue
+            self.removed_orphans += 1
+            return
         if target == EVALUATION_TARGET_ARCHIVED:
             # Archived and visible to the caller, or archived since the archive was read.
-            if _archived_visible(archived, database_id, row["assetId"]):
-                skipped_archived += 1
+            if _archived_visible(archived, database_id, asset_id):
+                self.skipped_archived += 1
             else:
-                hidden_archived += 1
-            continue
-        result = run_evaluation_for_asset(database_id, row["assetId"], schema_name, actor)
-        entry = {
-            "databaseId": database_id,
-            "assetId": row["assetId"],
-            "schemaName": schema_name,
-            "evaluationId": result.get("evaluationId"),
-            "verdict": result.get("verdict"),
-        }
+                self.hidden_archived += 1
+            return
+        result = run_evaluation_for_asset(database_id, asset_id, schema_name, actor)
+        entry = {"databaseId": database_id, "assetId": asset_id}
+        if name_schema:
+            entry["schemaName"] = schema_name
+        entry.update(evaluationId=result.get("evaluationId"), verdict=result.get("verdict"))
         if result.get("superseded"):
             entry["superseded"] = True
-            superseded += 1
-        triggered.append(entry)
+            self.superseded += 1
+        self.triggered.append(entry)
 
-    remaining = beyond_cap + beyond_budget
-    logger.info(f"Evaluation of database {database_id}: {registered} registered, {len(triggered)} "
-                f"triggered ({superseded} superseded), {without_schema} without a schema, "
-                f"{remaining} remaining ({beyond_cap} beyond the cap, {beyond_budget} beyond the "
-                f"time budget), {evaluated_earlier} evaluated earlier in this evaluation, "
-                f"{removed_orphans} records of deleted assets removed, "
-                f"{skipped_not_authorized} skipped as assets the caller may not read, "
-                f"{skipped_archived + hidden_archived} archived assets skipped "
-                f"({hidden_archived} the caller may not see, not in the response)")
-    body = {
-        "message": f"Evaluation triggered for {len(triggered)} assets",
-        "databaseId": database_id,
-        "assetsTriggered": triggered,
-        "assetsRemaining": remaining,
-        "superseded": superseded,
-        "registered": registered,
-        "withoutSchema": without_schema,
-        "skipped": skipped_archived + skipped_not_authorized,
-        "skippedNotAuthorized": skipped_not_authorized,
-        "skippedArchived": skipped_archived,
-        "removedOrphans": removed_orphans,
-    }
-    if remaining:
-        body["NextToken"] = _sweep_token(sweep_started_at)
-    return success(body=body)
-
-
-def _database_rows(database_id):
-    """Every asset-state row of a database (read to exhaustion)."""
-    return query_all_items(asset_state_table, KeyConditionExpression=Key("databaseId").eq(database_id))
-
-
-def _bound_assets(schema_name):
-    """Every state row bound to `schema_name` (its SchemaNameIndex partition, read to exhaustion),
-    but a deleted database's (under `<databaseId>#deleted`), which is never evaluated again."""
-    return [row for row in query_all_items(
-        asset_state_table,
-        IndexName="SchemaNameIndex",
-        KeyConditionExpression=Key("schemaName").eq(schema_name),
-    ) if not databaseRetirement.is_deleted_scope(row.get("databaseId"))]
+    def answer(self, event, next_token, database=False, **identity):
+        """The call's response: the evaluations it ran, its counts, and `NextToken` (`next_token`)
+        while anything is left to read."""
+        remaining = self.beyond_cap + self.beyond_budget
+        logger.info(f"{'Evaluation of database' if database else 'Sweep of schema'} "
+                    f"{identity}: {self.registered} registered, {len(self.triggered)} triggered "
+                    f"({self.superseded} superseded by a newer evaluation), "
+                    f"{self.skipped_not_authorized} skipped as not authorized, "
+                    f"{self.without_schema} without a schema, "
+                    f"{remaining} remaining in the pages read ({self.beyond_cap} beyond the cap, "
+                    f"{self.beyond_budget} beyond the time budget), {self.evaluated_earlier} "
+                    f"evaluated earlier in this walk, {self.removed_orphans} records of deleted "
+                    f"assets removed, "
+                    f"{self.skipped_archived + self.hidden_archived} archived assets skipped "
+                    f"({self.hidden_archived} the caller may not see, not in the response), "
+                    f"more to read: {next_token is not None}")
+        body = {
+            "message": (f"Evaluation triggered for {len(self.triggered)} assets" if database
+                        else f"Sweep triggered for {len(self.triggered)} assets"),
+            **identity,
+            "assetsTriggered": self.triggered,
+            "assetsRemaining": remaining,
+            "superseded": self.superseded,
+            "skipped": self.skipped_not_authorized + self.skipped_archived,
+            "skippedNotAuthorized": self.skipped_not_authorized,
+            "skippedArchived": self.skipped_archived,
+            "removedOrphans": self.removed_orphans,
+        }
+        if database:
+            body.update(registered=self.registered, withoutSchema=self.without_schema)
+        if next_token:
+            body["NextToken"] = next_token
+        return success(body=body)
 
 
 # The field of a sweep's continuation token: the instant its first call started.
@@ -809,38 +844,83 @@ def _parse_instant(value):
     return instant if instant.tzinfo else instant.replace(tzinfo=timezone.utc)
 
 
-def _sweep_started_at(starting_token):
-    """`(started_at, ok)`: the instant the sweep a token continues started, or now for a sweep's
-    first call (no token). `ok` is False for a malformed token, or one naming a future instant."""
+class _SweepPosition:
+    """Where a walk goes on: when it started, its phase, the database it registers (registration)
+    and the key of the page it continues from (None from the start of the phase)."""
+
+    def __init__(self, started_at, phase, database_id=None, cursor=None):
+        self.started_at = started_at
+        self.phase = phase
+        self.database_id = database_id
+        self.cursor = cursor
+
+    def evaluating(self):
+        return _SweepPosition(self.started_at, SWEEP_PHASE_EVALUATE)
+
+
+def _string_key(value, keys):
+    """Whether `value` is a table key with exactly `keys`, each a non-empty string."""
+    return (isinstance(value, dict) and set(value) == set(keys)
+            and all(isinstance(value[key], str) and value[key] for key in keys))
+
+
+def _sweep_position(starting_token, cursor_keys, cursor_matches):
+    """The walk a token continues, or the start of a new walk (no token, now); None for a token
+    that is not one of this walk: malformed, naming a future instant, an unknown phase, or a cursor
+    that is not a key of the table or index the phase reads (`cursor_keys` for the records,
+    `listing.BASE_STATE_KEYS` for the asset rows) or not of this request (`cursor_matches`). A
+    token of the earlier form (the start instant alone) goes on from the start of the walk."""
     now = datetime.now(timezone.utc)
     if not starting_token:
-        return now, True
+        return _SweepPosition(now, SWEEP_PHASE_REGISTER)
     try:
         decoded = json.loads(base64.b64decode(starting_token, validate=True).decode("utf-8"))
     except (ValueError, TypeError):
-        return None, False
-    started_at = _parse_instant(decoded.get(SWEEP_TOKEN_FIELD)) if isinstance(decoded, dict) else None
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    started_at = _parse_instant(decoded.get(SWEEP_TOKEN_FIELD))
     if started_at is None or started_at > now + timedelta(minutes=5):
-        return None, False
-    return started_at, True
+        return None
+    phase = decoded.get("phase", SWEEP_PHASE_REGISTER)
+    database_id = decoded.get("databaseId")
+    cursor = decoded.get("cursor")
+    if phase == SWEEP_PHASE_REGISTER:
+        if database_id is not None and not (isinstance(database_id, str) and database_id):
+            return None
+        if cursor is not None and not (database_id and _string_key(cursor, listing.BASE_STATE_KEYS)
+                                       and cursor["databaseId"] == database_id):
+            return None
+    elif phase == SWEEP_PHASE_EVALUATE:
+        if database_id is not None:
+            return None
+        if cursor is not None and not (_string_key(cursor, cursor_keys) and cursor_matches(cursor)):
+            return None
+    else:
+        return None
+    return _SweepPosition(started_at, phase, database_id, cursor)
 
 
-def _sweep_token(started_at):
-    return base64.b64encode(json.dumps(
-        {SWEEP_TOKEN_FIELD: started_at.isoformat()}).encode("utf-8")).decode("utf-8")
+def _sweep_token(started_at, phase, database_id, cursor):
+    """The continuation token of a walk: its start, its phase, and where it goes on."""
+    token = {SWEEP_TOKEN_FIELD: started_at.isoformat(), "phase": phase}
+    if database_id:
+        token["databaseId"] = database_id
+    if cursor:
+        token["cursor"] = cursor
+    return base64.b64encode(json.dumps(token).encode("utf-8")).decode("utf-8")
 
 
 def _sweep_candidates(rows, started_at, key):
-    """The rows a sweep call still has to evaluate, in the order it evaluates them.
+    """The rows of a page a sweep call still has to evaluate, in the order it evaluates them.
 
     A sweep is a walk over consecutive calls: the first call starts it (`started_at` is then now),
-    and each call that leaves rows unreached returns a token naming that instant. Every evaluation
-    records its start on the row (`lastEvaluatedAt`) before it evaluates anything, so a row evaluated
-    since the sweep started (by an earlier call of it, or by an evaluation of the trigger meanwhile)
-    is done and left out; the rest is what remains, and each call shrinks it. Order:
+    and each call that leaves rows to read returns a token naming that instant. Every evaluation
+    records its start on the row (`lastEvaluatedAt`) before it evaluates anything, so a row
+    evaluated since the sweep started (by an earlier call of it, a page this call reads again, or an
+    evaluation of the trigger meanwhile) is done and left out. Order within the page:
     `pending_evaluation` rows first, then the least recently evaluated (never evaluated first), then
-    `key`, so even calls that do not pass the token work through the rows instead of repeating the
-    same ones. Returns `(candidates, evaluated since the sweep started)`."""
+    `key`. Returns `(candidates, evaluated since the sweep started)`."""
     candidates = []
     evaluated = 0
     for row in rows:

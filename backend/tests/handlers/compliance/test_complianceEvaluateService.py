@@ -51,7 +51,7 @@ def database_binding():
     database bound to the swept schema. A test of the binding fallback configures the mocks."""
     with patch(f"{STORE}.get_database_item", return_value=None) as get_database_item, \
             patch(f"{STORE}.databases_bound_to_schema", return_value=[]) as bound, \
-            patch(f"{STORE}.register_unrecorded_assets", return_value=0) as register_unrecorded, \
+            patch(f"{STORE}.register_unrecorded_assets_page", return_value=(0, None)) as register_unrecorded, \
             patch(f"{STORE}.register_under_database_binding") as register:
         yield {"get_database_item": get_database_item, "databases_bound_to_schema": bound,
                "register_unrecorded_assets": register_unrecorded, "register": register}
@@ -608,9 +608,9 @@ class TestSweep:
         assert body_of(response)["message"] == "Schema not found"
         mocks["state"].query.assert_not_called()
 
-    def test_bound_assets_are_read_from_the_schema_name_index_to_exhaustion(self):
-        """The schema's index partition is read once, following LastEvaluatedKey; the pending row
-        is evaluated first, then the rest."""
+    def test_bound_assets_are_read_from_the_schema_name_index_a_page_at_a_time(self):
+        """The schema's index partition is read a page at a time, following LastEvaluatedKey; within
+        a page the pending row is evaluated first, then the rest."""
         pending_row = {"databaseId": DB, "assetId": "p", "complianceState": PENDING}
         state_table = MagicMock()
         state_table.query.side_effect = [
@@ -626,7 +626,8 @@ class TestSweep:
                 patch(f"{MOD}.check_and_trigger_cascade"):
             response = svc.lambda_handler(
                 rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), MagicMock())
-        assert [t["assetId"] for t in body_of(response)["assetsTriggered"]] == ["p", "a", "b"]
+        assert [t["assetId"] for t in body_of(response)["assetsTriggered"]] == ["a", "p", "b"]
+        assert "NextToken" not in body_of(response)
         queries = state_table.query.call_args_list
         assert len(queries) == 2
         assert all(q.kwargs["IndexName"] == "SchemaNameIndex" for q in queries)
@@ -666,7 +667,8 @@ class TestSweep:
 
     def test_sweep_stops_launching_after_the_time_budget_and_reports_the_rest(self, monkeypatch):
         assert svc.SWEEP_TIME_BUDGET_SECONDS < 29
-        monkeypatch.setattr(svc, "monotonic", _clock(0, 0, svc.SWEEP_TIME_BUDGET_SECONDS + 1))
+        # The call's start, the check before its first page, the first evaluation; then past it.
+        monkeypatch.setattr(svc, "monotonic", _clock(0, 0, 0, svc.SWEEP_TIME_BUDGET_SECONDS + 1))
         response, mocks = _run(
             rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), schema_item=schema_row(),
             state_rows=[{"databaseId": DB, "assetId": f"a{i}"} for i in range(3)])
@@ -759,7 +761,7 @@ class TestSweep:
         assert "error" not in response["body"]
         assert [c.args for c in mocks["cascade"].call_args_list] == [(DB, "a")]
         logged = " ".join(str(c.args[0]) for c in mocks["logger"].info.call_args_list)
-        assert "2 triggered (1 superseded by a newer evaluation), 0 skipped" in logged
+        assert "2 triggered (1 superseded by a newer evaluation), 0 skipped as not authorized" in logged
 
 
 @pytest.mark.unit
