@@ -102,10 +102,11 @@ DELETED_DATABASE_SCHEMA_MESSAGE = "The schema belongs to a deleted database and 
 # Pipeline rules: who may save one
 #######################
 
-# The answer to a save naming a pipeline rule whose workflow the caller may not run: the rule's name
-# only, the same whether the workflow or a pipeline is missing or the caller is refused, so the
-# answer says nothing of what exists.
-PIPELINE_RULE_REFUSED_MESSAGE = "Not authorized to run the workflow of pipeline rule '{rule}'"
+# The answer to a save naming a pipeline rule whose workflow the caller may not run: the rule's
+# position in the body's `rules` only (as body validation locates a rule), the same whether the
+# workflow or a pipeline is missing or the caller is refused, so the answer says nothing of what
+# exists.
+PIPELINE_RULE_REFUSED_MESSAGE = "Not authorized to run the workflow of pipeline rule rules[{position}]"
 EXECUTE_ROUTE = "/workflows/{workflowDatabaseId}/{workflowId}/execute"
 
 
@@ -176,18 +177,21 @@ def _record_missing(object_type, keys):
 
 def pipeline_rules_refused(event, casbin_enforcer, schema_body, stored_body=None):
     """The `403` refusing a save whose new or changed pipeline rule names a workflow the caller may
-    not run (`may_run_workflow`), naming that rule only; None when every such rule passes. The system
-    user (the default schema seed, a registration of a system schema) is not checked: evaluations,
-    sweeps and cascades run as it whatever the schema says."""
+    not run (`may_run_workflow`), locating that rule by its position in the body's `rules`
+    (`rulePosition`); None when every such rule passes. The system user (the default schema seed, a
+    registration of a system schema) is not checked: evaluations, sweeps and cascades run as it
+    whatever the schema says."""
     if claims_and_roles["tokens"][0] == SYSTEM_USER:
         return None
+    positions = {name: position for position, name
+                 in enumerate(((schema_body or {}).get("rules") or {}).keys())}
     for rule_name, ref in changed_pipeline_rules(schema_body, stored_body):
         if not may_run_workflow(casbin_enforcer, ref):
             logger.info(f"Schema save refused: the caller may not run the workflow of pipeline "
                         f"rule '{rule_name}'")
             return authorization_error(body={
-                "message": PIPELINE_RULE_REFUSED_MESSAGE.format(rule=rule_name),
-                "ruleName": rule_name})
+                "message": PIPELINE_RULE_REFUSED_MESSAGE.format(position=positions[rule_name]),
+                "rulePosition": positions[rule_name]})
     return None
 
 
@@ -329,8 +333,8 @@ MISSING_PARENT_WARNING_CODE = "extendsSchemaNotFound"
 # One message whether the parent is missing, is not vams-rules-v1, or exists but the caller may not
 # read it, so the warning confirms nothing about a schema the caller may not read.
 MISSING_PARENT_WARNING_MESSAGE = (
-    "The parent schema '{name}' was not found as a vams-rules-v1 schema you may read. If it does "
-    "not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.")
+    "The parent schema `extends` names was not found as a vams-rules-v1 schema you may read. If it "
+    "does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.")
 
 
 def missing_parent_warnings(casbin_enforcer, schema_body):
@@ -358,7 +362,7 @@ def missing_parent_warnings(casbin_enforcer, schema_body):
         return []
     return [{
         "code": MISSING_PARENT_WARNING_CODE,
-        "message": MISSING_PARENT_WARNING_MESSAGE.format(name=parent_name),
+        "message": MISSING_PARENT_WARNING_MESSAGE,
         "extends": parent_name,
     }]
 

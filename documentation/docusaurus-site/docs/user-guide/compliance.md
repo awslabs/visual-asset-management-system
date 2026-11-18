@@ -200,7 +200,7 @@ A schema whose body is not a `vams-rules-v1` document is marked **Legacy — can
 
 ### Registering a schema
 
-Saving a schema with a pipeline rule needs the right to run the rule's workflow: the workflow's execute route and reading the workflow and its pipelines. The Compliance Admin template grants it for the workflows of its database and of `GLOBAL`, the Compliance Global Admin template for `GLOBAL` workflows. Without it the save is refused with **Not authorized to run the workflow of pipeline rule '<name>'**, and the editor stays open with that message. Only pipeline rules the save adds or changes are checked.
+Saving a schema with a pipeline rule needs the right to run the rule's workflow: the workflow's execute route and reading the workflow and its pipelines. The Compliance Admin template grants it for the workflows of its database and of `GLOBAL`, the Compliance Global Admin template for `GLOBAL` workflows. Without it the save is refused with **Not authorized to run the workflow of pipeline rule rules[<n>]** (`<n>` is the rule's position in the schema's rules, counting from 0), and the editor stays open with that message. Only pipeline rules the save adds or changes are checked.
 
 ```bash
 POST /compliance/schemas
