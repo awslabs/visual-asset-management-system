@@ -127,7 +127,7 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | Helper                                                        | Use for                                                                                            |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                                |
-| `cachedFeaturesEnabled(page)`                                 | The deployment's feature flags, read from the app's own cache; `test.skip` on an absent flag       |
+| `cachedFeaturesEnabled(page)`                                 | Same as `featureSwitches(page)` (older name); `test.skip` on an absent flag                        |
 | `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages                   |
 | `searchBox(page)`                                             | The orchestration filter-bar search input                                                          |
 | `facet(page, label)`                                          | A native `<select>` filter                                                                         |
@@ -155,7 +155,7 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `pickViewerIfAsked(page, name, select?)`                      | Choose viewer `name` (config name) if asked, then ALWAYS assert it is the one selected             |
 | `expectViewerSelected(page, name)`                            | Assert the picker shows viewer `name` and no viewer placeholder remains                            |
 | `dataGrid(scope)`                                             | The Columnar viewer's react-data-grid root; scope header and row queries to it                     |
-| `featuresEnabled(page)` / `missingFeatures(list, req)`        | The deployment's `featuresEnabled` list / the required features it lacks                           |
+| `featuresEnabled(page)` / `missingFeatures(list, req)`        | Same as `featureSwitches(page)` (older name) / the required features it lacks                      |
 | `watchConsoleErrors(page, ignore?)`                           | Collect `console.error` and page errors not matching `CONSOLE_ERROR_IGNORE` (or your list)         |
 | `largestCanvas(scope)`                                        | The largest visible `<canvas>`, a viewer's rendering surface                                       |
 | `canvasStats(page, canvas, timeouts?)`                        | Pixel stats via `captureCanvas`: element shot, then bounded page clip of the canvas box            |
@@ -169,7 +169,7 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `sideNavigation(page)`                                        | The side navigation `nav` landmark (the one holding hash-route links)                              |
 | `expectSuperSplatRendered(page, iframe, what)`                | SuperSplat Editor drew the file: splat count > 0, canvas differs from the empty editor's           |
 | `SUPERSPLAT_CSP_ALLOWED` / `CSP_CONSOLE_REPORT`               | The editor page's baseline CSP violations / the console copy of a CSP report                       |
-| `featureSwitches(page)`                                       | The deployment's `featuresEnabled`, as the running app cached them (assert the right side)         |
+| `featureSwitches(page)`                                       | The deployment's `featuresEnabled`, from the app's own cache: the harness's one feature reader     |
 | `signInAs(page, username, password)`                          | Sign a fresh context in as another user, from credentials the environment supplies                 |
 
 **Selector facts worth not rediscovering:**
