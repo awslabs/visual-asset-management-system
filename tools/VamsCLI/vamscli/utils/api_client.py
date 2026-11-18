@@ -1040,7 +1040,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
         A redirect hop to plain http is refused, unless the base URL is itself http and the hop stays
         on its host: `setup` accepts plain http only for a loopback base URL. Every hop is checked, not
-        only the last, because a reply on an http hop can steer the rest of the chain.
+        only the last.
         """
         try:
             response = self.get(API_AMPLIFY_CONFIG, include_auth=False)
