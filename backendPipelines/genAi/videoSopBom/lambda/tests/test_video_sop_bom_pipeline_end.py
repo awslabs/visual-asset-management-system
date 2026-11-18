@@ -220,6 +220,27 @@ class TestFailureCauses:
         assert cause == mod.STATE_TIMEOUT_CAUSE
         assert "AWS Batch queue" in cause
 
+    def test_a_batch_state_timeout_ends_the_runs_job(self):
+        # Step Functions does not cancel the .sync job on a state timeout; pipelineEnd ends it so a
+        # queued job does not start after the run has failed and its scratch prefix is gone.
+        mod = _load()
+        batch = MagicMock()
+        batch.list_jobs.return_value = {"jobSummaryList": [
+            {"jobId": "j-done", "status": "SUCCEEDED"}, {"jobId": "j-queued", "status": "RUNNABLE"}]}
+        with patch.object(mod, "batch", batch), patch.object(mod, "BATCH_JOB_QUEUES", ["queue"]):
+            _, _, failure = _run(mod, _event(error={"Error": "States.Timeout"}))
+        assert batch.list_jobs.call_args.kwargs == {
+            "jobQueue": "queue",
+            "filters": [{"name": "JOB_NAME", "values": [_event()["batchJobName"]]}]}
+        assert [c.kwargs["jobId"] for c in batch.terminate_job.call_args_list] == ["j-queued"]
+        _failure(failure)
+
+    def test_another_failure_ends_no_job(self):
+        mod = _load()
+        batch = MagicMock()
+        with patch.object(mod, "batch", batch), patch.object(mod, "BATCH_JOB_QUEUES", ["queue"]):
+            _run(mod, _event(error={"Error": "States.TaskFailed", "Cause": "x"}))
+        batch.list_jobs.assert_not_called()
     def test_camel_case_job_keys_are_read_too(self):
         mod = _load()
         job = {"jobId": "x", "status": "FAILED", "statusReason": "Task failed to start",

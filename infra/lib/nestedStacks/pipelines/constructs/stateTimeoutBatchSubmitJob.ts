@@ -3,10 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Duration } from "aws-cdk-lib";
+import { Duration, Fn, Stack } from "aws-cdk-lib";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { Construct } from "constructs";
+import * as ServiceHelper from "../../../helper/service-helper";
 
 export interface StateTimeoutBatchSubmitJobProps extends tasks.BatchSubmitJobProps {
     /**
@@ -27,6 +30,10 @@ export interface StateTimeoutBatchSubmitJobProps extends tasks.BatchSubmitJobPro
  * job waits RUNNABLE is limited only by the execution timeout, and an execution-level
  * `States.Timeout` skips every Catch, so the state that reports the outcome never runs. This adds
  * `TimeoutSeconds` to the rendered state, which the state's Catch handles.
+ *
+ * Step Functions cancels a `.sync` job when the execution is aborted, not when the state times out,
+ * so the state's pipelineEnd ends the job itself: give that function
+ * `grantBatchStateTimeoutCleanup` on every queue the state can submit to.
  */
 export class StateTimeoutBatchSubmitJob extends tasks.BatchSubmitJob {
     private readonly stateTimeoutSeconds: number;
@@ -46,4 +53,33 @@ export class StateTimeoutBatchSubmitJob extends tasks.BatchSubmitJob {
             TimeoutSeconds: this.stateTimeoutSeconds,
         };
     }
+}
+
+/**
+ * Lets a pipelineEnd function end the run's AWS Batch job after a Batch state's own bound fires:
+ * `BATCH_JOB_QUEUES` (the queues the state submits to, comma-separated), `batch:ListJobs` to find
+ * the job by its run-unique job name (the action supports no resource-level permission) and
+ * `batch:TerminateJob` on jobs in this account and Region (job ids are generated at submit, so
+ * `job/*` is the narrowest ARN).
+ */
+export function grantBatchStateTimeoutCleanup(
+    pipelineEnd: lambda.Function,
+    jobQueueArns: string[]
+): void {
+    const stack = Stack.of(pipelineEnd);
+    pipelineEnd.addEnvironment("BATCH_JOB_QUEUES", Fn.join(",", jobQueueArns));
+    pipelineEnd.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["batch:ListJobs"],
+            resources: ["*"],
+        })
+    );
+    pipelineEnd.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["batch:TerminateJob"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:batch:${stack.region}:${stack.account}:job/*`,
+            ],
+        })
+    );
 }

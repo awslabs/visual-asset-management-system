@@ -21,7 +21,10 @@ import { storageResources } from "../../../../storage/storageBuilder-nestedStack
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
-import { StateTimeoutBatchSubmitJob } from "../../../constructs/stateTimeoutBatchSubmitJob";
+import {
+    StateTimeoutBatchSubmitJob,
+    grantBatchStateTimeoutCleanup,
+} from "../../../constructs/stateTimeoutBatchSubmitJob";
 import {
     NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
@@ -373,6 +376,10 @@ export class VideoSopBomConstruct extends Construct {
             props.vpc,
             props.pipelineSubnets
         );
+        // After the Batch state's own bound fires, pipelineEnd ends the run's job.
+        grantBatchStateTimeoutCleanup(pipelineEndFunction, [
+            batchPipeline.batchJobQueue.jobQueueArn,
+        ]);
 
         // Step Functions state machine
         const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipelineTask", {

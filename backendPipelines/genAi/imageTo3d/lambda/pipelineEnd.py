@@ -28,6 +28,39 @@ sfn = boto3.client(
     region_name=os.environ["AWS_REGION"],
     config=retry_config
 )
+batch = boto3.client(
+    'batch',
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
+)
+
+# Step Functions cancels a .sync Batch job when the execution is stopped, not when the Batch state's
+# own bound fires, so after that timeout the run's job, still queued or running, is ended here; else
+# it would start or go on on a GPU after the run had failed. The queues are every queue a model's
+# state submits to (BATCH_JOB_QUEUES, comma-separated); the job name is unique to the run.
+BATCH_JOB_QUEUES = [queue for queue in os.environ.get("BATCH_JOB_QUEUES", "").split(",") if queue]
+LIVE_BATCH_JOB_STATUSES = frozenset({"SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"})
+
+
+def end_batch_job_after_state_timeout(error, job_name):
+    """Terminate the run's Batch job when ``error`` is the Batch state's own timeout.
+
+    Returns how many jobs were ended. Best effort: a failed lookup or terminate is logged, and the
+    failure is still reported to the workflow."""
+    if not isinstance(error, dict) or error.get("Error") != STATE_TIMEOUT_ERROR or not job_name:
+        return 0
+    ended = 0
+    for queue in BATCH_JOB_QUEUES:
+        try:
+            response = batch.list_jobs(
+                jobQueue=queue, filters=[{"name": "JOB_NAME", "values": [job_name]}])
+            for job in response.get("jobSummaryList") or []:
+                if job.get("status") in LIVE_BATCH_JOB_STATUSES:
+                    batch.terminate_job(jobId=job["jobId"], reason="The pipeline's time limit was reached")
+                    ended += 1
+        except Exception as e:
+            logger.warning(f"Could not end the Batch job {job_name}: {e}")
+    return ended
 
 
 def lambda_handler(event, context):
@@ -44,6 +77,8 @@ def lambda_handler(event, context):
 
     externalSfnTaskToken = event["externalSfnTaskToken"]
     error = event.get("error")
+
+    end_batch_job_after_state_timeout(error, event.get("jobName"))
 
     if not externalSfnTaskToken:
         logger.warning("No external task token present; no workflow callback to send")

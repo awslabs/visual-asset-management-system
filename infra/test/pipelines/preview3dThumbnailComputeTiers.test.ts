@@ -29,6 +29,7 @@ import {
 } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct";
 import { makePipelineHarness } from "../support/pipelineConstructHarness";
 import { lambdaEnvironmentsByHandler, parseAsl, singleStateMachine } from "../support/asl";
+import { expectBatchStateTimeoutCleanup } from "../support/batchStateTimeoutCleanup";
 
 const BUNDLE_PIPELINE_JSON = path.resolve(
     __dirname,
@@ -220,6 +221,10 @@ describe("3D preview thumbnail compute tiers (template defaults)", () => {
         const envs = lambdaEnvironmentsByHandler(template, "openPipeline.lambda_handler");
         expect(envs).toHaveLength(1);
         expect(envs[0].LARGE_TIER_THRESHOLD_BYTES).toBe(String(2 * 1024 ** 3));
+    });
+
+    test("pipelineEnd can end the run's job after a tier's state timeout", () => {
+        expectBatchStateTimeoutCleanup(template);
     });
 });
 
