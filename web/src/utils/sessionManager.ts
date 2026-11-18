@@ -5,6 +5,7 @@
 
 import { signOut } from "aws-amplify/auth";
 import localforage from "localforage";
+import { clearPresignedUrlCache } from "../visualizerPlugin/core/presignedUrlCache";
 import {
     ensureSessionValid,
     getCurrentTokenExpiryMs,
@@ -171,6 +172,8 @@ export async function revokeSession(): Promise<void> {
  * Run it after revokeSession().
  */
 export function clearStoredSession(): void {
+    // Presigned file URLs the viewers cached belong to the signed-out user.
+    clearPresignedUrlCache();
     const kept = PRESERVED_PREFERENCE_KEYS.map((key) => [key, localStorage.getItem(key)] as const);
     localStorage.clear();
     for (const [key, value] of kept) {
