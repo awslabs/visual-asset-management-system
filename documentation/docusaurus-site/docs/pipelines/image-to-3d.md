@@ -150,7 +150,7 @@ aws codebuild batch-get-builds --ids <build-id>
 ```
 
 :::warning[Docker Hub rate limiting]
-Builds pull the `nvidia/cuda` base image, which is subject to anonymous pull rate limits and can fail with "429 Too Many Requests". Configure registry credentials in AWS Secrets Manager and reference them from the build, or mirror the base image into a private Amazon ECR repository.
+Builds pull their base images (`nvidia/cuda`, and `mambaorg/micromamba` for `sam3d`) from Docker Hub without credentials, so they are subject to Docker Hub's anonymous pull rate limits and can fail with "429 Too Many Requests". Neither the CodeBuild project nor `buildspec.yml` takes registry credentials. Rerun a failed build with `aws codebuild start-build --project-name <ImageTo3d CodeBuild project>`, or mirror the base images into a private Amazon ECR repository and point the `FROM` line of each affected Dockerfile at the mirror.
 :::
 
 ### Local Docker asset
