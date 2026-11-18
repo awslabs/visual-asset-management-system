@@ -15,7 +15,8 @@ import { nestedTemplateKeyFor } from "../support/iamPolicySize";
  * stack is refused the same way. The jest synth harness synthesizes fine at any size, so before this
  * guard the failure surfaced only on a real deploy (#1535: with `useGlobalVpc.useForAllLambdas` on, the
  * ApiBuilder2 nested stack was 1,009,044 bytes while development, at 986,768, had passed with 13,232
- * bytes to spare).
+ * bytes to spare). Writing the shared IAM suppressions on the IAM resources alone (#1647) has since
+ * cut ApiBuilder2 to about 0.65 MB in that cell.
  *
  * WHAT IS MEASURED. The template CloudFormation receives from `cdk synth`, which differs from a bare
  * `app.synth()` in two ways that move the size, so both are reproduced here:
@@ -34,15 +35,14 @@ import { nestedTemplateKeyFor } from "../support/iamPolicySize";
  * Commercial also runs the worst cell with a 20-character `app.baseStackName` (30 characters with the Region).
  *
  * NOT GUARDED: `useGlobalVpc.useForAllLambdas`. That option puts a VpcConfig block and a security group
- * on EVERY function and makes ApiBuilder2 the largest template by far (development alone is at 98.7% of
- * the limit there, before the audit search). No customer uses it today and it is deprecated, so its cell
+ * on EVERY function and makes ApiBuilder2 the largest template by far (651,446 bytes, 65.1% of the
+ * limit, with the audit search built in ApiBuilder3). No customer uses it today and it is deprecated, so its cell
  * only prints its size (informational) and never fails the build.
  *
  * THE THRESHOLDS. A function with its VpcConfig and security group is 14,000 to 29,000 bytes in the API
  * stacks, so the headroom below the limit is room for that many more functions, or for CDK and cdk-nag
  * raising the metadata they stamp on each resource, before a deploy is refused. STANDARD_THRESHOLD_BYTES
- * (940,000) and LONG_NAME_THRESHOLD_BYTES (960,000) are set just above the largest measured guarded cell
- * of their kind, so the guard fails on about one more function. A template over it fails here, in the pull request that crossed it, with the table
+ * (940,000) and LONG_NAME_THRESHOLD_BYTES (960,000) sit 6% and 4% below the limit. A template over it fails here, in the pull request that crossed it, with the table
  * printed below. The remedy is to build the new functions in a new nested stack (ApiBuilder3NestedStack
  * already exists, `infra/CLAUDE.md` "API Stack Ceilings"), not to raise the number.
  */
@@ -53,9 +53,9 @@ const CFN_HARD_LIMIT_BYTES = 1_000_000;
 
 /**
  * Guarded cells at the reference stack name must stay under STANDARD_THRESHOLD_BYTES (6% below the
- * limit): measured at 908,594 bytes in the largest (commercial worst), so about 31,000 bytes of
- * room, one more VPC-bound function, before the guard trips. The long-base-name cell stays under
- * LONG_NAME_THRESHOLD_BYTES (4% below): measured at 946,898 bytes, 13,000 bytes of room.
+ * limit): measured at 635,450 bytes in the largest (commercial worst, ApiBuilder2), so about
+ * 300,000 bytes of room. The long-base-name cell stays under LONG_NAME_THRESHOLD_BYTES (4% below):
+ * measured at 673,768 bytes, about 286,000 bytes of room.
  */
 const STANDARD_THRESHOLD_BYTES = 940_000;
 const LONG_NAME_THRESHOLD_BYTES = 960_000;

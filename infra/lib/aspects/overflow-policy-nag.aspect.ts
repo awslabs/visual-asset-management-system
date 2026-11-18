@@ -6,6 +6,7 @@
 import { CfnResource, IAspect } from "aws-cdk-lib";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { IConstruct } from "constructs";
+import { nagRuleReadsResource } from "../helper/security";
 
 /** The construct id CDK gives an overflow policy it splits off a role's default policy. */
 const OVERFLOW_ID = /^OverflowPolicy\d+$/;
@@ -19,6 +20,8 @@ const OVERFLOW_ID = /^OverflowPolicy\d+$/;
  * covers only the children that exist at that call). The statements are the same, so their
  * suppressions are too: this aspect copies the `cdk_nag` metadata of the role and its default policy
  * onto each overflow policy, before cdk-nag (added after it, at a later priority) checks it (#1499).
+ * A rule cdk-nag does not evaluate on a managed policy (AwsSolutions-IAM4, which reads roles, users and
+ * groups) is not copied: it would suppress nothing and only add template bytes.
  */
 export class OverflowPolicyNagSuppressionAspect implements IAspect {
     public visit(node: IConstruct): void {
@@ -36,6 +39,7 @@ export class OverflowPolicyNagSuppressionAspect implements IAspect {
         const rules: any[] = [];
         for (const source of sources) {
             for (const rule of source.getMetadata("cdk_nag")?.rules_to_suppress ?? []) {
+                if (!nagRuleReadsResource(rule.id, node)) continue;
                 if (!rules.some((r) => JSON.stringify(r) === JSON.stringify(rule)))
                     rules.push(rule);
             }
