@@ -168,8 +168,8 @@ vamscli execution details metadata my-execution-id --pipeline-id my-pipeline --p
 | ------------------ | --------------------------------------------------------------------------------- |
 | `--collection`     | `input` (default), `inputDatabase`, or `output` — case-sensitive                  |
 | `--pipeline-id`    | Only rows produced or read by this pipeline (one workflow step)                   |
-| `--page-size`      | Rows per page (max 500; a larger value is clamped with a warning)                 |
-| `--max-items`      | Maximum total rows to fetch — applies only with `--auto-paginate` (default 10000) |
+| `--page-size`      | Rows per page, 1 to 500 (a larger value is clamped with a warning)                |
+| `--max-items`      | Maximum total rows (at least 1) — applies only with `--auto-paginate` (10000)     |
 | `--starting-token` | Continuation token for manual pagination                                          |
 | `--auto-paginate`  | Fetch every page up to `--max-items`                                              |
 | `--json-output`    | Output the raw JSON response                                                      |
@@ -240,8 +240,8 @@ vamscli execution details files my-execution-id --collection output --pipeline-i
 | ------------------ | --------------------------------------------------------------------------------- |
 | `--collection`     | `input` (default) or `output` — case-sensitive                                    |
 | `--pipeline-id`    | Only output rows produced by this pipeline (one workflow step)                    |
-| `--page-size`      | Rows per page (max 500; a larger value is clamped with a warning)                 |
-| `--max-items`      | Maximum total rows to fetch — applies only with `--auto-paginate` (default 10000) |
+| `--page-size`      | Rows per page, 1 to 500 (a larger value is clamped with a warning)                |
+| `--max-items`      | Maximum total rows (at least 1) — applies only with `--auto-paginate` (10000)     |
 | `--starting-token` | Continuation token for manual pagination                                          |
 | `--auto-paginate`  | Fetch every page up to `--max-items`                                              |
 | `--json-output`    | Output the raw JSON response                                                      |

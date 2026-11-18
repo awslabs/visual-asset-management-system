@@ -849,6 +849,30 @@ class TestExecutionDetailsMetadata:
             assert result.exit_code != 0
             assert '--collection' in result.output
 
+    @pytest.mark.parametrize('command, method', [
+        ('metadata', 'get_execution_details_metadata'), ('files', 'get_execution_details_files')])
+    def test_a_400_without_a_token_does_not_blame_a_token(self, cli_runner, generic_command_mocks, command,
+                                                          method):
+        """The route also answers 400 for an invalid --pipeline-id or --page-size."""
+        with generic_command_mocks('execution') as mocks:
+            getattr(mocks['api_client'], method).side_effect = InvalidExecutionDataError(
+                "pipelineId is invalid.")
+            result = cli_runner.invoke(cli, ['execution', 'details', command, 'e1', '--pipeline-id', 'x y'])
+            assert result.exit_code != 0
+            assert 'pipelineId is invalid' in result.output
+            assert 'pagination token' not in result.output
+
+    @pytest.mark.parametrize('command', ['metadata', 'files'])
+    @pytest.mark.parametrize('option, value', [('--page-size', '0'), ('--page-size', '-5'),
+                                               ('--max-items', '0')])
+    def test_a_page_size_below_one_is_refused(self, cli_runner, generic_command_mocks, command, option, value):
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(cli, ['execution', 'details', command, 'e1', option, value,
+                                             '--auto-paginate'])
+            assert result.exit_code == 2
+            mocks['api_client'].get_execution_details_metadata.assert_not_called()
+            mocks['api_client'].get_execution_details_files.assert_not_called()
+
     def test_empty_collection_message(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:
             mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
