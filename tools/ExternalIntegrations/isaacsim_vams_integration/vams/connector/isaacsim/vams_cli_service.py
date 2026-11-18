@@ -262,6 +262,7 @@ class AuthStatus:
     expires_at: str = ""
     web_deployed_url: str = ""
     success: bool = False
+    refresh_supported: bool = False
 
 
 @dataclass
@@ -736,11 +737,23 @@ class VamsCliService:
 
     def check_authentication(self) -> AuthStatus:
         """
-        Check current authentication status.
+        Check current authentication status. A Cognito sign-in whose access token has expired is
+        renewed once with the CLI's refresh token, so a session the extension took over keeps
+        working past the token's lifetime; when the renewal fails the expired status is returned.
 
         Returns:
             AuthStatus dataclass with current auth state.
         """
+        status = self._read_auth_status()
+        if status.authenticated and status.is_expired and status.refresh_supported:
+            try:
+                self._execute_command(["auth", "refresh", "--json-output"])
+            except VamsCliError:
+                return status
+            return self._read_auth_status()
+        return status
+
+    def _read_auth_status(self) -> AuthStatus:
         try:
             output = self._execute_command(["auth", "status", "--json-output"])
             data = self._parse_json(output)
@@ -759,6 +772,7 @@ class VamsCliService:
                 expires_at=data.get("expires_at", ""),
                 web_deployed_url=data.get("web_deployed_url", ""),
                 success=data.get("success", False),
+                refresh_supported=data.get("refresh_supported", False) is True,
             )
 
             if status.web_deployed_url:
