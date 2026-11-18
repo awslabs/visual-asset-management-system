@@ -173,6 +173,7 @@ class TestTheAliasIsTheOnlyOneInTheResponseTree:
         )
         serialized = parse(payload, model=SearchResponseModel).dict(by_alias=True)
 
+        # `warnings` (#1590: truncated:time) ships on every answer, empty for a complete one.
         assert sorted(serialized) == [
             "_shards",
             "aggregationTotal",
@@ -180,7 +181,9 @@ class TestTheAliasIsTheOnlyOneInTheResponseTree:
             "hits",
             "timed_out",
             "took",
+            "warnings",
         ]
+        assert serialized["warnings"] == []
         assert sorted(serialized["hits"]) == ["hits", "max_score", "total"]
         assert serialized["aggregations"]["str_fileext"]["buckets"][0]["key"] == "glb"
 

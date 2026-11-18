@@ -1608,7 +1608,9 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
 
     The run's concurrency locks are released after the recording, and also when a recording step
     raises: this is the run's last step, so its locks must not outlive it because a row write failed.
-    The error still propagates to the caller.
+    The error still propagates to the caller. The completion event is published after that release,
+    so a consumer that relaunches on it (the compliance callback's waiting pipeline rules) finds the
+    locks free rather than refused again by the run it was told had ended.
 
     No-op when no execution context is present (non-workflow/direct invocations).
 
@@ -1619,8 +1621,9 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
         logger.info("No workflow execution context; skipping execution-output recording")
         return True
 
+    announcement = None
     try:
-        return _write_execution_outputs(
+        announcement = _write_execution_outputs(
             dynamo, workflow_execution_id, end_state_pipeline_execution_id, workflow_database_id,
             workflow_id, bucket_name, output_files, output_metadata, output_results, result_log,
             execution_log, log_group_arn, log_stream_name, execution_status, execution_error)
@@ -1634,12 +1637,22 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
             workflow_execution_id=workflow_execution_id, workflow_database_id=workflow_database_id,
             workflow_id=workflow_id)
 
+    # The terminal status is stored and the locks are free, so announce it. Only the writer that won
+    # the terminal guard announces, so a run finished by the error handler is announced once, by that
+    # handler, and of overlapping attempts of this step only the one whose write landed announces
+    # (#1271).
+    if announcement:
+        emit_workflow_execution_completed(**announcement)
+    return announcement is not None
+
 
 def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_execution_id,
                              workflow_database_id, workflow_id, bucket_name,
                              output_files, output_metadata, output_results, result_log, execution_log,
                              log_group_arn, log_stream_name, execution_status, execution_error):
-    """The row writes of record_execution_outputs, in order; see that function."""
+    """The row writes of record_execution_outputs, in order; see that function. Returns the
+    completion announcement's arguments when this call's terminal write landed, None when another
+    writer had already finished the run."""
     stop_date = er.iso_now()
     rows_truncated = False
 
@@ -1754,17 +1767,16 @@ def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
         if not eo.is_conditional_check_failure(e):
             raise
         logger.info("Main execution row already holds a terminal status; completion write skipped")
-        return False
+        return None
 
-    # The terminal status is now stored, so announce it. Only the writer that won the terminal guard
-    # emits, so a run finished by the error handler is announced once, by that handler, and of
-    # overlapping attempts of this step only the one whose write landed announces (#1271).
+    # The terminal status is now stored; record_execution_outputs announces it once the locks are
+    # released. Of overlapping attempts of this step only the one whose write landed gets here (#1271).
     attributes = (response or {}).get("Attributes") or {}
-    emit_workflow_execution_completed(
-        workflow_execution_id, workflow_database_id, workflow_id, execution_status,
-        started_at=attributes.get("executionStartDate", ""), completed_at=stop_date,
-        execution_group_id=attributes.get("executionGroupId", ""))
-    return True
+    return {"workflow_execution_id": workflow_execution_id,
+            "workflow_database_id": workflow_database_id, "workflow_id": workflow_id,
+            "execution_status": execution_status,
+            "started_at": attributes.get("executionStartDate", ""), "completed_at": stop_date,
+            "execution_group_id": attributes.get("executionGroupId", "")}
 
 
 def _terminal_status(output_failures):
@@ -2224,10 +2236,14 @@ def _finalize_ingestion(event, audit_event=None):
             continue
         metadata_type = deferred.get("type") or 'metadata'
         try:
+            # Written as the execution's, as on the ingest path: the metadata service records the
+            # write as the run's (lastChangeSource workflowExecution), so the compliance trigger does
+            # not re-evaluate the asset on a pipeline rule's own output.
             applied = process_metadata_file(
                 state.get("sourceBucket"), deferred["key"], state_event.get('metadataPathKey', ''),
                 state_event.get('databaseId'), state_event.get('assetId'), deferred["filePath"],
-                metadata_type, None)
+                metadata_type, None,
+                workflow_execution_id=state_event.get('workflowExecutionId') or batch_id)
             if applied is None or isinstance(applied, MetadataWriteBackRejection):
                 output_failures.append(_metadata_write_back_failure(applied))
             else:

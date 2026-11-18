@@ -16,7 +16,7 @@ import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
 import Alert from "@cloudscape-design/components/alert";
 import { isCadSupportError } from "./utils/fileLoaders";
-import { AssetDependencyResolver } from "./utils/assetDependencyResolver";
+import { AssetDependencyResolver, isAbortError } from "./utils/assetDependencyResolver";
 import { loadWithDependencies, USD_NO_GEOMETRY_MESSAGE } from "./utils/dependencyLoading";
 import { applySceneEnvironment, applySceneLighting, SceneEnvironment } from "./utils/sceneLighting";
 import { ApiRefusalError, isApiRefusalError } from "../../core/streamFailure";
@@ -133,9 +133,8 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     // Scene tree height the user picked. Held here, as the panel unmounts the scene tree when it
     // switches tabs or is hidden; cleared when the viewer is given other files
     const keptTreeHeight = useKeptSceneTreeHeight(loadTargetKey);
-    // Render loop handle and the in-flight download, both torn down on unmount.
+    // Render loop handle, stopped on unmount.
     const animationFrameRef = useRef<number | null>(null);
-    const downloadAbortRef = useRef<AbortController | null>(null);
     const sceneEnvironmentRef = useRef<SceneEnvironment | null>(null);
 
     // 3D selection toggle
@@ -307,6 +306,14 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         // the abandoned first load carry on writing into the live scene. The closure gives each run
         // its own flag, so the abandoned one stops and the live one proceeds.
         let cancelled = false;
+        // This run's downloads, aborted by its cleanup so closing the viewer or giving it other
+        // files mid-download stops the transfer instead of letting it run to completion for a
+        // scene nobody is looking at. Per run, like `cancelled`, so a run never reads another run's
+        // signal. An abort from this controller is the run's own cancellation, not a failure: it is
+        // not logged or listed, and the rest of the load stops (#1643).
+        const runAbort = new AbortController();
+        const cancelledByCleanup = (error: unknown) =>
+            runAbort.signal.aborted && isAbortError(error);
         // The renderer is created before any file loads, while viewerInstanceRef is set only once
         // the scene is ready, so this run's renderer is held here: cleanup releases it after a
         // load that failed or was cancelled too.
@@ -370,10 +377,6 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 const allAnimations: any[] = [];
                 const unloaded: string[] = [];
 
-                // Aborted by cleanup so closing the viewer mid-download stops the transfer instead
-                // of letting it run to completion for a scene nobody is looking at.
-                downloadAbortRef.current = new AbortController();
-
                 for (let i = 0; i < filesToLoad.length; i++) {
                     if (cancelled) {
                         console.log("Loading cancelled by component unmount");
@@ -419,7 +422,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                                     !assetVersionId && versionId && fileKey === assetKey
                                         ? versionId
                                         : undefined,
-                                signal: downloadAbortRef.current?.signal,
+                                signal: runAbort.signal,
                             },
                             `Failed to load: ${fileName}`
                         );
@@ -433,7 +436,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                             assetId: fileAssetId,
                             databaseId: fileDatabaseId,
                             assetVersionId: assetVersionId,
-                            signal: downloadAbortRef.current?.signal,
+                            signal: runAbort.signal,
                         });
                         runResolvers.push(resolver);
 
@@ -483,6 +486,9 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
                         console.log(`Successfully loaded ${fileName}`);
                     } catch (fileError: any) {
+                        // This run's cleanup aborted the download: a cancellation, so nothing is
+                        // logged or listed and the rest of this load stops.
+                        if (cancelledByCleanup(fileError)) return;
                         // Console logging only: a % specifier in the interpolated value can at most
                         // garble this one log line; nothing is executed, stored or returned from
                         // it.
@@ -748,8 +754,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 cancelAnimationFrame(animationFrameRef.current);
                 animationFrameRef.current = null;
             }
-            downloadAbortRef.current?.abort();
-            downloadAbortRef.current = null;
+            runAbort.abort();
 
             if (viewerInstanceRef.current) {
                 const { renderer, controls, clickHandler } = viewerInstanceRef.current;

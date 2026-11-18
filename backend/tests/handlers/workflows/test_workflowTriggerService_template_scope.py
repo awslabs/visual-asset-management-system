@@ -361,14 +361,23 @@ def _bundle_root():
 
 
 def _registration_construct_files():
-    """Every CDK file that instantiates VamsSchemaRegistration. That is where the pipelineId a bundle
-    is registered under comes from — the bundle itself declares none."""
+    """Every CDK file that instantiates VamsSchemaRegistration, plus the shared id modules under
+    `infra/common/` those files import. That is where the pipelineId a bundle is registered under
+    comes from — the bundle itself declares none. The system pipelines state their ids once in
+    `infra/common/systemPipelines.ts` and the construct passes the imported constants, so the literal
+    lives in the imported module rather than in the construct."""
     found = []
     for path in glob.glob(os.path.join(_repo_root(), "infra", "lib", "**", "*.ts"), recursive=True):
         with open(path, encoding="utf-8") as handle:
-            if "new VamsSchemaRegistration(" in handle.read():
-                found.append(os.path.normpath(path))
-    return sorted(found)
+            source = handle.read()
+        if "new VamsSchemaRegistration(" not in source:
+            continue
+        found.append(os.path.normpath(path))
+        for specifier in re.findall(r'from\s+"((?:\.\./)+common/[-_a-zA-Z0-9]+)"', source):
+            imported = os.path.normpath(os.path.join(os.path.dirname(path), specifier + ".ts"))
+            if os.path.isfile(imported):
+                found.append(imported)
+    return sorted(set(found))
 
 
 def _registration_string_literals():
@@ -385,7 +394,7 @@ def _bundle_workflow_files():
     per-variant subdirectory of it, so both shapes are globbed."""
     root = _bundle_root()
     found = set()
-    for pattern in ("/**/vamsSchema/**/workflow.json", "/**/vamsSchema/workflow.json"):
+    for pattern in ("/**/vamsSchema*/**/workflow.json", "/**/vamsSchema*/workflow.json"):
         found.update(os.path.normpath(f) for f in glob.glob(root + pattern, recursive=True))
     return sorted(found)
 
@@ -396,7 +405,7 @@ def _walked_workflow_files():
     rather than trusted."""
     found = []
     for dirpath, _dirnames, filenames in os.walk(_bundle_root()):
-        if "workflow.json" in filenames and "vamsSchema" in dirpath.split(os.sep):
+        if "workflow.json" in filenames and any(part.startswith("vamsSchema") for part in dirpath.split(os.sep)):
             found.append(os.path.normpath(os.path.join(dirpath, "workflow.json")))
     return sorted(found)
 

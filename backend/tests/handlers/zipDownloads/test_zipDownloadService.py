@@ -511,7 +511,7 @@ class TestVersionPinning:
         self._versions(env, monkeypatch, [{"relativeKey": "/other.glb", "versionId": "v", "size": 1}])
         response = _create(env, {"selection": FILE_SELECTION["selection"], "assetVersionId": "3"})
         assert response["statusCode"] == 400
-        assert "3" not in h.body_of(response)["message"].replace("VAMS General Error: ", "")
+        assert "3" not in h.body_of(response)["message"]
 
 
 class TestListPaging:

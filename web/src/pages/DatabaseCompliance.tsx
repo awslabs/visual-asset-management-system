@@ -960,13 +960,16 @@ const DatabaseCompliancePage: React.FC = () => {
                         variant="text-grid"
                     >
                         {/* Each tile lists its assets: a state tile sets the state filter, the
-                            errors tile the evaluation-error filter, Tracked clears both. */}
+                            errors tile the evaluation-error filter, Tracked clears both. Each
+                            count's name starts with the count it shows (Label in Name, #1592). */}
                         <div>
                             <Box variant="awsui-key-label">Tracked {Synonyms.Assets}</Box>
                             <Box variant="awsui-value-large">
                                 <Button
                                     variant="inline-link"
-                                    ariaLabel={`Show every tracked ${Synonyms.asset}`}
+                                    ariaLabel={`${formatCount(totalTracked)}: show every tracked ${
+                                        Synonyms.asset
+                                    }`}
                                     onClick={() => setFilters({ state: "", evaluationError: "" })}
                                 >
                                     {formatCount(totalTracked)}
@@ -979,7 +982,9 @@ const DatabaseCompliancePage: React.FC = () => {
                                 <Box variant="awsui-value-large">
                                     <Button
                                         variant="inline-link"
-                                        ariaLabel={`Show only ${tile.label.toLowerCase()} ${
+                                        ariaLabel={`${formatCount((summary as any)?.[tile.state])}${
+                                            filters.state === tile.state ? " (shown)" : ""
+                                        }: show only ${tile.label.toLowerCase()} ${
                                             Synonyms.assets
                                         }`}
                                         onClick={() =>
@@ -1006,7 +1011,9 @@ const DatabaseCompliancePage: React.FC = () => {
                             <Box variant="awsui-value-large">
                                 <Button
                                     variant="inline-link"
-                                    ariaLabel={`Show only ${Synonyms.assets} whose last evaluation errored`}
+                                    ariaLabel={`${formatCount(summary?.error)}${
+                                        filters.evaluationError === "true" ? " (shown)" : ""
+                                    }: show only ${Synonyms.assets} whose last evaluation errored`}
                                     onClick={() =>
                                         setFilters({
                                             evaluationError:
@@ -1315,7 +1322,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                                       item.complianceState === "exception" && (
                                                           <Button
                                                               variant="inline-link"
-                                                              ariaLabel={`Revoke the exception of ${
+                                                              ariaLabel={`Revoke exception of ${
                                                                   item.assetName || item.assetId
                                                               }`}
                                                               onClick={() => setRevokeTarget(item)}

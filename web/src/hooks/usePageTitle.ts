@@ -19,11 +19,19 @@ const APP_TITLE_PREFIX = config.APP_TITLE_PREFIX;
  *   usePageTitle()                                → "VAMS"
  */
 export function usePageTitle(...parts: (string | undefined | null)[]) {
+    usePageTitleWhen(true, ...parts);
+}
+
+/**
+ * usePageTitle for a component that is sometimes a page of its own and sometimes hosted inside
+ * another page: with `enabled` false it leaves the document title to the host page.
+ */
+export function usePageTitleWhen(enabled: boolean, ...parts: (string | undefined | null)[]) {
     const filtered = parts.filter(Boolean) as string[];
     const title =
         filtered.length > 0 ? `${APP_TITLE_PREFIX} - ${filtered.join(" - ")}` : APP_TITLE_PREFIX;
 
     useEffect(() => {
-        document.title = title;
-    }, [title]);
+        if (enabled) document.title = title;
+    }, [enabled, title]);
 }

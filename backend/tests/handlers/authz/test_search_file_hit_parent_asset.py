@@ -30,7 +30,7 @@ os.environ.setdefault("OPENSEARCH_ENDPOINT_SSM_PARAM", "/test/endpoint")
 os.environ.setdefault("OPENSEARCH_TYPE", "provisioned")
 
 _SEARCH_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "backend", "handlers", "search", "search.py"
+    os.path.dirname(__file__), "..", "..", "..", "backend", "handlers", "osSemanticSearch", "search.py"
 )
 
 USER_ID = "search-user"

@@ -111,7 +111,7 @@ describe("TemplateForm while a save is in flight", () => {
         // The Stepper's step buttons are held like Back: a press keeps Review and "Saving...", so
         // the screen still shows the values being saved.
         const steps = ["Basic", "Pipeline overrides", "Tags and Config Body"].map((label) =>
-            screen.getByRole("button", { name: `Go to step ${label}` })
+            screen.getByRole("button", { name: new RegExp(`^${label}: go to step \\d$`) })
         );
         for (const step of steps) {
             expect(step).toHaveAttribute("aria-disabled", "true");
