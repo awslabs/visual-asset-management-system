@@ -285,3 +285,34 @@ class TestTheListingWhileTheIndexIsBuilt:
         with self._building(tables, message="Some other problem"):
             status, _ = _list()
         assert status == 500
+
+
+@pytest.mark.unit
+class TestAFreshDeployment:
+    """A first deploy: the schema table is empty when the default-schema seed runs, so no row
+    predates the marker. The seeded row (as `dynamodb-complianceschema-defaults-construct.ts`
+    passes it, with `latestVersion`) is in LatestVersionIndex at once, and the first listing finds
+    it there; the one-time backfill finds nothing to mark and records that it ran."""
+
+    SEED = {"schemaName": {"S": "default-compliance-schema"}, "internalVersion": {"N": "1"},
+            "databaseId": {"S": "GLOBAL"}, "registeredBy": {"S": "SYSTEM_USER"},
+            "isSystem": {"BOOL": True}, "latestVersion": {"S": "latest"},
+            "schemaBody": {"S": json.dumps(RULES_SCHEMA_BODY)}}
+
+    def test_the_seeded_schema_is_listed_by_the_first_listing(self, tables):
+        from handlers.compliance import complianceDefaultSchemaSeed as seed_module
+        table = tables["complianceSchemaStorage"]
+        assert table.scan()["Items"] == []
+        client = boto3.client("dynamodb", region_name="us-east-1")
+        with patch.object(seed_module, "dynamodb_client", client):
+            assert seed_module.seed({"TableName": table.name, "Item": json.dumps(self.SEED)})
+        index = table.query(IndexName=svc.LATEST_VERSION_INDEX,
+                            KeyConditionExpression=svc.Key("latestVersion").eq("latest"))["Items"]
+        assert [row["schemaName"] for row in index] == ["default-compliance-schema"]
+
+        status, body = _list()
+        assert status == 200, body
+        assert [(s["schemaName"], s["version"]) for s in body["schemas"]] == [
+            ("default-compliance-schema", 1)]
+        assert _marked(tables) == [("default-compliance-schema", 1)]
+        assert table.get_item(Key=svc.LATEST_MARKER_BACKFILL_KEY).get("Item")
