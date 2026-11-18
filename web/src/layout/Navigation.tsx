@@ -104,6 +104,10 @@ export function Navigation({
     const navigationItems = allowedPaths
         ? allowedEntriesFor("side", allowedPaths, enabledFeatures)
         : [];
+    // Home is always listed, so the empty states below look at the pages beyond it.
+    const hasSidePages = navigationItems.some(
+        (item: any) => item.type !== "divider" && !(item.type === "link" && item.href === "#/")
+    );
     const hasProfilePages =
         allowedPaths !== null &&
         allowedEntriesFor("profile", allowedPaths, enabledFeatures).length > 0;
@@ -132,7 +136,7 @@ export function Navigation({
             </div>
             <Button onClick={retryLoad}>Retry</Button>
         </div>
-    ) : navigationItems.length === 0 && hasProfilePages ? (
+    ) : !hasSidePages && hasProfilePages ? (
         <div
             style={{
                 padding: "20px",
@@ -147,7 +151,7 @@ export function Navigation({
                 Open the menu with your user name in the top bar to reach them.
             </div>
         </div>
-    ) : navigationItems.length === 0 ? (
+    ) : !hasSidePages ? (
         <div
             style={{
                 padding: "20px",

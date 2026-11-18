@@ -387,8 +387,9 @@ export function webRouteChecksFor(
 
 /**
  * Recursively filters navigation items based on allowed routes.
- * For expandable-link-group, filters inner items and removes the group if empty.
- * Top-level links (e.g. Home) are kept if their href is allowed.
+ * A section or expandable-link-group keeps only its allowed items, at any depth, and is removed
+ * when none remain. A link is kept if its href is allowed; Home ("/") always is, as the router
+ * always allows it.
  */
 export function filterNavItems(items: any[], allowedRoutes: any[]): any[] {
     const result: any[] = [];
@@ -398,16 +399,15 @@ export function filterNavItems(items: any[], allowedRoutes: any[]): any[] {
             continue;
         }
         if (item.type === "section" || item.type === "expandable-link-group") {
-            const filteredChildren = (item.items || []).filter((child: any) =>
-                allowedRoutes.includes(normaliseHref(child.href))
-            );
-            if (filteredChildren.length > 0) {
+            const filteredChildren = filterNavItems(item.items || [], allowedRoutes);
+            if (filteredChildren.some((child) => child.type !== "divider")) {
                 result.push({ ...item, items: filteredChildren });
             }
             continue;
         }
         if (item.type === "link" && item.href) {
-            if (allowedRoutes.includes(normaliseHref(item.href))) {
+            const path = normaliseHref(item.href);
+            if (path === "/" || allowedRoutes.includes(path)) {
                 result.push(item);
             }
             continue;
