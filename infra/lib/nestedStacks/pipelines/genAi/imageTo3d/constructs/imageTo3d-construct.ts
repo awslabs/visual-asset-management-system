@@ -374,6 +374,24 @@ export class ImageTo3dConstruct extends Construct {
         // The ECS agent, not the container, fetches the secret, so the read grant belongs on the
         // execution role.
         hfTokenSecret.grantRead(containerExecutionRole);
+        // grantRead adds no KMS permission for a key imported by ARN (the ViaService grant it derives
+        // has no policy to land on), so under a customer managed key the agent's GetSecretValue was
+        // refused "Access to KMS is not allowed" and no job started. Decrypt with that key, only
+        // through Secrets Manager and only for this secret.
+        if (props.storageResources.encryption.kmsKey) {
+            containerExecutionRole.addToPolicy(
+                new iam.PolicyStatement({
+                    actions: ["kms:Decrypt"],
+                    resources: [props.storageResources.encryption.kmsKey.keyArn],
+                    conditions: {
+                        StringEquals: {
+                            "kms:ViaService": Service("SECRETSMANAGER", false).Endpoint,
+                            "kms:EncryptionContext:SecretARN": hfTokenSecret.secretArn,
+                        },
+                    },
+                })
+            );
+        }
 
         const efsClientPolicy = new iam.PolicyDocument({
             statements: [

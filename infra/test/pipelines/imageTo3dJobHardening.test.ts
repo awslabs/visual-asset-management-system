@@ -236,6 +236,22 @@ describe("Image to 3D jobs with a GPU model and the Blender agent enabled", () =
         expect(actions.has("secretsmanager:GetSecretValue")).toBe(true);
     });
 
+    it("under a customer managed key the execution role decrypts the token through Secrets Manager only", () => {
+        // grantRead adds no KMS permission for a key imported by ARN; without this statement the ECS
+        // agent's GetSecretValue is refused "Access to KMS is not allowed" and no GPU job starts.
+        const executionRoleId = roleId(jobs.triposr, "ExecutionRoleArn");
+        const statements = Object.values(template.findResources("AWS::IAM::Policy"))
+            .filter((p) => JSON.stringify((p as any).Properties.Roles).includes(executionRoleId))
+            .flatMap((p) => (p as any).Properties.PolicyDocument.Statement);
+        const decrypt = statements.filter((st: any) =>
+            [].concat(st.Action).includes("kms:Decrypt" as never)
+        );
+        expect(decrypt).toHaveLength(1);
+        expect([].concat(decrypt[0].Action)).toEqual(["kms:Decrypt"]);
+        expect(JSON.stringify(decrypt[0].Condition)).toContain("kms:ViaService");
+        expect(JSON.stringify(decrypt[0].Condition)).toContain("kms:EncryptionContext:SecretARN");
+    });
+
     it("the job role carries no ECS execution policy and deletes nothing", () => {
         const jobRoleId = roleId(jobs.triposr, "JobRoleArn");
         const role = template.findResources("AWS::IAM::Role")[jobRoleId] as any;
