@@ -258,10 +258,20 @@ class TestValidation:
         {"entryId": "e", "eventType": "compliance_check", "timestamp": "t"},
         {"databaseId:assetId": f"{DB}:{ASSET}", "timestamp": "t"},
         {"entryId": 1, "databaseId:assetId": f"{DB}:{ASSET}", "timestamp": "t"},
-    ], ids=["listing-token", "event-type-key", "missing-table-key", "non-string-key"])
+        {"entryId": "e", "databaseId:assetId": f"{DB}:another-asset", "timestamp": "t"},
+    ], ids=["listing-token", "event-type-key", "missing-table-key", "non-string-key",
+            "another-assets-key"])
     def test_an_asset_history_token_from_another_listing_is_rejected_before_any_read(self, token):
         response, table = _run(rest_event("GET", ASSET_PATH, ASSET_PARAMS,
                                           query_params={"startingToken": _token(token)}))
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Invalid pagination token"
+        table.query.assert_not_called()
+
+    def test_the_listing_of_one_asset_rejects_another_assets_token_before_any_read(self):
+        token = {"entryId": "e", "databaseId:assetId": f"{DB}:another-asset", "timestamp": "t"}
+        response, table = _run(rest_event("GET", LIST_PATH, query_params={
+            "databaseId": DB, "assetId": ASSET, "startingToken": _token(token)}))
         assert response["statusCode"] == 400
         assert body_of(response)["message"] == "Invalid pagination token"
         table.query.assert_not_called()
