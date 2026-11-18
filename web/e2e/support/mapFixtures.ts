@@ -39,6 +39,31 @@ export async function mapCamera(page: Page): Promise<MapCamera | null> {
       return { center: { lng: c.lng, lat: c.lat }, zoom: m.getZoom(), canvas: { width: cv.clientWidth, height: cv.clientHeight } }; })()`);
 }
 
+/** Moves the page's (first) map to a centre and zoom without animation. False when no map is mounted. */
+export async function mapJumpTo(
+    page: Page,
+    lon: number,
+    lat: number,
+    zoom: number
+): Promise<boolean> {
+    return page.evaluate(`(() => { const m = ${FIND_MAP}; if (!m) return false;
+      m.jumpTo({ center: [${lon}, ${lat}], zoom: ${zoom} }); return true; })()`);
+}
+
+/**
+ * Where the open popup is anchored, in CSS pixels from the top-left corner of the map's canvas, or null
+ * when none is open. MapLibre places a popup with `translate(x px, y px)`, the pixel of its coordinate
+ * plus the offset; the Search map gives a footprint's popup no offset, so this is the coordinate itself.
+ */
+export async function popupAnchorPx(page: Page): Promise<{ x: number; y: number } | null> {
+    return page.evaluate(() => {
+        const popup = document.querySelector(".maplibregl-popup") as HTMLElement | null;
+        const match =
+            popup && /translate\(([-\d.]+)px,\s*([-\d.]+)px\)\s*$/.exec(popup.style.transform);
+        return match ? { x: Number(match[1]), y: Number(match[2]) } : null;
+    });
+}
+
 /**
  * Where a coordinate falls in the map's canvas, in CSS pixels from its top-left corner. Computed from
  * the camera for flat Web Mercator, so the answer does not depend on the projection the basemap style
