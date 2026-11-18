@@ -210,7 +210,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Paged compliance schema listing** — `GET /compliance/schemas` reads the latest versions only and is paged with `NextToken`; the web interface, CLI and MCP read every page (#1663).
 -   **Paged sweep and Evaluate All** — Both read bound records a page at a time and return `NextToken` while more remain; `assetsRemaining` is a lower bound (#1663).
 -   **Schemas that cannot be read in full** — A rule that cannot be read, or an `extends` parent that is not found, gives no verdict and launches no pipeline rule (#1663).
--   **Evaluating against another schema** — Naming a schema other than the asset's bound one is a dry run that records nothing (PR #CMP1PR).
+-   **Evaluating against another schema** — Naming a schema other than the asset's bound one is a dry run that records nothing (PR #1670).
 -   **No customer managed IAM policies of its own** — Roles are granted inline, and CDK's generated overflow policies hold what does not fit an inline policy, so every role stays within IAM's inline policy limit in every partition (#1499).
 -   **Needle USD viewer error messages are readable** — The error panel shows its whole message at any panel width; the 3D canvas no longer stays above the text and pushes it out of view. (issue #1234)
 -   **Picked and dragged folders land at the same path** — A single folder added on its own on Create Asset becomes the asset's contents, and every other folder keeps its name, including every folder added to an existing asset. (issue #1471)
