@@ -471,6 +471,10 @@ _FORWARDED_DEFINITION = {
     "outputMetadata": {"bucketName": "abkt", "objectDir": "xasset1/metadata/"},
     "outputResults": {"bucketName": "abkt", "objectDir": "pipelines/cad/job/output/E1/results/"},
 }
+# A caller's instruction, which the run tasks forward and never log.
+_PROMPT = "Add four counterbored M3 holes on a 31.5 mm square pattern"
+_DEFINITION_WITH_PROMPT = dict(_FORWARDED_DEFINITION,
+                               agent={"prompt": _PROMPT, "modelProvider": "bedrock", "maxAttempts": 4})
 
 
 @pytest.mark.unit
@@ -509,6 +513,18 @@ class TestExecuteBatchJob:
         assert detail["subExecution"]["stageName"] == "CadStepAgentBatchJob"
         assert detail["logs"][0]["logStreamPrefix"] == "jobdef/default/"
         assert detail["logs"][0]["sourceType"] == "batch"
+
+    def test_the_log_names_the_run_and_leaves_out_the_prompt(self):
+        mod = _load("executeBatchJob.py")
+        event = dict(self._event(), definition=[json.dumps(_DEFINITION_WITH_PROMPT)])
+        with patch.object(mod, "logger", MagicMock()) as logger, \
+                patch.object(mod.batch, "submit_job", MagicMock(return_value={"jobId": "job-1"})) as submit:
+            mod.lambda_handler(event, MagicMock())
+        env = {e["name"]: e["value"] for e in submit.call_args.kwargs["containerOverrides"]["environment"]}
+        assert _PROMPT in env["CAD_AGENT_DEFINITION"]  # the container still receives it
+        logged = str(logger.mock_calls)
+        assert _PROMPT not in logged
+        assert "job=CadStepAgent_x mode=modify provider=bedrock" in logged
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -590,6 +606,18 @@ class TestInvokeAgentRuntime:
         ids = {mod.session_id_for("job", slots=0, namespace="ns") for _ in range(5)}
         assert len(ids) == 5
 
+    def test_the_log_names_the_run_and_leaves_out_the_prompt(self):
+        mod = _load("invokeAgentRuntime.py")
+        event = dict(self._event(), definition=[json.dumps(_DEFINITION_WITH_PROMPT)])
+        invoke = MagicMock(return_value=self._response({"accepted": True}))
+        with patch.object(mod, "logger", MagicMock()) as logger, \
+                patch.object(mod.agentcore, "invoke_agent_runtime", invoke):
+            assert mod.lambda_handler(event, MagicMock())["status"] == "ACCEPTED"
+        assert json.loads(invoke.call_args.kwargs["payload"])["definition"]["agent"]["prompt"] == _PROMPT
+        logged = str(logger.mock_calls)
+        assert _PROMPT not in logged
+        assert "job=CadStepAgent_x mode=modify provider=bedrock" in logged
+
 
 # ---------------------------------------------------------------------------------------------------
 # pipelineEnd
@@ -620,6 +648,23 @@ class TestPipelineEnd:
                                 "error": {"Error": "CadStepAgentRunFailed", "Cause": cause}}, MagicMock())
         assert fail.call_args.kwargs["error"] == "Pipeline Failure: CadStepAgentRunFailed"
         assert fail.call_args.kwargs["cause"] == cause
+
+    @pytest.mark.parametrize("error", [None, {"Error": "CadStepAgentRunFailed", "Cause": "No valid STEP"}])
+    def test_the_log_names_the_run_and_leaves_out_the_prompt(self, error):
+        mod = _load("pipelineEnd.py")
+        # The state's input: constructPipeline's payload, with the run task's result or its error.
+        event = {"jobName": "CadStepAgent_x", "currentStageType": "CAD",
+                 "definition": [json.dumps(_DEFINITION_WITH_PROMPT)], "externalSfnTaskToken": _TOKEN,
+                 "runResult": {"status": "succeeded"}}
+        if error:
+            event["error"] = error
+        with patch.object(mod, "logger", MagicMock()) as logger, \
+                patch.object(mod.sfn, "send_task_success", MagicMock()), \
+                patch.object(mod.sfn, "send_task_failure", MagicMock()):
+            assert mod.lambda_handler(event, MagicMock()) == event
+        logged = str(logger.mock_calls)
+        assert _PROMPT not in logged
+        assert "job=CadStepAgent_x stage=CAD" in logged
 
     @pytest.mark.parametrize("error, expected", [
         ({"Error": "X"}, "See AWS cloudwatch logs for error cause."),
