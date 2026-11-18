@@ -87,6 +87,8 @@ The `REPLACE_ALL` mode permanently removes any metadata keys not included in the
 
 ## Deleting metadata
 
+Delete appears only for a role that may delete that metadata, on an asset, a file or an asset link. Another role can still add and change fields, and in Bulk Edit a CSV import keeps every stored field the file leaves out.
+
 ### Single deletion
 
 Choose the **Delete** button (trash icon) on the metadata row you want to remove, then confirm the deletion.

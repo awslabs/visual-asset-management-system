@@ -25,6 +25,7 @@ import {
     abortExecution,
     rerunExecution,
     permanentDeleteExecution,
+    LAUNCH_OUTCOME_UNKNOWN_MESSAGE,
 } from "./executions";
 
 describe("executions service", () => {
@@ -38,6 +39,24 @@ describe("executions service", () => {
             const body = { inputFiles: [] };
             await executeWorkflow("db1", "wf1", body);
             expect(apiClient.post).toHaveBeenCalledWith("workflows/db1/wf1/execute", { body });
+        });
+
+        it("says the run may have started when the launch got no response", async () => {
+            (apiClient.post as jest.Mock).mockRejectedValue(new TypeError("Failed to fetch"));
+            expect(await executeWorkflow("db1", "wf1", { inputFiles: [] })).toEqual([
+                false,
+                LAUNCH_OUTCOME_UNKNOWN_MESSAGE,
+            ]);
+        });
+
+        it("keeps the API's message for a refused launch", async () => {
+            (apiClient.post as jest.Mock).mockRejectedValue(
+                Object.assign(new Error("Pipeline p1 is disabled"), { status: 400 })
+            );
+            expect(await executeWorkflow("db1", "wf1", { inputFiles: [] })).toEqual([
+                false,
+                "Pipeline p1 is disabled",
+            ]);
         });
     });
 

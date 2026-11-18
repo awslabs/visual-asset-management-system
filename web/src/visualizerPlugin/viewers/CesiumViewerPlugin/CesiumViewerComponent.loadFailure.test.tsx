@@ -153,6 +153,19 @@ describe("Cesium viewer load failures", () => {
         expect(screen.getByText(/Specific file versions cannot be viewed/)).toBeInTheDocument();
     });
 
+    it("names each notice's dismiss button, with the × glyph hidden from screen readers", async () => {
+        answers = { "a.json": loads("a.json"), "b.json": fails(404) };
+        render(
+            <CesiumViewerComponent {...props} versionId="v1" multiFileKeys={["a.json", "b.json"]} />
+        );
+        await waitFor(() => expect(warning()).not.toBeNull());
+        const notices = screen.getByTestId("cesium-notices");
+        for (const name of ["Dismiss warning", "Dismiss file version notice"]) {
+            const button = within(notices).getByRole("button", { name });
+            expect(button.querySelector('[aria-hidden="true"]')?.textContent).toBe("×");
+        }
+    });
+
     it("shows the error view when every tileset fails", async () => {
         answers = { "a.json": fails(404), "b.json": fails(429) };
         render(<CesiumViewerComponent {...props} multiFileKeys={["a.json", "b.json"]} />);

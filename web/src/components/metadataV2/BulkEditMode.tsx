@@ -41,6 +41,8 @@ interface BulkEditModeProps {
     rows: MetadataRowState[];
     mode?: "online" | "offline";
     restrictMetadata?: boolean;
+    /** Whether the role may delete a stored field; a field added in this edit can always be removed. */
+    canDelete?: boolean;
     onSave: (rows: MetadataRowState[]) => void;
     onCancel: () => void;
 }
@@ -66,6 +68,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
     rows,
     mode = "online",
     restrictMetadata = false,
+    canDelete = true,
     onSave,
     onCancel,
 }) => {
@@ -330,17 +333,31 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
             const nonSchemaImported = importedRows.filter(
                 (row) => !schemaRows.some((sr) => sr.metadataKey === row.metadataKey)
             );
+            // A role that may not delete metadata keeps every stored field: the CSV may add and
+            // change fields, but a stored field it leaves out stays, and a stored field it lists
+            // stays a stored row (no delete).
+            const stored = new Set(storedKeys);
+            const imported = new Set(nonSchemaImported.map((row) => row.metadataKey));
+            const keptStoredRows = canDelete
+                ? []
+                : editedRows.filter(
+                      (row) =>
+                          !isSchemaField(row) &&
+                          stored.has(row.metadataKey) &&
+                          !imported.has(row.metadataKey)
+                  );
 
-            // Combine: schema rows first, then imported rows
+            // Combine: schema rows first, then imported rows, then the stored rows kept
             const mergedRows = [
                 ...schemaRows,
                 ...(nonSchemaImported.map((row) => ({
                     ...row,
-                    isNew: true,
+                    isNew: canDelete || !stored.has(row.metadataKey ?? ""),
                     hasChanges: true,
                     isEditing: false,
                     isDeleted: false,
                 })) as MetadataRowState[]),
+                ...keptStoredRows,
             ];
 
             // Validate all imported rows
@@ -482,7 +499,11 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
             cell: (item: MetadataRowState) => {
                 const index = editedRows.indexOf(item);
                 const isSchema = isSchemaField(item);
-                const canDelete = !isSchema || !item.metadataSchemaRequired;
+                const canClearOrDelete = !isSchema || !item.metadataSchemaRequired;
+                // Clearing a schema field and removing a field added in this edit call no delete.
+                if (!canDelete && !isSchema && !item.isNew) {
+                    return null;
+                }
 
                 return (
                     <div style={{ display: "inline-block" }} tabIndex={-1}>
@@ -490,7 +511,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
                             variant="icon"
                             iconName={isSchema ? "undo" : "remove"}
                             onClick={() => handleDeleteRow(index)}
-                            disabled={!canDelete}
+                            disabled={!canClearOrDelete}
                             ariaLabel={isSchema ? "Clear value" : "Delete row"}
                         />
                     </div>

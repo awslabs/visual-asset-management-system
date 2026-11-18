@@ -43,6 +43,8 @@ import {
     listedBefore,
     listingEmptyText,
     loadFailureMessage,
+    pageReachable,
+    tokenPagerCounts,
 } from "../components/compliance/listingStates";
 import ListToolbar from "../components/list/ListToolbar";
 import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../components/list/tableSorting";
@@ -85,7 +87,6 @@ const ComplianceQuarantine: React.FC = () => {
     // Why the API refused the last row action. Kept apart from `error`, which every load clears,
     // so the refusal stays on the page while the listing is read again after it.
     const [actionError, setActionError] = useState<string | null>(null);
-    const [selectedItems, setSelectedItems] = useState<QuarantinedAsset[]>([]);
     const [exceptionTarget, setExceptionTarget] = useState<QuarantinedAsset | null>(null);
     const [granting, setGranting] = useState(false);
     const [releaseTarget, setReleaseTarget] = useState<QuarantinedAsset | null>(null);
@@ -93,8 +94,8 @@ const ComplianceQuarantine: React.FC = () => {
     const [filters, setFilters] = useUrlFilters(QUARANTINE_FILTER_KEYS, QUARANTINE_PAGE_ROUTE);
 
     // Server-side token paging: tokens[i] is the startingToken that fetches page i
-    // (tokens[0] is undefined). hasMore tracks whether the loaded page reported a
-    // NextToken, which is what Pagination's openEnd renders.
+    // (tokens[0] is undefined). hasMore tracks whether the page shown reported a NextToken
+    // (the counter's "+"); the pager follows the end of the walk (tokenPagerCounts).
     const [tokens, setTokens] = useState<Record<number, string | undefined>>({});
     const [hasMore, setHasMore] = useState(false);
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
@@ -115,7 +116,6 @@ const ComplianceQuarantine: React.FC = () => {
             setLoading(true);
             setError(null);
             setLoadFailed(false);
-            setSelectedItems([]);
             const [success, result] = await fetchQuarantinedAssets(
                 { maxItems: COMPLIANCE_LISTING_PAGE_SIZE, startingToken },
                 { databaseId: filters.databaseId, text: filters.text }
@@ -162,6 +162,7 @@ const ComplianceQuarantine: React.FC = () => {
 
     const handlePageChange = ({ detail }: { detail: { currentPageIndex: number } }) => {
         const newIndex = detail.currentPageIndex;
+        if (!pageReachable(tokens, newIndex)) return;
         setCurrentPageIndex(newIndex);
         loadPage(newIndex - 1, tokens[newIndex - 1]);
     };
@@ -280,14 +281,10 @@ const ComplianceQuarantine: React.FC = () => {
                     loading={loading}
                     items={sortedItems}
                     {...sortingProps}
-                    selectedItems={selectedItems}
-                    onSelectionChange={({ detail }) => setSelectedItems(detail.selectedItems)}
-                    selectionType="single"
                     pagination={
                         <Pagination
                             currentPageIndex={currentPageIndex}
-                            pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                            openEnd={hasMore}
+                            {...tokenPagerCounts(tokens, loadedPages)}
                             onChange={handlePageChange}
                             disabled={loading}
                             ariaLabels={{
@@ -402,6 +399,7 @@ const ComplianceQuarantine: React.FC = () => {
                                               {canRelease && itemAllows(item, "release") && (
                                                   <Button
                                                       variant="inline-link"
+                                                      ariaLabel={`Release ${assetLabel(item)}`}
                                                       onClick={() => setReleaseTarget(item)}
                                                   >
                                                       Release
@@ -411,6 +409,9 @@ const ComplianceQuarantine: React.FC = () => {
                                                   itemAllows(item, "exception") && (
                                                       <Button
                                                           variant="inline-link"
+                                                          ariaLabel={`Exception for ${assetLabel(
+                                                              item
+                                                          )}`}
                                                           onClick={() => setExceptionTarget(item)}
                                                       >
                                                           Exception

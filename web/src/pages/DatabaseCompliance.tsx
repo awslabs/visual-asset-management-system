@@ -74,6 +74,8 @@ import {
     listedBefore,
     listingEmptyText,
     loadFailureMessage,
+    pageReachable,
+    tokenPagerCounts,
 } from "../components/compliance/listingStates";
 import ComplianceAssetCell from "../components/compliance/ComplianceAssetCell";
 import {
@@ -85,6 +87,7 @@ import {
     removeBindingConfirmation,
 } from "../components/compliance/bindingConfirmations";
 import ListToolbar from "../components/list/ListToolbar";
+import { isFinalStatus } from "../utils/queryRetry";
 import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../components/list/tableSorting";
 
 /** The overview's server-side filters and sort, kept in the URL. */
@@ -408,7 +411,9 @@ const DatabaseCompliancePage: React.FC = () => {
                 setBindingStatus("loading");
                 setBindingError(null);
             }
-            const [bindingSuccess, bindingResult] = await getDatabaseBindings(databaseId);
+            const [bindingSuccess, bindingResult, failedStatus] = await getDatabaseBindings(
+                databaseId
+            );
             if (!isCurrent()) return;
             if (bindingSuccess && typeof bindingResult !== "string") {
                 const bound = bindingResult.databaseSchema || null;
@@ -430,7 +435,13 @@ const DatabaseCompliancePage: React.FC = () => {
                     }
                     await restartWalk();
                 }
-            } else if (!quiet) {
+            } else if (!quiet || isFinalStatus(failedStatus)) {
+                // A quiet read that may pass is left to the next one; a final answer (a 403 or
+                // 404) would be the same on every read, so the reads stop and Retry is offered.
+                if (isFinalStatus(failedStatus)) {
+                    setBindingApply(null);
+                    followedApply.current = null;
+                }
                 setBindingStatus("failed");
                 setBindingError(
                     typeof bindingResult === "string" && bindingResult
@@ -465,6 +476,16 @@ const DatabaseCompliancePage: React.FC = () => {
         await restartWalk();
         await loadBinding();
     }, [restartWalk, loadBinding]);
+
+    // The page stays mounted when the route moves to another database: what the last action and
+    // Evaluate All left belongs to the database they ran in.
+    useEffect(() => {
+        setEvaluateAllToken(undefined);
+        setActionMessage(null);
+        setActionError(null);
+        setBindingApply(null);
+        followedApply.current = null;
+    }, [databaseId]);
 
     useEffect(() => {
         if (databaseId) {
@@ -618,6 +639,7 @@ const DatabaseCompliancePage: React.FC = () => {
 
     const handlePageChange = ({ detail }: { detail: { currentPageIndex: number } }) => {
         const newIndex = detail.currentPageIndex;
+        if (!pageReachable(tokens, newIndex)) return;
         setCurrentPageIndex(newIndex);
         loadPage(newIndex - 1, tokens[newIndex - 1]);
     };
@@ -1188,8 +1210,7 @@ const DatabaseCompliancePage: React.FC = () => {
                         pagination={
                             <Pagination
                                 currentPageIndex={currentPageIndex}
-                                pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                                openEnd={hasMore}
+                                {...tokenPagerCounts(tokens, loadedPages)}
                                 onChange={handlePageChange}
                                 disabled={loading}
                                 ariaLabels={{
