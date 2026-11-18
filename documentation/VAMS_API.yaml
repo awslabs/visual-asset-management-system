@@ -2380,7 +2380,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/zipDownloadUrlResponse"
                 "400":
-                    description: "Invalid path parameters, the asset is not distributable, the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` ('Asset is quarantined and cannot be downloaded'), or (another user's job) a file in the archive is no longer downloadable."
+                    description: "Invalid path parameters, the asset is not distributable, the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` ('Asset is quarantined and cannot be downloaded'), or (another user's job) a file in the archive is no longer downloadable ('The selection includes an archived or deleted item. Remove it from the selection, or restore it first.')."
                     content:
                         application/json:
                             schema:
