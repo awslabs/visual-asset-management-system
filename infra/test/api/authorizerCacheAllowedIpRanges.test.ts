@@ -7,9 +7,7 @@
  * The REST API authorizer caches no decision when `allowedIpRanges` is set.
  *
  * The authorizer refuses a caller outside `app.authProvider.authorizerOptions.allowedIpRanges`, so its
- * decision depends on the client address, which neither scheme's identity source carries (the
- * `Authorization` header on authenticated routes, the connection address, a CloudFront edge behind
- * the distribution, on anonymous ones). With ranges set both schemes therefore carry
+ * decision depends on the client address. With ranges set both schemes carry
  * `authorizerResultTtlInSeconds: 0`; without them the 30 s and 900 s caches stay. Checked on the
  * synthesized API definition of every shipped template.
  */

@@ -18,7 +18,7 @@ export interface OpenApiSpecOptions {
     /**
      * Turn off the authorizer result cache on both schemes (TTL 0). Set when the authorizer
      * restricts callers by address (`allowedIpRanges`): its decision then depends on the request's
-     * client address, which neither scheme's identity source carries.
+     * client address.
      */
     authorizerCacheDisabled?: boolean;
 }
