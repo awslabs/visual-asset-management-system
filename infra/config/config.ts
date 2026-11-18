@@ -2122,15 +2122,19 @@ export function getConfig(app: cdk.App): Config {
     applyZipDownloadsDefaults(config);
     validateZipDownloadsConfig(config);
 
-    // Initialize compliance configuration if undefined (backward compatibility)
+    // Initialize compliance configuration if undefined (backward compatibility). An unset
+    // autoLoadDefaultSchema follows autoLoadDefaultAssetSchema: the default compliance schema needs
+    // the default asset metadata schema (checked below), so a config that turned that one off and
+    // predates the compliance block keeps deploying.
     if (config.app.compliance == undefined) {
         config.app.compliance = {
-            autoLoadDefaultSchema: true,
+            autoLoadDefaultSchema: !!config.app.metadataSchema.autoLoadDefaultAssetSchema,
             quarantineBlocksDownload: false,
         };
     }
     if (config.app.compliance.autoLoadDefaultSchema == undefined) {
-        config.app.compliance.autoLoadDefaultSchema = true;
+        config.app.compliance.autoLoadDefaultSchema =
+            !!config.app.metadataSchema.autoLoadDefaultAssetSchema;
     }
     if (config.app.compliance.quarantineBlocksDownload == undefined) {
         config.app.compliance.quarantineBlocksDownload = false;
