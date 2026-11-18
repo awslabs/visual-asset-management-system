@@ -277,7 +277,7 @@ class TestAStoredUndeclaredKeyDoesNotBlockUserWrites:
 @pytest.mark.parametrize(
     "path_name,invoke,update_type,stored_row,enforces", ENFORCING_PATHS, ids=_ENFORCING_IDS)
 class TestANewUndeclaredKeyIsStillRefused:
-    def test_a_new_undeclared_key_is_refused_and_named(
+    def test_a_new_undeclared_key_is_refused_and_the_stored_one_is_not(
             self, path_name, invoke, update_type, stored_row, enforces):
         with _WriteHarness(existing_rows=(stored_row,)) as harness:
             with pytest.raises(VAMSGeneralErrorResponse) as raised:
@@ -285,9 +285,11 @@ class TestANewUndeclaredKeyIsStillRefused:
 
         message = str(raised.value)
         assert "Metadata key validation failed" in message, f"{path_name}: {message}"
-        assert NEW_KEY in message, f"{path_name} did not name the refused key: {message}"
-        assert PIPELINE_KEY not in message, (
+        # One refusal (the new key's), not two: the stored key is not refused. The refusal is
+        # generic and names neither key (backend Rule 11).
+        assert message.count("A field is not defined in the metadata schema") == 1, (
             f"{path_name} still refused the stored key: {message}")
+        assert NEW_KEY not in message and PIPELINE_KEY not in message, f"{path_name}: {message}"
         assert not harness.wrote
 
     def test_a_new_undeclared_key_is_refused_on_an_empty_record(
@@ -297,7 +299,7 @@ class TestANewUndeclaredKeyIsStillRefused:
             with pytest.raises(VAMSGeneralErrorResponse) as raised:
                 invoke([NEW_KEY], USER_CLAIMS, update_type)
 
-        assert NEW_KEY in str(raised.value)
+        assert "A field is not defined in the metadata schema" in str(raised.value)
         assert not harness.wrote
 
 
@@ -333,7 +335,8 @@ class TestAssetLinkUpdateRestriction:
 
         message = str(raised.value)
         assert "Metadata key validation failed" in message
-        assert f"Field '{NEW_KEY}' is not defined in the metadata schema" in message
+        assert "A field is not defined in the metadata schema" in message
+        assert NEW_KEY not in message
         assert PIPELINE_KEY not in message
         assert not harness.wrote
 
@@ -541,7 +544,8 @@ def test_changing_a_stored_value_to_one_the_schema_refuses_is_still_refused(
             invoke(items, USER_CLAIMS, update_type)
 
     message = str(raised.value)
-    assert "'purple' is not in controlled list" in message, f"{path_name}: {message}"
+    assert "is not in the field's controlled list" in message, f"{path_name}: {message}"
+    assert "purple" not in message, f"{path_name}: {message}"
     assert TYPED_KEY not in message, f"{path_name} checked the unchanged stored key: {message}"
     assert not harness.wrote
 
