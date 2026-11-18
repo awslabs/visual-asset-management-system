@@ -187,4 +187,53 @@ describe("every shipped system bundle carries a SYSTEM category, and the pages s
             shipped.split("\n").find((line) => line.includes("`utility-zip-archive`")) ?? "";
         expect(row).toContain("`SYSTEM - Utility`");
     });
+
+    // D132: a compliance pipeline rule may use no system pipeline; every list of them names each bundle.
+    const RULE_NOTE_TITLE = ":::note[System pipelines cannot back a pipeline rule]";
+    const ruleLists: [string, string][] = [
+        [
+            "user-guide/compliance.md",
+            admonitionBody(readDoc("user-guide/compliance.md"), RULE_NOTE_TITLE),
+        ],
+        [
+            "CHANGELOG.md",
+            readRepo("CHANGELOG.md")
+                .split("\n")
+                .find((line) =>
+                    line.includes("A compliance pipeline rule cannot use a system pipeline")
+                ) ?? "",
+        ],
+        [
+            "additional/revisions.md",
+            readDoc("additional/revisions.md")
+                .split("\n")
+                .find((line) =>
+                    line.includes("A compliance pipeline rule cannot use a system pipeline")
+                ) ?? "",
+        ],
+    ];
+
+    test.each(ruleLists)(
+        "%s: the list of system pipelines a pipeline rule may not use is found",
+        (_doc, text) => {
+            // Control: an empty match would make every name check below vacuous.
+            expect(text.length).toBeGreaterThan(100);
+        }
+    );
+
+    test.each(
+        bundles.flatMap((dir) =>
+            ruleLists.map(([doc, text]) => [
+                path.relative(REPO, dir),
+                doc,
+                text,
+                JSON.parse(fs.readFileSync(path.join(dir, "pipeline.json"), "utf8")).pipelineName,
+            ])
+        )
+    )(
+        "%s: %s names its pipeline among those a pipeline rule may not use",
+        (_rel, _doc, text, name) => {
+            expect(text).toContain(name);
+        }
+    );
 });
