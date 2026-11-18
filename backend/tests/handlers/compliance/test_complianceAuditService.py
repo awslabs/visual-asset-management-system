@@ -392,7 +392,21 @@ class TestAssetHistoryPaging:
         condition = table.query.call_args.kwargs["KeyConditionExpression"]
         window = condition._values[1]
         assert type(window).__name__ == "Between"
-        assert window._values[1:] == ("2026-01-01", "2026-02-01")
+        assert window._values[1:] == ("2026-01-01T00:00:00+00:00", "2026-02-01T00:00:00+00:00")
+
+    @pytest.mark.parametrize("value,stored_form", [
+        ("2026-01-01T02:00:00+02:00", "2026-01-01T00:00:00+00:00"),
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00+00:00"),
+        ("20260101", "2026-01-01T00:00:00+00:00"),
+        ("2026-W01-1", "2025-12-29T00:00:00+00:00"),
+    ], ids=["offset", "zulu", "basic-form", "week-form"])
+    def test_a_date_filter_is_compared_in_the_stored_utc_form(self, value, stored_form):
+        # The window compares strings with the stored UTC isoformat() timestamps, so every accepted
+        # form is sent in that form.
+        _, table = _run(rest_event("GET", ASSET_PATH, ASSET_PARAMS, query_params={"startDate": value}),
+                        pages=[{"Items": []}])
+        condition = table.query.call_args.kwargs["KeyConditionExpression"]
+        assert condition._values[1]._values[1:] == (stored_form,)
 
 
 @pytest.mark.unit
@@ -459,9 +473,10 @@ class TestCrossAssetListing:
         assert all(resumed == last_key for resumed in pager.resumed_from)
 
     @pytest.mark.parametrize("window,shape,bounds", [
-        ({"startDate": "2026-01-01", "endDate": "2026-02-01"}, "Between", ("2026-01-01", "2026-02-01")),
-        ({"startDate": "2026-01-01"}, "GreaterThanEquals", ("2026-01-01",)),
-        ({"endDate": "2026-02-01"}, "LessThanEquals", ("2026-02-01",)),
+        ({"startDate": "2026-01-01", "endDate": "2026-02-01"}, "Between",
+         ("2026-01-01T00:00:00+00:00", "2026-02-01T00:00:00+00:00")),
+        ({"startDate": "2026-01-01"}, "GreaterThanEquals", ("2026-01-01T00:00:00+00:00",)),
+        ({"endDate": "2026-02-01"}, "LessThanEquals", ("2026-02-01T00:00:00+00:00",)),
     ], ids=["both", "start-only", "end-only"])
     def test_a_date_window_narrows_the_date_index_key_condition(self, window, shape, bounds):
         _, table = _run(rest_event("GET", LIST_PATH, query_params=window), pages=[{"Items": []}])

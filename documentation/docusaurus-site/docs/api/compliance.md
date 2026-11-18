@@ -1417,17 +1417,17 @@ GET /compliance/audit
 
 ### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                                                                                                           |
-| --------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
-| `eventType`     | string | No       | `null`  | Restrict the page to one event type — see [Event types](#event-types).                                                |
-| `databaseId`    | string | No       | `null`  | Only entries of this database (a deleted database's history: `<databaseId>%23deleted`); only they are read.           |
-| `assetId`       | string | No       | `null`  | Only entries of this asset; requires `databaseId`, and combines with `eventType`.                                     |
-| `text`          | string | No       | `null`  | Case-insensitive contains on the asset name recorded with the entry, the asset ID or the actor.                       |
-| `startDate`     | string | No       | `null`  | ISO-8601 timestamp; only entries at or after it are returned.                                                         |
-| `endDate`       | string | No       | `null`  | ISO-8601 timestamp; only entries at or before it are returned.                                                        |
-| `maxItems`      | number | No       | `100`   | Entries per page. A larger value is reduced to 200; the remainder follows `NextToken`. Takes precedence over `limit`. |
-| `limit`         | number | No       | `100`   | Alias of `maxItems`, read when `maxItems` is absent.                                                                  |
-| `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                                            |
+| Parameter       | Type   | Required | Default | Description                                                                                                                     |
+| --------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `eventType`     | string | No       | `null`  | Restrict the page to one event type — see [Event types](#event-types).                                                          |
+| `databaseId`    | string | No       | `null`  | Only entries of this database (a deleted database's history: `<databaseId>%23deleted`); only they are read.                     |
+| `assetId`       | string | No       | `null`  | Only entries of this asset; requires `databaseId`, and combines with `eventType`.                                               |
+| `text`          | string | No       | `null`  | Case-insensitive contains on the asset name recorded with the entry, the asset ID or the actor.                                 |
+| `startDate`     | string | No       | `null`  | ISO-8601 date or timestamp, compared in UTC (a value with no offset is read as UTC); only entries at or after it are returned.  |
+| `endDate`       | string | No       | `null`  | ISO-8601 date or timestamp, compared in UTC (a value with no offset is read as UTC); only entries at or before it are returned. |
+| `maxItems`      | number | No       | `100`   | Entries per page. A larger value is reduced to 200; the remainder follows `NextToken`. Takes precedence over `limit`.           |
+| `limit`         | number | No       | `100`   | Alias of `maxItems`, read when `maxItems` is absent.                                                                            |
+| `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                                                      |
 
 ### Response
 
