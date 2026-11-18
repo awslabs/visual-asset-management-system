@@ -26,6 +26,9 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy container pipeline application
 COPY ./video_sop_bom_pipeline/ ./video_sop_bom_pipeline/
+# Normalize read bits: COPY preserves the build host's umask, so a hardened checkout (umask 077/027)
+# leaves these root-owned 600/640 and unreadable to the non-root USER below.
+RUN chmod -R a+rX ./video_sop_bom_pipeline
 
 # Drop root; the pipeline reads /app and writes only under /app/tmp and /tmp
 RUN useradd --create-home --uid 10001 --user-group videosopbom \
