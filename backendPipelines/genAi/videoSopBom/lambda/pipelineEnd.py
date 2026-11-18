@@ -2,6 +2,7 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 import os
+import re
 import boto3
 import json
 from botocore.exceptions import ClientError
@@ -30,10 +31,16 @@ s3 = boto3.client(
 # The container's SendTaskSuccess payload names itself; a job that exited 0 without calling back
 # returns Batch's job description instead and must not read as success.
 REPORTER_MARKER = "video_sop_bom_pipeline"
-# The run's scratch prefix on the auxiliary bucket is `pipelines/<pipelineId>/<executionId>/`; the
-# cleanup refuses any locator that does not sit under this pipeline's root, so a malformed event
-# cannot aim the delete at another prefix.
-AUX_PREFIX_ROOT = "pipelines/genai-video-sop-bom/"
+# The run's scratch prefix on the auxiliary bucket is `pipelines/<name>/<executionId>/`, where <name>
+# is the workflow step's jobName or, without one, the pipeline id (executionRecords.aux_pipeline_prefix),
+# so a run is not always under the registered id. The cleanup refuses any locator that is not exactly
+# one such execution folder: a name in the API's id character set, then the workflow execution id (the
+# backend's execution id forms), so a malformed event cannot aim the delete at the root, at a whole
+# pipeline's folder, at a deeper folder or at a prefix of another shape.
+AUX_PREFIX_ROOT = "pipelines/"
+AUX_EXECUTION_PREFIX = re.compile(
+    re.escape(AUX_PREFIX_ROOT) + r"[-_a-zA-Z0-9]+/"
+    r"(?:[0-9a-f]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/")
 DEFINITION_FILENAME = "definition.json"
 # One list page; delete_objects takes at most 1000 keys per call.
 DELETE_BATCH = 1000
@@ -138,8 +145,8 @@ def aux_prefix_location(event):
     constructPipeline hands the state machine `definitionCommand` = ["--definition-s3-uri",
     "s3://<auxBucket>/<auxTempPrefix>definition.json"], and that is the one value on the event that
     names the prefix — the manifest fields do not survive the task's outputPath replacement. The
-    prefix is accepted only when it sits under this pipeline's root and names an execution folder,
-    so a missing, foreign or truncated locator yields None rather than a delete somewhere else."""
+    prefix is accepted only when it is exactly one execution folder under the pipelines root, so a
+    missing, foreign or truncated locator yields None rather than a delete somewhere else."""
     command = event.get("definitionCommand")
     if not isinstance(command, list) or len(command) < 2 or command[0] != "--definition-s3-uri":
         return None
@@ -150,9 +157,7 @@ def aux_prefix_location(event):
     if not bucket or not key.endswith("/" + DEFINITION_FILENAME):
         return None
     prefix = key[:-len(DEFINITION_FILENAME)]
-    execution_folder = prefix[len(AUX_PREFIX_ROOT):]
-    if not prefix.startswith(AUX_PREFIX_ROOT) or not execution_folder.strip("/") \
-            or "/" in execution_folder.rstrip("/"):
+    if not AUX_EXECUTION_PREFIX.fullmatch(prefix):
         return None
     return bucket, prefix
 

@@ -19,7 +19,7 @@
  *      the sub-execution and leaves the container running to its attempt bound.
  *   4. Each Lambda can fail and succeed the workflow callback token, holds the grants its handler's one
  *      job needs, and pipelineEnd holds only the scratch cleanup beside the release: a list on the
- *      auxiliary bucket conditioned to this pipeline's prefix root and a delete on objects under it.
+ *      auxiliary bucket conditioned to the pipelines root and a delete on objects under it.
  *   5. Each Lambda's environment is exactly the registry's key set for its handler stem, the caps are
  *      String()-wrapped config constants, and every `os.environ[...]` read in the handler's own source is
  *      a key its builder sets — a missing key is a KeyError at import that no synth, lint or
@@ -512,38 +512,44 @@ describe("the four pipeline Lambdas", () => {
         }
     });
 
-    test("pipelineEnd's scratch cleanup is bounded to this pipeline's prefix root on the auxiliary bucket", () => {
-        // The handler deletes a failed run's `pipelines/genai-video-sop-bom/<executionId>/` objects. The
-        // list is conditioned to that root and the delete names objects under it only: a locator the
-        // handler's own guard let through could still not reach another pipeline's working files, the
-        // previews, or the viewer data that share the bucket. No kms grant: a delete needs none.
+    test("pipelineEnd's scratch cleanup is bounded to the pipelines root on the auxiliary bucket", () => {
+        // The handler deletes a failed run's `pipelines/<name>/<executionId>/` objects, where <name> is
+        // the workflow step's jobName or the pipeline id. The list is conditioned to that root and the
+        // delete names objects under it only: a locator the handler's own guard let through could still
+        // not reach the previews or the viewer data that share the bucket. No kms grant: a delete needs
+        // none.
         const statements = attachedStatements("pipelineEnd");
         const list = statements.filter((s) => actionsOf(s).includes("s3:ListBucket"));
         expect(list).toHaveLength(1);
         expect(actionsOf(list[0])).toEqual(["s3:ListBucket"]);
         expect(resourcesOf(list[0]).map(flatten)).toEqual([`<${auxBucketLogicalId}.Arn>`]);
         expect(list[0].Condition).toEqual({
-            StringLike: { "s3:prefix": ["pipelines/genai-video-sop-bom/*"] },
+            StringLike: { "s3:prefix": ["pipelines/*"] },
         });
 
         const del = statements.filter((s) => actionsOf(s).includes("s3:DeleteObject"));
         expect(del).toHaveLength(1);
         expect(actionsOf(del[0])).toEqual(["s3:DeleteObject"]);
         expect(resourcesOf(del[0]).map(flatten)).toEqual([
-            `<${auxBucketLogicalId}.Arn>/pipelines/genai-video-sop-bom/*`,
+            `<${auxBucketLogicalId}.Arn>/pipelines/*`,
         ]);
         expect(del[0].Condition).toBeUndefined();
 
-        // The three spellings of the root agree: the role's condition, the storage stack's lifecycle
-        // rule and the handler's own refusal guard. A drift in any one silently un-scopes the others.
-        expect(VIDEO_SOP_BOM_AUX_PREFIX_ROOT).toBe("pipelines/genai-video-sop-bom/");
+        // The three spellings of the root agree: the role's condition, the platform's run prefix and the
+        // handler's own refusal guard. A drift in any one silently un-scopes the others.
+        expect(VIDEO_SOP_BOM_AUX_PREFIX_ROOT).toBe("pipelines/");
         const handler = fs.readFileSync(path.join(LAMBDA_SOURCE_DIR, "pipelineEnd.py"), "utf-8");
         expect(handler).toContain(`AUX_PREFIX_ROOT = "${VIDEO_SOP_BOM_AUX_PREFIX_ROOT}"`);
-        const storage = fs.readFileSync(
-            path.resolve(__dirname, "../../lib/nestedStacks/storage/storageBuilder-nestedStack.ts"),
+        const executionRecords = fs.readFileSync(
+            path.resolve(
+                __dirname,
+                "../../../backend/backend/common/workflows/executionRecords.py"
+            ),
             "utf-8"
         );
-        expect(storage).toContain(`prefix: "${VIDEO_SOP_BOM_AUX_PREFIX_ROOT}"`);
+        expect(executionRecords).toContain(
+            `_PIPELINES_PREFIX = "${VIDEO_SOP_BOM_AUX_PREFIX_ROOT}"`
+        );
     });
 
     test("openPipeline starts THIS state machine and vamsExecute invokes THIS openPipeline", () => {
