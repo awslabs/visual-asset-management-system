@@ -205,6 +205,15 @@ class ZipRefusal(VAMSGeneralErrorResponse):
     """A refused create (400, or the given status)."""
 
 
+def _refusal_message(error) -> str:
+    """The text a zip route answers a ``VAMSGeneralErrorResponse`` with: the message as raised, without
+    the "VAMS General Error: " prefix the base class puts on ``str()``, so the web, the CLI and the MCP
+    tools show the sentence the zip download pages quote (#1638), as the quarantine refusal already does
+    (``common/compliance/quarantineGuard.QuarantineBlockedResponse``). Refusals raised by the shared
+    helpers (download eligibility, asset versions) answer the same way on these routes."""
+    return getattr(error, "user_message", None) or str(error)
+
+
 class ZipLaunchRefused(Exception):
     """The execute handler refused the zipArchive launch with a refusal it only gives before any run
     starts (see _classify_launch_answer): no run exists. The message is the refusal's detail, for the
@@ -962,8 +971,8 @@ def create_job(event, database_id, asset_id):
         return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as e:
         # The request outcome records the refusal as failed, with the status's generic reason.
-        return general_error(status_code=getattr(e, "status_code", 400), body={"message": str(e)},
-                             event=event)
+        return general_error(status_code=getattr(e, "status_code", 400),
+                             body={"message": _refusal_message(e)}, event=event)
 
     now = zd.utc_now()
     request_id = zd.new_request_id()
@@ -1356,7 +1365,7 @@ def job_url(event, database_id, asset_id, request_id):
     except QuarantineBlockedResponse as refusal:
         return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)}, event=event)
+        return general_error(body={"message": _refusal_message(e)}, event=event)
     row = _reconcile(row)
     if row.get("status") != zd.STATUS_SUCCEEDED:
         return general_error(status_code=409, body={"message": zd.MSG_NOT_READY}, event=event)
@@ -1579,8 +1588,8 @@ def handle_api_request(event, context: LambdaContext) -> APIGatewayProxyResponse
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(status_code=getattr(v, "status_code", 400), body={"message": str(v)},
-                             event=event)
+        return general_error(status_code=getattr(v, "status_code", 400),
+                             body={"message": _refusal_message(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)

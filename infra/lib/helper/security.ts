@@ -987,8 +987,10 @@ export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
                     },
                     {
                         // The same grant on an imported external asset bucket, whose ARN is a
-                        // configured literal rather than a stack reference.
-                        regex: "/^Resource::arn:[a-z-]+:s3:::[^/]+/\\*$/g",
+                        // configured literal rather than a stack reference. The bucket name
+                        // excludes `*` and `?`, so a wildcard bucket ARN is still reported as a
+                        // finding: this entry covers only a grant on one named bucket.
+                        regex: "/^Resource::arn:[a-z-]+:s3:::[^/\\*?]+/\\*$/g",
                     },
                 ],
             },

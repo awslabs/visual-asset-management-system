@@ -515,6 +515,55 @@ function externalBuckets(cfg: ConfigShape): any[] {
     return Array.isArray(value) ? value.filter((entry) => !!entry) : [];
 }
 
+/** True when S3 Transfer Acceleration is requested on the created bucket or any external entry. */
+function s3taRequested(cfg: ConfigShape): boolean {
+    return (
+        g(cfg, "app.assetBuckets.useS3TransferAcceleration") === true ||
+        externalBuckets(cfg).some((b) => b.useS3TransferAcceleration === true)
+    );
+}
+
+/**
+ * Mirror of config.ts `ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION` (decision D6): whether
+ * presignedUrlNetworkRestrictions.allowedIpRanges may be combined with S3 Transfer Acceleration.
+ * Change both together.
+ */
+export const ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION = true;
+
+/**
+ * True when the presigned URL restriction covers an accelerated bucket. The restriction is applied
+ * only to the VAMS-created asset bucket and the auxiliary bucket, which follows the effective default
+ * asset bucket (config.ts: createdBucketAccelerated / effectiveDefaultBucketAccelerated).
+ */
+function s3taRestrictionCoversAcceleratedBucket(cfg: ConfigShape): boolean {
+    const created =
+        !!g(cfg, "app.assetBuckets.createNewBucket") &&
+        g(cfg, "app.assetBuckets.useS3TransferAcceleration") === true;
+    const externalDefault = externalBuckets(cfg).find((b) => b.isDefault);
+    const effectiveDefault = externalDefault
+        ? externalDefault.useS3TransferAcceleration === true
+        : created;
+    return created || effectiveDefault;
+}
+
+/** True when the named presigned URL restriction list is non-empty. */
+function s3taRestrictionList(cfg: ConfigShape, key: "allowedVpceIds" | "allowedIpRanges"): boolean {
+    const list = g(cfg, `app.assetBuckets.presignedUrlNetworkRestrictions.${key}`);
+    return Array.isArray(list) && list.length > 0;
+}
+
+/** Whether the IP-range rule fires; `allow` defaults to the constant and is a parameter for tests. */
+export function s3taIpRangeRuleApplies(
+    cfg: ConfigShape,
+    allow: boolean = ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION
+): boolean {
+    return (
+        !allow &&
+        s3taRestrictionCoversAcceleratedBucket(cfg) &&
+        s3taRestrictionList(cfg, "allowedIpRanges")
+    );
+}
+
 /** Region-name shape accepted for bucketRegion (config.ts: `AWS_REGION_NAME_PATTERN`, copied verbatim). */
 const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
 
@@ -618,6 +667,21 @@ function normalizeExternalPrefix(prefix: unknown): string {
 function externalPrefixesOverlap(a: string, b: string): boolean {
     if (a === "/" || b === "/") return true;
     return a === b || a.startsWith(b) || b.startsWith(a);
+}
+
+/**
+ * True when a `bucketArn` names one bucket (config.ts: `EXTERNAL_BUCKET_ARN_PATTERN` and
+ * `assertExternalBucketArnShape`): `arn:<partition>:s3:::<name>` with no wildcard and nothing after the
+ * name, and a name the CDK bucket import accepts (3 to 63 letters, digits, `.`, `_` and `-`, a letter
+ * or digit at both ends, no `..`, `.-` or `-.`, not an IPv4 address).
+ */
+function isValidExternalBucketArn(arn: unknown): boolean {
+    return (
+        typeof arn === "string" &&
+        /^arn:[a-z-]+:s3:::(?!\d{1,3}(\.\d{1,3}){3}$)(?!.*(\.\.|\.-|-\.))[A-Za-z0-9][A-Za-z0-9._-]{1,61}[A-Za-z0-9]$/.test(
+            arn
+        )
+    );
 }
 
 /** A per-bucket attribute reduced to undefined when unset (config.ts: `normalizeOptional`). */
@@ -1777,13 +1841,24 @@ const CORE_RULES: Rule[] = [
                 ? undefined
                 : partitionForRegionName(g(c, "env.region"));
             if (!partition) return false;
+            // A malformed ARN gets only the externalbucket-arn-shape message, as in config.ts, where
+            // the shape check runs before the partition check.
             return externalBuckets(c).some((b) => {
+                if (!isValidExternalBucketArn(b.bucketArn)) return false;
                 const arnPartition = String(b.bucketArn ?? "").split(":")[1];
                 return !!arnPartition && arnPartition !== partition;
             });
         },
         message:
             "Every app.assetBuckets.externalAssetBuckets bucketArn must use the same AWS partition as the deployment region.",
+    },
+    {
+        id: "externalbucket-arn-shape",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets"],
+        appliesWhen: (c) => externalBuckets(c).some((b) => !isValidExternalBucketArn(b.bucketArn)),
+        message:
+            "An app.assetBuckets.externalAssetBuckets bucketArn is not valid. It must name one bucket as arn:<partition>:s3:::<bucket-name>, with no wildcard (* or ?) and nothing after the name; the name is 3 to 63 characters of letters, digits, '.', '_' and '-', starts and ends with a letter or digit, has no '..', '.-' or '-.', and is not shaped like an IP address. List the bucket as arn:<partition>:s3:::<bucket-name> and set the key prefix in baseAssetsPrefix.",
     },
     {
         id: "externalbucket-overlapping-prefixes",
@@ -1803,6 +1878,110 @@ const CORE_RULES: Rule[] = [
         appliesWhen: (c) => externalBucketsWithInconsistentAttributes(c).length > 0,
         message:
             "An app.assetBuckets.externalAssetBuckets bucketArn is registered with inconsistent bucketAccountId, bucketRegion, or bucketKmsKeyArn values across its entries. One ARN is one physical bucket, so those must match on every entry for it.",
+    },
+    // ----- S3 Transfer Acceleration (config.ts: validateS3TransferAcceleration) -----
+    {
+        id: "s3ta-commercial-only",
+        severity: "error",
+        fieldPaths: [
+            "app.assetBuckets.useS3TransferAcceleration",
+            "app.assetBuckets.externalAssetBuckets",
+            "env.region",
+        ],
+        appliesWhen: (c) => s3taRequested(c) && !isCommercialPartition(c),
+        message:
+            "S3 Transfer Acceleration (app.assetBuckets.useS3TransferAcceleration, or the same key on an externalAssetBuckets entry) is available in the commercial partition only. Set it to false in this partition.",
+    },
+    {
+        id: "s3ta-needs-created-bucket",
+        severity: "error",
+        fieldPaths: [
+            "app.assetBuckets.useS3TransferAcceleration",
+            "app.assetBuckets.createNewBucket",
+        ],
+        appliesWhen: (c) =>
+            g(c, "app.assetBuckets.useS3TransferAcceleration") === true &&
+            !g(c, "app.assetBuckets.createNewBucket"),
+        message:
+            "app.assetBuckets.useS3TransferAcceleration is true but createNewBucket is false, so there is no VAMS-created asset bucket to accelerate. Set useS3TransferAcceleration on the externalAssetBuckets entries instead; the auxiliary bucket follows the default asset bucket.",
+    },
+    {
+        id: "s3ta-external-bucket-name",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets"],
+        appliesWhen: (c) =>
+            externalBuckets(c).some(
+                (b) =>
+                    b.useS3TransferAcceleration === true &&
+                    !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(
+                        String(b.bucketArn ?? "")
+                            .replace(/^.*:::/, "")
+                            .split("/")[0]
+                    )
+            ),
+        message:
+            "An app.assetBuckets.externalAssetBuckets entry sets useS3TransferAcceleration but its bucket name is not valid for S3 Transfer Acceleration. The name must be 3 to 63 characters of lowercase letters, digits and hyphens with no period.",
+    },
+    {
+        id: "s3ta-external-inconsistent",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets"],
+        appliesWhen: (c) => {
+            const seen = new Map<string, boolean>();
+            for (const b of externalBuckets(c)) {
+                const flag = b.useS3TransferAcceleration === true;
+                const arn = String(b.bucketArn ?? "");
+                if (seen.has(arn) && seen.get(arn) !== flag) return true;
+                seen.set(arn, flag);
+            }
+            return false;
+        },
+        message:
+            "An app.assetBuckets.externalAssetBuckets bucketArn is registered with inconsistent useS3TransferAcceleration values across its entries. One ARN is one physical bucket, so every entry for it must agree.",
+    },
+    {
+        id: "s3ta-not-boolean",
+        severity: "error",
+        fieldPaths: [
+            "app.assetBuckets.useS3TransferAcceleration",
+            "app.assetBuckets.externalAssetBuckets",
+        ],
+        appliesWhen: (c) => {
+            const top = g(c, "app.assetBuckets.useS3TransferAcceleration");
+            if (top !== undefined && top !== null && typeof top !== "boolean") return true;
+            return externalBuckets(c).some(
+                (b) =>
+                    b.useS3TransferAcceleration !== undefined &&
+                    typeof b.useS3TransferAcceleration !== "boolean"
+            );
+        },
+        message:
+            "app.assetBuckets.useS3TransferAcceleration and the same key on externalAssetBuckets entries must be a boolean (true or false, not a string).",
+    },
+    {
+        id: "s3ta-vpce-restriction",
+        severity: "error",
+        fieldPaths: [
+            "app.assetBuckets.useS3TransferAcceleration",
+            "app.assetBuckets.externalAssetBuckets",
+            "app.assetBuckets.presignedUrlNetworkRestrictions",
+        ],
+        appliesWhen: (c) =>
+            s3taRestrictionCoversAcceleratedBucket(c) && s3taRestrictionList(c, "allowedVpceIds"),
+        message:
+            "S3 Transfer Acceleration cannot be combined with presignedUrlNetworkRestrictions.allowedVpceIds. Accelerated requests do not arrive through a VPC endpoint, so the restriction would deny them. Use allowedIpRanges, or turn useS3TransferAcceleration off.",
+    },
+    {
+        id: "s3ta-ip-range-restriction",
+        severity: "error",
+        fieldPaths: [
+            "app.assetBuckets.useS3TransferAcceleration",
+            "app.assetBuckets.externalAssetBuckets",
+            "app.assetBuckets.presignedUrlNetworkRestrictions",
+        ],
+        appliesWhen: (c) => s3taIpRangeRuleApplies(c),
+        message:
+            "S3 Transfer Acceleration cannot be combined with presignedUrlNetworkRestrictions.allowedIpRanges, because it is not confirmed that aws:SourceIp is the client's address for accelerated requests. Remove the IP-range restriction, or turn useS3TransferAcceleration off.",
     },
     {
         id: "externalbucket-account-matches-deployment-warn",

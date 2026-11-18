@@ -175,6 +175,11 @@ The asset export API (`POST /database/{databaseId}/assets/{assetId}/export`, `va
 | Naming      | The prefix starts with `vams.`. Preview and viewer data in this bucket is keyed under `<databaseId>/`, and a database ID cannot contain a dot, so this prefix and its lifecycle rules never overlap a database's data.                                                                                                |
 
 :::note[Asset Bucket Configuration]
+
+### S3 Transfer Acceleration setting
+
+With `app.assetBuckets.useS3TransferAcceleration` set to `true`, the created asset bucket carries the Amazon S3 `AccelerateConfiguration` with status `Enabled`, and so does the Asset Auxiliary Bucket when the default asset bucket is accelerated (the auxiliary bucket follows the default asset bucket, including an external one). The Artefacts, Access Logs and Web App buckets never carry it. With the setting `false`, the default, the property is absent. The S3 asset buckets table row of an accelerated bucket carries `isAccelerated: true`; a missing attribute means `false`. The setting is commercial-partition only. See [Amazon S3 Transfer Acceleration](../deployment/s3-transfer-acceleration.md).
+
 VAMS supports multiple asset buckets. The `createNewBucket` configuration option creates a VAMS-managed bucket. The `externalAssetBuckets` configuration option registers pre-existing buckets by ARN. Each external bucket requires a `defaultSyncDatabaseId` and optional `baseAssetsPrefix`.
 :::
 

@@ -464,7 +464,7 @@ For measurements of your own — geometric accuracy, noise levels, coverage rati
 :::
 
 :::note[System pipelines cannot back a pipeline rule]
-A pipeline rule cannot use a system pipeline or workflow: the SYSTEM GenAI metadata and asset summary pipelines, the 3D preview thumbnail pipeline, or a workflow that runs one of them. Saving such a rule is refused with "A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai\_\* fields." The upload already runs the SYSTEM GenAI metadata pipeline on every file version, so to require what it generates, add a `metadata` rule on the file metadata (`files`) or attributes (`fileAttributes`) it writes, for example a required `genai_description`. A schema saved before this check that still names a system pipeline is not launched for it: the rule's result is an error with the same message until you change the rule.
+A pipeline rule cannot use a [system pipeline](../pipelines/system-pipelines.md) or a workflow that runs one: **SYSTEM - GenAI Metadata Generation**, **SYSTEM - GenAI Asset Summary**, **3D Preview Thumbnail**, **Media Preview Thumbnail**, or **Zip Archive**. Saving such a rule is refused with "A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai\_\* fields." The upload already runs the SYSTEM GenAI metadata pipeline on every file version, so to require what it generates, add a `metadata` rule on the file metadata (`files`) or attributes (`fileAttributes`) it writes, for example a required `genai_description`. A schema saved before this check that still names a system pipeline is not launched for it: the rule's result is an error with the same message until you change the rule.
 :::
 
 ---
