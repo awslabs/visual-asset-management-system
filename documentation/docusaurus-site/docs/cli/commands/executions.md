@@ -289,7 +289,8 @@ the returned text in both output modes; with `--json-output` the JSON response i
 memory unless `--json-output` must print it. When a later page fails, the pages already written stay
 in the file and the error names the token that re-reads the failed page (`startingToken`, with
 `pagesRead`, `rowsWritten` and `outputFile`, under `--json-output`); resume with `--starting-token`
-into another file, since `-o` replaces the file it names.
+into another file, since `-o` replaces the file it names. When the first page fails, nothing is written
+and a file already at that path is left as it was.
 
 ---
 
