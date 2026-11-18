@@ -332,3 +332,34 @@ describe("RasterImageViewerComponent text over the striped viewer background", (
         expect((info.parentElement as HTMLElement).style.background).toBe("var(--vams-bg-primary)");
     });
 });
+
+describe("RasterImageViewerComponent fallback when the preview did not load", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockCreateWorker.mockReturnValue(null);
+    });
+
+    it("gives the preview's refusal instead of saying no preview was generated", async () => {
+        (global as any).fetch = jest.fn();
+        mockDownloadAsset.mockResolvedValue([false, "Not Authorized", 403]);
+        render(
+            <RasterImageViewerComponent
+                {...baseProps}
+                assetKey="/big.tif"
+                fileInfo={{
+                    filename: "big.tif",
+                    key: "/big.tif",
+                    size: 999999999,
+                    previewFile: "/big.tif.previewFile.jpg",
+                }}
+                customParameters={{ maxDecodeBytes: 1000 }}
+            />
+        );
+
+        const notice = await screen.findByTestId("raster-viewer-fallback-notice");
+        expect(notice.textContent).toContain(
+            "Its generated preview could not be loaded: You do not have permission to view or download this file."
+        );
+        expect(notice.textContent).not.toContain("No preview has been generated");
+    });
+});

@@ -127,15 +127,22 @@ const RasterImageViewerComponent: React.FC<ViewerPluginProps> = ({
         [assetId, databaseId, versionId, assetVersionId]
     );
 
-    /** The generated preview with a notice, or the notice alone when there is none to show. */
+    /**
+     * The generated preview with a notice, or the notice alone when there is none to show: no
+     * preview at all, or one whose download was refused or failed, with the reason.
+     */
     const showFallback = useCallback(
         async (reason: string, isCancelled: () => boolean) => {
             let previewUrl: string | undefined;
+            let previewFailure: string | undefined;
             if (previewKey) {
                 try {
                     previewUrl = await signedUrl(previewKey, false);
-                } catch {
-                    previewUrl = undefined;
+                } catch (error) {
+                    previewFailure =
+                        error instanceof Error && error.message
+                            ? error.message
+                            : "Failed to download file";
                 }
             }
             if (isCancelled()) return;
@@ -144,6 +151,11 @@ const RasterImageViewerComponent: React.FC<ViewerPluginProps> = ({
                 previewUrl,
                 notice: previewUrl
                     ? `${reason} Showing its generated preview instead.`
+                    : previewFailure
+                    ? `${reason} Its generated preview could not be loaded: ${previewFailure.replace(
+                          /\.$/,
+                          ""
+                      )}. Download the file to open it in another application.`
                     : `${reason} No preview has been generated for it. Download the file to open it in another application.`,
             });
         },
