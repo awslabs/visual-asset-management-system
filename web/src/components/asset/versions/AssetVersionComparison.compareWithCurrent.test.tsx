@@ -118,4 +118,36 @@ describe("AssetVersionComparison: compare with current files", () => {
         expect(summaryLine("Added", 1)).toBeInTheDocument();
         expect(summaryLine("Removed", 0)).toBeInTheDocument();
     });
+
+    it("matches a snapshot file whose key keeps a leading slash", async () => {
+        (fetchAssetVersion as jest.Mock).mockResolvedValue([
+            true,
+            {
+                assetId: "asset-1",
+                assetVersionId: "1",
+                dateCreated: "2026-01-02T00:00:00Z",
+                files: [snapshotFile("/model.glb", "e1")],
+            },
+        ]);
+        (fetchAssetS3Files as jest.Mock).mockResolvedValue([
+            true,
+            [currentItem("/", "", true), currentItem("/model.glb", "e1")],
+        ]);
+
+        render(
+            <MemoryRouter>
+                <AssetVersionComparison
+                    databaseId="db-1"
+                    assetId="asset-1"
+                    version1={version}
+                    compareWithCurrent={true}
+                    onClose={() => undefined}
+                />
+            </MemoryRouter>
+        );
+
+        await waitFor(() => expect(summaryLine("Total Files", 1)).toBeInTheDocument());
+        expect(summaryLine("Unchanged", 1)).toBeInTheDocument();
+        expect(summaryLine("Removed", 0)).toBeInTheDocument();
+    });
 });
