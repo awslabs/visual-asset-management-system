@@ -8,7 +8,7 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 
 -   **React frontend** (`web/`) — Cloudscape UI, many viewer plugins for 3D/media
 -   **Python Lambda backend** (`backend/`) — Casbin ABAC/RBAC auth, DynamoDB, S3
--   **CDK TypeScript infrastructure** (`infra/`) — 14 nested stacks, multi-partition support
+-   **CDK TypeScript infrastructure** (`infra/`) — 15 core nested stacks plus one per enabled pipeline and add-on, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) — Click framework, profile-based config
 -   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, GenAI labeling, video SOP/BOM extraction, GenAI CAD STEP agent (Strands), Gaussian splatting, point cloud, 3D preview thumbnails, media previews (images, TGA/TIFF, video; `useMediaPreviews`), NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, image to 3D, the zipArchive system pipeline (Download as Zip), and more
 -   **Add-ons** (`infra/lib/nestedStacks/addon/`, `backend/backend/handlers/addon/`) — optional, feature-gated integrations deployed from their own nested stacks: Garnet Framework, Physna Sync, EDH Workstations (see `documentation/docusaurus-site/docs/developer/addons-overview.md`)
@@ -626,7 +626,7 @@ Runtime versions are in the Project Overview version table.
 
 -   **Frontend (`web/`)**: Cloudscape Design System, AWS Amplify v6 (auth), custom fetch-based `apiClient` (auto auth headers), HashRouter, TypeScript throughout (`__mocks__/*.js` remain JS). Viewer plugins: Three.js, Needle Engine, Potree, Gaussian Splat, GLTF, USD, IFC/BIM.
 -   **Backend (`backend/`)**: Casbin ABAC/RBAC, boto3, AWS Lambda Powertools (logging, tracing). Pydantic v1 only.
--   **Infrastructure (`infra/`)**: AWS CDK (TypeScript), 14 nested stacks, CDK Nag security checks, REST API (v1), custom Lambda authorizer (unified JWT + IP).
+-   **Infrastructure (`infra/`)**: AWS CDK (TypeScript), 15 core nested stacks, CDK Nag security checks, REST API (v1), custom Lambda authorizer (unified JWT + IP).
 -   **CLI (`tools/VamsCLI/`)**: Click command framework, profile-based multi-environment config, `--json-output` for machine-readable output.
 -   **MCP server (`tools/VamsMCP/`)**: Model Context Protocol server (`mcp` SDK) exposing the VAMS API as agent tools over stdio. Stores no credentials — reuses the `vamscli` profile and `APIClient`. Write and destructive tools are gated off by default via `VAMS_ENABLE_WRITES` / `VAMS_ENABLE_DESTRUCTIVE`.
 -   **Agent skill (`tools/VamsAgentSkill/`)**: Portable skill for operating a live deployment through `vamscli`; self-discovers commands, read-only by default. Surfaced in Claude Code as `/vams-agent`.
