@@ -70,6 +70,9 @@ BACKGROUND_REMOVAL_SESSIONS = {
     "birefnet": ("birefnet-general", "birefnet-general.onnx"),
 }
 
+# Present on a host with an NVIDIA GPU mapped into the container; absent on the Blender agent's CPU queue.
+NVIDIA_DEVICE = "/dev/nvidiactl"
+
 # A prompted mask that covers almost the whole frame, or almost none of it, means the prompt missed: it
 # names the background, or a speck. Either produces a reconstruction of the wrong thing, so it is rejected
 # rather than reconstructed.
@@ -144,6 +147,17 @@ def validate_image(image_path: str) -> dict:
     return info
 
 
+def _session_options() -> dict:
+    """Keyword arguments for rembg.new_session: none on a GPU host, the CPU provider alone without one.
+
+    The images install onnxruntime-gpu, which reports TensorRT and CUDA as available whether or not the
+    host has a GPU. On a host with no NVIDIA device (the Blender agent's CPU queue) a session created with
+    that default list segfaults inside onnxruntime (exit 139, nothing logged), so such a host is held to the
+    CPU provider. A GPU job's devices are mapped in by its GPU resource requirement.
+    """
+    return {} if os.path.exists(NVIDIA_DEVICE) else {"providers": ["CPUExecutionProvider"]}
+
+
 def _remove_background_rembg(image_path: str, output_path: str, params: dict) -> None:
     """rembg's u2net session, named so the weights the cache stage fetched are the weights read. The
     permissive default backend."""
@@ -151,7 +165,8 @@ def _remove_background_rembg(image_path: str, output_path: str, params: dict) ->
     from rembg import new_session, remove
 
     with Image.open(image_path) as img:
-        cut = remove(img.convert("RGBA"), session=new_session(BACKGROUND_REMOVAL_SESSIONS["rembg"][0]))
+        session = new_session(BACKGROUND_REMOVAL_SESSIONS["rembg"][0], **_session_options())
+        cut = remove(img.convert("RGBA"), session=session)
     cut.save(output_path)
 
 
@@ -165,7 +180,7 @@ def _remove_background_birefnet(image_path: str, output_path: str, params: dict)
             "Background removal backend 'birefnet' is unavailable: rembg is not installed") from e
 
     try:
-        session = new_session(BACKGROUND_REMOVAL_SESSIONS["birefnet"][0])
+        session = new_session(BACKGROUND_REMOVAL_SESSIONS["birefnet"][0], **_session_options())
     except Exception as e:
         raise PreprocessError(
             f"Background removal backend 'birefnet' could not load the birefnet-general "
