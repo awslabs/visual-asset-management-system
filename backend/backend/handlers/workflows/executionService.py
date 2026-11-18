@@ -5942,7 +5942,7 @@ def handle_get_request(event):
         return authorization_error()
 
     # excludeStatus: known statuses only, and never the one the status filter selects (fixed 400s).
-    # A newer parameter than the ones above, so it follows the gold-standard order: after Tier 1.
+    # excludeStatus is validated after Tier 1, as the global list does.
     _excluded, message = parse_list_status_filter(queryParameters)
     if message:
         return validation_error(body={'message': message}, event=event)
