@@ -46,6 +46,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **RapidPipeline EKS token in other partitions** — The pipeline signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud, instead of always naming an `amazonaws.com` host. (issue #1593)
+
 **Other changes:**
 
 -   **Backend test subsets** — A test run that collects the Physna add-on tests before another test imports the audit logging module, such as `tests/handlers` alone, no longer fails at collection. (issue #1451)
