@@ -756,10 +756,10 @@ def _paginate_with_page_metadata(
 def _single_response_list(page: Any, items_key: str) -> Dict[str, Any]:
     """Shape a route that returns its whole list in ONE response, under its own field name.
 
-    The compliance schema and pending-cascade listings carry no ``message`` envelope and no
-    continuation token, so ``paginate()`` has nothing to follow and a bare ``Items`` read finds
-    nothing. The list is lifted onto ``Items`` with a ``count`` so the tool matches every other list
-    tool, and every other top-level field is carried through.
+    The compliance schema listing carries no ``message`` envelope and no continuation token, so
+    ``paginate()`` has nothing to follow and a bare ``Items`` read finds nothing. The list is lifted
+    onto ``Items`` with a ``count`` so the tool matches every other list tool, and every other
+    top-level field is carried through.
     """
     items = page.get(items_key) if isinstance(page, dict) else None
     if not isinstance(items, list):
