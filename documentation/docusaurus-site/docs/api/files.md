@@ -11,7 +11,7 @@ For asset-level operations, see [Assets](assets.md). For file metadata, see [Met
 -   **File**: An individual object stored in S3 within an asset's directory structure. Files can be organized in folders.
 -   **File Version**: S3 object versions tracked through bucket versioning. VAMS also tracks file versions within asset version snapshots.
 -   **Primary File Type**: A designation that marks a file as the primary representative of a particular type within an asset (e.g., the primary `.ifc` file).
--   **Preview File**: A generated or uploaded preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file. When a file has several, `previewFile` names the newest one that is not archived.
+-   **Preview File**: A generated or uploaded preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file. `previewFile` names the file's newest preview that is not archived; a listing with `includeArchived=true` names the newest archived preview when the file has no other.
 -   **Archive**: Soft-deletion of a file using S3 delete markers. Archived files can be unarchived.
 
 ---
@@ -152,7 +152,7 @@ The `versions` list is present only when `includeVersions` is `true`. `changeWor
 
 `POST /database/{databaseId}/assets/{assetId}/moveFile`
 
-Moves or renames a file within the asset. This copies the file to the new location and deletes the original.
+Moves or renames a file within the asset. This copies the file to the new location and deletes the original. The copy runs within the request, so moving a large file can take longer than the Amazon API Gateway integration timeout; see [API Gateway Timeout for Large Operations](../troubleshooting/known-limitations.md#api-gateway-timeout-for-large-operations).
 
 **Request Parameters:**
 
@@ -199,7 +199,7 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 `POST /database/{databaseId}/assets/{assetId}/copyFile`
 
-Copies a file within the same asset or to a different asset. Supports cross-database copying when `destinationDatabaseId` is provided.
+Copies a file within the same asset or to a different asset. Supports cross-database copying when `destinationDatabaseId` is provided. The copy runs within the request, so copying a large file can take longer than the Amazon API Gateway integration timeout; see [API Gateway Timeout for Large Operations](../troubleshooting/known-limitations.md#api-gateway-timeout-for-large-operations).
 
 **Request Parameters:**
 
@@ -660,8 +660,6 @@ Completes a multipart file upload by signaling that all parts have been uploaded
 
 Each entry in `files` is an object with `relativeKey`, `uploadIdS3`, and a `parts` array of `{ "PartNumber", "ETag" }` objects. An empty `parts` array completes a file initialized as `zero-byte`. For any other file it cancels the file: the multipart upload is aborted, nothing is stored, and the file's result has `success: false`.
 
-A file over 1 GiB is processed asynchronously: its result has `success: true` and `largeFileAsynchronousHandling: true`, it counts toward `overallSuccess`, and it appears in the asset once the copy finishes.
-
 **Response:**
 
 ```json
@@ -682,15 +680,15 @@ A file over 1 GiB is processed asynchronously: its result has `success: true` an
 }
 ```
 
-A file over 1 GiB is processed asynchronously: its result has `largeFileAsynchronousHandling: true` and counts as a success, also when every file in the upload is that large. The file appears in the asset when the copy finishes. Files over 5 GiB are copied by the large object copy engine, which has no time limit. Read each such file's outcome with [Get Upload Status](#get-upload-status).
+A file over 1 GiB is processed asynchronously: its result has `success: true` and `largeFileAsynchronousHandling: true`, and it counts toward `overallSuccess`, also when every file in the upload is that large. The file appears in the asset when the copy finishes. Files over 5 GiB are copied by the large object copy engine, which has no time limit. Read each such file's outcome with [Get Upload Status](#get-upload-status).
 
 **Error Responses:**
 
-| Status | Description                                            |
-| ------ | ------------------------------------------------------ |
-| `400`  | Invalid upload ID, upload not found, or missing parts. |
-| `403`  | Not authorized to upload files to this asset.          |
-| `500`  | Internal server error.                                 |
+| Status | Description                                                                                                                                                                   |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid upload ID, upload not found, missing parts, or `Upload has already been completed.` (a completed upload whose record is kept for its asynchronously processed files). |
+| `403`  | Not authorized to upload files to this asset.                                                                                                                                 |
+| `500`  | Internal server error.                                                                                                                                                        |
 
 ---
 
@@ -698,7 +696,7 @@ A file over 1 GiB is processed asynchronously: its result has `largeFileAsynchro
 
 `GET /uploads/{uploadId}`
 
-Returns the outcome of each file an upload accepted for asynchronous processing. Completion keeps the record of an upload with such a file, with status `processing_async` and one `PENDING` entry per file. Each file then becomes `SUCCEEDED` or `FAILED`, and the upload `completed` or `completed_with_errors`. The record is kept for 7 days.
+Returns the outcome of each file an upload accepted for asynchronous processing. Completion keeps the record of an upload with such a file, with status `processing_async` and one `PENDING` entry per file. Each file then becomes `SUCCEEDED` or `FAILED`, and the upload `completed` or `completed_with_errors`. The record is kept for 7 days. A user upload whose files all landed at completion has no record; the upload a workflow execution makes to store its pipeline outputs keeps its record with status `completed` or `completed_with_errors`, so it answers `200`.
 
 **Request Parameters:**
 
@@ -737,12 +735,12 @@ Returns the outcome of each file an upload accepted for asynchronous processing.
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                              |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters.                                                                                                                                                                      |
-| `403`  | Not authorized to call this route.                                                                                                                                                       |
-| `404`  | Upload not found. Also returned for an upload whose files all landed at completion (it has no record), a record past its 7 days, another database, and an asset the caller may not read. |
-| `500`  | Internal server error.                                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                  |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters.                                                                                                                                                                          |
+| `403`  | Not authorized to call this route.                                                                                                                                                           |
+| `404`  | Upload not found. Also returned for a user upload whose files all landed at completion (it has no record), a record past its 7 days, another database, and an asset the caller may not read. |
+| `500`  | Internal server error.                                                                                                                                                                       |
 
 The route requires `GET` on the upload's asset. From the CLI, use `vamscli file upload-status` or `vamscli file upload --wait-async`.
 
