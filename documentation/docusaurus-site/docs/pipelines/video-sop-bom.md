@@ -29,7 +29,7 @@ The pipeline's unit, contract, and CDK test suites cover every stage; live smoke
 | WebM      | `.webm`   | Matroska-derived web container                                          |
 | Matroska  | `.mkv`    | Matroska container                                                      |
 
-The pipeline's accepted-input list is `*.mp4`, `*.mov`, `*.m4v`, `*.webm`, and `*.mkv`, so only files with those extensions are offered in the execute wizard. Matching is case-insensitive at every gate. AVI, WMV, and FLV are not accepted. A custom template that overrides `inputFileFilters` to add another container format does not widen the pipeline: the entry-point Lambda checks every selected file's extension against the same five-entry list and refuses the run with a readable cause, so widening the format list is a code change rather than a template change.
+The pipeline's accepted-input list is `*.mp4`, `*.mov`, `*.m4v`, `*.webm`, and `*.mkv`, so only files with those extensions are offered in the execute wizard. Matching is case-insensitive at every gate. AVI, WMV, and FLV are not accepted. A custom template that overrides `inputFileFilters` to add another container format does not widen the pipeline: the entry-point Lambda checks every selected file's extension against the same five-entry list and refuses the run with a readable cause, so widening the format list is a code change rather than a template change. The container then opens each video as a local file through the MP4/QuickTime and Matroska/WebM demuxers only, so a file whose content is in another format is refused as not decodable whatever its extension.
 
 ## Input selection
 
@@ -112,7 +112,7 @@ flowchart LR
 
 ### Container Image Build
 
-The container image is built by AWS CodeBuild during CDK deployment when `useCodeBuild` is enabled: CDK uploads the container source to Amazon S3 and a custom resource starts a build that pushes the image, tagged by the content hash of that source, to an Amazon ECR repository named `<config.name>-<baseStackName>-<region>-videosopbom` (with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true`). With `useCodeBuild` disabled the image is built locally with Docker at synthesis time. The image is a digest-pinned `python:3.12-slim` (Debian) base with the Debian `ffmpeg` package, boto3, jsonschema, and Pillow, and runs as a non-root user.
+The container image is built by AWS CodeBuild during CDK deployment when `useCodeBuild` is enabled: CDK uploads the container source to Amazon S3 and a custom resource starts a build that pushes the image, tagged by the content hash of that source, to an Amazon ECR repository named `<config.name>-<baseStackName>-<region>-videosopbom` (with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true`). With `useCodeBuild` disabled the image is built locally with Docker at synthesis time. The image is a digest-pinned `python:3.12-slim` (Debian) base with the Debian security updates published since that base applied at build time, the Debian `ffmpeg` package, boto3, jsonschema, and Pillow, and runs as a non-root user.
 
 ## Configuration
 

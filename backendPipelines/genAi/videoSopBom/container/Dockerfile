@@ -6,8 +6,11 @@
 FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
 
 # ffmpeg and ffprobe from the Debian archive. Debian builds ffmpeg with --enable-gpl, so the binaries
-# are GPL-2+ (see /usr/share/doc/ffmpeg/copyright in the image and NOTICE.md).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# are GPL-2+ (see /usr/share/doc/ffmpeg/copyright in the image and NOTICE.md). The digest pin fixes the
+# Debian packages at the day the base was built, so the layer applies the security updates Debian has
+# published since then before it installs, in one layer so the package lists never persist.
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
