@@ -15,6 +15,8 @@ export interface AuditInfoPopoverProps {
     /** The explanation. Plain text or simple elements; never record content. */
     children: React.ReactNode;
     testId?: string;
+    /** Visible text beside the icon, for an icon that needs telling apart from its neighbours. */
+    label?: string;
     size?: "small" | "medium" | "large";
 }
 
@@ -29,6 +31,7 @@ export const AuditInfoPopover: React.FC<AuditInfoPopoverProps> = ({
     header,
     children,
     testId,
+    label,
     size = "medium",
 }) => (
     <span data-testid={testId}>
@@ -42,12 +45,23 @@ export const AuditInfoPopover: React.FC<AuditInfoPopoverProps> = ({
             content={children}
         >
             {/* formAction none: the icon sits inside the search form and must not submit it. */}
-            <Button
-                variant="inline-icon"
-                iconName="status-info"
-                ariaLabel={ariaLabel}
-                formAction="none"
-            />
+            {label ? (
+                <Button
+                    variant="inline-link"
+                    iconName="status-info"
+                    ariaLabel={ariaLabel}
+                    formAction="none"
+                >
+                    {label}
+                </Button>
+            ) : (
+                <Button
+                    variant="inline-icon"
+                    iconName="status-info"
+                    ariaLabel={ariaLabel}
+                    formAction="none"
+                />
+            )}
         </Popover>
     </span>
 );

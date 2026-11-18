@@ -488,8 +488,8 @@ describe("FIX-054 wasm-unsafe-eval in script-src", () => {
         expect(govcloudTemplate.app.useFips).toBe(true);
         const { mechanism, value } = csp(S.govcloud());
         expect(mechanism).toBe("alb");
-        // Control: the regional Amazon S3 origin the absence below is about is present.
-        expect(value).toContain("https://s3.us-gov-west-1.amazonaws.com/");
+        // Control: the AWS service-host wildcard the absence below is about is present.
+        expect(value).toContain("https://*.amazonaws.com");
         expect(value).not.toMatch(/-fips\./);
     });
 
@@ -792,13 +792,35 @@ describe("FIX-012/FIX-026: inline-script hashes and 'unsafe-inline' are mutually
         // invariant (all three viewer directives reach the same origin) and cannot drift with the
         // partition, which changes the endpoint but not the relationship.
         const { value } = csp(synthTemplate("commercial"));
-        const s3Source = directive(value, "img-src").find((s) => s.includes("s3"));
+        const s3Source = directive(value, "img-src").find((s) => s.startsWith("https://*."));
         // Positive control: if img-src stopped carrying it, the assertion below would pass vacuously
         // against `undefined`.
         expect(s3Source).toBeDefined();
         expect(directive(value, "media-src")).toContain(s3Source);
         expect(directive(value, "frame-src")).toContain(s3Source);
     });
+
+    test.each(ALL_TEMPLATES)(
+        "%s: the AWS service-host wildcard is in connect/img/media/frame-src only, and no regional S3 host remains",
+        (name) => {
+            const { value } = csp(synthTemplate(name));
+            const wildcard = /^https:\/\/\*\.(amazonaws\.com|amazonaws\.eu)$/;
+            const carrying = directiveNames(value).filter((d) =>
+                directive(value, d).some((src) => wildcard.test(src))
+            );
+            expect(carrying).toEqual(["connect-src", "img-src", "media-src", "frame-src"]);
+            // The partition's own suffix, derived from the S3 hostname table.
+            const suffix = {
+                commercial: "amazonaws.com",
+                govcloud: "amazonaws.com",
+                eusovereign: "amazonaws.eu",
+            }[name];
+            expect(directive(value, "img-src")).toContain(`https://*.${suffix}`);
+            // No regional S3 host, virtual-hosted host or FIPS host is named.
+            expect(value).not.toMatch(/https:\/\/s3[.-]/);
+            expect(value).not.toMatch(/-fips\./);
+        }
+    );
 
     it("Physna ON: the add-on's origin reaches frame-src and connect-src", () => {
         // The directive the viewer genuinely depends on, and the positive control for the two

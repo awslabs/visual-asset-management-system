@@ -25,6 +25,14 @@ import {
     isUsdzBytes,
     USDZ_LIMITS,
 } from "./usdDependencies";
+import { clearPresignedUrlCache } from "../../../core/presignedFetch";
+
+jest.mock("../../../../services/APIService", () => ({
+    downloadAsset: jest.fn(async ({ key }: { key: string }) => [
+        true,
+        `https://s3.test/${encodeURIComponent(key)}?X-Amz-Signature=sig`,
+    ]),
+}));
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -103,9 +111,12 @@ function fakeZip(entries: Array<[string, string]>): Uint8Array {
 }
 
 function installFetch(files: Record<string, string>): string[] {
+    clearPresignedUrlCache();
     const requested: string[] = [];
     global.fetch = jest.fn(async (url: string) => {
-        const key = decodeURIComponent(url.replace(/^.*\/download\/stream\//, ""));
+        const key = decodeURIComponent(
+            url.replace(/^https:\/\/s3\.test\//, "").replace(/\?.*$/, "")
+        );
         requested.push(key);
         const content = files[key];
         if (content === undefined) {
@@ -125,8 +136,6 @@ function newResolver() {
     return new AssetDependencyResolver({
         assetId: "asset-1",
         databaseId: "db-1",
-        apiEndpoint: "https://api.example.test/",
-        getAuthHeader: () => Promise.resolve("Bearer t"),
     });
 }
 

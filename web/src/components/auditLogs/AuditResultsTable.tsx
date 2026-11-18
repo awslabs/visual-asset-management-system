@@ -73,7 +73,7 @@ export interface AuditResultsTableProps {
     hasMore: boolean;
     onPageChange: (pageIndex: number) => void;
     /** What the empty table says: nothing run yet, nothing found, or a failed run. */
-    emptyState: "notRun" | "noRecords" | "failed";
+    emptyState: "notRun" | "noRecords" | "failed" | "stopped";
     /** Called with a function that drops the header sort, for when the server order changes. */
     registerClearSorting?: (clear: () => void) => void;
 }
@@ -186,6 +186,8 @@ export const AuditResultsTable: React.FC<AuditResultsTableProps> = ({
             ? "Choose filters and a time range, then press Search."
             : emptyState === "failed"
             ? "The records could not be loaded."
+            : emptyState === "stopped"
+            ? "Narrow the time range or the filters and search again."
             : "No records match this search. Widen the time range or remove a filter.";
 
     return (
@@ -256,7 +258,13 @@ export const AuditResultsTable: React.FC<AuditResultsTableProps> = ({
             }
             empty={
                 <Box textAlign="center" color="inherit" padding="l">
-                    <b>{emptyState === "noRecords" ? "No records" : "No results yet"}</b>
+                    <b>
+                        {emptyState === "noRecords"
+                            ? "No records"
+                            : emptyState === "stopped"
+                            ? "The search was stopped"
+                            : "No results yet"}
+                    </b>
                     <Box variant="p" color="inherit">
                         {emptyText}
                     </Box>

@@ -282,7 +282,9 @@ export async function installAuditMocks(
                     recordsScanned: 1200,
                     bytesScanned: 2048,
                     rowCount: rows.length,
-                    candidateLimitReached: mock.starts.some((s) => s.contains) ? true : undefined,
+                    candidateLimitReached: mock.starts[mock.starts.length - 1]?.contains
+                        ? true
+                        : undefined,
                 },
                 Items: page,
                 ...(next ? { NextToken: next } : {}),

@@ -12,7 +12,6 @@
 
 import {
     AssetDependencyResolver,
-    buildDependencyUrl,
     DEPENDENCY_LIMITS,
     describeUnloaded,
     isolatedUrlModifier,
@@ -21,24 +20,32 @@ import {
     placeholderImageBytes,
     stripUsdAssetDelimiters,
 } from "./assetDependencyResolver";
+import { downloadAsset } from "../../../../services/APIService";
+import { clearPresignedUrlCache } from "../../../core/presignedFetch";
+
+jest.mock("../../../../services/APIService", () => ({
+    downloadAsset: jest.fn(async ({ key }: { key: string }) => [
+        true,
+        `https://s3.test/${encodeURIComponent(key)}?X-Amz-Signature=sig`,
+    ]),
+}));
 
 const ASSET = "asset-1";
 const CONTEXT = {
     assetId: ASSET,
     databaseId: "db-1",
-    apiEndpoint: "https://api.example.test/",
-    getAuthHeader: () => Promise.resolve("Bearer token"),
 };
 
 type FakeFile = { status?: number; bytes?: number; contentLength?: number };
 
 /** Installs a fetch that serves `files` by asset-relative key and records every URL requested. */
 function installFetch(files: Record<string, FakeFile>): string[] {
+    clearPresignedUrlCache();
     const requested: string[] = [];
     global.fetch = jest.fn(async (url: string) => {
         requested.push(url);
         const path = decodeURIComponent(
-            url.replace(/^.*\/download\/stream\//, "").replace(/\?.*$/, "")
+            url.replace(/^https:\/\/s3\.test\//, "").replace(/\?.*$/, "")
         );
         const file = files[path];
         if (!file) {
@@ -136,20 +143,6 @@ describe("stripUsdAssetDelimiters", () => {
     });
 });
 
-describe("buildDependencyUrl", () => {
-    it("encodes every segment and passes the asset version", () => {
-        expect(
-            buildDependencyUrl("tex/my file#1?.png", { ...CONTEXT, assetVersionId: "v 2" })
-        ).toBe(
-            "https://api.example.test/database/db-1/assets/asset-1/download/stream/tex/my%20file%231%3F.png?assetVersionId=v%202"
-        );
-    });
-
-    it("omits the query without an asset version", () => {
-        expect(buildDependencyUrl("a.png", CONTEXT)).not.toContain("?");
-    });
-});
-
 describe("AssetDependencyResolver.resolveDependencies", () => {
     const originalFetch = global.fetch;
 
@@ -157,18 +150,44 @@ describe("AssetDependencyResolver.resolveDependencies", () => {
         global.fetch = originalFetch;
     });
 
-    it("downloads in-asset files with the auth header and keys them by the name as written", async () => {
-        installFetch({ "m/tex.png": { bytes: 10 } });
-        const resolver = new AssetDependencyResolver(CONTEXT);
+    it("downloads in-asset files from presigned URLs and keys them by the name as written", async () => {
+        const requested = installFetch({ "m/tex.png": { bytes: 10 } });
+        const resolver = new AssetDependencyResolver({ ...CONTEXT, assetVersionId: "v2" });
 
         const result = await resolver.resolveDependencies("m/scene.obj", ["./tex.png"]);
 
         expect(result.resolved.get("./tex.png")?.key).toBe("m/tex.png");
         expect(result.resolved.get("./tex.png")?.bytes.byteLength).toBe(10);
-        expect((global.fetch as jest.Mock).mock.calls[0][1].headers.Authorization).toBe(
-            "Bearer token"
-        );
         expect(resolver.resolvedCount).toBe(1);
+        // The presign call is the authorized download route, asked for the asset version.
+        expect(downloadAsset).toHaveBeenCalledWith(
+            expect.objectContaining({
+                databaseId: "db-1",
+                assetId: ASSET,
+                key: "m/tex.png",
+                assetVersionId: "v2",
+            })
+        );
+        // S3 gets the signed URL alone: never the redirecting stream route, never an
+        // Authorization header or credentials (#1623).
+        expect(requested).toHaveLength(1);
+        expect(requested[0]).toMatch(/^https:\/\/s3\.test\//);
+        expect(requested[0]).not.toContain("/download/stream/");
+        const options = (global.fetch as jest.Mock).mock.calls[0][1];
+        expect(options?.headers).toBeUndefined();
+        expect(options?.credentials).toBeUndefined();
+    });
+
+    it("records a dependency whose presign was refused as not loaded", async () => {
+        installFetch({ "m/tex.png": {} });
+        (downloadAsset as jest.Mock).mockResolvedValueOnce([false, "Forbidden", 403]);
+        const resolver = new AssetDependencyResolver(CONTEXT);
+
+        const result = await resolver.resolveDependencies("m/scene.obj", ["tex.png"]);
+
+        expect(result.resolved.size).toBe(0);
+        expect(global.fetch).not.toHaveBeenCalled();
+        expect(resolver.notLoaded()).toEqual([{ path: "m/tex.png", reason: "not-found" }]);
     });
 
     it("never requests a rejected name", async () => {

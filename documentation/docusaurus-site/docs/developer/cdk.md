@@ -31,6 +31,7 @@ graph TD
     Auth["AuthBuilder"]
     Api["ApiBuilder"]
     Api2["ApiBuilder2"]
+    Api3["ApiBuilder3"]
     Search["SearchBuilder"]
     Pipeline["PipelineBuilder"]
     Addon["AddonBuilder"]
@@ -51,6 +52,8 @@ graph TD
     Names --> Api
     Storage --> Api2
     Names --> Api2
+    Storage --> Api3
+    Names --> Api3
     Api --> Api2
     Storage --> Search
     Names --> Search
@@ -62,6 +65,7 @@ graph TD
     Auth --> Rest
     Api --> Rest
     Api2 --> Rest
+    Api3 --> Rest
     Search --> Rest
     Addon --> Rest
     Storage --> Web
@@ -80,6 +84,7 @@ graph TD
 | AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`                   | Amazon Cognito, SAML, external OAuth                                                   |
 | ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`               | Primary API routes and Lambda wiring                                                   |
 | ApiBuilder2             | `nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`              | Secondary API routes and Lambda wiring                                                 |
+| ApiBuilder3             | `nestedStacks/apiLambda/apiBuilder3-nestedStack.ts`              | Third API stack: audit log search (own template size budget)                           |
 | RestApi                 | `nestedStacks/apiLambda/api-nestedStack.ts`                      | Amazon API Gateway REST API and Lambda authorizer, built from the route registry       |
 | StaticWeb               | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`      | Amazon S3 + Amazon CloudFront or ALB hosting                                           |
 | PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`          | Processing pipeline orchestrator                                                       |
@@ -167,7 +172,7 @@ Missing `setupSecurityAndLoggingEnvironmentAndPermissions` breaks authorization 
 
 ## API Route Wiring
 
-Routes are wired with the `attachFunctionToApi` helper (`lib/nestedStacks/apiLambda/apiRouteRegistry.ts`) from the nested stack that builds the route's Lambda function. Add new core routes in `apiBuilder2-nestedStack.ts`; use `apiBuilder-nestedStack.ts` only when the function must share a function instance defined there.
+Routes are wired with the `attachFunctionToApi` helper (`lib/nestedStacks/apiLambda/apiRouteRegistry.ts`) from the nested stack that builds the route's Lambda function. Add new core routes in `apiBuilder2-nestedStack.ts` (a template size guard, `infra/test/api/nestedTemplateSizeGuard.test.ts`, fails when an API stack nears the 1,000,000 byte CloudFormation limit, and then new functions go in `apiBuilder3-nestedStack.ts`); use `apiBuilder-nestedStack.ts` only when the function must share a function instance defined there.
 
 ### Attaching a Function to Amazon API Gateway
 
