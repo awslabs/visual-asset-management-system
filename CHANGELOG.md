@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.8.0] (TBD)
+
+### Major Change Summary:
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+-   **Backend** S3 presigned URLs can use the accelerate host for buckets flagged accelerated in the buckets table; no setting yet. ([#1610](https://github.com/awslabs/visual-asset-management-system/issues/1610))
+
+### Bug Fixes
+
+### Chores
+
+### Known Outstanding Issues
+
+### Troubleshooting
+
 ## [2.7.0] (2026-11-20)
 
 ### Major Change Summary:
@@ -199,6 +217,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **CDK** Fixed the web Content Security Policy blocking presigned URLs for an asset bucket in a Region other than the deployment Region: the policy named only the deployment Region's Amazon S3 host, so downloads, previews and the HTML viewer for such a bucket failed in the browser. The four directives that carried that host now carry the partition's AWS service-host wildcard. ([#1616](https://github.com/awslabs/visual-asset-management-system/issues/1616))
 -   **Documentation** The OpenAPI document `VAMS_API.yaml` no longer defines `errorMessage` twice in the `complianceEvaluation` schema, so strict YAML and OpenAPI parsers accept it. ([#1498](https://github.com/awslabs/visual-asset-management-system/issues/1498))
 -   **Web** Fixed a file manager selection made with Ctrl- or Shift-click while the file list was still loading: when the next page of files arrived, every item but the first one clicked was dropped, so an action such as Download as Zip got a smaller selection than the one shown. ([#1497](https://github.com/awslabs/visual-asset-management-system/issues/1497))
 -   **Backend** Asset version resolution errors no longer repeat the requested asset version ID or alias. ([#1134](https://github.com/awslabs/visual-asset-management-system/issues/1134))
@@ -473,6 +492,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: the claims apply to `lambdaAuthorizorJWTAudience` and to `additionalTokenAudiences` alike: the first listed claim present in the token decides and must name one of those audiences, and a token accepted only through an additional audience still has to identify a user and carry no machine-token marker. The user id the authorizer resolves, the configured claim when set, is the one id used for the roles, the MFA check, the audit records and `vams:tokens`; the claim may not be named under the reserved `vams:` prefix, and a misconfigured claim setting refuses every external token with a `403`.
     -   Note: a remotely hosted MCP server applies the same audience and user id rules for an external IdP. `vams-mcp setup-remote` records the deployment's user id claim and audience claims, which `GET /api/amplify-config` publishes as `externalOAuthIdpUserIdClaim` and `externalOAuthIdpAudienceClaims` (claim names only, never audience values; nothing new for an Amazon Cognito deployment), and `--audience-claim` overrides the published value (a deployment that predates the field falls back to `aud` with a note); an auth file without them keeps the previous checks (`aud`, and `cognito:username`, `username`, `sub`).
     -   Note: `vams-mcp setup-remote` for an external IdP now works when the deployment publishes the relative discovery path `idpAuthProviderDiscoveryEndpoint`: the path is joined to the provider URL, an absolute URL still works, and `--issuer` is the fallback when the discovery document cannot be read. An explicit `--user-id-claim` that differs from the deployment's published claim gives a note.
+-   **Web** The Three.js viewer opens files from an external S3 bucket whose CORS rule lists only the VAMS web origin. It now reads each file and referenced file through a presigned URL, so the browser sends the web origin instead of `null`. ([#1623](https://github.com/awslabs/visual-asset-management-system/issues/1623))
 -   **Documentation** Fixed the uninstall guide's step 4 deleting other VAMS deployments' log groups in the same account and Region: its commands read the deployment's log groups from its AWS CloudFormation stack record, leave out those of a current stack of the same name, list them for review before anything is deleted, and include the API Gateway execution log group; the `/aws/apigateway/<STACK_NAME>` block, which matched no VAMS log group, is removed. ([#1572](https://github.com/awslabs/visual-asset-management-system/issues/1572))
 
 ### Chores
