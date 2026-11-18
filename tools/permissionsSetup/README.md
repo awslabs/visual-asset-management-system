@@ -4,7 +4,7 @@ Automates the creation of VAMS roles and constraint imports from JSON permission
 
 ## Overview
 
-When adding a new VAMS database, administrators must create a complete set of roles and constraints covering all object types (database, asset, pipeline, workflow, metadata schema, tags, tag types, compliance schemas, compliance bindings, compliance evaluations, compliance cascades, web routes, and API routes). This tool automates that process using JSON templates that define common permission profiles.
+When adding a new VAMS database, administrators must create a complete set of roles and constraints covering all object types (database, asset, pipeline, workflow, metadata schema, tags, tag types, compliance schemas, compliance bindings, compliance evaluations, compliance cascades, and, with the EDH Workstations add-on, EDH images, workstations and capacity reservations, plus web routes and API routes). This tool automates that process using JSON templates that define common permission profiles.
 
 The tool orchestrates:
 
@@ -25,6 +25,8 @@ Pre-built JSON templates are located in `documentation/permissionsTemplates/`. F
 | `compliance-admin.json`        | `DATABASE_ID`                   | Compliance management and schema binding for one database; runs its database's and GLOBAL workflows (execute route only) |
 | `compliance-readonly.json`     | `DATABASE_ID`                   | Read-only compliance access for one database                                                                             |
 | `compliance-global-admin.json` | —                               | `GLOBAL` schema management, read-only compliance everywhere; runs GLOBAL workflows (execute route only)                  |
+| `edh-user.json` | — | EDH Workstations add-on: launch and manage your own workstations; no capacity reservation |
+| `edh-admin.json` | — | EDH Workstations add-on: everything in `edh-user.json` plus images, session oversight, capacity and the capacity reservation registry |
 
 `ROLE_NAME` is set from `--role-name`.
 
