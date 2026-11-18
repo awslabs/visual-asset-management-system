@@ -342,9 +342,11 @@ def release_locks(table, lock_keys, execution_id) -> int:
 
 
 def _execution_input_rows(inputs_table, workflow_execution_id) -> list:
-    """Every WorkflowExecutionInputs row of one execution (primary-key query, paged on key presence)."""
+    """Every WorkflowExecutionInputs row of one execution (primary-key query, strongly consistent so
+    rows the launch wrote moments ago are read, paged on key presence)."""
     rows: list = []
-    kwargs = {"KeyConditionExpression": Key("workflowExecutionId").eq(workflow_execution_id)}
+    kwargs = {"KeyConditionExpression": Key("workflowExecutionId").eq(workflow_execution_id),
+              "ConsistentRead": True}
     response = inputs_table.query(**kwargs)
     while True:
         rows.extend(response.get("Items", []))
@@ -380,7 +382,8 @@ def _rebuilt_lock_keys(dynamo, workflow_table_name, inputs_table_name, workflow_
     """The keys rebuilt from the workflow's stored concurrencyRestriction and the execution's input rows;
     empty (and no input-row read) when the restriction does not lock or the workflow row is gone."""
     workflow_record = dynamo.Table(workflow_table_name).get_item(
-        Key={"databaseId": workflow_database_id, "workflowId": workflow_id}).get("Item") or {}
+        Key={"databaseId": workflow_database_id, "workflowId": workflow_id},
+        ConsistentRead=True).get("Item") or {}
     restriction = (workflow_record.get("systemConfig") or {}).get("concurrencyRestriction")
     if lock_scope_for_restriction(restriction) is None:
         return []
