@@ -1004,6 +1004,27 @@ const CORE_RULES: Rule[] = [
     },
     ...AUDIT_SEARCH_RULES,
     {
+        id: "audit-search-enabled-boolean",
+        severity: "error",
+        fieldPaths: ["app.auditLogging.search.enabled"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.auditLogging.search.enabled");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message:
+            "app.auditLogging.search.enabled must be true or false (a JSON boolean). Leave it out to deploy Audit Log Search.",
+    },
+    {
+        id: "audit-search-not-in-eusc",
+        severity: "error",
+        fieldPaths: ["env.region", "app.auditLogging.search.enabled"],
+        appliesWhen: (c) =>
+            partitionForRegionName(g(c, "env.region")) === "aws-eusc" &&
+            g(c, "app.auditLogging.search.enabled") === true,
+        message:
+            "Audit Log Search needs Amazon CloudWatch Logs Insights, which is not available in the AWS European Sovereign Cloud (aws-eusc). Set app.auditLogging.search.enabled to false there; the recording of audit events is not affected.",
+    },
+    {
         id: "govcloud-no-deadline-cloud",
         severity: "error",
         fieldPaths: ["app.govCloud.enabled", "app.pipelines.deadlineCloudExecutionTypeEnabled"],

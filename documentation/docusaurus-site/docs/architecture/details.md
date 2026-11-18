@@ -291,12 +291,13 @@ Configuration values resolve through a four-tier fallback chain:
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                     |
 | `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type enabled                                   |
 | `ZIPDOWNLOADS`                  | Download as Zip enabled (`app.pipelines.useZipDownloads.enabled`)                    |
+| `AUDITLOGSEARCH`                | Audit Log Search deployed (`app.auditLogging.search.enabled`, default `true`)        |
 
 An enabled add-on adds feature flags of its own, which are listed on the add-on's pages. See [Add-ons Overview](../developer/addons-overview.md).
 
 ## Nested Stack Dependency Chain
 
-The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency, except LocationService, which declares one on StaticWeb when the static web stack is built. RestApi renders the routes that ApiBuilder, ApiBuilder2, ApiBuilder3, SearchBuilder, and AddonBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them. The dashed arrow is declared only under a condition: AddonBuilder deploys after ApiBuilder only while an enabled add-on invokes a function built there.
+The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency, except LocationService, which declares one on StaticWeb when the static web stack is built. RestApi renders the routes that ApiBuilder, ApiBuilder2, ApiBuilder3, SearchBuilder, and AddonBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them. The dashed arrow is declared only under a condition: AddonBuilder deploys after ApiBuilder only while an enabled add-on invokes a function built there. ApiBuilder3 is built only while `app.auditLogging.search.enabled` is `true` (the default; `false` in the EU Sovereign Cloud template).
 
 Stacks also read each other's outputs (the Lambda layers, `storageResources`, `authResources`, and the VPC), and AWS CloudFormation orders each such reference implicitly. StaticWeb reads the REST API endpoint and `authResources`, and declares its dependencies on RestApi and AuthBuilder explicitly. When `env.loadContextIgnoreVPCStacks` is `true`, ApiBuilder, ApiBuilder2, ApiBuilder3, SearchBuilder, PipelineBuilder, AddonBuilder, RestApi, and StaticWeb are not built.
 

@@ -34,6 +34,10 @@ import {
 import { DEFAULT_LIMITS } from "../../components/auditLogs/auditSearchValidation";
 import { DENIED_MESSAGE, useAuditSearch } from "../../components/auditLogs/useAuditSearch";
 import { visibleText } from "../../components/auditLogs/auditText";
+import {
+    AUDIT_SEARCH_NOT_ENABLED_MESSAGE,
+    isAuditLogSearchEnabled,
+} from "../../components/auditLogs/auditSearchEnabled";
 import { fetchAuditLogGroups } from "../../services/APIService";
 import { useToast } from "../../features/orchestration/components/ToastProvider";
 import { useAssetPageAccess } from "../../hooks/useAssetPageAccess";
@@ -73,7 +77,7 @@ type GroupsState =
  */
 export const WARNING_TOAST_BACKSTOP_MS = 600_000;
 
-const AuditLogSearch: React.FC = () => {
+const AuditLogSearchBody: React.FC = () => {
     const [groupsState, setGroupsState] = useState<GroupsState>({ kind: "loading" });
     const [filters, setFilters] = useState<AuditFilters>(() =>
         parseAuditSearchUrl(window.location.hash || "")
@@ -444,6 +448,33 @@ const AuditLogSearch: React.FC = () => {
             </SpaceBetween>
         </Box>
     );
+};
+
+/**
+ * The page. With Audit Log Search switched off for the deployment (no AUDITLOGSEARCH switch) it shows
+ * a short state and makes no API call; a direct URL lands here. The switch grants nothing: with it
+ * on, the API still decides who may use the page.
+ */
+const AuditLogSearch: React.FC = () => {
+    if (!isAuditLogSearchEnabled()) {
+        return (
+            <Box padding={VAMS_PAGE_PADDING}>
+                <SpaceBetween size="m">
+                    <Header variant="h1">Audit Log Search</Header>
+                    <Alert
+                        type="info"
+                        statusIconAriaLabel="Info"
+                        header={AUDIT_SEARCH_NOT_ENABLED_MESSAGE}
+                        data-testid="audit-search-not-enabled"
+                    >
+                        An administrator of this deployment turned Audit Log Search off. Recording
+                        of audit events is not affected.
+                    </Alert>
+                </SpaceBetween>
+            </Box>
+        );
+    }
+    return <AuditLogSearchBody />;
 };
 
 export default AuditLogSearch;

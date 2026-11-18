@@ -194,7 +194,7 @@ export interface storageResources {
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock a running execution holds
         largeObjectCopyJobsStorageTable: dynamodb.Table; // PK jobId; TTL expiresAt; copy jobs + ingestion batch rows of the large object copy engine
         zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; GSIs UserAssetIndex, AssetIndex; TTL expiresAt; Download as Zip jobs
-        auditLogQueriesStorageTable: dynamodb.Table; // PK queryId; sparse GSI OpenQueriesIndex; TTL expiresAt; audit log search handles
+        auditLogQueriesStorageTable?: dynamodb.Table; // PK queryId; sparse GSI OpenQueriesIndex; TTL expiresAt; audit log search handles. Absent when app.auditLogging.search.enabled is false
         // Compliance tables
         complianceSchemaStorageTable: dynamodb.Table;
         complianceAssetStateStorageTable: dynamodb.Table;
@@ -1784,16 +1784,18 @@ export function storageResourcesBuilder(
     // searches against app.auditLogging.search.maxConcurrentQueries. expiresAt (epoch seconds) is the TTL,
     // app.auditLogging.search.handleRetentionMinutes after the last use of the search (the service writes
     // it and treats a row past it as not found). The row also holds the contains terms of a search until
-    // the search is stopped or exported. Always deployed: audit log search is core VAMS with no
-    // feature switch (access is decided only by authorization). Encrypted with the shared CMK when
+    // the search is stopped or exported. Built only when app.auditLogging.search.enabled
+    // is true (the default); access is decided by authorization. Encrypted with the shared CMK when
     // app.useKmsCmkEncryption is on (dynamodbDefaultProps); removal policy RETAIN like every VAMS table,
     // and auto-named (no explicit tableName), so a retained table never collides with a redeploy.
-    const auditLogQueriesStorageTable = new dynamodb.Table(scope, "AuditLogQueriesStorageTable", {
-        ...dynamodbDefaultProps,
-        partitionKey: { name: "queryId", type: dynamodb.AttributeType.STRING },
-        timeToLiveAttribute: "expiresAt",
-    });
-    auditLogQueriesStorageTable.addGlobalSecondaryIndex({
+    const auditLogQueriesStorageTable = Config.isAuditSearchEnabled(config)
+        ? new dynamodb.Table(scope, "AuditLogQueriesStorageTable", {
+              ...dynamodbDefaultProps,
+              partitionKey: { name: "queryId", type: dynamodb.AttributeType.STRING },
+              timeToLiveAttribute: "expiresAt",
+          })
+        : undefined;
+    auditLogQueriesStorageTable?.addGlobalSecondaryIndex({
         indexName: AUDIT_LOG_OPEN_QUERIES_INDEX,
         partitionKey: { name: "openKey", type: dynamodb.AttributeType.STRING },
         sortKey: { name: "createdAtEpoch", type: dynamodb.AttributeType.NUMBER },
@@ -3553,8 +3555,13 @@ export function storageResourcesBuilder(
             storageResources.dynamo.largeObjectCopyJobsStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.zipDownloadRequestsStorage]:
             storageResources.dynamo.zipDownloadRequestsStorageTable.tableName,
-        [RESOURCE_PARAM_KEYS.dynamoTables.auditLogQueriesStorage]:
-            storageResources.dynamo.auditLogQueriesStorageTable.tableName,
+        // Only when audit log search is on: its handle table does not exist otherwise.
+        ...(storageResources.dynamo.auditLogQueriesStorageTable
+            ? {
+                  [RESOURCE_PARAM_KEYS.dynamoTables.auditLogQueriesStorage]:
+                      storageResources.dynamo.auditLogQueriesStorageTable.tableName,
+              }
+            : {}),
         // Compliance tables
         [RESOURCE_PARAM_KEYS.dynamoTables.complianceSchemaStorage]:
             storageResources.dynamo.complianceSchemaStorageTable.tableName,

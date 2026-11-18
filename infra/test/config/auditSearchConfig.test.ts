@@ -4,8 +4,9 @@
  */
 
 /**
- * `app.auditLogging.search.*`: the limits of audit log search. Audit log search has no on/off switch,
- * so there is no `enabled` key; each limit takes its default when absent, and a value that is not an
+ * `app.auditLogging.search.*`: the on/off switch and the limits of audit log search. `enabled` is true
+ * when absent (false in aws-eusc, where Amazon CloudWatch Logs Insights is not available; an explicit
+ * true there is refused). Each limit takes its default when absent, and a value that is not an
  * integer in range is a configuration error. The ConfigBuilder mirrors the defaults and the rules, and
  * the shipped config files carry the defaults.
  */
@@ -18,8 +19,9 @@ import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import { makeDefaultConfig } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/defaults";
 import { evaluateRules } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
 
-function configWith(search: unknown, apiTimeout?: number): any {
+function configWith(search: unknown, apiTimeout?: number, partition?: string): any {
     const config: any = {
+        env: partition ? { partition } : {},
         app: { auditLogging: { recordReads: true }, api: { apiGatewayRest: {} } },
     };
     if (search !== undefined) config.app.auditLogging.search = search;
@@ -27,24 +29,51 @@ function configWith(search: unknown, apiTimeout?: number): any {
     return config;
 }
 
-const resolved = (search: unknown, apiTimeout?: number) => {
-    const config = configWith(search, apiTimeout);
+const resolved = (search: unknown, apiTimeout?: number, partition?: string) => {
+    const config = configWith(search, apiTimeout, partition);
     Config.resolveAuditLoggingConfig(config);
     return config.app.auditLogging.search;
 };
 
 describe("resolveAuditLoggingConfig: search limits", () => {
     test.each([[undefined], [null], [{}]])("an absent block (%p) takes every default", (search) => {
-        expect(resolved(search)).toEqual(Config.AUDIT_SEARCH_DEFAULTS);
+        expect(resolved(search)).toEqual({ enabled: true, ...Config.AUDIT_SEARCH_DEFAULTS });
     });
 
-    test("has no enabled switch", () => {
-        expect(Object.keys(resolved({}))).not.toContain("enabled");
-        expect(() => resolved({ enabled: true })).toThrow(/enabled is not a known setting/);
+    test("enabled is true when absent and keeps an explicit boolean", () => {
+        expect(resolved({}).enabled).toBe(true);
+        expect(resolved({ enabled: true }, undefined, "aws").enabled).toBe(true);
+        expect(resolved({ enabled: false }).enabled).toBe(false);
+        expect(resolved({ enabled: null }, undefined, "aws-us-gov").enabled).toBe(true);
+    });
+
+    test.each(["true", "false", 1, 0, [], {}])(
+        "refuses an enabled that is not a boolean: %p",
+        (v) => {
+            expect(() => resolved({ enabled: v })).toThrow(
+                /^Configuration Error: app\.auditLogging\.search\.enabled must be true or false/
+            );
+        }
+    );
+
+    test("aws-eusc: absent means off, false is accepted, true is refused with the reason", () => {
+        expect(resolved({}, undefined, "aws-eusc").enabled).toBe(false);
+        expect(resolved(undefined, undefined, "aws-eusc").enabled).toBe(false);
+        expect(resolved({ enabled: false }, undefined, "aws-eusc").enabled).toBe(false);
+        expect(() => resolved({ enabled: true }, undefined, "aws-eusc")).toThrow(
+            /CloudWatch Logs Insights, which is not available in the 'aws-eusc' partition/
+        );
+    });
+
+    test("the other partitions (including aws-us-gov) accept true", () => {
+        for (const partition of ["aws", "aws-us-gov"]) {
+            expect(resolved({ enabled: true }, undefined, partition).enabled).toBe(true);
+        }
     });
 
     test("an explicit value is kept and the others default", () => {
         expect(resolved({ maxRows: 2500 })).toEqual({
+            enabled: true,
             ...Config.AUDIT_SEARCH_DEFAULTS,
             maxRows: 2500,
         });
@@ -121,7 +150,7 @@ describe("resolveAuditLoggingConfig: search limits", () => {
         Config.resolveAuditLoggingConfig(config);
         expect(config.app.auditLogging).toEqual({
             recordReads: true,
-            search: Config.AUDIT_SEARCH_DEFAULTS,
+            search: { enabled: true, ...Config.AUDIT_SEARCH_DEFAULTS },
         });
     });
 });
@@ -132,8 +161,12 @@ describe("the shipped config files and the ConfigBuilder", () => {
         ["config.template.commercial.json", commercialTemplate],
         ["config.template.govcloud.json", govcloudTemplate],
         ["config.template.eusovereign.json", eusovereignTemplate],
-    ])("%s carries the defaults", (_name, file: any) => {
-        expect(file.app.auditLogging.search).toEqual(Config.AUDIT_SEARCH_DEFAULTS);
+    ])("%s carries the defaults", (name, file: any) => {
+        expect(file.app.auditLogging.search).toEqual({
+            // On everywhere except the EU Sovereign template (no CloudWatch Logs Insights there).
+            enabled: !name.includes("eusovereign"),
+            ...Config.AUDIT_SEARCH_DEFAULTS,
+        });
     });
 
     test("the ceilings are the ones the Lambda holds", () => {
@@ -170,6 +203,36 @@ describe("the shipped config files and the ConfigBuilder", () => {
         expect(fired((c) => (c.app.auditLogging.search.longPollWaitSeconds = 26))).toEqual([
             "audit-search-long-poll-within-api-timeout",
         ]);
+    });
+
+    test("the builder presets match: on, except off in the EU Sovereign preset", () => {
+        expect((makeDefaultConfig("commercial") as any).app.auditLogging.search.enabled).toBe(true);
+        expect((makeDefaultConfig("govcloud") as any).app.auditLogging.search.enabled).toBe(true);
+        expect((makeDefaultConfig("eusovereign") as any).app.auditLogging.search.enabled).toBe(
+            false
+        );
+    });
+
+    test("the builder refuses enabled true in the EU Sovereign Cloud and a non-boolean", () => {
+        const ids = (mutate: (cfg: any) => void, profile: any = "commercial") => {
+            const cfg: any = makeDefaultConfig(profile);
+            mutate(cfg);
+            return evaluateRules(cfg)
+                .filter(
+                    (rule: any) =>
+                        String(rule.id).startsWith("audit-search-enabled") ||
+                        rule.id === "audit-search-not-in-eusc"
+                )
+                .map((rule: any) => rule.id);
+        };
+        expect(ids(() => undefined, "eusovereign")).toEqual([]);
+        expect(ids((c) => (c.app.auditLogging.search.enabled = true), "eusovereign")).toEqual([
+            "audit-search-not-in-eusc",
+        ]);
+        expect(ids((c) => (c.app.auditLogging.search.enabled = "yes"))).toEqual([
+            "audit-search-enabled-boolean",
+        ]);
+        expect(ids((c) => delete c.app.auditLogging.search.enabled)).toEqual([]);
     });
 
     test("a missing search block raises nothing", () => {

@@ -489,6 +489,7 @@
         "auditLogging": {
             "recordReads": true,
             "search": {
+                "enabled": false,
                 "maxQueryWindowDays": 31,
                 "maxRows": 1000,
                 "maxConcurrentQueries": 5,

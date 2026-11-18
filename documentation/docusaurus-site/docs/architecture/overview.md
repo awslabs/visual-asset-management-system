@@ -139,7 +139,7 @@ graph TD
     Auth["AuthBuilder<br/>(Cognito / OAuth)"]
     APIBuilder["ApiBuilder<br/>(Primary API Route Wiring)"]
     APIBuilder2["ApiBuilder2<br/>(Secondary API Route Wiring)"]
-    APIBuilder3["ApiBuilder3<br/>(Audit Log Search)"]
+    APIBuilder3["ApiBuilder3<br/>(Audit Log Search, when enabled)"]
     Search["SearchBuilder<br/>(OpenSearch)"]
     Pipelines["PipelineBuilder<br/>(Processing Pipelines)"]
     Addons["AddonBuilder<br/>(Garnet Framework, Physna Sync, EDH Workstations)"]

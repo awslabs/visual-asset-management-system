@@ -76,18 +76,18 @@ graph TD
 
 ### Key Nested Stacks
 
-| Stack                   | File                                                             | Purpose                                                                                |
-| ----------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                     | VPC, subnets, VPC endpoints                                                            |
-| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`             | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, Amazon EventBridge, AWS KMS |
-| ResourceNamesBuilder    | `nestedStacks/resourceNames/resourceNamesBuilder-nestedStack.ts` | AWS Systems Manager Parameter Store parameters that publish resource names             |
-| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`                   | Amazon Cognito, SAML, external OAuth                                                   |
-| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`               | Primary API routes and Lambda wiring                                                   |
-| ApiBuilder2             | `nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`              | Secondary API routes and Lambda wiring                                                 |
-| ApiBuilder3             | `nestedStacks/apiLambda/apiBuilder3-nestedStack.ts`              | Third API stack: audit log search (own template size budget)                           |
-| RestApi                 | `nestedStacks/apiLambda/api-nestedStack.ts`                      | Amazon API Gateway REST API and Lambda authorizer, built from the route registry       |
-| StaticWeb               | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`      | Amazon S3 + Amazon CloudFront or ALB hosting                                           |
-| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`          | Processing pipeline orchestrator                                                       |
+| Stack                   | File                                                             | Purpose                                                                                                         |
+| ----------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                     | VPC, subnets, VPC endpoints                                                                                     |
+| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`             | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, Amazon EventBridge, AWS KMS                          |
+| ResourceNamesBuilder    | `nestedStacks/resourceNames/resourceNamesBuilder-nestedStack.ts` | AWS Systems Manager Parameter Store parameters that publish resource names                                      |
+| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`                   | Amazon Cognito, SAML, external OAuth                                                                            |
+| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`               | Primary API routes and Lambda wiring                                                                            |
+| ApiBuilder2             | `nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`              | Secondary API routes and Lambda wiring                                                                          |
+| ApiBuilder3             | `nestedStacks/apiLambda/apiBuilder3-nestedStack.ts`              | Third API stack: audit log search (own template size budget; built only when `app.auditLogging.search.enabled`) |
+| RestApi                 | `nestedStacks/apiLambda/api-nestedStack.ts`                      | Amazon API Gateway REST API and Lambda authorizer, built from the route registry                                |
+| StaticWeb               | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`      | Amazon S3 + Amazon CloudFront or ALB hosting                                                                    |
+| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`          | Processing pipeline orchestrator                                                                                |
 
 **Resource-name keys.** Core keys are declared in `common/resourceParamKeys.ts` (`RESOURCE_PARAM_KEYS`) and published by ResourceNamesBuilder. The add-on and custom lanes declare theirs in `common/addonResourceParamKeys.ts` (`ADDON_RESOURCE_PARAM_KEYS`) and `common/customResourceParamKeys.ts` (`CUSTOM_RESOURCE_PARAM_KEYS`), both shipped empty. The stack that creates the resource publishes the key with `publishAddonResourceName()` (`nestedStacks/addon/addonStackHelpers.ts`) or `publishCustomResourceName()` (`nestedStacks/custom/customStackHelpers.ts`). Both helpers fail synthesis on a key equal to a core key or to one the other lane declares. Each lane's keys are mirrored in a backend file (`backend/backend/common/addonResourceNames.py`, `backend/backend/custom/customResourceNames.py`), and `test/storage/resourceNamesMirror.test.ts` compares each pair.
 
@@ -381,6 +381,7 @@ enum VAMS_APP_FEATURES {
     AUTHPROVIDER_EXTERNALOAUTHIDP,
     DEADLINECLOUD_PIPELINES,
     ZIPDOWNLOADS,
+    AUDITLOGSEARCH,
 }
 
 // common/addonAppFeatures.ts

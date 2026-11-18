@@ -48,10 +48,22 @@ function allStatements(s: SynthResult): any[] {
 describe.each(TEMPLATES)("audit log search infrastructure (%s)", (name) => {
     let synth: SynthResult;
     beforeAll(() => {
-        synth = synthTemplate(name);
+        // The EU Sovereign template ships audit log search off, and getConfig() refuses it on there
+        // (no CloudWatch Logs Insights). The synth harness does not run that check, so the cell turns
+        // the switch on to keep proving that the grants and the table are built correctly for the
+        // partition's ARNs; it is not a deployable configuration.
+        synth =
+            name === "eusovereign"
+                ? synthTemplate(name, {
+                      mutate: (c: any) => {
+                          c.app.auditLogging.search.enabled = true;
+                      },
+                      mutateKey: "audit-search-on",
+                  })
+                : synthTemplate(name);
     });
 
-    test("the service function is deployed with no feature switch", () => {
+    test("the service function is deployed when the switch is on (the default)", () => {
         const fn = lambdaByHandler(synth, HANDLER);
         expect(fn.properties.Timeout).toBe(29); // the API Gateway integration timeout
     });

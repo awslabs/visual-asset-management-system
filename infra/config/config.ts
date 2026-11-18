@@ -1008,8 +1008,10 @@ export function validateZipDownloadsConfig(config: ConfigPublic): void {
 /**
  * Defaults and validates `app.auditLogging`: an absent block or `recordReads` key means `true`; any
  * value that is not a JSON boolean is a configuration error rather than being read as truthy. The
- * `search` block (audit log search limits, no on/off switch) fills each absent key with its default;
- * a value that is not an integer in range is a configuration error. Exported for the config tests.
+ * `search` block fills each absent key with its default (`enabled` is `true` when absent, `false` in aws-eusc:
+ * audit log search is deployed unless a deployment turns it off); a value that is not an integer in range, or
+ * an `enabled` that is not a boolean, is a configuration error. `enabled: true` in the `aws-eusc`
+ * partition is refused because Amazon CloudWatch Logs Insights is not available there. Exported for the config tests.
  */
 export function resolveAuditLoggingConfig(config: ConfigPublic): void {
     const app = config.app as unknown as { auditLogging?: unknown };
@@ -1065,14 +1067,38 @@ function resolveAuditSearchConfig(block: { search?: unknown }, config: ConfigPub
     const search = block.search as Record<string, unknown>;
     const known = new Set(Object.keys(AUDIT_SEARCH_DEFAULTS));
     for (const key of Object.keys(search)) {
-        if (!known.has(key)) {
+        if (key !== "enabled" && !known.has(key)) {
             throw new Error(
                 `Configuration Error: app.auditLogging.search.${key} is not a known setting. ` +
-                    `Known settings: ${Array.from(known).join(", ")}.`
+                    `Known settings: enabled, ${Array.from(known).join(", ")}.`
             );
         }
     }
+    // On/off switch for the search capability only (routes, Lambda, query table, web page, CLI and MCP
+    // tools). Recording of audit events is not affected. Absent = on (off in aws-eusc). The EU Sovereign Cloud has no
+    // CloudWatch Logs Insights, so a search deployment there cannot work and is refused.
+    // An absent key is on everywhere except aws-eusc, where it is off so that a configuration written
+    // before this key existed still synthesizes there; an explicit true in aws-eusc is refused.
+    let enabled = config.env?.partition !== "aws-eusc";
+    if (search.enabled !== undefined && search.enabled !== null) {
+        if (typeof search.enabled !== "boolean") {
+            throw new Error(
+                "Configuration Error: app.auditLogging.search.enabled must be true or false (a JSON " +
+                    `boolean), not ${JSON.stringify(search.enabled)}.`
+            );
+        }
+        enabled = search.enabled;
+    }
+    if (enabled && config.env?.partition === "aws-eusc") {
+        throw new Error(
+            "Configuration Error: app.auditLogging.search.enabled is true, but audit log search needs " +
+                "Amazon CloudWatch Logs Insights, which is not available in the 'aws-eusc' partition " +
+                "(AWS European Sovereign Cloud). Set app.auditLogging.search.enabled to false there; " +
+                "the recording of audit events is not affected."
+        );
+    }
     const resolved = {
+        enabled,
         maxQueryWindowDays: auditSearchInteger(
             search,
             "maxQueryWindowDays",
@@ -1144,6 +1170,17 @@ function resolveAuditSearchConfig(block: { search?: unknown }, config: ConfigPub
         AUDIT_SEARCH_CEILINGS.handleRetentionMinutes
     );
     block.search = resolved;
+}
+
+/**
+ * Whether audit log search is deployed: `app.auditLogging.search.enabled`, which getConfig() always
+ * resolves. A config that skipped getConfig() (a unit-test harness) and has no value gets the same
+ * default getConfig() applies: on, except off in aws-eusc.
+ */
+export function isAuditSearchEnabled(config: ConfigPublic): boolean {
+    const value = (config.app as unknown as { auditLogging?: { search?: { enabled?: unknown } } })
+        .auditLogging?.search?.enabled;
+    return typeof value === "boolean" ? value : config.env?.partition !== "aws-eusc";
 }
 
 export function getConfig(app: cdk.App): Config {
@@ -5820,8 +5857,11 @@ export interface ConfigPublic {
         auditLogging: {
             // Whether read actions (gets, lists, searches) write audit records. Absent = true.
             recordReads: boolean;
-            // Audit log search limits (core, no on/off switch). Absent block or key = the default.
+            // Audit log search: an on/off switch and its limits. Absent block or key = the default.
             search: {
+                // Search capability only (routes, Lambda, query table, web page, CLI, MCP); recording
+                // of audit events is not affected. Absent = true (false in aws-eusc). Refused as true in aws-eusc.
+                enabled: boolean;
                 maxQueryWindowDays: number; // days a search may span (default 31, ceiling 366)
                 maxRows: number; // rows a search returns (default 1000, ceiling 10000)
                 maxConcurrentQueries: number; // open searches VAMS-wide (default 5, ceiling 20)

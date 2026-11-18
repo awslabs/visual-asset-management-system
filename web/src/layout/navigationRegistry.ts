@@ -150,12 +150,14 @@ function coreAdminNavEntries(): NavEntry[] {
                           },
                       ]
                     : []),
-                // Core VAMS, no feature switch: the entry shows when the API's web-route decision
-                // allows the page (admins by seed, others through the audit-reader template).
+                // Shown when the deployment has Audit Log Search (the AUDITLOGSEARCH switch, on by
+                // default) and the API's web-route decision allows the page (admins by seed, others
+                // through the audit-reader template). The switch grants nothing.
                 {
                     type: "link",
                     text: "Audit Log Search",
                     href: "#/auth/audit-log-search/",
+                    featuresEnabledRestriction: [featuresEnabled.AUDITLOGSEARCH],
                 },
                 {
                     // The tenant-wide view of the API keys page. The web route is the same as the

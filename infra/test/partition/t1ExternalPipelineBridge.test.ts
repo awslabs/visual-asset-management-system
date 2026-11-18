@@ -386,8 +386,13 @@ describe("SSM integration surface", () => {
         );
         // crOsReindexer is published only when the reindexer is built (search enabled), so it is the
         // one canonical key allowed to be absent.
+        // The audit log queries table (dynamoTables/auditLogQueriesStorage) is built, and published,
+        // only when audit log search is enabled; the EU Sovereign template turns it off.
+        const searchOff = name === "eusovereign";
         const required = canonical.filter(
-            (key) => key !== RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer
+            (key) =>
+                key !== RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer &&
+                !(searchOff && key === RESOURCE_PARAM_KEYS.dynamoTables.auditLogQueriesStorage)
         );
         for (const key of required) {
             expect(names.filter((n) => n.endsWith(`/resourceNames/${key}`))).toHaveLength(1);
@@ -395,8 +400,9 @@ describe("SSM integration surface", () => {
         // 75 registry parameters (ResourceNamesBuilder, including the audit log queries table) + the three late-bound ones here (the
         // workflow role ARN, the import function and the copy engine function), plus the reindexer
         // when search is enabled.
-        expect(names.length).toBeGreaterThanOrEqual(78);
-        expect(names.length).toBeLessThanOrEqual(79);
+        const searchOffCount = searchOff ? 1 : 0;
+        expect(names.length).toBeGreaterThanOrEqual(78 - searchOffCount);
+        expect(names.length).toBeLessThanOrEqual(79 - searchOffCount);
     });
 
     test.each(ALL_TEMPLATES)("%s binds the workflow role ARN parameter to the role", (name) => {
