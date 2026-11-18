@@ -24,7 +24,7 @@ When deploying to AWS GovCloud or the AWS European Sovereign Cloud, the followin
 -   Amazon OpenSearch Serverless is not offered at all in the AWS European Sovereign Cloud. Set `app.openSearch.useServerless.enabled` to `false` and use `app.openSearch.useProvisioned` there.
 -   Amazon Cognito advanced security (`AdvancedSecurityMode`) is not available. VAMS does not configure it and suppresses the corresponding check automatically, so no configuration change is needed.
 
-For the authoritative per-field list, see [Restricted-partition constraints](configuration-reference.md#restricted-partition-constraints).
+Some features are refused in these partitions only when they are turned on, for example an API custom domain in the AWS European Sovereign Cloud or the GenAI CAD STEP agent's `agentcore` runtime outside the commercial partition. For the authoritative per-field list and those feature-level refusals, see [Restricted-partition constraints](configuration-reference.md#restricted-partition-constraints).
 :::
 
 ## Key decisions
