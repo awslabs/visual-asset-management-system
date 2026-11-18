@@ -234,6 +234,28 @@ EDH accepted the start of the stopped workstation but has not reported the deskt
 2. Start it again with `vamscli edh workstation start SESSION_ID --wait`.
 3. If it stalls again, give the `Start Failure` line and the session id to an administrator, who sees the same session on the web's **Sessions** tab and can check the cluster with `vamscli edh admin health`.
 
+### Launch Stalled
+
+**Symptoms:**
+
+-   `edh workstation list` shows `STALLED` in the `State` column and `LAUNCH_STALLED` under `Last Error` for a workstation you launched and never started
+-   `edh workstation get SESSION_ID` shows `State: STALLED`, `Activity: none`, `EDH State: pending` (or `placing`) and:
+
+    ```text
+      Last Error:      LAUNCH_STALLED
+      Start Failure:   EDH has not placed this new workstation 3 hours after its launch. Delete it, or wait: EDH may still place it.
+                       To delete it: vamscli edh workstation delete SESSION_ID --confirm
+    ```
+
+**Cause:**
+
+EDH accepted the launch and assigned it a session, but 3 hours later it still lists the desktop `pending` or `placing`: it has not placed the new desktop on an instance. A first boot can install a GPU driver and take well over an hour, so the bound is 3 hours rather than the 30 minutes of a stalled start. The reconciler's sweep records the stall; it does not stop, delete or orphan the workstation, because EDH may still place it, in which case the workstation moves on by itself and the code is cleared. The desktop never ran, so this is not a start: stopping it and starting it again does not help. EDH reported no AWS error, so there is no `AWS:` line.
+
+**Resolution:**
+
+1. Delete the workstation with `vamscli edh workstation delete SESSION_ID --confirm`, then launch a new one; or wait, since EDH may still place it.
+2. If new launches stall too, give the session id to an administrator, who sees the same session on the web's **Sessions** tab and can check the cluster with `vamscli edh admin health`.
+
 ### The Image Is an Older Build or Shows Only Its Id
 
 **Symptoms:**

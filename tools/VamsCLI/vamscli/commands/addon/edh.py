@@ -125,6 +125,14 @@ STALLED_LABEL = 'STALLED'
 START_STALLED_MESSAGE = (
     "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if "
     "it stalls again, ask your administrator.")
+# A new launch EDH has not placed 3 hours after it was accepted: the session sweep records lastError
+# LAUNCH_STALLED on a CREATING row that has a session id and never had a start, and the row stays
+# CREATING with no activity until EDH moves it. It is not a start, so the way out is a delete (or
+# waiting: EDH may still place it), not a stop and a start. The State column prints STALLED too.
+LAUNCH_STALLED_CODE = 'LAUNCH_STALLED'
+LAUNCH_STALLED_MESSAGE = (
+    "EDH has not placed this new workstation 3 hours after its launch. Delete it, or wait: EDH may "
+    "still place it.")
 # A running workstation whose remote display session has ended: the record carries
 # connectionUnavailableReason DISPLAY_SESSION_ENDED, `get` prints the sentence the web shows under its inert
 # Connect, and `connect` is refused (409) with it.
@@ -144,13 +152,20 @@ def is_start_stalled(record: Dict[str, Any]) -> bool:
             and not record.get('activity'))
 
 
+def is_launch_stalled(record: Dict[str, Any]) -> bool:
+    """Whether the record is a new launch EDH has not placed after 3 hours: CREATING, with lastError
+    LAUNCH_STALLED and no activity."""
+    return (record.get('state') == 'CREATING' and record.get('lastError') == LAUNCH_STALLED_CODE
+            and not record.get('activity'))
+
+
 def state_label(record: Dict[str, Any]) -> str:
     """What the State column prints for a workstation: STARTING or STOPPING while the record's
-    `activity` says so, STALLED for a start the sweep found stalled, otherwise its state."""
+    `activity` says so, STALLED for a start or a launch the sweep found stalled, otherwise its state."""
     activity = record.get('activity')
     if activity in ACTIVITY_LABELS:
         return ACTIVITY_LABELS[activity]
-    if is_start_stalled(record):
+    if is_start_stalled(record) or is_launch_stalled(record):
         return STALLED_LABEL
     return str(record.get('state') or 'N/A')
 
@@ -170,9 +185,12 @@ def describe_start_failure(record: Dict[str, Any]) -> Optional[Tuple[str, Option
     (`AWS: <errorCode> in <Availability Zone>`, or the code alone; None when the failure names no
     code) the web shows beneath its badge. None for a workstation whose start did not fail, and while a
     new start of it runs. A start the sweep found stalled (is_start_stalled) gets the START_STALLED
-    sentence and no detail line: EDH reported no AWS error."""
+    sentence and no detail line: EDH reported no AWS error. So does a launch it found stalled
+    (is_launch_stalled), with the LAUNCH_STALLED sentence."""
     if is_start_stalled(record):
         return START_STALLED_MESSAGE, None
+    if is_launch_stalled(record):
+        return LAUNCH_STALLED_MESSAGE, None
     if record.get('state') != 'STOPPED' or record.get('activity'):
         return None
     code = record.get('lastError')
@@ -505,6 +523,10 @@ def format_workstation(result: Dict[str, Any]) -> str:
         lines.append(f"  Start Failure:   {message}")
         if detail:
             lines.append(f"{RECORD_VALUE_INDENT}{detail}")
+        if is_launch_stalled(result):
+            # The CLI's way out, beneath the sentence the web shows too.
+            target = result.get('sessionId') or result.get('bootstrapId', 'SESSION_ID')
+            lines.append(f"{RECORD_VALUE_INDENT}To delete it: vamscli edh workstation delete {target} --confirm")
     edh_failure = _edh_failure_line(result)
     if edh_failure:
         lines.append(edh_failure)
@@ -625,8 +647,9 @@ def workstation():
 def workstation_list(ctx: click.Context, json_output: bool):
     """List your EDH workstations. The State column reads STARTING or STOPPING while a workstation
     is between states (its `activity`), STALLED for a start EDH accepted and has not finished after
-    30 minutes (Last Error START_STALLED; stop it, then start it again), otherwise its state. The
-    Image column names the image the
+    30 minutes (Last Error START_STALLED; stop it, then start it again) or for a new launch EDH has
+    not placed after 3 hours (Last Error LAUNCH_STALLED; delete it, or wait), otherwise its state.
+    The Image column names the image the
     workstation was launched from (the recipe's display name and build version, else the image name,
     else the image id) and, on an ACTIVE, STOPPED or CREATING workstation whose recipe has a newer
     available build, appends `(v<n> available)`; the workstation keeps its image, so launch a new one
@@ -691,8 +714,10 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
     is CREATING with no session id yet. Follow the launch with `edh workstation get BOOTSTRAP_ID`,
     or in `edh workstation list` by its bootstrap id, until it reports ACTIVE and a session id; the
     bootstrap id keeps answering after the session id exists. A launch EDH refuses ends ORPHANED
-    with the reason in lastError. --os-family is the chosen image's family as `edh catalog images`
-    lists it.
+    with the reason in lastError. A launch EDH has not placed 3 hours after it was accepted stays
+    CREATING and reads STALLED (Last Error LAUNCH_STALLED): delete it with `edh workstation delete
+    SESSION_ID --confirm`, or wait, since EDH may still place it. --os-family is the chosen image's
+    family as `edh catalog images` lists it.
     With --capacity-reservation-id the launch goes into that reservation; when it is full, a
     reservation that falls back launches on-demand and one that does not is refused (409,
     RESERVATION_FULL); one your role may see but not launch into (LAUNCH `view only` in `edh catalog
@@ -771,12 +796,14 @@ def workstation_get(ctx: click.Context, session_id: str, json_output: bool):
     ended ORPHANED shows its reason under Last Error and, when VAMS captured the failure from EDH
     (the record's edhFailure), the AWS error code and operation, or the desktop setup checkpoint,
     under EDH failure. State reads as `list` does: STARTING or STOPPING while the workstation is
-    between states, STALLED for a start EDH accepted and has not finished after 30 minutes, otherwise
+    between states, STALLED for a start EDH accepted and has not finished after 30 minutes or a new
+    launch EDH has not placed after 3 hours, otherwise
     the record's state (--json-output keeps the record's own state). Activity is `starting` or
     `stopping` while the workstation is between states (none otherwise), and a start that left it
     STOPPED shows why under Start Failure, with the AWS error and Availability Zone the start recorded
     (the record's startFailure); a stalled start (Last Error START_STALLED) shows the sentence there
-    too, with no AWS line. Image names the image
+    too, with no AWS line, and a stalled launch (Last Error LAUNCH_STALLED) its sentence and the
+    delete command. Image names the image
     the workstation was launched from, as `list` does, beside Image ID; for an image an AMI recipe
     built, Recipe names the recipe and Recipe version the build it runs, followed by `(latest)` or
     `(latest <n>)` from the record's imageLatest and latestRecipeVersion.
@@ -904,7 +931,9 @@ def stop(ctx: click.Context, session_id: str, yes: bool, json_output: bool):
     `--yes` is passed; `--yes` is required in JSON mode, where no interactive prompt is possible. A
     launch that has no EDH session yet is refused (HTTP 409). A start EDH accepted and has not
     finished after 30 minutes (`list` State STALLED, Last Error START_STALLED) is stopped the same
-    way; start it again once it reads STOPPED.
+    way; start it again once it reads STOPPED. A new launch EDH has not placed after 3 hours (Last
+    Error LAUNCH_STALLED) never ran, so stopping it is no way out: delete it with `edh workstation
+    delete SESSION_ID --confirm`, or wait.
 
     Examples:
         vamscli edh workstation stop SESSION_ID
@@ -951,7 +980,8 @@ def delete(ctx: click.Context, session_id: str, confirm: bool, json_output: bool
 
     A launch that never received a session id is deleted by its bootstrap id: an ORPHANED launch at
     once, a CREATING one only after it has made no progress for 15 minutes (one that changed more
-    recently is refused with HTTP 409 while the launch may still complete).
+    recently is refused with HTTP 409 while the launch may still complete). A launch EDH has not
+    placed after 3 hours (Last Error LAUNCH_STALLED) has a session id and is deleted by it.
 
     Examples:
         vamscli edh workstation delete SESSION_ID --confirm
