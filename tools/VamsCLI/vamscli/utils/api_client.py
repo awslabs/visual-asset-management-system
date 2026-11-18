@@ -7832,11 +7832,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             kwargs['json'] = body if body is not None else {}
         if params:
             kwargs['params'] = params
-        # The ids in the path are sent as typed: a `#` (a deleted database's `<id>#deleted`) or a
-        # space would otherwise end or break the URL path, and `<id>#deleted` would read the live
-        # id. An id typed already encoded (`%23`) passes as it is; the route templates hold no
-        # character this changes.
-        endpoint = quote(endpoint, safe='/%')
+        # The endpoint arrives built with route_path, so each id is one path segment and reaches the
+        # API as typed (a deleted database's `<id>#deleted` included).
 
         try:
             response = verb(endpoint, include_auth=True, raise_http_errors=True, **kwargs)
@@ -7887,7 +7884,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Raises:
             ComplianceSchemaNotFoundError: When the schema does not exist
         """
-        endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
+        endpoint = route_path(API_COMPLIANCE_SCHEMA_BY_NAME, schemaName=schema_name)
         return self._compliance_request(
             'GET', endpoint, f"Getting compliance schema '{schema_name}'")
 
@@ -7937,7 +7934,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             InvalidComplianceDataError: When the new body is rejected, or the schema is a system
                 schema that cannot be modified
         """
-        endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
+        endpoint = route_path(API_COMPLIANCE_SCHEMA_BY_NAME, schemaName=schema_name)
         return self._compliance_request(
             'PUT', endpoint, f"Compliance schema '{schema_name}' update", body=dict(update_data))
 
@@ -7953,7 +7950,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             ComplianceSchemaNotFoundError: When the schema does not exist
             InvalidComplianceDataError: When the schema is still bound to a database or an asset
         """
-        endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
+        endpoint = route_path(API_COMPLIANCE_SCHEMA_BY_NAME, schemaName=schema_name)
         return self._compliance_request(
             'DELETE', endpoint, f"Compliance schema '{schema_name}' deletion")
 
@@ -7992,7 +7989,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             DatabaseNotFoundError: When the database does not exist
             InvalidComplianceDataError: When the pagination token is malformed
         """
-        endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
+        endpoint = route_path(API_COMPLIANCE_BIND_DATABASE, databaseId=database_id)
         return self._compliance_request(
             'GET', endpoint, f"Getting compliance bindings for '{database_id}'",
             params=self._compliance_page_params(max_items, starting_token))
@@ -8025,10 +8022,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         body: Dict[str, Any] = {'schemaName': schema_name}
         if asset_id:
-            endpoint = API_COMPLIANCE_BIND_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_COMPLIANCE_BIND_ASSET, databaseId=database_id, assetId=asset_id)
             action = f"Binding schema '{schema_name}' to asset '{asset_id}'"
         else:
-            endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
+            endpoint = route_path(API_COMPLIANCE_BIND_DATABASE, databaseId=database_id)
             action = f"Binding schema '{schema_name}' to database '{database_id}'"
             if auto_eval is not None:
                 body['complianceAutoEval'] = auto_eval
@@ -8051,10 +8048,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             DatabaseNotFoundError: When the database does not exist
         """
         if asset_id:
-            endpoint = API_COMPLIANCE_BIND_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_COMPLIANCE_BIND_ASSET, databaseId=database_id, assetId=asset_id)
             action = f"Removing the schema override from asset '{asset_id}'"
         else:
-            endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
+            endpoint = route_path(API_COMPLIANCE_BIND_DATABASE, databaseId=database_id)
             action = f"Removing the schema binding from database '{database_id}'"
         return self._compliance_request('DELETE', endpoint, action)
 
@@ -8083,7 +8080,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             AssetNotFoundError: When the asset does not exist
             InvalidComplianceDataError: When no schema is given and the asset has none bound
         """
-        endpoint = API_COMPLIANCE_EVALUATE_ASSET.format(databaseId=database_id, assetId=asset_id)
+        endpoint = route_path(API_COMPLIANCE_EVALUATE_ASSET, databaseId=database_id, assetId=asset_id)
         body = {'schemaName': schema_name} if schema_name else {}
         return self._compliance_request(
             'POST', endpoint, f"Evaluating asset '{asset_id}'", body=body)
@@ -8107,7 +8104,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             counts the bound assets still to evaluate; while it is above 0 the response carries
             `NextToken`, which the next call passes back to continue.
         """
-        endpoint = API_COMPLIANCE_SWEEP_SCHEMA.format(schemaName=schema_name)
+        endpoint = route_path(API_COMPLIANCE_SWEEP_SCHEMA, schemaName=schema_name)
         body = {'startingToken': starting_token} if starting_token else {}
         return self._compliance_request('POST', endpoint, f"Sweeping schema '{schema_name}'",
                                         body=body)
@@ -8136,7 +8133,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             database registered under the binding by this call; `withoutSchema` counts tracked
             assets whose record names no schema (not evaluated).
         """
-        endpoint = API_COMPLIANCE_EVALUATE_DATABASE.format(databaseId=database_id)
+        endpoint = route_path(API_COMPLIANCE_EVALUATE_DATABASE, databaseId=database_id)
         body = {'startingToken': starting_token} if starting_token else {}
         return self._compliance_request(
             'POST', endpoint, f"Evaluating the assets of database '{database_id}'", body=body)
@@ -8156,7 +8153,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Returns:
             API response data: {"evaluations": [...], "NextToken"?: str}, most recent first.
         """
-        endpoint = API_COMPLIANCE_EVALUATIONS_ASSET.format(databaseId=database_id, assetId=asset_id)
+        endpoint = route_path(API_COMPLIANCE_EVALUATIONS_ASSET, databaseId=database_id, assetId=asset_id)
         return self._compliance_request(
             'GET', endpoint, f"Listing evaluations for asset '{asset_id}'",
             params=self._compliance_page_params(max_items, starting_token))
@@ -8175,7 +8172,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             An asset that is not tracked answers complianceState "unknown" with a null schemaName
             rather than a 404.
         """
-        endpoint = API_COMPLIANCE_STATE_ASSET.format(databaseId=database_id, assetId=asset_id)
+        endpoint = route_path(API_COMPLIANCE_STATE_ASSET, databaseId=database_id, assetId=asset_id)
         return self._compliance_request(
             'GET', endpoint, f"Getting compliance state for asset '{asset_id}'")
 
@@ -8205,7 +8202,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                 "Database not found" rather than an empty overview)
             InvalidComplianceDataError: When the pagination token is malformed
         """
-        endpoint = API_COMPLIANCE_STATE_DATABASE.format(databaseId=database_id)
+        endpoint = route_path(API_COMPLIANCE_STATE_DATABASE, databaseId=database_id)
         params = dict(self._compliance_page_params(max_items, starting_token) or {})
         params.update({key: value for key, value in (filters or {}).items() if value})
         return self._compliance_request(
@@ -8259,7 +8256,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             AssetNotFoundError: When the asset is not tracked for compliance
             InvalidComplianceDataError: When the asset is not quarantined
         """
-        endpoint = API_COMPLIANCE_QUARANTINE_RELEASE.format(databaseId=database_id, assetId=asset_id)
+        endpoint = route_path(API_COMPLIANCE_QUARANTINE_RELEASE, databaseId=database_id, assetId=asset_id)
         body = {'reason': reason} if reason else {}
         return self._compliance_request(
             'POST', endpoint, f"Releasing asset '{asset_id}' from quarantine", body=body)
@@ -8284,7 +8281,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             AssetNotFoundError: When the asset is not tracked for compliance
             InvalidComplianceDataError: When the asset is not quarantined or the reason is missing
         """
-        endpoint = API_COMPLIANCE_QUARANTINE_EXCEPTION.format(
+        endpoint = route_path(API_COMPLIANCE_QUARANTINE_EXCEPTION,
             databaseId=database_id, assetId=asset_id)
         return self._compliance_request(
             'POST', endpoint, f"Granting an exception for asset '{asset_id}'",
@@ -8306,7 +8303,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             AssetNotFoundError: When the asset is not tracked for compliance
             InvalidComplianceDataError: When the asset has no active exception
         """
-        endpoint = API_COMPLIANCE_QUARANTINE_EXCEPTION.format(
+        endpoint = route_path(API_COMPLIANCE_QUARANTINE_EXCEPTION,
             databaseId=database_id, assetId=asset_id)
         return self._compliance_request(
             'DELETE', endpoint, f"Revoking the exception of asset '{asset_id}'")
@@ -8350,7 +8347,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Raises:
             ComplianceCascadeNotFoundError: When the cascade does not exist
         """
-        endpoint = API_COMPLIANCE_CASCADE_BY_ID.format(cascadeId=cascade_id)
+        endpoint = route_path(API_COMPLIANCE_CASCADE_BY_ID, cascadeId=cascade_id)
         return self._compliance_request(
             'GET', endpoint, f"Getting compliance cascade '{cascade_id}'")
 
@@ -8405,7 +8402,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             InvalidComplianceDataError: When the executor could not be started (the cascade is then
                 recorded as aborted)
         """
-        endpoint = API_COMPLIANCE_CASCADE_APPROVE.format(cascadeId=cascade_id)
+        endpoint = route_path(API_COMPLIANCE_CASCADE_APPROVE, cascadeId=cascade_id)
         body = {'reason': reason} if reason else {}
         return self._compliance_request(
             'POST', endpoint, f"Approving cascade '{cascade_id}'", body=body)
@@ -8421,7 +8418,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Raises:
             ComplianceCascadeNotFoundError: When the cascade does not exist or is not pending
         """
-        endpoint = API_COMPLIANCE_CASCADE_REJECT.format(cascadeId=cascade_id)
+        endpoint = route_path(API_COMPLIANCE_CASCADE_REJECT, cascadeId=cascade_id)
         body = {'reason': reason} if reason else {}
         return self._compliance_request(
             'POST', endpoint, f"Rejecting cascade '{cascade_id}'", body=body)
@@ -8498,7 +8495,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Raises:
             InvalidComplianceDataError: When the pagination token is malformed
         """
-        endpoint = API_COMPLIANCE_AUDIT_ASSET.format(databaseId=database_id, assetId=asset_id)
+        endpoint = route_path(API_COMPLIANCE_AUDIT_ASSET, databaseId=database_id, assetId=asset_id)
         params = self._compliance_audit_params(start_date, end_date, max_items, starting_token)
         return self._compliance_request(
             'GET', endpoint, f"Reading the audit history for asset '{asset_id}'",
