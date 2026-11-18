@@ -319,7 +319,7 @@ web/src/addons/edh/
                   #   a policy SYSTEM_USER wrote reads "Set at deployment on <date>")
   api/            # workstations.ts catalog.ts admin.ts containers.ts amiRecipes.ts (the apiClient callers)
                   #   queries.ts adminQueries.ts containerQueries.ts amiRecipeQueries.ts (TanStack hooks, module-local qk, polling cadence)
-                  #   outcome.ts (EdhRequestError, toOutcomeTuple, unconfirmedNotice: a mutation EDH did not confirm, a start in progress;
+                  #   outcome.ts (callService, EdhRequestError, toOutcomeTuple, unconfirmedNotice: a mutation EDH did not confirm, a start in progress;
                   #   isReservationFull and the RESERVATION_FULL launch and start sentences)
   components/     # WorkstationStatusBadge.tsx (also describeLastError, describeEdhFailure and EdhFailureDetail, see
                   #   Launch Failures; describeStartFailure and StartFailureNotice, see Start Status) CapacityDetail.tsx
@@ -394,6 +394,7 @@ With containers on, the Workstations page shows the Workstations / Simulations s
 The module keeps its own `api/` directory (`WEB_FRONTEND.md` Rule 3 lists an add-on module's `api/` as a service directory): the services import the module's `types.ts` and the orchestration client's `toTuple`, which `services/addons/` could not do without the services layer depending on a feature module. Components never import `apiClient`.
 
 -   The callers return `[boolean, data]` tuples through `toTuple`; the EDH mutations use `toOutcomeTuple` from `outcome.ts`, which keeps the status and body a page reads for an unconfirmed outcome (`EdhRequestError`).
+-   The query hooks throw a failed tuple through the one `callService` in `outcome.ts`: an `EdhRequestError` as it is, a message as the core `ServiceCallError` with the call's status (`failureStatus`), so the app's retry rule never re-sends a 403 or 404 (`web/CLAUDE.md` 4.1 item 7).
 -   The query hooks use the module-local `qk` factory (keys under `"edh"`, never colliding with the orchestration module's). `computeWorkstationRefetchInterval` polls every `WORKSTATION_POLL_TRANSITIONAL_MS` while a listed workstation is still changing state (it carries an `activity`, is CREATING, or is ACTIVE and not yet connectable), every `WORKSTATION_POLL_STABLE_MS` once all are settled (EDH can still stop one on idle), and not at all for an empty list. A start's 202 record replaces its row in the cached list at once (without its `sessionBootstrap`), so the badge reads Starting before the next poll.
 
 ### Launch Failures (web)
