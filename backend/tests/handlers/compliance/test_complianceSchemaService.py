@@ -365,6 +365,20 @@ class TestRegisterAndUpdate:
                          tokens=("SYSTEM_USER",))
         assert put_items(tables["schema"])[0]["isSystem"] is True
 
+    def test_registering_a_new_version_of_a_system_schema_as_a_user_is_refused(self):
+        request = {"schemaName": SCHEMA, "schemaBody": RULES_SCHEMA_BODY}
+        response, tables = _run(rest_event("POST", "/compliance/schemas", body=request),
+                                schema_rows=[schema_row(is_system=True)])
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "System schemas cannot be modified"
+        tables["schema"].put_item.assert_not_called()
+
+    def test_the_system_user_may_register_a_new_version_of_a_system_schema(self):
+        request = {"schemaName": SCHEMA, "schemaBody": RULES_SCHEMA_BODY, "isSystem": True}
+        response, tables = _run(rest_event("POST", "/compliance/schemas", body=request),
+                                tokens=("SYSTEM_USER",), schema_rows=[schema_row(is_system=True)])
+        assert response["statusCode"] == 200
+        assert put_items(tables["schema"])[0]["isSystem"] is True
     def test_updating_a_system_schema_as_a_user_is_refused(self):
         response, tables = _run(
             rest_event("PUT", f"/compliance/schemas/{SCHEMA}", {"schemaName": SCHEMA},

@@ -74,7 +74,7 @@ The listing is not paged; a schema appears once, at its highest version. The top
 
 ## Register a compliance schema
 
-Registers a schema body under a name. Registering a name that already exists writes the next version of that schema; the highest version is the one evaluation reads. The request is authorized on `POST` of the `complianceSchema` object in the target scope (`databaseId`, `GLOBAL` when omitted); re-registering an existing name also needs `PUT` on it in its current scope.
+Registers a schema body under a name. Registering a name that already exists writes the next version of that schema; the highest version is the one evaluation reads. The request is authorized on `POST` of the `complianceSchema` object in the target scope (`databaseId`, `GLOBAL` when omitted); re-registering an existing name also needs `PUT` on it in its current scope. A system schema (`isSystem: true`) gets a new version from the system user only; any other caller receives `400`, as on update.
 
 :::note[Schema names are unique across all databases]
 Schema names form one name space across `GLOBAL` and every database: a name that one scope uses cannot be registered as a second schema in another scope. Registering it again writes the next version of the existing schema (moving it to the scope the request names), and so needs `PUT` on that schema in its current scope; a caller who may not change it there gets `403`. Choose a name that is unique for the whole deployment, for example prefixed with the database ID.
@@ -285,12 +285,12 @@ The answer is the same when the workflow or a pipeline does not exist, and every
 
 ### Error responses
 
-| Status | Description                                                                                                                                                            |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, a body that is not a valid `vams-rules-v1` document, the scoping database is absent, or the name exists and belongs to a deleted database's schema |
-| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                                  |
-| `409`  | The compliance data of a deleted database with the scope's id is still being moved                                                                                     |
-| `500`  | Internal server error                                                                                                                                                  |
+| Status | Description                                                                                                                                                                                                                        |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, a body that is not a valid `vams-rules-v1` document, the scoping database is absent, or the name exists and belongs to a system schema (`System schemas cannot be modified`) or to a deleted database's schema |
+| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                                                                                              |
+| `409`  | The compliance data of a deleted database with the scope's id is still being moved                                                                                                                                                 |
+| `500`  | Internal server error                                                                                                                                                                                                              |
 
 ---
 

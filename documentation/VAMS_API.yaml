@@ -11605,7 +11605,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, or the name belongs to a deleted database's schema."
+                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, or the name belongs to a system schema (`System schemas cannot be modified`; only the system user writes its next version) or to a deleted database's schema."
                     content:
                         application/json:
                             schema:
