@@ -28,6 +28,16 @@ import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { Template } from "aws-cdk-lib/assertions";
 import { ImageTo3dConstruct } from "../../lib/nestedStacks/pipelines/genAi/imageTo3d/constructs/imageTo3d-construct";
 import { StateTimeoutBatchSubmitJob } from "../../lib/nestedStacks/pipelines/constructs/stateTimeoutBatchSubmitJob";
+import {
+    PcPotreeViewerConstruct,
+    PC_POTREE_BATCH_STATE_TIMEOUT,
+    PC_POTREE_STATE_MACHINE_TIMEOUT,
+} from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
+import {
+    CoordinateTransformConstruct,
+    COORDINATE_TRANSFORM_BATCH_TIMEOUT,
+    COORDINATE_TRANSFORM_STATE_MACHINE_TIMEOUT,
+} from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
 import { makePipelineHarness, ACCOUNT, REGION } from "../support/pipelineConstructHarness";
 import { parseAsl, singleStateMachine } from "../support/asl";
 import { newTestApp } from "../support/testApp";
@@ -177,6 +187,101 @@ describe("Image to 3D timeout chain", () => {
 
     test("the bundle taskTimeout envelopes the state machine", () => {
         expect(bundleTaskTimeoutSeconds("genAi/imageTo3d")).toBeGreaterThan(
+            definition.TimeoutSeconds
+        );
+    });
+});
+
+describe("Point cloud Potree viewer timeout chain", () => {
+    let template: Template;
+    let definition: any;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("PcPotreeViewerStateTimeoutStack", (c) => {
+            c.app.pipelines.usePreviewPcPotreeViewer.enabled = true;
+            c.app.pipelines.usePreviewPcPotreeViewer.autoRegisterWithVAMS = false;
+        });
+        const nested = new PcPotreeViewerConstruct(h.stack, "PcPotreeViewerPipeline", {
+            config: h.config,
+            storageResources: h.storage,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        template = Template.fromStack(nested);
+        definition = parseAsl(singleStateMachine(template));
+    });
+
+    test("both Batch states are bounded, with the attempts no longer than the bound", () => {
+        const states = batchStates(definition);
+        expect(states.map(([name]) => name).sort()).toEqual([
+            "PdalConverterBatchJob",
+            "PotreeConverterBatchJob",
+        ]);
+        expect(definition.TimeoutSeconds).toBe(PC_POTREE_STATE_MACHINE_TIMEOUT.toSeconds());
+        for (const [name, state] of states) {
+            expect([name, state.TimeoutSeconds]).toEqual([
+                name,
+                PC_POTREE_BATCH_STATE_TIMEOUT.toSeconds(),
+            ]);
+            expect(definition.TimeoutSeconds - state.TimeoutSeconds).toBeGreaterThanOrEqual(600);
+            const handler = definition.States[(state.Catch as any[])[0].Next];
+            expect(handler.Next).toBe("PipelineEndTask");
+        }
+        expect(maxAttemptSeconds(template)).toBeLessThanOrEqual(
+            PC_POTREE_BATCH_STATE_TIMEOUT.toSeconds()
+        );
+    });
+
+    test("the bundle taskTimeout envelopes the state machine", () => {
+        // Strictly greater: the parent's wait starts before the execution does.
+        expect(bundleTaskTimeoutSeconds("preview/pcPotreeViewer")).toBeGreaterThan(
+            definition.TimeoutSeconds
+        );
+    });
+});
+
+describe("Coordinate transform timeout chain", () => {
+    let template: Template;
+    let definition: any;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("CoordTransformStateTimeoutStack", (c) => {
+            c.app.pipelines.useConversionCoordinateTransform.enabled = true;
+            // Sources the container image from an ECR repository instead of a local Docker build.
+            c.app.pipelines.useConversionCoordinateTransform.useCodeBuild = true;
+            c.app.pipelines.useConversionCoordinateTransform.autoRegisterWithVAMS = false;
+        });
+        new CoordinateTransformConstruct(h.stack, "CoordinateTransformPipeline", {
+            config: h.config,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            assetAuxiliaryBucket: h.assetAuxiliaryBucket,
+            storageResources: h.storage,
+            kmsKey: h.kmsKey,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        template = Template.fromStack(h.stack);
+        definition = parseAsl(singleStateMachine(template));
+    });
+
+    test("the token wait sits inside the state machine, and the attempt is no longer than the wait", () => {
+        const wait = definition.States.CoordTransformBatchJob.TimeoutSeconds;
+        expect(wait).toBe(COORDINATE_TRANSFORM_BATCH_TIMEOUT.toSeconds());
+        expect(definition.TimeoutSeconds).toBe(
+            COORDINATE_TRANSFORM_STATE_MACHINE_TIMEOUT.toSeconds()
+        );
+        expect(definition.TimeoutSeconds - wait).toBeGreaterThanOrEqual(600);
+        expect(maxAttemptSeconds(template)).toBeLessThanOrEqual(wait);
+    });
+
+    test("the bundle taskTimeout envelopes the state machine", () => {
+        // Before, the 4-hour token wait equalled the 4-hour bundle wait that started first.
+        expect(bundleTaskTimeoutSeconds("conversion/coordinateTransform")).toBeGreaterThan(
             definition.TimeoutSeconds
         );
     });

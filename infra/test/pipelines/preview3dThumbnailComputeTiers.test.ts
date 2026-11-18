@@ -7,9 +7,10 @@
  * The 3D preview thumbnail pipeline sizes its compute to the input: one Fargate job definition, and
  * two Batch states behind a Choice on the `computeTier` constructPipeline returns, each overriding
  * vCPU and memory with its tier's configured size, setting `VAMS_COMPUTE_TIER` and the tier's memory in
- * `VAMS_TASK_MEMORY_MIB`, and bounding its own attempt. The state machine timeout covers the longer
- * tier and the registered pipeline's `taskTimeout` covers the state machine, so neither orchestration
- * gives up on a job Batch still allows to run.
+ * `VAMS_TASK_MEMORY_MIB`, and bounding its own attempt. Each Batch state also bounds the queue wait
+ * plus the attempt with its own TimeoutSeconds, the state machine timeout covers that, and the
+ * registered pipeline's `taskTimeout` covers the state machine, so a timeout at any level reaches
+ * pipelineEnd before the parent workflow gives up.
  *
  * Asserted on the synthesized ASL and job definition, because the size a job runs at is the one AWS
  * Batch receives.
@@ -23,6 +24,7 @@ import {
     Preview3dThumbnailConstruct,
     PREVIEW_3D_THUMBNAIL_LARGE_TIER_TIMEOUT,
     PREVIEW_3D_THUMBNAIL_STANDARD_TIER_TIMEOUT,
+    PREVIEW_3D_THUMBNAIL_BATCH_STATE_TIMEOUT,
     PREVIEW_3D_THUMBNAIL_STATE_MACHINE_TIMEOUT,
 } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct";
 import { makePipelineHarness } from "../support/pipelineConstructHarness";
@@ -156,8 +158,11 @@ describe("3D preview thumbnail compute tiers (template defaults)", () => {
     test("each tier bounds its own attempt; the state machine and the job definition cover the longer", () => {
         const standardSeconds = PREVIEW_3D_THUMBNAIL_STANDARD_TIER_TIMEOUT.toSeconds();
         const largeSeconds = PREVIEW_3D_THUMBNAIL_LARGE_TIER_TIMEOUT.toSeconds();
+        const stateSeconds = PREVIEW_3D_THUMBNAIL_BATCH_STATE_TIMEOUT.toSeconds();
         const machineSeconds = PREVIEW_3D_THUMBNAIL_STATE_MACHINE_TIMEOUT.toSeconds();
-        expect([standardSeconds, largeSeconds, machineSeconds]).toEqual([3600, 10800, 14400]);
+        expect([standardSeconds, largeSeconds, stateSeconds, machineSeconds]).toEqual([
+            3600, 10800, 12600, 13500,
+        ]);
 
         expect(asl.States[STANDARD_STATE].Parameters.Timeout).toEqual({
             AttemptDurationSeconds: standardSeconds,
@@ -171,11 +176,22 @@ describe("3D preview thumbnail compute tiers (template defaults)", () => {
         });
     });
 
+    test("each tier's Batch state bounds the queue wait plus the attempt, inside the state machine", () => {
+        const stateSeconds = PREVIEW_3D_THUMBNAIL_BATCH_STATE_TIMEOUT.toSeconds();
+        for (const name of [STANDARD_STATE, LARGE_STATE]) {
+            expect([name, asl.States[name].TimeoutSeconds]).toEqual([name, stateSeconds]);
+        }
+        expect(stateSeconds).toBeGreaterThan(PREVIEW_3D_THUMBNAIL_LARGE_TIER_TIMEOUT.toSeconds());
+        // Room for ConstructPipelineTask and PipelineEndTask, 5-minute Lambdas each.
+        expect(asl.TimeoutSeconds - stateSeconds).toBeGreaterThanOrEqual(600);
+    });
+
     test("the registered pipeline's taskTimeout covers the state machine timeout", () => {
-        // The parent workflow waits taskTimeout for the callback; shorter than the state machine, it
-        // fails the step while a large-tier job is still allowed to run.
+        // The parent workflow waits taskTimeout for the callback and starts before the execution
+        // does; not strictly longer than the state machine, it fails the step with a generic timeout
+        // before pipelineEnd can report.
         const bundle = JSON.parse(fs.readFileSync(BUNDLE_PIPELINE_JSON, "utf-8"));
-        expect(Number(bundle.executionConfig.taskTimeout)).toBeGreaterThanOrEqual(
+        expect(Number(bundle.executionConfig.taskTimeout)).toBeGreaterThan(
             PREVIEW_3D_THUMBNAIL_STATE_MACHINE_TIMEOUT.toSeconds()
         );
     });

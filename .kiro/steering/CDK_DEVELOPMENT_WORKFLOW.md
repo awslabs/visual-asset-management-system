@@ -1764,17 +1764,18 @@ Install a container's dependencies so that two builds of one commit ship the sam
 One job definition, one Batch state per tier. The 3D thumbnail pipeline is the worked example
 (`infra/lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct.ts`).
 One `BatchFargatePipelineConstruct` job definition is registered at the standard tier's size with
-`attemptDuration` = the longest tier's bound; each tier is its own `tasks.BatchSubmitJob` with fixed
+`attemptDuration` = the longest tier's bound; each tier is its own `StateTimeoutBatchSubmitJob` with fixed
 `containerOverrides.vcpus` / `memory` (aws-cdk-lib renders them as `ResourceRequirements` `VCPU` /
 `MEMORY` in MiB, the form AWS Batch accepts for Fargate — never the deprecated top-level
 `Vcpus`/`Memory`), `VAMS_COMPUTE_TIER` and `VAMS_TASK_MEMORY_MIB` (the memory override in MiB, since a
-Fargate container cannot read its task's memory from its cgroup) env values and its own `taskTimeout`,
+Fargate container cannot read its task's memory from its cgroup) env values and its own `taskTimeout` (the attempt override),
 behind a `sfn.Choice` on the tier the lambdas carry in the state. Ephemeral storage is a job-definition property and cannot be
 overridden per job, so size it for the largest tier. AWS Batch checks a vCPU/memory override against
 the Fargate task sizes only at submit, so every configurable tier size is validated in `getConfig()`
 with `isFargateCpuMemory` (`infra/config/config.ts`, mirrored in the ConfigBuilder
-`documentation/docusaurus-site/src/components/ConfigBuilder/validation.ts`). The state machine
-timeout covers the longest tier and the `vamsSchema` `taskTimeout` covers the state machine. Each
+`documentation/docusaurus-site/src/components/ConfigBuilder/validation.ts`). Both tier states share
+one state bound (queue wait plus attempt) above the longest tier, the state machine timeout covers
+that bound, and the `vamsSchema` `taskTimeout` covers the state machine. Each
 tier's Batch construct id is a module-level `*_STATE_NAME` literal in the registering lambda, which
 registers the container log source of the state its tier routes to. Tests:
 `infra/test/pipelines/preview3dThumbnailComputeTiers.test.ts`,
@@ -1783,6 +1784,23 @@ registers the container log source of the state its tier routes to. Tests:
 #### **Multi-Job State Machines Submit by the Revision-less Job Definition ARN**
 
 Mirrors `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Multi-Job State Machines Submit by the Revision-less Job Definition ARN". A deploy that changes a container image replaces its job definition: Batch registers a new revision and the old one is deregistered. `batchJobDefinition.jobDefinitionArn` is the `Ref`, the REVISIONED ARN, so a state machine that submits a second Batch job after a first one finishes (the Potree viewer's PDAL then Potree) fails that submit for every run spanning such a deploy. Such a state machine passes `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-definition/${pipeline.batchJobDefinitionPhysicalName}` instead (`BatchFargatePipelineConstruct.batchJobDefinitionPhysicalName` is the literal base-plus-hash name); Batch runs the latest ACTIVE revision, and `BatchSubmitJob`'s own `batch:SubmitJob` grant on `job-definition/*` already covers it. A single-job state machine has submitted before any deploy can replace its definition and keeps the `Ref`. Test: `infra/test/pipelines/pcPotreeViewerJobDefinitionRevision.test.ts`.
+
+#### **A Batch State Bounds Its Own Queue Wait (`StateTimeoutBatchSubmitJob`)**
+
+An attempt's clock starts when the job leaves the queue, and `tasks.BatchSubmitJob` renders
+`taskTimeout` as the SubmitJob attempt-duration override while forcing the state's `TimeoutSeconds` to
+undefined. A Batch state built with it is bounded only by the state machine timeout, and an
+execution-level `States.Timeout` skips every Catch, so `pipelineEnd` never reports and the run waits out
+the parent's `taskTimeout`. A `.sync` Batch state therefore uses `StateTimeoutBatchSubmitJob`
+(`infra/lib/nestedStacks/pipelines/constructs/stateTimeoutBatchSubmitJob.ts`), whose `stateTimeout`
+renders as the state's `TimeoutSeconds` and is caught like any other error (`taskTimeout` there is still
+the attempt override). Nest the chain: attempt duration ≤ the state bound; the state bound plus 15
+minutes (the two 5-minute Lambda states around it) ≤ the state machine timeout; the state machine
+timeout < the `vamsSchema` `taskTimeout`, which starts before the execution does. A
+`WAIT_FOR_TASK_TOKEN` Lambda state that submits the job itself (coordinate transform) bounds the wait
+with `taskTimeout`, which renders as the state's `TimeoutSeconds` there. Image to 3D, Video SOP/BOM, the
+3D thumbnail tiers and Potree use it; the NVIDIA, splat toolbox and metadata labeling constructs predate
+it. Test: `infra/test/pipelines/batchStateTimeoutChain.test.ts`.
 
 #### **Read Bits on COPY'd Source in a Non-Root Container**
 
