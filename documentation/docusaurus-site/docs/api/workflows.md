@@ -1908,8 +1908,8 @@ Three collections are addressable, matching the detail view's three metadata sec
 | `output`        | `outputs.metadata`      | The metadata each step wrote.                 |
 
 The detail view's `inputFiles` and `outputs.files` collections are paged by
-[Page execution detail files](#page-execution-detail-files), and `outputs.results` is read in full by
-[Get execution results](#get-execution-results).
+[Page execution detail files](#page-execution-detail-files). The result text of `outputs.results` pages
+through [Get execution results](#get-execution-results), concatenated, one page at a time.
 
 ### Path parameters
 
