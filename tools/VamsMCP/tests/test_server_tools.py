@@ -42,6 +42,21 @@ def test_list_databases_uses_pagination(mock_client):
     assert mock_client.paginate.called
 
 
+def test_list_buckets_passes_the_acceleration_flag_through(real_paginate_client):
+    """Each row reaches the agent as the API sent it, `isAccelerated` included, and the tool
+    description names the field."""
+    rows = [
+        {"bucketId": "b1", "bucketName": "n1", "bucketRegion": "us-west-2", "isAccelerated": True},
+        {"bucketId": "b2", "bucketName": "n2", "isAccelerated": False},
+        {"bucketId": "b3", "bucketName": "n3"},
+    ]
+    real_paginate_client.api.list_buckets.return_value = {"message": {"Items": rows}}
+    result = server.list_buckets()
+    assert [r.get("isAccelerated") for r in result["Items"]] == [True, False, None]
+    assert result["Items"][0]["bucketRegion"] == "us-west-2"
+    assert "isAccelerated" in (server.list_buckets.__doc__ or "")
+
+
 def test_get_asset_calls_api(mock_client):
     mock_client.api.get_asset.return_value = {"assetId": "a1"}
     result = server.get_asset("db1", "a1")

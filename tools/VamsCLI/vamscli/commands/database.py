@@ -862,6 +862,8 @@ def list_buckets(ctx: click.Context, page_size: Optional[int], max_items: Option
             lines.append(f"Region: {bucket.get('bucketRegion') or 'deployment Region'}")
             if bucket.get('bucketAccountId'):
                 lines.append(f"Account: {bucket.get('bucketAccountId')}")
+            # S3 Transfer Acceleration status; a row from an API that predates the field is not accelerated.
+            lines.append(f"Accelerated: {'Yes' if bucket.get('isAccelerated') else 'No'}")
             # The default bucket houses pipeline template data and execution run I/O, so call it out
             # rather than leaving the operator to infer it.
             lines.append(f"VAMS Default Bucket: {'Yes' if bucket.get('isDefault') else 'No'}")
