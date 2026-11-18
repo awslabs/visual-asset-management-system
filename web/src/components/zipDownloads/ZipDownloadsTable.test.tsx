@@ -278,6 +278,68 @@ describe("ZipDownloadsTable", () => {
         expect(mockAssetList).toHaveBeenCalledTimes(2);
     });
 
+    /** Advance one poll interval and let its answer land. */
+    const nextPoll = async () => {
+        await act(async () => {
+            jest.advanceTimersByTime(ZIP_POLL_INTERVAL_MS);
+        });
+        await act(async () => {
+            await Promise.resolve();
+        });
+    };
+
+    it("keeps polling after a failed poll, and says so after two in a row", async () => {
+        jest.useFakeTimers();
+        const failed = [false, "Service unavailable", 503];
+        mockAssetList
+            .mockResolvedValueOnce(page([job("1", "RUNNING")]))
+            .mockResolvedValueOnce(failed)
+            .mockResolvedValueOnce(failed)
+            .mockResolvedValueOnce(page([job("1", "SUCCEEDED")]))
+            .mockResolvedValue(page([job("1", "SUCCEEDED")]));
+        renderTable();
+        await act(async () => {
+            await Promise.resolve();
+        });
+        expect(screen.getByText("Preparing")).toBeInTheDocument();
+
+        await nextPoll();
+        expect(mockAssetList).toHaveBeenCalledTimes(2);
+        // One failed poll alone is not reported: the next one usually succeeds.
+        expect(screen.queryByText("Could not refresh the Download Queue")).toBeNull();
+
+        await nextPoll();
+        expect(mockAssetList).toHaveBeenCalledTimes(3);
+        expect(screen.getByText("Could not refresh the Download Queue")).toBeInTheDocument();
+        expect(screen.getByText(/Service unavailable/)).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+        expect(screen.getByText("Preparing")).toBeInTheDocument();
+
+        await nextPoll();
+        expect(mockAssetList).toHaveBeenCalledTimes(4);
+        expect(screen.getByText("Ready")).toBeInTheDocument();
+        expect(screen.queryByText("Could not refresh the Download Queue")).toBeNull();
+    });
+
+    it("drops a job a poll no longer lists, so its polling ends", async () => {
+        jest.useFakeTimers();
+        mockAssetList
+            .mockResolvedValueOnce(page([job("2", "RUNNING"), job("1", "SUCCEEDED")]))
+            .mockResolvedValue(page([job("1", "SUCCEEDED")]));
+        renderTable();
+        await act(async () => {
+            await Promise.resolve();
+        });
+        expect(screen.getByText("archive-2.zip")).toBeInTheDocument();
+
+        await nextPoll();
+        expect(screen.queryByText("archive-2.zip")).toBeNull();
+        await act(async () => {
+            jest.advanceTimersByTime(ZIP_POLL_INTERVAL_MS * 3);
+        });
+        expect(mockAssetList).toHaveBeenCalledTimes(2);
+    });
+
     it("does not poll while the browser tab is hidden", async () => {
         jest.useFakeTimers();
         const visibility = jest.spyOn(document, "visibilityState", "get");

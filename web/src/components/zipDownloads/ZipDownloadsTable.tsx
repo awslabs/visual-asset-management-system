@@ -184,6 +184,10 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
     const [loadingMore, setLoadingMore] = useState(false);
     const [loaded, setLoaded] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
+    // Polls that failed in a row, and the last one's message. A poll is re-armed after a failure
+    // too, so a job's status keeps updating once the service answers again.
+    const [pollFailures, setPollFailures] = useState(0);
+    const [pollError, setPollError] = useState("");
     const [disabled, setDisabled] = useState(false);
     const [notice, setNotice] = useState<Notice | null>(null);
     const [busyId, setBusyId] = useState<string | null>(null);
@@ -211,6 +215,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         setLoaded(false);
         setLoading(false);
         setLoadingMore(false);
+        setPollFailures(0);
     }
     const currentListKey = useRef(listKey);
     useLayoutEffect(() => {
@@ -256,6 +261,9 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                     setDisabled(true);
                 } else if (!quiet) {
                     setLoadError(message || "The Download Queue could not be loaded.");
+                } else {
+                    setPollError(message);
+                    setPollFailures((count) => count + 1);
                 }
                 return;
             }
@@ -263,8 +271,14 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
             setLoadError(null);
             setDisabled(false);
             setLoaded(true);
+            setPollFailures(0);
             if (quiet) {
-                setJobs((current) => mergeZipJobs(current, page.Items));
+                // A poll reads the first page again: a row it no longer lists within that page
+                // has gone from the list, and a first page with no token is the whole list.
+                setJobs((current) =>
+                    mergeZipJobs(current, page.Items, { hasMore: !!page.NextToken })
+                );
+                if (!page.NextToken) setNextToken(null);
             } else {
                 setJobs(page.Items);
                 setNextToken(page.NextToken);
@@ -280,12 +294,13 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
     }, [isActive, permissionsLoading, canList, load, refreshToken]);
 
     // Poll only while a job is queued or running, the surface is active and the tab is visible.
+    // Each answer re-arms the timer: a success changes `jobs`, a failure `pollFailures`.
     const interval = zipRefetchInterval(jobs, isActive && canList, documentVisible);
     useEffect(() => {
         if (interval === null) return;
         const timer = setTimeout(() => load(true), interval);
         return () => clearTimeout(timer);
-    }, [interval, jobs, load]);
+    }, [interval, jobs, pollFailures, load]);
 
     const loadMore = async () => {
         if (!nextToken) return;
@@ -570,6 +585,18 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                     statusIconAriaLabel={notice.type}
                 >
                     {notice.text}
+                </Alert>
+            )}
+            {pollFailures >= 2 && !loadError && (
+                <Alert
+                    type="warning"
+                    statusIconAriaLabel="Warning"
+                    header="Could not refresh the Download Queue"
+                    action={<Button onClick={() => load(true)}>Retry</Button>}
+                >
+                    {`${
+                        pollError ? `${pollError.replace(/\.$/, "")}. ` : ""
+                    }The list shows the last answer and keeps trying.`}
                 </Alert>
             )}
             {loadError && (
