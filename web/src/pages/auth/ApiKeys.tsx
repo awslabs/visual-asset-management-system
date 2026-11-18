@@ -210,12 +210,17 @@ export default function ApiKeys() {
     }, [resolveAttempt]);
 
     // Follow a later ?mode= change while the page stays mounted (for example the Admin - Auth link
-    // followed from the user view), within the allowed modes.
+    // followed from the user view), within the allowed modes. The URL is kept on the mode shown, so
+    // the profile menu marks API Key Management as the current page on the user view only.
     useEffect(() => {
         if (modesResolved) {
-            setMode(resolveApiKeyMode(requestedMode, showAdminMode, showUserMode));
+            const resolved = resolveApiKeyMode(requestedMode, showAdminMode, showUserMode);
+            setMode(resolved);
+            if (requestedMode !== resolved) {
+                navigate({ search: `?mode=${resolved}` }, { replace: true });
+            }
         }
-    }, [requestedMode, modesResolved, showAdminMode, showUserMode]);
+    }, [requestedMode, modesResolved, showAdminMode, showUserMode, navigate]);
 
     // Highlight Admin - Auth > "API Keys (all users)" only on the admin view, from the mode resolved
     // against the API listing. The user view is opened from the profile menu and highlights no side
