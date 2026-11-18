@@ -263,7 +263,7 @@ An `extendsSchemaNotFound` entry is returned when the body's `extends` names a p
 ```json
 {
     "code": "extendsSchemaNotFound",
-    "message": "The parent schema `extends` names was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.",
+    "message": "The parent schema named in `extends` was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.",
     "extends": "base-standard"
 }
 ```
