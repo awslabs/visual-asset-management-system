@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import boto3
+from boto3.dynamodb.conditions import Attr
 import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
@@ -756,6 +757,35 @@ class TestALargeAuditHistory:
             status, body = world.get(audit_svc, "/compliance/audit", None,
                                      {"databaseId": DELETED, "maxItems": "200"})
             assert status == 200 and len(body["entries"]) == 200
+
+    def test_the_audit_phase_reads_the_databases_own_index(self):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            world.delete(run=False)
+            audit = world.tables.audit
+            with patch.object(audit, "query", wraps=audit.query) as query:
+                assert world.move() is True
+            indexes = {call.kwargs.get("IndexName") for call in query.call_args_list}
+            assert "DatabaseIndex" in indexes and "AuditByDateGSI" not in indexes
+            assert world.rows_under(DB)["audit"] == []
+            kept = world.t["complianceAuditStorage"].scan(
+                FilterExpression=Attr("databaseId").eq(OTHER_DB))["Items"]
+            assert [entry["assetId"] for entry in kept] == ["kept"]
+
+    def test_a_cursor_saved_on_the_date_ordered_trail_starts_the_audit_phase_again(self):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            world.delete(run=False)
+            evaluation = world.t["complianceEvaluationStorage"]
+            evaluation.update_item(
+                Key=retirement.record_key(DB), UpdateExpression="SET phase = :p, #c = :c",
+                ExpressionAttributeNames={"#c": "cursor"},
+                ExpressionAttributeValues={":p": "audit", ":c": json.dumps({
+                    "entryId": "e", "allListPartition": "audit",
+                    "timestamp": "2026-10-01T00:00:00+00:00"})})
+            assert world.move() is True
+            assert world.rows_under(DB)["audit"] == []
+            assert retirement.get_record(evaluation, DB)["state"] == "done"
 
 
 JOB_QUEUE = "https://sqs.example/compliance-jobs"
