@@ -29,7 +29,8 @@ import { nestedTemplateKeyFor } from "../support/iamPolicySize";
  * WHICH CELLS. Guarded cells: the shipped template of each partition (commercial, GovCloud, EU
  * Sovereign), and for each of them the "worst" cell a customer can run, which stacks a customer managed
  * key (a KMS grant statement on every role), the global VPC (a VpcConfig block on the VPC-bound
- * functions), Download as Zip and the Deadline Cloud execution type (each adds Lambdas to ApiBuilder2).
+ * functions), Download as Zip and, on the commercial partition only, the Deadline Cloud execution type
+ * (each adds Lambdas to ApiBuilder2).
  * Commercial also runs the worst cell with a 20-character `app.baseStackName` (30 characters with the Region).
  *
  * NOT GUARDED: `useGlobalVpc.useForAllLambdas`. That option puts a VpcConfig block and a security group
@@ -52,7 +53,7 @@ const CFN_HARD_LIMIT_BYTES = 1_000_000;
 
 /**
  * Guarded cells at the reference stack name must stay under STANDARD_THRESHOLD_BYTES (6% below the
- * limit): measured at 919,583 bytes in the largest (EU Sovereign worst), so about 20,000 bytes of
+ * limit): measured at 908,594 bytes in the largest (commercial worst), so about 31,000 bytes of
  * room, one more VPC-bound function, before the guard trips. The long-base-name cell stays under
  * LONG_NAME_THRESHOLD_BYTES (4% below): measured at 946,898 bytes, 13,000 bytes of room.
  */
@@ -89,14 +90,20 @@ function applyStackName(c: any, baseName: string): void {
     c.webUrlDeploymentSSMParam = `${prefix}/web/deployedUrl`;
 }
 
-/** Customer managed key, global VPC (which AOSS then requires to be non-public), Download as Zip and Deadline Cloud. */
-const WORST = (c: any): void => {
-    c.app.useKmsCmkEncryption.enabled = true;
-    c.app.useGlobalVpc.enabled = true;
-    c.app.openSearch.useServerless.allowPublic = false;
-    c.app.pipelines.useZipDownloads.enabled = true;
-    c.app.pipelines.deadlineCloudExecutionTypeEnabled = true;
-};
+/**
+ * Customer managed key, global VPC (which AOSS then requires to be non-public) and Download as Zip,
+ * plus Deadline Cloud where the partition has it (the commercial partition only; GovCloud and EU
+ * Sovereign refuse the setting at config validation).
+ */
+const worst =
+    (deadlineCloud: boolean) =>
+    (c: any): void => {
+        c.app.useKmsCmkEncryption.enabled = true;
+        c.app.useGlobalVpc.enabled = true;
+        c.app.openSearch.useServerless.allowPublic = false;
+        c.app.pipelines.useZipDownloads.enabled = true;
+        c.app.pipelines.deadlineCloudExecutionTypeEnabled = deadlineCloud;
+    };
 
 /** Deprecated and unguarded: customer managed key and every function in the VPC (the sandbox cell that first hit the limit). */
 const ALL_LAMBDAS_IN_VPC = (c: any): void => {
@@ -115,17 +122,19 @@ const CELLS: Cell[] = [
         threshold: STANDARD_THRESHOLD_BYTES,
     })),
     ...PARTITIONS.map((template) => ({
-        name: `${template} worst (KMS, VPC, zip, Deadline Cloud)`,
+        name: `${template} worst (KMS, VPC, zip${
+            template === "commercial" ? ", Deadline Cloud" : ""
+        })`,
         template,
         threshold: STANDARD_THRESHOLD_BYTES,
-        mutate: WORST,
+        mutate: worst(template === "commercial"),
     })),
     {
         name: "commercial worst, 20-character base name",
         template: "commercial" as TemplateName,
         threshold: LONG_NAME_THRESHOLD_BYTES,
         baseName: "abcdefghijklmnopqrst",
-        mutate: WORST,
+        mutate: worst(true),
     },
     // Informational only: deprecated option, not guarded (see the header).
     ...PARTITIONS.map((template) => ({
