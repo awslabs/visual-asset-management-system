@@ -500,7 +500,7 @@ UI button handlers are deferred via `omni.kit.app`'s update event stream to avoi
 
 -   Credentials are managed by the VAMS CLI profile system, not stored in extension code
 -   For headless or non-interactive environments, use VAMS API keys (prefixed `vams_`) or IDP JWT tokens via `login_with_token()`
--   The VAMS CLI handles Cognito token refresh automatically
+-   A Cognito sign-in whose access token has expired is renewed once with the CLI's refresh token (`vamscli auth refresh`) before the next call, a session taken over from the CLI profile included; a key or token with no refresh token stays refused until the profile is signed in again
 -   The extension caches credentials in memory only for automatic re-authentication during the session
 
 ---
