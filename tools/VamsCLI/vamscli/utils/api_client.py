@@ -117,8 +117,7 @@ _REDIRECT_TARGET_FAILED_MESSAGE = (
 def _raise_if_redirect_target_unreachable(error, request_url: str) -> None:
     """Raise an APIError naming only the host when a request failed at a host it was redirected to.
 
-    The exception text of a failed send repeats the full URL, which for a presigned Amazon S3 URL
-    includes its signature."""
+    The exception text of a failed send repeats the full URL."""
     failed_url = getattr(getattr(error, 'request', None), 'url', None)
     if not isinstance(failed_url, str):
         return
