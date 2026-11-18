@@ -37,6 +37,12 @@ class EdhUnavailableError(EdhError):
     pass
 
 
+class EdhQuotaExceededError(EdhError):
+    """Raised when EDH refuses a request (429) because a quota, session count or budget is exhausted.
+    Resending does not clear it until something that counts toward the quota ends."""
+    pass
+
+
 class EdhOutcomeUnknownError(EdhUnavailableError):
     """Raised when EDH did not confirm a mutating request, which may still be in progress."""
     # Carried into --json-output beside the error, as the API's own error body carries it.

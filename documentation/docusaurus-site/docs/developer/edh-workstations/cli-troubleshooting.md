@@ -759,6 +759,20 @@ Jobs are listed and killed under your own EDH identity on one backend: another u
 
 Use `vamscli edh container job list` (with `--backend eks --cluster NAME` for EKS jobs) and pass the row's `jobId` verbatim, with the same `--backend`, `--cluster` and `--namespace` options.
 
+### Job Submission Refused for a Quota
+
+**Symptoms:**
+
+-   `edh container job submit` reports `Container job submission refused (429): The EDH quota for this operation has been reached.`, with `error_type` `EdhQuotaExceededError` under `--json-output`
+
+**Cause:**
+
+EDH refused the job because a quota, budget or target-node limit is used up. This is not throttling: the CLI sends the request once and does not back off, because resending cannot clear the limit.
+
+**Resolution:**
+
+Run `vamscli edh container job list` to see the jobs that count toward the limit. Submit again after one of them ends, or kill a job you no longer need with `vamscli edh container job kill`. If the limit is too low for the work, ask the EDH administrator to raise it.
+
 ---
 
 ## AMI Recipes
@@ -848,6 +862,8 @@ The image completed and its AMI is kept, but registering the AMI in EDH, or atta
     ```bash
     vamscli edh admin ami-recipe register RECIPE_ID VERSION
     ```
+
+    A retry that fails again exits `1` with `Registration failed again: <reason>`.
 
 A successful retry makes the build `AVAILABLE` and retires the recipe's other `AVAILABLE` builds, a newer one included, and a retry the sweep completes on its own has the same effect. Retry an older build only if it should replace the current one; to keep a newer build, retire the older `REGISTER_FAILED` build with `vamscli edh admin ami-recipe retire RECIPE_ID VERSION --confirm`. That retire is refused while EDH lists no stack for the build (see [Retire Refused](#retire-refused)), and the sweep then keeps retrying the build until its five automatic attempts have failed. A retry refused with `the build's AMI has been deregistered` concerns a build that was already pruned; build the recipe again instead.
 
@@ -955,11 +971,11 @@ Run the listing the message names until it shows the outcome, and send the reque
 
 **Cause:**
 
-The VAMS proxy could not complete a call to the EDH REST API within its budget (the API answers within 29 seconds, so long EDH operations are reported as unknown rather than waited on). A launch never waits on EDH in the API call itself: it is retried in the background twice within twenty minutes, and a third transient failure records `ORPHANED` with `LAUNCH_ERROR`, so a slow cluster shows as a long `CREATING` rather than as an error from `create`. A launch the worker never settled stays `CREATING` until the reconciler's sweep closes it as `ORPHANED` with `CREATE_TIMED_OUT` 30 minutes after the record's last write, or 5 minutes after it once all three launch attempts have started; it can be deleted by its bootstrap id once 15 minutes have passed since its last change (`vamscli edh workstation delete BOOTSTRAP_ID --confirm`).
+The VAMS proxy could not complete a call to the EDH REST API within its budget (the API answers within 29 seconds, so long EDH operations are reported as unknown rather than waited on). A launch reads EDH's catalog in the API call itself, so a slow or unreachable cluster fails `create` with 502 before anything is launched. The launch itself does not wait on EDH: it is retried in the background twice within twenty minutes, and a third transient failure records `ORPHANED` with `LAUNCH_ERROR`, so a slow cluster shows as a long `CREATING` rather than as an error from `create`. A launch the worker never settled stays `CREATING` until the reconciler's sweep closes it as `ORPHANED` with `CREATE_TIMED_OUT` 30 minutes after the record's last write, or 5 minutes after it once all three launch attempts have started; it can be deleted by its bootstrap id once 15 minutes have passed since its last change (`vamscli edh workstation delete BOOTSTRAP_ID --confirm`).
 
 **Resolution:**
 
-1. Do not re-run a launch that is still `CREATING`; watch it with `vamscli edh workstation list`, selecting the row by its `bootstrapId` (the list shows its `sessionId` once EDH assigns one). A launch that ended `ORPHANED` is not retried by re-sending its `--bootstrap-id`: the API answers with the stored record unchanged and launches nothing. Delete the record and launch again without `--bootstrap-id` (a new key is generated); see [Launch Ended ORPHANED](#launch-ended-orphaned). Re-send a `create` with its original `--bootstrap-id` only when the first response was lost, to read the record it created instead of launching a second workstation:
+1. Do not re-run a launch that is still `CREATING`; watch it with `vamscli edh workstation list`, selecting the row by its `bootstrapId` (the list shows its `sessionId` once EDH assigns one). A launch that ended `ORPHANED` is not retried by re-sending its `--bootstrap-id`: the API answers with the stored record unchanged and launches nothing. Delete the record and launch again without `--bootstrap-id` (a new key is generated); see [Launch Ended ORPHANED](#launch-ended-orphaned). Re-send a `create` with its original `--bootstrap-id` only when the first response was lost, to read the record it created instead of launching a second workstation. `create` prints the bootstrap id before it sends the request, and a failed `create` names it in its error (`bootstrapId` under `--json-output`); look it up with `vamscli edh workstation get BOOTSTRAP_ID` first:
 
     ```bash
     vamscli edh workstation delete BOOTSTRAP_ID --confirm

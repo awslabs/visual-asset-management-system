@@ -164,15 +164,15 @@ vamscli execution details metadata my-execution-id --collection output --auto-pa
 vamscli execution details metadata my-execution-id --pipeline-id my-pipeline --page-size 500
 ```
 
-| Option             | Description                                                                       |
-| ------------------ | --------------------------------------------------------------------------------- |
-| `--collection`     | `input` (default), `inputDatabase`, or `output` — case-sensitive                  |
-| `--pipeline-id`    | Only rows produced or read by this pipeline (one workflow step)                   |
-| `--page-size`      | Rows per page (max 500; a larger value is clamped with a warning)                 |
-| `--max-items`      | Maximum total rows to fetch — applies only with `--auto-paginate` (default 10000) |
-| `--starting-token` | Continuation token for manual pagination                                          |
-| `--auto-paginate`  | Fetch every page up to `--max-items`                                              |
-| `--json-output`    | Output the raw JSON response                                                      |
+| Option             | Description                                                                   |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `--collection`     | `input` (default), `inputDatabase`, or `output` — case-sensitive              |
+| `--pipeline-id`    | Only rows produced or read by this pipeline (one workflow step)               |
+| `--page-size`      | Rows per page, 1 to 500 (a larger value is clamped with a warning)            |
+| `--max-items`      | Maximum total rows (at least 1) — applies only with `--auto-paginate` (10000) |
+| `--starting-token` | Continuation token for manual pagination                                      |
+| `--auto-paginate`  | Fetch every page up to `--max-items`                                          |
+| `--json-output`    | Output the raw JSON response                                                  |
 
 `--collection` selects which of the detail view's metadata collections is read: `input` the asset and
 file metadata the run read, `inputDatabase` the metadata-source databases' own metadata, and `output`
@@ -236,15 +236,15 @@ vamscli execution details files my-execution-id --collection output --auto-pagin
 vamscli execution details files my-execution-id --collection output --pipeline-id my-pipeline
 ```
 
-| Option             | Description                                                                       |
-| ------------------ | --------------------------------------------------------------------------------- |
-| `--collection`     | `input` (default) or `output` — case-sensitive                                    |
-| `--pipeline-id`    | Only output rows produced by this pipeline (one workflow step)                    |
-| `--page-size`      | Rows per page (max 500; a larger value is clamped with a warning)                 |
-| `--max-items`      | Maximum total rows to fetch — applies only with `--auto-paginate` (default 10000) |
-| `--starting-token` | Continuation token for manual pagination                                          |
-| `--auto-paginate`  | Fetch every page up to `--max-items`                                              |
-| `--json-output`    | Output the raw JSON response                                                      |
+| Option             | Description                                                                   |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `--collection`     | `input` (default) or `output` — case-sensitive                                |
+| `--pipeline-id`    | Only output rows produced by this pipeline (one workflow step)                |
+| `--page-size`      | Rows per page, 1 to 500 (a larger value is clamped with a warning)            |
+| `--max-items`      | Maximum total rows (at least 1) — applies only with `--auto-paginate` (10000) |
+| `--starting-token` | Continuation token for manual pagination                                      |
+| `--auto-paginate`  | Fetch every page up to `--max-items`                                          |
+| `--json-output`    | Output the raw JSON response                                                  |
 
 `input` reads the workflow-level input files, each printed as `databaseId:assetId` and the
 asset-relative path with the S3 version the run read. `output` reads the files the pipelines wrote,
@@ -253,7 +253,8 @@ files. `--pipeline-id` applies to the `output` collection only.
 
 Paging behaves as in [`execution details metadata`](#execution-details-metadata): a token is only valid
 alongside the `--collection` and `--pipeline-id` it was issued with, and auto-pagination stops at
-`--max-items` or after 200 pages, reporting the token to resume from.
+`--max-items` or after 200 pages, reporting the token to resume from. When a later page fails, the
+error names the token that re-reads it (`startingToken`, with `rowsRead`, under `--json-output`).
 
 ---
 
@@ -283,7 +284,13 @@ printed and its token is shown (and carried in `--json-output`) for `--starting-
 page is read and concatenated, stopping after 200 pages and reporting the token to resume from.
 `TRUNCATED` in the caption (`resultContentTruncated: true` under `--json-output`) means a result row
 was stored cut or a single row exceeded the response limit; that text is not retrievable. `-o` writes
-the returned text in both output modes; with `--json-output` the JSON response is still printed.
+the returned text in both output modes; with `--json-output` the JSON response is still printed. With
+`-o` and auto-pagination each page is written to the file as it arrives, so the text is not held in
+memory unless `--json-output` must print it. When a later page fails, the pages already written stay
+in the file and the error names the token that re-reads the failed page (`startingToken`, with
+`pagesRead`, `rowsWritten` and `outputFile`, under `--json-output`); resume with `--starting-token`
+into another file, since `-o` replaces the file it names. When the first page fails, nothing is written
+and a file already at that path is left as it was.
 
 ---
 

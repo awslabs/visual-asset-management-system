@@ -38,7 +38,7 @@ from ..utils.exceptions import (
     ZipDownloadTimeoutError,
     ZipDownloadTransferError,
 )
-from ..utils.json_output import output_error, output_result, output_status, output_warning
+from ..utils.json_output import output_error, output_result, output_status, output_warning, output_info
 from ..utils.zip_downloads import (
     build_create_request,
     build_selection,
@@ -47,6 +47,7 @@ from ..utils.zip_downloads import (
     is_terminal,
     progress_text,
     resolve_local_path,
+    check_download_destination,
     wait_for_zip_download,
 )
 
@@ -219,11 +220,15 @@ def create(ctx: click.Context, database_id: str, asset_id: str, files: Tuple[str
                                     archive_format, compression, archive_file_name)
         if download_to:
             # Fail before the job starts when the destination can never be written.
-            resolve_local_path(download_to, archive_file_name or "archive", overwrite)
+            check_download_destination(download_to, overwrite)
 
         output_status(f"Creating a zip download of asset '{asset_id}'...", json_output)
         job = api_client.create_zip_download(database_id, asset_id, body)
+    except _HANDLED_ERRORS as e:
+        _report(e, json_output)
 
+    request_id = job.get('requestId')
+    try:
         if wait or download_to:
             output_status(f"Waiting for zip download '{job.get('requestId')}'...", json_output)
             job = wait_for_zip_download(
@@ -247,6 +252,13 @@ def create(ctx: click.Context, database_id: str, asset_id: str, files: Tuple[str
                       cli_formatter=format_job)
         return job
     except _HANDLED_ERRORS as e:
+        # The job exists: name it, so a retry downloads it instead of creating a second one.
+        if request_id:
+            fields = getattr(e, 'json_fields', None)
+            e.json_fields = {**(fields if isinstance(fields, dict) else {}), 'requestId': request_id}
+            output_info(f"The zip download '{request_id}' was created. Download it later with: "
+                        f"vamscli zip-download download -d {database_id} -a {asset_id} -r {request_id} "
+                        f"-o <path>", json_output)
         _report(e, json_output)
 
 
@@ -339,7 +351,10 @@ def download(ctx: click.Context, database_id: str, asset_id: str, request_id: st
     """Download a finished archive to a local file.
 
     The archive streams from a short-lived presigned URL that is never printed. A partial
-    transfer leaves no file behind.
+    transfer leaves no file behind. Another user's finished archive, listed by
+    'zip-download list --all-users', downloads the same way when you may download files from the
+    asset; --wait follows only your own jobs, so for another user's job it requests the archive
+    directly (refused while the job is not finished).
 
     Examples:
         vamscli zip-download download -d my-db -a my-asset -r <request-id> -o ./downloads
@@ -353,9 +368,15 @@ def download(ctx: click.Context, database_id: str, asset_id: str, request_id: st
             raise InvalidZipDownloadRequestError("--timeout applies with --wait")
         if wait:
             output_status(f"Waiting for zip download '{request_id}'...", json_output)
-            wait_for_zip_download(api_client, database_id, asset_id, request_id,
-                                  timeout or ZIP_DOWNLOAD_DEFAULT_WAIT_TIMEOUT_SECONDS,
-                                  on_update=_status_printer(json_output))
+            try:
+                wait_for_zip_download(api_client, database_id, asset_id, request_id,
+                                      timeout or ZIP_DOWNLOAD_DEFAULT_WAIT_TIMEOUT_SECONDS,
+                                      on_update=_status_printer(json_output))
+            except ZipDownloadNotFoundError:
+                # The job read answers only the caller's own jobs. Another user's job is fetched through
+                # the URL route, which answers for a shared finished job and refuses an unfinished one.
+                output_status(f"Zip download '{request_id}' is not one of your jobs or does not exist, "
+                              "so it cannot be followed; requesting its archive.", json_output)
         result = _fetch_archive(api_client, database_id, asset_id, request_id, output,
                                 overwrite, json_output)
         output_result(result, json_output, success_message="✓ Archive downloaded!",

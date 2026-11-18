@@ -2746,11 +2746,11 @@ class TestTheEvaluationsTextNamesThePipelineRules:
 
 
 class TestPathIdsArePercentEncoded:
-    """Every compliance call percent-encodes the ids it puts in the URL path (D134):
-    `vamscli compliance state -d 'r23-d#deleted'` sent `/compliance/state/r23-d#deleted`, which
-    the HTTP client cut at `#` as a fragment, so the live id's data came back. A `#` (and a
-    space) is now encoded; an id typed already encoded (`%23`) is sent as typed. The MCP tools call
-    these same client methods."""
+    """Every compliance call builds its path with `route_path`, so each id is one path segment and the
+    API reads it as typed (D134): `vamscli compliance state -d 'r23-d#deleted'` sent
+    `/compliance/state/r23-d#deleted`, which the HTTP client cut at `#` as a fragment, so the live
+    id's data came back. A `/`, `?`, `#` or `%` in an id is encoded, so an id never reaches another
+    route. The MCP tools call these same client methods."""
 
     DB = 'r23-d#deleted'
     ASSET = 'asset#1'
@@ -2794,12 +2794,27 @@ class TestPathIdsArePercentEncoded:
         client.unbind_compliance_schema(self.DB, asset_id=self.ASSET)
         assert calls[0]['endpoint'] == '/compliance/bind/r23-d%23deleted/asset%231'
 
-    def test_an_id_typed_encoded_is_sent_as_typed_and_a_plain_id_unchanged(self):
+    def test_a_percent_is_part_of_the_id_and_a_plain_id_is_unchanged(self):
         client, calls = _recording_client({})
         client.get_compliance_state('r23-d%23deleted', 'a1')
         client.get_compliance_state('my-database', 'my_asset.glb')
         assert [c['endpoint'] for c in calls] == [
-            '/compliance/state/r23-d%23deleted/a1', '/compliance/state/my-database/my_asset.glb']
+            '/compliance/state/r23-d%2523deleted/a1', '/compliance/state/my-database/my_asset.glb']
+
+    SLASHED = [
+        ('unbind_compliance_schema', ('db/a1',), '/compliance/bind/db%2Fa1'),
+        ('evaluate_database_compliance', ('db/a1',), '/compliance/evaluate/db%2Fa1'),
+        ('get_database_compliance_state', ('db/a1',), '/compliance/state/db%2Fa1'),
+        ('get_compliance_schema', ('s/x?y',), '/compliance/schemas/s%2Fx%3Fy'),
+        ('get_compliance_state', ('db', 'a/b'), '/compliance/state/db/a%2Fb'),
+        ('approve_compliance_cascade', ('c/1',), '/compliance/cascades/c%2F1/approve'),
+    ]
+
+    @pytest.mark.parametrize('method, args, endpoint', SLASHED, ids=[c[0] for c in SLASHED])
+    def test_a_slash_in_an_id_stays_in_its_segment(self, method, args, endpoint):
+        client, calls = _recording_client({})
+        getattr(client, method)(*args)
+        assert calls[0]['endpoint'] == endpoint
 
     def test_the_url_on_the_wire_carries_no_fragment(self):
         sent = []
@@ -2934,6 +2949,30 @@ class TestABindingChangeAppliedInTheBackground:
             body = json.loads(result.output)
             assert (body['waitTimedOut'], body['applyStatus'], body['apply']['assetsProcessed']) == (
                 True, 'applying', 10)
+
+    @pytest.mark.parametrize('read, text', [
+        (_read(_apply(applyId='apply-2', status='applying')),
+         'replaced by a later binding change (apply-2, applying)'),
+        (_read(None), 'the binding read names no change in progress'),
+    ], ids=['later-change', 'no-change'])
+    def test_a_change_replaced_while_waiting_is_reported_as_replaced(self, cli_runner, generic_command_mocks,
+                                                                     monkeypatch, read, text):
+        sleeps = []
+        monkeypatch.setattr('vamscli.commands.compliance.time.sleep', sleeps.append)
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            mocks['api_client'].get_compliance_bindings.return_value = read
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait'])
+            assert result.exit_code == 1
+            assert text in result.output
+            assert 'Stopped waiting' not in result.output and sleeps == []
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait', '--json-output'])
+            body = json.loads(result.output)
+            assert 'waitTimedOut' not in body
+            assert body['replacedBy'] == {'applyId': (read['apply'] or {}).get('applyId'),
+                                          'status': (read['apply'] or {}).get('status')}
 
     def test_json_output_carries_the_apply_fields(self, cli_runner, generic_command_mocks,
                                                   monkeypatch):
