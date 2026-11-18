@@ -893,22 +893,36 @@ def start(ctx: click.Context, session_id: str, wait: bool, json_output: bool):
 
 @workstation.command(name='stop')
 @click.argument('session_id')
+@click.option('--yes', is_flag=True, help='Skip the interactive confirmation prompt')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 @requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
-def stop(ctx: click.Context, session_id: str, json_output: bool):
-    """Stop one of your running workstations. Start it again with `edh workstation start`. A launch
-    that has no EDH session yet is refused (HTTP 409). A start EDH accepted and has not finished
-    after 30 minutes (`list` State STALLED, Last Error START_STALLED) is stopped the same way; start
-    it again once it reads STOPPED.
+def stop(ctx: click.Context, session_id: str, yes: bool, json_output: bool):
+    """Stop one of your running workstations. The desktop's open applications close and its disk is
+    kept; start it again with `edh workstation start`. The command asks before it stops unless
+    `--yes` is passed; `--yes` is required in JSON mode, where no interactive prompt is possible. A
+    launch that has no EDH session yet is refused (HTTP 409). A start EDH accepted and has not
+    finished after 30 minutes (`list` State STALLED, Last Error START_STALLED) is stopped the same
+    way; start it again once it reads STOPPED.
 
     Examples:
         vamscli edh workstation stop SESSION_ID
-        vamscli edh workstation stop SESSION_ID --json-output
+        vamscli edh workstation stop SESSION_ID --yes
+        vamscli edh workstation stop SESSION_ID --yes --json-output
     """
     # Setup/auth already validated by decorator
     api_client = _api_client(ctx)
+
+    if not yes:
+        if json_output:
+            output_result({"error": "Confirmation required",
+                           "message": "Stopping a workstation requires the --yes flag",
+                           "sessionId": session_id}, json_output=True)
+            sys.exit(1)
+        click.confirm(
+            f"Stop workstation '{session_id}'? Its open applications close; its disk is kept, and "
+            f"'vamscli edh workstation start {session_id}' starts it again.", abort=True)
 
     output_status(f"Stopping workstation '{session_id}'...", json_output)
 

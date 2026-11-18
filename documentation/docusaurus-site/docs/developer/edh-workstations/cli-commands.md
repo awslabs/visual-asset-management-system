@@ -199,18 +199,21 @@ A read the cluster does not answer while the command waits is tried again at the
 
 ### edh workstation stop
 
-Stop one of your running workstations. Start it again with `edh workstation start`. A launch that has no EDH session yet is refused with HTTP 409. A start EDH accepted and has not finished after 30 minutes (`list` prints `STALLED`, `lastError` `START_STALLED`) is stopped the same way; start it again once it reads `STOPPED`.
+Stop one of your running workstations. The desktop's open applications close and its disk is kept; start it again with `edh workstation start`. The command asks `Stop workstation '<id>'? Its open applications close; its disk is kept, and 'vamscli edh workstation start <id>' starts it again. [y/N]` before it stops, and a declined prompt sends nothing; `--yes` skips the prompt. With `--json-output` no prompt is possible, so `--yes` is required there: without it the command prints one error object (`"error": "Confirmation required"`, `"message": "Stopping a workstation requires the --yes flag"`, `sessionId`), exits 1 and stops nothing. A launch that has no EDH session yet is refused with HTTP 409. A start EDH accepted and has not finished after 30 minutes (`list` prints `STALLED`, `lastError` `START_STALLED`) is stopped the same way; start it again once it reads `STOPPED`.
 
 ```bash
 vamscli edh workstation stop SESSION_ID [OPTIONS]
 ```
 
-| Option          | Type | Required | Description              |
-| --------------- | ---- | -------- | ------------------------ |
-| `--json-output` | Flag | No       | Output raw JSON response |
+| Option          | Type | Required | Description                                                              |
+| --------------- | ---- | -------- | ------------------------------------------------------------------------ |
+| `--yes`         | Flag | No       | Skip the interactive confirmation prompt (required with `--json-output`) |
+| `--json-output` | Flag | No       | Output raw JSON response                                                 |
 
 ```bash
 vamscli edh workstation stop 3f9a1c2e-0b7d-4e6f-9a21-5c8d7e6f4b30
+vamscli edh workstation stop 3f9a1c2e-0b7d-4e6f-9a21-5c8d7e6f4b30 --yes
+vamscli edh workstation stop 3f9a1c2e-0b7d-4e6f-9a21-5c8d7e6f4b30 --yes --json-output
 ```
 
 ### edh workstation delete
