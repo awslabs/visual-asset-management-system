@@ -5,7 +5,7 @@
 
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import CogMapViewerComponent, { filesToShow } from "./CogMapViewerComponent";
+import CogMapViewerComponent, { STACKED_BELOW_PX, filesToShow } from "./CogMapViewerComponent";
 import viewerConfig from "../../config/viewerConfig.json";
 import { admitsVisualizeSelection } from "../../core/viewerSelection";
 
@@ -112,13 +112,48 @@ describe("CogMapViewerComponent layout (D2)", () => {
         expect(mapColumn.style.flex).toBe("999 1 480px");
         expect(parseFloat(mapColumn.style.minWidth)).toBe(0);
         expect(mapColumn.style.minHeight).toBe("360px");
-        expect(mapColumn.style.height).not.toBe("");
+        // The map fills the frame it is placed in; no fixed height of its own (UAT B).
+        expect(mapColumn.style.height).toBe("100%");
+        expect(root.style.height).toBe("100%");
+        expect(listColumn.style.maxHeight).toBe("100%");
+        // Opaque, so the frame's striped backdrop never shows behind the map or the layer list.
+        expect(root.style.background).not.toBe("");
+        expect(listColumn.style.background).not.toBe("");
         expect(listColumn.style.flex).toBe("1 1 300px");
         expect(listColumn.style.overflowX).toBe("hidden");
         // Document order, which is tab order at every width, is the map then its list.
         expect(
             mapColumn.compareDocumentPosition(listColumn) & Node.DOCUMENT_POSITION_FOLLOWING
         ).toBeTruthy();
+    });
+});
+
+describe("CogMapViewerComponent stacked layout (UAT B)", () => {
+    const original = (global as any).ResizeObserver;
+    afterEach(() => {
+        (global as any).ResizeObserver = original;
+    });
+
+    const withWidth = (width: number) => {
+        (global as any).ResizeObserver = class {
+            constructor(private cb: (entries: any[]) => void) {}
+            observe() {
+                this.cb([{ contentRect: { width } }]);
+            }
+            disconnect() {}
+        };
+    };
+
+    it("leaves room for the top of the layer list when it wraps under the map", () => {
+        withWidth(STACKED_BELOW_PX - 1);
+        render(<CogMapViewerComponent {...base} assetKey="x.tif" />);
+        expect(screen.getByTestId("cog-map-column").style.height).toBe("65%");
+    });
+
+    it("lets the map fill the frame when the list sits beside it", () => {
+        withWidth(STACKED_BELOW_PX);
+        render(<CogMapViewerComponent {...base} assetKey="x.tif" />);
+        expect(screen.getByTestId("cog-map-column").style.height).toBe("100%");
     });
 });
 

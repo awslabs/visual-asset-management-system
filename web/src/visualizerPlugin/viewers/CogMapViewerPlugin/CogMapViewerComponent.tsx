@@ -51,37 +51,57 @@ export function filesToShow(props: ViewerPluginProps): SizedFile[] {
 const NO_ANCHOR = () => undefined;
 
 /**
- * Layout: the map and the layer list are two wrapping flex items. The map's basis is large and its
- * grow factor much larger than the list's, so on a wide viewer the list sits beside the map and takes
- * its 300 px basis, and on a phone or tablet the two no longer fit on one row, wrap, and each takes
- * the full width, the list below the map. The map has its own height (a flex item whose parent has no
- * height collapses to nothing), and `min-width: 0` stops long content from pushing it narrower. The
- * DOM order (map, then list) is the focus order at every width.
+ * Layout: the viewer fills the visualizer frame it is placed in (the frame is the page's or the modal's
+ * own size, and fullscreen makes it the screen), instead of choosing a height of its own. A fixed height
+ * left the map clipped below a shorter frame, with its controls outside the frame, and showed the
+ * frame's striped backdrop under the map and the layer list in a taller one. The viewer paints an opaque
+ * background over the whole frame, so the backdrop never shows through behind the layer list or the map
+ * controls.
+ *
+ * The map and the layer list are two wrapping flex items. The map's basis is large and its grow factor
+ * much larger than the list's, so on a wide viewer the list sits beside the map and takes its 300 px
+ * basis, and on a phone or tablet the two no longer fit on one row, wrap, and each takes the full width,
+ * the list below the map (the viewer scrolls). Both fill the frame's height when side by side; the list
+ * scrolls inside itself. `min-width: 0` stops long content from pushing the map narrower. The DOM order
+ * (map, then list) is the focus order at every width.
  */
 export const MAP_MIN_HEIGHT_PX = 360;
+const VIEWER_BACKGROUND = "var(--vams-bg-primary, #0f1b2a)";
 const VIEWER_STYLE: React.CSSProperties = {
     display: "flex",
     flexWrap: "wrap",
+    alignContent: "stretch",
     gap: "12px",
     width: "100%",
+    height: "100%",
     minWidth: 0,
+    minHeight: `${MAP_MIN_HEIGHT_PX}px`,
+    overflowX: "hidden",
+    overflowY: "auto",
     boxSizing: "border-box",
+    background: VIEWER_BACKGROUND,
 };
 const MAP_COLUMN_STYLE: React.CSSProperties = {
     flex: "999 1 480px",
     minWidth: 0,
     position: "relative",
-    height: "min(70vh, 640px)",
+    height: "100%",
     minHeight: `${MAP_MIN_HEIGHT_PX}px`,
+    boxSizing: "border-box",
 };
+/** The width below which the map (480 px basis) and the list (300 px basis, 12 px gap) no longer fit on one row. */
+export const STACKED_BELOW_PX = 480 + 300 + 12;
+/** Share of the frame the map takes when the list sits under it, so the top of the list stays in view. */
+const STACKED_MAP_HEIGHT = "65%";
 const LIST_COLUMN_STYLE: React.CSSProperties = {
     flex: "1 1 300px",
     minWidth: 0,
-    maxHeight: "min(70vh, 640px)",
+    maxHeight: "100%",
     overflowX: "hidden",
     overflowY: "auto",
-    paddingRight: "4px",
+    padding: "0 8px 8px 4px",
     boxSizing: "border-box",
+    background: VIEWER_BACKGROUND,
 };
 
 /**
@@ -140,6 +160,21 @@ const CogMapViewerComponent: React.FC<ViewerPluginProps> = (props) => {
         if (first && zoomTo(first.id)) framed.current = true;
     }, [entries, zoomTo]);
 
+    // Whether the list has wrapped under the map: then the map leaves room for the top of the list.
+    const rootRef = useRef<HTMLDivElement>(null);
+    const [stacked, setStacked] = useState(false);
+    const hasFiles = files.length > 0;
+    const hasViewerRoot = !!appCache.getItem("config")?.locationServiceApiUrl;
+    useEffect(() => {
+        const root = rootRef.current;
+        if (!root || typeof ResizeObserver === "undefined") return undefined;
+        const observer = new ResizeObserver(([entry]) =>
+            setStacked(entry.contentRect.width < STACKED_BELOW_PX)
+        );
+        observer.observe(root);
+        return () => observer.disconnect();
+    }, [hasViewerRoot, hasFiles]);
+
     if (!mapStyleUrl) {
         return (
             <Box padding="l" textAlign="center" color="text-status-inactive">
@@ -157,8 +192,13 @@ const CogMapViewerComponent: React.FC<ViewerPluginProps> = (props) => {
     }
 
     return (
-        <div style={VIEWER_STYLE} data-testid="cog-map-viewer">
-            <div style={MAP_COLUMN_STYLE} data-testid="cog-map-column">
+        <div ref={rootRef} style={VIEWER_STYLE} data-testid="cog-map-viewer">
+            <div
+                style={
+                    stacked ? { ...MAP_COLUMN_STYLE, height: STACKED_MAP_HEIGHT } : MAP_COLUMN_STYLE
+                }
+                data-testid="cog-map-column"
+            >
                 <Map
                     ref={mapRef}
                     initialViewState={{ latitude: 0, longitude: 0, zoom: 1 }}
