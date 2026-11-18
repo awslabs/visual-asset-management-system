@@ -461,7 +461,7 @@ export const sweepMessage = (schemaName: string, result: any): string => {
         parts.push(`${result.skippedArchived} archived, not evaluated`);
     }
     if (result?.assetsRemaining) {
-        parts.push(`${result.assetsRemaining} not reached yet; run the sweep again`);
+        parts.push(`at least ${result.assetsRemaining} not reached yet; run the sweep again`);
     } else if (result?.NextToken) {
         parts.push(`more ${Synonyms.assets} remain; run the sweep again`);
     }

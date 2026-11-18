@@ -208,7 +208,9 @@ export const evaluateAllMessage = (result: EvaluateDatabaseResponse): string => 
     }
     if (result.assetsRemaining) {
         parts.push(
-            `${formatCount(result.assetsRemaining)} not reached yet; choose Evaluate All again`
+            `at least ${formatCount(
+                result.assetsRemaining
+            )} not reached yet; choose Evaluate All again`
         );
     } else if (result.NextToken) {
         parts.push(`more ${Synonyms.assets} remain; choose Evaluate All again`);

@@ -211,7 +211,7 @@ describe("ComplianceSchemas row actions", () => {
                 within(rowOf("cad-quality")).getByRole("button", { name: "Sweep cad-quality" })
             );
         await sweep();
-        expect(await screen.findByText(/313 not reached yet/)).toBeInTheDocument();
+        expect(await screen.findByText(/at least 313 not reached yet/)).toBeInTheDocument();
         await sweep();
         await sweep();
         await waitFor(() => expect(service().sweepSchema).toHaveBeenCalledTimes(3));
@@ -271,7 +271,7 @@ describe("ComplianceSchemas sweep message", () => {
                 assetsRemaining: 40,
             })
         ).toBe(
-            `Sweep of schema "std": 3 ${Synonyms.assets} evaluated; 2 skipped (you may not evaluate or read them); 40 not reached yet; run the sweep again.`
+            `Sweep of schema "std": 3 ${Synonyms.assets} evaluated; 2 skipped (you may not evaluate or read them); at least 40 not reached yet; run the sweep again.`
         );
         expect(sweepMessage("std", { assetsTriggered: [{}] })).toBe(
             `Sweep of schema "std": 1 ${Synonyms.asset} evaluated.`
@@ -324,7 +324,7 @@ describe("ComplianceSchemas sweep message", () => {
         expect(
             sweepMessage("std", { assetsTriggered: [], assetsRemaining: 12, NextToken: "tok-2" })
         ).toBe(
-            `Sweep of schema "std": 0 ${Synonyms.assets} evaluated; 12 not reached yet; run the sweep again.`
+            `Sweep of schema "std": 0 ${Synonyms.assets} evaluated; at least 12 not reached yet; run the sweep again.`
         );
     });
 });

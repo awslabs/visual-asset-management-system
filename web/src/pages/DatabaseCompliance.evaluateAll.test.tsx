@@ -110,7 +110,7 @@ describe("DatabaseCompliance Evaluate All", () => {
         await screen.findByText("override-asset");
         const evaluateAll = () => screen.getByRole("button", { name: /Evaluate All/ });
         await userEvent.click(evaluateAll());
-        expect(await screen.findByText(/113 not reached yet/)).toBeInTheDocument();
+        expect(await screen.findByText(/at least 113 not reached yet/)).toBeInTheDocument();
         await waitFor(() => expect(evaluateAll()).toBeEnabled());
         await userEvent.click(evaluateAll());
         await waitFor(() => expect(service().evaluateDatabaseCompliance).toHaveBeenCalledTimes(2));
@@ -139,7 +139,7 @@ describe("DatabaseCompliance Evaluate All", () => {
                 assetsRemaining: 35,
                 registered: 4,
             })
-        ).toMatch(/200 assets; 4 newly registered.*; 35 not reached yet/);
+        ).toMatch(/200 assets; 4 newly registered.*; at least 35 not reached yet/);
     });
 
     it("says how many archived assets were not evaluated", () => {
@@ -207,6 +207,8 @@ describe("DatabaseCompliance Evaluate All", () => {
                 assetsRemaining: 7,
                 NextToken: "tok-2",
             })
-        ).toBe("Evaluation triggered for 3 assets; 7 not reached yet; choose Evaluate All again.");
+        ).toBe(
+            "Evaluation triggered for 3 assets; at least 7 not reached yet; choose Evaluate All again."
+        );
     });
 });

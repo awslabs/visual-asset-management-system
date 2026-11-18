@@ -524,7 +524,7 @@ describe("one number format for every count (D165)", () => {
                 skippedNotAuthorized: 1002,
             } as any)
         ).toBe(
-            "Evaluation triggered for 100 assets; 1,100 newly registered under the database schema; 1,001 archived, not evaluated; 1,002 skipped (you may not read them); 2,400 not reached yet; choose Evaluate All again."
+            "Evaluation triggered for 100 assets; 1,100 newly registered under the database schema; 1,001 archived, not evaluated; 1,002 skipped (you may not read them); at least 2,400 not reached yet; choose Evaluate All again."
         );
     });
 
