@@ -144,11 +144,6 @@ the run's full result text with [`execution details results`](#execution-details
 described above, and its `metadata`, `files` and `results` subcommands each read one part of that view
 in full.
 
-:::warning[Renamed in 2.7.0]
-`vamscli execution details-metadata` is now `vamscli execution details metadata`, with the same
-options. The flat form is no longer accepted, so update any script that calls it.
-:::
-
 ---
 
 ## execution details metadata
@@ -429,7 +424,7 @@ without one. A version is pinned only when someone chose it: a `versionId` given
 `vamscli workflow execute` or the API, or a version picked in the web: an older version chosen in
 the execute wizard, or a file run from the file manager while an asset version is browsed, even
 when that version is still the current one. A web launch from the current asset view and a
-`fileUpload` trigger launch are not pinned, so their re-runs take the current version. An execution recorded before v2.7.0 re-runs every file on its current version. If a
+`fileUpload` trigger launch are not pinned, so their re-runs take the current version. An execution recorded before versions were pinned re-runs every file on its current version. If a
 named version has since been deleted, the re-run is refused the way an execute naming that version
 is.
 
