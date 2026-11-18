@@ -24,7 +24,7 @@ FROM --platform=linux/amd64 public.ecr.aws/lambda/python:3.12@sha256:a53086fc311
 # edited by hand.
 COPY requirements.txt ./
 # Installs exactly the locked packages: pip refuses any file whose SHA-256 is not in requirements.txt.
-RUN pip install --no-cache-dir --require-hashes -r requirements.txt
+RUN pip install --no-cache-dir --no-deps --only-binary=:all: --require-hashes -r requirements.txt
 
 # Be sure to copy over the function itself! `.dockerignore` keeps the tests, the Poetry files and any
 # local caches out of this copy, so the image holds the runtime modules only.

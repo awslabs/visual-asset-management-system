@@ -99,7 +99,7 @@ class TestRequirementsAreTheLockExport:
             assert re.search(r"--hash=sha256:[0-9a-f]{64}", entry), entry.splitlines()[0]
         install = [line for line in _read("Dockerfile").splitlines()
                    if line.startswith("RUN pip install")]
-        assert len(install) == 1 and "--require-hashes" in install[0], install
+        assert len(install) == 1 and all(flag in install[0] for flag in ("--require-hashes", "--no-deps", "--only-binary=:all:")), install
 
     def test_the_pyproject_floor_matches_the_lock(self):
         # The direct dependencies' floors are the locked releases, so a re-lock cannot drift below.
