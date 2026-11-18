@@ -213,6 +213,8 @@ describe("isTransitionalWorkstation", () => {
     it("treats a stalled start as settled, and a creating row with any other code as transitional", () => {
         const creating = { state: "CREATING", connectionAvailable: false, activity: null } as const;
         expect(isTransitionalWorkstation({ ...creating, lastError: "START_STALLED" })).toBe(false);
+        // So is a new launch EDH has not placed after 3 hours.
+        expect(isTransitionalWorkstation({ ...creating, lastError: "LAUNCH_STALLED" })).toBe(false);
         expect(isTransitionalWorkstation({ ...creating, lastError: null })).toBe(true);
         // The service reports no activity on a stalled row; were it to report one, the row moves.
         expect(

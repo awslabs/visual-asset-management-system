@@ -1,5 +1,5 @@
 {
-    "description": "Workstation records covering every state x activity x lastError combination of the start-status contract (feature #536, the stalled start included), each with what the web status badge shows (`badge`), what `vamscli edh workstation list` prints in its State column (`state`, the badge's last word upper-cased: `Start stalled` prints `STALLED`), and the start-failure sentence and detail line both the web and `vamscli edh workstation get` show (null when none), and, on a running workstation that cannot be connected to, the sentence the web shows under its inert Connect and `get` prints as Connection (`connectionUnavailableMessage`, absent on the other cases). Read by web/src/addons/edh/components/WorkstationStatusBadge.cases.test.tsx and tools/VamsCLI/tests/addon/test_edh_start_status.py, so the two clients cannot drift apart.",
+    "description": "Workstation records covering every state x activity x lastError combination of the start-status contract (feature #536, the stalled start and the stalled launch included), each with what the web status badge shows (`badge`), what `vamscli edh workstation list` prints in its State column (`state`, the badge's last word upper-cased: `Start stalled` and `Launch stalled` print `STALLED`), and the start-failure sentence and detail line both the web and `vamscli edh workstation get` show (null when none), and, on a running workstation that cannot be connected to, the sentence the web shows under its inert Connect and `get` prints as Connection (`connectionUnavailableMessage`, absent on the other cases). Read by web/src/addons/edh/components/WorkstationStatusBadge.cases.test.tsx and tools/VamsCLI/tests/addon/test_edh_start_status.py, so the two clients cannot drift apart.",
     "cases": [
         {
             "name": "a stopped workstation whose start is in progress",
@@ -72,6 +72,44 @@
             "badge": "Start stalled",
             "state": "STALLED",
             "startFailureMessage": "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if it stalls again, ask your administrator.",
+            "startFailureDetail": null
+        },
+        {
+            "name": "a new launch EDH has not placed after 3 hours",
+            "record": {
+                "state": "CREATING",
+                "edhState": "pending",
+                "activity": null,
+                "lastError": "LAUNCH_STALLED",
+                "startFailure": {
+                    "observedAt": "2026-10-24T13:00:00Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Launch stalled",
+            "state": "STALLED",
+            "startFailureMessage": "EDH has not placed this new workstation 3 hours after its launch. Delete it, or wait: EDH may still place it.",
+            "startFailureDetail": null
+        },
+        {
+            "name": "a stalled launch EDH still lists as placing",
+            "record": {
+                "state": "CREATING",
+                "edhState": "placing",
+                "activity": null,
+                "lastError": "LAUNCH_STALLED",
+                "startFailure": {
+                    "observedAt": "2026-10-24T13:00:00Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Launch stalled",
+            "state": "STALLED",
+            "startFailureMessage": "EDH has not placed this new workstation 3 hours after its launch. Delete it, or wait: EDH may still place it.",
             "startFailureDetail": null
         },
         {

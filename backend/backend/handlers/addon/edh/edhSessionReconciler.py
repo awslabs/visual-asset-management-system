@@ -30,8 +30,9 @@ ORPHANED with a session id and no captured reason is given the reason EDH record
 read from EDH's per-user listing as the row's owner -- the listing is owner-scoped -- at most once per row
 per read interval and within a per-sweep allowance of such reads; a read that fails writes only its stamp.
 A start of a stopped desktop EDH accepted whose desktop EDH still lists pending or placing half an hour later
-is recorded START_STALLED on its CREATING row, and nothing else is done to it: its key is kept and its desktop
-is neither stopped, deleted nor orphaned.
+is recorded START_STALLED on its CREATING row, and a new launch EDH still lists pending or placing three hours
+after it was made LAUNCH_STALLED; nothing else is done to either: its key is kept and its desktop is neither
+stopped, deleted nor orphaned.
 Session keys that no
 row names at all (a mint whose reply was lost, a row that is gone, a key a re-issue replaced) have their
 records deleted once expired or older than one sweep's grace, save that every unexpired key of a desktop
@@ -84,10 +85,11 @@ from .common.edhLeasePolicy import lease_action, parse_iso, read_lease_policy
 from .common.edhSessionState import (
     ACTIVITY_FIELD, CREDENTIAL_CLAIM_SECONDS, EDH_FAILURE_FIELD, EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD,
     EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_STOPPED, EXPIRES_AT_FIELD, LAST_ERROR_CREATE_TIMED_OUT,
-    LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_START_FAILED, LAST_ERROR_START_STALLED, MAX_LAUNCH_ATTEMPTS,
-    START_FAILURE_FIELD, START_IN_PROGRESS_SECONDS, START_STALL_EDH_STATES, START_STALL_SECONDS,
+    LAST_ERROR_LAUNCH_STALLED, LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_START_FAILED, LAST_ERROR_START_STALLED,
+    LAUNCH_STALL_SECONDS, MAX_LAUNCH_ATTEMPTS, START_FAILURE_FIELD, START_IN_PROGRESS_SECONDS,
+    START_STALL_EDH_STATES, START_STALL_SECONDS,
     STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED, credential_claim_fresh,
-    credential_claim_stamp, deleted_row_expiry, edh_failure_attributes, edh_failure_read_due,
+    credential_claim_stamp, deleted_row_expiry, edh_failure_attributes, edh_failure_read_due, launch_stall_due,
     never_auto_start_schedule, observed_row_attributes, orphaned_last_error, schedule_never_auto_starts,
     session_row_live, start_failure, start_in_progress, start_resolve_due, start_stall_cleared, start_stall_due,
     start_stamp, state_for_edh_session_state,
@@ -566,19 +568,30 @@ def _start_resolution(row: Dict[str, Any], updates: Dict[str, Any], desktop: Dic
 
 def _start_stall(row: Dict[str, Any], updates: Dict[str, Any], desktop: Dict[str, Any],
                  now: datetime) -> Dict[str, Any]:
-    """The attributes that record a start EDH accepted and has not finished: a row this pass leaves CREATING,
-    stamped ``startAcceptedAt`` at least ``START_STALL_SECONDS`` ago and not recorded stalled yet
-    (``start_stall_due``), whose desktop EDH still lists pending or placing, records START_STALLED with a
-    ``startFailure`` that names nothing EDH said. That is all: the desktop is neither stopped, deleted nor orphaned,
-    and the row stays CREATING, so its key is kept -- the desktop may still finish starting. The row is written
-    under the pass's own condition, so a write made since wins. Nothing for any other row."""
+    """The attributes that record a start EDH accepted, or a new launch, that has not finished: a row this pass
+    leaves CREATING, whose desktop EDH still lists pending or placing, records START_STALLED when it is stamped
+    ``startAcceptedAt`` at least ``START_STALL_SECONDS`` ago (``start_stall_due``), and LAUNCH_STALLED when it is a
+    new launch made at least ``LAUNCH_STALL_SECONDS`` ago (``launch_stall_due``), with a ``startFailure`` that names
+    nothing EDH said. That is all: the desktop is neither stopped, deleted nor orphaned, and the row stays CREATING,
+    so its key is kept -- the desktop may still finish starting, or be placed. The row is written under the pass's
+    own condition, so a write made since wins. Nothing for any other row, or one recorded stalled already."""
     edh_state = str(desktop.get(EDH_SESSION_STATE_FIELD) or "").lower()
-    if not start_stall_due({**row, **updates}, now) or edh_state not in START_STALL_EDH_STATES:
+    if edh_state not in START_STALL_EDH_STATES:
         return {}
-    logger.warning(f"The start of bootstrap {row.get('bootstrapId')} has not finished: EDH still lists its desktop "
-                   f"{edh_state} {START_STALL_SECONDS // 60} minutes after accepting the start; recorded as a "
-                   "stalled start")
-    return {"lastError": LAST_ERROR_START_STALLED, START_FAILURE_FIELD: start_failure(None, None, now)}
+    seen = {**row, **updates}
+    if start_stall_due(seen, now):
+        code = LAST_ERROR_START_STALLED
+        logger.warning(f"The start of bootstrap {row.get('bootstrapId')} has not finished: EDH still lists its "
+                       f"desktop {edh_state} {START_STALL_SECONDS // 60} minutes after accepting the start; recorded "
+                       "as a stalled start")
+    elif launch_stall_due(seen, now):
+        code = LAST_ERROR_LAUNCH_STALLED
+        logger.warning(f"The launch of bootstrap {row.get('bootstrapId')} has not finished: EDH still lists its "
+                       f"desktop {edh_state} {LAUNCH_STALL_SECONDS // 3600} hours after the launch; recorded as a "
+                       "stalled launch")
+    else:
+        return {}
+    return {"lastError": code, START_FAILURE_FIELD: start_failure(None, None, now)}
 
 
 def _persist(bootstrap_id: str, updates: Dict[str, Any], seen_updated_at, *, touch: bool = True) -> Optional[str]:

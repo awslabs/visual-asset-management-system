@@ -65,6 +65,7 @@ import {
 import WorkstationImageCell from "../components/WorkstationImageCell";
 import {
     hoursWord,
+    isLaunchStalled,
     isStartStalled,
     leaseRemaining,
     type LeaseRemainingTone,
@@ -150,11 +151,11 @@ const formatDate = (iso: string) => {
 };
 
 /**
- * Whether Delete is offered: any settled row, a start the sweep found stalled, or a session-less
- * launch past the grace window.
+ * Whether Delete is offered: any settled row, a start or a launch the sweep found stalled, or a
+ * session-less launch past the grace window.
  */
 const isDeletable = (row: WorkstationRecord): boolean => {
-    if (row.state !== "CREATING" || isStartStalled(row)) return true;
+    if (row.state !== "CREATING" || isStartStalled(row) || isLaunchStalled(row)) return true;
     if (row.sessionId) return false;
     const updatedAt = new Date(row.updatedAt).getTime();
     return !isNaN(updatedAt) && Date.now() - updatedAt > CREATING_DELETE_GRACE_MS;
@@ -278,7 +279,8 @@ const RowActions: React.FC<RowActionsProps> = ({
     // The menu offers only the one of Stop and Start that applies, and neither while the workstation
     // is being created, started or stopped (`activity`). A start EDH accepted and has not finished
     // after 30 minutes (`isStartStalled`) leaves the row CREATING with no activity; the service stops
-    // it like an active one, so Stop is offered for it.
+    // it like an active one, so Stop is offered for it. A launch EDH has not placed after 3 hours
+    // (`isLaunchStalled`) never ran, so it offers Delete and not Stop.
     const changing = !!row.activity;
     const stoppable = !changing && (row.state === "ACTIVE" || isStartStalled(row));
     const startable = !changing && row.state === "STOPPED";

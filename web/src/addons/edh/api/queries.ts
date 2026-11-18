@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as workstationService from "./workstations";
 import * as catalogService from "./catalog";
 import { callService, mayHaveTakenEffect } from "./outcome";
-import { isStartStalled } from "../labels";
+import { isLaunchStalled, isStartStalled } from "../labels";
 import type {
     CapacityReservationView,
     CatalogLeasePolicy,
@@ -36,8 +36,9 @@ export const WORKSTATION_POLL_STABLE_MS = 20000;
 /**
  * A row still moving towards a steady state: one the service reports `starting` or `stopping`
  * (`activity`), a launch EDH has not reported back on, or an active desktop EDH does not yet report
- * connectable. A start the sweep found stalled (`isStartStalled`) is CREATING but not moving: nothing
- * changes until the user stops it or EDH finishes, so it does not hold the list at the fast cadence.
+ * connectable. A start or a launch the sweep found stalled (`isStartStalled`, `isLaunchStalled`) is
+ * CREATING but not moving: nothing changes until the user stops or deletes it or EDH moves on, so it
+ * does not hold the list at the fast cadence.
  * Nor does a running workstation whose remote display session has ended (`connectionUnavailableReason`):
  * it is not starting, and stays as it is until the user stops it.
  */
@@ -47,7 +48,7 @@ export function isTransitionalWorkstation(
 ): boolean {
     return (
         !!row.activity ||
-        (row.state === "CREATING" && !isStartStalled(row)) ||
+        (row.state === "CREATING" && !isStartStalled(row) && !isLaunchStalled(row)) ||
         (row.state === "ACTIVE" && !row.connectionAvailable && !row.connectionUnavailableReason)
     );
 }

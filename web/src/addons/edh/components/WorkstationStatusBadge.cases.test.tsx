@@ -76,6 +76,9 @@ describe("workstationStatusCases.json (shared with the CLI tests)", () => {
         );
         expect(creatingCodes).toContain("START_STALLED");
         expect(CASES.filter((c) => c.badge === "Start stalled").length).toBeGreaterThanOrEqual(1);
+        // So is a new launch EDH has not placed after 3 hours.
+        expect(creatingCodes).toContain("LAUNCH_STALLED");
+        expect(CASES.filter((c) => c.badge === "Launch stalled").length).toBeGreaterThanOrEqual(1);
         // A running workstation whose remote display session has ended.
         expect(
             CASES.filter((c) => c.record.connectionUnavailableReason === "DISPLAY_SESSION_ENDED")
