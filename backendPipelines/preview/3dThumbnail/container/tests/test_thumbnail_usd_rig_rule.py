@@ -3,8 +3,8 @@
 
 """Which root prims beside a USD stage's default prim are left out of the preview.
 
-A root prim is left out only when it clearly is a rig: the largest root, at least 1,000 times larger
-than the next largest, or at least 50 times larger and holding lights or cameras. A placeholder
+A root prim is left out only when it looks like a rig by both tests: it is at least 50 times larger than
+the default prim, and it holds both a camera and a light. A placeholder
 default prim, peer roots and a site plan beside a building are all drawn, as they are for a stage
 without a default prim. A left-out root is also kept in the incomplete-preview report when anything
 that is drawn depends on it.
@@ -30,9 +30,10 @@ def _cube(name, size, at=(0, 0, 0), extra=""):
             f'["xformOp:translate"]\n{extra}    }}\n')
 
 
-def _root(name, *children, lights=False):
+def _root(name, *children, lights=False, camera=False):
     light = '    def DistantLight "Sun"\n    {\n    }\n' if lights else ""
-    return f'def Xform "{name}"\n{{\n' + "".join(children) + light + "}\n"
+    cam = '    def Camera "Cam"\n    {\n    }\n' if camera else ""
+    return f'def Xform "{name}"\n{{\n' + "".join(children) + light + cam + "}\n"
 
 
 def _sphere(name, radius):
@@ -60,11 +61,47 @@ class TestRigRule:
         extent, report = _load(path)
         assert extent > 20 and report == {}
 
-    def test_a_tiny_locator_a_car_and_a_10_km_rig_draw_the_car_and_leave_out_the_rig(self, tmp_path):
+    def test_a_tiny_locator_a_car_and_a_10_km_environment_without_lights_draws_both(self, tmp_path):
         path = _write(tmp_path, _root("World", _cube("locator", 0.01)) + _root("Car", _cube("body", 4))
                       + _root("Rig", _sphere("environment", 5000)))
         extent, report = _load(path)
-        assert 3.9 < extent < 4.5 and report["leftOut"] == ["Rig"]
+        assert extent > 9000 and report == {}
+
+    def test_a_1_mm_placeholder_with_a_4_m_car_and_no_lights_draws_the_car(self, tmp_path):
+        path = _write(tmp_path, _root("World", _cube("locator", 0.001)) + _root("Car", _cube("body", 4)))
+        extent, report = _load(path)
+        assert extent >= 4 and report == {}
+
+    def test_a_10_cm_placeholder_with_a_300_m_site_plan_draws_both(self, tmp_path):
+        site = _cube("plan", 300, extra='        double3 xformOp:scale = (1, 0.01, 1)\n').replace(
+            'xformOpOrder = ["xformOp:translate"]', 'xformOpOrder = ["xformOp:translate", "xformOp:scale"]')
+        path = _write(tmp_path, _root("World", _cube("locator", 0.1)) + _root("Site", site))
+        extent, report = _load(path)
+        assert extent > 250 and report == {}
+
+    def test_a_car_root_with_a_light_and_no_camera_beside_a_placeholder_is_drawn(self, tmp_path):
+        path = _write(tmp_path, _root("World", _cube("locator", 0.05))
+                      + _root("Car", _cube("body", 4), lights=True))
+        extent, report = _load(path)
+        assert extent >= 4 and report == {}
+
+    def test_a_root_with_a_camera_and_no_light_is_drawn(self, tmp_path):
+        path = _write(tmp_path, _root("World", _cube("a", 4)) + _root("Dome", _sphere("sky", 500), camera=True))
+        extent, report = _load(path)
+        assert extent > 900 and report == {}
+
+    def test_a_rig_with_a_camera_and_a_light_is_left_out(self, tmp_path):
+        path = _write(tmp_path, _root("World", _cube("locator", 0.2)) + _root(
+            "Rig", _sphere("environment", 5000), lights=True, camera=True))
+        extent, report = _load(path)
+        assert extent < 1 and report["leftOut"] == ["Rig"]
+
+    def test_any_light_type_counts(self, tmp_path):
+        for light_type in ("DomeLight", "RectLight", "SphereLight", "DiskLight", "CylinderLight"):
+            rig = (f'def Xform "Rig"\n{{\n{_sphere("sky", 500)}    def {light_type} "L"\n    {{\n    }}\n'
+                   f'    def Camera "Cam"\n    {{\n    }}\n}}\n')
+            path = _write(tmp_path, _root("World", _cube("a", 4)) + rig, name=f"{light_type}.usda")
+            assert _load(path)[1].get("leftOut") == ["Rig"], light_type
 
     def test_a_site_plan_beside_a_building_is_drawn(self, tmp_path):
         site = _cube("plan", 300, extra='        double3 xformOp:scale = (1, 0.01, 1)\n').replace(
@@ -79,13 +116,13 @@ class TestRigRule:
         extent, report = _load(path)
         assert extent > 12 and report == {}
 
-    def test_a_root_60_times_the_default_prim_is_left_out_with_lights_and_drawn_without(self, tmp_path):
-        lit = _write(tmp_path, _root("World", _cube("a", 4)) + _root("Dome", _sphere("sky", 125), lights=True),
-                     name="lit.usda")
-        bare = _write(tmp_path, _root("World", _cube("a", 4)) + _root("Dome", _sphere("sky", 125)),
-                      name="bare.usda")
-        assert _load(lit)[1]["leftOut"] == ["Dome"]
-        extent, report = _load(bare)
+    def test_a_root_60_times_the_default_prim_needs_both_a_camera_and_a_light(self, tmp_path):
+        both = _write(tmp_path, _root("World", _cube("a", 4)) + _root(
+            "Dome", _sphere("sky", 125), lights=True, camera=True), name="both.usda")
+        light_only = _write(tmp_path, _root("World", _cube("a", 4)) + _root(
+            "Dome", _sphere("sky", 125), lights=True), name="light.usda")
+        assert _load(both)[1]["leftOut"] == ["Dome"]
+        extent, report = _load(light_only)
         assert extent > 200 and report == {}
 
     def test_a_root_with_only_lights_changes_nothing(self, tmp_path):
@@ -94,7 +131,8 @@ class TestRigRule:
         assert 3.9 < extent < 4.5 and report == {}
 
     def test_a_default_prim_larger_than_the_other_roots_leaves_nothing_out(self, tmp_path):
-        path = _write(tmp_path, _root("World", _cube("a", 4000)) + _root("Small", _cube("b", 1)))
+        path = _write(tmp_path, _root("World", _cube("a", 4000)) + _root("Small", _cube("b", 1),
+                                                                         lights=True, camera=True))
         assert _load(path)[1] == {}
 
 

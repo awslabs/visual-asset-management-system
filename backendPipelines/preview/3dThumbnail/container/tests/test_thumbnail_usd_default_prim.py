@@ -38,8 +38,9 @@ _MODEL = """
     }"""
 
 
-def _rig(radius=5000, lights=False):
-    light = '    def DistantLight "Sun"\n    {\n    }\n' if lights else ""
+def _rig(radius=5000, lights=True):
+    light = ('    def DistantLight "Sun"\n    {\n    }\n    def Camera "Cam"\n    {\n    }\n'
+             if lights else "")
     return f"""
 def Xform "Rig"
 {{

@@ -67,14 +67,13 @@ MAX_POINTS = 30_000_000
 _RENDERED_PURPOSES = ("default", "render")
 _IMPLICIT_RESOLUTION = 24
 
-# A root prim beside the default prim is left out of the preview only when it clearly is a rig: the
-# largest root of the stage, at least RIG_SCALE_STRONG times larger than the next largest root, or at
-# least RIG_SCALE times larger and holding lights or cameras (a thumbnail rig is a huge environment with
-# its own lights and camera). Any other root, however small or large, is drawn as before.
+# A root prim beside the default prim is left out of the preview only when it looks like a thumbnail rig
+# by both tests: it is at least RIG_SCALE times larger than the default prim, and it holds both a camera
+# and a light (a rig is a huge environment with its own lights and camera). A root that fails either test
+# is drawn exactly as it is for a stage without a default prim. Known limit: a model's own root that is
+# at least RIG_SCALE times larger than a tiny default prim and holds a camera and a light is left out.
 RIG_SCALE = 50.0
-RIG_SCALE_STRONG = 1000.0
-# A root of this share of the largest root's size or more is judged with it, at the same scale.
-RIG_SAME_SCALE_SHARE = 0.1
+
 # Prims the independence check of a left-out root visits at most; past it the root counts as used.
 MAX_DEPENDENCY_PRIMS = 200_000
 
@@ -427,25 +426,26 @@ def _count_instancer(prim, xform_cache, context, cache):
 # Root prims beside the default prim
 # --------------------------------------------------------------------------------------------------
 
-def _holds_rig_content(stage, name):
-    """True when the root prim ``name`` holds a light or a camera."""
-    from pxr import Usd, UsdGeom
+def _rig_content(stage, name):
+    """(has a camera, has a light) for the root prim ``name``: a UsdGeom camera, and any UsdLux light."""
+    from pxr import Usd, UsdGeom, UsdLux
 
-    root = stage.GetPrimAtPath("/" + name)
-    for prim in Usd.PrimRange(root, Usd.TraverseInstanceProxies()):
-        if prim.IsA(UsdGeom.Camera) or str(prim.GetTypeName()).endswith("Light"):
-            return True
-    return False
+    camera = light = False
+    for prim in Usd.PrimRange(stage.GetPrimAtPath("/" + name), Usd.TraverseInstanceProxies()):
+        camera = camera or prim.IsA(UsdGeom.Camera)
+        light = light or prim.HasAPI(UsdLux.LightAPI) or str(prim.GetTypeName()).endswith("Light")
+        if camera and light:
+            break
+    return camera, light
 
 
 def _find_rigs(stage, default_prim, parts, part_roots):
-    """The root prims beside the default prim that clearly are a rig, as {name: why}.
+    """The root prims beside the default prim that look like a thumbnail rig, as {name: why}.
 
-    Each root's size is the largest side of the bounds of what it draws. The largest root, when it is
-    not the default prim, is a rig if it is at least RIG_SCALE_STRONG times larger than every root
-    below its scale class, or at least RIG_SCALE times larger and holds lights or cameras; roots of
-    its own scale class (at least RIG_SAME_SCALE_SHARE of its size) are judged with it. Nothing else is
-    left out: a placeholder default prim, peer roots and a site plan beside a building are all drawn.
+    A root is a rig only when it is at least RIG_SCALE times larger than the default prim (the largest
+    side of the bounds of what each draws) and holds both a camera and a light. Every other root is
+    drawn: a placeholder default prim beside the model, peer roots, a site plan beside a building, a
+    root that holds lights only, a camera only, or neither.
     """
     bounds = {}
     for (points, _, _), root in zip(parts, part_roots):
@@ -455,26 +455,16 @@ def _find_rigs(stage, default_prim, parts, part_roots):
         bounds[root] = (low, high)
     sizes = {root: float((high - low).max()) for root, (low, high) in bounds.items()}
     default_name = default_prim.GetName()
-    if len(sizes) < 2 or default_name not in sizes:
-        return {}
-    largest = max(sizes.values())
-    if sizes[default_name] >= largest * RIG_SAME_SCALE_SHARE:
-        return {}
-    top_class = [name for name, size in sizes.items() if size >= largest * RIG_SAME_SCALE_SHARE]
-    below = [size for name, size in sizes.items() if name not in top_class]
-    reference = max(below) if below else 0.0
-    if reference <= 0.0:
-        return {}
-    ratio = min(sizes[name] for name in top_class) / reference
-    if ratio < RIG_SCALE:
+    if len(sizes) < 2 or sizes.get(default_name, 0.0) <= 0.0:
         return {}
     rigs = {}
-    for name in top_class:
-        if ratio >= RIG_SCALE_STRONG:
-            rigs[name] = f"{sizes[name]:.4g} units across, {ratio:,.0f} times the largest other root"
-        elif _holds_rig_content(stage, name):
-            rigs[name] = (f"{sizes[name]:.4g} units across, {ratio:,.0f} times the largest other root, "
-                          f"holds lights or cameras")
+    for name, size in sizes.items():
+        if name == default_name or size < RIG_SCALE * sizes[default_name]:
+            continue
+        camera, light = _rig_content(stage, name)
+        if camera and light:
+            rigs[name] = (f"{size:.4g} units across, {size / sizes[default_name]:,.0f} times the default "
+                          f"prim, holds lights and a camera")
     return rigs
 
 
