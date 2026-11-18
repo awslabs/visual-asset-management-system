@@ -20232,7 +20232,8 @@ components:
                             maximum: 180
                         radiusMeters:
                             type: number
-                            exclusiveMinimum: 0
+                            minimum: 0
+                            exclusiveMinimum: true
                             description: "Optional radius in meters; treated as a circle around (lat, lon)"
                     required: [lat, lon]
                 bbox:
