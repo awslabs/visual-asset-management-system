@@ -460,6 +460,8 @@ export const sweepMessage = (schemaName: string, result: any): string => {
 // The id of the flash a failed listing load raises: a later failure replaces it, a later load
 // that succeeds removes it.
 const LOAD_FAILURE_FLASH_ID = "compliance-schemas-load-failure";
+// The id of the flash shown while a sweep runs.
+const SWEEP_RUNNING_FLASH_ID = "compliance-schemas-sweep-running";
 
 export default function ComplianceSchemas() {
     const { can: canCallRoute } = useAllowedRoutes();
@@ -483,6 +485,11 @@ export default function ComplianceSchemas() {
     const flashSequence = useRef(0);
     // The NextToken of each schema's last sweep while assets remained (see handleSweep).
     const sweepTokens = useRef<Record<string, string>>({});
+    // The schema whose sweep is running. A sweep can run for about 20 seconds and start up to 200
+    // evaluations, so a second one (of any schema) is refused until it answers; the ref closes the
+    // gap between a click and the render that shows the sweep as busy.
+    const [sweepingSchema, setSweepingSchema] = useState<string | null>(null);
+    const sweepRunning = useRef(false);
 
     // Modal state
     const [modalVisible, setModalVisible] = useState(false);
@@ -707,8 +714,17 @@ export default function ComplianceSchemas() {
     };
 
     const handleSweep = async (schemaName: string) => {
+        if (sweepRunning.current) return;
+        sweepRunning.current = true;
+        setSweepingSchema(schemaName);
         // A sweep that left assets unreached is continued by the next Sweep of the same schema.
-        const [success, result] = await sweepSchema(schemaName, sweepTokens.current[schemaName]);
+        const [success, result] = await sweepSchema(
+            schemaName,
+            sweepTokens.current[schemaName]
+        ).finally(() => {
+            sweepRunning.current = false;
+            setSweepingSchema(null);
+        });
         if (success) {
             if (result?.NextToken) {
                 sweepTokens.current[schemaName] = result.NextToken;
@@ -762,7 +778,23 @@ export default function ComplianceSchemas() {
                     Compliance Schemas
                 </Header>
 
-                <Flashbar items={flashMessages} />
+                {/* While a sweep runs, the page says which one: the other Sweep links wait for it
+                    (an inline link shows no disabled reason of its own). */}
+                <Flashbar
+                    items={
+                        sweepingSchema
+                            ? [
+                                  {
+                                      type: "info",
+                                      loading: true,
+                                      id: SWEEP_RUNNING_FLASH_ID,
+                                      content: `Sweeping schema "${sweepingSchema}". Another sweep can start when it answers.`,
+                                  },
+                                  ...flashMessages,
+                              ]
+                            : flashMessages
+                    }
+                />
 
                 <Container>
                     <Table
@@ -913,7 +945,15 @@ export default function ComplianceSchemas() {
                                                       {canSweep && (
                                                           <Button
                                                               variant="inline-link"
-                                                              disabled={legacy}
+                                                              disabled={
+                                                                  legacy ||
+                                                                  (sweepingSchema !== null &&
+                                                                      sweepingSchema !==
+                                                                          item.schemaName)
+                                                              }
+                                                              loading={
+                                                                  sweepingSchema === item.schemaName
+                                                              }
                                                               onClick={() =>
                                                                   handleSweep(item.schemaName)
                                                               }

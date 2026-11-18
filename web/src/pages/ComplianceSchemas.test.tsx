@@ -158,6 +158,29 @@ describe("ComplianceSchemas row actions", () => {
         expect(screen.getByText("Sweep failed for that schema")).toBeInTheDocument();
     });
 
+    it("sends one sweep at a time and shows the running one as busy", async () => {
+        service().fetchComplianceSchemas.mockResolvedValue([true, [rulesSchema]]);
+        let answer: (value: unknown) => void = () => undefined;
+        service().sweepSchema.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+
+        render(<ComplianceSchemas />);
+        await screen.findByText("cad-quality");
+        const sweepButton = () =>
+            within(rowOf("cad-quality")).getByRole("button", { name: /Sweep/ });
+        fireEvent.click(sweepButton());
+        fireEvent.click(sweepButton());
+        await waitFor(() => expect(sweepButton()).toHaveAttribute("aria-disabled", "true"));
+        expect(screen.getByText(/Sweeping schema "cad-quality"/)).toBeInTheDocument();
+        fireEvent.click(sweepButton());
+        expect(service().sweepSchema).toHaveBeenCalledTimes(1);
+
+        answer([true, { assetsTriggered: [], assetsRemaining: 0 }]);
+        await waitFor(() => expect(sweepButton()).not.toHaveAttribute("aria-disabled"));
+        await waitFor(() =>
+            expect(screen.queryByText(/Sweeping schema "cad-quality"/)).not.toBeInTheDocument()
+        );
+    });
+
     it("continues a sweep that left assets with the token it returned", async () => {
         service().fetchComplianceSchemas.mockResolvedValue([true, [rulesSchema]]);
         service()
