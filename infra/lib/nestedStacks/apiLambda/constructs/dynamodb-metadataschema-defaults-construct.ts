@@ -8,10 +8,10 @@ import * as cdk from "aws-cdk-lib";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
 import { AwsCustomResource, AwsSdkCall, PhysicalResourceId } from "aws-cdk-lib/custom-resources";
 import { SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT } from "../../../helper/seedCustomResource";
+import { addIamNagSuppressions } from "../../../helper/security";
 import { Construct } from "constructs";
 import { Config } from "../../../../config/config";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
-import { NagSuppressions } from "cdk-nag";
 import { readFileSync } from "fs";
 import { join } from "path";
 
@@ -779,15 +779,11 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
         }
 
         // Add CDK Nag suppressions
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: "Custom resource role requires DynamoDB PutItem permissions for metadata schema initialization. The permissions are scoped to the specific metadata schema table created by this deployment.",
-                },
-            ],
-            true
-        );
+        addIamNagSuppressions(this, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Custom resource role requires DynamoDB PutItem permissions for metadata schema initialization. The permissions are scoped to the specific metadata schema table created by this deployment.",
+            },
+        ]);
     }
 }
