@@ -368,14 +368,15 @@ Audit log search (the opt-in `audit` set): `vams_audit_groups`, `vams_audit_sear
 `vams_audit_results`, `vams_audit_stop`. `vams_audit_groups` lists the log groups the caller may search,
 the action names, entity types and outcomes the filters accept, and the deployment's limits.
 `vams_audit_search` starts a search with the same filters as `vamscli audit search` (log groups, actions,
-entity types and ids, users, API key ids, databases, assets, outcomes, request ids, up to three
-`contains` terms, a time range such as `24h` or ISO 8601, probe records, sort) and waits on the server
+entity types and ids, users, API key ids, databases, assets, outcomes, request ids, `contains`
+terms (the most terms and the longest term are the deployment's limits from `vams_audit_groups`), a time range such as `24h` or ISO 8601, probe records, sort) and waits on the server
 for about 20 seconds; when the search is Complete it returns up to `max_rows` rows (25 by default, at
 most 200) with `statistics`, and `NextToken` and `truncated` when more exist. A search still Running
 returns its `queryId`: `vams_audit_results` waits up to about 20 seconds more, or pages a Complete search
 (`starting_token`). `vams_audit_stop` stops the caller's own search and frees its slot; it removes no
 data and is not read-only, but it is registered with the set alone, like the three reads. A stopped
-search returns no rows, a handle expires an hour after its last use, and a refusal for an unknown,
+search returns no rows, and a finished search that used `contains` can no longer be read once it is
+stopped; a handle expires an hour after its last use, and a refusal for an unknown,
 expired or not-yours handle is one generic not-found. No tool reports a count of records the caller may
 not see: `statistics.candidateLimitReached` says the search reached its row limit with a filter the query
 could not apply itself, so narrow the time range. Over the remote server each call carries the signed-in

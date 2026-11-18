@@ -542,8 +542,13 @@ asymmetry other callers rely on):
     long poll of about 20 seconds, less in remote mode inside the call's time budget
     (`_audit_wait_seconds`), and rows are bounded (`AUDIT_DEFAULT_ROWS` 25, `AUDIT_MAX_ROWS` 200) with
     `NextToken` and `truncated` to continue (`vams_audit_results`, Rule 8). No tool computes or returns a
-    count of records the caller may not see. `SERVER_INSTRUCTIONS` gains its audit line only when the set
-    is selected (`AUDIT_INSTRUCTIONS`).
+    count of records the caller may not see. `SERVER_INSTRUCTIONS` is NOT changed by the set: it is the same
+    text whatever is selected and names no audit tool (the descriptions carry the billable and sensitive
+    warnings, and Rule 11's agent scenarios stay unchanged); `test_the_instructions_do_not_change_with_the_audit_set`
+    pins this. The `contains` limits come from `vams_audit_groups` (`audit_search.get_contains_limits`,
+    shared with the CLI, cached per deployment for five minutes, defaults when the read fails). A
+    `contains` search cannot be read once it is stopped or exported, and row text is untrusted: the
+    descriptions say both.
 
     `toolsets.py` names the sets
     (`consumer`, `operator`, `admin`, `compliance`, `audit`, `edh`, `edh-admin`; plus `custom` for a fork's tools and
