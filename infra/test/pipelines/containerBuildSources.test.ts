@@ -830,4 +830,16 @@ describe.each(IMAGE_TO_3D_MODELS)("the Image to 3D %s image", (model) => {
         expect(check).toBeGreaterThan(lastCodeCopy);
         expect(check).toBeLessThan(userAt);
     });
+
+    it("carries torch.hub's trusted list when it sets TORCH_HOME, which uid 10000 cannot create", () => {
+        // torch.hub touches $TORCH_HOME/hub/trusted_list on first use when it is missing; under the
+        // root-owned hub directory that was a PermissionError and the Stable3DGen run failed.
+        const torchHome = steps
+            .map((s) => /^ENV TORCH_HOME=(\S+)/.exec(s.trim())?.[1])
+            .find((v) => v !== undefined);
+        if (torchHome === undefined) return;
+        const created = steps.findIndex((s) => s.includes(`touch ${torchHome}/hub/trusted_list`));
+        expect(created).toBeGreaterThan(-1);
+        expect(created).toBeLessThan(userAt);
+    });
 });

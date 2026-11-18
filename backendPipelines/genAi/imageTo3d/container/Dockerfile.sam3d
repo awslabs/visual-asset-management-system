@@ -304,7 +304,11 @@ RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypo
 # The upstream checkout is the working directory of the model's process, and an upstream tool may
 # create files relative to it. Group vams and mode 1775 let the runtime user add entries while the
 # sticky bit keeps the root-owned sources as they are. HOME belongs to the runtime user.
-RUN chgrp vams /opt/sam3d && chmod 1775 /opt/sam3d && chown -R vams:vams /home/vams
+# torch.hub creates $TORCH_HOME/hub/trusted_list on first use when it is missing, and the runtime user
+# cannot write the root-owned hub directory, so the image carries the empty file. facebookresearch is a
+# trusted owner, so torch.hub never writes to it.
+RUN chgrp vams /opt/sam3d && chmod 1775 /opt/sam3d && chown -R vams:vams /home/vams && \
+    touch /opt/torchhome/hub/trusted_list
 # Every HuggingFace download in this image is held to its pinned commit (hfguard/hf_pins.py). Checked
 # at build time, so an image whose huggingface_hub lacks what the guard wraps fails here rather than
 # on its first run.
