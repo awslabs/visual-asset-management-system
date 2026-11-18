@@ -117,6 +117,7 @@ JWT_ADDITIONAL_AUDIENCES_ENV = os.environ.get('JWT_ADDITIONAL_AUDIENCES')
 ALLOWED_IP_RANGES_ENV = os.environ.get('ALLOWED_IP_RANGES')
 IGNORED_PATHS_ENV = os.environ.get('IGNORED_PATHS')
 
+
 # Parse JSON environment variables
 def parse_allowed_ip_ranges(raw: Optional[str]) -> Optional[List]:
     """Parse ALLOWED_IP_RANGES into the list of [min, max] ranges the IP check compares against.

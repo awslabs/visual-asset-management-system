@@ -435,6 +435,7 @@ class _RowWriteFails:
 
         return _Table()
 
+
 @pytest.mark.unit
 class TestTheHistoryStaysReadable:
 

@@ -152,7 +152,8 @@ def asset_change_provenance(workflow_execution_id=None):
 
 def stamp_asset_version_provenance(asset):
     """Record a new asset version as the asset row's latest change, in place on the row dict whose
-    stamped fields (ASSET_VERSION_STAMPED_FIELDS) the caller writes to the row: `lastChangeSource` `assetVersion`, `lastChangeAt` now,
+    stamped fields (ASSET_VERSION_STAMPED_FIELDS) the caller writes to the row: `lastChangeSource`
+    `assetVersion`, `lastChangeAt` now,
     `lastAssetVersionAt` the same instant, and no `lastChangeWorkflowExecutionId` (the latest change
     is not a workflow execution's). `lastUploadAt` is left as it is. The stream MODIFY that write
     raises is what makes the compliance trigger re-evaluate the asset, so a version-coverage verdict
