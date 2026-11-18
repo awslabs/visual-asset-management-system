@@ -361,7 +361,7 @@ MISSING_PARENT_WARNING_CODE = "extendsSchemaNotFound"
 # read it, so the warning confirms nothing about a schema the caller may not read.
 MISSING_PARENT_WARNING_MESSAGE = (
     "The parent schema named in `extends` was not found as a vams-rules-v1 schema you may read. If "
-    "it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.")
+    "it does not exist or is not vams-rules-v1, an evaluation under this schema reaches no verdict.")
 
 
 def missing_parent_warnings(casbin_enforcer, schema_body):
@@ -682,11 +682,21 @@ def list_schemas(event, database_id_filter=None, query_params=None):
         presented[(item["schemaName"], int(item.get("internalVersion", 1)))] = schema
         return True
 
-    items, next_key, _reads = listing.query_page(
-        schema_table,
-        {"IndexName": LATEST_VERSION_INDEX,
-         "KeyConditionExpression": Key(LATEST_VERSION_ATTRIBUTE).eq(LATEST_VERSION_MARKER)},
-        page_size, LATEST_VERSION_KEYS, start_key=start_key, accept=accept, prepare=prime)
+    try:
+        items, next_key, _reads = listing.query_page(
+            schema_table,
+            {"IndexName": LATEST_VERSION_INDEX,
+             "KeyConditionExpression": Key(LATEST_VERSION_ATTRIBUTE).eq(LATEST_VERSION_MARKER)},
+            page_size, LATEST_VERSION_KEYS, start_key=start_key, accept=accept, prepare=prime)
+    except ClientError as error:
+        # An update that adds LatestVersionIndex completes while DynamoDB still builds it (no token
+        # was issued from it yet), so the listing reads as it did before the index: whole.
+        if start_key is not None or not databaseRetirement.wait_index_not_ready(error):
+            raise
+        logger.info("LatestVersionIndex is not active yet; the schema listing is read whole")
+        rows = _unindexed_latest_rows(scopes)
+        prime(rows)
+        items, next_key = [item for item in rows if accept(item)], None
 
     # A save replaces the marker in one transaction, so a name has one marked row; should a page
     # still meet two (a backfill racing a save), the higher version is listed.
@@ -708,6 +718,25 @@ def list_schemas(event, database_id_filter=None, query_params=None):
         # The Schemas page's create form offers these scopes only.
         body["createScopes"] = creatable_scopes(casbin_enforcer)
     return success(body=body)
+
+
+def _unindexed_latest_rows(scopes):
+    """The latest version row of each schema, by name, read without LatestVersionIndex: from
+    DatabaseIdIndex for each of `scopes`, or the whole table (less the backfill row) when None.
+    shortcut: unpaged, as the listing was before the index; only read while the index is built."""
+    if scopes is not None:
+        rows = [item for scope in sorted(scopes) for item in query_all_items(
+            schema_table, IndexName="DatabaseIdIndex",
+            KeyConditionExpression=Key("databaseId").eq(scope))]
+    else:
+        rows = [item for item in _scan_all_items(schema_table)
+                if item.get("schemaName") != LATEST_MARKER_BACKFILL_KEY["schemaName"]]
+    latest = {}
+    for item in rows:
+        held = latest.get(item["schemaName"])
+        if held is None or int(item.get("internalVersion", 1)) > int(held.get("internalVersion", 1)):
+            latest[item["schemaName"]] = item
+    return [latest[name] for name in sorted(latest)]
 
 
 def _token_key(key):

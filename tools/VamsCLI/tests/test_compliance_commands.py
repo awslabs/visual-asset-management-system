@@ -677,8 +677,8 @@ class TestComplianceSchemaCommands:
         """D150: a parent not found as a vams-rules-v1 schema the caller may read is a save
         warning, printed as the API worded it."""
         message = ("The parent schema named in `extends` was not found as a vams-rules-v1 schema you "
-                   "may read. If it does not exist or is not vams-rules-v1, this schema is evaluated "
-                   "with its own rules only.")
+                   "may read. If it does not exist or is not vams-rules-v1, an evaluation under this "
+                   "schema reaches no verdict.")
         answer = {'message': "Schema 'cad-quality' registered as v2", 'schemaName': 'cad-quality',
                   'internalVersion': 2, 'warnings': [{
                       'code': 'extendsSchemaNotFound', 'message': message, 'extends': 'base'}]}

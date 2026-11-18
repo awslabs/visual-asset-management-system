@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from backend.tests.handlers.compliance import _cdkTables
@@ -229,3 +230,42 @@ class TestTwoSavesOfOneVersion:
         assert first["statusCode"] == 200
         assert second["statusCode"] == 409
         assert _marked(tables) == [("s-x", 2)]
+
+
+@pytest.mark.unit
+class TestTheListingWhileTheIndexIsBuilt:
+    """An update that adds LatestVersionIndex completes while DynamoDB still builds it; the
+    listing then reads the latest versions without it, whole, as it did before the index."""
+
+    def _building(self, tables, message="Cannot read from backfilling global secondary index"):
+        real_query = tables["complianceSchemaStorage"].query
+
+        def query(**kwargs):
+            if kwargs.get("IndexName") == svc.LATEST_VERSION_INDEX:
+                raise ClientError({"Error": {"Code": "ValidationException", "Message": message}},
+                                  "Query")
+            return real_query(**kwargs)
+        return patch.object(svc.schema_table, "query", side_effect=query)
+
+    def test_the_first_page_lists_every_latest_version_with_no_token(self, tables):
+        _save("s-a"), _save("s-a")
+        _save("s-b", DB_A)
+        with self._building(tables):
+            status, body = _list(maxItems=1)
+        assert status == 200, body
+        assert [(s["schemaName"], s["version"]) for s in body["schemas"]] == [("s-a", 2), ("s-b", 1)]
+        assert "NextToken" not in body and body["createScopes"] == ["GLOBAL", DB_A]
+
+    def test_a_database_filter_reads_global_and_that_database(self, tables):
+        _save("global-one")
+        _save("own-one", DB_A)
+        with self._building(tables):
+            status, body = _list(databaseId="GLOBAL")
+        assert status == 200, body
+        assert [s["schemaName"] for s in body["schemas"]] == ["global-one"]
+
+    def test_another_read_error_is_not_hidden(self, tables):
+        _save("s-a")
+        with self._building(tables, message="Some other problem"):
+            status, _ = _list()
+        assert status == 500

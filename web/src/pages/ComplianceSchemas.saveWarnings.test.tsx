@@ -76,7 +76,7 @@ describe("the Schemas page after a save that returned warnings", () => {
     it("shows the missing-parent warning the server returned, word for word", async () => {
         // D150: decided by the API from what the caller may read; the page only shows it.
         const missingParent =
-            "The parent schema named in `extends` was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.";
+            "The parent schema named in `extends` was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, an evaluation under this schema reaches no verdict.";
         await createWith({
             message: "Schema 's1' registered as v1",
             schemaName: "s1",
