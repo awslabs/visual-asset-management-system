@@ -268,15 +268,15 @@ When `useCodeBuild` is enabled, the CodeBuild project runs **outside the VPC** t
 
 The following AWS resources are created when this pipeline is enabled:
 
-| Resource                     | Service            | Purpose                                                                           |
-| :--------------------------- | :----------------- | :-------------------------------------------------------------------------------- |
-| Fargate Compute Environment  | AWS Batch          | Serverless container execution                                                    |
-| Job Queue                    | AWS Batch          | Job scheduling and prioritization                                                 |
-| Job Definition               | AWS Batch          | Container configuration (120 GiB ephemeral storage, for the transform spill)      |
-| Container Repository         | Amazon ECR         | Stores the coordinate transform container image                                   |
-| CodeBuild Project            | AWS CodeBuild      | Builds and pushes the container image to Amazon ECR                               |
-| Step Functions State Machine | AWS Step Functions | Workflow orchestration with 4-hour timeout                                        |
-| Lambda Functions (4)         | AWS Lambda         | Pipeline coordination (vamsExecute, openPipeline, constructPipeline, pipelineEnd) |
+| Resource                     | Service            | Purpose                                                                                                    |
+| :--------------------------- | :----------------- | :--------------------------------------------------------------------------------------------------------- |
+| Fargate Compute Environment  | AWS Batch          | Serverless container execution                                                                             |
+| Job Queue                    | AWS Batch          | Job scheduling and prioritization                                                                          |
+| Job Definition               | AWS Batch          | Container configuration (120 GiB ephemeral storage, for the transform spill)                               |
+| Container Repository         | Amazon ECR         | Stores the coordinate transform container image                                                            |
+| CodeBuild Project            | AWS CodeBuild      | Builds and pushes the container image to Amazon ECR                                                        |
+| Step Functions State Machine | AWS Step Functions | Workflow orchestration with a 3 hour 45 minute timeout; the transform job is bounded at 3 hours 30 minutes |
+| Lambda Functions (4)         | AWS Lambda         | Pipeline coordination (vamsExecute, openPipeline, constructPipeline, pipelineEnd)                          |
 
 ## Troubleshooting
 

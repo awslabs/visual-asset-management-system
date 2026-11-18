@@ -50,6 +50,16 @@ export interface CoordinateTransformConstructProps extends cdk.StackProps {
     importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
+/**
+ * Timeout chain. The registered pipeline's 14,400-second `taskTimeout` (vamsSchema/pipeline.json)
+ * starts before the execution does, so the state machine ends 15 minutes inside it. The token wait
+ * on CoordTransformBatchJob leaves 15 minutes for ConstructPipelineTask and PipelineEndTask
+ * (5-minute Lambdas each), and the job's attempt duration equals that wait so the container does
+ * not outlive the run.
+ */
+export const COORDINATE_TRANSFORM_STATE_MACHINE_TIMEOUT = cdk.Duration.minutes(225);
+export const COORDINATE_TRANSFORM_BATCH_TIMEOUT = cdk.Duration.minutes(210);
+
 export class CoordinateTransformConstruct extends Construct {
     public readonly pipelineVamsLambdaFunctionName: string;
 
@@ -201,10 +211,10 @@ export class CoordinateTransformConstruct extends Construct {
             this,
             "BatchFargatePipeline_CoordTransform",
             {
-                // Matches the 4-hour taskTimeout on the state that waits for this job. This
+                // Matches the taskTimeout on the state that waits for this job. This
                 // pipeline submits its own job under WAIT_FOR_TASK_TOKEN, so Step Functions
                 // bounds only the token wait -- without this the container outlives the run.
-                attemptDuration: cdk.Duration.hours(4),
+                attemptDuration: COORDINATE_TRANSFORM_BATCH_TIMEOUT,
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -323,7 +333,7 @@ export class CoordinateTransformConstruct extends Construct {
 
         // No heartbeatTimeout: the container reports only terminal success/failure on the
         // internal token (it sends no periodic heartbeats), so a heartbeat window would fail
-        // any transform outlasting it. The 4-hour taskTimeout bounds the wait instead.
+        // any transform outlasting it. The taskTimeout bounds the wait instead.
         const coordTransformBatchJob = new tasks.LambdaInvoke(this, "CoordTransformBatchJob", {
             lambdaFunction: executeBatchJobFunction,
             integrationPattern: sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
@@ -337,7 +347,7 @@ export class CoordinateTransformConstruct extends Construct {
                 "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
             }),
             resultPath: "$.batchResult",
-            taskTimeout: sfn.Timeout.duration(cdk.Duration.hours(4)),
+            taskTimeout: sfn.Timeout.duration(COORDINATE_TRANSFORM_BATCH_TIMEOUT),
         })
             .addCatch(handleBatchError, {
                 resultPath: "$.error",
@@ -366,10 +376,10 @@ export class CoordinateTransformConstruct extends Construct {
 
         const stateMachine = new sfn.StateMachine(this, "CoordTransformProcessing-StateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(definition),
-            // Envelopes the 4-hour batch-job taskTimeout so an overrunning transform hits that
-            // task's own timeout and reaches pipelineEnd — which releases the external task
-            // token — rather than being cut short by an execution-level States.Timeout.
-            timeout: cdk.Duration.hours(5),
+            // Envelopes the batch-job taskTimeout so an overrunning transform hits that task's own
+            // timeout and reaches pipelineEnd — which releases the external task token — rather
+            // than being cut short by an execution-level States.Timeout.
+            timeout: COORDINATE_TRANSFORM_STATE_MACHINE_TIMEOUT,
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,

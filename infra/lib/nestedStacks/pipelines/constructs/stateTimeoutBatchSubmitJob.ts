@@ -8,12 +8,12 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { Construct } from "constructs";
 
-export interface StateTimeoutBatchSubmitJobProps
-    extends Omit<tasks.BatchSubmitJobProps, "taskTimeout" | "timeout"> {
+export interface StateTimeoutBatchSubmitJobProps extends tasks.BatchSubmitJobProps {
     /**
      * Step Functions bound on the whole state: the time the job waits in the AWS Batch queue plus
      * its attempts. Keep it below the state machine timeout, with room for the states after it, so
      * a `States.Timeout` here is caught by the state's Catch rather than ending the execution.
+     * `taskTimeout`, when given, still renders as the SubmitJob attempt-duration override.
      */
     readonly stateTimeout: Duration;
 }
@@ -26,8 +26,7 @@ export interface StateTimeoutBatchSubmitJobProps
  * The attempt clock starts only when the job leaves the queue, so without a state bound the time a
  * job waits RUNNABLE is limited only by the execution timeout, and an execution-level
  * `States.Timeout` skips every Catch, so the state that reports the outcome never runs. This adds
- * `TimeoutSeconds` to the rendered state, which the state's Catch handles. The attempt bound stays
- * on the job definition.
+ * `TimeoutSeconds` to the rendered state, which the state's Catch handles.
  */
 export class StateTimeoutBatchSubmitJob extends tasks.BatchSubmitJob {
     private readonly stateTimeoutSeconds: number;
