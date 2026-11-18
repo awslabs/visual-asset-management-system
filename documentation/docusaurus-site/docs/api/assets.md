@@ -639,6 +639,7 @@ Generates presigned S3 URLs for downloading files from an asset. The URLs are ti
 
 | Field                 | Type               | Required | Description                                                                                                                                                              |
 | --------------------- | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `downloadType`        | string             | Yes      | `assetFile` for the asset's files or `assetPreview` for its preview image.                                                                                               |
 | `key`                 | string             | No       | Relative file path within the asset. If omitted, the asset's primary file is used. Mutually exclusive with `keys`.                                                       |
 | `keys`                | (string\|object)[] | No       | Files to generate URLs for in bulk (max 1,500 per request; `assetFile` only). Each entry is a path string (latest) or `{key, versionId}`. Mutually exclusive with `key`. |
 | `versionId`           | string             | No       | S3 version ID for a single `key`. Cannot be combined with `keys` (put versions on individual keys instead).                                                              |
