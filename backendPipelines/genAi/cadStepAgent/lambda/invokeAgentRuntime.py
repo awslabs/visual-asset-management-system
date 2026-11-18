@@ -105,9 +105,17 @@ def abort_external_workflow(error, task_token, error_name=INVOKE_ERROR):
         logger.error(f"Failed to send task failure callback: {e}")
 
 
-def lambda_handler(event, context):
-    logger.info("Event", event=event)
+def definition_summary(definition):
+    """``mode=<mode> provider=<provider>`` of a definition, for the log line. The definition also
+    carries the caller's prompt, which is not logged."""
+    try:
+        agent = definition.get("agent") or {}
+        return f"mode={definition.get('mode')} provider={agent.get('modelProvider')}"
+    except AttributeError:
+        return "mode=? provider=?"
 
+
+def lambda_handler(event, context):
     job_name = event["jobName"]
     definition = event["definition"]
     task_token = event.get("taskToken", "")
@@ -115,6 +123,7 @@ def lambda_handler(event, context):
     definition_obj = json.loads(definition[0]) if isinstance(definition, list) else definition
     if isinstance(definition_obj, str):
         definition_obj = json.loads(definition_obj)
+    logger.info(f"Event: job={job_name} {definition_summary(definition_obj)}")
 
     payload = {
         "jobName": job_name,
