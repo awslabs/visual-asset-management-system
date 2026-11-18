@@ -1774,7 +1774,7 @@ paths:
                 "200":
                     description: Database deleted.
                 "400":
-                    description: Database contains an active workflow, pipeline, or assets.
+                    description: "Database contains an active workflow, pipeline, or assets, or an unexpected error stopped the delete ('VAMS General Error: Error deleting database.')."
                 "403":
                     description: Action not allowed or not authorized.
                 "404":
