@@ -150,6 +150,8 @@ Enable this pipeline in `infra/config/config.json`:
 
 The model is set per deployment: `bedrockModelId` is the only place a model id is configured, every Amazon Bedrock call of every template uses it, and the job role's Amazon Bedrock grant is scoped to it at synthesis. No template or workload profile may name a model; a rendered configuration with a `modelId`, `model_id`, or similar key anywhere in it is refused before the job starts. To use another model, change `bedrockModelId` and redeploy.
 
+The model must accept 32,000 output tokens per call: in a full-analysis run the finalize and visual-verification calls ask for that many, and window extraction for 16,000. A workload profile can lower each stage's `maxTokens` (see [The `profile` block](#the-profile-block)). The container's preflight probes the model with the run's largest request before Amazon Transcribe runs, so a model with a lower output limit fails the run in its first minute with a cause naming the stage.
+
 The byte caps are not operator options. They are `config.ts` constants sized to the container's 100 GiB ephemeral volume: `VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB` (4096) per video and `VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB` (16384) per run.
 
 The pipeline is accepted in the commercial and AWS GovCloud (US) partitions. Amazon Transcribe and Amazon Bedrock are documented by AWS as available in both AWS GovCloud (US) Regions; the pipeline is not live-tested there, and the GovCloud template ships `bedrockModelId` empty for the operator to set. Enabling it in any other partition fails configuration validation with a message ending `not validated outside the commercial and GovCloud partitions: Amazon Transcribe endpoint availability is unverified and the service-helper has no row for this partition; a missing endpoint hangs a run until its timeout.`
@@ -412,7 +414,7 @@ Reported when Amazon Bedrock returns content that fails schema validation after 
 VideoSopBomConnectivityError: could not connect to bedrock-runtime.us-east-1.amazonaws.com from the isolated subnet (connect timeout) — the Bedrock Runtime interface endpoint is missing (app.useGlobalVpc.addVpcEndpoints).
 ```
 
-The preflight probe runs before any download. A connect timeout means the interface endpoint for the named service is missing from the VPC; an `AccessDeniedException`, `ResourceNotFoundException`, or `ValidationException` from the Amazon Bedrock probe means the model is not accessible in this account and Region — enable model access in the Amazon Bedrock console.
+The preflight probe runs before any download. A connect timeout means the interface endpoint for the named service is missing from the VPC; an `AccessDeniedException` or `ResourceNotFoundException` from the Amazon Bedrock probe means the model is not accessible in this account and Region — enable model access in the Amazon Bedrock console. The Amazon Bedrock probe asks for as many output tokens as the run's largest call, so a `ValidationException` from it names that count and the stage it comes from: the model does not accept that request (often an output limit below it; the message from Amazon Bedrock says which), so choose a model that does or lower the stage's `maxTokens` in a workload profile.
 
 ### Container exited without reporting
 
