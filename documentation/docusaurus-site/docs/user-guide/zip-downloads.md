@@ -44,13 +44,13 @@ The asset's **Download Queue** tab opens on **My jobs**. When your role allows i
 
 The search box above each list finds jobs by asset ID, asset name, request ID, archive name, or (with **Show all users**) the requester, and the refresh button beside it reloads the list. The search covers the jobs already loaded; when more jobs exist than one load holds, choose **Load more** to add older jobs, which the search then includes.
 
-| Status        | Meaning                                                                                                     |
-| ------------- | ----------------------------------------------------------------------------------------------------------- |
-| **Queued**    | The job is starting.                                                                                        |
-| **Preparing** | The archive is being written. The progress bar shows files and bytes written.                               |
-| **Ready**     | The archive is ready to download.                                                                           |
-| **Failed**    | No archive was produced. The reason is shown with the job, for example the path of a file that was refused. |
-| **Cancelled** | The job was stopped before it finished: cancelled here, or its run aborted from the **Executions** page.    |
+| Status        | Meaning                                                                                                                                                                                                   |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Queued**    | The job is starting.                                                                                                                                                                                      |
+| **Preparing** | The archive is being written. The progress bar shows files and bytes written.                                                                                                                             |
+| **Ready**     | The archive is ready to download.                                                                                                                                                                         |
+| **Failed**    | No archive was produced. The reason is shown with the job, for example the path of a file that was refused. A run aborted from the **Executions** page fails with **Cancelled from workflow executions**. |
+| **Cancelled** | You cancelled the job before it finished.                                                                                                                                                                 |
 
 If a job fails with **The archive job was stopped** or **The archive job stopped responding**, its archive job ended before it finished, for example because it was stopped by an administrator or ran out of memory. Create the job again; see [Zip Archive troubleshooting](../pipelines/zip-archive.md#troubleshooting) if it recurs.
 
