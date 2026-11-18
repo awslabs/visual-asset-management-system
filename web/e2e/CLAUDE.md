@@ -365,6 +365,18 @@ distributable asset with a top-level file), skipping when the deployment has non
 | `E2E_ZIP_CREATE=1`                            | Creates one zip job on that asset and deletes it again (cancel, then delete)                                                                                                                                                                                                                       |
 | `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD` | A second user for the ownership check (signs in with `signInAs`; never hardcoded): get and delete of the admin's job answer 404, and its URL follows the API's own decision, the all-users list's `canDownload` for that job (200, or 400 when a member is no longer downloadable; 404 without it) |
 
+Map specs. `search.mapframing.spec.ts` route-mocks the Search answer (hits on several continents and a
+footprint split at longitude 180), so it needs no data; it reads the map's camera through
+`support/mapFixtures.ts` (`mapCamera`, `isInView`, projection-independent) and skips when the deployment
+has no Map view. `viewers.cogmap.layout.spec.ts` opens a raster in the GeoTIFF Map Viewer and checks it
+fills its frame at 390, 820 and 1280 px and in fullscreen (`stripePixels` counts the frame backdrop's
+stripe colours; none may show). It finds a `.tif` through the API and skips, with the reason, when
+location services are off or the file is not a raster the viewer draws:
+
+| Variable                              | Effect                                                                                  |
+| ------------------------------------- | --------------------------------------------------------------------------------------- |
+| `E2E_COG_MAP_FILE=<db>/<asset>/<key>` | Names the georeferenced raster the layout spec opens, instead of the first `.tif` found |
+
 The SuperSplat Editor renders only through WebGPU, which headless Chromium hides. `E2E_WEBGPU=1` runs
 the SuperSplat cases in a separate `chromium-webgpu` project launched with WebGPU on, and takes them out
 of the `chromium` project, so every other case still runs in a browser without WebGPU. Without an
