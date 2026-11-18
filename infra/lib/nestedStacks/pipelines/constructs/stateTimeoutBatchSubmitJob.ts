@@ -9,6 +9,7 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { Construct } from "constructs";
+import { NagSuppressions } from "cdk-nag";
 import * as ServiceHelper from "../../../helper/service-helper";
 
 export interface StateTimeoutBatchSubmitJobProps extends tasks.BatchSubmitJobProps {
@@ -81,5 +82,21 @@ export function grantBatchStateTimeoutCleanup(
                 `arn:${ServiceHelper.Partition()}:batch:${stack.region}:${stack.account}:job/*`,
             ],
         })
+    );
+    NagSuppressions.addResourceSuppressions(
+        pipelineEnd,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "pipelineEnd ends the run's AWS Batch job after its Batch state's own bound fires: batch:ListJobs supports no resource-level permission, and batch:TerminateJob names a job id AWS Batch generates at submit, so job/* in this account and Region is the narrowest ARN. The job is found by the run's unique job name on the pipeline's own queues.",
+                appliesTo: [
+                    "Resource::*",
+                    {
+                        regex: "/^Resource::arn:(?:aws(?:-[a-z-]+)?|<AWS::Partition>):batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job\\/\\*$/g",
+                    },
+                ],
+            },
+        ],
+        true
     );
 }
