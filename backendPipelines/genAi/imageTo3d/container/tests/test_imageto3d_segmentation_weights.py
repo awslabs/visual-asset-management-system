@@ -22,6 +22,7 @@ import pytest
 
 import model_manager
 import preprocess
+from hfguard import hf_pins
 
 pytestmark = pytest.mark.unit
 
@@ -36,8 +37,9 @@ def _write(path, size=WEIGHT):
     return path
 
 
-def _hf_cache(root, repo, weight="model.safetensors", revision="abc123"):
-    """A HuggingFace-shaped cache holding one repo's snapshot, and its blobs beside it."""
+def _hf_cache(root, repo, weight="model.safetensors", revision=None):
+    """A HuggingFace-shaped cache holding one repo's snapshot at its pinned commit, and its blobs beside it."""
+    revision = revision or hf_pins.HF_REVISIONS.get(repo, "abc123")
     repo_dir = root / "hub" / ("models--" + repo.replace("/", "--"))
     snapshot = repo_dir / "snapshots" / revision
     snapshot.mkdir(parents=True, exist_ok=True)

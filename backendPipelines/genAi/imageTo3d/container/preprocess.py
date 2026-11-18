@@ -35,6 +35,10 @@ BACKGROUND_REMOVAL_BACKENDS = ("none", "rembg", "birefnet", "rmbg2", "sam")
 # older than SamModel needs, and it cannot be raised in the shared layer without breaking that model's own
 # checkpoint -- see requirements.txt. Selecting sam there raises rather than falling back.
 SAM_MODEL_REPO = "facebook/sam-vit-huge"
+# The checkpoints SAM_MODEL_REPO may name. Each is pinned in hfguard/hf_pins.py, and a run naming any
+# other repository is refused before anything downloads: the setting is part of a run's configuration,
+# so leaving it open would let a run load an arbitrary repository's weights.
+SAM_MODEL_REPOS = ("facebook/sam-vit-huge", "facebook/sam-vit-large", "facebook/sam-vit-base")
 
 # HuggingFace repositories each background-removal backend needs. Declaring one here does two things: the
 # weight-cache CHECK asks about it, so a cache holding the model's weights but not the backend's reports a
@@ -260,10 +264,18 @@ def _remove_background_sam(image_path: str, output_path: str, params: dict) -> N
         source = img.convert("RGB")
     prompt, described = resolve_sam_prompt(params.get("SAM_PROMPT"), source.size)
     repo = str(params.get("SAM_MODEL_REPO") or SAM_MODEL_REPO).strip() or SAM_MODEL_REPO
+    if repo not in SAM_MODEL_REPOS:
+        raise PreprocessError(
+            f"SAM_MODEL_REPO '{repo}' is not one of the SAM checkpoints this pipeline loads; expected one of "
+            f"{', '.join(SAM_MODEL_REPOS)}")
     logger.info(f"Segmenting with SAM ({repo}) prompted by {described}")
 
-    model = SamModel.from_pretrained(repo)
-    processor = SamProcessor.from_pretrained(repo)
+    # The revision is passed as well as enforced by the pin guard, so this load reads the pinned commit
+    # even where the guard is not installed.
+    from hfguard.hf_pins import revision_for
+
+    model = SamModel.from_pretrained(repo, revision=revision_for(repo))
+    processor = SamProcessor.from_pretrained(repo, revision=revision_for(repo))
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     model.eval()
@@ -324,8 +336,12 @@ def _remove_background_rmbg2(image_path: str, output_path: str, params: dict) ->
             "Background removal backend 'rmbg2' is unavailable: torch, torchvision and "
             "transformers are required") from e
 
+    # trust_remote_code runs the repository's own model code, so the pinned commit fixes the code as well
+    # as the weights.
+    from hfguard.hf_pins import revision_for
+
     model = AutoModelForImageSegmentation.from_pretrained(
-        "briaai/RMBG-2.0", trust_remote_code=True)
+        "briaai/RMBG-2.0", trust_remote_code=True, revision=revision_for("briaai/RMBG-2.0"))
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     model.eval()

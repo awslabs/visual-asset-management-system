@@ -25,8 +25,7 @@
         "MIN_VOLUME_RETENTION": "0.5",
         "CLOSE_HOLE_MAX_EDGES": "10000",
         "NEGLIGIBLE_FRAGMENT_FRACTION": "0.1",
-        "BENCHMARK_REPORT": "false",
-        "INVALIDATE_MODEL_CACHE": "false"
+        "BENCHMARK_REPORT": "false"
     },
     "models": {
         "sam3d": {
