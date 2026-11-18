@@ -746,9 +746,10 @@ aws opensearch delete-domain \
 ## Step 11: Delete the AWS CodeArtifact domain
 
 The Image to 3D pipeline creates a CodeArtifact domain and a `pypi-store` repository so that its
-container builds pull Python packages through a cache rather than depending on the public package CDN.
+container builds pull Python packages through a cache rather than depending on the public package CDN,
+in the Regions that offer AWS CodeArtifact; elsewhere there is nothing to delete in this step.
 Both are removed with the stack. The domain carries an **explicit name**
-(`<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-imageto3d`, lower-cased, with each character other than a letter, digit or `-` replaced by `-`, and cut to 50 characters), so an orphan left by a failed teardown blocks a redeploy
+(`<CONFIG_NAME>-<BASE_STACK_NAME>-imageto3d`, lower-cased, with each character other than a letter, digit or `-` replaced by `-`, and cut to 50 characters; with the CMK on, cut to 46 characters and followed by `-kms`), so an orphan left by a failed teardown blocks a redeploy
 using the same configuration name.
 
 ```bash
