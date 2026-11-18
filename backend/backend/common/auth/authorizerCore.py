@@ -207,6 +207,9 @@ JWT_ADDITIONAL_AUDIENCES = parse_additional_audiences(JWT_ADDITIONAL_AUDIENCES_E
 # API Key Configuration
 API_KEY_HASH_INDEX_NAME = 'apiKeyHashIndex'  # pragma: allowlist secret
 API_KEY_CACHE_TTL = 15  # seconds before a cached entry expires
+# How long past its expiry a cached API key record still answers when the lookup itself fails.
+# Past that the key's status is unknown and the lookup is refused (ApiKeyLookupUnavailableError).
+API_KEY_STALE_FALLBACK_SECONDS = 2 * API_KEY_CACHE_TTL
 
 # User Roles Configuration
 USER_ROLES_CACHE_TTL = 60  # seconds before a cached entry expires
@@ -312,6 +315,8 @@ def _lookup_api_key_by_hash(key_hash: str):
     - Fresh cache hit: return immediately (no DynamoDB call)
     - Expired or missing: query DynamoDB GSI once, cache result for API_KEY_CACHE_TTL seconds
     - Not-found keys are cached as None to prevent DDOS of DynamoDB with invalid keys
+    - Query failure: the cached record answers until API_KEY_STALE_FALLBACK_SECONDS past its
+      expiry; otherwise ApiKeyLookupUnavailableError
     """
     current_time = time.time()
     cached = _api_key_cache.get(key_hash)
@@ -345,9 +350,10 @@ def _lookup_api_key_by_hash(key_hash: str):
         return record
     except Exception as e:
         logger.error(f"Failed to query API key by hash: {str(e)}")
-        # On error, return the cached record if available (even if expired). With nothing
-        # cached the key's status is unknown, which is not the same as "not found".
-        if cached:
+        # On error, return the cached record if it expired no more than
+        # API_KEY_STALE_FALLBACK_SECONDS ago. With nothing cached, or only an older entry, the
+        # key's status is unknown, which is not the same as "not found".
+        if cached and current_time < cached['expiry'] + API_KEY_STALE_FALLBACK_SECONDS:
             return cached['record']
         raise ApiKeyLookupUnavailableError("API key lookup failed") from e
 
