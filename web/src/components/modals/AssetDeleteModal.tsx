@@ -44,6 +44,9 @@ interface AssetDeleteModalProps {
 
     // Force delete mode for archived files
     forceDeleteMode?: boolean;
+
+    // Whether the role may permanently delete; without it only archiving is offered
+    canPermanentlyDelete?: boolean;
 }
 
 interface AssetDeleteState {
@@ -66,6 +69,7 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
     databaseId,
     assetId,
     forceDeleteMode = false,
+    canPermanentlyDelete = true,
 }) => {
     const [state, setState] = useState<AssetDeleteState>({
         operation: forceDeleteMode ? "delete" : "archive",
@@ -358,7 +362,7 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                     )}
                 </Box>
 
-                {!forceDeleteMode && (
+                {!forceDeleteMode && canPermanentlyDelete && (
                     <Toggle
                         onChange={({ detail }) =>
                             handleOperationChange(detail.checked ? "delete" : "archive")

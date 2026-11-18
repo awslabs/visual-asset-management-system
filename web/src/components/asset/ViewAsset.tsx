@@ -138,10 +138,11 @@ export default function ViewAsset() {
         can("PUT", ASSET_UNARCHIVE_ROUTE),
         `Your role does not allow unarchiving this ${Synonyms.asset}.`
     );
+    const canPermanentlyDelete = can("DELETE", ASSET_PERMANENT_DELETE_ROUTE);
     const permanentDeleteDisabledReason = routeDisabledReason(
         permissionsLoading,
         permissionsFailed,
-        can("DELETE", ASSET_PERMANENT_DELETE_ROUTE),
+        canPermanentlyDelete,
         `Your role does not allow permanently deleting this ${Synonyms.asset}.`
     );
 
@@ -489,6 +490,7 @@ export default function ViewAsset() {
                         selectedAssets={asset ? [asset] : []}
                         databaseId={databaseId}
                         forceDeleteMode={isArchived}
+                        canPermanentlyDelete={canPermanentlyDelete}
                         onSuccess={(operation) => {
                             setShowDeleteModal(false);
                             // Navigate back to search page after successful deletion / archival

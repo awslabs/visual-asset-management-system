@@ -56,7 +56,14 @@ jest.mock("../metadataV2", () => ({
     },
 }));
 jest.mock("./TabbedContainer", () => ({ __esModule: true, default: () => null }));
-jest.mock("../modals/AssetDeleteModal", () => ({ __esModule: true, default: () => null }));
+const mockDeleteModalProps: any[] = [];
+jest.mock("../modals/AssetDeleteModal", () => ({
+    __esModule: true,
+    default: (props: any) => {
+        mockDeleteModalProps.push(props);
+        return null;
+    },
+}));
 jest.mock("../modals/AssetUnarchiveModal", () => ({ __esModule: true, default: () => null }));
 jest.mock("../createupdate/UpdateAsset", () => ({ UpdateAsset: () => null }));
 
@@ -82,6 +89,7 @@ async function renderAs(routes: any[]) {
     return {
         pane: mockPaneProps[mockPaneProps.length - 1],
         metadata: mockMetadataProps[mockMetadataProps.length - 1],
+        deleteModal: mockDeleteModalProps[mockDeleteModalProps.length - 1],
     };
 }
 
@@ -91,6 +99,7 @@ describe("asset page actions by role", () => {
         __resetCache();
         mockPaneProps.length = 0;
         mockMetadataProps.length = 0;
+        mockDeleteModalProps.length = 0;
         mockFetchAsset.mockResolvedValue([
             true,
             { assetId: "a1", assetName: "Bracket", databaseId: "db1" },
@@ -128,10 +137,27 @@ describe("asset page actions by role", () => {
         expect(metadata.readOnly).toBe(false);
     });
 
+    it("a database-user role may archive from the delete dialog but not permanently delete", async () => {
+        const { deleteModal } = await renderAs(DATABASE_USER_ROUTES);
+        expect(deleteModal.canPermanentlyDelete).toBe(false);
+    });
+
     it("the administrator keeps Delete and the metadata editor", async () => {
         const { pane, metadata } = await renderAs(ADMIN_ROUTES);
         expect(pane.deleteDisabledReason).toBeUndefined();
         expect(metadata.readOnly).toBe(false);
+    });
+
+    it("a role with the deleteAsset route is offered permanent delete in the delete dialog", async () => {
+        const { deleteModal } = await renderAs([
+            ...ADMIN_ROUTES,
+            {
+                path: "/database/{databaseId}/assets/{assetId}/deleteAsset",
+                methods: ["DELETE"],
+                category: "test",
+            },
+        ]);
+        expect(deleteModal.canPermanentlyDelete).toBe(true);
     });
 
     it("disables Delete and the editor while the permission check loads", async () => {
@@ -195,6 +221,7 @@ describe("archived asset page (#870)", () => {
         __resetCache();
         mockPaneProps.length = 0;
         mockMetadataProps.length = 0;
+        mockDeleteModalProps.length = 0;
         mockFetchAsset.mockResolvedValue([
             true,
             {

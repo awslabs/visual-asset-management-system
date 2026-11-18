@@ -31,6 +31,12 @@ const NewSearchPage: React.FC<NewSearchPageProps> = () => {
             can("DELETE", "/database/{databaseId}/assets/{assetId}/archiveAsset"),
             `Your role does not allow archiving or deleting ${Synonyms.assets}.`
         ),
+        permanentDelete: routeDisabledReason(
+            permissionsLoading,
+            permissionsFailed,
+            can("DELETE", "/database/{databaseId}/assets/{assetId}/deleteAsset"),
+            `Your role does not allow permanently deleting ${Synonyms.assets}.`
+        ),
     };
 
     return (

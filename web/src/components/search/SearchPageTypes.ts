@@ -8,11 +8,13 @@ import Synonyms from "../../synonyms";
 
 /**
  * Why the asset list's Create and Delete Selected actions are unavailable to the signed-in role
- * (Cloudscape `disabledReason`). An action with no reason is enabled.
+ * (Cloudscape `disabledReason`). An action with no reason is enabled. `permanentDelete` covers the
+ * delete dialog's permanent delete, the only choice for a selection with an archived row.
  */
 export interface AssetActionDisabledReasons {
     create?: string;
     delete?: string;
+    permanentDelete?: string;
 }
 
 /**
