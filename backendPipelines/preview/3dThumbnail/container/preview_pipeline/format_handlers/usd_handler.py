@@ -127,7 +127,7 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
     parts = []
     default_prim = _default_prim(stage)
     if default_prim is not None:
-        parts = _collect_parts(default_prim, xform_cache, context)
+        parts = _collect_scene(default_prim, xform_cache, context)
         if parts:
             others = [child.GetName() for child in stage.GetPseudoRoot().GetChildren()
                       if child.GetPath() != default_prim.GetPath()]
@@ -142,7 +142,7 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
                         f"drawing the whole stage")
             context.points_total = 0
     if not parts:
-        parts = _collect_parts(stage.GetPseudoRoot(), xform_cache, context)
+        parts = _collect_scene(stage.GetPseudoRoot(), xform_cache, context)
 
     if not parts:
         raise ValueError("No valid mesh geometry found in USD stage")
@@ -181,12 +181,16 @@ def _default_prim(stage):
     return prim
 
 
-def _collect_parts(root, xform_cache, context):
-    """The (points, triangles, colours) parts of the gprims at and under ``root``, in traversal order."""
+def _collect_parts(root, xform_cache, context, plan=None):
+    """The (points, triangles, colours) parts of the gprims at and under ``root``, in traversal order.
+
+    With a ``plan`` (``_sample_plan``) only the gprims and instances it keeps are read; without one the
+    walk stops once the stage passes MAX_POINTS vertices and ``context.capped`` is set."""
     from pxr import Usd, UsdGeom
 
     time = context.time
     parts = []
+    gprim_index = -1
     iterator = iter(Usd.PrimRange(root, Usd.TraverseInstanceProxies()))
     for prim in iterator:
         if prim.IsPseudoRoot():
@@ -195,16 +199,199 @@ def _collect_parts(root, xform_cache, context):
             iterator.PruneChildren()
             continue
         if prim.IsA(UsdGeom.PointInstancer):
-            parts.extend(_expand_point_instancer(prim, xform_cache, context))
+            parts.extend(_expand_point_instancer(prim, xform_cache, context, plan))
             iterator.PruneChildren()
+            if plan is None and context.capped:
+                break
             continue
+        if plan is not None:
+            if not prim.IsA(UsdGeom.Gprim):
+                continue
+            gprim_index += 1
+            if not plan.keeps_gprim(gprim_index):
+                continue
         part = _gprim_part(prim, np.array(xform_cache.GetLocalToWorldTransform(prim)), context)
         if part is not None:
             parts.append(part)
         if context.points_total > MAX_POINTS:
-            logger.warning(f"Stage expands past {MAX_POINTS} vertices; remaining prims are skipped")
+            context.capped = True
+            if plan is not None:
+                logger.warning(f"The sampled preview still passes {MAX_POINTS} vertices; "
+                               f"remaining prims are skipped")
             break
     return parts
+
+
+def _collect_scene(root, xform_cache, context):
+    """``_collect_parts`` of ``root``; when the stage passes MAX_POINTS vertices, the parts of an evenly
+    spaced sample of its gprims and instances instead, so the preview covers the whole scene rather
+    than the first prims in traversal order."""
+    parts = _collect_parts(root, xform_cache, context)
+    if not context.capped:
+        return parts
+    parts = None
+    context.reset_counts()
+    plan = _sample_plan(root, xform_cache, context)
+    context.reset_counts()
+    parts = _collect_parts(root, xform_cache, context, plan)
+    logger.warning(f"Stage expands past {MAX_POINTS} vertices (about {plan.total_vertices:,} in "
+                   f"{plan.total_items:,} gprims and instances); the preview shows {plan.kept_items:,} of "
+                   f"them, every {plan.stride}th in traversal order plus the outermost, so it covers the "
+                   f"whole scene")
+    return parts
+
+
+class _SamplePlan:
+    """Which gprims (by traversal index) and point-instancer instances a sampled load keeps: every
+    ``stride``th, plus the ones holding the scene's outermost positions, so the sample spans the
+    scene's full footprint."""
+
+    def __init__(self, stride, forced_gprims, forced_instances, total_vertices, total_items, kept_items):
+        self.stride = stride
+        self.forced_gprims = forced_gprims
+        self.forced_instances = forced_instances
+        self.total_vertices = total_vertices
+        self.total_items = total_items
+        self.kept_items = kept_items
+
+    def keeps_gprim(self, index):
+        return index % self.stride == 0 or index in self.forced_gprims
+
+    def instance_mask(self, path, count):
+        keep = np.zeros(count, dtype=bool)
+        keep[::self.stride] = True
+        forced = self.forced_instances.get(str(path))
+        if forced is not None and len(forced):
+            keep[np.asarray(forced, dtype=np.int64)] = True
+        return keep
+
+
+# Vertices assumed for an implicit gprim when counting a stage (its tessellation is a few hundred).
+_IMPLICIT_VERTEX_ESTIMATE = 300
+# Share of MAX_POINTS the sampled preview aims at; the rest absorbs the estimate's error and the
+# outermost items kept beside the stride.
+SAMPLE_BUDGET_SHARE = 0.9
+
+
+def _local_extent(prim, cache, context):
+    """(vertex count, local min, local max) of one gprim, counted once per prototype prim."""
+    from pxr import UsdGeom
+
+    key = prim.GetPrimInPrototype().GetPath() if prim.IsInstanceProxy() else prim.GetPath()
+    if key in cache:
+        return cache[key]
+    if prim.IsA(UsdGeom.Mesh):
+        points = UsdGeom.Mesh(prim).GetPointsAttr().Get(context.time)
+        if points is None or len(points) == 0:
+            result = (0, None, None)
+        else:
+            array = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+            result = (len(array), array.min(axis=0), array.max(axis=0))
+    else:
+        extent = UsdGeom.Boundable(prim).GetExtentAttr().Get(context.time)
+        if extent is not None and len(extent) == 2:
+            result = (_IMPLICIT_VERTEX_ESTIMATE, np.array(extent[0], dtype=np.float64),
+                      np.array(extent[1], dtype=np.float64))
+        else:
+            result = (_IMPLICIT_VERTEX_ESTIMATE, None, None)
+    cache[key] = result
+    return result
+
+
+def _world_box(lo, hi, matrix):
+    corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])])
+    world = _transform(corners, matrix)
+    return world.min(axis=0), world.max(axis=0)
+
+
+def _sample_plan(root, xform_cache, context):
+    """Count the gprims and instances under ``root`` without tessellating them and choose the stride
+    that brings the sample under MAX_POINTS, plus the items that hold the scene's outermost bounds."""
+    from pxr import Usd, UsdGeom
+
+    time = context.time
+    cache = {}
+    boxes = []          # (gprim index, world min, world max)
+    instancers = []     # (path, per-instance vertices, world translations)
+    total_vertices = 0
+    total_gprims = 0
+    gprim_index = -1
+    iterator = iter(Usd.PrimRange(root, Usd.TraverseInstanceProxies()))
+    for prim in iterator:
+        if prim.IsPseudoRoot():
+            continue
+        if not _is_rendered(prim, time):
+            iterator.PruneChildren()
+            continue
+        if prim.IsA(UsdGeom.PointInstancer):
+            iterator.PruneChildren()
+            entry = _count_instancer(prim, xform_cache, context, cache)
+            if entry is not None:
+                instancers.append(entry)
+                total_vertices += entry[1] * len(entry[2])
+            continue
+        if not prim.IsA(UsdGeom.Gprim):
+            continue
+        gprim_index += 1
+        total_gprims += 1
+        count, lo, hi = _local_extent(prim, cache, context)
+        total_vertices += count
+        if lo is not None:
+            matrix = np.array(xform_cache.GetLocalToWorldTransform(prim))
+            wlo, whi = _world_box(lo, hi, matrix)
+            boxes.append((gprim_index, wlo, whi))
+
+    total_items = total_gprims + sum(len(entry[2]) for entry in instancers)
+    budget = MAX_POINTS * SAMPLE_BUDGET_SHARE
+    stride = max(2, int(np.ceil(total_vertices / budget))) if total_vertices > 0 else 2
+
+    forced_gprims = set()
+    if boxes:
+        lows = np.array([box[1] for box in boxes])
+        highs = np.array([box[2] for box in boxes])
+        for axis in range(3):
+            forced_gprims.add(boxes[int(lows[:, axis].argmin())][0])
+            forced_gprims.add(boxes[int(highs[:, axis].argmax())][0])
+    forced_instances = {}
+    for path, _, translations in instancers:
+        forced = set()
+        for axis in range(3):
+            forced.add(int(translations[:, axis].argmin()))
+            forced.add(int(translations[:, axis].argmax()))
+        forced_instances[str(path)] = sorted(forced)
+    kept = len({i for i in range(0, total_gprims, stride)} | forced_gprims) + sum(
+        len(set(range(0, len(entry[2]), stride)) | set(forced_instances[str(entry[0])]))
+        for entry in instancers)
+    return _SamplePlan(stride, forced_gprims, forced_instances, int(total_vertices), total_items, kept)
+
+
+def _count_instancer(prim, xform_cache, context, cache):
+    """(path, vertices per instance, world translations of the instances) of a PointInstancer, or None."""
+    from pxr import Usd, UsdGeom
+
+    instancer = UsdGeom.PointInstancer(prim)
+    time = context.time
+    transforms = instancer.ComputeInstanceTransformsAtTime(time, time)
+    proto_indices = instancer.GetProtoIndicesAttr().Get(time)
+    targets = instancer.GetPrototypesRel().GetTargets()
+    if not transforms or proto_indices is None or not targets:
+        return None
+    stage = prim.GetStage()
+    per_prototype = []
+    for target in targets:
+        root = stage.GetPrimAtPath(target)
+        vertices = 0
+        if root:
+            for child in Usd.PrimRange(root, Usd.TraverseInstanceProxies()):
+                if _is_rendered(child, time) and child.IsA(UsdGeom.Gprim):
+                    vertices += _local_extent(child, cache, context)[0]
+        per_prototype.append(vertices)
+    indices = np.asarray(proto_indices, dtype=np.int64)
+    valid = (indices >= 0) & (indices < len(per_prototype))
+    mean_vertices = float(np.asarray(per_prototype, dtype=np.float64)[indices[valid]].mean()) if valid.any() else 0.0
+    instancer_to_world = np.array(xform_cache.GetLocalToWorldTransform(prim))
+    world = np.array(transforms, dtype=np.float64).reshape(-1, 4, 4) @ instancer_to_world
+    return prim.GetPath(), int(round(mean_vertices)), world[:, 3, :3]
 
 
 class _LoadContext:
@@ -226,6 +413,19 @@ class _LoadContext:
         # Why a shader input's connections were not followed; each reason is logged once.
         self.connections_not_followed = set()
         self.points_total = 0
+        # Set when a walk stopped at MAX_POINTS vertices; ``_collect_scene`` then samples the stage.
+        self.capped = False
+
+
+def _reset_counts(self):
+    """Forget what a discarded walk counted, so a second walk of the stage starts clean."""
+    self.points_total = 0
+    self.capped = False
+    self.mdl_unread.clear()
+    self.mdl_approximated.clear()
+
+
+_LoadContext.reset_counts = _reset_counts
 
 
 def _counted(counts):
@@ -410,7 +610,7 @@ def _implicit_geometry(prim, context):
     return points, triangles, colours
 
 
-def _expand_point_instancer(prim, xform_cache, context):
+def _expand_point_instancer(prim, xform_cache, context, plan=None):
     """Every instance of a PointInstancer, each prototype's gprims placed by its transform."""
     from pxr import Usd, UsdGeom
 
@@ -441,14 +641,19 @@ def _expand_point_instancer(prim, xform_cache, context):
 
     proto_indices = np.asarray(proto_indices, dtype=np.int64)
     parts = []
-    for instance, matrix in zip(proto_indices, transforms):
+    keep = plan.instance_mask(prim.GetPath(), len(proto_indices)) if plan is not None else None
+    for number, (instance, matrix) in enumerate(zip(proto_indices, transforms)):
+        if keep is not None and not keep[number]:
+            continue
         if instance < 0 or instance >= len(prototypes):
             continue
         world = np.array(matrix) @ instancer_to_world
         for points, triangles, colours in prototypes[instance]:
             if context.points_total > MAX_POINTS:
-                logger.warning(f"Point instancer {prim.GetPath()}: vertex limit reached, "
-                               f"remaining instances skipped")
+                context.capped = True
+                if plan is not None:
+                    logger.warning(f"Point instancer {prim.GetPath()}: the sampled instances still pass "
+                                   f"the vertex limit, remaining instances skipped")
                 return parts
             parts.append((_transform(points, world), triangles, colours))
             context.points_total += len(points)
