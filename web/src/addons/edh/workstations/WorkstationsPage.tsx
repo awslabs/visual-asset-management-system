@@ -44,6 +44,7 @@ import WorkstationStatusBadge, {
     describeLastError,
 } from "../components/WorkstationStatusBadge";
 import CapacityDetail from "../components/CapacityDetail";
+import ConfirmActionDialog from "../admin/ConfirmActionDialog";
 import DeleteWorkstationDialog from "../components/DeleteWorkstationDialog";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
@@ -446,6 +447,8 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
         useWorkstationMutations();
     const [launchOpen, setLaunchOpen] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState<WorkstationRecord | null>(null);
+    // The workstation whose Stop waits for the user's confirmation, as the admin Sessions tab asks.
+    const [stopTarget, setStopTarget] = useState<WorkstationRecord | null>(null);
     const [signInTarget, setSignInTarget] = useState<WorkstationRecord | null>(null);
     // The board's controls, where a dialog finds the element it returns focus to.
     const boardRef = useRef<HTMLDivElement>(null);
@@ -509,8 +512,11 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
         setActionError(null);
         try {
             await stopWorkstation.mutateAsync({ sessionId: row.sessionId });
+            setStopTarget(null);
             toast.success("Workstation stop requested", { description: row.name });
         } catch (err) {
+            // Close the confirmation and report the failure as the delete does.
+            setStopTarget(null);
             const unconfirmed = unconfirmedNotice("Stop", err);
             if (unconfirmed) {
                 toast.warning(unconfirmed.title, {
@@ -596,9 +602,9 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
     // The row handlers close over the mutations and the toast, both fresh on many renders; the menu
     // reads them through a ref so the column definitions can stay stable across a poll. A fresh
     // `cell` function is a new element type, which remounts the cell and closes an open menu.
-    const handlersRef = useRef({ stop: handleStop, start: handleStart, renew: handleRenew });
-    handlersRef.current = { stop: handleStop, start: handleStart, renew: handleRenew };
-    const onStop = useCallback((row: WorkstationRecord) => handlersRef.current.stop(row), []);
+    // Stop opens its confirmation (`setStopTarget`), which runs `handleStop`.
+    const handlersRef = useRef({ start: handleStart, renew: handleRenew });
+    handlersRef.current = { start: handleStart, renew: handleRenew };
     const onStart = useCallback((row: WorkstationRecord) => handlersRef.current.start(row), []);
     const onRenew = useCallback((row: WorkstationRecord) => handlersRef.current.renew(row), []);
 
@@ -613,7 +619,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                 canRenew={canRenew}
                 leaseEnabled={leaseEnabled}
                 leaseHours={leaseHours}
-                onStop={onStop}
+                onStop={setStopTarget}
                 onStart={onStart}
                 onDelete={setDeleteTarget}
                 onRenew={onRenew}
@@ -629,7 +635,6 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
             canShowSignIn,
             leaseEnabled,
             leaseHours,
-            onStop,
             onStart,
             onRenew,
         ]
@@ -836,6 +841,28 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                     // gains a row, so focus goes to the search box.
                     returnFocusTo={(opener, launched) =>
                         launched || !opener ? searchBox() : opener
+                    }
+                />
+            )}
+
+            {stopTarget && (
+                <ConfirmActionDialog
+                    open
+                    title={`Stop ${stopTarget.name}`}
+                    confirmLabel="Stop"
+                    // A stop is reversible: the workstation keeps its disk and starts again here.
+                    destructive={false}
+                    busy={stopWorkstation.isPending}
+                    busyLabel="Stopping..."
+                    onCancel={() => setStopTarget(null)}
+                    onConfirm={() => handleStop(stopTarget)}
+                    returnFocusTo={() => rowActionsOrSearchBox(stopTarget)}
+                    message={
+                        <p>
+                            Stop this workstation? Its open applications close and unsaved work in
+                            them is lost; its disk is kept, and you can start it again from this
+                            page.
+                        </p>
                     }
                 />
             )}

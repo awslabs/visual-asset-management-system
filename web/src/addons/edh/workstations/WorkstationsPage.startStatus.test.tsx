@@ -429,6 +429,7 @@ describe("WorkstationsPage stalled start", () => {
 
         await openActionsFor(user, "Render box");
         await user.click(screen.getByRole("menuitem", { name: "Stop" }));
+        await user.click(screen.getByRole("button", { name: "Stop" }));
 
         await waitFor(() =>
             expect(m.stopWorkstation.mutateAsync).toHaveBeenCalledWith({ sessionId: "s-1" })

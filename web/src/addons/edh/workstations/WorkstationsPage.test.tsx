@@ -599,7 +599,33 @@ describe("WorkstationsPage", () => {
         );
     });
 
-    it("disables Stop on a workstation while its stop is in flight, and offers it again once the stop fails", async () => {
+    it("asks before it stops a workstation, and a cancelled confirmation sends nothing", async () => {
+        const user = userEvent.setup();
+        const m = mutations();
+        (queries.useWorkstationMutations as jest.Mock).mockReturnValue(m);
+        renderPage();
+
+        await openActionsFor(user, "Dev box");
+        await user.click(screen.getByRole("menuitem", { name: "Stop" }));
+        const dialog = screen.getByRole("dialog", { name: "Stop Dev box" });
+        expect(dialog).toHaveTextContent("Its open applications close");
+        expect(dialog).toHaveTextContent("its disk is kept");
+        await user.click(screen.getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        expect(m.stopWorkstation.mutateAsync).not.toHaveBeenCalled();
+        // Focus returns to the row's menu trigger.
+        expect(screen.getByLabelText("Actions for Dev box")).toHaveFocus();
+
+        await openActionsFor(user, "Dev box");
+        await user.click(screen.getByRole("menuitem", { name: "Stop" }));
+        await user.click(screen.getByRole("button", { name: "Stop" }));
+        await waitFor(() =>
+            expect(m.stopWorkstation.mutateAsync).toHaveBeenCalledWith({ sessionId: "s-1" })
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    it("sends one stop for a second confirm while the first is in flight, and offers Stop again once the stop fails", async () => {
         const user = userEvent.setup();
         const m = mutations();
         let refuse: (err: Error) => void = () => undefined;
@@ -614,18 +640,13 @@ describe("WorkstationsPage", () => {
 
         await openActionsFor(user, "Dev box");
         await user.click(screen.getByRole("menuitem", { name: "Stop" }));
-        await openActionsFor(user, "Dev box");
-        const stop = screen.getByRole("menuitem", { name: "Stop" });
-        expect(stop).toHaveAttribute("aria-disabled", "true");
-        expect(stop).toHaveAccessibleDescription("A stop of this workstation is in progress.");
-        await user.click(stop);
+        const confirm = screen.getByRole("button", { name: "Stop" });
+        await user.click(confirm);
+        await user.click(confirm);
         expect(m.stopWorkstation.mutateAsync).toHaveBeenCalledTimes(1);
-        const del = screen.getByRole("menuitem", { name: "Delete" });
-        expect(del).toHaveAttribute("aria-disabled", "true");
-        expect(del).toHaveAccessibleDescription("A stop of this workstation is in progress.");
-        await user.keyboard("{Escape}");
 
         await act(async () => refuse(new Error("Forbidden")));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
         await waitFor(() =>
             expect(screen.getByRole("alert")).toHaveTextContent("Failed to stop Dev box: Forbidden")
         );
@@ -716,6 +737,7 @@ describe("WorkstationsPage", () => {
 
         const items = await openActionsFor(user, "Dev box");
         await user.click(items.find((item) => item.textContent === "Stop")!);
+        await user.click(screen.getByRole("button", { name: "Stop" }));
 
         await waitFor(() =>
             expect(screen.getByRole("alert")).toHaveTextContent("Failed to stop Dev box: Forbidden")
