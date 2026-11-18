@@ -4,8 +4,9 @@
  */
 
 /**
- * How a zipArchive run ends when its container never reports. The ZipArchiveBatchJob heartbeat clock
- * starts at submit, so it also runs out for a job still waiting in the AWS Batch queue or one that
+ * How a zipArchive run submits its job and how it ends when its container never reports. The
+ * ZipArchiveBatchJob state submits through executeBatchJob, which is not idempotent, so the state
+ * carries no Retry. Its heartbeat clock starts at submit, so it also runs out for a job still waiting in the AWS Batch queue or one that
  * failed before its container ran. pipelineEnd then looks the run's job up on the pipeline's queue by
  * job name (ListJobs) and cancels a job still waiting to start (TerminateJob), so it needs the queue
  * and both actions.
@@ -15,7 +16,7 @@ import { Template } from "aws-cdk-lib/assertions";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { ZipArchiveConstruct } from "../../lib/nestedStacks/pipelines/utility/zipArchive/constructs/zipArchive-construct";
 import { makePipelineHarness } from "../support/pipelineConstructHarness";
-import { lambdaEnvironmentsByHandler } from "../support/asl";
+import { lambdaEnvironmentsByHandler, parseAsl, singleStateMachine } from "../support/asl";
 
 let template: Template;
 
@@ -81,5 +82,17 @@ describe("zipArchive pipelineEnd after a heartbeat timeout", () => {
         expect(actionsOf(terminate[0])).toEqual(["batch:TerminateJob"]);
         expect(JSON.stringify(terminate[0].Resource)).toMatch(/:job\/\*"/);
         expect(statements.some((s) => actionsOf(s).includes("batch:SubmitJob"))).toBe(false);
+    });
+});
+
+describe("zipArchive job submission", () => {
+    test("the submitting state does not retry, so one run submits one Batch job", () => {
+        // executeBatchJob submits on every call; CDK's default Retry on Lambda service exceptions
+        // would start a second container on the same task token and job row.
+        const definition = parseAsl(singleStateMachine(template));
+        const state = definition.States.ZipArchiveBatchJob;
+        expect(JSON.stringify(state.Resource)).toContain("waitForTaskToken");
+        expect(state.Retry).toBeUndefined();
+        expect(state.Catch.some((c: any) => c.ErrorEquals.includes("States.ALL"))).toBe(true);
     });
 });
