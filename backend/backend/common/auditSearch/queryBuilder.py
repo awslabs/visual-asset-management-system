@@ -194,7 +194,7 @@ def _text_values(raw: Any, name: str, max_length: int, normalize: bool) -> Tuple
 
 
 MAX_EPOCH_SECONDS = 4102444800   # 2100-01-01T00:00:00Z
-# CloudWatch Logs keeps events for at most 3653 days (10 years), so an older start can never match.
+# CloudWatch Logs keeps events for at most 3653 days (10 years), so a start before that can never match.
 MAX_LOOKBACK_DAYS = 3653
 
 
