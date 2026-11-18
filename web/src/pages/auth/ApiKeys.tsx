@@ -40,6 +40,7 @@ import UpdateApiKey from "./UpdateApiKey";
 import { usePageTitle } from "../../hooks/usePageTitle";
 import { API_KEYS_ADMIN_NAV_HREF, useActiveNavHref } from "../../layout/activeNavHref";
 import { routeDisabledReason } from "../../features/orchestration/permissions/routeDisabledReason";
+import { useLatestRequest } from "../../components/compliance/listingFilters";
 
 export type ApiKeyManagementMode = "admin" | "user"; // pragma: allowlist secret
 
@@ -245,9 +246,12 @@ export default function ApiKeys() {
     const [hasMore, setHasMore] = useState(false);
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
     const [loadedPages, setLoadedPages] = useState(1);
+    // Only the latest load sets state: an answer for a mode switched away from is dropped.
+    const beginLoad = useLatestRequest();
 
     const loadPage = useCallback(
         async (pageNumber: number, startingToken: string | undefined) => {
+            const isCurrent = beginLoad();
             setLoading(true);
             setError(null);
             setSelectedItems([]);
@@ -257,6 +261,7 @@ export default function ApiKeys() {
                     pageSize: API_KEY_LISTING_PAGE_SIZE,
                     startingToken,
                 });
+                if (!isCurrent()) return;
                 if (result === false || (Array.isArray(result) && result[0] === false)) {
                     const errorMsg = Array.isArray(result) ? result[1] : "Failed to fetch API keys";
                     setError(errorMsg);
@@ -276,15 +281,18 @@ export default function ApiKeys() {
                 }
             } catch (err: any) {
                 console.log(err);
+                if (!isCurrent()) return;
                 setError(err?.message || "Unknown error");
                 setAllItems([]);
                 setHasMore(false);
             } finally {
-                setLoading(false);
-                setReload(false);
+                if (isCurrent()) {
+                    setLoading(false);
+                    setReload(false);
+                }
             }
         },
-        [mode]
+        [mode, beginLoad]
     );
 
     useEffect(() => {

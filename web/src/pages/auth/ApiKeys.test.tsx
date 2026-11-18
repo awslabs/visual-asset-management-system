@@ -554,3 +554,41 @@ describe("ApiKeys actions by role", () => {
         expect(button("Delete")).not.toHaveAttribute("aria-disabled");
     });
 });
+
+describe("ApiKeys listing after a mode switch", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        cacheRoutes("/auth/api-keys", "/auth/user/api-keys");
+    });
+
+    it("keeps the rows of the mode switched to when the previous mode's listing answers later", async () => {
+        let answerAdmin!: (value: unknown) => void;
+        mockFetchApiKeys.mockReturnValue(new Promise((resolve) => (answerAdmin = resolve)));
+        mockFetchUserApiKeys.mockResolvedValue({
+            Items: [{ apiKeyId: "u1k", apiKeyName: "my-key", userId: "u1", isActive: "true" }], // pragma: allowlist secret
+        });
+
+        renderApiKeys();
+        await waitFor(() => expect(mockFetchApiKeys).toHaveBeenCalled());
+
+        await userEvent.click(screen.getByText("My Keys"));
+        expect(await screen.findByText("my-key")).toBeInTheDocument();
+
+        await act(async () => {
+            answerAdmin({
+                Items: [
+                    { apiKeyId: "a1k", apiKeyName: "tenant-key", userId: "u2", isActive: "true" },
+                ], // pragma: allowlist secret
+                NextToken: "admin-token",
+            });
+        });
+
+        expect(screen.getByText("my-key")).toBeInTheDocument();
+        expect(screen.queryByText("tenant-key")).not.toBeInTheDocument();
+        expect(screen.getByLabelText("Next page of API keys")).toHaveAttribute(
+            "aria-disabled",
+            "true"
+        );
+    });
+});
