@@ -111,7 +111,7 @@ Processing pipeline costs are variable and depend on the number of assets proces
 
 ### Feature Costs
 
-These features add charges only when they are enabled, and most only while they run. The figures are US East (N. Virginia) on-demand prices; AWS GovCloud prices are higher.
+These features add charges only when they are enabled, and most only while they run. The figures are US East (N. Virginia) on-demand prices; prices in other Regions and partitions differ.
 
 | Feature                                         | What is billed                                                                                                                                                                                                                                                 | Approximate cost                                                                         |
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
