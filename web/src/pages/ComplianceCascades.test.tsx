@@ -75,7 +75,7 @@ describe("ComplianceCascades", () => {
         await userEvent.click(tableReject);
 
         // The reason is optional (the API records "rejected"): the field says so.
-        expect(screen.getAllByText("Optional.").length).toBeGreaterThan(0);
+        expect(screen.getAllByText(/^Optional\./).length).toBeGreaterThan(0);
         await userEvent.type(screen.getByLabelText("Reason for rejection"), "Not needed");
         const confirm = screen.getAllByRole("button", { name: "Reject" });
         await userEvent.click(confirm[confirm.length - 1]);
