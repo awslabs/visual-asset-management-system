@@ -50,6 +50,16 @@ export interface CogConvertConstructProps extends cdk.StackProps {
     importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
+/**
+ * Where the workflow stages a run's output: `pipelines/{first pipeline}/{first job}/output/{execution}/` with the
+ * `files`, `metadata` and `results` folders beneath it (backend `executionRecords.pipeline_output_prefixes`). The
+ * names in the first two segments belong to the FIRST pipeline of the workflow, which is not necessarily this one,
+ * and the execution id is minted per run, so neither is known when the role is created: the job role is limited to
+ * the `output/` area of every run instead, and does not reach `pipelines/templates/`, `pipelines/workflowExecutionInputs/`
+ * or any asset file. A per-run prefix would need credentials scoped at launch, which a Batch task role cannot be.
+ */
+const RUN_OUTPUT_KEY_PATTERN = "pipelines/*/*/output/*";
+
 export class CogConvertConstruct extends Construct {
     public readonly pipelineVamsLambdaFunctionName: string;
 
@@ -94,7 +104,9 @@ export class CogConvertConstruct extends Construct {
                 new iam.PolicyStatement({
                     effect: iam.Effect.ALLOW,
                     actions: s3WriteActions,
-                    resources: [`${record.bucket.bucketArn}/${objectPrefix}pipelines/*`],
+                    resources: [
+                        `${record.bucket.bucketArn}/${objectPrefix}${RUN_OUTPUT_KEY_PATTERN}`,
+                    ],
                 })
             );
         }
@@ -444,7 +456,7 @@ export class CogConvertConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "The container reads the input file of any asset in the registered asset buckets (the object is chosen per run, so the key is a wildcard under each bucket's asset prefix) and writes only under that prefix's pipelines/ run-I/O area; it has no write permission on asset files. The states:SendTask* actions are scoped to this account and Region because the task token is the run's own and its state machine ARN is not known when the role is created.",
+                    reason: "The container reads the input file of any asset in the registered asset buckets (the object is chosen per run, so the key is a wildcard under each bucket's asset prefix) and writes only under the output folders of the run area (pipelines/*/*/output/*); it has no write permission on asset files. The states:SendTask* actions are scoped to this account and Region because the task token is the run's own and its state machine ARN is not known when the role is created.",
                 },
             ],
             true

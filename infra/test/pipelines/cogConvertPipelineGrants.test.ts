@@ -166,7 +166,7 @@ describe("CogConvertContainerJobRole", () => {
         expect(actionsOf(reads[0])).toContain("s3:GetObjectVersion");
     });
 
-    test("writes only under the run-I/O pipelines/ area, never where asset files live", () => {
+    test("writes only under the output folders of a run, never where asset files, templates or run inputs live", () => {
         // The pipeline promises the original is never replaced; a flaw in GDAL reading an untrusted
         // TIFF must not be able to overwrite it. Read and write are separate statements, and the
         // write resource ends in `pipelines/*`.
@@ -176,7 +176,9 @@ describe("CogConvertContainerJobRole", () => {
         );
         expect(writes).toHaveLength(1);
         for (const resource of resourcesOf(writes[0])) {
-            expect(resourceText(resource)).toMatch(/pipelines\/\*/);
+            // `pipelines/*/*/output/*`: the first pipeline's name and job name, then the run's output folders.
+            // Narrower than `pipelines/*`, which also reaches templates/ and workflowExecutionInputs/.
+            expect(resourceText(resource)).toContain("pipelines/*/*/output/*");
         }
         // No statement mixes the read and the write actions.
         for (const read of statements.filter((st) => actionsOf(st).includes("s3:GetObject"))) {

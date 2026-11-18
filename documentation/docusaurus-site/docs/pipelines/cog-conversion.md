@@ -93,7 +93,11 @@ A source with a nodata value and no alpha band is converted through a mask band:
 
 ## Antimeridian
 
-A raster whose extent straddles longitude 180 (for example 178.75 E to 178.95 W) is refused. Reprojected into Web Mercator it would become a world-wide grid holding a few valid pixels. A whole-world raster (a 0 to 360 degree global grid) is accepted. Split the file at longitude 180 and convert each part.
+A raster whose extent straddles longitude 180 (for example 178.75 E to 178.95 W) is refused. Reprojected into Web Mercator it would become a world-wide grid holding a few valid pixels. A whole-world raster (a 0 to 360 degree global grid) is accepted. The run ends as failed and its error shows this text: "This raster crosses the antimeridian (longitude 180), which COG conversion does not support: in Web Mercator it would become a world-wide grid of almost empty pixels. Split the file at longitude 180 into a western and an eastern part (for example with gdal_translate -projwin on each side), upload the parts, and convert each one."
+
+## Failed and Refused Runs
+
+A refused file (over a limit, no room, crossing the antimeridian) or a failed conversion ends the VAMS execution as failed, with the reason as the error text. The failure name is short (`CogConvertRefused` for a refusal, `CogConvertFailed` otherwise) and the text travels as the failure cause, because AWS Step Functions rejects a failure whose name is over 256 characters and the run would otherwise stay in progress. A rejected failure call is logged and retried once with a minimal message, never dropped.
 
 ## Configuration
 
@@ -132,7 +136,7 @@ The default template, `cog-convert-deflate`, carries `{"compression": "DEFLATE"}
 
 The image has two stages, each pinned by digest. The build stage (`condaforge/miniforge3`) installs the GDAL packages from `conda-explicit.txt`, which lists every package by URL and SHA-256 and is installed without a solver, and the Python packages from a hash-locked `requirements.lock` installed with `--require-hashes`. The runtime stage is a Debian slim image that receives only the finished `/opt/cog` environment, so conda, its own Python and its tools never run on an uploaded file. The package manager is removed from the environment and the container runs as a non-root user.
 
-The job role is read-only on the asset buckets (the input at its launch version) and can write only under the `pipelines/` run area of each registered bucket, where the workflow collects a run's output. It cannot overwrite an original, delete anything, or reach the auxiliary bucket. It carries no managed policies.
+The job role is read-only on the asset buckets (the input at its launch version) and can write only under the `output/` folders of the run area of each registered bucket (`pipelines/*/*/output/*`), where the workflow collects a run's output. It cannot overwrite an original, write a template or a run input, delete anything, or reach the auxiliary bucket, and it carries no managed policies. The write path cannot be narrowed to one run: the first two path segments are the names of the first pipeline and job of the workflow, and the execution id is created per run, so none of them is known when the role is created.
 
 When the container receives SIGTERM, which AWS Batch sends when a job is terminated, it stops GDAL, reports the failure on the task token and exits within a few seconds, so the workflow does not wait out its four-hour limit.
 
