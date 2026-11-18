@@ -13,7 +13,7 @@
 import React from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useNavigate } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { appCache } from "../../services/appCache";
 import {
     ALLOWED_API_ROUTES_CACHE_KEY,
@@ -292,6 +292,24 @@ describe("ApiKeys ?mode= preference", () => {
         localStorage.clear();
         mockFetchApiKeys.mockResolvedValue({ Items: [] });
         mockFetchUserApiKeys.mockResolvedValue({ Items: [] });
+    });
+
+    it("puts the mode it shows in the URL, so the profile menu can tell the views apart", async () => {
+        cacheRoutes("/auth/user/api-keys");
+        let search: string | null = null;
+        const LocationProbe = () => {
+            search = useLocation().search;
+            return null;
+        };
+        render(
+            <MemoryRouter initialEntries={["/auth/api-keys/?mode=admin"]}>
+                <ApiKeys />
+                <LocationProbe />
+            </MemoryRouter>
+        );
+
+        await waitFor(() => expect(mockFetchUserApiKeys).toHaveBeenCalled());
+        await waitFor(() => expect(search).toBe("?mode=user"));
     });
 
     it("ignores ?mode=admin when the listing does not allow admin mode", async () => {
