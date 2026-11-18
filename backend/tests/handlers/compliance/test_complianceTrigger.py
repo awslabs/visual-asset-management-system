@@ -169,7 +169,10 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
             patch(f"{STORE}.get_child_links", return_value=list(children)), \
             patch(f"{STORE}.run_evaluation", return_value=evaluation,
                   side_effect=run_evaluation_effect) as run_evaluation, \
-            patch(f"{STORE}.write_audit") as write_audit:
+            patch(f"{STORE}.write_audit") as write_audit, \
+            patch(f"{STORE}.EVALUATION_CLAIM_STALE_SECONDS", 10 ** 9):
+        # The records' fixed timestamps are months old, so no pending claim is judged stale here
+        # (`claim_orphaned` is tested in test_complianceEvaluationRetriesAndFences).
         response = trigger.lambda_handler(event, MagicMock())
     return {"database": database_table, "cascade": cascade_table, "state": state_table,
             "asset": asset_table, "s3": s3_client, "get_evaluation": get_evaluation,
