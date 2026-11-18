@@ -346,7 +346,7 @@ web/src/addons/edh/
                   #   offer, and shows the architecture on the image card and in Review; see Launch Wizard Choices; a Capacity
                   #   select after Instance type,
                   #   see Capacity Reservations)
-                  #   ConnectLink.tsx (click-driven: opens the tab, then requests the URL) OsSignInDialog.tsx (the owner's
+                  #   ConnectLink.tsx (click-driven: opens the tab, then requests the URL and points the tab at it only when it is an `https:` link) OsSignInDialog.tsx (the owner's
                   #   desktop sign-in through useOsSignIn, a non-cached mutation fetched on open and reset on close: the
                   #   Windows user name and masked password, a directory account's user name alone, or Linux's "no
                   #   password is needed"; steps rendered per osFamily and credential; opened from the row's Show desktop
