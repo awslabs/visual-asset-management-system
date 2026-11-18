@@ -118,11 +118,30 @@ ALLOWED_IP_RANGES_ENV = os.environ.get('ALLOWED_IP_RANGES')
 IGNORED_PATHS_ENV = os.environ.get('IGNORED_PATHS')
 
 # Parse JSON environment variables
-try:
-    ALLOWED_IP_RANGES = json.loads(ALLOWED_IP_RANGES_ENV) if ALLOWED_IP_RANGES_ENV else []
-except json.JSONDecodeError:
-    logger.error("Failed to parse ALLOWED_IP_RANGES environment variable")
-    ALLOWED_IP_RANGES = []
+def parse_allowed_ip_ranges(raw: Optional[str]) -> Optional[List]:
+    """Parse ALLOWED_IP_RANGES into the list of [min, max] ranges the IP check compares against.
+
+    Unset or empty means no IP restriction ([]). A value that is set but is not a JSON array
+    yields None, which the IP check answers by admitting no caller: CDK always writes a JSON
+    array, so only a hand-edited function environment reaches this, and it is logged at ERROR
+    naming the variable. Entries of a valid array are checked one by one in is_ip_authorized.
+    """
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.error("Failed to parse ALLOWED_IP_RANGES environment variable; every request is refused "
+                     "until it is a JSON array of [min, max] ranges")
+        return None
+    if not isinstance(value, list):
+        logger.error("ALLOWED_IP_RANGES is not a JSON array; every request is refused until it is a "
+                     "JSON array of [min, max] ranges")
+        return None
+    return value
+
+
+ALLOWED_IP_RANGES = parse_allowed_ip_ranges(ALLOWED_IP_RANGES_ENV)
 
 try:
     IGNORED_PATHS = json.loads(IGNORED_PATHS_ENV) if IGNORED_PATHS_ENV else []
@@ -1388,7 +1407,7 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
 
     # Step 1: IP validation (using shared clientIp module)
     client_ip = resolve_client_ip(event, fronted=fronted)
-    if not is_ip_authorized(client_ip, ALLOWED_IP_RANGES):
+    if ALLOWED_IP_RANGES is None or not is_ip_authorized(client_ip, ALLOWED_IP_RANGES):
         logger.info(f"IP {client_ip} not in allowed ranges")
         return _denied("IP address not authorized", FAILURE_FORBIDDEN)
 
