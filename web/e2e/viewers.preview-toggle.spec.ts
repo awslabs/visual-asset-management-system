@@ -91,18 +91,22 @@ async function openWithPreviewToggle(
     page: Page,
     subject: PreviewSubject,
     version?: string,
-    assetDetailsDelayMs = 0
+    assetDetailsDelayMs = 0,
+    held: { count: number } = { count: 0 }
 ) {
     const route =
         `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
         `/file/${encodeURIComponent(subject.key)}` +
         (version ? `?version=${encodeURIComponent(version)}` : "");
     if (assetDetailsDelayMs > 0) {
+        // The asset details request is `.../assets/<id>?showArchived=true`, so the id may be followed
+        // by a query string; `held.count` lets the caller prove the delay was really applied.
         const assetDetails = new RegExp(
-            `/database/${subject.databaseId}/assets/${subject.assetId}$`
+            `/database/${subject.databaseId}/assets/${subject.assetId}(\\?|$)`
         );
         await page.route(assetDetails, async (route) => {
             if (route.request().method() !== "GET") return route.continue();
+            held.count += 1;
             await new Promise((resolve) => setTimeout(resolve, assetDetailsDelayMs));
             await route.continue();
         });
@@ -184,7 +188,14 @@ test.describe("File page Preview toggle", () => {
         const s = subject!;
         const downloads = watchDownloads(page);
 
-        const toggle = await openWithPreviewToggle(page, s, undefined, 6_000);
+        const held = { count: 0 };
+        const started = Date.now();
+        const toggle = await openWithPreviewToggle(page, s, undefined, 6_000, held);
+        const waited = Date.now() - started;
+        expect(held.count, "the asset details request was held back").toBeGreaterThan(0);
+        expect(waited, "the toggle appeared only after the held asset details").toBeGreaterThan(
+            5_500
+        );
         await toggle.click();
 
         const request = await expectPreviewRequest(downloads, s.previewKey);
