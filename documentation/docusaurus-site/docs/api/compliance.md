@@ -502,7 +502,7 @@ PUT /compliance/bind/{databaseId}
 
 | Field                | Type    | Required | Description                                                                                                                                                                                                            |
 | -------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemaName`         | string  | Yes      | A `GLOBAL` schema or a schema scoped to this database                                                                                                                                                                  |
+| `schemaName`         | string  | Yes      | A `GLOBAL` schema or a schema scoped to this database; 3 to 63 characters: letters, digits, `-` and `_`                                                                                                                |
 | `complianceAutoEval` | boolean | No       | Evaluate assets of this database automatically when they are created or updated. Omitted: `true` for a new binding; a database that is already bound keeps its stored value, so changing the schema does not change it |
 
 ```json
@@ -596,12 +596,12 @@ DELETE /compliance/bind/{databaseId}
 
 ### Error responses
 
-| Status | Description                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid `databaseId`, or the database does not exist                                                                                    |
-| `403`  | Not authorized                                                                                                                          |
-| `409`  | The compliance data of a deleted database with this id is still being moved, or a binding change of the database is still being applied |
-| `500`  | Internal server error                                                                                                                   |
+| Status | Description                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `databaseId`, or the database does not exist                                                                                                                   |
+| `403`  | Not authorized                                                                                                                                                         |
+| `409`  | The compliance data of a deleted database with this id is still being moved, or a binding change of the database is still being applied or stopped while being applied |
+| `500`  | Internal server error                                                                                                                                                  |
 
 ---
 
@@ -615,9 +615,9 @@ PUT /compliance/bind/{databaseId}/{assetId}
 
 ### Request body
 
-| Field        | Type   | Required | Description                                                  |
-| ------------ | ------ | -------- | ------------------------------------------------------------ |
-| `schemaName` | string | Yes      | A `GLOBAL` schema or a schema scoped to the asset's database |
+| Field        | Type   | Required | Description                                                                                                    |
+| ------------ | ------ | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `schemaName` | string | Yes      | A `GLOBAL` schema or a schema scoped to the asset's database; 3 to 63 characters: letters, digits, `-` and `_` |
 
 ### Response
 
@@ -694,9 +694,9 @@ POST /compliance/evaluate/{databaseId}/{assetId}
 
 ### Request body
 
-| Field        | Type   | Required | Description                                                                             |
-| ------------ | ------ | -------- | --------------------------------------------------------------------------------------- |
-| `schemaName` | string | No       | Schema to evaluate against; defaults to the bound schema. The binding is left unchanged |
+| Field        | Type   | Required | Description                                                                                                                               |
+| ------------ | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaName` | string | No       | Schema to evaluate against, 3 to 63 characters: letters, digits, `-` and `_`; defaults to the bound schema. The binding is left unchanged |
 
 ### Response
 
@@ -789,12 +789,12 @@ POST /compliance/evaluate/{databaseId}
 
 ### Error responses
 
-| Status | Description                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid `databaseId` or `startingToken`, or the database does not exist                                                                 |
-| `403`  | Not authorized                                                                                                                          |
-| `409`  | The compliance data of a deleted database with this id is still being moved, or a binding change of the database is still being applied |
-| `500`  | Internal server error                                                                                                                   |
+| Status | Description                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `databaseId` or `startingToken`, or the database does not exist                                                                                                |
+| `403`  | Not authorized                                                                                                                                                         |
+| `409`  | The compliance data of a deleted database with this id is still being moved, or a binding change of the database is still being applied or stopped while being applied |
+| `500`  | Internal server error                                                                                                                                                  |
 
 ---
 
@@ -1269,8 +1269,8 @@ POST /compliance/cascades
 
 | Field             | Type    | Required | Description                                                                      |
 | ----------------- | ------- | -------- | -------------------------------------------------------------------------------- |
-| `databaseId`      | string  | Yes      | Database of the source asset                                                     |
-| `assetId`         | string  | Yes      | Asset whose downstream assets are re-evaluated                                   |
+| `databaseId`      | string  | Yes      | Database of the source asset, 3 to 63 characters: letters, digits, `-` and `_`   |
+| `assetId`         | string  | Yes      | Asset whose downstream assets are re-evaluated, up to 256 characters             |
 | `reason`          | string  | No       | Reason recorded on the cascade, up to 1024 characters (default `manual trigger`) |
 | `requireApproval` | boolean | No       | Wait for approval before executing (default `true`)                              |
 
