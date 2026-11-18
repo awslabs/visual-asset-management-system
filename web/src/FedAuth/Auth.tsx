@@ -46,6 +46,7 @@ import {
     generateOAuthState,
     getReturnedOAuthState,
     getSameOriginReturnUrl,
+    isOAuthCallback,
     oauthNavigation,
 } from "./oauthSignInState";
 
@@ -705,7 +706,8 @@ const Auth: React.FC<AuthProps> = (props) => {
             const codeExchangePending =
                 !getExternalOAuth2Token().accessToken &&
                 !!localStorage.getItem(OAUTH_STATE_KEY) &&
-                !!localStorage.getItem(OAUTH_CODE_VERIFIER_KEY);
+                !!localStorage.getItem(OAUTH_CODE_VERIFIER_KEY) &&
+                isOAuthCallback(document.location.href);
             if (codeExchangePending) {
                 return;
             }
@@ -796,6 +798,12 @@ const Auth: React.FC<AuthProps> = (props) => {
             const codeVerifier = localStorage.getItem(OAUTH_CODE_VERIFIER_KEY);
             if (!storedState || !codeVerifier) {
                 // no state or code_verifier in local storage
+                return;
+            }
+            if (!isOAuthCallback(document.location.href)) {
+                // A sign-in left at the IdP (or that never reached it): drop its values and show
+                // the sign-in page, rather than reading this load as a callback that failed.
+                clearOAuthSignInState();
                 return;
             }
             const returnTo = localStorage.getItem(OAUTH_RETURN_TO_KEY);
@@ -1062,6 +1070,7 @@ const Auth: React.FC<AuthProps> = (props) => {
 
                 document.location = authorizeUri;
             } else {
+                clearOAuthSignInState();
                 localStorage.setItem(
                     "auth_error",
                     "Failed to initialize authorization flow. Missing scope or mfa scope in config."
@@ -1069,6 +1078,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                 setauthError(localStorage.getItem("auth_error"));
             }
         } catch (error) {
+            clearOAuthSignInState();
             localStorage.setItem("auth_error", "Failed to initialize authorization flow.");
             setauthError(localStorage.getItem("auth_error"));
         }
