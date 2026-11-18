@@ -144,6 +144,7 @@ MSG_JOB_NOT_STARTED = "The archive job could not start"
 # reports the state's error as "Pipeline Failure: <Error>", which the workflow error handler records.
 CONTAINER_STOPPED_ERROR = "ZipArchiveContainerStopped"
 HEARTBEAT_TIMEOUT_ERROR = "States.HeartbeatTimeout"
+STATE_TIMEOUT_ERROR = "States.Timeout"
 JOB_QUEUED_ERROR = "ZipArchiveJobQueued"
 JOB_NOT_STARTED_ERROR = "ZipArchiveJobNotStarted"
 MSG_CANCELLED_FROM_EXECUTIONS = "Cancelled from workflow executions"
@@ -356,7 +357,8 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
     - SUCCEEDED without the archive: FAILED (not produced).
     - ABORTED: FAILED "Cancelled from workflow executions", cancelledBy execution.
     - FAILED / TIMED_OUT: FAILED with the container's own reason when it gave one (on the row or as
-      a prefixed execution error), else for TIMED_OUT the timeout message, else the stop the
+      a prefixed execution error), else for TIMED_OUT or a States.Timeout in the execution error
+      (STATE_TIMEOUT_ERROR, the job state's 11-hour bound) the timeout message, else the stop the
       container recorded on SIGTERM (``stopReason``, a Batch terminate outside an abort), else, by
       the error name in the execution error, MSG_JOB_STOPPED for the container's own stop answer
       (CONTAINER_STOPPED_ERROR) or MSG_JOB_LOST for a heartbeat timeout (HEARTBEAT_TIMEOUT_ERROR, a
@@ -384,13 +386,16 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
         return STATUS_FAILED, {"error_message": MSG_CANCELLED_FROM_EXECUTIONS,
                                "cancelled_by": CANCELLED_BY_EXECUTION}
     if execution_status in ("FAILED", "TIMED_OUT"):
+        error = execution_error if isinstance(execution_error, str) else ""
         reason = (row.get("errorMessage") or "").strip() or container_reason(execution_error)
-        if not reason and execution_status == "TIMED_OUT":
+        # The ZipArchiveBatchJob state's 11-hour bound ends the run with States.Timeout (reported
+        # by pipelineEnd as a failure), which wins over the stop the container recorded when AWS
+        # Batch ended its attempt at the same bound.
+        if not reason and (execution_status == "TIMED_OUT" or STATE_TIMEOUT_ERROR in error):
             reason = MSG_JOB_TIMED_OUT
         if not reason:
             reason = (row.get("stopReason") or "").strip()[:1024]
         if not reason:
-            error = execution_error if isinstance(execution_error, str) else ""
             if CONTAINER_STOPPED_ERROR in error:
                 reason = MSG_JOB_STOPPED
             elif JOB_QUEUED_ERROR in error:
