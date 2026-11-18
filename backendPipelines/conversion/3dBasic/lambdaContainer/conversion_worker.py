@@ -63,6 +63,33 @@ def check_exportable(loaded, output_filetype, input_name):
             f"triangle meshes only. Convert it to .ply, .obj, .glb or .gltf, which store points.")
 
 
+def rename_materials(loaded):
+    """Give every material of the loaded model the name ``material_<n>`` (one number per distinct
+    material, in geometry order).
+
+    trimesh 5 writes an OBJ export's texture images and ``newmtl`` lines under the material's own name,
+    and a glTF material name is free text: one holding ``/`` or ``:`` or equal to ``..`` fails the
+    export or the write-back, and any other renames the files the export has always written
+    (``material_0.png``). Done in the worker so the names never reach a file name; used for OBJ
+    output only, since a glTF or GLB output keeps the model's material names."""
+    geometry = getattr(loaded, "geometry", None)
+    parts = list(geometry.values()) if isinstance(geometry, dict) else [loaded]
+    numbers = {}
+    for part in parts:
+        material = getattr(getattr(part, "visual", None), "material", None)
+        if material is None or not hasattr(material, "name"):
+            continue
+        number = numbers.setdefault(id(material), len(numbers))
+        try:
+            material.name = f"material_{number}"
+        except (AttributeError, TypeError):
+            pass
+
+
+# The output formats whose exporter writes a file named after a material.
+MATERIAL_NAMED_FILE_FORMATS = {'.obj'}
+
+
 def convert_model(job, trimesh=None):
     """Load the staged input and write the converted model to ``job["output_file"]``.
 
@@ -81,6 +108,8 @@ def convert_model(job, trimesh=None):
         job["input_dir"], job["input_relative_path"], job["by_reference"])
     mesh = trimesh.load(job["input_file"], resolver=resolver)
     check_exportable(mesh, job["output_filetype"], job["input_name"])
+    if job["output_filetype"] in MATERIAL_NAMED_FILE_FORMATS:
+        rename_materials(mesh)
     # NOTE: output_filetype carries a leading dot, e.g. ".stl", but trimesh's exporter registry is keyed
     # without it ("stl"). Passing the dotted form raises ValueError("%s exporter not available!",
     # ".stl") and fails every conversion, so strip it here.

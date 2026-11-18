@@ -142,3 +142,23 @@ def head_size(client, bucket, key, version_id=""):
     if version_id:
         kwargs["VersionId"] = version_id
     return int(client.head_object(**kwargs)["ContentLength"])
+
+
+# Peak resident memory per decoded RGBA byte of a texture image, which the factors above do not cover
+# because an image's memory follows its pixels, not its file size. Measured with trimesh 5.2.1 as
+# VmHWM less an interpreter that only imported trimesh: a glTF with four 4096 x 4096 PNG textures
+# (192 MB of files, 268 MB decoded) peaked at 0.87 - 1.09 GB over the glTF/GLB/OBJ/PLY outputs, 4.1
+# times its decoded bytes, and a GLB with one 12,000 x 12,000 texture (0.6 MB of file, 576 MB decoded)
+# peaked at 1.65 GB as GLB and 2.2 GB as OBJ, 3.8 times. Plus about 25%.
+TEXTURE_MEMORY_FACTOR = 5
+
+
+def texture_budget_bytes(extension, geometry_bytes, memory_bytes=None):
+    """Decoded RGBA bytes of texture images the function can hold beside a model whose input and
+    non-image files total ``geometry_bytes``: the memory a conversion may use, less the base and the
+    geometry's share, divided by ``TEXTURE_MEMORY_FACTOR``. None when the memory is not known."""
+    if not memory_bytes:
+        return None
+    usable = memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES
+    usable -= expansion_factor(extension) * geometry_bytes
+    return max(int(usable / TEXTURE_MEMORY_FACTOR), 0)

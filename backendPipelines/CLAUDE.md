@@ -243,14 +243,24 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     free space of `/tmp`, using a per-format expansion factor (`MEMORY_EXPANSION_FACTORS`). The factors are the
     peak resident memory of a load and export divided by the input size, measured with the installed
     trimesh and numpy; re-measure them when either moves a major version (the module docstring lists the
-    method and the figures). The same limit, less the input, bounds the referenced files.
+    method and the figures). The same limit, less the input, bounds the files that carry geometry (buffers,
+    material libraries). Texture images are budgeted apart, by decoded pixels (`texture_budget_bytes`,
+    `TEXTURE_MEMORY_FACTOR`; `referenced_files.decoded_image_bytes` reads the header only), because an image's
+    memory follows its pixels and not its file size. A reference left out for size is collected in
+    `FetchReport.skipped_for_size`, and `lambda.incomplete_message` puts it in the run's completion message
+    (the handler's `body`), so a run never reports plain success with fewer textures.
 -   `conversion_worker.py` loads and exports the model in a child process started by `run_worker`: scrubbed
     environment (`worker_environment`: no `AWS_*`, `HOME=/tmp`), `RLIMIT_AS` set to the function memory plus
     `ADDRESS_SPACE_OVERHEAD_BYTES` (OpenBLAS reserves about 1.5 GB of address space at start, so a limit at the
     function memory alone refuses inputs the size check allows), and a wall-clock limit from
     `context.get_remaining_time_in_millis()` less `WORKER_RESERVE_SECONDS`. The worker imports neither boto3 nor
     trimesh at module level and creates no AWS client. A format added to the handler is parsed in
-    `convert_model`, never in `lambda.py`.
+    `convert_model`, never in `lambda.py`. An OBJ output gets its materials renamed `material_<n>` first
+    (`rename_materials`), because trimesh 5 writes a texture file and the `newmtl` line from the material's own
+    name, which a glTF leaves free text (`/`, `:`, `..` broke the export); GLB and glTF outputs keep the names.
+    A non-user worker failure logs the child's traceback from `worker.stderr`. The worker is a fresh
+    interpreter per run (about 0.4 s of start and imports); do not fork it from the handler, which would hand it
+    the function's credentials in memory.
 -   `scene_limits.py`, `archive_guard.py` and `xml_guard.py` are vendored from the 3D thumbnail container
     (`preview/3dThumbnail/container/preview_pipeline/`), because a build context holds only its own directory.
     `tests/test_3dbasic_vendored_guards.py` compares each with its canonical file apart from the import lines; a

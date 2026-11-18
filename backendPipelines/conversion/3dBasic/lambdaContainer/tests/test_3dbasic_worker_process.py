@@ -103,6 +103,24 @@ class TestTheWorkerOutcome:
         with pytest.raises(RuntimeError, match=r"stopped unexpectedly.*killed by signal 9"):
             _run(_load(), tmp_path, body)
 
+    def test_a_worker_that_reports_a_non_user_failure_has_its_traceback_logged(self, tmp_path):
+        mod = _load()
+        body = ("sys.stderr.write('Traceback: KeyError in export_obj\\n')\n"
+                "json.dump({'ok': False, 'type': 'KeyError', 'message': \"'x'\"}, open(result_path, 'w'))\n"
+                "sys.exit(1)\n")
+        with patch.object(mod, "logger") as logger, pytest.raises(RuntimeError):
+            _run(mod, tmp_path, body)
+        assert any("KeyError in export_obj" in str(call) for call in logger.error.call_args_list)
+
+    def test_a_user_error_does_not_log_the_worker_stderr(self, tmp_path):
+        mod = _load()
+        body = ("sys.stderr.write('Traceback: noise\\n')\n"
+                "json.dump({'ok': False, 'type': 'ValueError', 'message': 'no geometry'}, open(result_path, 'w'))\n"
+                "sys.exit(1)\n")
+        with patch.object(mod, "logger") as logger, pytest.raises(ValueError):
+            _run(mod, tmp_path, body)
+        assert not logger.error.called
+
     def test_a_worker_that_exits_without_a_result_reports_the_status_and_logs_its_stderr(self, tmp_path):
         mod = _load()
         body = "sys.stderr.write('Traceback: boom\\n')\nsys.exit(3)\n"

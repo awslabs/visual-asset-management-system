@@ -36,6 +36,7 @@ import posixpath
 import re
 import shutil
 import struct
+import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
@@ -76,12 +77,55 @@ class Reference(NamedTuple):
     required: bool
 
 
+# Texture image formats. An image costs memory in proportion to its decoded pixels, not to its file
+# size (a 12,000 x 12,000 PNG of one colour is under 1 MB and decodes to 576 MB), so images are budgeted
+# apart from the files that carry geometry.
+IMAGE_EXTENSIONS = frozenset({
+    ".png", ".jpg", ".jpeg", ".tga", ".tif", ".tiff", ".bmp", ".gif", ".webp", ".dds", ".ppm", ".pgm",
+    ".exr", ".hdr"})
+# Bytes per decoded pixel the budget assumes (RGBA).
+DECODED_BYTES_PER_PIXEL = 4
+# An image whose pixel size cannot be read from its header is counted as its file size times this.
+UNMEASURED_IMAGE_EXPANSION = 8
+
+
+def is_image(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in IMAGE_EXTENSIONS
+
+
+def decoded_image_bytes(path: str, file_size: int) -> int:
+    """Bytes the image decodes to as RGBA, from its header (nothing is decoded). A file whose header
+    cannot be read is estimated from its file size; one past Pillow's decompression-bomb limit counts
+    as too large for any budget."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return file_size * UNMEASURED_IMAGE_EXPANSION
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with Image.open(path) as image:
+                width, height = image.size
+        return int(width) * int(height) * DECODED_BYTES_PER_PIXEL
+    except Image.DecompressionBombError:
+        return 1 << 62
+    except Exception:
+        return file_size * UNMEASURED_IMAGE_EXPANSION
+
+
 @dataclass
 class FetchLimits:
     max_files: int = DEFAULT_MAX_FILES
+    # Bytes of every file fetched, images included.
     max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES
     max_depth: int = DEFAULT_MAX_DEPTH
     disk_headroom_bytes: int = DEFAULT_DISK_HEADROOM_BYTES
+    # Bytes of the fetched files that are not images (buffers, material libraries); None for no limit
+    # beyond max_total_bytes.
+    max_geometry_bytes: Optional[int] = None
+    # Decoded bytes the images may take, as a function of the bytes of the input and of the non-image
+    # files fetched so far (the geometry memory they share the function with); None for no limit.
+    image_budget: Optional[Callable[[int], int]] = None
 
 
 @dataclass
@@ -97,6 +141,14 @@ class FetchReport:
     # how many were skipped in all.
     skipped: List[str] = field(default_factory=list)
     skipped_count: int = 0
+    # The references left out because of a size limit (file bytes, decoded image bytes, the disk), as
+    # "name: reason", the first MAX_SKIPPED_LOGGED, and how many in all. The run reports these in its
+    # completion message.
+    skipped_for_size: List[str] = field(default_factory=list)
+    skipped_for_size_count: int = 0
+    # Bytes of the non-image files fetched, and decoded bytes of the images fetched.
+    geometry_bytes: int = 0
+    image_decoded_bytes: int = 0
 
 
 # --------------------------------------------------------------------------------------------------
@@ -159,6 +211,10 @@ def confinement_root(input_key: str, relative_subdir: str = "") -> Tuple[str, st
         if (input_key == suffix or input_key.endswith("/" + suffix)) and resolve_reference(suffix) == suffix:
             return input_key[:len(input_key) - len(suffix)], suffix
     return own_directory, name
+
+
+def _mb(value: int) -> str:
+    return f"{value / 1024 ** 2:,.0f} MB"
 
 
 def _shown(value) -> str:
@@ -327,15 +383,21 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
 
     # Root-relative path -> local file, for every file the loader may be served; and root-relative
     # path -> the failure message, for every name already looked up and not fetched.
+    input_bytes = os.path.getsize(local_input_path)
     available = {input_relative_path: local_input_path}
     unavailable: Dict[str, str] = {}
     looked_up = 0
     queue = deque([(local_input_path, input_relative_path, ext, 0)])
 
-    def refuse(reference: Reference, rel_path: str, name: str, failure: str, reason: str):
+    def refuse(reference: Reference, rel_path: str, name: str, failure: str, reason: str,
+               for_size: bool = False):
         """Fail on a required reference; skip an optional one with a warning naming it."""
         if reference.required:
             raise ReferencedFileError(failure)
+        if for_size:
+            report.skipped_for_size_count += 1
+            if report.skipped_for_size_count <= MAX_SKIPPED_LOGGED:
+                report.skipped_for_size.append(f"{name}: {reason}")
         report.skipped_count += 1
         if report.skipped_count <= MAX_SKIPPED_LOGGED:
             warning = (f"Skipped {name}, referenced by {rel_path}: {reason}. The model is converted "
@@ -404,26 +466,65 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
                        f"again to include it)")
                 continue
             size, version_id = measured
+            image = is_image(relative)
             if report.total_bytes + size > limits.max_total_bytes:
                 failure = (f"The files the input references exceed {limits.max_total_bytes} bytes "
                            f"(reached at {relative}, {size} bytes).")
                 unavailable[relative] = failure
                 refuse(reference, rel_path, relative, failure,
                        f"its {size} bytes take the referenced files past "
-                       f"{limits.max_total_bytes} bytes")
+                       f"{limits.max_total_bytes} bytes", for_size=True)
                 continue
+            if (not image and limits.max_geometry_bytes is not None
+                    and report.geometry_bytes + size > limits.max_geometry_bytes):
+                failure = (f"{relative} ({size} bytes) takes the model's files past the "
+                           f"{limits.max_geometry_bytes} bytes this function can convert beyond the "
+                           f"input.")
+                unavailable[relative] = failure
+                refuse(reference, rel_path, relative, failure,
+                       f"its {size} bytes take the model's files past the "
+                       f"{limits.max_geometry_bytes} bytes this function can convert beyond the input",
+                       for_size=True)
+                continue
+            image_room = None
+            if image and limits.image_budget is not None:
+                image_room = max(limits.image_budget(input_bytes + report.geometry_bytes)
+                                 - report.image_decoded_bytes, 0)
+                if size > image_room:
+                    # Decoded, an image is never smaller than its file.
+                    failure = f"{relative} ({size} bytes) is larger than the memory left for textures."
+                    unavailable[relative] = failure
+                    refuse(reference, rel_path, relative, failure,
+                           f"its {size} bytes are more than the {_mb(image_room)} of texture memory "
+                           f"left in this function", for_size=True)
+                    continue
             free = shutil.disk_usage(local_root).free
             if size + limits.disk_headroom_bytes > free:
                 failure = (f"{relative} ({size} bytes) does not fit in the {free} bytes of working "
                            f"disk left.")
                 unavailable[relative] = failure
                 refuse(reference, rel_path, relative, failure,
-                       f"its {size} bytes exceed the {free} bytes of working disk left")
+                       f"its {size} bytes exceed the {free} bytes of working disk left",
+                       for_size=True)
                 continue
             os.makedirs(os.path.dirname(target), exist_ok=True)
             extra = {"VersionId": version_id} if version_id else None
             with open(target, "wb") as handle:
                 client.download_fileobj(Bucket=bucket, Key=key, Fileobj=handle, ExtraArgs=extra)
+            if image and image_room is not None:
+                decoded = decoded_image_bytes(target, size)
+                if decoded > image_room:
+                    os.remove(target)
+                    failure = (f"{relative} decodes to {decoded} bytes, more than the {image_room} "
+                               f"bytes of texture memory left.")
+                    unavailable[relative] = failure
+                    refuse(reference, rel_path, relative, failure,
+                           f"it decodes to {_mb(decoded)}, more than the {_mb(image_room)} of texture "
+                           f"memory left in this function", for_size=True)
+                    continue
+                report.image_decoded_bytes += decoded
+            if not image:
+                report.geometry_bytes += size
             report.fetched.append(relative)
             report.total_bytes += size
             available[relative] = target

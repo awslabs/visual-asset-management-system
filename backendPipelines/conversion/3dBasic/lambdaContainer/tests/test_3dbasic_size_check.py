@@ -222,4 +222,9 @@ class TestTheConversionRefusesBeforeDownloading:
                 patch.object(mod.referenced_files, "ConfinedResolver", MagicMock()):
             _convert(mod, client, key="xid/model.gltf")
         limit = size_check.limits(".gltf", FUNCTION_MEMORY_MB * MB, BIG_DISK)[0]
-        assert captured["limits"].max_total_bytes == min(mod.referenced_files.DEFAULT_MAX_TOTAL_BYTES, limit - 1000)
+        # Files that carry geometry are bounded by what is left of the input's limit; textures are
+        # bounded apart, by decoded pixels.
+        assert captured["limits"].max_geometry_bytes == limit - 1000
+        assert captured["limits"].max_total_bytes == mod.referenced_files.DEFAULT_MAX_TOTAL_BYTES
+        assert captured["limits"].image_budget(1000) == size_check.texture_budget_bytes(
+            ".gltf", 1000, FUNCTION_MEMORY_MB * MB)

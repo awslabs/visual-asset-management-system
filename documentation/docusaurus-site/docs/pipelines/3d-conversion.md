@@ -34,7 +34,7 @@ Each reference is checked before anything is downloaded:
 -   It must be a path relative to the file that names it (for example `textures/wood.png` or `../shared/wood.png`) that resolves to a file inside the input's own asset. Absolute paths, URLs, and paths that leave the asset are rejected. Data embedded in the model (a `data:` URI) needs no download.
 -   A GLTF or GLB buffer holds the geometry. A rejected buffer reference, or a buffer that is not in the asset, fails the run with a message naming it.
 -   A material library or a texture image only adds appearance. One that is rejected, not in the asset, or over a limit is skipped, the run log records a warning naming it, and the model converts without it: an OBJ without its material library converts as geometry only.
--   A model may reference at most 1,000 files totalling 2 GiB, and only an OBJ file's material library is read for further references.
+-   A model may reference at most 1,000 files totalling 2 GiB, and only an OBJ file's material library is read for further references. Texture images are limited by their decoded size, see [Input size limits](#input-size-limits); one left out for size is named in the run's completion message.
 -   Names are read the way the model loader reads them: an OBJ file's material library is everything after `mtllib` on the first line that contains it, and a texture is everything after `map_Kd` on its line, so a name may contain spaces but not texture options such as `-s`.
 
 ## Architecture
@@ -192,6 +192,12 @@ The limit comes from the running function, not from a fixed number. It is the sm
 | `.xyz`       | 13               | 344.4 MB                          |
 
 A larger function memory raises these limits in proportion. The worker's address space is capped at the function memory plus 2 GiB, so a model that still grows past the size check fails with a message that the model needs more memory than the function has, and one that runs past the invocation's remaining time (less 90 seconds kept for the upload) is stopped with a message naming the time.
+
+Texture images are budgeted apart from these figures, by their decoded size. An image's memory follows its pixels, not its file size: a 12,000 x 12,000 PNG of one colour is under 1 MB on disk and needs 576 MB decoded. After the input and the files that carry geometry (GLTF buffers, OBJ material libraries) are counted at the factors above, the memory that remains is divided by 5, the peak memory measured per decoded RGBA byte of texture, and that many decoded bytes of texture images are fetched, so four 4096 x 4096 textures or one 12,000 x 12,000 texture fit at 5,308 MB of function memory. A texture over what remains is skipped and the model converts without it. The run still succeeds, and its completion message says the model is incomplete and names each file left out and why, for example `Converted BoomBox.gltf, but 1 referenced file could not be included because of the function's size limits, so the converted model is incomplete: ...`. A GLTF buffer that does not fit fails the run.
+
+### Run time
+
+Each conversion starts a new worker process, which starts an interpreter and imports Trimesh. A small model takes about 0.4 seconds longer than when the parsers ran inside the function process (median 0.6 seconds against 0.2 seconds measured on a warm function). The worker is not forked from the function process, because a forked worker would inherit the function's AWS credentials from memory.
 
 ## Related Resources
 

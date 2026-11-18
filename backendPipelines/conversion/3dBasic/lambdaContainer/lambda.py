@@ -531,6 +531,9 @@ def run_worker(job, work_dir, timeout_seconds=None):
             f"{job['input_name']} needs more memory to convert than this function has{limit}. "
             f"Reduce the model's size and run the conversion again.")
     message = result.get("message") or "The conversion failed"
+    if result.get("type") not in USER_ERRORS:
+        # The child printed the traceback to its stderr; the message alone does not say where it failed.
+        _log_worker_stderr(stderr_path)
     raise (ValueError if result.get("type") in USER_ERRORS else RuntimeError)(message)
 
 
@@ -615,12 +618,16 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         download(input_bucket, input_key, temp_file, **({"version_id": input_version} if input_version else {}))
         # An input whose text is not UTF-8 fails here, before its references are read or fetched.
         check_input_text(temp_file, input_s3_asset_extension, os.path.basename(input_key))
+        memory_bytes = size_check.memory_limit_bytes()
         fetched = referenced_files.fetch_referenced_files(
             _s3_client_for_bucket(input_bucket), input_bucket, root_key, input_relative_path,
             temp_file, input_dir, limits=referenced_files.FetchLimits(
-                max_total_bytes=min(referenced_files.DEFAULT_MAX_TOTAL_BYTES,
-                                    size_limit - input_size) if size_limit is not None
-                else referenced_files.DEFAULT_MAX_TOTAL_BYTES),
+                # Files that carry geometry (buffers, material libraries) are bounded by what is left
+                # of the input's limit; texture images by their decoded pixels against the memory the
+                # geometry leaves, not by their file size.
+                max_geometry_bytes=(size_limit - input_size) if size_limit is not None else None,
+                image_budget=(lambda geometry_bytes: size_check.texture_budget_bytes(
+                    input_s3_asset_extension, geometry_bytes, memory_bytes)) if memory_bytes else None),
             logger=logger)
 
         # Export mesh to output format, under the name it will carry in the asset: the input file's
@@ -674,6 +681,27 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         shutil.rmtree(work_dir, ignore_errors=True)
 
     logger.info("Conversion complete")
+    return incomplete_message(os.path.basename(input_key), fetched)
+
+
+# Files named in the completion message; the rest are counted.
+INCOMPLETE_MESSAGE_FILES = 5
+
+
+def incomplete_message(input_name, fetched):
+    """The completion message of a run that left referenced files out because of a size limit, or
+    None when none was left out. The run still succeeds, so a model that lost its textures is not
+    reported as a plain success."""
+    count = getattr(fetched, "skipped_for_size_count", 0)
+    names = getattr(fetched, "skipped_for_size", None) or []
+    if not count or not isinstance(count, int):
+        return None
+    shown = "; ".join(names[:INCOMPLETE_MESSAGE_FILES])
+    more = f"; and {count - INCOMPLETE_MESSAGE_FILES} more" if count > INCOMPLETE_MESSAGE_FILES else ""
+    noun = "file" if count == 1 else "files"
+    return (f"Converted {input_name}, but {count} referenced {noun} could not be included because of "
+            f"the function's size limits, so the converted model is incomplete: {shown}{more}. "
+            f"Reduce the size of the referenced files and run the conversion again.")
 
 
 def _remember_deadline(context):
@@ -745,11 +773,13 @@ def lambda_handler(event, context):
     # the workflow manifest (legacy body fields are the fallback for direct/local invocations).
     input_path, output_path, relative_subdir, version_id = resolve_inputs_from_manifest(data)
 
-    convert_input_output(input_path, output_path, output_filetype, relative_subdir, version_id)
+    message = convert_input_output(input_path, output_path, output_filetype, relative_subdir, version_id)
 
+    if message:
+        logger.warning(message)
     return {
-        'statusCode': 200, 
-        'body': 'Success'
+        'statusCode': 200,
+        'body': message or 'Success'
     }
 
 
