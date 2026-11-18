@@ -1156,9 +1156,9 @@ export async function expectNoNewCspViolations(
 /**
  * Records the host of every request the page, its frames and its workers make. `thirdParty()`
  * lists the hosts outside the deployment: anything but the app origin, the API host, Amazon S3,
- * Amazon Cognito and other `amazonaws.com` endpoints. That is how a viewer that reaches out to a
- * public CDN at run time (unpkg, jsDelivr) fails, which air-gapped and GovCloud deployments cannot
- * serve. `options.extraHosts` adds hosts a case legitimately reaches, and `E2E_EXTRA_HOSTS`
+ * Amazon Cognito and other AWS endpoints (`amazonaws.com`, `amazonaws.com.cn`, `amazonaws.eu`).
+ * That is how a viewer that reaches out to a public CDN at run time (unpkg, jsDelivr) fails, which
+ * air-gapped and GovCloud deployments cannot serve. `options.extraHosts` adds hosts a case legitimately reaches, and `E2E_EXTRA_HOSTS`
  * (comma-separated) adds a deployment's own custom domains.
  */
 export function watchRequestHosts(page: Page, options: { extraHosts?: string[] } = {}) {
@@ -1182,7 +1182,9 @@ export function watchRequestHosts(page: Page, options: { extraHosts?: string[] }
                 .map((host) => host.trim())
                 .filter(Boolean)
                 .forEach((host) => allowed.add(host));
-            const awsEndpoint = /(^|\.)(amazonaws\.com|amazonaws\.com\.cn|amazoncognito\.com)$/i;
+            // amazonaws.eu is the AWS European Sovereign Cloud partition (aws-eusc).
+            const awsEndpoint =
+                /(^|\.)(amazonaws\.com|amazonaws\.com\.cn|amazonaws\.eu|amazoncognito\.com)$/i;
             return [...hosts]
                 .filter((host) => !allowed.has(host) && !awsEndpoint.test(host.split(":")[0]))
                 .sort();
