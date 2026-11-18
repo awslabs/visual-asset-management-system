@@ -536,18 +536,6 @@ class TestAssetAuthorizationObject:
     def test_no_database_id_stands_in_as_archived(self):
         assert self._helper()(None, None, _ASSET, include_archived=True)["databaseId"] == "#deleted"
 
-    def test_a_missing_id_on_an_archived_read_is_decided_as_archived_then_live(self):
-        objects = _real_dynamodb().asset_authorization_objects(None, _DB, _ASSET, include_archived=True)
-        assert [o["databaseId"] for o in objects] == [f"{_DB}#deleted", _DB]
-
-    @pytest.mark.parametrize("asset, database_id, include_archived", [
-        (_live_row(), _DB, True), (_archived_row(), _DB, True), (None, _DB, False),
-        (None, f"{_DB}#deleted", True)])
-    def test_every_other_request_is_one_object(self, asset, database_id, include_archived):
-        objects = _real_dynamodb().asset_authorization_objects(
-            asset, database_id, _ASSET, include_archived=include_archived)
-        assert objects == [self._helper()(asset, database_id, _ASSET, include_archived=include_archived)]
-
 
 @pytest.mark.unit
 class TestRefusedMatchesMissing:
@@ -781,49 +769,3 @@ class TestCombinedWriteMatrix:
         archived = _write(route, _STATES["archived"](), _FLAGS[flag], _CALLERS[caller]())
         missing = _write(route, _STATES["missing"](), _FLAGS[flag], _CALLERS[caller]())
         assert archived == missing
-
-
-def _archived_only_enforcer():
-    """A role granted db1's archived records only (databaseId equals db1#deleted)."""
-    enforcer = MagicMock()
-    enforcer.return_value.enforceAPI.return_value = True
-    enforcer.return_value.enforce.side_effect = lambda obj, act: obj.get("databaseId") == f"{_DB}#deleted"
-    return enforcer
-
-
-@pytest.mark.unit
-class TestArchivedOnlyCallerGetsOneAnswerForLiveAndMissing:
-    """With showArchived, a missing id is decided as both an archived and a live asset, so a caller
-    refused the live database is refused a missing id as it is a live asset, and still reads the
-    archived record it is granted."""
-
-    @pytest.mark.parametrize("route", _READ_ROUTES)
-    def test_live_and_missing_answer_alike(self, route):
-        live = _read(route, _STATES["live"](), _FLAGS["flag"], _archived_only_enforcer())
-        missing = _read(route, _STATES["missing"](), _FLAGS["flag"], _archived_only_enforcer())
-        assert live == missing == _REFUSED
-
-    @pytest.mark.parametrize("route", _READ_ROUTES)
-    def test_the_archived_record_is_still_read(self, route):
-        status, message = _read(route, _STATES["archived"](), _FLAGS["flag"], _archived_only_enforcer())
-        assert status == 200, message
-
-    def test_the_asset_get(self):
-        from backend.tests.handlers.assets.test_assetService_history import _load
-        assetService = _load()
-
-        def _get(table):
-            event = {
-                "requestContext": {"http": {"method": "GET", "path": _BASE}},
-                "pathParameters": {"databaseId": _DB, "assetId": _ASSET},
-                "queryStringParameters": {"showArchived": "true"},
-            }
-            with patch.object(assetService, "asset_table", table), \
-                    patch.object(assetService, "CasbinEnforcer", _archived_only_enforcer()), \
-                    patch.object(assetService, "request_to_claims", return_value={"tokens": ["alice"]}):
-                return assetService.lambda_handler(event, MagicMock())["statusCode"]
-
-        assert _get(_Table(_live_row())) == _get(_Table()) == 403
-
-    def test_a_caller_granted_both_still_learns_a_missing_id_is_missing(self):
-        assert _read("listFiles", _STATES["missing"](), _FLAGS["flag"], _allowing_enforcer()) == _READ_NOT_FOUND

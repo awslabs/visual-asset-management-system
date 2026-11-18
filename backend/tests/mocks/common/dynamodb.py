@@ -141,7 +141,6 @@ _real_dynamodb = _load_real_dynamodb()
 ARCHIVED_ASSET_DATABASE_SUFFIX = _real_dynamodb.ARCHIVED_ASSET_DATABASE_SUFFIX
 get_asset_record = _real_dynamodb.get_asset_record
 asset_authorization_object = _real_dynamodb.asset_authorization_object
-asset_authorization_objects = _real_dynamodb.asset_authorization_objects
 
 
 def get_asset_object_from_id(database_id, asset_id, include_archived=False):

@@ -83,21 +83,6 @@ def asset_authorization_object(asset, databaseId, assetId, include_archived=Fals
     return {'databaseId': stand_in_database_id, 'assetId': assetId, 'object__type': 'asset'}
 
 
-def asset_authorization_objects(asset, databaseId, assetId, include_archived=False):
-    """Every object Tier 2 must allow for a single-asset request, in the order to decide them.
-
-    A found record, or a missing id on a live-only read, is the one object
-    asset_authorization_object builds. A missing id on a read that includes archived assets could
-    be a live or an archived asset, so it is decided on both stand-ins, the archived one first: the
-    caller learns an id is missing only when it may read both, and is otherwise refused exactly as
-    it is for the live or the archived record it may not read.
-    """
-    first = asset_authorization_object(asset, databaseId, assetId, include_archived=include_archived)
-    if asset or not include_archived or str(databaseId or '').endswith(ARCHIVED_ASSET_DATABASE_SUFFIX):
-        return [first]
-    return [first, asset_authorization_object(None, databaseId, assetId)]
-
-
 def query_all_items(table, **query_kwargs) -> List[Dict]:
     """Query a table, paging to exhaustion, and return every matching item.
 
