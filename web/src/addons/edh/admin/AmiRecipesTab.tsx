@@ -215,10 +215,23 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
         const target = deleteTarget;
         if (!claim(target.recipeId)) return;
         try {
-            await remove.mutateAsync(target.recipeId);
+            const result = await remove.mutateAsync(target.recipeId);
             deletedRecipeRef.current = target.recipeId;
             setDeleteTarget(null);
-            toast.success("Recipe deleted", { description: target.displayName });
+            // The API deletes the recipe even when it could not delete some of its EC2 Image
+            // Builder resources, and names each one in `warnings`: the admin has to clean those up.
+            const left = Array.isArray(result?.warnings)
+                ? result.warnings.filter((w): w is string => typeof w === "string" && !!w)
+                : [];
+            if (left.length > 0) {
+                const resources = left.join("; ");
+                toast.warning("Recipe deleted with warnings", {
+                    description: `${target.displayName}: these Image Builder resources were left: ${resources}`,
+                    duration: 0,
+                });
+            } else {
+                toast.success("Recipe deleted", { description: target.displayName });
+            }
         } catch (err) {
             // Close the confirmation and report through a toast; the dialog has no error slot.
             setDeleteTarget(null);

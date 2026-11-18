@@ -582,6 +582,26 @@ it("deletes an admin recipe through the confirmation", async () => {
     expect(mockToast.success).toHaveBeenCalledWith("Recipe deleted", { description: "Mine" });
 });
 
+it("names the Image Builder resources a delete left, in a warning that stays until dismissed", async () => {
+    const left =
+        "DeleteComponent arn:aws:imagebuilder:us-east-1:111122223333:component/x: Conflict";
+    mutations.remove = mutation({ recipeId: "mine", deleted: true, warnings: [left] });
+    const user = userEvent.setup();
+    render(<AmiRecipesTab can={() => true} />);
+
+    await openActionsFor(user, "Mine");
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(mockToast.warning).toHaveBeenCalled());
+    expect(mockToast.warning).toHaveBeenCalledWith("Recipe deleted with warnings", {
+        description: `Mine: these Image Builder resources were left: ${left}`,
+        duration: 0,
+    });
+    expect(mockToast.success).not.toHaveBeenCalled();
+});
+
 it("lists the builds of a recipe and retries a failed registration", async () => {
     const user = userEvent.setup();
     (amiRecipeQueries.useEdhAmiBuilds as jest.Mock).mockReturnValue(
