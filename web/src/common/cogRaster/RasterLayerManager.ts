@@ -100,11 +100,15 @@ const MAX_ERROR_REFRESHES = 3;
 export const AUTO_RETRY_DELAY_MS = 4 * 1000;
 
 /** The same file, whichever way it was named: leading slashes ignored; versions must be equal (unpinned equals unpinned only). */
-function sameFile(a: RasterFileRef, b: RasterFileRef): boolean {
+function sameFile(a: RasterFileRef, b: RasterFileRef, latestVersionId?: string): boolean {
     const key = (file: RasterFileRef) => file.key.replace(/^\/+/, "");
     if (a.databaseId !== b.databaseId || a.assetId !== b.assetId || key(a) !== key(b)) return false;
-    // A pinned version and the unpinned (latest) file may be different content: they stay separate.
-    return (a.versionId || "") === (b.versionId || "");
+    // Compare the version each side actually loads: an unpinned file loads the latest version, so it
+    // is the same bytes as a pin on that version. When the latest is not known, a pin and the unpinned
+    // file may be different content and stay separate.
+    const effective = (file: RasterFileRef) => file.versionId || latestVersionId || "";
+    if (!a.versionId && !b.versionId) return true;
+    return effective(a) !== "" && effective(a) === effective(b);
 }
 
 function boundsOfCorners(corners: [number, number][]): [[number, number], [number, number]] {
@@ -152,13 +156,29 @@ export class RasterLayerManager {
      * the same COG selected by itself are one raster, though their ids can differ in how the key and
      * version are written.
      */
-    hasFile(file: RasterFileRef): boolean {
-        return this.items.some((item) => sameFile(item.entry.file, file));
+    hasFile(file: RasterFileRef, latestVersionId?: string): boolean {
+        return this.items.some((item) => sameFile(item.entry.file, file, latestVersionId));
     }
 
-    add(prepared: PreparedRaster, opacity = 0.8): AddResult {
+    /**
+     * True when a layer shows the same file under a different version identity (one pinned, one
+     * unpinned), so whether they are the same version needs the file's latest version id.
+     */
+    needsVersionCheck(file: RasterFileRef): boolean {
+        return this.items.some(
+            (item) =>
+                sameFile(
+                    { ...item.entry.file, versionId: undefined },
+                    { ...file, versionId: undefined }
+                ) && !sameFile(item.entry.file, file)
+        );
+    }
+
+    add(prepared: PreparedRaster, opacity = 0.8, latestVersionId?: string): AddResult {
         if (this.disposed) return { ok: false, message: "The map is closed." };
-        if (this.has(prepared.id) || this.hasFile(prepared.file)) return { ok: true };
+        if (this.has(prepared.id) || this.hasFile(prepared.file, latestVersionId)) {
+            return { ok: true };
+        }
         if (this.items.length >= this.max) {
             return {
                 ok: false,

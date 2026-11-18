@@ -10,12 +10,13 @@ import { useRasterLayers } from "./useRasterLayers";
 import RasterLayerPanel from "./RasterLayerPanel";
 import { RasterFileRef } from "./presignedUrl";
 import { MapLike } from "./RasterLayerManager";
-import { prepareRaster, rasterId, rasterLabel } from "./rasterResolver";
+import { latestVersionId, prepareRaster, rasterId, rasterLabel } from "./rasterResolver";
 
 jest.mock("./cogProtocol", () => ({ registerCogProtocol: jest.fn().mockResolvedValue(undefined) }));
 jest.mock("./rasterResolver", () => ({
     ...jest.requireActual("./rasterResolver"),
     prepareRaster: jest.fn(),
+    latestVersionId: jest.fn(),
 }));
 jest.mock("./presignedUrl", () => ({
     ...jest.requireActual("./presignedUrl"),
@@ -66,6 +67,7 @@ function resolveTo(file: RasterFileRef) {
 
 beforeEach(() => {
     jest.clearAllMocks();
+    (latestVersionId as jest.Mock).mockResolvedValue(undefined);
     (prepareRaster as jest.Mock).mockImplementation(async (file: RasterFileRef) => resolveTo(file));
 });
 
@@ -99,7 +101,44 @@ describe("useRasterLayers: a raster is listed once (r2-D5)", () => {
         expect(result.current.entries[0].usedCog).toBe(true);
     });
 
-    it("keeps a pinned version apart from the unpinned file and lists it as its own row (r3)", async () => {
+    it("lists the COG once when its source is selected with the COG at its current version (live r4-D1, both orders)", async () => {
+        (latestVersionId as jest.Mock).mockResolvedValue("v7");
+        const pinned = { ...COG, versionId: "v7" };
+        for (const order of [
+            [SOURCE, pinned],
+            [pinned, SOURCE],
+        ]) {
+            const result = await addAll(order);
+            expect(result.current.entries).toHaveLength(1);
+        }
+    });
+
+    it("lists the unpinned COG and its pin on the latest version once, and asks the API only then", async () => {
+        (latestVersionId as jest.Mock).mockResolvedValue("v7");
+        const result = await addAll([COG, { ...COG, versionId: "v7" }]);
+        expect(result.current.entries).toHaveLength(1);
+        expect(latestVersionId).toHaveBeenCalled();
+        (latestVersionId as jest.Mock).mockClear();
+        const plain = await addAll([COG]);
+        expect(plain.current.entries).toHaveLength(1);
+        expect(latestVersionId).not.toHaveBeenCalled();
+    });
+
+    it("keeps two different versions of one file as two rows", async () => {
+        (latestVersionId as jest.Mock).mockResolvedValue("v8");
+        // An older pin and the latest file.
+        const older = await addAll([SOURCE, { ...COG, versionId: "v7" }]);
+        expect(older.current.entries).toHaveLength(2);
+        // Two pins.
+        const pins = await addAll([
+            { ...COG, versionId: "v7" },
+            { ...COG, versionId: "v8" },
+        ]);
+        expect(pins.current.entries).toHaveLength(2);
+    });
+
+    it("keeps a pin apart from the unpinned file when the latest version is unknown", async () => {
+        (latestVersionId as jest.Mock).mockResolvedValue(undefined);
         const result = await addAll([SOURCE, { ...COG, versionId: "v7" }]);
         expect(result.current.entries).toHaveLength(2);
     });

@@ -10,6 +10,7 @@ import {
     PrepareOptions,
     PreparedRaster,
     prepareRaster,
+    latestVersionId,
     rasterId,
     rasterLabel,
 } from "./rasterResolver";
@@ -107,7 +108,13 @@ export function useRasterLayers(
                 // The map may have gone while the file was being read.
                 if (!mounted.current || !manager.current) return false;
                 // A source and its COG are one layer: the COG's id is what is shown.
-                const result = manager.current.add(ready);
+                // The same file selected unpinned and at a pinned version is one raster when the pin
+                // is the latest version: ask the API for the latest only in that case.
+                const latest = manager.current.needsVersionCheck(ready.file)
+                    ? await latestVersionId(ready.file)
+                    : undefined;
+                if (!mounted.current || !manager.current) return false;
+                const result = manager.current.add(ready, undefined, latest);
                 if (!result.ok) {
                     notice({ id, label, text: result.message, kind: "warning" });
                     return false;

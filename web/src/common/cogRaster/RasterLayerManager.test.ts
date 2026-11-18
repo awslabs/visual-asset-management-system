@@ -355,6 +355,34 @@ describe("RasterLayerManager", () => {
         manager.dispose();
     });
 
+    it("treats a pin on the latest version as the unpinned file, and an older pin as another (r4-D1)", () => {
+        const map = new FakeMap();
+        const manager = new RasterLayerManager(map, OPTIONS(map));
+        const cog = (versionId?: string): PreparedRaster => ({
+            ...prepared("x"),
+            id: `db/a/maps/a.tif.cog.tif${versionId ? `@${versionId}` : ""}`,
+            file: { databaseId: "db", assetId: "a", key: "/maps/a.tif.cog.tif", versionId },
+        });
+        manager.add(cog());
+        expect(manager.needsVersionCheck(cog("v7").file)).toBe(true);
+        expect(manager.needsVersionCheck(cog().file)).toBe(false);
+        expect(manager.add(cog("v7"), undefined, "v7")).toEqual({ ok: true });
+        expect(manager.entries()).toHaveLength(1);
+        manager.add(cog("v6"), undefined, "v7");
+        expect(manager.entries()).toHaveLength(2);
+        // Without the latest, the pin stays apart.
+        manager.add(cog("v5"));
+        expect(manager.entries()).toHaveLength(3);
+        // A pin first, the unpinned file second: same rule.
+        const other = new RasterLayerManager(new FakeMap(), OPTIONS(map));
+        other.add(cog("v7"));
+        expect(other.needsVersionCheck(cog().file)).toBe(true);
+        other.add(cog(), undefined, "v7");
+        expect(other.entries()).toHaveLength(1);
+        other.dispose();
+        manager.dispose();
+    });
+
     it("gives up at once on a refusal from the API, with its reason and no Retry (r3-D2)", async () => {
         jest.useFakeTimers();
         try {

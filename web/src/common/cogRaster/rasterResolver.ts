@@ -187,6 +187,30 @@ async function lookupSize(file: RasterFileRef): Promise<number | undefined> {
     }
 }
 
+/**
+ * The version id the unpinned (latest) file is at right now, or undefined when the API cannot say.
+ * Used to tell whether a file chosen at a pinned version and the same file chosen unpinned are the
+ * same bytes. The API answers; nothing is derived here.
+ */
+export async function latestVersionId(file: RasterFileRef): Promise<string | undefined> {
+    try {
+        const [ok, info] = await fetchFileInfo({
+            databaseId: file.databaseId,
+            assetId: file.assetId,
+            fileKey: file.key,
+            includeVersions: true,
+        });
+        if (!ok) return undefined;
+        const versions: any[] = (info as any)?.versions ?? [];
+        const latest = versions.find((version) => version?.isLatest) ?? versions[0];
+        return typeof latest?.versionId === "string" && latest.versionId
+            ? latest.versionId
+            : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 /** Whether the source's latest version differs from the version a COG was converted from. */
 export async function isStaleCog(
     source: RasterFileRef,
