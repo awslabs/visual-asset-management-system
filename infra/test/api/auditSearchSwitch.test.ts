@@ -152,3 +152,36 @@ describe("turning the switch off removes only what search added", () => {
         );
     });
 });
+
+describe("cdk-nag: audit log search adds no finding in either mode", () => {
+    // The CLI synth of GovCloud and EU Sovereign needs AWS lookups, so the harness runs the nag packs
+    // on every cell. A finding that exists without this feature (GovCloud and EU Sovereign carry
+    // AwsSolutions-COG8 today) is not this feature's: the cells must show no finding on an audit
+    // resource and the same findings with the switch on and off. The EU Sovereign "on" cell is not
+    // deployable (getConfig refuses it); it only proves the wiring is clean with that partition's ARNs.
+    const AUDIT_RESOURCE = /ApiBuilder3|AuditLogQueries|auditLogService|AuditLogService/;
+    const findings = (template: TemplateName, enabled: boolean): string[] =>
+        synthTemplate(template, {
+            mutate: setSearch(enabled),
+            mutateKey: `audit-search-${enabled}`,
+            nag: true,
+        })
+            .errors.map((e) => `${e.path}: ${e.message.slice(0, 120)}`)
+            .sort();
+
+    test.each(PARTITIONS)(
+        "%s: no finding on an audit resource, and the same findings on and off",
+        (template) => {
+            const on = findings(template, true);
+            const off = findings(template, false);
+            expect(on.filter((f) => AUDIT_RESOURCE.test(f))).toEqual([]);
+            expect(off.filter((f) => AUDIT_RESOURCE.test(f))).toEqual([]);
+            expect(off).toEqual(on);
+        }
+    );
+
+    test("control: the nag packs ran (the commercial cell reports annotations)", () => {
+        const s = synthTemplate("commercial", { nag: true });
+        expect(s.warnings.length + s.infos.length + s.errors.length).toBeGreaterThan(0);
+    });
+});
