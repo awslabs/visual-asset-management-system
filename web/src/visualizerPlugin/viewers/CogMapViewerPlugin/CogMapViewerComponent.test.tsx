@@ -92,6 +92,29 @@ describe("filesToShow", () => {
     });
 });
 
+describe("CogMapViewerComponent layout (D2)", () => {
+    it("wraps the layer list under the map instead of squeezing the map, with the map first in focus order", () => {
+        render(<CogMapViewerComponent {...base} assetKey="x.tif" />);
+        const root = screen.getByTestId("cog-map-viewer");
+        const mapColumn = screen.getByTestId("cog-map-column");
+        const listColumn = screen.getByTestId("cog-layer-column");
+        expect(root.style.flexWrap).toBe("wrap");
+        // The map is a flex item that may not shrink below its basis in a way that reaches zero: it
+        // has its own height, a basis wider than a phone (so it wraps there), and a growth factor
+        // that keeps it far larger than the list on a wide viewer.
+        expect(mapColumn.style.flex).toBe("999 1 480px");
+        expect(parseFloat(mapColumn.style.minWidth)).toBe(0);
+        expect(mapColumn.style.minHeight).toBe("360px");
+        expect(mapColumn.style.height).not.toBe("");
+        expect(listColumn.style.flex).toBe("1 1 300px");
+        expect(listColumn.style.overflowX).toBe("hidden");
+        // Document order, which is tab order at every width, is the map then its list.
+        expect(
+            mapColumn.compareDocumentPosition(listColumn) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+    });
+});
+
 describe("CogMapViewerComponent", () => {
     it("frames the first raster once its extent is known, not before (D3)", () => {
         const layers = mockLayers.value;

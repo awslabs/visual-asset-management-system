@@ -51,6 +51,40 @@ export function filesToShow(props: ViewerPluginProps): SizedFile[] {
 const NO_ANCHOR = () => undefined;
 
 /**
+ * Layout: the map and the layer list are two wrapping flex items. The map's basis is large and its
+ * grow factor much larger than the list's, so on a wide viewer the list sits beside the map and takes
+ * its 300 px basis, and on a phone or tablet the two no longer fit on one row, wrap, and each takes
+ * the full width, the list below the map. The map has its own height (a flex item whose parent has no
+ * height collapses to nothing), and `min-width: 0` stops long content from pushing it narrower. The
+ * DOM order (map, then list) is the focus order at every width.
+ */
+export const MAP_MIN_HEIGHT_PX = 360;
+const VIEWER_STYLE: React.CSSProperties = {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "12px",
+    width: "100%",
+    minWidth: 0,
+    boxSizing: "border-box",
+};
+const MAP_COLUMN_STYLE: React.CSSProperties = {
+    flex: "999 1 480px",
+    minWidth: 0,
+    position: "relative",
+    height: "min(70vh, 640px)",
+    minHeight: `${MAP_MIN_HEIGHT_PX}px`,
+};
+const LIST_COLUMN_STYLE: React.CSSProperties = {
+    flex: "1 1 300px",
+    minWidth: 0,
+    maxHeight: "min(70vh, 640px)",
+    overflowX: "hidden",
+    overflowY: "auto",
+    paddingRight: "4px",
+    boxSizing: "border-box",
+};
+
+/**
  * Shows georeferenced TIFFs on the Location Service basemap. A Web Mercator COG streams as map tiles
  * (the COG tile protocol over a presigned URL, with ranged reads); a small file in another bundled
  * coordinate system is drawn as one placed image and labelled as an approximate placement. Layer
@@ -123,15 +157,12 @@ const CogMapViewerComponent: React.FC<ViewerPluginProps> = (props) => {
     }
 
     return (
-        <div
-            style={{ display: "flex", height: "100%", minHeight: "480px", gap: "12px" }}
-            data-testid="cog-map-viewer"
-        >
-            <div style={{ flex: "1 1 auto", minWidth: 0, position: "relative" }}>
+        <div style={VIEWER_STYLE} data-testid="cog-map-viewer">
+            <div style={MAP_COLUMN_STYLE} data-testid="cog-map-column">
                 <Map
                     ref={mapRef}
                     initialViewState={{ latitude: 0, longitude: 0, zoom: 1 }}
-                    style={{ width: "100%", height: "100%", minHeight: "480px" }}
+                    style={{ width: "100%", height: "100%" }}
                     mapStyle={mapStyleUrl}
                     validateStyle={false}
                     onLoad={onLoad}
@@ -139,7 +170,7 @@ const CogMapViewerComponent: React.FC<ViewerPluginProps> = (props) => {
                     <NavigationControl position="bottom-right" showZoom showCompass={false} />
                 </Map>
             </div>
-            <div style={{ flex: "0 0 320px", overflowY: "auto", paddingRight: "4px" }}>
+            <div style={LIST_COLUMN_STYLE} data-testid="cog-layer-column">
                 <SpaceBetween size="s">
                     <Box variant="h3">Raster layers</Box>
                     <RasterLayerPanel layers={layers} emptyText="No raster is on the map." />
