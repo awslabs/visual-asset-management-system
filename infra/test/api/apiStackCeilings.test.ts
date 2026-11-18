@@ -68,8 +68,7 @@ const DEPLOYED_METADATA_CONTEXT = {
 /**
  * The cells in which the API stacks' templates are largest (#1647): a customer managed key, every
  * Lambda in the VPC (one security group per function) and Download as Zip in all three partitions,
- * plus the Deadline Cloud execution type, which only the commercial partition offers. Before #1647
- * `ApiBuilder2` was over 1,000,000 bytes in each of them.
+ * plus the Deadline Cloud execution type, which only the commercial partition offers.
  */
 interface WorstCaseCell {
     name: string;
@@ -268,10 +267,9 @@ describe("API stack split — the ceilings the rationale names", () => {
  * The template body of each API stack in the cells where it is largest, against a budget below the
  * CloudFormation limit (#1647).
  *
- * `ApiBuilder2` crossed 1,000,000 bytes in these cells, and roughly half of each API template was
- * cdk-nag suppression metadata copied onto resources the suppressed rules never read. The budget
- * catches the next large step before it reaches the limit, and the placement test catches the
- * mechanism coming back on its own.
+ * cdk-nag suppression metadata is a large share of each API template, and a suppression copied onto
+ * resources its rule never reads multiplies it by the resource count. The budget catches the next
+ * large step before it reaches the limit, and the placement test catches such copies on their own.
  */
 describe("API stack template bodies in the worst-case cells (#1647)", () => {
     test("the measured templates carry the metadata a deployment writes", () => {
@@ -300,7 +298,7 @@ describe("API stack template bodies in the worst-case cells (#1647)", () => {
 
     test("no IAM suppression in an API stack sits on a resource its rule does not read", () => {
         // cdk-nag AwsSolutions-IAM4 reads roles, users and groups; AwsSolutions-IAM5 reads those and
-        // policies. A copy anywhere else is the `applyToChildren` stamping #1647 removed.
+        // policies. A copy anywhere else comes from `addResourceSuppressions(scope, ..., true)`.
         const reads: Record<string, string[]> = {
             "AwsSolutions-IAM4": ["AWS::IAM::Role", "AWS::IAM::User", "AWS::IAM::Group"],
             "AwsSolutions-IAM5": [

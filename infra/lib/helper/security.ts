@@ -839,11 +839,9 @@ function iam5IsReadOnDefaultPolicy(resource: CfnResource, targets: Set<CfnResour
  * Applies the standard CDK Nag suppressions required by every VAMS Lambda function,
  * scoped to the function's own execution role and policies rather than the whole stack.
  *
- * Previously these three suppressions were applied once at the CoreVAMSStack level with
- * `applyToChildren=true`. Because cdk-nag recurses across nested-stack boundaries, that
- * stamped the suppression metadata onto every resource in every nested stack (S3 buckets,
- * DynamoDB tables, API routes, etc.), bloating the synthesized CloudFormation templates as
- * resources were added. They are written only on the IAM resources under the function (its
+ * A stack-level `applyToChildren=true` suppression would stamp the metadata onto every
+ * resource in every nested stack (cdk-nag recurses across nested-stack boundaries), so these
+ * are applied per function. They are written only on the IAM resources under the function (its
  * service role, default policy and any policy it holds when this is called), the only ones the
  * two rules read (`addIamNagSuppressions`); the function resource, its security group,
  * permissions and event source mappings carry none.

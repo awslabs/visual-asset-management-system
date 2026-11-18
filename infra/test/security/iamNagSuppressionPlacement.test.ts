@@ -4,13 +4,13 @@
  */
 
 /**
- * `addIamNagSuppressions` writes an IAM suppression only where cdk-nag reads it (#1647).
+ * `addIamNagSuppressions` writes an IAM suppression only where cdk-nag reads it.
  *
- * The shared Lambda suppressions used to be added with `applyToChildren`, which stamps them on every
- * resource under the scope. cdk-nag's AwsSolutions-IAM4 rule reads roles, users and groups, and
- * AwsSolutions-IAM5 reads those plus policies and managed policies, and of a role only its inline
- * `Policies`. The copies anywhere else suppressed nothing and put `ApiBuilder2` over CloudFormation's
- * 1,000,000-byte template limit. These tests pin where each copy lands.
+ * cdk-nag's AwsSolutions-IAM4 rule reads roles, users and groups, and AwsSolutions-IAM5 reads those
+ * plus policies and managed policies, and of a role only its inline `Policies`. A copy on any other
+ * resource suppresses nothing and counts toward CloudFormation's 1,000,000-byte template limit, which
+ * `NagSuppressions.addResourceSuppressions(scope, ..., true)` reaches by stamping every resource under
+ * the scope. These tests pin where each copy lands.
  */
 
 import * as cdk from "aws-cdk-lib";
