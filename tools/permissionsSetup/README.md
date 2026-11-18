@@ -135,6 +135,10 @@ Templates define their required variables in the JSON `variables` array. Variabl
 
 The `--delete` flag deletes the role only. Since constraint IDs are server-generated UUIDs, individual constraint deletion by name is no longer practical from this tool. After deleting a role, use the VAMS UI or `vamscli role constraint` commands to clean up orphaned constraints if needed. To recreate a role with updated constraints, delete the role and re-run the tool in create mode.
 
+### Exit status
+
+The script exits 0 and prints `Status: Complete` only when every step succeeded. If the role cannot be created it stops there and exits 1. If the constraint import, the user assignment or the deletion fails, or a `vamscli` command does not finish within 60 seconds, it prints `Status: Incomplete (failed: <steps>)` and exits 1. A role whose constraint import failed exists with no constraints: re-run the tool, which continues when the role already exists.
+
 ## How It Works
 
 1. The script loads a JSON template file from the path provided via `--template`
