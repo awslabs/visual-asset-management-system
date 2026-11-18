@@ -15,15 +15,16 @@ This page covers issues encountered while configuring VamsCLI, signing in, manag
 
 **Symptoms:**
 
--   `vamscli setup` fails with `Invalid base URL. Please provide a valid HTTP/HTTPS URL.`
+-   `vamscli setup` fails with `Invalid base URL. Please provide an https URL (plain http is accepted only for localhost or a loopback address).`
+-   `vamscli setup` fails with `Invalid API Gateway URL extracted from amplify config: http://...`
 
 **Cause:**
 
-The URL passed to `vamscli setup` is missing a scheme or host, or uses a scheme other than `http`/`https`.
+The URL passed to `vamscli setup` is missing a scheme or host, uses a scheme other than `https`, or uses plain `http` for a host other than `localhost` or a loopback address. The same rule applies to the API URL the deployment publishes in its Amplify configuration, because every later command sends your sign-in token to that URL.
 
 **Resolution:**
 
-Pass a complete HTTP or HTTPS URL for any VAMS entry point — a CloudFront distribution, Application Load Balancer, custom domain, or Amazon API Gateway endpoint. VamsCLI fetches the Amplify configuration from this URL and extracts the API Gateway URL automatically.
+Pass a complete HTTPS URL for any VAMS entry point — a CloudFront distribution, Application Load Balancer, custom domain, or Amazon API Gateway endpoint. VamsCLI fetches the Amplify configuration from this URL and extracts the API Gateway URL automatically.
 
 ```bash
 vamscli setup https://d1234567890.cloudfront.net
