@@ -438,7 +438,7 @@ Such an image also carries `defaultInstanceType`, the instance type the launch w
 #### Authorization
 
 -   **API tier:** `GET` on `/addon/edh/catalog/images`.
--   **Object tier:** each item is filtered through `GET` on `edhImage` (`edhImageId`, `edhOsFamily`).
+-   **Object tier:** each item is filtered through `GET` on `edhImage` (`edhImageId` is the stack id, `edhStackName` its name, `edhOsFamily`; `edhRecipeId` is empty).
 
 ### GET `/addon/edh/catalog/instance-types`
 
@@ -541,7 +541,7 @@ Registers a desktop image in EDH, reads the new software stack's id back from th
 #### Authorization
 
 -   **API tier:** `POST` on `/addon/edh/admin/images/vdi`.
--   **Object tier:** `POST` on `edhImage` evaluated against the body (`edhImageId` is the `stackName`, `edhOsFamily` is derived from `baseOs`).
+-   **Object tier:** `POST` on `edhImage` evaluated against the body (`edhStackName` is the `stackName`, `edhOsFamily` is derived from `baseOs`; `edhImageId` and `edhRecipeId` are empty, as the stack has no id yet).
 
 ### POST `/addon/edh/admin/images/simulation`
 
@@ -922,7 +922,7 @@ The recipe routes return this object. A field not described as conditional is pr
 #### Authorization
 
 -   **API tier:** `GET` on `/addon/edh/admin/ami-recipes`.
--   **Object tier:** `GET` on `edhImage` (`edhImageId` = recipe id, `edhOsFamily`), applied per item.
+-   **Object tier:** `GET` on `edhImage` (`edhRecipeId` = recipe id, `edhOsFamily`; `edhImageId` and `edhStackName` are empty), applied per item.
 
 ### POST `/addon/edh/admin/ami-recipes`
 
@@ -970,7 +970,7 @@ Creating, duplicating or updating an `admin` recipe also reads from Amazon EC2 t
 #### Authorization
 
 -   **API tier:** `POST` on `/addon/edh/admin/ami-recipes`.
--   **Object tier:** `POST` on `edhImage` (`edhImageId` = recipe id from body, `edhOsFamily` from body); with `duplicateOf`, also `GET` on `edhImage` from the source recipe (its recipe id and `osFamily`), checked once the source is read.
+-   **Object tier:** `POST` on `edhImage` (`edhRecipeId` = recipe id from body, `edhOsFamily` from body; `edhImageId` and `edhStackName` are empty); with `duplicateOf`, also `GET` on `edhImage` from the source recipe (its recipe id and `osFamily`), checked once the source is read.
 
 ### GET `/addon/edh/admin/ami-recipes/{recipeId}`
 

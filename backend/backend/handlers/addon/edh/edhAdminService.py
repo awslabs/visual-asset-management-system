@@ -222,11 +222,14 @@ def _workstation_auth_object(image_id, os_family, instance_type):
     }
 
 
-def _image_auth_object(image_id, os_family):
-    """The edhImage enforcement dict: exactly the matrix fields, as strings."""
+def _image_auth_object(image_id, stack_name, os_family):
+    """The edhImage enforcement dict for an image: exactly the matrix fields, as strings. The stack id and
+    name are the image's own; ``edhRecipeId`` names an AMI recipe and is empty on every image route."""
     return {
         "object__type": IMAGE_OBJECT_TYPE,
         "edhImageId": str(image_id if image_id is not None else ""),
+        "edhStackName": str(stack_name if stack_name is not None else ""),
+        "edhRecipeId": "",
         "edhOsFamily": str(os_family if os_family is not None else ""),
     }
 
@@ -607,7 +610,8 @@ def list_images(event):
     allowed = []
     for item in items:
         # Appends only on an allow, so an absent enforcer yields an empty catalog, never an open one.
-        if enforcer and enforcer.enforce(_image_auth_object(item["imageId"], item["osFamily"]), "GET"):
+        auth_object = _image_auth_object(item["imageId"], item["stackName"], item["osFamily"])
+        if enforcer and enforcer.enforce(auth_object, "GET"):
             allowed.append(item)
     return success(body={'Items': allowed})
 
@@ -623,10 +627,11 @@ def register_image(event, kind_label):
         fields = simulation_stack_fields(request)
         os_family = OS_FAMILY_LINUX
 
-    # Tier-2 from the validated body: the EDH id does not exist yet, so the stack name stands in.
+    # Tier-2 from the validated body: the EDH id does not exist yet, so it is decided on the stack name
+    # with an empty stack id.
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforcer().enforce(_image_auth_object(request.stackName, os_family), "POST"):
+    if not _enforcer().enforce(_image_auth_object("", request.stackName, os_family), "POST"):
         return authorization_error()
 
     kind = KIND_BY_IMAGE_KIND[kind_label]
@@ -742,7 +747,8 @@ def delete_image(event, kind_label):
     item = _image_item(kind_label, record)
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforcer().enforce(_image_auth_object(item["imageId"], item["osFamily"]), "DELETE"):
+    if not _enforcer().enforce(_image_auth_object(item["imageId"], item["stackName"], item["osFamily"]),
+                              "DELETE"):
         return authorization_error()
 
     _call_edh(event, client, "delete_software_stack", "adminImageDelete", edh_uid, kind, image_id,

@@ -266,11 +266,14 @@ def _workstation_auth_object(image_id, os_family, instance_type):
     }
 
 
-def _image_auth_object(image_id, os_family):
-    """The edhImage enforcement dict: exactly the matrix fields, as strings."""
+def _image_auth_object(image_id, stack_name, os_family):
+    """The edhImage enforcement dict for a catalog image: exactly the matrix fields, as strings. The stack id
+    and name are the image's own; ``edhRecipeId`` names an AMI recipe and is empty here."""
     return {
         "object__type": IMAGE_OBJECT_TYPE,
         "edhImageId": str(image_id),
+        "edhStackName": str(stack_name if stack_name is not None else ""),
+        "edhRecipeId": "",
         "edhOsFamily": str(os_family),
     }
 
@@ -745,7 +748,7 @@ def list_catalog_images(event):
             # A stack whose family cannot be determined is not offered; it is never Linux by default.
             continue
         # Appends only on an allow, so an absent enforcer yields an empty catalog, never an open one.
-        if enforcer and enforcer.enforce(_image_auth_object(item["imageId"], item["osFamily"]), "GET"):
+        if enforcer and enforcer.enforce(_image_auth_object(item["imageId"], item["name"], item["osFamily"]), "GET"):
             items.append((item, stack))
     recipe_builds = _recipe_builds_by_stack("catalog images listed as baseline") if items else {}
     items = [_categorized(item, recipe_builds.get(item["imageId"]), stack) for item, stack in items]
