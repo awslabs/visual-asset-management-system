@@ -157,6 +157,7 @@ const IMAGE_TO_3D_DEFAULT = {
         "g5.8xlarge",
     ],
     maxVCpus: 48,
+    modelCacheGeneration: 0,
     models: {
         sam3d: { enabled: false },
         stable3dgen: { enabled: true },

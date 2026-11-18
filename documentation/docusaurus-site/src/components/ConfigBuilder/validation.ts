@@ -1402,6 +1402,18 @@ const CORE_RULES: Rule[] = [
         message: "useImageTo3d.instanceTypes must be a non-empty array.",
     },
     {
+        id: "imageto3d-model-cache-generation",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.modelCacheGeneration"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            const generation = g(c, "app.pipelines.useImageTo3d.modelCacheGeneration");
+            return !Number.isSafeInteger(generation) || generation < 0;
+        },
+        message:
+            "useImageTo3d.modelCacheGeneration must be a whole number of 0 or more. Raise it by one to start every model on an empty weight cache.",
+    },
+    {
         id: "imageto3d-blenderagent-model-id",
         severity: "error",
         fieldPaths: ["app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId"],
