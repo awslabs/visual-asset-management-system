@@ -75,3 +75,8 @@ EDH_AMI_RECIPES_DISABLED_MESSAGE = (
 # (backend/backend/handlers/addon/edh/common/edhClient.py _ERROR_RESPONSES). A business refusal, not
 # throttling: resending cannot clear it until something that counts toward the quota ends.
 EDH_QUOTA_REACHED_API_MESSAGE = "The EDH quota for this operation has been reached."
+
+# Every add-on's 429 bodies that are a business refusal rather than throttling. APIClient adds them to
+# its core ones (utils/api_client.py _BUSINESS_REFUSAL_429_MESSAGES), so such a 429 is sent once and
+# reaches the add-on's own status mapping instead of the throttling backoff.
+ADDON_BUSINESS_REFUSAL_429_MESSAGES = (EDH_QUOTA_REACHED_API_MESSAGE,)
