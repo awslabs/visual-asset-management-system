@@ -95,7 +95,7 @@ const renderBulk = (onSave = jest.fn()) => {
 };
 
 const importCSV = async (content: string) => {
-    fireEvent.click(screen.getByRole("button", { name: "Import from CSV" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import CSV" }));
     const dialog = screen
         .getAllByRole("dialog")
         .find((d) => within(d).queryByText("Import Metadata from CSV")) as HTMLElement;

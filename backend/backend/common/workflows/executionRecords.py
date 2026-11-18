@@ -359,7 +359,8 @@ def pipeline_input_manifest_key(execution_id: str, pipeline_index: int) -> str:
 def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: str = "",
                          database_id: str = "", asset_id: str = "",
                          asset_root_s3_key: str = "", aux_preview_prefix: str = "",
-                         bucket_region: str = "", bucket_account_id: str = "") -> dict:
+                         bucket_id: str = "", bucket_region: str = "",
+                         bucket_account_id: str = "") -> dict:
     """One self-locating input-manifest entry: an asset-relative path mapped to the S3
     location (bucket/key/versionId) and asset identity a pipeline reads for that path.
 
@@ -367,6 +368,9 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
     s3:// URI): `assetRootS3Key` is this file's asset-root prefix within `bucket`, and
     `auxPreviewPrefix` is this file's unique auxiliary-bucket preview prefix. Downstream
     consumers reconstruct s3:// as needed from `bucket` + the relevant relative key.
+    `bucketId` is the asset bucket's registration id (the asset-buckets table key), carried
+    beside the bucket NAME for a consumer that resolves the registration row -- its name and
+    baseAssetsPrefix -- from the manifest alone; empty when the writer has no asset row.
     `bucketRegion` is the Region the file's bucket is in, which a pipeline uses to build the
     client that reads the file; a consumer treats an empty value as the deployment Region.
     `bucketAccountId` is the bucket's owning account when it is not the deployment account."""
@@ -377,6 +381,7 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
         "assetRootS3Key": asset_root_s3_key or "",
         "auxPreviewPrefix": aux_preview_prefix or "",
         "bucket": bucket,
+        "bucketId": bucket_id or "",
         "bucketRegion": bucket_region or "",
         "bucketAccountId": bucket_account_id or "",
         "key": key,
@@ -1000,7 +1005,7 @@ def is_skip_record(main_item) -> bool:
 
 def build_skip_record_update(execution_id, workflow_database_id, workflow_id, workflow_arn,
                              skipped_at, skip_scope, skip_reason, blocking_execution_id,
-                             first_skipped_at=None):
+                             first_skipped_at=None, is_system=False):
     """The UpdateItem arguments (minus the table) that create or extend a skip record's main row.
 
     One atomic call: every attribute a launched run's main row carries is SET only if absent
@@ -1012,13 +1017,17 @@ def build_skip_record_update(execution_id, workflow_database_id, workflow_id, wo
 
     first_skipped_at is the start and stop date the record keeps (the date its configuration and input
     rows were first written with, so all of the record's rows agree); skipped_at, the time of THIS
-    refusal, is lastSkippedDate. It defaults to skipped_at."""
+    refusal, is lastSkippedDate. It defaults to skipped_at.
+
+    is_system is the refused workflow's stored isSystem flag, recorded as a launched run's main row
+    records it (build_workflow_execution_record), so the lists hide a system workflow's skipped launches
+    with its runs. Like the record's identity, the first skip sets it."""
     first_skipped_at = first_skipped_at or skipped_at
     base = build_workflow_execution_record(
         execution_id=execution_id, workflow_database_id=workflow_database_id, workflow_id=workflow_id,
         workflow_arn=workflow_arn or "", workflow_execution_arn="", execution_start_date=first_skipped_at,
         execution_status=EXECUTION_STATUS_SKIPPED, triggered_by_user_id="SYSTEM_USER",
-        trigger_type="File-Upload", execution_log_group_arn="")
+        trigger_type="File-Upload", execution_log_group_arn="", is_system=is_system)
     # Terminal from the first write: the stop date is the first skip, like the start date.
     base["executionStopDate"] = first_skipped_at
     base["skipScope"] = skip_scope or ""

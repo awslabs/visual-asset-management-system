@@ -85,7 +85,7 @@ TYPED_TOOLS = {
     "list_assets": "Items", "get_asset": "assetId",
     "list_asset_files": "Items", "list_asset_versions": "Items", "get_asset_version": "assetVersionId",
     "get_asset_metadata": "Items", "get_database_metadata": "Items",
-    "search_assets": "total_is_lower_bound", "search_files": "total_is_lower_bound",
+    "search_assets": "total_is_lower_bound", "search_files": "total_is_lower_bound", "search_nlp": "relation",
     "list_executions": "filterStartDate", "list_workflow_executions": "filterStartDate",
     "get_execution_details": "truncatedCollections", "get_execution_results": "resultContent",
     "generate_download_url": "downloadUrl", "generate_download_urls_bulk": "files",
@@ -150,7 +150,7 @@ def test_the_server_sends_its_instructions_within_the_budget():
 
 
 @pytest.mark.parametrize("fragment", [
-    "databaseId + assetId", "search_assets", "list_databases", "get_asset", "list_asset_files",
+    "databaseId + assetId", "search_assets", "search_nlp", "list_databases", "get_asset", "list_asset_files",
     "generate_download_url", "truncated=true", "NextToken", "NotAuthenticated", "vamscli", "source code",
     "say so plainly", "vams_status",
 ])
@@ -420,6 +420,8 @@ NOT_AUTO_APPROVED_READS = {
     # Opt-in audit tools: a search starts a billable query and audit records may be sensitive, so the
     # client asks before each call.
     "vams_audit_groups", "vams_audit_search", "vams_audit_results", "vams_audit_stop",
+    # Bills an Amazon Bedrock embedding on every call (Mandatory Rule 4, the billed-read case).
+    "search_nlp",
 }
 
 

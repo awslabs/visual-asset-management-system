@@ -81,6 +81,8 @@ class ResourceKeys:
     WORKFLOW_STORAGE_TABLE_V2 = ResourceParamKey("dynamoTables/workflowStorageV2", ("WORKFLOW_STORAGE_TABLE_V2_NAME",))
     WORKFLOW_TRIGGERS_STORAGE_TABLE = ResourceParamKey("dynamoTables/workflowTriggersStorage", ("WORKFLOW_TRIGGERS_STORAGE_TABLE_NAME",))
     WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE = ResourceParamKey("dynamoTables/workflowExecutionLocksStorage", ("WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME",))
+    # Vector search tables
+    VECTOR_EMBEDDINGS_STORAGE_TABLE = ResourceParamKey("dynamoTables/vectorEmbeddingsStorage", ("VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME",))
     # Large object copy engine: one row per copy job, plus one per workflow ingestion batch
     LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE = ResourceParamKey("dynamoTables/largeObjectCopyJobsStorage", ("LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE_NAME",))
     # Download as Zip jobs: one row per prepared download, owned by its requester (TTL expiresAt)

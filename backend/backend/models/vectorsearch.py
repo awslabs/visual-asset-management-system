@@ -1,0 +1,220 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Request and response models of POST /search/nlp.
+
+The request is validated here. The response is an OpenSearch-style envelope the handler assembles as
+plain dicts (its keys start with underscores); the response models describe that contract for the
+OpenAPI document and the web/CLI/MCP clients. Vector-specific values live under ``_vector`` only;
+``_source`` carries the same key set as an OpenSearch file hit.
+"""
+
+from typing import Any, Dict, List, Literal, Optional
+
+from aws_lambda_powertools.utilities.parser import BaseModel, Field, root_validator, validator
+
+from common.validators import validate
+from common.vectorsearch.fileClassIntent import FILE_CLASSES
+from models.search import MAX_SEARCH_FILTERS, MAX_SEARCH_TAGS, GeoSearchModel, SearchFilterModel
+
+ENTITY_TYPES = ("file", "asset")
+WARNING_CODES = (
+    "truncated:window",
+    "truncated:targets",
+    "databases:none_accessible",
+    "opensearch:fields_ignored",
+    "opensearch:enrichment_failed",
+    "segments:window_full",
+)
+# Constraints only the OpenSearch file index can answer; ignored with a warning when no OpenSearch
+# mode is enabled.
+OPENSEARCH_ONLY_FIELDS = ("filters", "metadataQuery", "metadataSearchMode", "geoSearch", "tags")
+MAX_QUERY_LENGTH = 1000
+QUERY_TOO_LONG_MESSAGE = "The query is {length} characters; the limit is {limit}."
+QUERY_BLANK_MESSAGE = "The query must not be blank."
+MAX_DATABASE_IDS = 100
+# File extensions one request may name; the web sends the extensions picked in its filter panel.
+MAX_FILE_EXTENSIONS = 100
+# Characters in one tag or file-extension value, the bound the keyword search puts on a tag.
+MAX_FILTER_VALUE_LENGTH = 256
+# Field validator messages: the 400 names the field once, as "<field>: <message>" (validation_error_message)
+UNKNOWN_FILE_CLASS_MESSAGE = "only these values are accepted: " + ", ".join(FILE_CLASSES)
+ENTITY_TYPE_MESSAGE = "exactly one of these values is accepted: " + ", ".join(ENTITY_TYPES)
+MAX_SIZE = 100
+DEFAULT_SIZE = 25
+VECTOR_INDEX_LABEL = "vams-vectors"
+
+
+def _normalise_list(values: List[str], strip_dot: bool = False) -> List[str]:
+    """Lower-cased, trimmed, de-duplicated, in first-seen order; ``strip_dot`` drops a leading dot."""
+    seen: List[str] = []
+    for value in values or []:
+        item = value.strip().lower()
+        if strip_dot:
+            item = item.lstrip(".")
+        if item and item not in seen:
+            seen.append(item)
+    return seen
+
+
+class NlpSearchRequestModel(BaseModel):
+    query: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH)
+    entityTypes: List[str] = Field(default_factory=lambda: ["file"])
+    databaseIds: List[str] = Field(default_factory=list)
+    includeArchived: bool = False
+    includeSegments: bool = True
+    fileClasses: List[str] = Field(default_factory=list, max_items=len(FILE_CLASSES))
+    fileExtensions: List[str] = Field(default_factory=list, max_items=MAX_FILE_EXTENSIONS)
+    size: int = Field(DEFAULT_SIZE, ge=1, le=MAX_SIZE)
+    # OpenSearch-only constraints, typed and bounded as the /search request models type them, so a
+    # malformed constraint is a 400 here rather than a failure of the OpenSearch step.
+    filters: Optional[List[SearchFilterModel]] = Field(None, max_items=MAX_SEARCH_FILTERS)
+    metadataQuery: Optional[str] = Field(None, max_length=MAX_QUERY_LENGTH)
+    metadataSearchMode: Optional[Literal["key", "value", "both"]] = None
+    geoSearch: Optional[GeoSearchModel] = None
+    tags: Optional[List[str]] = Field(None, max_items=MAX_SEARCH_TAGS)
+    enrich: bool = True
+
+    class Config:
+        extra = "ignore"
+
+    @root_validator(pre=True)
+    def _query_in_plain_words(cls, values):
+        """The query's length limit and a blank query as sentences the caller can act on. A model-level
+        error is reported without a field prefix, and it stops validation before the field's own
+        max_length, which stays the declared bound. The query is kept as sent."""
+        query = values.get("query")
+        if isinstance(query, str) and len(query) > MAX_QUERY_LENGTH:
+            raise ValueError(QUERY_TOO_LONG_MESSAGE.format(length=len(query), limit=MAX_QUERY_LENGTH))
+        if isinstance(query, str) and not query.strip():
+            raise ValueError(QUERY_BLANK_MESSAGE)
+        return values
+
+    @validator("entityTypes")
+    def _one_entity_kind(cls, value):
+        if len(value) != 1 or value[0] not in ENTITY_TYPES:
+            raise ValueError(ENTITY_TYPE_MESSAGE)
+        return value
+
+    @validator("fileClasses")
+    def _normalise_classes(cls, value):
+        """Normalised, then checked against the classifier's ids, so an unknown class is a 400 rather than
+        an empty answer. The message lists the accepted ids and never echoes the value sent."""
+        classes = _normalise_list(value)
+        if any(name not in FILE_CLASSES for name in classes):
+            raise ValueError(UNKNOWN_FILE_CLASS_MESSAGE)
+        return classes
+
+    @validator("fileExtensions")
+    def _normalise_extensions(cls, value):
+        return _normalise_list(value, strip_dot=True)
+
+    @root_validator(skip_on_failure=True)
+    def _validate_database_ids(cls, values):
+        ids = values.get("databaseIds") or []
+        if len(ids) > MAX_DATABASE_IDS:
+            raise ValueError(f"databaseIds accepts at most {MAX_DATABASE_IDS} entries")
+        for database_id in ids:
+            (valid, message) = validate({"databaseId": {"value": database_id, "validator": "ID"}})
+            if not valid:
+                raise ValueError(message)
+        return values
+
+    @root_validator(skip_on_failure=True)
+    def _bound_values(cls, values):
+        """Each tag and file extension is at most MAX_FILTER_VALUE_LENGTH characters."""
+        (valid, message) = validate({
+            "tags": {"value": values.get("tags"), "validator": "STRING_256_ARRAY", "optional": True},
+            "fileExtensions": {"value": values.get("fileExtensions"), "validator": "STRING_256_ARRAY",
+                               "optional": True},
+        })
+        if not valid:
+            raise ValueError(message)
+        return values
+
+    def opensearch_only_fields(self) -> List[str]:
+        """Names of the OpenSearch-only constraints the caller set, in declaration order."""
+        return [name for name in OPENSEARCH_ONLY_FIELDS if getattr(self, name)]
+
+
+class SegmentRefModel(BaseModel, extra="ignore"):
+    segmentKey: str
+    segmentKind: str
+    segmentLabel: str
+    segmentStartMs: Optional[int] = None
+    segmentEndMs: Optional[int] = None
+
+
+class NlpVectorInfoModel(BaseModel, extra="ignore"):
+    distance: float
+    embeddingModelId: str
+    sourceModalities: List[str] = Field(default_factory=list)
+    indexedAt: str = ""
+    fileClass: str = ""
+    segmentHits: int = 0
+    bestSegment: Optional[SegmentRefModel] = None
+
+
+class NlpSearchHitModel(BaseModel):
+    index_: str = Field(VECTOR_INDEX_LABEL, alias="_index")
+    id_: str = Field(..., alias="_id")
+    score: float = Field(..., alias="_score")
+    index_type: str = Field(..., alias="_index_type")
+    source: Dict[str, Any] = Field(default_factory=dict, alias="_source")
+    vector: NlpVectorInfoModel = Field(..., alias="_vector")
+
+    class Config:
+        allow_population_by_field_name = True
+        extra = "ignore"
+
+
+class NlpWarningModel(BaseModel, extra="ignore"):
+    code: str
+    message: str
+
+    @validator("code")
+    def _known_code(cls, value):
+        if value not in WARNING_CODES:
+            raise ValueError(f"unknown warning code {value!r}")
+        return value
+
+
+class NlpSummaryModel(BaseModel, extra="ignore"):
+    query: str
+    embeddingModelId: str
+    databasesSearched: int
+    candidatesEvaluated: int
+    itemsCollapsed: int
+    classIntent: List[str] = Field(default_factory=list)
+    truncated: bool = False
+
+
+class NlpTermsBucketModel(BaseModel, extra="ignore"):
+    key: str
+    doc_count: int
+
+
+class NlpTermsAggregationModel(BaseModel, extra="ignore"):
+    """One terms aggregation in the shape the keyword search returns: str_fileext (file mode) or
+    str_assettype (asset mode), str_databaseid and list_tags, counted over every hit of the answer."""
+
+    doc_count_error_upper_bound: int = 0
+    sum_other_doc_count: int = 0
+    buckets: List[NlpTermsBucketModel] = Field(default_factory=list)
+
+
+class NlpSearchResponseModel(BaseModel):
+    took: int
+    timed_out: bool = False
+    shards: Dict[str, int] = Field(
+        default_factory=lambda: {"total": 1, "successful": 1, "skipped": 0, "failed": 0}, alias="_shards"
+    )
+    hits: Dict[str, Any]
+    aggregations: Dict[str, NlpTermsAggregationModel] = Field(default_factory=dict)
+    aggregationTotal: int = 0
+    nlp: NlpSummaryModel
+    warnings: List[NlpWarningModel] = Field(default_factory=list)
+
+    class Config:
+        allow_population_by_field_name = True
+        extra = "ignore"

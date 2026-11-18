@@ -285,12 +285,12 @@ The answer is the same when the workflow or a pipeline does not exist, and every
 
 ### Error responses
 
-| Status | Description                                                                                                                                                            |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, a body that is not a valid `vams-rules-v1` document, the scoping database is absent, or the name exists and belongs to a deleted database's schema |
-| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                                  |
-| `409`  | The compliance data of a deleted database with the scope's id is still being moved                                                                                     |
-| `500`  | Internal server error                                                                                                                                                  |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, a body that is not a valid `vams-rules-v1` document, the scoping database is absent, the name exists and belongs to a deleted database's schema, or a new or changed pipeline rule uses a system pipeline or workflow ("A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai\_\* fields.", with `ruleName`) |
+| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                                                                                                                                                                                                                                                        |
+| `409`  | The compliance data of a deleted database with the scope's id is still being moved                                                                                                                                                                                                                                                                                                           |
+| `500`  | Internal server error                                                                                                                                                                                                                                                                                                                                                                        |
 
 ---
 
@@ -356,12 +356,12 @@ A system schema (`isSystem: true`) is updated or deleted only by the system user
 
 ### Error responses
 
-| Status | Description                                                                                                                                           |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters or body, the schema or scoping database does not exist, the schema is a system schema, or the schema belongs to a deleted database |
-| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                 |
-| `409`  | The compliance data of a deleted database with the schema's current or new scope id is still being moved                                              |
-| `500`  | Internal server error                                                                                                                                 |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                 |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or body, the schema or scoping database does not exist, the schema is a system schema, the schema belongs to a deleted database, or a new or changed pipeline rule uses a system pipeline or workflow ("A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai\_\* fields.", with `ruleName`) |
+| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                                                                                                                                                                                                                                       |
+| `409`  | The compliance data of a deleted database with the schema's current or new scope id is still being moved                                                                                                                                                                                                                                                                    |
+| `500`  | Internal server error                                                                                                                                                                                                                                                                                                                                                       |
 
 ---
 

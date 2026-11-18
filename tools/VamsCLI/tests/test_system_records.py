@@ -54,9 +54,10 @@ def _backend_refusal_messages() -> set:
 
 
 def test_the_backend_module_defines_the_refusals_the_cli_mirrors():
-    # Four fixed messages, two field-naming update templates and two field-naming functions. A count
-    # that moves means the backend gained or lost a refusal: mirror it in system_records.py.
-    assert len(_backend_refusal_messages()) == 8
+    # Five fixed messages (the fifth refuses a compliance pipeline rule on a system record), two
+    # field-naming update templates and two field-naming functions. A count that moves means the
+    # backend gained or lost a refusal: mirror it in system_records.py.
+    assert len(_backend_refusal_messages()) == 9
 
 
 @pytest.mark.parametrize("message", sorted(_backend_refusal_messages()))

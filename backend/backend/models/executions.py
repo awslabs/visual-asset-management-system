@@ -368,8 +368,11 @@ class WorkflowExecutionConfigurationRecord(
 
 # Trigger types on the execute request. The storage layer records the canonical stored values
 # "Manual"/"File-Upload" (TRIGGER_TYPES above); the request accepts the lowercase forms and the
-# handler maps them (TRIGGER_TYPE_TO_STORED). The system trigger values are deliberately absent: a
-# request naming one is refused here, whoever sends it.
+# handler maps them (TRIGGER_TYPE_TO_STORED). "fileUpload" is set by the upload trigger dispatcher,
+# which invokes the execute handler directly as SYSTEM_USER; the handler refuses it on any other
+# request (400). The system trigger values are deliberately absent: a request naming one is refused
+# here, whoever sends it. The workflow trigger KIND set (models.workflows.TRIGGER_TYPES) is a separate
+# vocabulary.
 EXECUTE_TRIGGER_TYPES = ("manual", "fileUpload")
 TRIGGER_TYPE_TO_STORED = {"manual": "Manual", "fileUpload": "File-Upload"}
 
