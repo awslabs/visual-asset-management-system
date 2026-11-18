@@ -107,6 +107,30 @@ aws bedrock-agentcore-control list-agent-runtimes \
 
 An add-on can create objects outside the VAMS stack, in an external system or at run time, that `cdk destroy` does not remove. When the deployment enables an add-on whose pages describe removal steps, complete them while the deployment is still running, before [Step 1](#step-1-destroy-the-cdk-stack). The [Add-ons Overview](../developer/addons-overview.md) lists each add-on with a link to its pages.
 
+## Pre-uninstall: Lambda functions created for pipelines
+
+A Lambda-type pipeline created through the API or the web interface without naming an existing function gets an AWS Lambda function that VAMS creates at that moment, named `vams-` followed by the pipeline ID's letters and digits and eight random characters, and run with the deployment's pipeline Lambda role. These functions are not stack resources, so `cdk destroy` leaves them, and deleting or archiving the pipeline leaves its function too. On a deployment with a VPC they are attached to the VAMS subnets and pipeline security group, and their network interfaces can keep AWS CloudFormation from deleting those. Delete them while the stack still exists, before [Step 1](#step-1-destroy-the-cdk-stack), using the `vams-nested-stack-resources.txt` file from [Record stack resource identifiers](#record-stack-resource-identifiers):
+
+```bash
+# The deployment's pipeline Lambda role (its logical ID begins with lambdaPipelineRole)
+ROLE_NAME=$(awk -F'\t' '$1 == "AWS::IAM::Role" && $2 ~ /^lambdaPipelineRole/ { print $3 }' \
+    vams-nested-stack-resources.txt)
+ROLE_ARN=$(aws iam get-role --role-name "${ROLE_NAME}" --query Role.Arn --output text)
+
+# The functions that run with that role; review the list before deleting anything
+aws lambda list-functions \
+    --query "Functions[?Role=='${ROLE_ARN}'].FunctionName" \
+    --output text | tr '\t' '\n' > vams-pipeline-functions.txt
+cat vams-pipeline-functions.txt
+
+# Delete each function and its log group (a function that never ran has no log group)
+while read -r FN; do
+    [ -n "${FN}" ] || continue
+    aws lambda delete-function --function-name "${FN}"
+    aws logs delete-log-group --log-group-name "/aws/lambda/${FN}" || true
+done < vams-pipeline-functions.txt
+```
+
 ## Step 1: Destroy the CDK stack
 
 Run the CDK destroy command from the `infra` directory. This removes all CloudFormation-managed resources.
