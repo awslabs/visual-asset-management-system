@@ -275,6 +275,14 @@ The shipped `text-viewer` and `text-diff-viewer` list it; no other viewer does
     Viewer shows it on that side only (`text-diff-side-binary` / `text-diff-side-encoding`) while the
     other side renders, and logs nothing for it. A new text-style viewer loads through
     `loadTextFile` too.
+-   **Size cap.** Text larger than `TEXT_VIEWER_MAX_BYTES` (20 MiB, from the 206's
+    `Content-Range` total, the `Content-Length`, or the bytes read so far) is `too-large`: the full
+    GET is not sent, or its body is cancelled at the cap. The Text Viewer shows
+    `text-viewer-too-large-notice`, the Text Diff Viewer `text-diff-side-too-large` on that side.
+    Above `TEXT_HIGHLIGHT_MAX_CHARS` (1 Mi characters) the Text Viewer renders a plain `<pre>`
+    (`text-viewer-plain`) without the highlighter. A failed read of the presigned URL is worded by
+    `textReadFailureMessage`: an S3 403 or 404 is a link to refresh, never a VAMS permission answer,
+    and a `TypeError` is a connection problem.
 
 ---
 
