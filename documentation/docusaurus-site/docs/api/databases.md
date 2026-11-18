@@ -123,6 +123,7 @@ GET /buckets
 | `isDefault`        | boolean | Whether this is the VAMS default asset bucket, which holds pipeline template data and execution-time run input and output under the `pipelines/` prefix. Exactly one bucket is default. |
 | `bucketRegion`     | string  | The AWS Region the bucket is in; presigned URLs and Amazon S3 requests for the bucket are signed for it. `null` on a row written without a Region, which is the deployment Region.      |
 | `bucketAccountId`  | string  | The 12-digit AWS account that owns the bucket when it is not the deployment account; `null` otherwise.                                                                                  |
+| `isAccelerated`    | boolean | Whether S3 Transfer Acceleration is on for the bucket. Uploads and downloads for an accelerated bucket use its accelerate endpoint. `false` when the registration does not say.         |
 
 ```json
 {
@@ -133,7 +134,8 @@ GET /buckets
             "baseAssetsPrefix": "assets/",
             "isDefault": true,
             "bucketRegion": "us-west-2",
-            "bucketAccountId": null
+            "bucketAccountId": null,
+            "isAccelerated": true
         },
         {
             "bucketId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
@@ -141,7 +143,8 @@ GET /buckets
             "baseAssetsPrefix": "",
             "isDefault": false,
             "bucketRegion": "us-east-1",
-            "bucketAccountId": "222222222222"
+            "bucketAccountId": "222222222222",
+            "isAccelerated": false
         }
     ],
     "NextToken": null
