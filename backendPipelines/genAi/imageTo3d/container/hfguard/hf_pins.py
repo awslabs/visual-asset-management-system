@@ -13,7 +13,9 @@ TRELLIS.2 loads a decoder from ``microsoft/TRELLIS-image-large`` -- and those ca
 
 ``install()`` therefore wraps huggingface_hub's two download entry points. A call with no revision, or
 with ``main``, gets the pinned commit; a call naming the pinned commit passes; a repository with no pin,
-or a call asking for any other revision, is refused with an error naming the repository. The main
+or a call asking for any other revision, is refused with an error naming the repository. It also wraps
+the cache lookup ``try_to_load_from_cache``, which transformers uses after a download to find the file
+again by the caller's revision, so a lookup by ``main`` reads the pinned commit too. The main
 process installs it before anything imports transformers or diffusers, and every upstream process gets it
 through the ``sitecustomize`` beside this file, which ``run_upstream`` puts on that process's
 ``PYTHONPATH``. A cached file under a pinned commit is read without a network call, so a warm cache costs
@@ -121,6 +123,28 @@ def _pinned(download):
     return wrapper
 
 
+def _pinned_lookup(lookup):
+    """Wrap huggingface_hub's ``try_to_load_from_cache`` so a lookup by ``main`` finds the pinned commit.
+
+    A pinned download writes ``snapshots/<pin>`` and no ``refs/main`` (huggingface_hub records a ref only
+    for the revision it was asked for), and transformers ignores what ``hf_hub_download`` returns: it looks
+    the file up again by the caller's revision. Without this a model loaded through ``from_pretrained``
+    (TRELLIS.2's DINOv3) found nothing, and a cache whose ``refs/main`` predates the pin would serve the
+    older commit. Only the lookup is redirected; nothing is downloaded and nothing is refused here.
+    """
+    if getattr(lookup, "_vams_pinned", False):
+        return lookup
+
+    @functools.wraps(lookup)
+    def wrapper(repo_id, filename, *args, revision=None, repo_type=None, **kwargs):
+        if revision in (None, "", "main") and repo_type in (None, "model") and is_pinned(repo_id):
+            revision = revision_for(repo_id)
+        return lookup(repo_id, filename, *args, revision=revision, repo_type=repo_type, **kwargs)
+
+    wrapper._vams_pinned = True
+    return wrapper
+
+
 def install() -> bool:
     """Hold every huggingface_hub download in this process to the pins. Idempotent.
 
@@ -136,6 +160,8 @@ def install() -> bool:
 
     file_download.hf_hub_download = _pinned(file_download.hf_hub_download)
     _snapshot_download.snapshot_download = _pinned(_snapshot_download.snapshot_download)
+    file_download.try_to_load_from_cache = _pinned_lookup(file_download.try_to_load_from_cache)
     huggingface_hub.hf_hub_download = file_download.hf_hub_download
     huggingface_hub.snapshot_download = _snapshot_download.snapshot_download
+    huggingface_hub.try_to_load_from_cache = file_download.try_to_load_from_cache
     return True

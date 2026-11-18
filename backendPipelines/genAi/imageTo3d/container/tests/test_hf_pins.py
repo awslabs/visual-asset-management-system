@@ -92,7 +92,11 @@ class TestTheGuardInThisProcess:
         for module, name, fake in ((file_download, "hf_hub_download", fake_file),
                                    (huggingface_hub, "hf_hub_download", fake_file),
                                    (_snapshot_download, "snapshot_download", fake_snapshot),
-                                   (huggingface_hub, "snapshot_download", fake_snapshot)):
+                                   (huggingface_hub, "snapshot_download", fake_snapshot),
+                                   # Not faked: recorded so install()'s wrapper is undone after the test.
+                                   (file_download, "try_to_load_from_cache", file_download.try_to_load_from_cache),
+                                   (huggingface_hub, "try_to_load_from_cache",
+                                    file_download.try_to_load_from_cache)):
             monkeypatch.setattr(module, name, fake)
         assert hf_pins.install()
         return calls
@@ -161,6 +165,32 @@ class TestTheGuardInAnUpstreamProcess:
         done = self._run(
             "import huggingface_hub; "
             f"print(open(huggingface_hub.hf_hub_download('{repo}', 'config.json')).read())", tmp_path)
+
+        assert done.returncode == 0, done.stderr
+        assert done.stdout.strip() == "pinned"
+
+    @pytest.mark.parametrize("old_main", [False, True])
+    def test_a_cache_lookup_by_main_reads_the_pinned_snapshot_in_the_child(self, tmp_path, old_main):
+        """transformers finds a file again after downloading it with try_to_load_from_cache(revision='main').
+        A pinned download writes no refs/main, so that lookup found nothing and TRELLIS.2's DINOv3 failed
+        to load ('does not appear to have a file named model.safetensors'); a refs/main left by an older
+        download would have served that older commit."""
+        repo = "facebook/dinov3-vitl16-pretrain-lvd1689m"
+        repo_dir = Path(tmp_path) / "hub" / "models--facebook--dinov3-vitl16-pretrain-lvd1689m"
+        snapshots = [(hf_pins.HF_REVISIONS[repo], "pinned")] + ([("0" * 40, "old")] if old_main else [])
+        for revision, body in snapshots:
+            snapshot = repo_dir / "snapshots" / revision
+            snapshot.mkdir(parents=True)
+            (snapshot / "model.safetensors").write_text(body)
+        if old_main:
+            (repo_dir / "refs").mkdir()
+            (repo_dir / "refs" / "main").write_text("0" * 40)
+
+        done = self._run(
+            "import os, huggingface_hub; "
+            f"p = huggingface_hub.try_to_load_from_cache('{repo}', 'model.safetensors', "
+            "cache_dir=os.path.join(os.environ['HF_HOME'], 'hub')); "
+            "print(open(p).read() if isinstance(p, str) else p)", tmp_path)
 
         assert done.returncode == 0, done.stderr
         assert done.stdout.strip() == "pinned"
