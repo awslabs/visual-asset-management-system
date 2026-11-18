@@ -537,6 +537,49 @@ class TestComplianceSchemaCommands:
             assert result.exit_code == 2
             mocks['api_client'].list_compliance_schemas.assert_not_called()
 
+    def test_auto_paginate_reads_every_page_through_an_empty_one(self, cli_runner,
+                                                                 generic_command_mocks):
+        # A page can be empty while a token is present (rows the caller may not read are left
+        # out), so only an absent token ends the walk.
+        second = dict(SCHEMA_RECORD, schemaName='zz-last')
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_schemas.side_effect = [
+                {'schemas': [SCHEMA_RECORD], 'NextToken': 'p2', 'createScopes': ['GLOBAL']},
+                {'schemas': [], 'NextToken': 'p3', 'createScopes': ['GLOBAL']},
+                {'schemas': [second], 'createScopes': ['GLOBAL']},
+            ]
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'list', '--auto-paginate',
+                                             '--max-items', '50', '--json-output'])
+            assert result.exit_code == 0, result.output
+            body = json.loads(result.output)
+            assert [s['schemaName'] for s in body['schemas']] == ['cad-quality', 'zz-last']
+            assert (body['pageCount'], body['autoPaginated'], body['createScopes']) == (3, True, ['GLOBAL'])
+            assert 'NextToken' not in body
+            assert [c.kwargs for c in mocks['api_client'].list_compliance_schemas.call_args_list] == [
+                {'database_id': None, 'max_items': 50, 'starting_token': token}
+                for token in (None, 'p2', 'p3')]
+
+    def test_auto_paginate_stops_on_a_token_handed_back_and_keeps_it(self, cli_runner,
+                                                                    generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_schemas.side_effect = [
+                {'schemas': [SCHEMA_RECORD], 'NextToken': 'p2'},
+                {'schemas': [], 'NextToken': 'p2'},
+            ]
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'list', '--auto-paginate',
+                                             '--json-output'])
+            assert result.exit_code == 0, result.output
+            body = json.loads(result.output)
+            assert (body['NextToken'], body['truncated'], body['pageCount']) == ('p2', True, 2)
+
+    def test_auto_paginate_with_a_starting_token_is_refused(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'list', '--auto-paginate',
+                                             '--starting-token', 'p2'])
+            assert result.exit_code != 0
+            assert 'Cannot use --auto-paginate with --starting-token' in result.output
+            mocks['api_client'].list_compliance_schemas.assert_not_called()
+
     @pytest.mark.parametrize("command", ['create', 'update'])
     def test_the_write_help_says_a_database_scope_is_refused_while_bound_elsewhere(self, cli_runner,
                                                                                   command):

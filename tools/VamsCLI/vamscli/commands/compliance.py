@@ -852,40 +852,91 @@ def schema():
     pass
 
 
+# The most pages `compliance schema list --auto-paginate` reads (at 200 a page, 200,000 schemas).
+MAX_SCHEMA_LISTING_PAGES = 1000
+
+
+def _read_every_schema_page(api_client, database_id: Optional[str], page_size: Optional[int],
+                            json_output: bool) -> Dict[str, Any]:
+    """Every page of the schema listing, joined: `schemas` from every page and `createScopes` from
+    the first. A page can be short, or empty, while a NextToken is present (schemas the caller may
+    not read are left out), so only an absent token ends the walk. A token handed back unchanged,
+    or MAX_SCHEMA_LISTING_PAGES pages, stop it with the token kept (`NextToken`, `truncated`)."""
+    schemas: List[Dict[str, Any]] = []
+    first: Optional[Dict[str, Any]] = None
+    token: Optional[str] = None
+    pages = 0
+    while True:
+        page = api_client.list_compliance_schemas(
+            database_id=database_id, max_items=page_size, starting_token=token)
+        pages += 1
+        first = first if first is not None else page
+        schemas.extend(page.get('schemas') or [])
+        output_status(f"Fetched {len(schemas)} compliance schema(s) (page {pages})...", json_output)
+        next_token = page.get('NextToken')
+        if not next_token:
+            token = None
+            break
+        if next_token == token or pages >= MAX_SCHEMA_LISTING_PAGES:
+            token = next_token
+            break
+        token = next_token
+    result: Dict[str, Any] = {'schemas': schemas, 'totalItems': len(schemas),
+                              'autoPaginated': True, 'pageCount': pages}
+    if 'createScopes' in first:
+        result['createScopes'] = first['createScopes']
+    if token:
+        result.update(NextToken=token, truncated=True)
+    return result
+
+
 @schema.command('list')
 @click.option('-d', '--database-id', default=None,
               help='Only schemas scoped to this database, plus GLOBAL schemas')
 @click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_LISTING_PAGE_SIZE), default=None,
               help=f'Schemas per page (the API applies {DEFAULT_COMPLIANCE_LIST_PAGE_SIZE} when '
-                   f'omitted; at most {MAX_COMPLIANCE_LISTING_PAGE_SIZE})')
+                   f'omitted; at most {MAX_COMPLIANCE_LISTING_PAGE_SIZE}); with --auto-paginate, '
+                   'the size of each page read')
 @click.option('--starting-token', default=None, help='Token for pagination (the previous page\'s NextToken)')
+@click.option('--auto-paginate', is_flag=True,
+              help='Follow NextToken until every schema has been read, and list them together')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def list_schemas(ctx: click.Context, database_id: Optional[str], max_items: Optional[int],
-                 starting_token: Optional[str], json_output: bool):
-    """List compliance schemas (the latest version of each), in name order, one page per call.
+                 starting_token: Optional[str], auto_paginate: bool, json_output: bool):
+    """List compliance schemas (the latest version of each), in name order.
+
+    Without --auto-paginate the command reads one page: the response carries a NextToken when more
+    schemas exist; pass it back as --starting-token. A page can hold fewer schemas than
+    --max-items, even none, while a NextToken is present (schemas you may not read are left out):
+    keep paging until no token is returned. --auto-paginate does that and lists every schema.
 
     Each record carries schemaFormat: vams-rules-v1, or legacy for a row whose body is not a
     vams-rules-v1 document. A legacy schema cannot be bound, updated or evaluated; it is listed so
     it can be found and deleted with 'compliance schema delete'.
 
-    The response carries a NextToken when more schemas exist; pass it back as --starting-token.
-    A page can hold fewer schemas than --max-items, even none, while a NextToken is present
-    (schemas you may not read are left out): keep paging until no token is returned.
-
     Examples:
         vamscli compliance schema list
+        vamscli compliance schema list --auto-paginate
         vamscli compliance schema list -d my-database
         vamscli compliance schema list --max-items 50 --starting-token "token123"
-        vamscli compliance schema list --json-output
+        vamscli compliance schema list --auto-paginate --json-output
     """
+    if auto_paginate and starting_token:
+        raise click.ClickException(
+            "Cannot use --auto-paginate with --starting-token. "
+            "Use --auto-paginate for automatic pagination, or --starting-token for manual pagination."
+        )
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
     output_status("Retrieving compliance schemas...", json_output)
     try:
-        result = api_client.list_compliance_schemas(
-            database_id=database_id, max_items=max_items, starting_token=starting_token)
+        if auto_paginate:
+            result = _read_every_schema_page(api_client, database_id, max_items, json_output)
+        else:
+            result = api_client.list_compliance_schemas(
+                database_id=database_id, max_items=max_items, starting_token=starting_token)
         output_result(result, json_output, cli_formatter=format_schema_list)
         return result
     except _COMPLIANCE_ERRORS as e:

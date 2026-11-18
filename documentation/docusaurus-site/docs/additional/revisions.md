@@ -220,7 +220,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Archived assets and binding changes** — A database binding change also updates the compliance records of its archived assets (#1663).
 -   **Long cascades** — A cascade continues in further runs instead of stopping at the 15-minute function limit, and one that makes no progress for 20 minutes is aborted with a reason (#1663).
 -   **Compliance schema scope** — Moving a bound schema to a database scope is refused while it is bound in another database; moving it to `GLOBAL` is allowed (#1663).
--   **Paged compliance schema listing** — `GET /compliance/schemas` reads the latest versions only and is paged with `NextToken`; the web interface, CLI and MCP read every page (#1663).
+-   **Paged compliance schema listing** — `GET /compliance/schemas` reads the latest versions only and is paged with `NextToken`; the web interface and MCP read every page, and `vamscli compliance schema list --auto-paginate` does (#1663).
 -   **Paged sweep and Evaluate All** — Both read bound records a page at a time and return `NextToken` while more remain; `assetsRemaining` is a lower bound (#1663).
 -   **Schemas that cannot be read in full** — A rule that cannot be read, or an `extends` parent that is not found, gives no verdict and launches no pipeline rule (#1663).
 -   **Evaluating against another schema** — Naming a schema other than the asset's bound one is a dry run that records nothing (PR #1670).

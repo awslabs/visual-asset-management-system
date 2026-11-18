@@ -21,27 +21,29 @@ A schema is addressed by name. Registering a name that already exists writes a n
 
 ## compliance schema list
 
-List compliance schemas (the latest version of each), in name order, one page per call.
+List compliance schemas (the latest version of each), in name order: one page per call, or every page with `--auto-paginate`.
 
 ```bash
 vamscli compliance schema list [OPTIONS]
 ```
 
-| Option                | Type    | Required | Description                                                      |
-| --------------------- | ------- | -------- | ---------------------------------------------------------------- |
-| `-d`, `--database-id` | TEXT    | No       | Only schemas scoped to this database, plus `GLOBAL` schemas      |
-| `--max-items`         | INTEGER | No       | Schemas per page (the API applies 100 when omitted; at most 200) |
-| `--starting-token`    | TEXT    | No       | Token for pagination (the previous page's `NextToken`)           |
-| `--json-output`       | FLAG    | No       | Output raw JSON response (`{"schemas": [...], "NextToken"?}`)    |
+| Option                | Type    | Required | Description                                                                                                          |
+| --------------------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| `-d`, `--database-id` | TEXT    | No       | Only schemas scoped to this database, plus `GLOBAL` schemas                                                          |
+| `--max-items`         | INTEGER | No       | Schemas per page (the API applies 100 when omitted; at most 200); with `--auto-paginate`, the size of each page read |
+| `--starting-token`    | TEXT    | No       | Token for pagination (the previous page's `NextToken`)                                                               |
+| `--auto-paginate`     | FLAG    | No       | Follow `NextToken` until every schema has been read, and list them together                                          |
+| `--json-output`       | FLAG    | No       | Output raw JSON response (`{"schemas": [...], "NextToken"?}`)                                                        |
 
 ```bash
 vamscli compliance schema list
+vamscli compliance schema list --auto-paginate
 vamscli compliance schema list -d my-database
 vamscli compliance schema list --max-items 50 --starting-token "token123"
 vamscli compliance schema list --json-output
 ```
 
-The response carries a `NextToken` while more schemas remain; the command prints it with `Use --starting-token to get the next page`. A page leaves out the schemas you may not read, so it can hold fewer schemas than `--max-items`, or none (`No compliance schemas on this page.`), while a `NextToken` is present: keep paging until no token is returned.
+Without `--auto-paginate` the command reads one page. The response carries a `NextToken` while more schemas remain; the command prints it with `Use --starting-token to get the next page`. With `--auto-paginate` the command follows each `NextToken` and lists every schema together; `--json-output` then carries `schemas`, `totalItems`, `autoPaginated: true`, `pageCount` and the first page's `createScopes` (and keeps `NextToken` with `truncated: true` only if a page hands back the token it was sent, or after 1,000 pages). `--auto-paginate` cannot be combined with `--starting-token`. A page leaves out the schemas you may not read, so it can hold fewer schemas than `--max-items`, or none (`No compliance schemas on this page.`), while a `NextToken` is present: keep paging until no token is returned.
 
 Each record carries `schemaFormat`, printed as `Format:` — `vams-rules-v1`, or `legacy` for a row whose body is not a `vams-rules-v1` document. A legacy schema cannot be bound (`compliance bind` is refused with `Schema body must be a vams-rules-v1 document`), updated or evaluated; it is listed so that it can be found and removed with `compliance schema delete`.
 
