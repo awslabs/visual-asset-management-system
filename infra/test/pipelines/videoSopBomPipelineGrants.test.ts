@@ -528,15 +528,19 @@ describe("the four pipeline Lambdas", () => {
         expect(actions).toContain("states:SendTaskSuccess");
         expect(actions).toEqual(expect.arrayContaining(MUST_GRANT[stem]));
         if (stem === "pipelineEnd") {
-            // Nothing beyond the token release, the scratch cleanup asserted below, and the SSM
-            // resource-name read every VAMS Lambda gets from globalLambdaEnvironmentsAndPermissions.
+            // Nothing beyond the token release, the scratch cleanup asserted below, the SSM
+            // resource-name read every VAMS Lambda gets from globalLambdaEnvironmentsAndPermissions,
+            // and the lookup and terminate of the run's Batch job after the Batch state's own bound
+            // (grantBatchStateTimeoutCleanup, asserted in videoSopBomTimeoutChain.test.ts).
             expect(
                 actions.filter(
                     (a) =>
                         !a.startsWith("states:SendTask") &&
                         !a.startsWith("ssm:") &&
                         a !== "s3:ListBucket" &&
-                        a !== "s3:DeleteObject"
+                        a !== "s3:DeleteObject" &&
+                        a !== "batch:ListJobs" &&
+                        a !== "batch:TerminateJob"
                 )
             ).toEqual([]);
         }
