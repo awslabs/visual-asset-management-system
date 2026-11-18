@@ -82,6 +82,10 @@ test is honest; a test that passes because its assertion never ran is not.
 A spec that needs a file of a particular type looks one up with `findAssetFiles` and skips when the
 returned map has no entry for that extension — never a fixed database and asset id.
 
+`viewers.preview-toggle.spec.ts` follows the same rule for the file page's Preview toggle: it scans for
+a distributable asset whose file has a generated preview and skips when there is none.
+`E2E_PREVIEW_ASSET="<databaseId>/<assetId>"` (optional) confines the scan to one asset.
+
 **Why this matters concretely:** the executions board is newest-first and server-paginated (pageSize
 50). A spec that waited for a specific seeded workflow id passed for weeks, then failed once newer
 executions pushed that id off page 1 — the app was fine, the assumption was not.
