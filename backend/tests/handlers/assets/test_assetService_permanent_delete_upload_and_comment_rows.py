@@ -3,10 +3,9 @@
 
 """A permanent delete removes every upload record and every comment of the asset.
 
-Both are found with a query (the upload table's AssetIdGSI, the comment table's assetId partition)
-and every row found is deleted, so the query is paged to exhaustion: a row past the first page
-would otherwise outlive the asset. An upload record is deleted only when it names the asset's
-database, since asset ids are unique per database only.
+Both are found with a query and every row found is deleted, so the query is paged to exhaustion:
+a row past the first page would otherwise outlive the asset. An upload record is deleted only when
+it names the asset's database.
 """
 
 from unittest.mock import MagicMock
@@ -56,7 +55,7 @@ class TestPermanentDeleteRemovesEveryUploadAndComment:
                 for c in comments.delete_item.call_args_list} >= {"1:c-1", "1:c-2"}
 
     def test_an_upload_record_of_a_same_id_asset_in_another_database_is_kept(self, monkeypatch):
-        # Asset ids are unique per database only: the upload index answers both databases' rows.
+        # Only the upload record that names the asset's own database is deleted.
         uploads, _, upload_pager, _ = self._run(
             monkeypatch,
             upload_pages=[{"Items": [_upload("u-own"), _upload("u-other", database_id="db2")]}],
