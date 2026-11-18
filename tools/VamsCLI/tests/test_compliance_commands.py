@@ -2950,6 +2950,30 @@ class TestABindingChangeAppliedInTheBackground:
             assert (body['waitTimedOut'], body['applyStatus'], body['apply']['assetsProcessed']) == (
                 True, 'applying', 10)
 
+    @pytest.mark.parametrize('read, text', [
+        (_read(_apply(applyId='apply-2', status='applying')),
+         'replaced by a later binding change (apply-2, applying)'),
+        (_read(None), 'the binding read names no change in progress'),
+    ], ids=['later-change', 'no-change'])
+    def test_a_change_replaced_while_waiting_is_reported_as_replaced(self, cli_runner, generic_command_mocks,
+                                                                     monkeypatch, read, text):
+        sleeps = []
+        monkeypatch.setattr('vamscli.commands.compliance.time.sleep', sleeps.append)
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            mocks['api_client'].get_compliance_bindings.return_value = read
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait'])
+            assert result.exit_code == 1
+            assert text in result.output
+            assert 'Stopped waiting' not in result.output and sleeps == []
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait', '--json-output'])
+            body = json.loads(result.output)
+            assert 'waitTimedOut' not in body
+            assert body['replacedBy'] == {'applyId': (read['apply'] or {}).get('applyId'),
+                                          'status': (read['apply'] or {}).get('status')}
+
     def test_json_output_carries_the_apply_fields(self, cli_runner, generic_command_mocks,
                                                   monkeypatch):
         monkeypatch.setattr('vamscli.commands.compliance.time.sleep', lambda seconds: None)
