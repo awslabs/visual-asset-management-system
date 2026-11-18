@@ -27,6 +27,11 @@ s3 = boto3.client(
     region_name=os.environ["AWS_REGION"],
     config=retry_config
 )
+batch = boto3.client(
+    'batch',
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
+)
 
 # The container's SendTaskSuccess payload names itself; a job that exited 0 without calling back
 # returns Batch's job description instead and must not read as success.
@@ -59,9 +64,14 @@ ATTEMPT_TIMEOUT_CAUSE = ("the container did not finish within the 6 h bound; las
 # The Batch state's own Step Functions bound, which counts the time the job waited in the AWS Batch
 # queue as well as its run; Step Functions gives that States.Timeout no cause of its own.
 STATE_TIMEOUT_ERROR = "States.Timeout"
-STATE_TIMEOUT_CAUSE = ("the job did not finish within the pipeline's 7 h 45 min bound, which counts the "
-                       "time it waited in the AWS Batch queue (for example behind the Fargate vCPU "
-                       "quota) as well as its run")
+STATE_TIMEOUT_CAUSE = ("the job did not finish within the pipeline's time limit, which counts the time "
+                       "it waited in the AWS Batch queue (for example behind the Fargate vCPU quota) as "
+                       "well as its run")
+# Step Functions cancels a .sync Batch job when the execution is stopped, not when the Batch state's
+# own bound fires, so after that timeout the run's job, still queued or running, is ended here. The
+# queue is the one the state submits to (BATCH_JOB_QUEUES); the job name is unique to the run.
+BATCH_JOB_QUEUES = [queue for queue in os.environ.get("BATCH_JOB_QUEUES", "").split(",") if queue]
+LIVE_BATCH_JOB_STATUSES = frozenset({"SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"})
 # The stored executionError budget; the SendTaskFailure API itself accepts 32768.
 MAX_CAUSE_CHARS = 16384
 
@@ -211,6 +221,27 @@ def _send(callback, **kwargs):
         raise
 
 
+def end_batch_job_after_state_timeout(error, job_name):
+    """Terminate the run's Batch job when ``error`` is the Batch state's own timeout.
+
+    Returns how many jobs were ended. Best effort: a failed lookup or terminate is logged, and the
+    failure is still reported to the workflow."""
+    if not isinstance(error, dict) or error.get("Error") != STATE_TIMEOUT_ERROR or not job_name:
+        return 0
+    ended = 0
+    for queue in BATCH_JOB_QUEUES:
+        try:
+            response = batch.list_jobs(
+                jobQueue=queue, filters=[{"name": "JOB_NAME", "values": [job_name]}])
+            for job in response.get("jobSummaryList") or []:
+                if job.get("status") in LIVE_BATCH_JOB_STATUSES:
+                    batch.terminate_job(jobId=job["jobId"], reason="The pipeline's time limit was reached")
+                    ended += 1
+        except Exception as e:
+            logger.warning(f"Could not end the Batch job {job_name}: {e}")
+    return ended
+
+
 def lambda_handler(event, context):
     """
     PipelineEnd - Video SOP/BOM Extraction
@@ -223,6 +254,7 @@ def lambda_handler(event, context):
     external_sfn_task_token = event.get('externalSfnTaskToken', "")
 
     if "error" in event:
+        end_batch_job_after_state_timeout(event["error"], event.get("batchJobName"))
         code, cause = failure_for(event["error"])
         logger.error(f"Pipeline failure: {code}: {cause}")
         if external_sfn_task_token:

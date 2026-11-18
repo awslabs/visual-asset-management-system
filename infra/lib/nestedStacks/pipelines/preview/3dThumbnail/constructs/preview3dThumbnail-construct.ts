@@ -19,7 +19,10 @@ import {
     buildPipelineEndFunction,
 } from "../lambdaBuilder/preview3dThumbnailFunctions";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
-import { StateTimeoutBatchSubmitJob } from "../../../constructs/stateTimeoutBatchSubmitJob";
+import {
+    StateTimeoutBatchSubmitJob,
+    grantBatchStateTimeoutCleanup,
+} from "../../../constructs/stateTimeoutBatchSubmitJob";
 import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -328,6 +331,10 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             props.pipelineSecurityGroups,
             props.storageResources.encryption.kmsKey
         );
+        // After a tier's Batch state bound fires, pipelineEnd ends the run's job.
+        grantBatchStateTimeoutCleanup(pipelineEndFunction, [
+            batchPipeline.batchJobQueue.jobQueueArn,
+        ]);
 
         const pipeLineEndTask = new tasks.LambdaInvoke(this, "PipelineEndTask", {
             lambdaFunction: pipelineEndFunction,

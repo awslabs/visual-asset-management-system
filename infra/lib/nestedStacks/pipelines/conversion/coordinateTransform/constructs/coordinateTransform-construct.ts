@@ -21,6 +21,7 @@ import { storageResources } from "../../../../storage/storageBuilder-nestedStack
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
+import { grantBatchStateTimeoutCleanup } from "../../../constructs/stateTimeoutBatchSubmitJob";
 import {
     NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
@@ -292,6 +293,10 @@ export class CoordinateTransformConstruct extends Construct {
             props.pipelineSubnets,
             props.kmsKey
         );
+        // After the token wait's own bound fires, pipelineEnd ends the job executeBatchJob submitted.
+        grantBatchStateTimeoutCleanup(pipelineEndFunction, [
+            batchPipeline.batchJobQueue.jobQueueArn,
+        ]);
 
         const pipelineEndTask = new tasks.LambdaInvoke(this, "PipelineEndTask", {
             lambdaFunction: pipelineEndFunction,

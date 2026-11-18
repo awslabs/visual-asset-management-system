@@ -41,6 +41,7 @@ import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-
 import { VideoSopBomConstruct } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
+import { expectBatchStateTimeoutCleanup } from "../support/batchStateTimeoutCleanup";
 
 const ACCOUNT = "123456789012";
 const REGION = "us-east-1";
@@ -158,6 +159,10 @@ describe("Video SOP/BOM timeout chain", () => {
         const catchers = task.Catch as any[];
         expect(catchers.some((c) => c.ErrorEquals.includes("States.ALL"))).toBe(true);
         expect(definition.States[catchers[0].Next].Next).toBe("PipelineEndTask");
+    });
+
+    test("pipelineEnd can end the run's job after the Batch state's timeout", () => {
+        expectBatchStateTimeoutCleanup(template);
     });
 
     test("the bundle taskTimeout is the config constant and envelopes the state machine", () => {

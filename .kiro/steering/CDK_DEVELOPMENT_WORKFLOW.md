@@ -1798,9 +1798,15 @@ the attempt override). Nest the chain: attempt duration ≤ the state bound; the
 minutes (the two 5-minute Lambda states around it) ≤ the state machine timeout; the state machine
 timeout < the `vamsSchema` `taskTimeout`, which starts before the execution does. A
 `WAIT_FOR_TASK_TOKEN` Lambda state that submits the job itself (coordinate transform) bounds the wait
-with `taskTimeout`, which renders as the state's `TimeoutSeconds` there. Image to 3D, Video SOP/BOM, the
+with `taskTimeout`, which renders as the state's `TimeoutSeconds` there. Step Functions cancels a `.sync` job
+when the execution is aborted, not when a state times out, and a job a Lambda submitted under a token wait has
+no owner after the wait times out, so the state's pipelineEnd ends the run's job itself:
+`grantBatchStateTimeoutCleanup` gives it `BATCH_JOB_QUEUES` (every queue the state submits to),
+`batch:ListJobs` and `batch:TerminateJob` on `job/*`, and its handler's `end_batch_job_after_state_timeout`
+terminates the unfinished job with the run's job name on `States.Timeout`. Image to 3D, Video SOP/BOM, the
 3D thumbnail tiers and Potree use it; the NVIDIA, splat toolbox and metadata labeling constructs predate
-it. Test: `infra/test/pipelines/batchStateTimeoutChain.test.ts`.
+it. Tests: `infra/test/pipelines/batchStateTimeoutChain.test.ts`,
+`backendPipelines/tests/test_pipeline_end_ends_timed_out_batch_job.py`.
 
 #### **Read Bits on COPY'd Source in a Non-Root Container**
 

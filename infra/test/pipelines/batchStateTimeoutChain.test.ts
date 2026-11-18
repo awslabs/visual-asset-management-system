@@ -40,6 +40,7 @@ import {
 } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
 import { makePipelineHarness, ACCOUNT, REGION } from "../support/pipelineConstructHarness";
 import { parseAsl, singleStateMachine } from "../support/asl";
+import { expectBatchStateTimeoutCleanup } from "../support/batchStateTimeoutCleanup";
 import { newTestApp } from "../support/testApp";
 
 const HF_TOKEN = "hf_test_token_placeholder"; // pragma: allowlist secret
@@ -190,6 +191,10 @@ describe("Image to 3D timeout chain", () => {
             definition.TimeoutSeconds
         );
     });
+
+    test("pipelineEnd can end the run's job on either queue after a state timeout", () => {
+        expectBatchStateTimeoutCleanup(template);
+    });
 });
 
 describe("Point cloud Potree viewer timeout chain", () => {
@@ -240,6 +245,10 @@ describe("Point cloud Potree viewer timeout chain", () => {
         expect(bundleTaskTimeoutSeconds("preview/pcPotreeViewer")).toBeGreaterThan(
             definition.TimeoutSeconds
         );
+    });
+
+    test("pipelineEnd can end the run's job on the PDAL or Potree queue after a state timeout", () => {
+        expectBatchStateTimeoutCleanup(template);
     });
 });
 
@@ -292,5 +301,9 @@ describe("Coordinate transform timeout chain", () => {
         const state = definition.States.CoordTransformBatchJob;
         expect(state.Retry).toBeUndefined();
         expect(state.Catch.some((c: any) => c.ErrorEquals.includes("States.ALL"))).toBe(true);
+    });
+
+    test("pipelineEnd can end the job executeBatchJob submitted after the token wait times out", () => {
+        expectBatchStateTimeoutCleanup(template);
     });
 });

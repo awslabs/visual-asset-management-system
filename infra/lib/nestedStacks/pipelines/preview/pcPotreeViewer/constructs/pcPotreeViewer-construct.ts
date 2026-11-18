@@ -19,7 +19,10 @@ import {
     buildPipelineEndFunction,
 } from "../lambdaBuilder/pcPotreeViewerFunctions";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
-import { StateTimeoutBatchSubmitJob } from "../../../constructs/stateTimeoutBatchSubmitJob";
+import {
+    StateTimeoutBatchSubmitJob,
+    grantBatchStateTimeoutCleanup,
+} from "../../../constructs/stateTimeoutBatchSubmitJob";
 import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -351,6 +354,11 @@ export class PcPotreeViewerConstruct extends NestedStack {
             props.pipelineSecurityGroups,
             props.storageResources.encryption.kmsKey
         );
+        // After either Batch state's own bound fires, pipelineEnd ends the run's job on its queue.
+        grantBatchStateTimeoutCleanup(pipelineEndFunction, [
+            pdalBatchPipeline.batchJobQueue.jobQueueArn,
+            potreeBatchPipeline.batchJobQueue.jobQueueArn,
+        ]);
 
         const pipeLineEndTask = new tasks.LambdaInvoke(this, "PipelineEndTask", {
             lambdaFunction: pipelineEndFunction,

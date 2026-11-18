@@ -37,7 +37,10 @@ import {
     kmsKeyPolicyStatementGenerator,
 } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
-import { StateTimeoutBatchSubmitJob } from "../../../constructs/stateTimeoutBatchSubmitJob";
+import {
+    StateTimeoutBatchSubmitJob,
+    grantBatchStateTimeoutCleanup,
+} from "../../../constructs/stateTimeoutBatchSubmitJob";
 import { ImageTo3dModelImage } from "./imageTo3dCodeBuild-construct";
 import { populateHuggingFaceTokenSecret } from "../../nvidia/customResources/populateHuggingFaceTokenSecret";
 
@@ -781,6 +784,11 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
             props.pipelineSecurityGroups,
             props.storageResources.encryption.kmsKey
         );
+        // After a Batch state's own bound fires, pipelineEnd ends the run's job on either queue.
+        grantBatchStateTimeoutCleanup(pipelineEndFunction, [
+            batchJobQueue.ref,
+            ...(highGpuMemoryJobQueue ? [highGpuMemoryJobQueue.ref] : []),
+        ]);
 
         /**
          * Per-model Batch job definition. They differ only by model key, image, container memory, and
