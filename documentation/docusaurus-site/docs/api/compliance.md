@@ -335,7 +335,7 @@ PUT /compliance/schemas/{schemaName}
 | Field         | Type   | Required | Description                                                |
 | ------------- | ------ | -------- | ---------------------------------------------------------- |
 | `schemaBody`  | object | No       | Replacement schema definition (a `vams-rules-v1` document) |
-| `description` | string | No       | Replacement description                                    |
+| `description` | string | No       | Replacement description (up to 1024 characters)            |
 | `databaseId`  | string | No       | Replacement database scope, or `GLOBAL`                    |
 
 A system schema (`isSystem: true`) is updated or deleted only by the system user; any other caller receives `400`.
@@ -735,6 +735,7 @@ POST /compliance/evaluate/{databaseId}/{assetId}
 | ------ | ---------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, the asset does not exist, no schema is named or bound, or the evaluation could not run |
 | `403`  | Not authorized                                                                                             |
+| `409`  | The compliance data of a deleted database with this id is still being moved                                |
 | `500`  | Internal server error                                                                                      |
 
 ---
@@ -788,11 +789,12 @@ POST /compliance/evaluate/{databaseId}
 
 ### Error responses
 
-| Status | Description                                                             |
-| ------ | ----------------------------------------------------------------------- |
-| `400`  | Invalid `databaseId` or `startingToken`, or the database does not exist |
-| `403`  | Not authorized                                                          |
-| `500`  | Internal server error                                                   |
+| Status | Description                                                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `databaseId` or `startingToken`, or the database does not exist                                                                 |
+| `403`  | Not authorized                                                                                                                          |
+| `409`  | The compliance data of a deleted database with this id is still being moved, or a binding change of the database is still being applied |
+| `500`  | Internal server error                                                                                                                   |
 
 ---
 
@@ -1106,9 +1108,9 @@ POST /compliance/quarantine/{databaseId}/{assetId}/release
 
 ### Request body
 
-| Field    | Type   | Required | Description                                                     |
-| -------- | ------ | -------- | --------------------------------------------------------------- |
-| `reason` | string | No       | Reason recorded in the audit entry (default `released via API`) |
+| Field    | Type   | Required | Description                                                                            |
+| -------- | ------ | -------- | -------------------------------------------------------------------------------------- |
+| `reason` | string | No       | Reason recorded in the audit entry, up to 1024 characters (default `released via API`) |
 
 ### Response
 
@@ -1122,6 +1124,7 @@ POST /compliance/quarantine/{databaseId}/{assetId}/release
 | ------ | --------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, the asset has no compliance record, the asset is not quarantined, or its record changed under every try |
 | `403`  | Not authorized                                                                                                              |
+| `409`  | The compliance data of a deleted database with this id is still being moved                                                 |
 | `500`  | Internal server error                                                                                                       |
 
 ---
@@ -1159,6 +1162,7 @@ POST /compliance/quarantine/{databaseId}/{assetId}/exception
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, no reason given, the asset has no compliance record, the asset is not quarantined, or its record changed under every try |
 | `403`  | Not authorized                                                                                                                               |
+| `409`  | The compliance data of a deleted database with this id is still being moved                                                                  |
 | `500`  | Internal server error                                                                                                                        |
 
 ---
@@ -1188,6 +1192,7 @@ DELETE /compliance/quarantine/{databaseId}/{assetId}/exception
 | ------ | --------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, the asset has no compliance record, no exception is active, or its record changed under every try |
 | `403`  | Not authorized                                                                                                        |
+| `409`  | The compliance data of a deleted database with this id is still being moved                                           |
 | `500`  | Internal server error                                                                                                 |
 
 ---
@@ -1262,12 +1267,12 @@ POST /compliance/cascades
 
 ### Request body
 
-| Field             | Type    | Required | Description                                               |
-| ----------------- | ------- | -------- | --------------------------------------------------------- |
-| `databaseId`      | string  | Yes      | Database of the source asset                              |
-| `assetId`         | string  | Yes      | Asset whose downstream assets are re-evaluated            |
-| `reason`          | string  | No       | Reason recorded on the cascade (default `manual trigger`) |
-| `requireApproval` | boolean | No       | Wait for approval before executing (default `true`)       |
+| Field             | Type    | Required | Description                                                                      |
+| ----------------- | ------- | -------- | -------------------------------------------------------------------------------- |
+| `databaseId`      | string  | Yes      | Database of the source asset                                                     |
+| `assetId`         | string  | Yes      | Asset whose downstream assets are re-evaluated                                   |
+| `reason`          | string  | No       | Reason recorded on the cascade, up to 1024 characters (default `manual trigger`) |
+| `requireApproval` | boolean | No       | Wait for approval before executing (default `true`)                              |
 
 ### Response
 
@@ -1287,6 +1292,7 @@ When `requireApproval` is `false`, the status is `202` and `state` is `executing
 | ------ | ------------------------------------------------------------------------------------------------------ |
 | `400`  | Invalid parameters, the asset does not exist, or the cascade could not be started (recorded `aborted`) |
 | `403`  | Not authorized                                                                                         |
+| `409`  | The compliance data of a deleted database with this id is still being moved                            |
 | `500`  | Internal server error                                                                                  |
 
 ---
@@ -1344,9 +1350,9 @@ POST /compliance/cascades/{cascadeId}/approve
 
 ### Request body
 
-| Field    | Type   | Required | Description                                                                |
-| -------- | ------ | -------- | -------------------------------------------------------------------------- |
-| `reason` | string | No       | Reason recorded on the cascade and in the audit entry (default `approved`) |
+| Field    | Type   | Required | Description                                                                                       |
+| -------- | ------ | -------- | ------------------------------------------------------------------------------------------------- |
+| `reason` | string | No       | Reason recorded on the cascade and in the audit entry, up to 1024 characters (default `approved`) |
 
 ### Response
 
@@ -1378,9 +1384,9 @@ POST /compliance/cascades/{cascadeId}/reject
 
 ### Request body
 
-| Field    | Type   | Required | Description                                                                |
-| -------- | ------ | -------- | -------------------------------------------------------------------------- |
-| `reason` | string | No       | Reason recorded on the cascade and in the audit entry (default `rejected`) |
+| Field    | Type   | Required | Description                                                                                       |
+| -------- | ------ | -------- | ------------------------------------------------------------------------------------------------- |
+| `reason` | string | No       | Reason recorded on the cascade and in the audit entry, up to 1024 characters (default `rejected`) |
 
 ### Response
 
