@@ -26,7 +26,7 @@ than the parent's only where the caller may read that database and its assets, t
 
 import base64
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import boto3
 from aws_lambda_powertools.utilities.parser import ValidationError
@@ -364,24 +364,31 @@ INVALID_DATE_MESSAGE = "startDate and endDate must be ISO-8601 dates or date-tim
 
 
 def _validate_dates(start_date, end_date):
-    """`(valid, message)` for the optional `startDate` / `endDate` filters: each must be an
-    ISO-8601 date or date-time (`datetime.fromisoformat`), since the window compares them with the
-    stored timestamps as strings."""
+    """`(valid, message, start, end)` for the optional `startDate` / `endDate` filters. Each must
+    be an ISO-8601 date or date-time (`datetime.fromisoformat`) and is returned in the stored
+    timestamps' form, UTC `isoformat()` (a value with no offset is read as UTC), because the window
+    compares them with the stored timestamps as strings: a value with an offset, or in the basic or
+    week form, would otherwise compare out of order."""
     (valid, message) = validate({
         "startDate": {"value": start_date, "validator": "STRING_256", "optional": True},
         "endDate": {"value": end_date, "validator": "STRING_256", "optional": True},
     })
     if not valid:
-        return valid, message
+        return valid, message, None, None
+    normalized = []
     for value in (start_date, end_date):
         if not value:
+            normalized.append(value)
             continue
         try:
-            datetime.fromisoformat(value)
+            moment = datetime.fromisoformat(value)
         except ValueError:
             logger.info("Audit date filter rejected: not an ISO-8601 date or date-time")
-            return False, INVALID_DATE_MESSAGE
-    return True, None
+            return False, INVALID_DATE_MESSAGE, None, None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        normalized.append(moment.astimezone(timezone.utc).isoformat())
+    return True, None, normalized[0], normalized[1]
 
 
 #######################
@@ -396,9 +403,7 @@ def get_asset_audit(event, database_id, asset_id, params):
         (valid, message) = validate({"assetId": {"value": asset_id, "validator": "ASSET_ID"}})
     if not valid:
         return validation_error(body={"message": message}, event=event)
-    start_date = params.get("startDate")
-    end_date = params.get("endDate")
-    (valid, message) = _validate_dates(start_date, end_date)
+    (valid, message, start_date, end_date) = _validate_dates(params.get("startDate"), params.get("endDate"))
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
@@ -635,7 +640,7 @@ def query_audit(event, params):
         return validation_error(body={"message": message}, event=event)
     if asset_id and not database_id:
         return validation_error(body={"message": "assetId requires databaseId"}, event=event)
-    (valid, message) = _validate_dates(start_date, end_date)
+    (valid, message, start_date, end_date) = _validate_dates(start_date, end_date)
     if not valid:
         return validation_error(body={"message": message}, event=event)
     page_size = listing.page_size_of(params.get("maxItems", params.get("limit")),

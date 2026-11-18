@@ -22971,13 +22971,13 @@ components:
       complianceAuditStartDateParam:
         name: startDate
         in: query
-        description: "ISO-8601 timestamp; only entries at or after it are returned"
+        description: "ISO-8601 date or timestamp, compared in UTC (a value with no offset is read as UTC); only entries at or after it are returned"
         schema:
             type: string
       complianceAuditEndDateParam:
         name: endDate
         in: query
-        description: "ISO-8601 timestamp; only entries at or before it are returned"
+        description: "ISO-8601 date or timestamp, compared in UTC (a value with no offset is read as UTC); only entries at or before it are returned"
         schema:
             type: string
       complianceStartingTokenParam:
