@@ -254,11 +254,17 @@ const profileColumns: ColumnDef<EdhDesktopProfile>[] = [
 const NO_SESSIONS: EdhAdminInstance[] = [];
 const NO_RESERVATIONS: CapacityReservationView[] = [];
 
-/**
- * A query's value for a summary card: `…` while it loads, `—` once it failed with no answer. A later
- * read that fails keeps the last answer in `data`, so the card keeps its value.
- */
+/** A query's value for a summary card: `…` while it loads, `—` once it failed. */
 const tileValue = (
+    query: { isLoading: boolean; error: unknown },
+    value: () => React.ReactNode
+): React.ReactNode => (query.isLoading ? "…" : query.error ? "—" : value());
+
+/**
+ * The same for the polled sessions query: a later poll that fails keeps the last answer in `data`,
+ * and its section keeps its rows beside a could-not-refresh line, so the card keeps its value.
+ */
+const polledTileValue = (
     query: { isLoading: boolean; error: unknown; data?: unknown },
     value: () => React.ReactNode
 ): React.ReactNode =>
@@ -447,7 +453,10 @@ const CapacityTab: React.FC<CapacityTabProps> = ({ can, onManageReservations }) 
                     value={tileValue(capacity, () => capacity.data?.totalSessions ?? 0)}
                 />
                 {canSessions && (
-                    <Tile label="Running" value={tileValue(sessionsQuery, () => running.length)} />
+                    <Tile
+                        label="Running"
+                        value={polledTileValue(sessionsQuery, () => running.length)}
+                    />
                 )}
                 <Tile
                     label="Distinct owners"
