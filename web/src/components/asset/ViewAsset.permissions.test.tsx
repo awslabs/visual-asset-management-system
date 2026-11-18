@@ -137,6 +137,17 @@ describe("asset page actions by role", () => {
         expect(metadata.readOnly).toBe(false);
     });
 
+    it("a database-user role may add and edit metadata but is not offered metadata delete", async () => {
+        const { metadata } = await renderAs(DATABASE_USER_ROUTES);
+        expect(metadata.readOnly).toBe(false);
+        expect(metadata.canDelete).toBe(false);
+    });
+
+    it("the administrator is offered metadata delete", async () => {
+        const { metadata } = await renderAs(ADMIN_ROUTES);
+        expect(metadata.canDelete).toBe(true);
+    });
+
     it("a database-user role may archive from the delete dialog but not permanently delete", async () => {
         const { deleteModal } = await renderAs(DATABASE_USER_ROUTES);
         expect(deleteModal.canPermanentlyDelete).toBe(false);

@@ -132,6 +132,8 @@ export default function ViewAsset() {
     );
     // The metadata editor adds with POST and updates with PUT; either grant keeps it editable.
     const canWriteMetadata = can("POST", ASSET_METADATA_ROUTE) || can("PUT", ASSET_METADATA_ROUTE);
+    // Row delete calls DELETE on the same route, which a role may lack while it may add and edit.
+    const canDeleteMetadata = can("DELETE", ASSET_METADATA_ROUTE);
     const unarchiveDisabledReason = routeDisabledReason(
         permissionsLoading,
         permissionsFailed,
@@ -461,6 +463,7 @@ export default function ViewAsset() {
                                                     !canWriteMetadata ||
                                                     isArchived
                                                 }
+                                                canDelete={canDeleteMetadata}
                                             />
                                         )}
                                     </ErrorBoundary>

@@ -41,6 +41,8 @@ interface BulkEditModeProps {
     rows: MetadataRowState[];
     mode?: "online" | "offline";
     restrictMetadata?: boolean;
+    /** Whether the role may delete a stored field; a field added in this edit can always be removed. */
+    canDelete?: boolean;
     onSave: (rows: MetadataRowState[]) => void;
     onCancel: () => void;
 }
@@ -66,6 +68,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
     rows,
     mode = "online",
     restrictMetadata = false,
+    canDelete = true,
     onSave,
     onCancel,
 }) => {
@@ -482,7 +485,11 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
             cell: (item: MetadataRowState) => {
                 const index = editedRows.indexOf(item);
                 const isSchema = isSchemaField(item);
-                const canDelete = !isSchema || !item.metadataSchemaRequired;
+                const canClearOrDelete = !isSchema || !item.metadataSchemaRequired;
+                // Clearing a schema field and removing a field added in this edit call no delete.
+                if (!canDelete && !isSchema && !item.isNew) {
+                    return null;
+                }
 
                 return (
                     <div style={{ display: "inline-block" }} tabIndex={-1}>
@@ -490,7 +497,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
                             variant="icon"
                             iconName={isSchema ? "undo" : "remove"}
                             onClick={() => handleDeleteRow(index)}
-                            disabled={!canDelete}
+                            disabled={!canClearOrDelete}
                             ariaLabel={isSchema ? "Clear value" : "Delete row"}
                         />
                     </div>
