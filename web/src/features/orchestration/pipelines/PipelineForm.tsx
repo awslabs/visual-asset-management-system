@@ -28,6 +28,9 @@ import Breadcrumb from "../components/Breadcrumb";
 import Stepper from "../components/Stepper";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
 import { BusyButton } from "../components/BusyControls";
+import { DisabledReasonButton, DisabledReasonTooltip } from "../components/DisabledReason";
+import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
+import { routeDisabledReason } from "../permissions/routeDisabledReason";
 import { useFocusHandOff } from "../components/useFocusHandOff";
 import { appCache } from "../../../services/appCache";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
@@ -230,6 +233,18 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
     // A system pipeline (shipped by a vamsSchema bundle) accepts only `enabled` on update; every other
     // field is locked and the save sends nothing else.
     const isSystemPipeline = mode === "edit" && !!initial?.isSystem;
+    // The View page of a system pipeline is open to every role that may read it; Enabled and Update
+    // change the pipeline, so they follow the role's update route (web/CLAUDE.md 6.4: the route
+    // check runs first). An ordinary pipeline's Edit is only offered with that route.
+    const { loading: permissionsLoading, failed: permissionsFailed, can } = useAllowedRoutes();
+    const systemChangeDeniedReason = isSystemPipeline
+        ? routeDisabledReason(
+              permissionsLoading,
+              !!permissionsFailed,
+              can("PUT", "/database/{databaseId}/pipelines/{pipelineId}"),
+              "Your role does not allow changing this pipeline."
+          )
+        : undefined;
     const pageTitle =
         mode === "create"
             ? "Create Pipeline"
@@ -333,6 +348,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
         }
 
         if (isSystemPipeline) {
+            if (systemChangeDeniedReason) return;
             try {
                 await updateMutation.mutateAsync({
                     databaseId,
@@ -519,7 +535,16 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                 </button>
             ) : (
                 !isDeadlineCloudDisabled &&
-                saveWarnings.length === 0 && (
+                saveWarnings.length === 0 &&
+                (systemChangeDeniedReason ? (
+                    <DisabledReasonButton
+                        key="wizard-save"
+                        disabledReason={systemChangeDeniedReason}
+                        className={btnPrimary}
+                    >
+                        Update
+                    </DisabledReasonButton>
+                ) : (
                     <BusyButton
                         key="wizard-save"
                         ref={saveRef}
@@ -531,7 +556,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                     >
                         {mode === "create" ? "Create" : "Update"}
                     </BusyButton>
-                )
+                ))
             )}
         </>
     );
@@ -686,12 +711,30 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                     </fieldset>
 
                     <div className="flex items-center gap-2">
-                        <input
-                            {...register("enabled")}
-                            type="checkbox"
-                            id="enabled"
-                            disabled={isDeadlineCloudDisabled}
-                        />
+                        <DisabledReasonTooltip reason={systemChangeDeniedReason}>
+                            <input
+                                {...register("enabled")}
+                                // React still reports a change for a cancelled click.
+                                {...(systemChangeDeniedReason ? { onChange: () => undefined } : {})}
+                                type="checkbox"
+                                id="enabled"
+                                disabled={isDeadlineCloudDisabled}
+                                aria-disabled={systemChangeDeniedReason ? true : undefined}
+                                aria-description={systemChangeDeniedReason}
+                                // A denied change keeps the box focusable with its reason; the
+                                // click is cancelled, so the box keeps its value.
+                                onClick={
+                                    systemChangeDeniedReason
+                                        ? (event) => event.preventDefault()
+                                        : undefined
+                                }
+                                className={
+                                    systemChangeDeniedReason
+                                        ? "opacity-50 cursor-not-allowed"
+                                        : undefined
+                                }
+                            />
+                        </DisabledReasonTooltip>
                         <label htmlFor="enabled" className="text-sm font-medium">
                             Enabled
                         </label>

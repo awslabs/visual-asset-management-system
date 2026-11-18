@@ -43,7 +43,8 @@ execution settings and the admin settings that govern how it may be run are show
 configuration templates as a separate list; **Archive** withdraws it from use. Only the actions your
 permissions allow appear in the menu, so a read-only user sees **Templates** alone. A
 [system pipeline](../concepts/pipelines-and-workflows.md#system-pipelines), marked **System**, offers
-**View** in place of **Edit**, where only **Enabled** can change, and lists **Archive** disabled with the
+**View** in place of **Edit**, where only **Enabled** can change (when your role may update pipelines; otherwise
+**Enabled** and **Update** are disabled with the reason), and lists **Archive** disabled with the
 reason shown on hover or focus; its template list shows **Create Template** and **Delete** the same way.
 
 Deleting a template from that list is permanent and is never blocked. When an auto-triggered workflow's
@@ -201,7 +202,7 @@ for the tag schema fields and the quoting rule in detail.
 
 ![Workflows page showing two built-in workflows](/img/workflows_page_20261109_v2.7.png)
 
-Each entry's **⋮** actions menu holds **Edit**, **Execute**, **View Executions**, and **Archive**, limited to the actions your permissions allow. A system workflow, marked **System**, offers **View** in place of **Edit** and lists **Archive** disabled with the reason shown on hover or focus; in its trigger list **Add** and **Delete** are disabled the same way, and **Edit** switches a trigger on or off.
+Each entry's **⋮** actions menu holds **Edit**, **Execute**, **View Executions**, and **Archive**, limited to the actions your permissions allow. A system workflow, marked **System**, offers **View** in place of **Edit**, where only **Enabled** can change when your role may update workflows (otherwise **Enabled** and **Save** are disabled with the reason), and lists **Archive** disabled with the reason shown on hover or focus; in its trigger list **Add** and **Delete** are disabled the same way, and **Edit** switches a trigger on or off.
 
 ## Creating a workflow
 
