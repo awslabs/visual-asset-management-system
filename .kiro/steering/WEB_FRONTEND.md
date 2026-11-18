@@ -1146,7 +1146,11 @@ binary, S3's 416 on an empty object read as empty text, a network `TypeError` re
 `Range`. UTF-16 with a BOM is decoded; UTF-32 and BOM-less UTF-16 are an unsupported encoding; any
 other NUL byte, or too many control bytes (10 %, or 2 % when not valid UTF-8), is binary. Notices:
 `text-viewer-binary-notice` / `text-viewer-encoding-notice`, and per side in the differ
-`text-diff-side-binary` / `text-diff-side-encoding` while the other side renders. Full account:
+`text-diff-side-binary` / `text-diff-side-encoding` while the other side renders. Text over
+`TEXT_VIEWER_MAX_BYTES` (20 MiB) is `too-large` (`text-viewer-too-large-notice`, `text-diff-side-too-large`)
+and is not downloaded past its sample; over `TEXT_HIGHLIGHT_MAX_CHARS` the Text Viewer renders plain text
+(`text-viewer-plain`). `textReadFailureMessage` words a failed presigned read (an S3 403/404 is a link to
+refresh, a `TypeError` a connection problem). Full account:
 `web/src/visualizerPlugin/CLAUDE.md`, "Files Without an Extension and the Binary Guard".
 
 ### 8.5 Compare Mode (cross-asset / multi-version)
