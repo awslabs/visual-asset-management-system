@@ -176,6 +176,34 @@ describe("CI workflow", () => {
         expect(infraJob).toMatch(/- name: Npm ci root directory\n\s+run: npm ci/);
     });
 
+    describe("documentation site build", () => {
+        const docsJob = (): string =>
+            /^ {4}docs-build:\n([\s\S]*?)(?=\n {4}\S|$(?![\s\S]))/m.exec(text)?.[1] ?? "";
+
+        test("the site fails its build on a broken link or anchor (control: why CI builds it)", () => {
+            const config = read("documentation/docusaurus-site/docusaurus.config.ts");
+            expect(config).toMatch(/onBrokenLinks: "throw"/);
+            expect(config).toMatch(/onBrokenAnchors: "throw"/);
+        });
+
+        test("a CI job installs and builds the site from its own directory", () => {
+            const job = docsJob();
+            expect(job).toMatch(
+                /working-directory: documentation\/docusaurus-site\n\s+run: npm ci$/m
+            );
+            expect(job).toMatch(
+                /working-directory: documentation\/docusaurus-site\n\s+run: npm run build$/m
+            );
+        });
+
+        test("the build job deploys nothing and keeps the read-only token", () => {
+            const job = docsJob();
+            expect(job).not.toBe("");
+            expect(job).not.toMatch(/gh-pages|permissions:/);
+            expect(text).toMatch(/^permissions:\n\s+contents: read$/m);
+        });
+    });
+
     describe("infra type check", () => {
         // The infra Jest suite compiles transpile-only, so this is the only place an infra type error
         // fails the build.
