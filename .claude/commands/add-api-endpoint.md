@@ -308,7 +308,7 @@ export function buildMyFunction(
 
 ### Step 6: Add API Route Binding
 
-**Prefer `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`** for new endpoints — it exists to keep both API stacks clear of the two per-template CloudFormation ceilings (500 resources, and a 1 MB template body, which `apiBuilder` fills roughly twice as fast because its Lambdas carry long inline IAM policies). Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there. Note the split does **not** relieve the API Gateway resources-per-REST-API quota: both stacks register into one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree is a whole-deployment figure. See "API Stack Ceilings" in `infra/CLAUDE.md`.
+**Prefer `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`** for new endpoints — it exists to keep both API stacks clear of the two per-template CloudFormation ceilings (500 resources, and a 1,000,000-byte template body, which fills well ahead of the resource count; see "API Stack Ceilings" in `infra/CLAUDE.md` for the current figures). Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there. Note the split does **not** relieve the API Gateway resources-per-REST-API quota: both stacks register into one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree is a whole-deployment figure. See "API Stack Ceilings" in `infra/CLAUDE.md`.
 
 1. Add import for the new builder function at the top
 2. Build the Lambda function in the constructor
