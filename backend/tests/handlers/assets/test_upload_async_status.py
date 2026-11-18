@@ -437,6 +437,7 @@ class TestUploadStatusRoute:
 
     def test_ids_are_validated(self, uploads, monkeypatch):
         _Enforcer.calls = []
+        monkeypatch.setattr(_Enforcer, "api", True)
         monkeypatch.setattr(uf, "CasbinEnforcer", _Enforcer)
         monkeypatch.setattr(uf, "request_to_claims", lambda event: {"tokens": ["u"], "roles": ["r"]})
         event = {"requestContext": {"http": {"path": "/uploads/x", "method": "GET"}},
@@ -444,3 +445,13 @@ class TestUploadStatusRoute:
                  "queryStringParameters": {"assetId": ASSET, "databaseId": DB}, "headers": {}}
         assert uf.lambda_handler(event, MagicMock())["statusCode"] == 400
         assert _Enforcer.calls == []
+
+    @pytest.mark.parametrize("tokens, api", [(["u"], False), ([], True)])
+    def test_the_route_check_runs_before_the_ids_are_validated(self, uploads, monkeypatch, tokens, api):
+        monkeypatch.setattr(_Enforcer, "api", api)
+        monkeypatch.setattr(uf, "CasbinEnforcer", _Enforcer)
+        monkeypatch.setattr(uf, "request_to_claims", lambda event: {"tokens": list(tokens), "roles": ["r"]})
+        event = {"requestContext": {"http": {"path": "/uploads/x", "method": "GET"}},
+                 "pathParameters": {"uploadId": "bad id!"},
+                 "queryStringParameters": None, "headers": {}}
+        assert uf.lambda_handler(event, MagicMock())["statusCode"] == 403
