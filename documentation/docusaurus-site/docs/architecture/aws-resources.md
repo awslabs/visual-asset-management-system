@@ -698,14 +698,23 @@ Every AWS Fargate job definition carries an explicit name: each construct choose
 
 ## AWS CodeArtifact
 
-Deployed with the Image to 3D pipeline, which builds one container image per enabled model. Each build
-installs its Python dependencies from source, so a build is only as reliable as the public package index
-is reachable from the build subnet. Fetching through a pull-through cache makes a rebuild reproducible.
+Deployed with the Image to 3D pipeline when it builds with AWS CodeBuild (`useCodeBuild: true`) in a
+Region that offers AWS CodeArtifact (some commercial Regions, see the
+[AWS CodeArtifact endpoints page](https://docs.aws.amazon.com/general/latest/gr/codeartifact.html); not AWS
+GovCloud (US) or the AWS European Sovereign Cloud). Each build installs its Python dependencies from source, so a build is only as
+reliable as the public package index is reachable from the build subnet. Fetching through a
+pull-through cache makes a rebuild reproducible. In a Region without CodeArtifact no domain is created
+and the builds install from the public index (`pypi.org`, `files.pythonhosted.org`), which the build
+subnet must then reach.
 
-| Resource       | Name                                               | Removal on teardown | Custom name        |
-| -------------- | -------------------------------------------------- | ------------------- | ------------------ |
-| **Domain**     | `<config.name>-<baseStackName>-<region>-imageto3d` | Deleted with stack  | Yes -- can collide |
-| **Repository** | `pypi-store` (external connection `public:pypi`)   | Deleted with stack  | Yes -- can collide |
+| Resource       | Name                                                                                     | Removal on teardown | Custom name        |
+| -------------- | ---------------------------------------------------------------------------------------- | ------------------- | ------------------ |
+| **Domain**     | `<config.name>-<baseStackName>-imageto3d`, with `-kms` appended when the CMK encrypts it | Deleted with stack  | Yes -- can collide |
+| **Repository** | `pypi-store` (external connection `public:pypi`)                                         | Deleted with stack  | Yes -- can collide |
+
+The domain is encrypted with the VAMS customer managed key when `app.useKmsCmkEncryption` is enabled.
+A domain's key cannot change after it is created, so turning the CMK on or off replaces the domain under
+the other name, and the cache fills again on the next build.
 
 The domain name includes `baseStackName` because CodeArtifact domain names are unique per account and
 Region: without it, two VAMS deployments in one account would contend for the same domain. An orphan

@@ -255,7 +255,12 @@ describe("the coordinateTransform image", () => {
  *
  * Named explicitly, not globbed, for the same reason as the block above.
  */
-const NON_ROOT_IMAGES: { label: string; file: string; scratchDir?: string }[] = [
+const NON_ROOT_IMAGES: {
+    label: string;
+    file: string;
+    scratchDir?: string;
+    readSources?: string[];
+}[] = [
     {
         label: "pcPotreeViewer PDAL",
         file: path.join(PIPELINES_DIR, "preview", "pcPotreeViewer", "container", "Dockerfile_PDAL"),
@@ -282,6 +287,8 @@ const NON_ROOT_IMAGES: { label: string; file: string; scratchDir?: string }[] = 
         label: "videoSopBom",
         file: path.join(PIPELINES_DIR, "genAi", "videoSopBom", "container", "Dockerfile"),
         scratchDir: "/app/tmp",
+        // The package the entrypoint imports at run time.
+        readSources: ["./video_sop_bom_pipeline/"],
     },
 ];
 
@@ -350,7 +357,7 @@ function runtimeStage(text: string): string[] {
 
 describe.each(NON_ROOT_IMAGES)(
     "the $label image runs as a non-root user",
-    ({ file, scratchDir }) => {
+    ({ file, scratchDir, readSources }) => {
         const text = fs.readFileSync(file, "utf-8");
         const stage = runtimeStage(text);
         const userAt = stage.findIndex((l) => /^USER\s+\S/.test(l));
@@ -412,6 +419,33 @@ describe.each(NON_ROOT_IMAGES)(
                 expect(joined).toContain(scratchDir);
                 expect(joined).toMatch(/\bchown\b/);
             });
+        }
+
+        if (readSources) {
+            it.each(readSources)(
+                "normalizes the read bits of %s right after copying it",
+                (source) => {
+                    // docker COPY keeps the build host's mode bits, so a checkout made under umask
+                    // 077 or 027 copies root-owned 600/640 files the non-root USER cannot read, and
+                    // the job fails at import while the image builds green (backendPipelines/CLAUDE.md
+                    // "A Non-Root Container Normalizes Read Bits on the Source It COPYs").
+                    const steps = instructions(stage.join("\n")).filter(
+                        (step) => step.trim() !== "" && !/^\s*#/.test(step)
+                    );
+                    const copyAt = steps.findIndex(
+                        (step) => /^COPY\s/.test(step) && step.trim().split(/\s+/).pop() === source
+                    );
+                    expect(copyAt).toBeGreaterThan(-1);
+                    const next = steps[copyAt + 1] ?? "";
+                    expect(next).toMatch(/^RUN\s+chmod\s+-R\s+a\+rX\s/);
+                    const targets = next
+                        .trim()
+                        .split(/\s+/)
+                        .slice(4)
+                        .map((target) => path.posix.basename(target));
+                    expect(targets).toContain(path.posix.basename(source));
+                }
+            );
         }
     }
 );
