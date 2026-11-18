@@ -699,9 +699,10 @@ def _register_new_asset(database_id, asset_id, batch=None, asset_name=None):
     """A new asset of a bound database whose auto-evaluation is off: register it under the
     database binding without evaluating it, so `evaluate`, the sweep and the database overview reach
     it (the binding governs every asset of the database whatever auto-evaluation says). With
-    auto-evaluation on, the evaluation that follows registers it (`check_default_schema`). A
-    database without a binding, or an asset already recorded, costs the database read only, or one
-    consistent read more."""
+    auto-evaluation on, the evaluation that follows registers it (`check_default_schema`). An asset
+    whose row is gone (an INSERT handled after the asset's permanent delete) is not registered, as
+    `check_default_schema` does not register one. A database without a binding, or an asset already
+    recorded, costs the database read only, or one consistent read more."""
     batch = batch if batch is not None else TriggerBatch()
     db_item = batch.database_item(database_id)
     if not db_item or db_item.get("complianceAutoEval") is True:
@@ -710,6 +711,9 @@ def _register_new_asset(database_id, asset_id, batch=None, asset_name=None):
     if not schema_name:
         return
     if store.get_compliance_record(database_id, asset_id, consistent_read=True):
+        return
+    if not asset_row_exists(database_id, asset_id):
+        logger.info(f"Asset {database_id}:{asset_id} no longer exists; not registering it")
         return
     store.register_under_database_binding(database_id, asset_id, schema_name,
                                           asset_name=asset_name)

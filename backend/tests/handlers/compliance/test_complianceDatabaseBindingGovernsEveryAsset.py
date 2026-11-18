@@ -22,6 +22,7 @@ from backend.tests.handlers.compliance.test_complianceTrigger import (
     _run, _sns_event, _stream_message)
 from handlers.compliance import complianceEvaluateService as svc
 from handlers.compliance import complianceEvaluationStore as store
+from handlers.compliance import complianceTrigger as trigger
 
 STORE = "handlers.compliance.complianceEvaluationStore"
 SVC = "handlers.compliance.complianceEvaluateService"
@@ -35,12 +36,19 @@ EVALUATION = {"evaluationId": "eval-1", "verdict": "compliant", "complianceState
 @pytest.mark.unit
 class TestTheTriggerRegistersANewAsset:
 
-    def _run(self, message, database_item, compliance_record=None):
-        with patch(f"{STORE}.register_under_database_binding") as register:
+    def _run(self, message, database_item, compliance_record=None, asset_row_exists=True):
+        with patch(f"{STORE}.register_under_database_binding") as register, \
+                patch.object(trigger, "asset_row_exists",
+                             return_value=asset_row_exists) as row_exists:
             mocks = _run(_sns_event(message), database_item=database_item,
                          compliance_record=compliance_record)
-        mocks["register"] = register
+        mocks["register"], mocks["asset_row_exists"] = register, row_exists
         return mocks
+
+    def test_an_insert_whose_asset_row_is_gone_registers_nothing(self):
+        mocks = self._run(_stream_message("INSERT"), OFF_DB, asset_row_exists=False)
+        mocks["register"].assert_not_called()
+        mocks["asset_row_exists"].assert_any_call(DB, ASSET)
 
     def test_an_insert_in_a_bound_database_with_auto_eval_off_is_registered_not_evaluated(self):
         mocks = self._run(_stream_message("INSERT"), OFF_DB)
