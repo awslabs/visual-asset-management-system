@@ -33,14 +33,15 @@ _cache_ttl = 60  # seconds
 # (pipelineService.MAX_REFERENCING_WORKFLOW_PAGES).
 MAX_SCHEMA_QUERY_PAGES = 20
 
-# Refusals that would otherwise repeat what the caller sent (a key outside the schema, a submitted
-# value) or a field's controlled list. The response stays generic (backend Rule 11); the field name
-# is logged.
+# Refusals that repeat neither what the caller sent (a submitted value, a key outside the schema)
+# nor a field's controlled list (backend Rule 11). A key outside the schema is caller input, so that
+# refusal names no field and the key is logged. The other two name the schema-defined field (format
+# with ``field=``), which the caller can read from the schema itself.
 MSG_FIELD_NOT_IN_SCHEMA = ("A field is not defined in the metadata schema. Only schema-defined fields "
                            "are allowed when restrictMetadataOutsideSchemas is enabled.")
-MSG_FIELD_TYPE_FIXED_BY_SCHEMA = ("A field's type is defined by its metadata schema and cannot be "
-                                  "changed.")
-MSG_VALUE_NOT_IN_CONTROLLED_LIST = "A field value is not in the field's controlled list."
+MSG_FIELD_TYPE_FIXED_BY_SCHEMA = ("Field '{field}' has its type defined by its metadata schema; the type "
+                                  "cannot be changed.")
+MSG_VALUE_NOT_IN_CONTROLLED_LIST = "Field '{field}' has a value that is not in its controlled list."
 
 
 class SchemaLookupError(Exception):
@@ -834,7 +835,7 @@ def validate_metadata_against_schema(
                         if actual_type_normalized != existing_type_normalized:
                             logger.info(f"Metadata field {field_name} cannot change type from "
                                         f"{_type_name(existing_type)} to {_type_name(actual_type)}")
-                            errors.append(MSG_FIELD_TYPE_FIXED_BY_SCHEMA)
+                            errors.append(MSG_FIELD_TYPE_FIXED_BY_SCHEMA.format(field=field_name))
     
     # Step 4: Validate dependsOn chains recursively (NEW - comprehensive)
     depends_valid, depends_errors = validate_depends_on_chain(
@@ -855,10 +856,10 @@ def validate_metadata_against_schema(
                 
                 if (controlled_list and not is_empty_value(actual_value)
                         and actual_value not in controlled_list):
-                    # The value and the list are caller and schema content; only the field is logged.
+                    # The value and the list stay out of the response and the log.
                     logger.info(f"Metadata field {field_name} has a value outside its controlled list "
                                 f"({len(controlled_list)} entries)")
-                    errors.append(MSG_VALUE_NOT_IN_CONTROLLED_LIST)
+                    errors.append(MSG_VALUE_NOT_IN_CONTROLLED_LIST.format(field=field_name))
     
     is_valid = len(errors) == 0
     return is_valid, errors, metadata_with_defaults
