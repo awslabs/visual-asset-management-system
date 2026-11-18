@@ -23,7 +23,8 @@
  * is kept, and the remaining names are recorded so the viewer can say what was not loaded.
  */
 
-import { fetchPresignedFile } from "../../../core/presignedFetch";
+import { fetchPresignedFile, PresignedReadError } from "../../../core/presignedFetch";
+import { isApiRefusalError } from "../../../core/streamFailure";
 
 const MiB = 1024 * 1024;
 
@@ -62,6 +63,10 @@ export function placeholderImageBytes(): Uint8Array {
 /** Why a referenced file was not loaded. */
 export type UnloadedReason =
     | "not-found"
+    /** The API refused the file's download (401, 403, or a refusal with its own reason). */
+    | "refused"
+    /** The request failed for any other reason: a 5xx, a throttle, no response. */
+    | "failed"
     | "outside-asset"
     | "external"
     | "udim"
@@ -501,7 +506,7 @@ export class AssetDependencyResolver {
             if (isAbortError(error)) {
                 throw error;
             }
-            this.recordUnloaded(key, "not-found");
+            this.recordUnloaded(key, failedReadReason(error));
             return null;
         }
 
@@ -519,7 +524,7 @@ export class AssetDependencyResolver {
             if (isAbortError(error)) {
                 throw error;
             }
-            this.recordUnloaded(key, "not-found");
+            this.recordUnloaded(key, "failed");
             return null;
         }
 
@@ -539,8 +544,26 @@ export class AssetDependencyResolver {
     }
 }
 
+/**
+ * Why a referenced file's read failed, from the status the API or S3 answered. A 404 is "not
+ * found", and so is S3's 403 on a freshly presigned URL, which S3 also answers for a key that is
+ * not there. The API's own refusal (401, 403, or a refusal with its reason) is "refused". Anything
+ * else (a 5xx, a throttle, no response) is "failed".
+ */
+function failedReadReason(error: unknown): UnloadedReason {
+    const status = (error as { status?: unknown } | null)?.status;
+    if (error instanceof PresignedReadError) {
+        return status === 403 || status === 404 ? "not-found" : "failed";
+    }
+    if (status === 404) return "not-found";
+    if (status === 401 || status === 403 || isApiRefusalError(error)) return "refused";
+    return "failed";
+}
+
 const REASON_TEXT: Record<UnloadedReason, string> = {
     "not-found": "not found in this asset",
+    refused: "download refused",
+    failed: "could not be downloaded",
     "outside-asset": "outside this asset",
     external: "external URL, not fetched",
     udim: "UDIM texture sets are not supported",

@@ -92,14 +92,16 @@ function abortError(): Error {
 /**
  * The error for a failed presign: an `ApiRefusalError` carrying the API's reason when it refused
  * the file with one, else an Error worded from the status the API returned (never a client rule).
+ * Either carries that status as `status` (undefined when no API answer came back), so a caller can
+ * tell a missing file from a refused or failed request.
  */
 function presignFailure(result: unknown, subject: string): Error {
-    const refusal = apiRefusalMessage(
-        downloadResponseStatus(result),
-        downloadResponseApiMessage(result)
-    );
-    if (refusal) return new ApiRefusalError(refusal);
-    return new Error(downloadFailureMessage(result, subject));
+    const status = downloadResponseStatus(result);
+    const refusal = apiRefusalMessage(status, downloadResponseApiMessage(result));
+    const error = refusal
+        ? new ApiRefusalError(refusal)
+        : new Error(downloadFailureMessage(result, subject));
+    return Object.assign(error, { status });
 }
 
 /** A presigned URL for the file, from the authorized download route (cached while it is safe). */
