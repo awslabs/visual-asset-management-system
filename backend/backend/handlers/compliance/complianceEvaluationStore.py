@@ -1652,8 +1652,13 @@ def start_pipeline_rule_executions(
     database_id: str,
     asset_id: str,
     evaluated_at: str,
+    launched: List[str],
 ) -> Tuple[List[Dict[str, Any]], List[RuleResult]]:
     """Launch one workflow execution per pipeline rule.
+
+    Each rule's name is appended to `launched` as soon as its launch returned an execution, or its
+    waiting row is written: from then on a workflow runs (or will) for the evaluation, so a caller
+    this raises to, or that fails later, keeps its claim (`run_evaluation`).
 
     Returns (started, errored): `started` entries are `{ruleName, executionId, status}` (a tracking
     row is written for each). A rule whose launch the workflow's concurrency lock refused (another
@@ -1729,6 +1734,8 @@ def start_pipeline_rule_executions(
             evaluation_table.put_item(Item=_waiting_tracking_row(
                 evaluation_id, rule_name, rule, database_id, asset_id, evaluated_at, request,
                 pipeline_wait_seconds(workflow)))
+            # Only the waiting row lets a callback launch the rule later.
+            launched.append(rule_name)
             started.append({"ruleName": rule_name, "status": PIPELINE_EXECUTION_WAITING})
             logger.info(f"Pipeline rule '{rule_name}' waits for a running execution of its workflow")
             continue
@@ -1737,6 +1744,7 @@ def start_pipeline_rule_executions(
             errored.extend(engine.errored_pipeline_rule_results({rule_name: rule}, failure_message))
             continue
 
+        launched.append(rule_name)
         evaluation_table.put_item(Item={
             "evaluationId": pipeline_execution_record_id(evaluation_id, rule_name),
             "recordType": PIPELINE_EXECUTION_RECORD_TYPE,
@@ -1852,31 +1860,32 @@ def run_evaluation(
                     "row claimed by a newer evaluation; nothing is evaluated")
         return _superseded_result(evaluation_id, claimed_from)
 
+    launched: List[str] = []
     try:
         return _evaluate_claimed(database_id, asset_id, schema_name, actor, evaluation_id,
-                                 evaluated_at, claimed.record)
+                                 evaluated_at, claimed.record, launched)
     except Exception:
-        # While no workflow was launched, the claim goes, so the change is not read as covered and a
-        # retry evaluates it; a row the evaluation wrote whole (no pipeline rule launched) is marked
-        # not applied. Once a workflow was launched the claim stays: a retry would launch it again,
-        # and the run's callback decides the asset.
-        readable, row = _evaluation_row(evaluation_id)
-        if readable and not (row or {}).get("pipelineExecutions"):
-            if _undo_claim(database_id, asset_id, evaluation_id, claimed) and row is not None:
-                _mark_not_applied(evaluation_id, engine.NOT_APPLIED_NOT_RECORDED)
-        else:
+        # Until a workflow was launched (or a rule's wait for one recorded), the claim goes, so the
+        # change is not read as covered and a retry evaluates it; a row the evaluation wrote is
+        # marked not applied. Once a workflow was launched the claim stays: a retry would launch it
+        # again, and the run's callback decides the asset.
+        if launched:
             logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} failed after its "
                         "pipeline rules were launched; its claim stays")
+        elif (_undo_claim(database_id, asset_id, evaluation_id, claimed)
+              and _evaluation_row(evaluation_id) is not None):
+            _mark_not_applied(evaluation_id, engine.NOT_APPLIED_NOT_RECORDED)
         raise
 
 
 def _evaluate_claimed(database_id: str, asset_id: str, schema_name: str, actor: str,
                       evaluation_id: str, evaluated_at: str, claimed_from: Dict[str, Any],
-                      ) -> Dict[str, Any]:
+                      launched: List[str]) -> Dict[str, Any]:
     """`run_evaluation` once its claim landed on the record (`claimed_from` is the record the claim
     was computed from): read the schema and the inputs, evaluate, launch the pipeline rules and
-    write the outcome. An exception raised here before a workflow was launched leaves the claim to
-    `run_evaluation` to undo; one raised after the launch leaves it in place."""
+    write the outcome. Each pipeline rule that launched (or whose wait was recorded) is appended to
+    `launched` (`start_pipeline_rule_executions`): an exception raised while it is empty leaves the
+    claim to `run_evaluation` to undo; one raised after leaves it in place."""
     # The evaluation this one replaced on the row may still have a rule waiting for its workflow:
     # its outcome can no longer apply, so the rule does not launch (and a wait past its bound is
     # recorded as such).
@@ -1935,7 +1944,7 @@ def _evaluate_claimed(database_id: str, asset_id: str, schema_name: str, actor: 
                                    for name in pipeline_rules],
         })
         started, launch_errors = start_pipeline_rule_executions(
-            pipeline_rules, evaluation_id, database_id, asset_id, evaluated_at)
+            pipeline_rules, evaluation_id, database_id, asset_id, evaluated_at, launched)
         rule_results.extend(launch_errors)
 
     # A waiting rule is pending like a launched one: the evaluation stays `pending_pipeline`.
@@ -2360,16 +2369,15 @@ class LandedClaim(NamedTuple):
     fields: Tuple[str, ...]
 
 
-def _evaluation_row(evaluation_id: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
-    """`(readable, row)`: the evaluation's row by a strongly consistent read (None when it has none).
-    A pipeline evaluation lists its `pipelineExecutions` on the row before its first launch; a row
-    without them launched nothing. A read that fails is `(False, None)`, so the claim stays and
-    `claim_orphaned` judges it later."""
+def _evaluation_row(evaluation_id: str) -> Optional[Dict[str, Any]]:
+    """The evaluation's row by a strongly consistent read: None when it has none, or when the read
+    fails (logged), so a failed evaluation's row is marked only when it is known to exist."""
     try:
-        return True, get_evaluation(evaluation_id, consistent_read=True)
+        return get_evaluation(evaluation_id, consistent_read=True)
     except Exception as e:
-        logger.warning(f"Evaluation {evaluation_id}: its row could not be read ({e}); the claim stays")
-        return False, None
+        logger.warning(f"Evaluation {evaluation_id}: its row could not be read ({e}); it is not "
+                       "marked not applied")
+        return None
 
 
 def _mark_not_applied(evaluation_id: str, reason: str) -> None:
@@ -2384,8 +2392,8 @@ def _mark_not_applied(evaluation_id: str, reason: str) -> None:
 
 def _undo_claim(database_id: str, asset_id: str, evaluation_id: str, claim: LandedClaim) -> bool:
     """Put the record back as it was before this evaluation's claim, when the evaluation failed
-    before it launched a workflow (an AWS error before the launch, or in the state write of an
-    evaluation without one): each attribute the claim
+    before it launched a workflow (an AWS error before any launch or after every launch failed, or
+    in the state write of an evaluation without one): each attribute the claim
     set goes back to its value in the copy the claim was computed from, or is removed when that copy
     had none (so a state is put back only where the claim filled one in), and a record the claim
     created is deleted. The change the evaluation was for is then not taken as covered

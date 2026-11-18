@@ -174,9 +174,9 @@ class TestAFailedEvaluationIsEvaluatedAgain:
         assert state.get("lastEvaluationStatus") == engine.EVALUATION_STATUS_COMPLETED
 
     def test_a_failure_after_the_launch_leaves_the_claim_and_launches_once(self, held):
-        """The pending state write fails after the pipeline rule launched. The evaluation row
-        exists, so the claim stays: the queue's retry finds the change covered and launches
-        nothing, and the run's callback finalizes the evaluation (as on the base)."""
+        """The pending state write fails after the pipeline rule launched, so the claim stays: the
+        queue's retry finds the change covered and launches nothing, and the run's callback
+        finalizes the evaluation (as on the base)."""
         w = held("none", state="compliant", body=waits.schema_body(other_rules=False))
         _bound_by_database(w)
         real = store._write_evaluation_state
@@ -224,6 +224,70 @@ class TestAFailedEvaluationIsEvaluatedAgain:
         first = next(row for eid, row in rows.items() if eid != state["lastEvaluationId"])
         assert first["notApplied"] == engine.NOT_APPLIED_NOT_RECORDED
         assert rows[state["lastEvaluationId"]].get("notApplied") is None
+
+    def test_no_launch_then_an_aws_error_is_evaluated_again(self, held):
+        """Every pipeline rule fails to launch (caught per rule), then the record read after the
+        launches fails. The row still lists the rule as `starting`, but no workflow runs: the claim
+        goes, the row is marked not applied, and the queue's retry evaluates the change."""
+        w = held("none", state="compliant", body=waits.schema_body(other_rules=False))
+        _bound_by_database(w)
+        real_read = store.get_compliance_record
+        attempted = []
+        failed = []
+
+        def launch(*args, **kwargs):
+            attempted.append(True)
+            raise RuntimeError("launch refused")
+
+        def read(*args, **kwargs):
+            if attempted and not failed:
+                failed.append(True)
+                raise THROTTLED
+            return real_read(*args, **kwargs)
+
+        event = _sns_event(_stream_message(change_source="assetEdit", change_at=_ago(minutes=1)))
+        with patch.object(store, "launch_workflow_execution", side_effect=launch), \
+                patch.object(store, "get_compliance_record", side_effect=read):
+            assert _deliver(event) == ["q-1"]
+            assert _deliver(event) == []
+        assert len(attempted) == 2
+        state = w.state()
+        rows = {row["evaluationId"]: row for row in _evaluation_rows(w)}
+        assert len(rows) == 2
+        retry = rows[state["lastEvaluationId"]]
+        assert retry["status"] == state["lastEvaluationStatus"] == engine.EVALUATION_STATUS_ERROR
+        assert retry.get("notApplied") is None
+        first = next(row for eid, row in rows.items() if eid != state["lastEvaluationId"])
+        assert [entry["status"] for entry in first["pipelineExecutions"]] == [
+            store.PIPELINE_EXECUTION_STARTING]
+        assert first["notApplied"] == engine.NOT_APPLIED_NOT_RECORDED
+
+    def test_a_held_rule_whose_wait_was_not_recorded_is_evaluated_again(self, held):
+        """The workflow's lock holds the rule and its waiting row cannot be written: nothing would
+        launch the rule later, so the claim goes and the queue's retry records the wait."""
+        w = held("perAsset", state="compliant", body=waits.schema_body(other_rules=False))
+        _bound_by_database(w)
+        w.hold(waits.USER_RUN)
+        real_put = store.evaluation_table.put_item
+        failed = []
+
+        def put(**kwargs):
+            if not failed and kwargs["Item"].get("status") == store.PIPELINE_EXECUTION_WAITING:
+                failed.append(True)
+                raise THROTTLED
+            return real_put(**kwargs)
+
+        event = _sns_event(_stream_message(change_source="assetEdit", change_at=_ago(minutes=1)))
+        with patch.object(store.evaluation_table, "put_item", side_effect=put):
+            assert _deliver(event) == ["q-1"]
+            assert _deliver(event) == []
+        assert failed and len(w.refused()) == 2 and w.launched() == []
+        state = w.state()
+        assert state["lastEvaluationStatus"] == engine.EVALUATION_STATUS_PENDING_PIPELINE
+        assert w.tracking(state["lastEvaluationId"])["status"] == store.PIPELINE_EXECUTION_WAITING
+        (first,) = [row for row in _evaluation_rows(w)
+                    if row["evaluationId"] != state["lastEvaluationId"]]
+        assert first["notApplied"] == engine.NOT_APPLIED_NOT_RECORDED
 
 
 @pytest.mark.unit
