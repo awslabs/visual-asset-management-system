@@ -142,6 +142,8 @@ You can update the description, expiration date, and active status of an existin
     - **Active** -- Toggle the key between active and inactive states.
 4. Choose **Update API Key**.
 
+The expiration is sent only when you change it, so you can still change the description of an expired key or deactivate it. When a self-service key's 365-day window from creation has ended, its expiration date cannot change; create a new key to keep access.
+
 :::tip[Deactivate instead of delete]
 If you need to temporarily revoke access, toggle the key to **Inactive** instead of deleting it. This preserves the key record and allows you to reactivate it later.
 :::
