@@ -772,14 +772,17 @@ aws s3 ls | grep <STACK_NAME>
 aws dynamodb list-tables \
     --query "TableNames[?contains(@, '<STACK_NAME>')]"
 
-# Check for remaining Lambda functions
+# Check for remaining Lambda functions. A function name AWS CloudFormation generated holds only
+# the first 25 characters of a longer stack name, so match on those; a function of another
+# deployment whose stack name starts with the same 25 characters also matches
+PREFIX=$(printf '%s' "<STACK_NAME>" | cut -c1-25)
 aws lambda list-functions \
-    --query "Functions[?contains(FunctionName, '<STACK_NAME>')].[FunctionName]" \
+    --query "Functions[?starts_with(FunctionName, '${PREFIX}')].[FunctionName]" \
     --output text
 
 # Check for remaining log groups
 aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/lambda/<STACK_NAME>" \
+    --log-group-name-prefix "/aws/lambda/${PREFIX}" \
     --query 'logGroups[].logGroupName'
 ```
 
