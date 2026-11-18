@@ -659,12 +659,18 @@ function externalPrefixesOverlap(a: string, b: string): boolean {
 }
 
 /**
- * True when a `bucketArn` is exactly `arn:<partition>:s3:::<name>` (config.ts:
- * `assertExternalBucketArnShape`): no wildcard, key prefix or trailing path, and a name of 1 to 255
- * letters, digits, `.`, `_` and `-`.
+ * True when a `bucketArn` names one bucket (config.ts: `EXTERNAL_BUCKET_ARN_PATTERN` and
+ * `assertExternalBucketArnShape`): `arn:<partition>:s3:::<name>` with no wildcard and nothing after the
+ * name, and a name the CDK bucket import accepts (3 to 63 letters, digits, `.`, `_` and `-`, a letter
+ * or digit at both ends, no `..`, `.-` or `-.`, not an IPv4 address).
  */
 function isValidExternalBucketArn(arn: unknown): boolean {
-    return typeof arn === "string" && /^arn:[a-z-]+:s3:::[A-Za-z0-9._-]{1,255}$/.test(arn);
+    return (
+        typeof arn === "string" &&
+        /^arn:[a-z-]+:s3:::(?!\d{1,3}(\.\d{1,3}){3}$)(?!.*(\.\.|\.-|-\.))[A-Za-z0-9][A-Za-z0-9._-]{1,61}[A-Za-z0-9]$/.test(
+            arn
+        )
+    );
 }
 
 /** A per-bucket attribute reduced to undefined when unset (config.ts: `normalizeOptional`). */
@@ -1815,7 +1821,10 @@ const CORE_RULES: Rule[] = [
                 ? undefined
                 : partitionForRegionName(g(c, "env.region"));
             if (!partition) return false;
+            // A malformed ARN gets only the externalbucket-arn-shape message, as in config.ts, where
+            // the shape check runs before the partition check.
             return externalBuckets(c).some((b) => {
+                if (!isValidExternalBucketArn(b.bucketArn)) return false;
                 const arnPartition = String(b.bucketArn ?? "").split(":")[1];
                 return !!arnPartition && arnPartition !== partition;
             });
@@ -1829,7 +1838,7 @@ const CORE_RULES: Rule[] = [
         fieldPaths: ["app.assetBuckets.externalAssetBuckets"],
         appliesWhen: (c) => externalBuckets(c).some((b) => !isValidExternalBucketArn(b.bucketArn)),
         message:
-            "Every app.assetBuckets.externalAssetBuckets bucketArn must be arn:<partition>:s3:::<bucket-name> naming one bucket, with no wildcard (* or ?), no key prefix and no trailing path; the name is 1 to 255 characters of letters, digits, '.', '_' and '-'. List each bucket by name.",
+            "An app.assetBuckets.externalAssetBuckets bucketArn is not valid. It must name one bucket as arn:<partition>:s3:::<bucket-name>, with no wildcard (* or ?) and nothing after the name; the name is 3 to 63 characters of letters, digits, '.', '_' and '-', starts and ends with a letter or digit, has no '..', '.-' or '-.', and is not shaped like an IP address. List the bucket as arn:<partition>:s3:::<bucket-name> and set the key prefix in baseAssetsPrefix.",
     },
     {
         id: "externalbucket-overlapping-prefixes",
