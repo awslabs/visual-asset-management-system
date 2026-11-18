@@ -364,3 +364,21 @@ describe("ComplianceQuarantine release", () => {
         expect(screen.getByText("Name of asset-1")).toBeInTheDocument();
     });
 });
+
+describe("ComplianceQuarantine rows", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockAllowed = [];
+    });
+
+    it("lists the rows without a selection control, since no action reads a selection", async () => {
+        service().fetchQuarantinedAssets.mockResolvedValue([
+            true,
+            { quarantinedAssets: [quarantined("asset-1")], nextToken: undefined },
+        ]);
+        render(<ComplianceQuarantine />);
+        await screen.findByText("Name of asset-1");
+        expect(screen.queryAllByRole("radio")).toHaveLength(0);
+        expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    });
+});

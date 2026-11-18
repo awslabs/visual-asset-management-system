@@ -87,7 +87,6 @@ const ComplianceQuarantine: React.FC = () => {
     // Why the API refused the last row action. Kept apart from `error`, which every load clears,
     // so the refusal stays on the page while the listing is read again after it.
     const [actionError, setActionError] = useState<string | null>(null);
-    const [selectedItems, setSelectedItems] = useState<QuarantinedAsset[]>([]);
     const [exceptionTarget, setExceptionTarget] = useState<QuarantinedAsset | null>(null);
     const [granting, setGranting] = useState(false);
     const [releaseTarget, setReleaseTarget] = useState<QuarantinedAsset | null>(null);
@@ -117,7 +116,6 @@ const ComplianceQuarantine: React.FC = () => {
             setLoading(true);
             setError(null);
             setLoadFailed(false);
-            setSelectedItems([]);
             const [success, result] = await fetchQuarantinedAssets(
                 { maxItems: COMPLIANCE_LISTING_PAGE_SIZE, startingToken },
                 { databaseId: filters.databaseId, text: filters.text }
@@ -283,9 +281,6 @@ const ComplianceQuarantine: React.FC = () => {
                     loading={loading}
                     items={sortedItems}
                     {...sortingProps}
-                    selectedItems={selectedItems}
-                    onSelectionChange={({ detail }) => setSelectedItems(detail.selectedItems)}
-                    selectionType="single"
                     pagination={
                         <Pagination
                             currentPageIndex={currentPageIndex}
