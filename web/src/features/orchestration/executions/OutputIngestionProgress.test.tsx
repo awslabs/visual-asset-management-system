@@ -171,7 +171,8 @@ describe("OutputIngestionProgress", () => {
                 outputIngestion={progress()}
             />
         );
-        const region = screen.getByRole("region", { name: "Output files being copied" });
+        // The region and the table it scrolls are named apart, so neither name is read twice.
+        const region = screen.getByRole("region", { name: "Output files table, scrolls sideways" });
         expect(region).toHaveClass("overflow-x-auto");
         expect(region).toHaveAttribute("tabIndex", "0");
         expect(region).toContainElement(
