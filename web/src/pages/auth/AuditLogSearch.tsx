@@ -66,6 +66,13 @@ type GroupsState =
     | { kind: "failed"; message: string }
     | { kind: "ready"; data: AuditLogGroupsResult };
 
+/**
+ * Backstop for the incomplete-result warning toasts: they stay until dismissed, the page dismisses
+ * them when the results they describe are replaced or the page is left, and this finite duration
+ * (10 minutes) ends one that nothing else did.
+ */
+export const WARNING_TOAST_BACKSTOP_MS = 600_000;
+
 const AuditLogSearch: React.FC = () => {
     const [groupsState, setGroupsState] = useState<GroupsState>({ kind: "loading" });
     const [filters, setFilters] = useState<AuditFilters>(() =>
@@ -178,8 +185,14 @@ const AuditLogSearch: React.FC = () => {
     const { statistics, warnings } = state;
     const finished = state.phase === "done" || state.phase === "stopped";
     const hasRun = state.phase !== "idle";
-    const emptyState: "notRun" | "noRecords" | "failed" =
-        state.phase === "error" ? "failed" : hasRun && finished ? "noRecords" : "notRun";
+    const emptyState: "notRun" | "noRecords" | "failed" | "stopped" =
+        state.phase === "error"
+            ? "failed"
+            : state.phase === "stopped"
+            ? "stopped"
+            : hasRun && finished
+            ? "noRecords"
+            : "notRun";
 
     // Warnings are toasts; information is an info icon beside the results.
     const warningToasts: { key: string; title: string; text: string }[] = [];
@@ -222,9 +235,24 @@ const AuditLogSearch: React.FC = () => {
     // errors follow the app's default (8 seconds).
     const toast = useToast();
     const shown = useRef<Set<string>>(new Set());
+    // The ids of the warning toasts this page raised, so it can dismiss them (and only them).
+    const warningIds = useRef<string[]>([]);
+    const dismissToast = useRef(toast.dismiss);
+    dismissToast.current = toast.dismiss;
+    const dismissWarnings = useCallback(() => {
+        for (const id of warningIds.current) dismissToast.current(id);
+        warningIds.current = [];
+    }, []);
     useEffect(() => {
-        if (state.phase === "starting") shown.current.clear();
-    }, [state.phase]);
+        // A new search, or results cleared (filters from a link, Back), ends the warnings of the
+        // results that were shown.
+        if (state.phase === "starting" || state.phase === "idle") {
+            shown.current.clear();
+            dismissWarnings();
+        }
+    }, [state.phase, dismissWarnings]);
+    // Leaving the page takes its warnings with it: the toast stack belongs to the whole app.
+    useEffect(() => dismissWarnings, [dismissWarnings]);
     const once = (key: string, raise: () => void) => {
         if (shown.current.has(key)) return;
         shown.current.add(key);
@@ -242,9 +270,13 @@ const AuditLogSearch: React.FC = () => {
     const warningKeys = warningToasts.map((w) => `${state.queryId}:${w.key}`).join("|");
     useEffect(() => {
         for (const w of warningToasts) {
-            once(`${state.queryId}:${w.key}`, () =>
-                toast.warning(w.title, { description: w.text, duration: 0 })
-            );
+            once(`${state.queryId}:${w.key}`, () => {
+                const id = toast.warning(w.title, {
+                    description: w.text,
+                    duration: WARNING_TOAST_BACKSTOP_MS,
+                });
+                if (id) warningIds.current.push(id);
+            });
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [warningKeys]);
@@ -256,23 +288,28 @@ const AuditLogSearch: React.FC = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [groupsFailure]);
 
-    const status = isActive ? (
-        <span aria-live="polite" data-testid="audit-progress">
-            <StatusIndicator type="in-progress">
-                {statistics.recordsScanned !== undefined
-                    ? `${statistics.recordsScanned} records scanned so far`
-                    : "Waiting for the first results"}
-            </StatusIndicator>
+    // The live region exists before its text does, so the first message is announced.
+    const status = (
+        <span aria-live="polite" data-testid="audit-status-live">
+            {isActive ? (
+                <span data-testid="audit-progress">
+                    <StatusIndicator type="in-progress">
+                        {statistics.recordsScanned !== undefined
+                            ? `${statistics.recordsScanned} records scanned so far`
+                            : "Waiting for the first results"}
+                    </StatusIndicator>
+                </span>
+            ) : state.phase === "stopped" ? (
+                <span data-testid="audit-stopped">
+                    <StatusIndicator type="stopped">Search stopped</StatusIndicator>
+                    <AuditInfoPopover ariaLabel="About the stopped search" header="Search stopped">
+                        A stopped search shows no records. Narrow the time range or the filters and
+                        search again.
+                    </AuditInfoPopover>
+                </span>
+            ) : null}
         </span>
-    ) : state.phase === "stopped" ? (
-        <span aria-live="polite" data-testid="audit-stopped">
-            <StatusIndicator type="stopped">Search stopped</StatusIndicator>
-            <AuditInfoPopover ariaLabel="About the stopped search" header="Search stopped">
-                A stopped search shows no records. Narrow the time range or the filters and search
-                again.
-            </AuditInfoPopover>
-        </span>
-    ) : null;
+    );
 
     return (
         <Box padding={VAMS_PAGE_PADDING}>
@@ -334,6 +371,7 @@ const AuditLogSearch: React.FC = () => {
                                 filters.logGroups.includes(AUTHENTICATION_GROUP_KEY) ? (
                                     <AuditInfoPopover
                                         testId="audit-authentication-note"
+                                        label="Authentication group"
                                         ariaLabel="About the Authentication log group"
                                         header="Authentication group"
                                     >

@@ -55,12 +55,21 @@ export const queryToFilters = (
 };
 
 /** The property filter's filtering properties; every property takes `=` except contains. */
-export const filteringProperties = (): PropertyFilterProps.FilteringProperty[] =>
+export const filteringProperties = (
+    groupLabels?: ReadonlyMap<string, string>
+): PropertyFilterProps.FilteringProperty[] =>
     AUDIT_LIST_FILTERS.map(({ key, label }) => ({
         key,
         propertyLabel: label,
         groupValuesLabel: `${label} values`,
-        operators: key === "contains" ? [":"] : ["="],
+        // A Log group token holds the group's key; it reads as the group's label (also for a
+        // token that came from a link). The filters keep the key.
+        operators:
+            key === "logGroups" && groupLabels
+                ? [{ operator: "=", format: (value: string) => groupLabels.get(value) ?? value }]
+                : key === "contains"
+                ? [":"]
+                : ["="],
     }));
 
 /**

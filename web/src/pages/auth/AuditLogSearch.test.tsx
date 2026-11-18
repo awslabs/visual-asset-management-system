@@ -12,8 +12,27 @@
 import React from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import AuditLogSearch from "./AuditLogSearch";
+import AuditLogSearch, { WARNING_TOAST_BACKSTOP_MS } from "./AuditLogSearch";
 import { ToastProvider } from "../../features/orchestration/components/ToastProvider";
+
+// The real toast provider, with the options of each warning recorded.
+const warningOptions: { duration?: number }[] = [];
+jest.mock("../../features/orchestration/components/ToastProvider", () => {
+    const actual = jest.requireActual("../../features/orchestration/components/ToastProvider");
+    return {
+        ...actual,
+        useToast: () => {
+            const toast = actual.useToast();
+            return {
+                ...toast,
+                warning: (title: string, options?: { duration?: number }) => {
+                    if (options) warningOptions.push(options);
+                    return toast.warning(title, options);
+                },
+            };
+        },
+    };
+});
 
 const mockGroups = jest.fn();
 const mockStart = jest.fn();
@@ -239,6 +258,8 @@ describe("Audit Log Search page", () => {
         ]);
         await openPage();
         const note = screen.getByTestId("audit-authentication-note");
+        // The second info icon next to Filters carries a visible name, so it is told apart.
+        expect(within(note).getByText("Authentication group")).toBeTruthy();
         expect(screen.queryByText(/does not record sign-ins itself/)).toBeNull();
         await userEvent.click(
             within(note).getByRole("button", { name: "About the Authentication log group" })
@@ -403,5 +424,147 @@ describe("Audit Log Search page", () => {
             true
         );
         expect(mockStart).not.toHaveBeenCalled();
+    });
+});
+
+const LIMIT_WARNING = /reached its record limit/;
+const limited = () =>
+    complete([row()], {
+        statistics: { candidateLimitReached: true },
+        warnings: ["recheckTimeBudget"],
+    });
+const searchLimited = async () => {
+    mockGet.mockResolvedValue(limited());
+    await openPage();
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText(LIMIT_WARNING, {}, { timeout: 4000 });
+};
+
+describe("Audit Log Search page: warning toasts do not outlive their results (D14)", () => {
+    it("gives the warnings a long finite duration as a backstop", async () => {
+        expect(WARNING_TOAST_BACKSTOP_MS).toBe(600_000);
+        warningOptions.length = 0;
+        await searchLimited();
+        expect(warningOptions.length).toBeGreaterThan(0);
+        for (const options of warningOptions) {
+            expect(options.duration).toBe(WARNING_TOAST_BACKSTOP_MS);
+        }
+    });
+
+    it("dismisses them when a new search starts", async () => {
+        await searchLimited();
+        expect(screen.getByText(/took longer than the time allowed/)).toBeTruthy();
+        mockGet.mockResolvedValue(complete([row()]));
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await waitFor(() => expect(screen.queryByText(LIMIT_WARNING)).toBeNull());
+        expect(screen.queryByText(/took longer than the time allowed/)).toBeNull();
+    });
+
+    it("dismisses them when the results are cleared by a link with other filters", async () => {
+        await searchLimited();
+        await act(async () => {
+            window.location.hash = "#/auth/audit-log-search/?user=mallory";
+            window.dispatchEvent(new HashChangeEvent("hashchange"));
+        });
+        await waitFor(() => expect(screen.queryByText(LIMIT_WARNING)).toBeNull());
+        expect(screen.queryByText(/took longer than the time allowed/)).toBeNull();
+    });
+
+    it("dismisses them when the page is left, while the toast stack lives on", async () => {
+        mockGet.mockResolvedValue(limited());
+        const view = render(
+            <ToastProvider>
+                <AuditLogSearch />
+            </ToastProvider>
+        );
+        await userEvent.click(await screen.findByRole("button", { name: "Search" }));
+        await screen.findByText(LIMIT_WARNING, {}, { timeout: 4000 });
+        view.rerender(
+            <ToastProvider>
+                <div>Another page</div>
+            </ToastProvider>
+        );
+        // The provider is the same instance across the rerender, so the toast would stay if the
+        // page did not take it down.
+        await waitFor(() => expect(screen.queryByText(LIMIT_WARNING)).toBeNull());
+        expect(screen.getByText("Another page")).toBeTruthy();
+    });
+
+    it("does not dismiss a toast the page did not raise", async () => {
+        await searchLimited();
+        expect(screen.getAllByText(LIMIT_WARNING)).toHaveLength(1);
+    });
+});
+
+describe("Audit Log Search page: layout and wording fixes of the UX recheck", () => {
+    it("says the search was stopped in the empty table, not that no record matches", async () => {
+        mockGet.mockResolvedValue([true, { status: "Running", Items: [], statistics: {} }]);
+        await openPage();
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        const stop = await screen.findByRole("button", { name: "Stop" });
+        await act(async () => {
+            await userEvent.click(stop);
+        });
+        expect(await screen.findByText("The search was stopped")).toBeTruthy();
+        expect(screen.queryByText(/No records match this search/)).toBeNull();
+        expect(screen.queryByText("No records")).toBeNull();
+    });
+
+    it("keeps the status in a live region that exists before its text", async () => {
+        mockGet.mockResolvedValue([true, { status: "Running", Items: [], statistics: {} }]);
+        await openPage();
+        const live = screen.getByTestId("audit-status-live");
+        expect(live.getAttribute("aria-live")).toBe("polite");
+        expect(live.textContent).toBe("");
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await waitFor(() => expect(live.textContent).toContain("Waiting for the first results"));
+        expect(screen.getByTestId("audit-status-live")).toBe(live);
+    });
+
+    it("puts the status on its own line under the controls so starting a search cannot reflow them", async () => {
+        await openPage();
+        const slot = screen.getByTestId("audit-status-slot");
+        const controls = screen.getByTestId("audit-search-controls");
+        expect(controls.contains(slot)).toBe(true);
+        expect(screen.getByTestId("audit-search-controls-row").contains(slot)).toBe(false);
+        // Zero intrinsic width, full width of the controls: the text can never widen them.
+        expect(slot.style.width).toBe("0px");
+        expect(slot.style.minWidth).toBe("100%");
+        expect(slot.style.overflow).toBe("hidden");
+    });
+
+    it("aligns the controls to the top of the filter row, not to the bottom of its column", async () => {
+        await openPage();
+        const layout = screen.getByTestId("audit-filter-layout");
+        expect(layout.style.alignItems).toBe("flex-start");
+        expect(screen.getByTestId("audit-search-controls-row").style.alignItems).toBe("flex-start");
+    });
+
+    it("tells the user in the search popover that records appear at the end and Stop is available", async () => {
+        await openPage();
+        await userEvent.click(
+            within(screen.getByTestId("audit-search-info")).getByRole("button", {
+                name: "About running a search",
+            })
+        );
+        expect(await screen.findByText(/Records appear when the search finishes/)).toBeTruthy();
+        expect(screen.getByText(/Choose Stop to end it early/)).toBeTruthy();
+    });
+
+    it("shows a Log group token from a link by its label, not its key", async () => {
+        window.location.hash = "#/auth/audit-log-search/?group=auditActions";
+        await openPage();
+        expect(screen.queryByText(/auditActions/)).toBeNull();
+        expect(document.body.textContent).toContain("Actions");
+    });
+
+    it("keeps field problems inline with Search disabled, and raises no toast for them", async () => {
+        window.location.hash = "#/auth/audit-log-search/?contains=ab";
+        await openPage();
+        expect(screen.getByText(/A contains term has 3 to 64 characters/)).toBeTruthy();
+        expect(document.querySelector('[aria-label="Notifications"]')).toBeNull();
+        expect((screen.getByRole("button", { name: "Search" }) as HTMLButtonElement).disabled).toBe(
+            true
+        );
     });
 });

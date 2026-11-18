@@ -45,7 +45,7 @@ A record becomes searchable about a minute after the action it describes, becaus
 
 ## While a search runs
 
-A search reads CloudWatch Logs and can take several seconds. The page waits on the server and shows how many records it has scanned so far, beside the **Search** button. Choose the info icons beside **Filters**, **Time range** and **Search** for the rules of filters, the time range and the search. It shows no count of matches, because the records are checked again on the server when the search finishes. Records appear when the search finishes. Choose **Stop** to end the search early (also right after you chose Search: the search is cancelled as soon as the service has started it); a stopped search shows no records, so narrow the time range or the filters and search again. A search that passes the deployment's time limit stops with a message that asks you to narrow the range or the filters.
+A search reads CloudWatch Logs and can take several seconds. The page waits on the server and shows how many records it has scanned so far, on a line under the **Search** button (the buttons and fields do not move when a search starts). Choose the info icons beside **Filters**, **Time range** and **Search** for the rules of filters, the time range and the search. It shows no count of matches, because the records are checked again on the server when the search finishes. Records appear when the search finishes. Choose **Stop** to end the search early (also right after you chose Search: the search is cancelled as soon as the service has started it); a stopped search shows no records and the table says the search was stopped, so narrow the time range or the filters and search again. A search that passes the deployment's time limit stops with a message that asks you to narrow the range or the filters.
 
 When the service is busy or you already run the most searches allowed at once, the page says so. Wait a moment and search again.
 
@@ -53,7 +53,11 @@ When the service is busy or you already run the most searches allowed at once, t
 
 The table shows one row per record, on one line (long values are cut and shown in full when you point at them or open the record; the preferences button turns on wrapped lines): time (your local time), log group, action, outcome, user, database, asset, entity and a one-line summary. **Order** chooses newest or oldest first for the whole result, by the exact time of each record. Time is shown in one format for every record, whichever format it was written in. Column headers sort the page shown only. Use the preferences button to choose the columns.
 
-Warnings and errors appear as notifications in the top right corner of the page. Choose the close button to dismiss one. The warnings about an incomplete or partial result stay until you dismiss them; errors close after a few seconds. The notes below are information: choose the info icon beside **Export** to read them.
+Warnings and errors appear as notifications in the top right corner of the page. Choose the close button to dismiss one. The warnings about an incomplete or partial result stay until you dismiss them, you start another search, the results are cleared (for example by opening a link with other filters) or you leave the page; they close by themselves after 10 minutes at the latest. Errors close after a few seconds.
+
+A problem with a field you filled in (a **contains** term that is too short, a log group you may not search) is not a notification. It is shown under the filter, **Search** stays disabled until you fix it, and it does not disappear on its own, so you see what to correct.
+
+The notes below are information: choose the info icon beside **Export** to read them.
 
 The notifications and notes explain what the result may not show:
 
