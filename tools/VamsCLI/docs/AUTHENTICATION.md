@@ -280,19 +280,20 @@ This removes the override token and returns to Cognito authentication mode.
 
 ### Storage Locations
 
-Authentication data is stored in OS-appropriate secure locations:
+Each profile keeps its sign-in in `auth_profile.json` in its own directory, `<config>/profiles/<profile>/`, where `<config>` is:
 
--   **Windows**: `%APPDATA%\vamscli\auth_profile.json`
--   **macOS**: `~/Library/Application Support/vamscli/auth_profile.json`
--   **Linux**: `~/.config/vamscli/auth_profile.json`
+-   **Windows**: `%APPDATA%\vamscli`
+-   **macOS**: `~/Library/Application Support/vamscli`
+-   **Linux**: `~/.config/vamscli`
 
-### Security Features
+`--save-credentials` writes the username and password to `credentials.json` in the same directory.
 
--   **Secure Storage**: Uses OS-appropriate secure storage mechanisms
--   **Token Encryption**: Sensitive data is protected
--   **HTTPS Only**: All authentication communication uses HTTPS
--   **No Plaintext Passwords**: Passwords are not stored unless explicitly requested
--   **Automatic Cleanup**: Expired tokens are automatically removed
+### How the Files Are Protected
+
+-   **Owner-only plain JSON**: Both files are plain JSON written with mode `0600`. The CLI uses no OS keychain and does not encrypt them. On Windows the mode has no effect, so the permissions of the folder apply
+-   **Passwords**: A password is stored only with `--save-credentials`, and then in plain text
+-   **Transport**: `vamscli setup` accepts an `https` deployment URL, or plain `http` only for `localhost` or a loopback address
+-   **Expired tokens**: Nothing removes an expired token from the file. `vamscli auth logout` deletes both files
 
 ### Token Types Stored
 
@@ -381,7 +382,7 @@ This shows:
 **Solutions:**
 
 -   Provide a new override token with `vamscli auth set-override`
--   Use one-time override with `--token-override`
+-   Sign in with a new token: `echo "$VAMS_TOKEN" | vamscli auth login --user-id <user-id> --token-override-stdin` (this saves the token; there is no one-time override)
 -   Clear override and use Cognito: `vamscli auth clear-override`
 
 ### MFA Errors
