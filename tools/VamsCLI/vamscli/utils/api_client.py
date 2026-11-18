@@ -107,6 +107,29 @@ _REDIRECT_TARGET_REFUSED_MESSAGE = (
     "may not reach that host. Retry the command, or contact your administrator."
 )
 
+_REDIRECT_TARGET_FAILED_MESSAGE = (
+    "The request was redirected to {host}, which answered HTTP {status}. That host is not the VAMS API: "
+    "a presigned URL may have expired, or the network path may not reach that host. Retry the command, "
+    "or contact your administrator."
+)
+
+
+def _raise_if_redirect_target_unreachable(error, request_url: str) -> None:
+    """Raise an APIError naming only the host when a request failed at a host it was redirected to.
+
+    The exception text of a failed send repeats the full URL, which for a presigned Amazon S3 URL
+    includes its signature."""
+    failed_url = getattr(getattr(error, 'request', None), 'url', None)
+    if not isinstance(failed_url, str):
+        return
+    host = urlparse(failed_url).netloc
+    if host and host != urlparse(request_url).netloc:
+        raise APIError(
+            f"The request was redirected to {host}, which could not be reached ({type(error).__name__}). "
+            "That host is not the VAMS API: the network path may not reach it. Retry the command, or "
+            "contact your administrator."
+        ) from None
+
 
 def _is_cognito_unavailable(error_message: str) -> bool:
     """True when a 400 from the Cognito user routes says the feature is off, not that the input is bad.
@@ -348,6 +371,7 @@ from .retry_config import get_retry_config
 from .addon_api_client import AddonAPIClientMixin
 from .custom_api_client import CustomAPIClientMixin
 from .request_paths import _path_segment, route_path  # noqa: F401 - route_path is re-exported
+from .logging import scrub_text
 
 # The exact 429 bodies that are a handler's business refusal rather than throttling
 # (_is_business_refusal_429): retrying cannot clear them. The per-user active zip download cap, and an
@@ -700,49 +724,59 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             # Re-raise specific errors without wrapping
             raise
         except requests.exceptions.HTTPError as e:
+            # A host the request was redirected to (a presigned Amazon S3 URL) is named by its host
+            # and status only, as the 403 case above does: the exception text repeats the full URL.
+            redirected_host = _redirected_host(e.response, url)
+            if redirected_host:
+                raise APIError(_REDIRECT_TARGET_FAILED_MESSAGE.format(
+                    host=redirected_host, status=e.response.status_code)) from None
             if raise_http_errors:
                 # The caller maps the status code and the handler's body itself.
                 raise
 
             # Handle other HTTP errors with appropriate messages
             status_code = e.response.status_code
+            fallback = scrub_text(str(e))
 
             if status_code == 429:
                 # This shouldn't happen due to the check above, but just in case
-                raise RateLimitExceededError(f"Rate limit exceeded: {e}")
+                raise RateLimitExceededError(f"Rate limit exceeded: {fallback}")
             elif status_code >= 500:
                 # Server errors (500, 502, 503, 504, etc.)
-                error_message = _api_error_message(e.response, str(e))
+                error_message = _api_error_message(e.response, fallback)
                 raise APIError(
                     f"Server error ({status_code}): {error_message}. "
                     "The VAMS API is experiencing issues. Please try again later."
                 )
             elif status_code == 404:
                 # Not found errors
-                error_message = _api_error_message(e.response, str(e))
+                error_message = _api_error_message(e.response, fallback)
                 raise APIError(f"Resource not found (404): {error_message}")
             elif status_code == 400:
                 # Bad request errors
-                error_message = _api_error_message(e.response, str(e))
+                error_message = _api_error_message(e.response, fallback)
                 raise APIError(f"Invalid request (400): {error_message}")
             else:
                 # Other HTTP errors
-                error_message = _api_error_message(e.response, str(e))
+                error_message = _api_error_message(e.response, fallback)
                 raise APIError(f"API request failed ({status_code}): {error_message}")
         except requests.exceptions.ConnectionError as e:
+            _raise_if_redirect_target_unreachable(e, url)
             raise APIError(
                 f"Connection error: Unable to connect to the VAMS API. "
                 "Please check your network connection and verify the API Gateway URL is correct. "
-                f"Details: {e}"
+                f"Details: {scrub_text(str(e))}"
             )
         except requests.exceptions.Timeout as e:
+            _raise_if_redirect_target_unreachable(e, url)
             raise APIError(
                 f"Request timeout: The VAMS API did not respond in time. "
                 "The service may be experiencing high load. Please try again later. "
-                f"Details: {e}"
+                f"Details: {scrub_text(str(e))}"
             )
         except requests.exceptions.RequestException as e:
-            raise APIError(f"Request failed: {e}")
+            _raise_if_redirect_target_unreachable(e, url)
+            raise APIError(f"Request failed: {scrub_text(str(e))}")
             
     def _try_refresh_token(self, token_before: Optional[str] = None) -> bool:
         """Try to refresh the authentication token or re-authenticate using saved credentials.
@@ -4331,12 +4365,16 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             staged_response.raise_for_status()
             return staged_response.json()
         except requests.exceptions.RequestException as e:
+            # Named by status and host only: the exception text repeats the presigned URL.
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            host = urlparse(staged_url).netloc
+            detail = f"HTTP {status} from {host}" if status else f"{type(e).__name__} reaching {host}"
             raise APIError(
                 "Asset export failed: the export payload was staged for download but could not be "
-                f"retrieved from its presigned URL ({e}). The URL expires after "
+                f"retrieved from its presigned URL ({detail}). The URL expires after "
                 f"{payload.get('presignedExportPayloadExpiresIn', 'the configured')} seconds; retry "
                 "the export if it has elapsed."
-            )
+            ) from None
         except ValueError as e:
             raise APIError(
                 "Asset export failed: the staged export payload was retrieved but is not valid "
