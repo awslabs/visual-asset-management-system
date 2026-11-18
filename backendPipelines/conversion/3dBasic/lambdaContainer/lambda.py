@@ -840,8 +840,7 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
             "output_filetype": output_filetype,
             "input_name": os.path.basename(input_key),
             "address_space_bytes": size_check.address_space_limit_bytes(),
-            "file_size_bytes": size_check.file_size_limit_bytes(
-                input_size + (fetched.total_bytes if isinstance(getattr(fetched, "total_bytes", None), int) else 0)),
+            "file_size_bytes": size_check.file_size_limit_bytes(size_check.free_disk_bytes(work_dir)),
         }, work_dir)
 
         # Upload output file to S3. The converted file keeps the input file's subdirectory within the

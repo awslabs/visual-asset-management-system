@@ -85,15 +85,21 @@ def memory_limit_bytes(environ=None):
 # a runaway allocation without refusing an input the size check allows.
 ADDRESS_SPACE_OVERHEAD_BYTES = 2 * 1024 * MB
 
-# The largest single file the worker may write is OUTPUT_DISK_FACTOR times the bytes it was given
-# (the input and the files it references), never less than this floor, so a small model that expands
-# in an exporter is not refused while a runaway write stops at the limit.
+# The largest single file the worker may write is the working disk's free space less DISK_HEADROOM_BYTES,
+# never less than this floor. What a conversion legitimately writes cannot be read from the input's
+# size: an OBJ export re-encodes every texture as PNG, and a PNG of a photographic texture is many
+# times its JPEG source (a 13.9 MB GLB holding one 8192 x 8192 photo needs a 134 MB PNG), so a limit
+# that is a multiple of the input refuses real models. The disk check (see limits) already bounds the
+# whole output; this limit only stops one runaway write, such as a decompression bomb, from filling
+# the working disk and leaving no room for the cleanup, the logs and the invocation after it.
 FILE_SIZE_FLOOR_BYTES = 64 * MB
 
 
-def file_size_limit_bytes(input_bytes):
-    """The worker's ``RLIMIT_FSIZE`` for a job whose input and referenced files total ``input_bytes``."""
-    return max(int(OUTPUT_DISK_FACTOR * max(int(input_bytes), 0)), FILE_SIZE_FLOOR_BYTES)
+def file_size_limit_bytes(free_disk_bytes):
+    """The worker's ``RLIMIT_FSIZE`` for a job whose working directory has ``free_disk_bytes`` free:
+    the free space less the headroom, never less than the floor. ``free_disk_bytes`` is required, so
+    a caller that cannot measure the disk fails instead of running without the limit."""
+    return max(int(free_disk_bytes) - DISK_HEADROOM_BYTES, FILE_SIZE_FLOOR_BYTES)
 
 
 def address_space_limit_bytes(environ=None):

@@ -11,7 +11,9 @@ folder's path out of the run's error text."""
 import io
 import json
 import os
+import shutil
 import signal
+import subprocess
 import sys
 import time
 from unittest.mock import MagicMock, patch
@@ -237,10 +239,14 @@ class TestTheWorkingDirectoryIsRemoved:
 
 @pytest.mark.unit
 class TestTheWorkersLimits:
-    def test_the_file_size_limit_follows_the_input_with_a_floor(self):
+    def test_the_file_size_limit_is_the_free_disk_less_headroom_with_a_floor(self):
         assert size_check.file_size_limit_bytes(0) == size_check.FILE_SIZE_FLOOR_BYTES
-        big = 100 * 1024 ** 2
-        assert size_check.file_size_limit_bytes(big) == int(size_check.OUTPUT_DISK_FACTOR * big)
+        free = 10 * 1024 ** 3
+        assert size_check.file_size_limit_bytes(free) == free - size_check.DISK_HEADROOM_BYTES
+
+    def test_the_file_size_limit_needs_a_measured_disk(self):
+        with pytest.raises(TypeError):
+            size_check.file_size_limit_bytes(None)
 
     def test_the_handler_passes_the_file_size_limit(self):
         mod = _load()
@@ -253,9 +259,42 @@ class TestTheWorkersLimits:
         with patch.object(mod, "run_worker", _worker), \
                 patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p, **kw: open(p, "w").close())), \
                 patch.object(mod, "uploadV2", MagicMock()), \
+                patch.object(size_check, "free_disk_bytes", return_value=5 * 1024 ** 3), \
                 patch.object(mod, "head_input", MagicMock(return_value=(100 * 1024 ** 2, ""))):
             mod.convert_input_output("s3://abkt/xid/m.stl", "s3://obkt/files/", ".glb")
-        assert captured["file_size_bytes"] == int(size_check.OUTPUT_DISK_FACTOR * 100 * 1024 ** 2)
+        assert captured["file_size_bytes"] == 5 * 1024 ** 3 - size_check.DISK_HEADROOM_BYTES
+
+    def test_a_photo_textured_glb_converts_to_obj_under_the_handlers_limit(self, tmp_path):
+        # An OBJ export re-encodes the texture as PNG, which for a photographic texture is several
+        # times the size of the GLB that holds it as JPEG.
+        # The suite stubs trimesh in this process, so the model is built in a child interpreter.
+        glb = tmp_path / "photo.glb"
+        build = (
+            "import sys, numpy as np, trimesh\n"
+            "from PIL import Image\n"
+            "n = 6000\n"
+            "rng = np.random.default_rng(5)\n"
+            "ramp = np.linspace(0, 255, n, dtype=np.float32)\n"
+            "photo = (ramp[None, :, None] * 0.5 + ramp[:, None, None] * 0.5\n"
+            "         + rng.normal(0, 18, (n, n, 3))).clip(0, 255).astype(np.uint8)\n"
+            "Image.fromarray(photo).save('photo.jpg', quality=90)\n"
+            "quad = trimesh.Trimesh(vertices=[[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], faces=[[0, 1, 2], [0, 2, 3]],\n"
+            "    visual=trimesh.visual.TextureVisuals(uv=[[0, 0], [1, 0], [1, 1], [0, 1]], image=Image.open('photo.jpg')))\n"
+            "open(sys.argv[1], 'wb').write(quad.export(file_type='glb'))\n")
+        made = subprocess.run([sys.executable, "-c", build, str(glb)], cwd=tmp_path, capture_output=True, text=True)
+        if made.returncode != 0:
+            pytest.skip(f"trimesh, numpy and Pillow are needed to build the model: {made.stderr[-200:]}")
+        mod = _load()
+        uploaded = {}
+        client = MagicMock()
+        with patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p, **kw: shutil.copy(glb, p))), \
+                patch.object(mod, "uploadV2", MagicMock(side_effect=lambda b, k, p: uploaded.update({k: os.path.getsize(p)}))), \
+                patch.object(mod, "_s3_client_for_bucket", lambda bucket: client), \
+                patch.object(mod, "head_input", MagicMock(return_value=(glb.stat().st_size, ""))), \
+                patch.object(size_check, "memory_limit_bytes", return_value=None):
+            mod.convert_input_output("s3://abkt/xid/photo.glb", "s3://obkt/files/", ".obj")
+        png = [size for key, size in uploaded.items() if key.endswith(".png")]
+        assert png and png[0] > max(3.5 * glb.stat().st_size, size_check.FILE_SIZE_FLOOR_BYTES)
 
     def test_a_write_past_the_file_size_limit_fails_the_job(self, tmp_path):
         mod = _load()
