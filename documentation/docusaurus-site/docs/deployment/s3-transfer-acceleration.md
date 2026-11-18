@@ -132,6 +132,8 @@ VAMS enables acceleration on the auxiliary bucket itself, because it owns it. Th
 
     The Download as Zip archive link is also on the accelerate host when the archive is in the accelerated auxiliary bucket. Download as Zip itself needs the global VPC (`app.useGlobalVpc.enabled`), so a deployment without it has no zip link to check.
 
+    The bucket list also shows the setting. `GET /buckets` returns `isAccelerated` for each bucket, and the create-database bucket picker in the web app marks an accelerated bucket with `(accelerated)`. This is the setting VAMS recorded at deployment, so allow for the 10-minute cache above on a deployment with warm functions. It does not test the URL host.
+
 2. **Credential scope.** In the same URL, `X-Amz-Credential` ends with `<date>/<region>/s3/aws4_request`, and `<region>` is the **bucket's** Region, not an edge location.
 3. **Browser.** Open the browser developer tools Network tab, download a file or open a viewer, and confirm the request goes to `<bucket>.s3-accelerate.amazonaws.com` and succeeds. A multipart upload shows one request per part to the same host, each response readable for its `ETag`.
 4. **Speed.** A gain is visible only from a client far from the bucket Region. From inside that Region the results are the same, which is expected.
