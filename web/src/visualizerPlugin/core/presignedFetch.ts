@@ -31,6 +31,7 @@ import {
     downloadFailureMessage,
     downloadResponseApiMessage,
     downloadResponseStatus,
+    isFileNotFoundAnswer,
 } from "./streamFailure";
 import {
     dropCachedPresignedUrl,
@@ -92,16 +93,21 @@ function abortError(): Error {
 /**
  * The error for a failed presign: an `ApiRefusalError` carrying the API's reason when it refused
  * the file with one, else an Error worded from the status the API returned (never a client rule).
- * Either carries that status as `status` (undefined when no API answer came back), so a caller can
- * tell a missing file from a refused or failed request.
+ * Either carries that status as `status` (undefined when no API answer came back), and
+ * `fileNotFound` when the API answered that the file is not in the bucket, so a caller can tell a
+ * missing file from a refused or failed request.
  */
 function presignFailure(result: unknown, subject: string): Error {
     const status = downloadResponseStatus(result);
-    const refusal = apiRefusalMessage(status, downloadResponseApiMessage(result));
+    const apiMessage = downloadResponseApiMessage(result);
+    const refusal = apiRefusalMessage(status, apiMessage);
     const error = refusal
         ? new ApiRefusalError(refusal)
         : new Error(downloadFailureMessage(result, subject));
-    return Object.assign(error, { status });
+    return Object.assign(error, {
+        status,
+        fileNotFound: isFileNotFoundAnswer(status, apiMessage),
+    });
 }
 
 /** A presigned URL for the file, from the authorized download route (cached while it is safe). */
@@ -156,8 +162,7 @@ export async function fetchPresignedFile(
 ): Promise<Response> {
     const first = await resolvePresignedFileUrl(request, subject);
     let response = await fetch(first.url, { signal: request.signal });
-    // A URL just issued cannot have expired, so only a reused one is worth a second presign: S3
-    // also answers 403 for a missing object, and that is not retried.
+    // A URL just issued cannot have expired, so only a reused one is worth a second presign.
     if (!response.ok && response.status === 403 && first.cached) {
         response = await fetch(await getPresignedFileUrl(request, subject, { fresh: true }), {
             signal: request.signal,
