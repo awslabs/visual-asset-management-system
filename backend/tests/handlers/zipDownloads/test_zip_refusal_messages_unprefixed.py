@@ -68,7 +68,7 @@ class TestCreateRefusals:
         env.s3.add("xasset1/gone.glb", version="dm", delete_marker=True)
         fake = types.ModuleType("handlers.assets.assetVersions")
         fake.validate_asset_version_exists = lambda db, a, v: True
-        fake.get_asset_file_versions = lambda db, a, v: {"files": [
+        fake.get_asset_file_versions = lambda db, a, v, **_kw: {"files": [
             {"relativeKey": "/gone.glb", "versionId": "dm", "size": 1}]}
         fake.resolve_asset_version_id_from_alias = lambda db, a, alias: alias
         monkeypatch.setitem(sys.modules, "handlers.assets.assetVersions", fake)
