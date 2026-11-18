@@ -588,28 +588,38 @@ class TestAdminInstanceIdIsOnePathSegment:
 
 class TestOtherIdsAreEncodedAsOnePathSegment:
     """An image, recipe or job id is formatted into its route as one encoded segment, so a `?`, `#` or
-    `/` in it cannot drop or redirect part of the id: `12?x=1` addresses image `12?x=1`, never image 12."""
+    `/` in it cannot drop or redirect part of the id: `12?x=1` addresses image `12?x=1`, never image 12.
+    The requests are recorded at the session, below the client's path guard, so the URL asserted is the
+    one sent."""
 
-    @pytest.mark.parametrize("method,args,prefix", [
-        ("delete_edh_vdi_image", ("12?x=1",), "/addon/edh/admin/images/vdi/12%3Fx%3D1"),
-        ("delete_edh_simulation_image", ("12#x",), "/addon/edh/admin/images/simulation/12%23x"),
-        ("get_edh_ami_recipe", ("r/../x",), "/addon/edh/admin/ami-recipes/r%2F..%2Fx"),
+    @pytest.mark.parametrize("method,args,verb,path", [
+        ("delete_edh_vdi_image", ("12?x=1",), "DELETE", "/addon/edh/admin/images/vdi/12%3Fx%3D1"),
+        ("delete_edh_simulation_image", ("12#x",), "DELETE", "/addon/edh/admin/images/simulation/12%23x"),
+        ("get_edh_ami_recipe", ("r/x",), "GET", "/addon/edh/admin/ami-recipes/r%2Fx"),
     ])
-    def test_a_reserved_character_is_sent_encoded(self, monkeypatch, method, args, prefix):
+    def test_a_reserved_character_reaches_the_wire_encoded(self, monkeypatch, method, args, verb, path):
         client = _client()
-        sent = _record_verbs(monkeypatch, client)
-        try:
-            getattr(client, method)(*args)
-        except Exception:
-            pass
-        ((_verb, endpoint),) = sent
-        assert endpoint == prefix
+        sent = _record_requests(monkeypatch, client)
+        getattr(client, method)(*args)
+        assert sent == [(verb, "https://api.example.com" + path)]
+
+    def test_an_id_carrying_a_dot_segment_is_refused_unsent(self, monkeypatch):
+        """`r/../x` is encoded to `r%2F..%2Fx`, which the path guard reads as a `..` segment."""
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        with pytest.raises(APIError) as excinfo:
+            client.get_edh_ami_recipe("r/../x")
+        assert sent == []
+        error = excinfo.value
+        while not isinstance(error, InvalidRequestPathError) and error.__context__ is not None:
+            error = error.__context__
+        assert isinstance(error, InvalidRequestPathError)
 
     def test_a_plain_id_is_sent_as_it_is(self, monkeypatch):
         client = _client()
-        sent = _record_verbs(monkeypatch, client)
+        sent = _record_requests(monkeypatch, client)
         client.delete_edh_vdi_image("12")
-        assert sent == [("delete", "/addon/edh/admin/images/vdi/12")]
+        assert sent == [("DELETE", "https://api.example.com/addon/edh/admin/images/vdi/12")]
 
 
 class _SessionAnswer:
