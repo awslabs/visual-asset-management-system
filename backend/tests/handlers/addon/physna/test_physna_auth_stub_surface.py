@@ -26,8 +26,6 @@ _AUTH_PACKAGE = _BACKEND / "handlers" / "auth"
 def _names_imported_from_handlers_auth():
     names = set()
     for path in _BACKEND.rglob("*.py"):
-        if path.name == "localDev_api_server.py":
-            continue  # local development server, never imported under test
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module == "handlers.auth":
