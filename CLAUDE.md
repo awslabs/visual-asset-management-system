@@ -56,6 +56,7 @@ root/
 ├── backendPipelines/          # Processing pipeline definitions (containers + Lambdas)
 │   ├── CLAUDE.md              # Pipeline development guide (S3 output paths, assetId threading, new-pipeline checklist)
 │   ├── ci/                    # CI runner for the pipeline suites (one pytest process per tests directory)
+│   ├── common/                # Canonical shared helpers a pipeline vendors into its own lambda/ or container/ (compliance_output.py)
 │   ├── genAi/
 │   │   ├── nvidia/
 │   │   │   ├── cosmos/
@@ -605,6 +606,10 @@ Deep-dive workflow guides in `.kiro/steering/`:
 -   `CDK_DEVELOPMENT_WORKFLOW.md` — CDK nested stacks, constructs, lambda builders, security patterns, pipeline development
 -   `BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` — End-to-end API endpoint development across backend + CDK
 -   `CLI_DEVELOPMENT_WORKFLOW.md` — CLI commands, decorators, testing, profile support, JSON output
+-   `WEB_DEVELOPMENT_WORKFLOW.md` — Frontend workflow: rules, templates, review checklist, Playwright end-to-end testing
+-   `WEB_FRONTEND.md` — Frontend architecture, components, routing, navigation and the viewer plugin system
+-   `DOCUMENTATION_WORKFLOW.md` — Docusaurus documentation: structure, writing style, what to update for each change
+-   `ADDON_<ADDON>.md` — One per add-on that has its own steering, with a section per component (backend, CDK, web); see Rule 11
 
 User-facing docs:
 
