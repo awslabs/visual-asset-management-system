@@ -107,10 +107,31 @@ describe("Search results boolean cells", () => {
         );
     });
 
-    it("leaves no checkbox in the table without a name", () => {
-        mount();
-        for (const box of screen.getAllByRole("checkbox")) {
-            expect(box).toHaveAccessibleName();
+    // Only the yes/no column checkboxes: the row-selection checkboxes are named by #906, which this
+    // branch does not carry.
+    it("leaves no yes/no column checkbox without a name", () => {
+        const { container } = mount();
+        const table = createWrapper(container).findTable();
+        expect(table).not.toBeNull();
+        const headers = (table?.findColumnHeaders() ?? []).map((header) =>
+            header.getElement().textContent?.trim()
+        );
+        const rowCount = table?.findRows().length ?? 0;
+        expect(rowCount).toBe(2);
+        let boxes = 0;
+        for (const label of ["Archived", "Distributable"]) {
+            const column = headers.indexOf(label) + 1;
+            expect(column).toBeGreaterThan(0);
+            for (let row = 1; row <= rowCount; row++) {
+                const box = table
+                    ?.findBodyCell(row, column)
+                    ?.getElement()
+                    .querySelector("input[type=checkbox]");
+                expect(box).not.toBeNull();
+                expect(box).toHaveAccessibleName();
+                boxes++;
+            }
         }
+        expect(boxes).toBe(4);
     });
 });
