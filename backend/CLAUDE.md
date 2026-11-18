@@ -273,7 +273,12 @@ backend/
 │   │   │                                           #   __init__: request_to_claims() → claims
 │   │   ├── authz/__init__.py                       # CasbinEnforcer proxy (ABAC/RBAC)
 │   │   ├── compliance/                             # Compliance. API handlers (one Lambda each):
-│   │   │                                           #   complianceSchemaService (schemas CRUD incl. DELETE),
+│   │   │                                           #   complianceSchemaService (schemas CRUD incl. DELETE; the
+│   │   │                                           #   listing pages LatestVersionIndex, a save moves the
+│   │   │                                           #   latestVersion marker in one TransactWriteItems, and the first
+│   │   │                                           #   listing marks pre-marker rows once, bounded and conditional,
+│   │   │                                           #   _mark_latest_versions_once; a scope move that would leave a
+│   │   │                                           #   binding outside the new scope is refused, _narrowing_refused),
 │   │   │                                           #   complianceSchemaBindingService (db/asset bindings;
 │   │   │                                           #   a database bind/change/unbind saves the binding,
 │   │   │                                           #   answers 202 and is applied in the background by
@@ -281,7 +286,9 @@ backend/
 │   │   │                                           #   `bindingApply#<db>` in the evaluation table, message
 │   │   │                                           #   with ids only, run() pages from the job Lambda
 │   │   │                                           #   in a records phase (409 while it runs, queues no
-│   │   │                                           #   evaluation) then an evaluations phase (shares on
+│   │   │                                           #   evaluation; walks live then `<db>#deleted` records,
+│   │   │                                           #   updating existing ones only, archived_partition)
+│   │   │                                           #   then an evaluations phase (shares on
 │   │   │                                           #   the trigger queue, at most
 │   │   │                                           #   EVALUATION_OUTSTANDING_LIMIT of its own sent
 │   │   │                                           #   and not taken: evaluationsSent counted by the
@@ -292,7 +299,9 @@ backend/
 │   │   │                                           #   run limit (run_limit(), stopReason), never from
 │   │   │                                           #   elapsed time; resume repeats the change; D161),
 │   │   │                                           #   complianceEvaluateService (evaluate/sweep/evaluations/
-│   │   │                                           #   state), complianceQuarantineService, complianceCascadeService,
+│   │   │                                           #   state; sweep and Evaluate All read bound records a page at a
+│   │   │                                           #   time under the time budget, NextToken = phase + cursor,
+│   │   │                                           #   _SweepWalk; assetsRemaining a lower bound), complianceQuarantineService, complianceCascadeService,
 │   │   │                                           #   complianceAuditService. Event-driven: complianceJobs
 │   │   │                                           #   (the job queue: a deleted database's move and a
 │   │   │                                           #   binding change applied in the background, each
@@ -306,7 +315,12 @@ backend/
 │   │   │                                           #   workflow.execution.completed; then launches the pipeline
 │   │   │                                           #   rules waiting for that workflow, PipelineRuleWaitIndex,
 │   │   │                                           #   through the execute Lambda), complianceCascadeExecutor
-│   │   │                                           #   (async invoke from complianceCascadeService, event {"cascadeId"}),
+│   │   │                                           #   (async invoke from complianceCascadeService, event {"cascadeId"};
+│   │   │                                           #   retryAttempts 0: a run with less than RUN_DEADLINE_MARGIN_MS left
+│   │   │                                           #   records nodes/partialResults/heartbeatAt and invokes itself with
+│   │   │                                           #   {"cascadeId", "run": n+1}, fenced on runNumber; a reader aborts
+│   │   │                                           #   a cascade executing with no heartbeat for
+│   │   │                                           #   CASCADE_RUN_STALE_SECONDS, expire_stopped_cascade),
 │   │   │                                           #   complianceDefaultSchemaSeed (cr.Provider custom resource:
 │   │   │                                           #   the GLOBAL default schema, a conditional put with
 │   │   │                                           #   registeredAt stamped at write, Delete keeps the row;
@@ -332,6 +346,21 @@ backend/
 │   │   │                                           #   reopen on the finalization read, replace only the
 │   │   │                                           #   FAILED of that executionId, finalize again; never
 │   │   │                                           #   SUCCEEDED->FAILED, never a closed evaluation).
+│   │   │                                           #   Every binding write (database bind/change/unbind of a
+│   │   │                                           #   quarantined record, asset override set/clear) stamps
+│   │   │                                           #   bindingChangedAt on the record; evaluation_ownership_condition
+│   │   │                                           #   refuses an evaluation that began at or before it (its verdict
+│   │   │                                           #   stays on its evaluation row), writes after the claim also need
+│   │   │                                           #   attribute_exists(databaseId), and a claim on a record naming
+│   │   │                                           #   another schema is refused (CLAIM_REBOUND). A claim whose
+│   │   │                                           #   evaluation raises is undone (_undo_claim, conditional on the
+│   │   │                                           #   claim's revision); a pending_pipeline claim older than
+│   │   │                                           #   EVALUATION_CLAIM_STALE_SECONDS with no evaluation row no longer
+│   │   │                                           #   covers a change (claim_orphaned). An evaluation naming a schema
+│   │   │                                           #   other than the bound one is dry_run_evaluation (no write, no
+│   │   │                                           #   workflow). A rule that cannot be read or an unresolved extends
+│   │   │                                           #   parent gives verdict error and launches no pipeline rule,
+│   │   │                                           #   whatever TOOLING_FAILURES_APPLY_ENFORCEMENT says.
 │   │   │                                           #   complianceNotifications
 │   │   ├── pipelines/                              # Pipeline CRUD (pipelineService = full CRUD;
 │   │   │                                           #   pipelineTemplateService = templates + tagSchema)

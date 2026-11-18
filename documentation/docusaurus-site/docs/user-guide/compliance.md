@@ -269,7 +269,7 @@ When two or more pipeline rules of a schema name the same workflow, the schema s
 :::
 
 :::note[A parent schema that was not found]
-When a schema's `extends` names a parent that was not found as a `vams-rules-v1` schema you may read, the schema still saves, and the answer carries an `extendsSchemaNotFound` warning: **The parent schema named in `extends` was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.** The Schemas page shows it beside the success message, and the CLI prints it. The same message is shown for a parent you may not read, so check the name with an administrator if you expect it to exist. See [Schema inheritance](../concepts/compliance.md#schema-inheritance).
+When a schema's `extends` names a parent that was not found as a `vams-rules-v1` schema you may read, the schema still saves, and the answer carries an `extendsSchemaNotFound` warning: **The parent schema named in `extends` was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, an evaluation under this schema reaches no verdict.** The Schemas page shows it beside the success message, and the CLI prints it. The same message is shown for a parent you may not read, so check the name with an administrator if you expect it to exist. See [Schema inheritance](../concepts/compliance.md#schema-inheritance).
 :::
 
 ### Updating a schema
@@ -744,6 +744,8 @@ A cascade nobody approves or rejects before its approval timeout is aborted with
 3. Enter an optional reason.
 4. The cascade moves to `executing` and its downstream assets are evaluated in dependency order in the background; the API answers `202` with the cascade `state`. The Cascade Approvals page follows the execution and shows its progress until the cascade is `completed` or `aborted`: how many nodes were evaluated of the total, and apart from them how many were skipped and why, how many failed and how many remain, for example "1 of 2 nodes evaluated; 1 skipped: not authorized". A node is skipped when it is in a database the approver may not evaluate (not authorized), was archived when the cascade reached it (archived), has no bound schema or no longer exists, or a newer evaluation of it was already running (superseded). **View nodes** lists each node with its outcome: its verdict when it was evaluated, or why it was skipped or failed. An executing, completed or aborted cascade in the list shows the same progress and **View nodes** link. A node skipped as not authorized is listed by its database and ID; the cascade records no name for it. A node in a database whose compliance you may not read, or an asset you may not read, is not listed: the progress and **View nodes** count it, for example "1 of 1 nodes evaluated; 1 node you cannot access", without its ID, name or verdict. An archived node you may not see is neither listed nor counted.
 
+A large cascade runs in several steps: each run hands the remaining nodes to the next before its time runs out, so the progress keeps growing until the cascade ends. A cascade that makes no progress for 20 minutes, because its run stopped before it finished, is aborted the next time it is listed or opened, with the reason `The cascade stopped before it finished; start it again`, and recorded as `cascade_timed_out`. Its evaluated nodes keep their verdicts; evaluate the parent again or create a new cascade to evaluate the rest.
+
 ### Rejecting a cascade
 
 1. Locate the cascade in the list.
@@ -788,7 +790,7 @@ The compliance audit log records every compliance action across the deployment.
 | `cascade_auto_triggered`           | A cascade was opened after the evaluation of an asset with children                                                      |
 | `cascade_approved`                 | A pending cascade was approved and executed                                                                              |
 | `cascade_rejected`                 | A pending cascade was rejected                                                                                           |
-| `cascade_timed_out`                | A pending cascade reached its approval timeout unapproved and was aborted                                                |
+| `cascade_timed_out`                | A pending cascade reached its approval timeout unapproved, or an executing cascade's run stopped, and it was aborted     |
 | `schema_binding_applied_to_asset`  | A binding change reached an asset (its previous and new state; a quarantined asset stays quarantined until re-evaluated) |
 | `schema_binding_auto_eval_changed` | Re-binding the same schema changed only automatic evaluation                                                             |
 | `schema_binding_apply_finished`    | A database binding change finished applying to the assets (or failed), with its totals                                   |
