@@ -109,12 +109,12 @@ class TestGroups:
     def test_not_supported_is_a_clear_json_error(self, cli_runner, generic_command_mocks):
         with generic_command_mocks("audit") as mocks:
             mocks["api_client"].list_audit_log_groups.side_effect = AuditSearchNotSupportedError(
-                "Audit Log Search is not enabled on this deployment, or the deployment runs a VAMS version")
+                "Audit Log Search is not available on this deployment")
             result = _invoke(cli_runner, "groups", "--json-output")
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert data["error_type"] == "AuditSearchNotSupportedError"
-        assert "not enabled on this deployment" in data["error"]
+        assert "not available on this deployment" in data["error"]
 
 
 class TestSearch:
