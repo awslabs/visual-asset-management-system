@@ -2697,6 +2697,19 @@ const CORE_RULES: Rule[] = [
 
     // ----- IP ranges (config.ts: "Validate IP ranges configuration") -----
     {
+        // An unset value is backfilled to []; any other value that is not an array is rejected,
+        // since the authorizer refuses every request for a list it cannot read as an array.
+        id: "ip-ranges-array",
+        severity: "error",
+        fieldPaths: ["app.authProvider.authorizerOptions.allowedIpRanges"],
+        appliesWhen: (c) => {
+            const ranges = g(c, "app.authProvider.authorizerOptions.allowedIpRanges");
+            return ranges !== undefined && ranges !== null && !Array.isArray(ranges);
+        },
+        message:
+            "app.authProvider.authorizerOptions.allowedIpRanges must be an array of [min, max] IP address ranges ([] for no restriction).",
+    },
+    {
         id: "ip-range-shape",
         severity: "error",
         fieldPaths: ["app.authProvider.authorizerOptions.allowedIpRanges"],

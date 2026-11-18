@@ -31,6 +31,7 @@ import commercialTemplate from "../../config/config.template.commercial.json";
 import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import govcloudTemplate from "../../config/config.template.govcloud.json";
 import { newTestApp } from "../support/testApp";
+import { RULES } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
 
 const realReadFileSync = jest.requireActual("fs").readFileSync;
 
@@ -133,6 +134,7 @@ describe("ipAddressFamily", () => {
 const INVALID_FORMAT = /Invalid IP address format in range at index/;
 const MIXED_FAMILY = /mixes IPv4 and IPv6 endpoints|mixes IPv6 and IPv4 endpoints/;
 const NOT_A_PAIR = /must be an array of exactly 2 IP addresses/;
+const NOT_AN_ARRAY = /allowedIpRanges must be an array of \[min, max\] IP address ranges/;
 
 const withRanges = (ranges: unknown) => (c: any) => {
     c.app.authProvider.authorizerOptions.allowedIpRanges = ranges;
@@ -213,6 +215,56 @@ describe("authorizerOptions.allowedIpRanges accepts both address families", () =
     test("still rejects an entry that is not a two-element array", () => {
         const run = loadConfig(commercialTemplate, "us-east-1", withRanges([["2001:db8::"]]));
         expect(run).toThrow(NOT_A_PAIR);
+    });
+
+    test.each([
+        ["an object", {}],
+        ["a string", "203.0.113.0-203.0.113.255"],
+        ["a number", 1],
+    ])("rejects a list that is %s rather than an array", (_kind, value) => {
+        // The authorizer refuses every request for a value it cannot read as an array, so the
+        // deployment must not write one.
+        const run = loadConfig(commercialTemplate, "us-east-1", withRanges(value));
+        expect(run).toThrow(NOT_AN_ARRAY);
+    });
+
+    test.each([
+        ["unset", undefined],
+        ["null", null],
+        ["empty", []],
+    ])("accepts a list that is %s (no restriction)", (_kind, value) => {
+        const run = loadConfig(commercialTemplate, "us-east-1", (c: any) => {
+            if (value === undefined) delete c.app.authProvider.authorizerOptions.allowedIpRanges;
+            else c.app.authProvider.authorizerOptions.allowedIpRanges = value;
+        });
+        expect(run).not.toThrow();
+    });
+});
+
+describe("ConfigBuilder mirrors the allowedIpRanges array rule", () => {
+    const rule = RULES.find((r) => r.id === "ip-ranges-array");
+    const shaped = (value: unknown) => {
+        const config = JSON.parse(JSON.stringify(commercialTemplate));
+        if (value === undefined) delete config.app.authProvider.authorizerOptions.allowedIpRanges;
+        else config.app.authProvider.authorizerOptions.allowedIpRanges = value;
+        return config;
+    };
+
+    test("[control] the rule is ported as an error on the field", () => {
+        expect(rule).toBeDefined();
+        expect(rule!.severity).toBe("error");
+        expect(rule!.fieldPaths).toContain("app.authProvider.authorizerOptions.allowedIpRanges");
+    });
+
+    test.each([
+        ["an object", {}, true],
+        ["a string", "203.0.113.0-203.0.113.255", true],
+        ["unset", undefined, false],
+        ["null", null, false],
+        ["empty", [], false],
+        ["a valid range list", [["203.0.113.0", "203.0.113.255"]], false],
+    ])("agrees with getConfig() for a list that is %s", (_kind, value, violates) => {
+        expect(rule!.appliesWhen(shaped(value))).toBe(violates);
     });
 });
 
