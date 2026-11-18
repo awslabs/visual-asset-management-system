@@ -157,4 +157,15 @@ describe("PlayCanvasGaussianSplatViewerComponent", () => {
         expect(canvas?.getAttribute("role")).toBe("img");
         expect(canvas?.getAttribute("aria-label")).toContain("scene.ply");
     });
+
+    it("draws a refused download's message on a theme panel over the dark scene", async () => {
+        mockDownloadAsset.mockResolvedValue([false, "Not Authorized", 403]);
+        jest.spyOn(console, "error").mockImplementation(() => undefined);
+        const { findByRole } = render(<PlayCanvasGaussianSplatViewerComponent {...props} />);
+
+        const alert = await findByRole("alert");
+        expect(alert.textContent).toBe("You do not have permission to view or download this file.");
+        expect(alert.style.background).toBe("var(--vams-bg-primary)");
+        expect(alert.style.color).toBe("var(--vams-color-error)");
+    });
 });

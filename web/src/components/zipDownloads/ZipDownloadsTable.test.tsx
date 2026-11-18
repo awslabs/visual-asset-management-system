@@ -26,13 +26,23 @@ jest.mock("../../services/APIService", () => ({
 
 // The Tier-1 gate is the API's own decision; each test says which routes it allows.
 let mockAllowed: Record<string, boolean> = {};
+// Set when the allowed-routes check itself failed: can() then answers false for every route.
+let mockPermissionsFailed = false;
+const mockRetryPermissions = jest.fn();
 jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
     useAllowedRoutes: () => ({
         loading: false,
-        failed: false,
-        can: (method: string, path: string) => !!mockAllowed[`${method} ${path}`],
+        failed: mockPermissionsFailed,
+        retry: mockRetryPermissions,
+        can: (method: string, path: string) =>
+            !mockPermissionsFailed && !!mockAllowed[`${method} ${path}`],
     }),
 }));
+
+beforeEach(() => {
+    mockPermissionsFailed = false;
+    mockRetryPermissions.mockReset();
+});
 
 const ALL = {
     "GET /database/{databaseId}/assets/{assetId}/download/zip": true,
@@ -246,6 +256,17 @@ describe("ZipDownloadsTable", () => {
         ).toHaveAttribute("aria-disabled", "true");
     });
 
+    it("says the permission check failed, with Retry, instead of loading forever", async () => {
+        mockPermissionsFailed = true;
+        renderTable();
+
+        expect(screen.getByText("Your permissions could not be checked")).toBeInTheDocument();
+        expect(screen.queryByText("Loading download jobs")).toBeNull();
+        expect(mockAssetList).not.toHaveBeenCalled();
+        await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+        expect(mockRetryPermissions).toHaveBeenCalledTimes(1);
+    });
+
     it("does not load while its tab is inactive", () => {
         mockAssetList.mockResolvedValue(page([]));
         renderTable({ isActive: false });
@@ -272,6 +293,68 @@ describe("ZipDownloadsTable", () => {
             await Promise.resolve();
         });
 
+        await act(async () => {
+            jest.advanceTimersByTime(ZIP_POLL_INTERVAL_MS * 3);
+        });
+        expect(mockAssetList).toHaveBeenCalledTimes(2);
+    });
+
+    /** Advance one poll interval and let its answer land. */
+    const nextPoll = async () => {
+        await act(async () => {
+            jest.advanceTimersByTime(ZIP_POLL_INTERVAL_MS);
+        });
+        await act(async () => {
+            await Promise.resolve();
+        });
+    };
+
+    it("keeps polling after a failed poll, and says so after two in a row", async () => {
+        jest.useFakeTimers();
+        const failed = [false, "Service unavailable", 503];
+        mockAssetList
+            .mockResolvedValueOnce(page([job("1", "RUNNING")]))
+            .mockResolvedValueOnce(failed)
+            .mockResolvedValueOnce(failed)
+            .mockResolvedValueOnce(page([job("1", "SUCCEEDED")]))
+            .mockResolvedValue(page([job("1", "SUCCEEDED")]));
+        renderTable();
+        await act(async () => {
+            await Promise.resolve();
+        });
+        expect(screen.getByText("Preparing")).toBeInTheDocument();
+
+        await nextPoll();
+        expect(mockAssetList).toHaveBeenCalledTimes(2);
+        // One failed poll alone is not reported: the next one usually succeeds.
+        expect(screen.queryByText("Could not refresh the Download Queue")).toBeNull();
+
+        await nextPoll();
+        expect(mockAssetList).toHaveBeenCalledTimes(3);
+        expect(screen.getByText("Could not refresh the Download Queue")).toBeInTheDocument();
+        expect(screen.getByText(/Service unavailable/)).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+        expect(screen.getByText("Preparing")).toBeInTheDocument();
+
+        await nextPoll();
+        expect(mockAssetList).toHaveBeenCalledTimes(4);
+        expect(screen.getByText("Ready")).toBeInTheDocument();
+        expect(screen.queryByText("Could not refresh the Download Queue")).toBeNull();
+    });
+
+    it("drops a job a poll no longer lists, so its polling ends", async () => {
+        jest.useFakeTimers();
+        mockAssetList
+            .mockResolvedValueOnce(page([job("2", "RUNNING"), job("1", "SUCCEEDED")]))
+            .mockResolvedValue(page([job("1", "SUCCEEDED")]));
+        renderTable();
+        await act(async () => {
+            await Promise.resolve();
+        });
+        expect(screen.getByText("archive-2.zip")).toBeInTheDocument();
+
+        await nextPoll();
+        expect(screen.queryByText("archive-2.zip")).toBeNull();
         await act(async () => {
             jest.advanceTimersByTime(ZIP_POLL_INTERVAL_MS * 3);
         });
@@ -518,6 +601,25 @@ describe("ZipDownloadsTable", () => {
         expect(screen.getByText("archive-req-b.zip")).toBeInTheDocument();
     });
 
+    it("says to load more, not that there are no jobs, when a page lists none but more remain", async () => {
+        mockGlobalList.mockResolvedValueOnce(page([], "tok"));
+        mockGlobalList.mockResolvedValueOnce(page([job("1", "SUCCEEDED")], null));
+        render(
+            <MemoryRouter>
+                <ZipDownloadsTable />
+            </MemoryRouter>
+        );
+        expect(
+            await screen.findByText("No download jobs on the pages loaded so far")
+        ).toBeInTheDocument();
+        expect(screen.getByText("Choose Load more to keep looking.")).toBeInTheDocument();
+        expect(screen.queryByText("No download jobs")).toBeNull();
+        expect(screen.queryByText(/Download as Zip/)).toBeNull();
+
+        await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+        expect(await screen.findByText("archive-1.zip")).toBeInTheDocument();
+    });
+
     it("says the search covers the loaded jobs while more pages remain", async () => {
         mockGlobalList.mockResolvedValue(page([job("1", "SUCCEEDED")], "tok"));
         render(
@@ -569,32 +671,37 @@ describe("ZipDownloadsTable — Show all users (asset tab)", () => {
         await screen.findByText("archive-1.zip");
         expect(screen.queryByText("Show all users")).toBeNull();
         expect(mockAllUsersList).not.toHaveBeenCalled();
-        // Nothing is rendered in the right-aligned tools group either.
+        // The list toolbar has no filters group, and the table's pagination slot stays empty.
+        expect(document.querySelector('[data-list-toolbar-group="filters"]')).toBeNull();
         expect(createWrapper(document.body).findTable()!.findPagination()).toBeNull();
     });
 
-    it("places the toggle right-aligned in the filter row, away from search and refresh", async () => {
+    it("lays out the list toolbar: search and refresh on the left, the toggle in the filters group", async () => {
         mockAllowed = { ...ALL, [ALL_USERS_ROUTE]: true };
         mockAssetList.mockResolvedValue(page([job("1", "SUCCEEDED")]));
         renderTable();
         await screen.findByText("archive-1.zip");
         const table = createWrapper(document.body).findTable()!;
-        // The tools slot sits inside Cloudscape's right-aligned group of the filter row.
-        const toolsSlot = table.findPagination()!.getElement();
-        expect(toolsSlot.parentElement!.className).toMatch(/tools-align-right/);
-        const control = createWrapper(toolsSlot).findSegmentedControl()!;
+        // The whole toolbar is the table's filter slot (ListToolbar), not split across slots.
+        const filterSlot = table.findFilterSlot()!.getElement();
+        const toolbar = filterSlot.querySelector("[data-list-toolbar]") as HTMLElement;
+        expect(toolbar).not.toBeNull();
+        expect(table.findPagination()).toBeNull();
+        const searchGroup = toolbar.querySelector(
+            '[data-list-toolbar-group="search"]'
+        ) as HTMLElement;
+        const filters = toolbar.querySelector('[data-list-toolbar-group="filters"]') as HTMLElement;
+        expect(searchGroup).toContainElement(
+            screen.getByRole("searchbox", { name: "Search download jobs" })
+        );
+        expect(searchGroup).toContainElement(
+            screen.getByRole("button", { name: "Refresh download queue" })
+        );
+        const control = createWrapper(filters).findSegmentedControl()!;
         expect(control).not.toBeNull();
         // Default: My jobs.
         expect(control.findSelectedSegment()!.getElement()).toHaveTextContent("My jobs");
-        // Search and refresh stay on the left, in the filter slot; the toggle is not there.
-        const filterSlot = table.findFilterSlot()!.getElement();
-        expect(filterSlot).not.toContainElement(control.getElement());
-        expect(filterSlot).toContainElement(
-            screen.getByRole("searchbox", { name: "Search download jobs" })
-        );
-        expect(filterSlot).toContainElement(
-            screen.getByRole("button", { name: "Refresh download queue" })
-        );
+        expect(searchGroup).not.toContainElement(control.getElement());
         expect(mockAllUsersList).not.toHaveBeenCalled();
     });
 
@@ -684,5 +791,82 @@ describe("ZipDownloadsTable — Show all users (asset tab)", () => {
         );
         await screen.findByText("archive-1.zip");
         expect(screen.queryByText("Show all users")).toBeNull();
+    });
+
+    /** A list call that answers only when the test says so. */
+    const deferred = () => {
+        let resolve: (value: unknown) => void = () => undefined;
+        const promise = new Promise((r) => {
+            resolve = r;
+        });
+        return { promise, resolve };
+    };
+
+    it("drops a late answer for the list the user switched away from", async () => {
+        mockAllowed = { ...ALL, [ALL_USERS_ROUTE]: true };
+        const mine = deferred();
+        mockAssetList.mockReturnValueOnce(mine.promise);
+        mockAllUsersList.mockResolvedValue(
+            page([job("2", "SUCCEEDED", { requestedBy: "bob", isOwn: false })])
+        );
+        renderTable();
+        await waitFor(() => expect(mockAssetList).toHaveBeenCalledTimes(1));
+
+        await userEvent.click(screen.getByText("Show all users"));
+        expect(await screen.findByText("archive-2.zip")).toBeInTheDocument();
+        // The caller's own list answers after the switch, with a page token of its own route.
+        await act(async () => {
+            mine.resolve(page([job("1", "SUCCEEDED")], "mine-token"));
+        });
+
+        expect(screen.queryByText("archive-1.zip")).toBeNull();
+        expect(screen.getByText("archive-2.zip")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    });
+
+    it("drops a late Load more for the list the user switched away from", async () => {
+        mockAllowed = { ...ALL, [ALL_USERS_ROUTE]: true };
+        mockAssetList.mockResolvedValueOnce(page([job("3", "SUCCEEDED")], "mine-token"));
+        const more = deferred();
+        mockAssetList.mockReturnValueOnce(more.promise);
+        mockAllUsersList.mockResolvedValue(
+            page([job("2", "SUCCEEDED", { requestedBy: "bob", isOwn: false })], "all-token")
+        );
+        renderTable();
+        await screen.findByText("archive-3.zip");
+        await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+
+        await userEvent.click(screen.getByText("Show all users"));
+        expect(await screen.findByText("archive-2.zip")).toBeInTheDocument();
+        await act(async () => {
+            more.resolve(page([job("1", "SUCCEEDED")], null));
+        });
+
+        expect(screen.queryByText("archive-1.zip")).toBeNull();
+        expect(screen.queryByText("archive-3.zip")).toBeNull();
+        // The page token is still the all-users list's own.
+        mockAllUsersList.mockResolvedValueOnce(page([], null));
+        await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+        expect(mockAllUsersList).toHaveBeenLastCalledWith(
+            expect.objectContaining({ startingToken: "all-token" })
+        );
+    });
+
+    it("drops the previous list's error when the user switches list", async () => {
+        mockAllowed = { ...ALL, [ALL_USERS_ROUTE]: true };
+        mockAssetList.mockResolvedValueOnce([false, "My jobs could not be read", 500]);
+        const all = deferred();
+        mockAllUsersList.mockReturnValueOnce(all.promise);
+        renderTable();
+        expect(await screen.findByText("My jobs could not be read")).toBeInTheDocument();
+
+        await userEvent.click(screen.getByText("Show all users"));
+
+        // While the all-users list loads, the other list's error is gone.
+        await waitFor(() => expect(screen.queryByText("My jobs could not be read")).toBeNull());
+        await act(async () => {
+            all.resolve(page([job("2", "SUCCEEDED", { requestedBy: "bob", isOwn: false })]));
+        });
+        expect(screen.getByText("archive-2.zip")).toBeInTheDocument();
     });
 });

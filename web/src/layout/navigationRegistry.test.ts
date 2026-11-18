@@ -18,6 +18,7 @@ import {
     allNavEntries,
     allowedEntriesFor,
     entriesFor,
+    filterNavItems,
     normaliseHref,
     webRouteChecksFor,
 } from "./navigationRegistry";
@@ -330,5 +331,38 @@ describe("My Download Queue (Download as Zip)", () => {
             ["ZIPDOWNLOADS"]
         );
         expect(hrefsIn(both)).toContain("#/zipdownloads/");
+    });
+});
+
+describe("filterNavItems", () => {
+    const link = (text: string, href: string) => ({ type: "link", text, href });
+
+    it("keeps Home, which the router always allows, when the listing does not name /", () => {
+        const items = [link("Home", "#/"), link("Databases", "#/databases/")];
+        expect(filterNavItems(items, ["/databases"])).toEqual(items);
+    });
+
+    it("filters the links of a group nested in a section by each link's own route", () => {
+        const group = {
+            type: "expandable-link-group",
+            text: "Group",
+            href: "#/group/",
+            items: [link("Open", "#/open/"), link("Closed", "#/closed/")],
+        };
+        const section = { type: "section", text: "Section", items: [group] };
+        expect(filterNavItems([section], ["/group", "/open"])).toEqual([
+            { ...section, items: [{ ...group, items: [link("Open", "#/open/")] }] },
+        ]);
+    });
+
+    it("drops a nested group whose links are all refused, and the section it leaves empty", () => {
+        const group = {
+            type: "expandable-link-group",
+            text: "Group",
+            href: "#/group/",
+            items: [link("Closed", "#/closed/")],
+        };
+        const section = { type: "section", text: "Section", items: [group] };
+        expect(filterNavItems([section], ["/group"])).toEqual([]);
     });
 });

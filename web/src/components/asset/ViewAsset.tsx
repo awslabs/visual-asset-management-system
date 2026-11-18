@@ -132,16 +132,19 @@ export default function ViewAsset() {
     );
     // The metadata editor adds with POST and updates with PUT; either grant keeps it editable.
     const canWriteMetadata = can("POST", ASSET_METADATA_ROUTE) || can("PUT", ASSET_METADATA_ROUTE);
+    // Row delete calls DELETE on the same route, which a role may lack while it may add and edit.
+    const canDeleteMetadata = can("DELETE", ASSET_METADATA_ROUTE);
     const unarchiveDisabledReason = routeDisabledReason(
         permissionsLoading,
         permissionsFailed,
         can("PUT", ASSET_UNARCHIVE_ROUTE),
         `Your role does not allow unarchiving this ${Synonyms.asset}.`
     );
+    const canPermanentlyDelete = can("DELETE", ASSET_PERMANENT_DELETE_ROUTE);
     const permanentDeleteDisabledReason = routeDisabledReason(
         permissionsLoading,
         permissionsFailed,
-        can("DELETE", ASSET_PERMANENT_DELETE_ROUTE),
+        canPermanentlyDelete,
         `Your role does not allow permanently deleting this ${Synonyms.asset}.`
     );
 
@@ -460,6 +463,7 @@ export default function ViewAsset() {
                                                     !canWriteMetadata ||
                                                     isArchived
                                                 }
+                                                canDelete={canDeleteMetadata}
                                             />
                                         )}
                                     </ErrorBoundary>
@@ -489,6 +493,7 @@ export default function ViewAsset() {
                         selectedAssets={asset ? [asset] : []}
                         databaseId={databaseId}
                         forceDeleteMode={isArchived}
+                        canPermanentlyDelete={canPermanentlyDelete}
                         onSuccess={(operation) => {
                             setShowDeleteModal(false);
                             // Navigate back to search page after successful deletion / archival

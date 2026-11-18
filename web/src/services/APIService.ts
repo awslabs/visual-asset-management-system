@@ -9,6 +9,7 @@ import {
     isRequestBlocked,
     NETWORK_FAILURE_MESSAGE,
 } from "./apiClient";
+import { markUnanswered, requestFailureMessage } from "./networkFailure";
 import { default as vamsConfig } from "../config";
 import { ensureApiStage } from "../utils/apiEndpoint";
 
@@ -256,7 +257,11 @@ export const downloadAsset = async ({
         // Failure tuple is [false, message, status?]. The status is the HTTP status of the download
         // request when known (ApiError), so a caller fetching several entries can tell a per-entry
         // authorization denial (401/403) or archived version (410) apart from a generic failure.
-        // A request the AWS WAF web ACL blocked carries no status, so its message is shown.
+        // A request the AWS WAF web ACL blocked carries no status, so its message is shown; a
+        // request that got no response at all says the service could not be reached.
+        if (isNetworkFailure(error)) {
+            return markUnanswered([false, NETWORK_FAILURE_MESSAGE, undefined]);
+        }
         // Check for 410 Gone status (archived file)
         if (error.status === 410) {
             return [false, "This file version has been archived and cannot be downloaded", 410];
@@ -266,12 +271,14 @@ export const downloadAsset = async ({
         // block is on, D166) instead of its generic text (core/streamFailure.ts).
         // It is present only with the status (an ApiError carries the parsed body; it is read by
         // shape so a test double of the client without the class is not a TypeError here).
-        const status = isRequestBlocked(error) ? undefined : error?.status;
+        const blocked = isRequestBlocked(error);
+        const status = blocked ? undefined : error?.status;
         const failure: any[] = [false, error?.message, status];
         if (typeof status === "number" && typeof error?.body?.message === "string") {
             failure.push(error.body.message);
         }
-        return failure;
+        // Only these two failures carry no API answer and a message that says what happened.
+        return blocked ? markUnanswered(failure) : failure;
     }
 };
 
@@ -730,7 +737,7 @@ export const fetchAssetLinks = async ({
         // surface the failure instead of rendering an empty (success-shaped)
         // relationship tree.
         console.log("Error fetching asset links:", error);
-        return [false, error?.message || "An error occurred"];
+        return [false, requestFailureMessage(error, "An error occurred")];
     }
 };
 
@@ -1112,7 +1119,7 @@ export const fetchAllComments = async ({ assetId, showArchived = false }: any) =
         }
     } catch (error: any) {
         console.log(error);
-        return error?.message;
+        return isNetworkFailure(error) ? NETWORK_FAILURE_MESSAGE : error?.message;
     }
 };
 
@@ -3521,8 +3528,19 @@ const zipAssetPath = (databaseId: string, assetId: string) =>
 
 const zipFailure = (error: any, fallback: string): [false, string, number | undefined] => {
     console.log(error);
-    return [false, error?.message || fallback, isRequestBlocked(error) ? undefined : error?.status];
+    return [
+        false,
+        requestFailureMessage(error, fallback),
+        isRequestBlocked(error) ? undefined : error?.status,
+    ];
 };
+
+/**
+ * Shown for a create that got no response: the request may have reached the API, so the job may
+ * exist, and creating it again could start a second one.
+ */
+export const ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE =
+    "The request got no reply, so the zip download may have been created. Check the Download Queue before trying again.";
 
 const zipListQuery = ({ maxItems, pageSize, startingToken }: any): Record<string, string> => {
     const query: Record<string, string> = {};
@@ -3546,6 +3564,10 @@ export const createZipDownload = async ({ databaseId, assetId, body }: any) => {
         }
         return [true, response];
     } catch (error: any) {
+        if (isNetworkFailure(error)) {
+            console.log(error);
+            return [false, ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE, undefined];
+        }
         return zipFailure(error, "Failed to create the zip download");
     }
 };

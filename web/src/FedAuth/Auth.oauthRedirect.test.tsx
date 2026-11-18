@@ -377,6 +377,35 @@ describe("Auth external OAuth state", () => {
         expect(storedSignInValues()).toEqual([null, null, null]);
     });
 
+    it("clears an abandoned sign-in without an error and shows the sign-in page", async () => {
+        // The user went to the IdP and came back without signing in: the values are stored, but
+        // the page URL carries no code, error or state.
+        storeSignInAttempt();
+        window.history.replaceState(null, "", DEEP_LINK);
+
+        renderAuth();
+
+        expect(await screen.findByText("Log in with SSO")).toBeInTheDocument();
+        expect(storedSignInValues()).toEqual([null, null, null]);
+        expect(localStorage.getItem("auth_error")).toBeNull();
+        expect(mockGetTokenFromCodeRedirect).not.toHaveBeenCalled();
+    });
+
+    it("removes the stored values when the authorize step fails", async () => {
+        window.history.replaceState(null, "", DEEP_LINK);
+        mockGetAuthorizeUri.mockRejectedValue(new Error("discovery failed"));
+
+        renderAuth();
+        fireEvent.click(await screen.findByText("Log in with SSO"));
+
+        await waitFor(() =>
+            expect(localStorage.getItem("auth_error")).toBe(
+                "Failed to initialize authorization flow."
+            )
+        );
+        expect(storedSignInValues()).toEqual([null, null, null]);
+    });
+
     it("removes the stored values when the code exchange fails", async () => {
         storeSignInAttempt();
         window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);

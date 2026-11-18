@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """What the allowed-routes listing reports, to a role built from each database template, for the
-routes the web app gates its database, asset and search actions on.
+routes the web app gates its database, asset, search and API key actions on.
 
 The web pages disable or hide an action when ``GET /auth/routes/api/allowed`` does not list its route
 and method (``useAllowedRoutes().can()``). Their tests drive the pages with the listings in
@@ -43,6 +43,8 @@ EXPECTED_LISTING = {
         "/assets": {"GET"},
         "/database/{databaseId}/assets/{assetId}": {"GET"},
         "/database/{databaseId}/assets/{assetId}/metadata": {"GET"},
+        "/auth/user/api-keys": {"GET"},
+        "/auth/user/api-keys/{apiKeyId}": {"GET"},
     },
     "database-user.json": {
         "/database": {"GET"},
@@ -52,11 +54,16 @@ EXPECTED_LISTING = {
         "/database/{databaseId}/assets/{assetId}": {"GET"},
         "/database/{databaseId}/assets/{assetId}/archiveAsset": {"DELETE"},
         "/database/{databaseId}/assets/{assetId}/metadata": {"GET", "POST"},
+        "/auth/user/api-keys": {"GET", "POST"},
+        "/auth/user/api-keys/{apiKeyId}": {"GET", "PUT", "DELETE"},
     },
 }
-# Every route either listing names; each template is evaluated on all of them, so a route missing from
-# a template's listing asserts that the role is offered no method on it.
-GATED_ROUTE_PATHS = sorted(set().union(*(listing.keys() for listing in EXPECTED_LISTING.values())))
+# Routes the web gates an action on that no template above grants, so neither listing names them.
+UNLISTED_GATED_ROUTES = {"/database/{databaseId}/assets/{assetId}/deleteAsset"}
+# Every route either listing names, plus the unlisted ones; each template is evaluated on all of them,
+# so a route missing from a template's listing asserts that the role is offered no method on it.
+GATED_ROUTE_PATHS = sorted(
+    UNLISTED_GATED_ROUTES.union(*(listing.keys() for listing in EXPECTED_LISTING.values())))
 
 
 def _stored_constraints(template_name):

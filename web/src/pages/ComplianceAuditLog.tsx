@@ -28,12 +28,15 @@ import {
     listedBefore,
     listingEmptyText,
     loadFailureMessage,
+    pageReachable,
+    tokenPagerCounts,
 } from "../components/compliance/listingStates";
 import Link from "@cloudscape-design/components/link";
 import Synonyms from "../synonyms";
 import {
     fetchAuditLog,
     AuditEntry,
+    ARCHIVED_DATABASE_ID_SUFFIX,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
@@ -150,10 +153,14 @@ const ComplianceAuditLog: React.FC = () => {
         eventTypeOptions.find((option) => option.value === filters.eventType) ||
         eventTypeOptions[0];
     const [assetDraft, setAssetDraft] = useState(filters.assetId);
+    // The box follows the filter when the URL changes it (Back, a link, the database cleared).
+    useEffect(() => {
+        setAssetDraft(filters.assetId);
+    }, [filters.assetId]);
 
     // Server-side token paging: tokens[i] is the startingToken that fetches page i
-    // (tokens[0] is undefined). hasMore tracks whether the loaded page reported a
-    // NextToken, which is what Pagination's openEnd renders.
+    // (tokens[0] is undefined). hasMore tracks whether the page shown reported a NextToken
+    // (the counter's "+"); the pager follows the end of the walk (tokenPagerCounts).
     const [tokens, setTokens] = useState<Record<number, string | undefined>>({});
     const [hasMore, setHasMore] = useState(false);
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
@@ -232,6 +239,7 @@ const ComplianceAuditLog: React.FC = () => {
 
     const handlePageChange = ({ detail }: { detail: { currentPageIndex: number } }) => {
         const newIndex = detail.currentPageIndex;
+        if (!pageReachable(tokens, newIndex)) return;
         setCurrentPageIndex(newIndex);
         loadPage(newIndex - 1, tokens[newIndex - 1]);
     };
@@ -336,8 +344,7 @@ const ComplianceAuditLog: React.FC = () => {
                     pagination={
                         <Pagination
                             currentPageIndex={currentPageIndex}
-                            pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                            openEnd={hasMore}
+                            {...tokenPagerCounts(tokens, loadedPages)}
                             onChange={handlePageChange}
                             disabled={loading}
                             ariaLabels={{
@@ -415,17 +422,24 @@ const ComplianceAuditLog: React.FC = () => {
                             id: "assetId",
                             header: Synonyms.Asset,
                             cell: (item) => {
+                                // An entry of a deleted database's history (`<id>#deleted`) has no
+                                // asset page to open, so it is shown as text.
+                                const { assetId, databaseId } = item;
                                 const label =
-                                    item.assetId && item.assetId !== "*" && canOpenAsset ? (
+                                    assetId &&
+                                    assetId !== "*" &&
+                                    canOpenAsset &&
+                                    databaseId &&
+                                    !databaseId.endsWith(ARCHIVED_DATABASE_ID_SUFFIX) ? (
                                         <Link
-                                            href={`#/databases/${
-                                                item.databaseId
-                                            }/assets/${encodeURIComponent(item.assetId)}`}
+                                            href={`#/databases/${encodeURIComponent(
+                                                databaseId
+                                            )}/assets/${encodeURIComponent(assetId)}`}
                                         >
-                                            {item.assetName || item.assetId}
+                                            {item.assetName || assetId}
                                         </Link>
                                     ) : (
-                                        item.assetName || item.assetId || "-"
+                                        item.assetName || assetId || "-"
                                     );
                                 // The name recorded with the entry, with the id beneath it.
                                 return item.assetName ? (

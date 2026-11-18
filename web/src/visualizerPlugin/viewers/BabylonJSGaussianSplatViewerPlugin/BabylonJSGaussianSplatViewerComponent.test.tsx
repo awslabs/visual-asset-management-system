@@ -252,6 +252,9 @@ describe("BabylonJSGaussianSplatViewerComponent", () => {
                     "does not support. The BabylonJS Gaussian Splat viewer opens SPZ versions 2 " +
                     "and 3, PLY, SOG and SPLAT files."
             );
+            // On a theme panel, readable over the dark scene in both themes.
+            expect(alert.style.background).toBe("var(--vams-bg-primary)");
+            expect(alert.style.color).toBe("var(--vams-color-error)");
             expect(babylon.SceneLoader.ImportMeshAsync).not.toHaveBeenCalled();
             expect(queryByText("Downloading asset...")).toBeNull();
             warn.mockRestore();
