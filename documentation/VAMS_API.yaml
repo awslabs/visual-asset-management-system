@@ -595,7 +595,7 @@ paths:
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update metadata for an asset link (bulk operation)."
-            description: "Update existing metadata items for a specific asset link. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            description: "Update existing metadata items for a specific asset link. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions; a REPLACE_ALL that removes stored keys also requires the DELETE method on this route and returns 403 without it). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -5909,7 +5909,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update metadata for an asset (bulk operation)."
-            description: "Update existing metadata items for a specific asset. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            description: "Update existing metadata items for a specific asset. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions; a REPLACE_ALL that removes stored keys also requires the DELETE method on this route and returns 403 without it). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -6153,7 +6153,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update metadata or attributes for a file (bulk operation)."
-            description: "Update existing metadata or attribute items for a specific file. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). File attributes only support 'string' metadataValueType. Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            description: "Update existing metadata or attribute items for a specific file. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions; a REPLACE_ALL that removes stored keys also requires the DELETE method on this route and returns 403 without it). File attributes only support 'string' metadataValueType. Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -6365,7 +6365,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update metadata for a database (bulk operation)."
-            description: "Update existing metadata items for a specific database. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            description: "Update existing metadata items for a specific database. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions; a REPLACE_ALL that removes stored keys also requires the DELETE method on this route and returns 403 without it). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -19431,7 +19431,7 @@ components:
                     type: string
                     enum: [update, replace_all]
                     default: "update"
-                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items; removing stored keys also requires the DELETE method on the route, else 403)"
             required:
                 - metadata
             example:
@@ -19567,7 +19567,7 @@ components:
                     type: string
                     enum: [update, replace_all]
                     default: "update"
-                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items; removing stored keys also requires the DELETE method on the route, else 403)"
             required:
                 - metadata
             example:
@@ -19725,7 +19725,7 @@ components:
                     type: string
                     enum: [update, replace_all]
                     default: "update"
-                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items; removing stored keys also requires the DELETE method on the route, else 403)"
             required:
                 - filePath
                 - type
@@ -19884,7 +19884,7 @@ components:
                     type: string
                     enum: [update, replace_all]
                     default: "update"
-                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items; removing stored keys also requires the DELETE method on the route, else 403)"
             required:
                 - metadata
             example:
