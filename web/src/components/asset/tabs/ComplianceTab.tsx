@@ -57,7 +57,12 @@ import {
 } from "../../compliance/complianceStateBadge";
 import Synonyms from "../../../synonyms";
 import { useLatestRequest } from "../../compliance/listingFilters";
-import { ListingLoadFailed, loadFailureMessage } from "../../compliance/listingStates";
+import {
+    ListingLoadFailed,
+    loadFailureMessage,
+    pageReachable,
+    tokenPagerCounts,
+} from "../../compliance/listingStates";
 import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../../list/tableSorting";
 
 interface ComplianceTabProps {
@@ -214,6 +219,7 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
 
     const handlePageChange = async ({ detail }: { detail: { currentPageIndex: number } }) => {
         const newIndex = detail.currentPageIndex;
+        if (!pageReachable(tokens, newIndex)) return;
         setCurrentPageIndex(newIndex);
         setLoading(true);
         try {
@@ -560,8 +566,7 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                     pagination={
                         <Pagination
                             currentPageIndex={currentPageIndex}
-                            pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                            openEnd={hasMore}
+                            {...tokenPagerCounts(tokens, loadedPages)}
                             onChange={handlePageChange}
                             disabled={loading}
                             ariaLabels={{

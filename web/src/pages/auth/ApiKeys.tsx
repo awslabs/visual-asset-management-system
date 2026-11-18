@@ -37,6 +37,7 @@ import { usePageTitle } from "../../hooks/usePageTitle";
 import { API_KEYS_ADMIN_NAV_HREF, useActiveNavHref } from "../../layout/activeNavHref";
 import { routeDisabledReason } from "../../features/orchestration/permissions/routeDisabledReason";
 import { useLatestRequest } from "../../components/compliance/listingFilters";
+import { pageReachable, tokenPagerCounts } from "../../components/compliance/listingStates";
 
 export type ApiKeyManagementMode = "admin" | "user"; // pragma: allowlist secret
 
@@ -237,8 +238,8 @@ export default function ApiKeys() {
     const [filterText, setFilterText] = useState("");
 
     // Server-side token paging: tokens[i] is the startingToken that fetches page i
-    // (tokens[0] is undefined). hasMore tracks whether the loaded page reported a
-    // NextToken, which is what Pagination's openEnd renders.
+    // (tokens[0] is undefined). hasMore tracks whether the page shown reported a NextToken
+    // (the counter's "+"); the pager follows the end of the walk (tokenPagerCounts).
     const [tokens, setTokens] = useState<Record<number, string | undefined>>({});
     const [hasMore, setHasMore] = useState(false);
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
@@ -313,6 +314,7 @@ export default function ApiKeys() {
 
     const handlePageChange = ({ detail }: any) => {
         const newIndex = detail.currentPageIndex;
+        if (!pageReachable(tokens, newIndex)) return;
         setCurrentPageIndex(newIndex);
         loadPage(newIndex - 1, tokens[newIndex - 1]);
     };
@@ -528,8 +530,7 @@ export default function ApiKeys() {
                         pagination={
                             <Pagination
                                 currentPageIndex={currentPageIndex}
-                                pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                                openEnd={hasMore}
+                                {...tokenPagerCounts(tokens, loadedPages)}
                                 onChange={handlePageChange}
                                 disabled={loading}
                                 ariaLabels={{

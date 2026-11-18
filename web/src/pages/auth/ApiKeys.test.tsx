@@ -212,6 +212,27 @@ describe("ApiKeys server-side paging", () => {
         expect(screen.queryByLabelText("Page 2 of API keys")).not.toBeInTheDocument();
     });
 
+    it("offers no page past the last one after stepping back to page one", async () => {
+        mockFetchApiKeys.mockImplementation(async ({ startingToken }: any) =>
+            startingToken === "tok-2"
+                ? { Items: [key("k2")] }
+                : { Items: [key("k1")], NextToken: "tok-2" }
+        );
+
+        renderApiKeys();
+        await waitFor(() => expect(screen.getByText("name-k1")).toBeInTheDocument());
+
+        await userEvent.click(screen.getByLabelText("Page 2 of API keys"));
+        await waitFor(() => expect(screen.getByText("name-k2")).toBeInTheDocument());
+
+        await userEvent.click(screen.getByLabelText("Page 1 of API keys"));
+        await waitFor(() => expect(screen.getByText("name-k1")).toBeInTheDocument());
+
+        // Page 2 was the last: page 1's NextToken does not make a third page.
+        expect(screen.queryByLabelText("Page 3 of API keys")).not.toBeInTheDocument();
+        expect(mockFetchApiKeys).toHaveBeenCalledTimes(3);
+    });
+
     it("switching to My Keys restarts the walk from page one", async () => {
         cacheRoutes("/auth/api-keys", "/auth/user/api-keys");
         mockFetchApiKeys.mockResolvedValue({

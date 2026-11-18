@@ -40,6 +40,8 @@ import {
     listedBefore,
     listingEmptyText,
     loadFailureMessage,
+    pageReachable,
+    tokenPagerCounts,
 } from "../components/compliance/listingStates";
 import ReasonModal from "../components/compliance/ReasonModal";
 import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
@@ -217,6 +219,7 @@ const ComplianceCascades: React.FC = () => {
     }, [loadPage]);
 
     const handlePageChange = ({ detail }: { detail: { currentPageIndex: number } }) => {
+        if (!pageReachable(tokens, detail.currentPageIndex)) return;
         setCurrentPageIndex(detail.currentPageIndex);
         loadPage(detail.currentPageIndex - 1, tokens[detail.currentPageIndex - 1]);
     };
@@ -471,8 +474,7 @@ const ComplianceCascades: React.FC = () => {
                     pagination={
                         <Pagination
                             currentPageIndex={currentPageIndex}
-                            pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                            openEnd={hasMore}
+                            {...tokenPagerCounts(tokens, loadedPages)}
                             onChange={handlePageChange}
                             disabled={loading}
                             ariaLabels={{
