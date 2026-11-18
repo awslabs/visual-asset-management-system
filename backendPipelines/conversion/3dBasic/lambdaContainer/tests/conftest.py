@@ -6,3 +6,4 @@
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "unit: standalone unit test (no AWS calls)")
+    config.addinivalue_line("markers", "golden: runs against the built image (see tests/golden/run_golden.sh)")
