@@ -501,6 +501,9 @@ export default function ComplianceSchemas() {
     const [formError, setFormError] = useState<string | null>(null);
     // The rule-name problem the editor's Visual Builder shows; saving is refused while it is set.
     const [rulesProblem, setRulesProblem] = useState<string | null>(null);
+    // Counts the times the modal opened. The editor stays mounted while the modal is closed, so it
+    // is keyed by this count: each open starts it afresh (JSON tab, no builder state or problem).
+    const [editorSession, setEditorSession] = useState(0);
     const [saving, setSaving] = useState(false);
     const formErrorRef = useRef<HTMLDivElement>(null);
 
@@ -572,6 +575,8 @@ export default function ComplianceSchemas() {
         setSelectedTemplate(DEFAULT_TEMPLATE_OPTION);
         setFormBody(DEFAULT_TEMPLATE_BODY);
         setFormError(null);
+        setRulesProblem(null);
+        setEditorSession((session) => session + 1);
         setModalVisible(true);
     };
 
@@ -626,6 +631,8 @@ export default function ComplianceSchemas() {
         setFormDatabaseId(schema.databaseId || GLOBAL_SCOPE);
         setFormBody(JSON.stringify(schema.schemaBody, null, 2));
         setFormError(null);
+        setRulesProblem(null);
+        setEditorSession((session) => session + 1);
         setModalVisible(true);
     };
 
@@ -1035,6 +1042,7 @@ export default function ComplianceSchemas() {
                             description="A vams-rules-v1 rule set: pipeline, metadata, relationship, file structure, version coverage and asset attributes rules with an enforcement level each. Use the JSON editor for full control or the Visual Builder for guided editing."
                         >
                             <ComplianceSchemaEditor
+                                key={editorSession}
                                 value={formBody}
                                 onChange={setFormBody}
                                 readOnly={viewOnly}
