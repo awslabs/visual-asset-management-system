@@ -16,10 +16,12 @@ The engine modules are loaded by file path (they are stdlib only); this suite do
 container.
 """
 
+import importlib
 import importlib.util
 import io
 import json
 import os
+import sys
 
 import pytest
 
@@ -31,14 +33,19 @@ from test_system_genai_media_handler import (
 _ENGINE_DIR = os.path.abspath(os.path.join(
     os.path.dirname(__file__), *[os.pardir] * 5, "utility", "zipArchive", "container", "zip_archive_pipeline",
     "engine"))
+_ENGINE_PACKAGE = "zip_archive_engine"
 
 
 def _engine(name):
-    path = os.path.join(_ENGINE_DIR, f"{name}.py")
-    spec = importlib.util.spec_from_file_location(f"zip_archive_engine_{name}", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    # The engine's modules import each other relatively (tarstream uses zipstream's entry-name check),
+    # so each loads as a submodule of the engine package, itself loaded by file path.
+    if _ENGINE_PACKAGE not in sys.modules:
+        spec = importlib.util.spec_from_file_location(
+            _ENGINE_PACKAGE, os.path.join(_ENGINE_DIR, "__init__.py"), submodule_search_locations=[_ENGINE_DIR])
+        package = importlib.util.module_from_spec(spec)
+        sys.modules[_ENGINE_PACKAGE] = package
+        spec.loader.exec_module(package)
+    return importlib.import_module(f"{_ENGINE_PACKAGE}.{name}")
 
 
 @pytest.fixture
