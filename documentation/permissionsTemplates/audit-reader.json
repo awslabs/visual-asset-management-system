@@ -1,0 +1,140 @@
+{
+    "metadata": {
+        "name": "Audit Reader",
+        "description": "Search and read the audit log groups matching ALLOWED_GROUPS (every group by default). Grants the Audit Log Search page, the audit routes, the sign-in probes and the route listing the web app uses to decide which actions to offer. Audit records can name users and request details, so grant this only to people who need it, and prefer an mfaRequired role. Templates create constraints only: create the role first (POST /roles or `vamscli role create --mfa-required`), import this template with variableValues.ROLE_NAME, then assign users. mfaRequired is a role attribute chosen there: an mfaRequired role is dropped from every request whose MFA claim is false (an external OAuth IDP with useGlobalVpc.useForAllLambdas=true, or a VAMS API key), which locks the holder out of these routes. Nothing else is granted. Only admin holds audit access by default.",
+        "version": "1.0"
+    },
+    "variables": [
+        {
+            "name": "ROLE_NAME",
+            "required": true,
+            "description": "The existing role to attach these constraints to"
+        },
+        {
+            "name": "ALLOWED_GROUPS",
+            "required": true,
+            "default": ".*",
+            "description": "A regular expression matched against the whole audit log group key (for example authorization, or (authorization|api)). The default .* allows every group, including groups added later."
+        }
+    ],
+    "constraints": [
+        {
+            "name": "{{ROLE_NAME}}-audit-web-routes",
+            "description": "Allow navigation to the Audit Log Search page for {{ROLE_NAME}}",
+            "objectType": "web",
+            "criteriaAnd": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/audit-log-search"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-audit-api-routes",
+            "description": "Allow the audit routes (search, read and delete a saved search) for {{ROLE_NAME}}",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "equals",
+                    "value": "/audit"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/audit/"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-signin-api-routes-get",
+            "description": "Allow the sign-in probes the web app and CLI call (login profile, secure config) for {{ROLE_NAME}}",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/secure-config"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-signin-api-routes-post",
+            "description": "Allow the login profile and the route listing the web app uses to decide which actions to offer for {{ROLE_NAME}}",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/routes"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "POST",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-audit-log-groups",
+            "description": "Allow the audit log groups matching {{ALLOWED_GROUPS}} for {{ROLE_NAME}}",
+            "objectType": "auditLog",
+            "criteriaAnd": [
+                {
+                    "field": "auditLogGroup",
+                    "operator": "equals",
+                    "value": "(?:{{ALLOWED_GROUPS}})"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        }
+    ]
+}
