@@ -70,20 +70,34 @@ def compliance_tables():
 
 def hand_off_compliance_move(database_id):
     """Queue the move of the deleted database's compliance data on the compliance job queue
-    (`databaseRetirement.move_message`), where the compliance job Lambda runs it. A failed send is
-    logged and the delete still succeeds: the database row has moved, and the record stays
-    `moving`, so the live id shows none of the deleted database's data until the message is sent
-    again."""
+    (`databaseRetirement.move_message`), where the compliance job Lambda runs it. The delete still
+    succeeds when the send fails: the database row has moved, and the record stays `moving`, so the
+    live id shows none of the deleted database's data until the move runs. The message then goes
+    to the job queue's dead-letter queue instead, where a move that keeps failing also ends, so
+    redriving it to the job queue starts it (a message sent to the dead-letter queue directly has
+    no source queue to redrive to); when that send fails too, an error naming the database is
+    logged."""
     import os
     from common.compliance import databaseRetirement
     queue_url = os.environ.get('COMPLIANCE_JOB_QUEUE_URL', '')
+    dlq_url = os.environ.get('COMPLIANCE_JOB_DLQ_URL', '')
+    body = json.dumps(databaseRetirement.move_message(database_id))
+    sqs = boto3.client('sqs', config=retry_config)
     try:
-        boto3.client('sqs', config=retry_config).send_message(
-            QueueUrl=queue_url, MessageBody=json.dumps(databaseRetirement.move_message(database_id)))
+        sqs.send_message(QueueUrl=queue_url, MessageBody=body)
         return True
     except Exception as e:
         logger.exception(f"Could not queue the compliance move of deleted database {database_id}: {e}")
-        return False
+    try:
+        if not dlq_url:
+            raise ValueError("no compliance job dead-letter queue is configured")
+        sqs.send_message(QueueUrl=dlq_url, MessageBody=body)
+        logger.error(f"The compliance move of deleted database {database_id} is in the compliance "
+                     "job dead-letter queue; redrive it to the compliance job queue to run it")
+    except Exception as e:
+        logger.error(f"The compliance move of deleted database {database_id} was not queued and "
+                     f"could not be put in the compliance job dead-letter queue: {e}")
+    return False
 
 #######################
 # Utility Functions
