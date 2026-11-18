@@ -237,10 +237,11 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
     authorized = _authorized_database_ids(cascade)
     authorized_assets = _authorized_asset_keys(cascade)
 
-    # Each node's compliance record is read once, up front, so the names are recorded with the
-    # nodes; the evaluation loop takes the bound schema from the same read. A node outside the
-    # starting caller's reach (its database, or, for a caller whose asset rules read asset fields,
-    # the asset itself) is not read: it is neither evaluated nor named.
+    # Each node's compliance record is read up front, so the names are recorded with the nodes; the
+    # evaluation loop reads it again, consistently, right before the node's evaluation, so a binding
+    # changed since the cascade started decides the schema. A node outside the starting caller's
+    # reach (its database, or, for a caller whose asset rules read asset fields, the asset itself)
+    # is not read: it is neither evaluated nor named.
     records = {}
     for node in execution_order:
         node_key = _node_key(node["databaseId"], node["assetId"])
@@ -269,7 +270,9 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
             _write_nodes(cascade_id, nodes)
             results.append({"node": node_key, "status": NODE_STATE_SKIPPED_NOT_AUTHORIZED})
             continue
-        schema_name = records[node_key].get("schemaName", "")
+        current = store.get_compliance_record(
+            node["databaseId"], node["assetId"], consistent_read=True) or {}
+        schema_name = current.get("schemaName", "")
         if not schema_name:
             nodes[node_key] = NODE_STATE_SKIPPED
             _write_nodes(cascade_id, nodes)
