@@ -25,6 +25,8 @@ from typing import Any, Dict, Optional
 import click
 
 from ..constants import (
+    AUDIT_SEARCH_DISABLED_MESSAGE,
+    FEATURE_AUDITLOGSEARCH,
     AUDIT_DEFAULT_MAX_ROWS,
     AUDIT_DEFAULT_PAGE_SIZE,
     AUDIT_DEFAULT_WAIT_TIMEOUT_SECONDS,
@@ -50,7 +52,7 @@ from ..utils.audit_search import (
     resolve_contains_limits,
     wait_for_audit_query,
 )
-from ..utils.decorators import get_profile_manager_from_context, requires_setup_and_auth
+from ..utils.decorators import get_profile_manager_from_context, requires_feature, requires_setup_and_auth
 from ..utils.exceptions import (
     AuditQueryNotFoundError,
     AuditSearchError,
@@ -136,6 +138,7 @@ def audit():
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
+@requires_feature(FEATURE_AUDITLOGSEARCH, AUDIT_SEARCH_DISABLED_MESSAGE)
 def groups(ctx: click.Context, json_output: bool):
     """List the audit log groups you may search, the actions and entity types, and the limits.
 
@@ -193,6 +196,7 @@ def groups(ctx: click.Context, json_output: bool):
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
+@requires_feature(FEATURE_AUDITLOGSEARCH, AUDIT_SEARCH_DISABLED_MESSAGE)
 def search(ctx: click.Context, groups_, actions, entity_types, entity_ids, users, api_key_ids,
            databases, assets, outcomes, request_ids, contains, time_from, time_to, include_probes,
            order, max_rows, page_size, no_wait, timeout, json_output: bool):
@@ -271,6 +275,7 @@ def search(ctx: click.Context, groups_, actions, entity_types, entity_ids, users
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
+@requires_feature(FEATURE_AUDITLOGSEARCH, AUDIT_SEARCH_DISABLED_MESSAGE)
 def results(ctx: click.Context, query_id: str, page_token: Optional[str], read_all: bool,
             max_rows: int, page_size: Optional[int], order: Optional[str], wait_: bool,
             timeout: int, json_output: bool):
@@ -318,6 +323,7 @@ def results(ctx: click.Context, query_id: str, page_token: Optional[str], read_a
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
+@requires_feature(FEATURE_AUDITLOGSEARCH, AUDIT_SEARCH_DISABLED_MESSAGE)
 def show(ctx: click.Context, query_id: str, record_id: str, json_output: bool):
     """Show every field of one record of a search.
 
@@ -353,6 +359,7 @@ def show(ctx: click.Context, query_id: str, record_id: str, json_output: bool):
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
+@requires_feature(FEATURE_AUDITLOGSEARCH, AUDIT_SEARCH_DISABLED_MESSAGE)
 def stop(ctx: click.Context, query_id: str, json_output: bool):
     """Stop a running search and free its concurrency slot.
 
@@ -384,6 +391,7 @@ def stop(ctx: click.Context, query_id: str, json_output: bool):
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
+@requires_feature(FEATURE_AUDITLOGSEARCH, AUDIT_SEARCH_DISABLED_MESSAGE)
 def export_(ctx: click.Context, query_id: str, export_format: str, output_path: Optional[str],
             overwrite: bool, json_output: bool):
     """Export the rows of a Complete search as CSV or NDJSON.

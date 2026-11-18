@@ -41,7 +41,7 @@ describe("resolveAuditLoggingConfig", () => {
         Config.resolveAuditLoggingConfig(config);
         expect(config.app.auditLogging).toEqual({
             recordReads: true,
-            search: Config.AUDIT_SEARCH_DEFAULTS,
+            search: { enabled: true, ...Config.AUDIT_SEARCH_DEFAULTS },
         });
     });
 
@@ -70,10 +70,10 @@ describe("the shipped config files and the ConfigBuilder", () => {
         ["config.template.commercial.json", commercialTemplate],
         ["config.template.govcloud.json", govcloudTemplate],
         ["config.template.eusovereign.json", eusovereignTemplate],
-    ])("%s records reads", (_name, file: any) => {
+    ])("%s records reads", (name, file: any) => {
         expect(file.app.auditLogging).toEqual({
             recordReads: true,
-            search: Config.AUDIT_SEARCH_DEFAULTS,
+            search: { enabled: !name.includes("eusovereign"), ...Config.AUDIT_SEARCH_DEFAULTS },
         });
     });
 
@@ -82,7 +82,7 @@ describe("the shipped config files and the ConfigBuilder", () => {
         (profile) => {
             expect((makeDefaultConfig(profile) as any).app.auditLogging).toEqual({
                 recordReads: true,
-                search: Config.AUDIT_SEARCH_DEFAULTS,
+                search: { enabled: profile !== "eusovereign", ...Config.AUDIT_SEARCH_DEFAULTS },
             });
         }
     );

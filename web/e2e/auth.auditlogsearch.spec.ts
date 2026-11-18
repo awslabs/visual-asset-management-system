@@ -131,6 +131,49 @@ test.describe("Audit Log Search: access", () => {
     });
 });
 
+/**
+ * Makes `/secure-config` answer as a deployment with Audit Log Search switched off: the real answer
+ * with the AUDITLOGSEARCH switch removed from `featuresEnabled`. The web-route decision is still
+ * allowed, so the cases prove the switch hides the page on its own and that nothing it hides is a
+ * permission.
+ */
+async function switchSearchOff(page: Page) {
+    await page.route(/\/secure-config$/, async (route) => {
+        const response = await route.fetch({ timeout: 45_000 });
+        const body = await response.json();
+        const features: string[] = Array.isArray(body.featuresEnabled) ? body.featuresEnabled : [];
+        await route.fulfill({
+            response,
+            json: { ...body, featuresEnabled: features.filter((f) => f !== "AUDITLOGSEARCH") },
+        });
+    });
+}
+
+test.describe("Audit Log Search: the deployment switched it off", () => {
+    test.skip(HARNESS, "needs the real navigation and secure-config");
+
+    test("no nav item, no compliance link, and a direct URL shows the not-enabled state", async ({
+        page,
+    }) => {
+        const mock = await installAuditMocks(page);
+        await decideAuditPage(page, true);
+        await switchSearchOff(page);
+        await page.goto("/#/compliance/audit/");
+        await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(page.getByRole("link", { name: "Audit Log Search" })).toHaveCount(0);
+
+        await page.goto(PAGE);
+        await expect(
+            page.getByText("Audit Log Search is not enabled on this deployment")
+        ).toBeVisible({ timeout: 60_000 });
+        await expect(searchButton(page)).toHaveCount(0);
+        // The page made no /audit call (the mock layer records every one it answers).
+        expect(mock.requests).toEqual([]);
+    });
+});
+
 test.describe("Audit Log Search: search", () => {
     test("a full search: start, long-poll, page, record details, export", async ({ page }) => {
         const errors = watchConsoleErrors(page);

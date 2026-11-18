@@ -264,3 +264,40 @@ describe("every backend route is registered with API Gateway", () => {
         expect([...cdk].sort()).toEqual([...BACKEND_PAIRS].sort());
     });
 });
+
+describe("with audit log search switched off the audit routes are in neither listing nor spec", () => {
+    // The five /audit method+path pairs carry the AUDITLOGSEARCH switch in apiRoutes.py (ApiRoute
+    // addon_feature), so a deployment with app.auditLogging.search.enabled false lists none of them and
+    // registers none with API Gateway. The backend listing and the spec must still agree on the rest.
+    const AUDIT_PAIRS = DECLARED.filter((r) => r.name.startsWith("API_AUDIT_")).flatMap(
+        (r) => r.methodPathPairs
+    );
+    const withoutAudit = (c: any) => {
+        withRouteContributingFeatures(c);
+        c.app.auditLogging.search.enabled = false;
+    };
+
+    test("[control] the audit routes were parsed, five method+path pairs", () => {
+        expect(AUDIT_PAIRS).toHaveLength(5);
+        for (const pair of AUDIT_PAIRS) expect(BACKEND_PAIRS.has(pair)).toBe(true);
+    });
+
+    test("commercial, all route features on, search off: exactly the backend minus the audit pairs", () => {
+        const synth = synthTemplate("commercial", {
+            mutate: withoutAudit,
+            mutateKey: "route-parity-search-off",
+        });
+        const cdk = restApiPairs(synth);
+        for (const pair of AUDIT_PAIRS) expect(cdk.has(pair)).toBe(false);
+        expect(cdk.has("GET /addon/physna/viewer")).toBe(true); // control: the mutation took effect
+        const expected = [...BACKEND_PAIRS].filter((pair) => !AUDIT_PAIRS.includes(pair)).sort();
+        expect([...cdk].sort()).toEqual(expected);
+    });
+
+    test("EU Sovereign as shipped (search off): no audit route, and nothing the backend lacks", () => {
+        const cdk = restApiPairs(synthTemplate("eusovereign"));
+        for (const pair of AUDIT_PAIRS) expect(cdk.has(pair)).toBe(false);
+        expect([...cdk].filter((pair) => !BACKEND_PAIRS.has(pair))).toEqual([]);
+        expect(cdk.size).toBeGreaterThan(100);
+    });
+});

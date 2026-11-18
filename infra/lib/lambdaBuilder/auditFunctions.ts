@@ -107,6 +107,12 @@ export function buildAuditLogService(
 
     // The handle table and its open-search index.
     const queryTable = storageResources.dynamo.auditLogQueriesStorageTable;
+    if (!queryTable) {
+        throw new Error(
+            "buildAuditLogService needs the audit log queries table, which the storage stack builds " +
+                "only when app.auditLogging.search.enabled is true."
+        );
+    }
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,

@@ -38,6 +38,7 @@ import {
 } from "../services/ComplianceService";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 import { useWebRouteAllowed } from "../hooks/useWebRouteAllowed";
+import { isAuditLogSearchEnabled } from "../components/auditLogs/auditSearchEnabled";
 
 /** One value of an audit entry's details as a reader sees it: text as is, lists joined, objects as
  * `key value` pairs, and anything else as JSON. */
@@ -140,8 +141,10 @@ export const AUDIT_DETAILS_MIN_WIDTH = 210;
 const ComplianceAuditLog: React.FC = () => {
     // Asset ids link to the asset page only when the caller may open it.
     const { canOpenAsset } = useAssetPageAccess();
-    // The link to Audit Log Search shows only when the API's web-route decision allows that page.
-    const canSearchAuditLogs = useWebRouteAllowed("/auth/audit-log-search");
+    // The link to Audit Log Search shows only when the deployment has the feature (the AUDITLOGSEARCH
+    // switch) and the API's web-route decision allows that page.
+    const webRouteAllowsAuditSearch = useWebRouteAllowed("/auth/audit-log-search");
+    const canSearchAuditLogs = isAuditLogSearchEnabled() && webRouteAllowsAuditSearch;
     const [items, setItems] = useState<AuditEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);

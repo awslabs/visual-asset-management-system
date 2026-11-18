@@ -1,6 +1,6 @@
 # Audit Log Search API
 
-The Audit Log Search API searches the VAMS audit log groups (Amazon CloudWatch Logs) without AWS console access. It is part of core VAMS: the routes, the function and the handle table are always deployed and there is no feature switch. Access is decided only by authorization.
+The Audit Log Search API searches the VAMS audit log groups (Amazon CloudWatch Logs) without AWS console access. It is part of core VAMS and deployed by default. `app.auditLogging.search.enabled` (default `true`) switches it: when it is `false` the routes, the function and the handle table are not deployed and every `/audit` request is answered by API Gateway as an unknown route, so no response described below applies. The EU Sovereign Cloud template ships it `false`, because Amazon CloudWatch Logs Insights is not available there. The recording of audit events does not depend on it. When it is on, access is decided only by authorization.
 
 :::info[Authorization]
 Two checks apply. The route check allows `/audit` (GET, POST, DELETE). Then each requested log group is checked as an `auditLog` object with the constraint field `auditLogGroup` set to the group key (action GET). If any named group is unknown, not deployed or not allowed, the whole request is refused with the same `403` and no group is named. The seeded `admin` role may search every group; other roles need the Audit Reader permission template or an `auditLog` constraint.
