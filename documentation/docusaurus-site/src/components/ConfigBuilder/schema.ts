@@ -407,6 +407,14 @@ const CORE_FIELDS: FieldMeta[] = [
         help: "Write an audit record for every read (gets, lists and searches): the request and the number of items returned, never the content. On by default, and when the setting is absent. Turning it off cuts audit log volume; writes, denials, failures, downloads and exports are recorded either way.",
     },
     {
+        path: "app.auditLogging.search.enabled",
+        label: "Audit Log Search",
+        input: "boolean",
+        section: "security",
+        advanced: true,
+        help: "Deploy Audit Log Search: the /audit API routes, their Lambda function, the search-handle table, and the web page, CLI commands and MCP tools. On by default, and when the setting is absent. Searches run on Amazon CloudWatch Logs Insights, billed per GB scanned only when someone searches. Turn it off to remove the feature and its cost; Amazon CloudWatch Logs Insights is not currently supported in the AWS European Sovereign Cloud, so audit log search is off there by default and enabling it is rejected. The recording of audit events is not affected.",
+    },
+    {
         path: "app.auditLogging.search.maxQueryWindowDays",
         label: "Audit search: longest window (days)",
         input: "number",

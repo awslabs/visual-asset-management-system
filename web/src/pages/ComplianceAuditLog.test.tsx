@@ -10,6 +10,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ComplianceAuditLog, { auditDetailLines, eventTypeOptions } from "./ComplianceAuditLog";
 import { COMPLIANCE_LISTING_PAGE_SIZE } from "../services/ComplianceService";
+import { appCache } from "../services/appCache";
 
 jest.mock("../services/ComplianceService", () => ({
     ...jest.requireActual("../services/ComplianceService"),
@@ -359,7 +360,16 @@ describe("ComplianceAuditLog link to Audit Log Search", () => {
         service().fetchAuditLog.mockResolvedValue([true, { entries: [], nextToken: undefined }]);
     });
 
+    it("is hidden when the deployment switched Audit Log Search off, even if the route is allowed", async () => {
+        appCache.setItem("config", { featuresEnabled: [] });
+        mockSearchPageAllowed = true;
+        render(<ComplianceAuditLog />);
+        await waitFor(() => expect(service().fetchAuditLog).toHaveBeenCalled());
+        expect(screen.queryByRole("link", { name: "Audit Log Search" })).toBeNull();
+    });
+
     it("is offered only when the web-route decision allows the search page", async () => {
+        appCache.setItem("config", { featuresEnabled: ["AUDITLOGSEARCH"] });
         mockSearchPageAllowed = false;
         const { unmount } = render(<ComplianceAuditLog />);
         await waitFor(() => expect(service().fetchAuditLog).toHaveBeenCalled());

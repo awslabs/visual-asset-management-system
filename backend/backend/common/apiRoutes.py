@@ -43,7 +43,7 @@ from common.apiRouteTypes import DELETE, GET, HEAD, POST, PUT, ApiRoute, _route_
 # Add-on routes are declared in common/addonApiRoutes.py; every name there is re-exported here.
 from common.addonApiRoutes import *  # noqa: F401,F403
 from common.addonApiRoutes import ADDON_ROUTES
-from common.addonFeatures import addon_feature_deployed
+from common.addonFeatures import CORE_FEATURE_AUDIT_LOG_SEARCH, addon_feature_deployed
 
 # Routes a fork adds are declared in custom/customApiRoutes.py (fork-owned, shipped empty).
 from custom.customApiRoutes import CUSTOM_ROUTES
@@ -633,12 +633,22 @@ COMPLIANCE_ROUTES: Tuple[ApiRoute, ...] = (
 )
 
 # ---------------------------------------------------------------------------
-# Audit log search (core, no feature switch: access is decided by authorization only)
+# Audit log search (core; deployed unless app.auditLogging.search.enabled is false, so each route
+# carries the AUDITLOGSEARCH switch and the listings leave it out when the switch is off; access is
+# decided by authorization)
 # ---------------------------------------------------------------------------
-API_AUDIT_LOG_GROUPS = ApiRoute("/audit/log-groups", (GET,), "audit")
-API_AUDIT_QUERIES = ApiRoute("/audit/queries", (POST,), "audit")
-API_AUDIT_QUERY_BY_ID = ApiRoute("/audit/queries/{queryId}", (GET, DELETE), "audit")
-API_AUDIT_QUERY_EXPORT = ApiRoute("/audit/queries/{queryId}/export", (GET,), "audit")
+API_AUDIT_LOG_GROUPS = ApiRoute(
+    "/audit/log-groups", (GET,), "audit", addon_feature=CORE_FEATURE_AUDIT_LOG_SEARCH
+)
+API_AUDIT_QUERIES = ApiRoute(
+    "/audit/queries", (POST,), "audit", addon_feature=CORE_FEATURE_AUDIT_LOG_SEARCH
+)
+API_AUDIT_QUERY_BY_ID = ApiRoute(
+    "/audit/queries/{queryId}", (GET, DELETE), "audit", addon_feature=CORE_FEATURE_AUDIT_LOG_SEARCH
+)
+API_AUDIT_QUERY_EXPORT = ApiRoute(
+    "/audit/queries/{queryId}/export", (GET,), "audit", addon_feature=CORE_FEATURE_AUDIT_LOG_SEARCH
+)
 
 AUDIT_ROUTES: Tuple[ApiRoute, ...] = (
     API_AUDIT_LOG_GROUPS,

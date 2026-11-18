@@ -377,6 +377,8 @@ describe("Video SOP/BOM Extraction pipeline validation (useGenAiVideoSopBom)", (
     const euSovereignPartition = (c: any) => {
         restrictedPartition(c);
         c.env.region = "eusc-de-east-1";
+        // Audit log search is refused in aws-eusc unless off (Logs Insights is not available there).
+        c.app.auditLogging.search.enabled = false;
     };
     const US_GOV_ID = "us-gov.anthropic.claude-sonnet-4-20250514-v1:0";
     /** The message getConfig() throws for `mutate`, or "" when it accepts the configuration. */

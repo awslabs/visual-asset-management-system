@@ -2,7 +2,9 @@
 
 Audit Log Search finds records in the audit logs of your VAMS deployment from the web interface. Use it to answer who did what to which data, when a request was denied and why, and what else happened during one request. For the compliance history of schemas, quarantine and cascades, use the **Compliance Audit Log** page instead. The two pages read different trails.
 
-**Where to find it:** **Admin - Auth** > **Audit Log Search** in the left sidebar. The item appears only when your roles allow the page. Administrators have it by default. For other roles, import the Audit Reader permission template (see [Permissions](permissions.md)) or add an `auditLog` constraint to a role.
+**Where to find it:** **Admin - Auth** > **Audit Log Search** in the left sidebar. The item appears only when Audit Log Search is enabled on your deployment and your roles allow the page. Administrators have it by default. For other roles, import the Audit Reader permission template (see [Permissions](permissions.md)) or add an `auditLog` constraint to a role.
+
+**Availability.** Amazon CloudWatch Logs Insights is not currently supported in the AWS European Sovereign Cloud, so Audit Log Search is off there by default, and the deployment configuration rejects turning it on. Audit recording is unaffected: VAMS keeps recording audit events, so the logs stay available in Amazon CloudWatch Logs for your own tools. Everywhere else it is on by default, and an administrator can turn it off with `app.auditLogging.search.enabled`. When it is off, the menu item and the link from the Compliance Audit Log page are hidden, a direct link to the page shows "Audit Log Search is not enabled on this deployment", and the `vamscli audit` commands and the MCP audit tools say the same.
 
 ## What you can search
 

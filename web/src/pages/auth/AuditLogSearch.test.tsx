@@ -14,6 +14,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import AuditLogSearch, { WARNING_TOAST_BACKSTOP_MS } from "./AuditLogSearch";
 import { ToastProvider } from "../../features/orchestration/components/ToastProvider";
+import { appCache } from "../../services/appCache";
 
 // The real toast provider, with the options of each warning recorded.
 const warningOptions: { duration?: number }[] = [];
@@ -85,6 +86,8 @@ const complete = (rows: object[], extra: object = {}) => [
 
 beforeEach(() => {
     jest.clearAllMocks();
+    // The deployment has Audit Log Search (the AUDITLOGSEARCH switch in /secure-config).
+    appCache.setItem("config", { featuresEnabled: ["AUDITLOGSEARCH"] });
     window.location.hash = "#/auth/audit-log-search/";
     mockGroups.mockResolvedValue([true, GROUPS]);
     mockStart.mockResolvedValue([true, { queryId: "q-1", status: "Scheduled" }]);
@@ -99,6 +102,26 @@ const openPage = async () => {
     );
     await screen.findByRole("button", { name: "Search" });
 };
+
+describe("Audit Log Search page when the deployment switched it off", () => {
+    it.each([[undefined], [[]], [["ZIPDOWNLOADS"]]])(
+        "shows the not-enabled state and makes no API call (features: %p)",
+        (features) => {
+            appCache.setItem("config", { featuresEnabled: features });
+            render(
+                <ToastProvider>
+                    <AuditLogSearch />
+                </ToastProvider>
+            );
+            expect(
+                screen.getByText("Audit Log Search is not enabled on this deployment")
+            ).toBeTruthy();
+            expect(screen.queryByRole("button", { name: "Search" })).toBeNull();
+            expect(mockGroups).not.toHaveBeenCalled();
+            expect(mockStart).not.toHaveBeenCalled();
+        }
+    );
+});
 
 describe("Audit Log Search page", () => {
     it("shows the no-access panel for a 403 on the log groups and offers no search", async () => {
