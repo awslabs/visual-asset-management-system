@@ -477,6 +477,14 @@ class TestSchemaResolution:
         assert [r.ruleName for r in results] == [engine.UNRESOLVED_PARENT_RULE_NAME]
         assert results[0].message == engine.UNRESOLVED_PARENT_MESSAGE
 
+    def test_the_unresolved_parent_result_has_a_name_no_rule_of_a_schema_can_have(self):
+        from models.compliance import VamsRulesV1Schema
+        from aws_lambda_powertools.utilities.parser import ValidationError
+        with pytest.raises(ValidationError):
+            VamsRulesV1Schema(**{"schemaFormat": "vams-rules-v1", "rules": {
+                engine.UNRESOLVED_PARENT_RULE_NAME: {"ruleType": "relationship", "enforcement": "warn",
+                                                     "checks": []}}})
+
     def test_a_resolved_chain_reports_nothing(self):
         unresolved = []
         engine.resolve_rules(self.CHILD, lambda name: {"parent": self.PARENT}.get(name),
