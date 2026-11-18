@@ -46,7 +46,7 @@ def install_sigterm_handler() -> None:
 
 def _report(sfn, message: str) -> None:
     try:
-        sfn.send_task_failure(message)
+        sfn.send_task_failure(message, "CogConvertContainerError")
     except Exception as report_error:  # noqa: BLE001 - nothing more can be done; the exit code remains
         log.get_logger().error(f"The failure could not be reported: {report_error}")
 

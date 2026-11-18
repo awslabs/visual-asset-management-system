@@ -34,13 +34,29 @@ STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 
+# AWS Step Functions rejects a task failure whose `error` is over 256 characters or whose `cause` is over 32,768,
+# and the failure it carried is lost. The error stays a short name; the text goes in `cause`.
+ERROR_NAME_LIMIT = 256
+CAUSE_LIMIT = 32768
+
+
+def _bounded_error(name):
+    return str(name or "CogConvertFailed")[:ERROR_NAME_LIMIT]
+
+
+def _bounded_cause(text):
+    text = str(text or "See AWS CloudWatch logs for the error cause.")
+    marker = " ... [truncated]"
+    return text if len(text) <= CAUSE_LIMIT else text[:CAUSE_LIMIT - len(marker)] + marker
+
+
 def abort_external_workflow(error, task_token):
     if (task_token != None and task_token != ""):
         logger.error("Aborting external task")
         sfn.send_task_failure(
             taskToken=task_token,
-            error='Pipeline Failure: ' + error,
-            cause='See AWS cloudwatch logs for error cause.'
+            error=_bounded_error('Pipeline Failure: ' + str(error)),
+            cause=_bounded_cause('See AWS cloudwatch logs for error cause. ' + str(error))
         )
 
 

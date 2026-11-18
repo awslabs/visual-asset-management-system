@@ -80,6 +80,22 @@ def _split_s3_uri(field_name, s3_uri):
     return bucket, key
 
 
+# AWS Step Functions rejects a task failure whose `error` is over 256 characters or whose `cause` is over 32,768,
+# and the failure it carried is lost. The error stays a short name; the text goes in `cause`.
+ERROR_NAME_LIMIT = 256
+CAUSE_LIMIT = 32768
+
+
+def _bounded_error(name):
+    return str(name or "CogConvertFailed")[:ERROR_NAME_LIMIT]
+
+
+def _bounded_cause(text):
+    text = str(text or "See AWS CloudWatch logs for the error cause.")
+    marker = " ... [truncated]"
+    return text if len(text) <= CAUSE_LIMIT else text[:CAUSE_LIMIT - len(marker)] + marker
+
+
 def abort_external_workflow(error, task_token):
     """Fail the VAMS workflow's waitForCallback task token so a failure here does not leave the
     pipeline task waiting for its full taskTimeout. This task is the first state of the pipeline's
@@ -91,8 +107,8 @@ def abort_external_workflow(error, task_token):
     try:
         sfn.send_task_failure(
             taskToken=task_token,
-            error="CogConvertPipelineError",
-            cause=str(error)[:256]
+            error=_bounded_error("CogConvertPipelineError"),
+            cause=_bounded_cause(error)
         )
         logger.info("Sent task failure callback to Step Functions")
     except Exception as e:

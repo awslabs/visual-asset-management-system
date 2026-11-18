@@ -328,12 +328,16 @@ def crosses_antimeridian(info: dict) -> bool:
     return low < 180 < high and (high - low) < NEAR_GLOBAL_DEGREES
 
 
+ANTIMERIDIAN_MESSAGE = (
+    "This raster crosses the antimeridian (longitude 180), which COG conversion does not support: in Web Mercator "
+    "it would become a world-wide grid of almost empty pixels. Split the file at longitude 180 into a western and "
+    "an eastern part (for example with gdal_translate -projwin on each side), upload the parts, and convert each one."
+)
+
+
 def check_antimeridian(info: dict) -> None:
     if crosses_antimeridian(info):
-        raise ConversionRefused(
-            "The raster crosses the antimeridian (longitude 180). Web Mercator output cannot hold it in one "
-            "Cloud Optimized GeoTIFF without becoming a world-wide grid of almost empty pixels, so it is not "
-            "converted. Split the file at longitude 180 and convert each part.")
+        raise ConversionRefused(ANTIMERIDIAN_MESSAGE)
 
 
 def needs_mask_band(info: dict) -> bool:

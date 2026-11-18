@@ -51,6 +51,8 @@ class PipelineStage(JsonEncodable):
     outputResults: StageOutput = None
     status: PipelineStatus = PipelineStatus.PENDING
     errorMessage: str = None
+    # Short machine-readable failure name (the task failure `error`); the message is the `cause`.
+    errorName: str = ""
     id: str = ""
 
     def __post_init__(self):

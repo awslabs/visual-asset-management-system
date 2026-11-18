@@ -67,7 +67,7 @@ def world(monkeypatch):
     monkeypatch.setattr(core.s3, "register_bucket_regions", lambda _m: None)
     monkeypatch.setattr(core.sfn, "send_task_heartbeat", lambda _t: None)
     monkeypatch.setattr(core.sfn, "send_task_success", lambda out: tokens.success.append(out))
-    monkeypatch.setattr(core.sfn, "send_task_failure", lambda msg="": tokens.failure.append(msg))
+    monkeypatch.setattr(core.sfn, "send_task_failure", lambda msg="", name="": tokens.failure.append(msg))
     return fake, tokens
 
 
@@ -262,7 +262,7 @@ def test_main_reports_an_unexpected_error_on_the_task_token(monkeypatch):
 
     sent = []
     previous = signal.getsignal(signal.SIGTERM)
-    monkeypatch.setattr(sfn, "send_task_failure", lambda msg="": sent.append(msg))
+    monkeypatch.setattr(sfn, "send_task_failure", lambda msg="", name="": sent.append(msg))
     monkeypatch.setattr(entry.sys, "argv", ["prog", "{not json"])
     try:
         assert entry.main() == 1

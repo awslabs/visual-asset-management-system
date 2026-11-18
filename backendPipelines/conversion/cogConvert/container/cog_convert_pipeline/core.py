@@ -32,6 +32,8 @@ logger = log.get_logger()
 # Reserved results object name read by the workflow's process-output step (backendPipelines/CLAUDE.md).
 EXECUTION_STATUS_FILENAME = "execution.status.json"
 SKIP_NOTE_FILENAME = "cog-convert-skipped.json"
+# The task failure name of a file the pipeline declines to convert (over a limit, crossing the antimeridian, no room).
+REFUSED_ERROR_NAME = "CogConvertRefused"
 
 
 def run(params: dict) -> PipelineExecutionParams:
@@ -68,7 +70,8 @@ def run(params: dict) -> PipelineExecutionParams:
     sfn.send_task_heartbeat(definition.externalSfnTaskToken)
 
     if result_stage.status is PipelineStatus.FAILED:
-        sfn.send_task_failure(result_stage.errorMessage or "Unknown error")
+        sfn.send_task_failure(
+            result_stage.errorMessage or "Unknown error", result_stage.errorName or sfn.DEFAULT_ERROR_NAME)
     else:
         try:
             sfn.send_task_success(output)
@@ -206,6 +209,8 @@ def _run_convert_stage(stage: PipelineStage, input_parameters, local_test: bool,
         logger.exception(error)
         stage.status = PipelineStatus.FAILED
         stage.errorMessage = str(error)
+        stage.errorName = (
+            REFUSED_ERROR_NAME if isinstance(error, convert.ConversionRefused) else sfn.DEFAULT_ERROR_NAME)
     finally:
         if work_dir:
             shutil.rmtree(work_dir, ignore_errors=True)

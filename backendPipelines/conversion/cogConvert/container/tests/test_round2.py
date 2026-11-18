@@ -185,7 +185,7 @@ _SIGTERM_CHILD = textwrap.dedent('''
     from cog_convert_pipeline import __main__ as entry, convert
     from cog_convert_pipeline.utils.aws import sfn
 
-    def record(message=""):
+    def record(message="", name=""):
         with open({marker!r}, "w") as handle:
             handle.write(message)
     sfn.send_task_failure = record
@@ -224,7 +224,7 @@ class TestSigterm:
         from cog_convert_pipeline import __main__ as entry
         previous = signal.getsignal(signal.SIGTERM)
         monkeypatch.setattr(entry.sys, "argv", ["prog", "{not json"])
-        monkeypatch.setattr(core.sfn, "send_task_failure", lambda msg="": None)
+        monkeypatch.setattr(core.sfn, "send_task_failure", lambda msg="", name="": None)
         try:
             entry.main()
             assert signal.getsignal(signal.SIGTERM) is not previous

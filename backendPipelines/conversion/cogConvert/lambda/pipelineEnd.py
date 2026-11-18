@@ -22,6 +22,22 @@ sfn = boto3.client(
 )
 
 
+# AWS Step Functions rejects a task failure whose `error` is over 256 characters or whose `cause` is over 32,768,
+# and the failure it carried is lost. The error stays a short name; the text goes in `cause`.
+ERROR_NAME_LIMIT = 256
+CAUSE_LIMIT = 32768
+
+
+def _bounded_error(name):
+    return str(name or "CogConvertFailed")[:ERROR_NAME_LIMIT]
+
+
+def _bounded_cause(text):
+    text = str(text or "See AWS CloudWatch logs for the error cause.")
+    marker = " ... [truncated]"
+    return text if len(text) <= CAUSE_LIMIT else text[:CAUSE_LIMIT - len(marker)] + marker
+
+
 def lambda_handler(event, context):
     """
     PipelineEnd - COG conversion
@@ -47,10 +63,12 @@ def lambda_handler(event, context):
             logger.info("Sent external task token: success")
         else:
             try:
+                # The sub-state-machine's Catch carries the container's failure name (`Error`) and its text
+                # (`Cause`); the external task reports both, bounded, so the execution shows why it failed.
                 sfn.send_task_failure(
                     taskToken=externalSfnTaskToken,
-                    error='Pipeline Failure: ' + event["error"].get("Error", "Unknown"),
-                    cause='See AWS cloudwatch logs for error cause.'
+                    error=_bounded_error('Pipeline Failure: ' + str(event["error"].get("Error", "Unknown"))),
+                    cause=_bounded_cause(event["error"].get("Cause"))
                 )
                 logger.info("Sent external task token: error")
             except Exception as e:
