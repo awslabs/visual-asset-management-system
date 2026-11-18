@@ -183,7 +183,11 @@ most 100 tools per connection.
 The `audit` set is opt-in on both transports: name it (`VAMS_MCP_TOOLSETS=consumer,audit`) and the four
 audit tools register. It is not part of `consumer`, `operator`, `admin` or `all`, because a search starts a
 billable Amazon CloudWatch Logs Insights query and audit records may be sensitive. Audit search is core
-VAMS with no feature switch and the tools need no write or destructive gate; the API decides which log
+VAMS, on by default (a deployment can turn it off with `app.auditLogging.search.enabled`; the EU Sovereign
+Cloud template does), and the tools need no write or destructive gate. On a deployment without it (no
+`AUDITLOGSEARCH` in the feature list read at sign-in) a local server registers no audit tool and
+`vams_status` reports `gates.auditSearch`; a remote server answers each audit call with "Audit Log Search is
+not enabled on this deployment". Sign in again and restart the server after the setting changes; the API decides which log
 groups and rows a caller may see.
 
 `vams_status` reports the selected sets in `gates.toolsets`. `vams_mcp/toolsets.py` lists each set's

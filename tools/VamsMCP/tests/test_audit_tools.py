@@ -145,6 +145,29 @@ async def test_only_the_audit_set_registers_the_tools_with_the_gates_off(server_
         assert status["gates"]["toolsets"] == ["audit"]
 
 
+@pytest.mark.parametrize("switches", [["AUTHPROVIDER_COGNITO"], []], ids=["other-switches", "no-switches"])
+@pytest.mark.parametrize("selection", ["audit", "all,audit", "consumer,audit"])
+async def test_a_deployment_with_audit_search_off_registers_no_audit_tool(server_with_switches, selection, switches):
+    """The deployment's feature list lacks AUDITLOGSEARCH: selecting the set yields no audit tool, and
+    vams_status says why. The other tools of the selection are unaffected."""
+    with server_with_switches(switches, toolsets=selection) as server:
+        listed = {tool.name for tool in await server.mcp.list_tools()}
+        status = server.vams_status()
+    assert listed & AUDIT == set()
+    assert status["gates"]["auditSearch"] == "Audit Log Search is not enabled on this deployment"
+    if selection == "audit":
+        assert listed == {"vams_status"}
+    else:
+        assert len(listed) > 1
+
+
+async def test_a_deployment_with_audit_search_on_reports_no_audit_problem(server_with_switches):
+    with server_with_switches(["AUDITLOGSEARCH"], toolsets="audit") as server:
+        listed = {tool.name for tool in await server.mcp.list_tools()}
+        assert "auditSearch" not in server.vams_status()["gates"]
+    assert AUDIT <= listed
+
+
 async def test_the_audit_tools_are_listed_with_their_annotations(server_with_switches):
     with server_with_switches(ALL_SWITCHES, toolsets="audit") as server:
         tools = {tool.name: tool for tool in await server.mcp.list_tools()}
@@ -413,6 +436,7 @@ def test_a_search_without_contains_does_not_read_the_limits(client):
 @pytest.fixture
 def deployment():
     with FakeDeployment() as fake:
+        fake.features = "AUTHPROVIDER_COGNITO,AUDITLOGSEARCH"  # the deployment has Audit Log Search
         yield fake
 
 
@@ -457,12 +481,32 @@ def test_an_audit_call_reaches_the_api_with_the_users_own_token(audit_remote, de
     assert "error" in body
 
 
+def test_the_remote_server_answers_audit_search_off_without_a_request(audit_remote, deployment):
+    """A remote server cannot know the deployment at start, so each call checks the request's feature
+    list: with AUDITLOGSEARCH missing the tool answers the CLI's sentence and sends nothing to the API."""
+    deployment.features = "AUTHPROVIDER_COGNITO"
+    token = deployment.token("carol")
+    before = len(deployment.api_authorizations)
+    for tool, arguments in [("vams_audit_groups", {}), ("vams_audit_search", {}),
+                            ("vams_audit_results", {"query_id": QID}), ("vams_audit_stop", {"query_id": QID})]:
+        response = audit_remote.call_tool(tool, arguments, token=token)
+        body = json.loads(response.json()["result"]["content"][0]["text"])
+        assert "Audit Log Search is not enabled on this deployment" in json.dumps(body), (tool, body)
+    sent = deployment.api_authorizations[before:]
+    assert all(not path for path in []) and len(sent) <= 1, sent  # only the /secure-config read
+
+
 def test_a_second_user_is_not_served_the_first_users_token(audit_remote, deployment):
     alice, bob = deployment.token("alice"), deployment.token("bob")
     before = len(deployment.api_authorizations)
     audit_remote.call_tool("vams_audit_groups", {}, token=alice)
     audit_remote.call_tool("vams_audit_groups", {}, token=bob)
-    assert deployment.api_authorizations[before:] == [f"Bearer {alice}", f"Bearer {bob}"]
+    # The first call also reads the deployment's feature list (one /secure-config read, shared by all
+    # users, with the first caller's own token); collapse that repeat. Each user's call carries their token.
+    sent = deployment.api_authorizations[before:]
+    collapsed = [token for index, token in enumerate(sent) if index == 0 or token != sent[index - 1]]
+    assert collapsed == [f"Bearer {alice}", f"Bearer {bob}"]
+    assert sent[-1] == f"Bearer {bob}"
 
 
 def test_remote_defaults_to_consumer_so_audit_is_never_on_by_default(monkeypatch, tmp_path):

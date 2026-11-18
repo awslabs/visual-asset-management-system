@@ -16,7 +16,8 @@ from vams_mcp import toolsets
 from vams_mcp.config import Config, ConfigError
 
 ALL_SWITCHES = ["AUTHPROVIDER_COGNITO", addon_constants.FEATURE_EDH_WORKSTATIONS,
-                addon_constants.FEATURE_EDH_CONTAINERS, addon_constants.FEATURE_EDH_AMI_RECIPES]
+                addon_constants.FEATURE_EDH_CONTAINERS, addon_constants.FEATURE_EDH_AMI_RECIPES,
+                "AUDITLOGSEARCH"]
 
 
 @pytest.fixture

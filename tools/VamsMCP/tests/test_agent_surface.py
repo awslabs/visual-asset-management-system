@@ -24,7 +24,7 @@ from vams_mcp import server
 from vams_mcp.addon_tools import edh
 from vams_mcp.config import Config
 
-ALL_SWITCHES = ["AUTHPROVIDER_COGNITO", addon_constants.FEATURE_EDH_WORKSTATIONS]
+ALL_SWITCHES = ["AUTHPROVIDER_COGNITO", addon_constants.FEATURE_EDH_WORKSTATIONS, "AUDITLOGSEARCH"]
 
 # --- Budgets (Mandatory Rule 11) --------------------------------------------------------------------
 

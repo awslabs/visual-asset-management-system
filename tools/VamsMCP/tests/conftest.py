@@ -145,6 +145,12 @@ def server_with_switches():
             mock = MagicMock()
             mock.config = config
             mock.has_feature.side_effect = lambda name: name in set(switches)
+            mock.feature_switches.return_value = {
+                "has_feature_switches": True,
+                "enabled": sorted(switches),
+                "total": len(set(switches)),
+                "fetched_at": None,
+            }
             mock.require_feature = types.MethodType(real_client_class.require_feature, mock)
             mock.unwrap_message = real_client_class.unwrap_message
             return mock

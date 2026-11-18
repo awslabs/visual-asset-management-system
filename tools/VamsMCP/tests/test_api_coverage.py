@@ -30,6 +30,7 @@ ALL_SWITCHES = [
     addon_constants.FEATURE_EDH_WORKSTATIONS,
     addon_constants.FEATURE_EDH_CONTAINERS,
     addon_constants.FEATURE_EDH_AMI_RECIPES,
+    "AUDITLOGSEARCH",
 ]
 
 TABLES = {

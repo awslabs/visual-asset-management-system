@@ -534,8 +534,14 @@ asymmetry other callers rely on):
     `audit` is named, so `all`, `consumer`, `operator` and `admin` never carry them (a test that wants
     every tool selects `all,audit`; the `server_with_switches` fixture takes `toolsets=`). A search starts
     a billable CloudWatch Logs Insights query and audit records may be sensitive, so every description says
-    so and none is in the README `autoApprove` sample. Audit search is core VAMS with no feature switch,
-    so the set is the only gate: the three reads and `vams_audit_stop` sit in the read block, and the stop
+    so and none is in the README `autoApprove` sample. Audit search is core VAMS with a deployment switch
+    (`AUDITLOGSEARCH`, on by default, off in the EU Sovereign template): the set is the opt-in gate, and the
+    feature list is the second. `_audit_search_switched_off()` keeps a signed-in stdio server from registering
+    the four tools when its snapshot was read and lacks the switch (`vams_status` `gates.auditSearch` says so; a
+    remote server has no client at start), and each tool opens with `_require_audit_search()`, the pre-flight
+    that answers the CLI's `AUDIT_SEARCH_DISABLED_MESSAGE` as data on either transport (an unread snapshot is
+    let through). The fixtures take `AUDITLOGSEARCH` in `ALL_SWITCHES`; the fake deployment's `features` sets
+    the remote list. So: the three reads and `vams_audit_stop` sit in the read block, and the stop
     tool (stops the caller's own search, removes no data) carries `STOP_OWN_SEARCH`, not `READ`. The tools
     build the request with the CLI's `vamscli.utils.audit_search.build_filters` and call
     `CLIENT.api.<method>` in the tool body (the coverage manifest reads that); a search waits at most one
