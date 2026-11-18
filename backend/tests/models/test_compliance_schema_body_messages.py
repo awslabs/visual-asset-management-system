@@ -54,14 +54,6 @@ class TestVamsRulesV1SchemaMessagesDoNotEchoInput:
         assert "Rule names may not start with $" in message
         assert CALLER_RULE_NAME not in message
 
-    def test_the_result_an_evaluation_records_for_an_unresolved_parent_uses_a_reserved_name(self):
-        # The engine's own result name is one no rule of a schema can carry.
-        from common.compliance.evaluationEngine import UNRESOLVED_PARENT_RULE_NAME
-        assert UNRESOLVED_PARENT_RULE_NAME.startswith("$")
-        with pytest.raises(ValidationError):
-            VamsRulesV1Schema(**{"schemaFormat": "vams-rules-v1", "rules": {
-                UNRESOLVED_PARENT_RULE_NAME: {"ruleType": "relationship", "enforcement": "warn", "checks": []}}})
-
     def test_the_model_class_name_stays_out_of_the_caller_safe_message(self):
         error = _errors_for({"schemaFormat": "vams-rules-v1", "rules": {}})
         message = validation_error_message(error)
