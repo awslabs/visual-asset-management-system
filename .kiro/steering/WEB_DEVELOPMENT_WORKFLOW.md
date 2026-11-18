@@ -1003,8 +1003,10 @@ helper table is in `web/e2e/CLAUDE.md` Rule 3; the groups are:
     `firstCardId`, `openCardMenu`, `tableRows` / `expectTableRendered` (takes the page's own empty-state
     regex), `menuSurface`, `wizardRail`, `rowValue`, `collectPageErrors`, `sideNavigation`,
     `profileMenuName` / `profileMenuTrigger` / `openProfileMenu` / `profileMenuLink`, `signInAs`.
--   **Feature switches:** `cachedFeaturesEnabled`, `featuresEnabled` / `missingFeatures`, `featureSwitches`;
-    `test.skip` on an absent switch.
+-   **Feature switches:** `featureSwitches(page)` is the harness's one feature reader (the deployment's
+    `featuresEnabled`, from the app's own cache); `test.skip` on an absent switch. `cachedFeaturesEnabled`
+    and `featuresEnabled` are older names for it, and `missingFeatures(list, req)` lists the required
+    features a deployment lacks.
 -   **Files and viewers:** `openAssetFile`, `openFileManager`, `selectTreePath`, `treeNode`,
     `selectedTreeNode`, `chooseViewer`, `chooseSelectOption`, `apiContext`, `findAssetFiles`,
     `findNestedAssetFile`, `findAssetsWithFiles`, `viewerSamples`, `compareSeed`, `openViewerFile`,
