@@ -10,11 +10,14 @@ import { MapLike, firstLayerIdWithPrefix } from "../../common/cogRaster/RasterLa
 import { RasterFileRef } from "../../common/cogRaster/presignedUrl";
 import { useRasterLayers } from "../../common/cogRaster/useRasterLayers";
 import RasterLayerPanel from "../../common/cogRaster/RasterLayerPanel";
+import { shownRasterKey } from "./SearchRasterLayers.keys";
 
 /** A file hit the user asked to see as a raster. */
 export interface SearchRasterRequest {
     /** Increases with every click, so asking again for a removed raster adds it again. */
     seq: number;
+    /** "show" draws the raster; "hide" removes the layer that shows this file. */
+    action: "show" | "hide";
     file: RasterFileRef;
     sizeBytes?: number;
 }
@@ -25,6 +28,8 @@ const FOOTPRINT_LAYER_PREFIXES = ["geojson-fill-", "geojson-outline-"];
 interface Props {
     map: MapLike | null;
     requests: SearchRasterRequest[];
+    /** Called with the files whose raster is on the map (a converted COG counts for its source). */
+    onShownChange?: (shown: Set<string>) => void;
 }
 
 /**
@@ -32,12 +37,14 @@ interface Props {
  * as the GeoTIFF Map Viewer draws them (common/cogRaster); this component is loaded only when the
  * first raster is requested, so the COG reader is not part of the Search page bundle.
  */
-const SearchRasterLayers: React.FC<Props> = ({ map, requests }) => {
+const SearchRasterLayers: React.FC<Props> = ({ map, requests, onShownChange }) => {
     const layers = useRasterLayers(map, {
         beforeLayerId: () =>
             map ? firstLayerIdWithPrefix(map, FOOTPRINT_LAYER_PREFIXES) : undefined,
     });
-    const { addFile } = layers;
+    const { addFile, remove, entries } = layers;
+    const entriesRef = useRef(entries);
+    entriesRef.current = entries;
     const handled = useRef(0);
 
     // The hit's footprint is already framed on the map, so an added raster is not zoomed to; the
@@ -47,9 +54,30 @@ const SearchRasterLayers: React.FC<Props> = ({ map, requests }) => {
         for (const request of requests) {
             if (request.seq <= handled.current) continue;
             handled.current = request.seq;
-            void addFile(request.file, { sizeBytes: request.sizeBytes });
+            if (request.action === "hide") {
+                const wanted = shownRasterKey(request.file);
+                for (const entry of entriesRef.current) {
+                    if (shownRasterKey({ ...entry.file, key: entry.sourceKey }) === wanted) {
+                        remove(entry.id);
+                    }
+                }
+            } else {
+                void addFile(request.file, { sizeBytes: request.sizeBytes });
+            }
         }
-    }, [map, requests, addFile]);
+    }, [map, requests, addFile, remove]);
+
+    // Report which hits are shown, so the popup's button reads Show or Hide to match (a layer removed
+    // from the list below the map turns its button back to Show).
+    useEffect(() => {
+        onShownChange?.(
+            new Set(
+                entries
+                    .filter((entry) => !entry.failed)
+                    .map((entry) => shownRasterKey({ ...entry.file, key: entry.sourceKey }))
+            )
+        );
+    }, [entries, onShownChange]);
 
     if (layers.entries.length === 0 && layers.notices.length === 0 && layers.busy === 0) {
         return null;

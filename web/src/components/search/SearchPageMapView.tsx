@@ -45,6 +45,7 @@ import {
     popupOffsetsFor,
 } from "./utils/mapPopupPlacement";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
+import { shownRasterKey } from "./SearchRasterLayers.keys";
 import type { SearchRasterRequest } from "./SearchRasterLayers";
 
 // Loaded on the first "Show raster", so the COG reader is not part of the Search page bundle.
@@ -431,13 +432,25 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     // so a page of shapes alone is framed as well (locationDataBounds).
     const [mapLoaded, setMapLoaded] = useState(false);
     const [rasterRequests, setRasterRequests] = useState<SearchRasterRequest[]>([]);
-    const showRaster = (item: LocationDataWithDetails) => {
+    // The hits whose raster is on the map, reported by the raster layers (a layer removed from the
+    // list turns its popup button back to "Show raster").
+    const [shownRasters, setShownRasters] = useState<Set<string>>(new Set());
+    const rasterKeyOf = (item: LocationDataWithDetails) =>
+        item.fileKey
+            ? shownRasterKey({
+                  databaseId: item.databaseId,
+                  assetId: item.assetId,
+                  key: item.fileKey,
+              })
+            : "";
+    const requestRaster = (item: LocationDataWithDetails, action: "show" | "hide") => {
         const key = item.fileKey;
         if (!key) return;
         setRasterRequests((current) => [
             ...current,
             {
                 seq: (current[current.length - 1]?.seq ?? 0) + 1,
+                action,
                 file: { databaseId: item.databaseId, assetId: item.assetId, key },
                 sizeBytes: item.fileSize,
             },
@@ -864,10 +877,19 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                             <Button
                                                 iconName="location-pin"
                                                 fullWidth
-                                                onClick={() => showRaster(selectedItem)}
+                                                onClick={() =>
+                                                    requestRaster(
+                                                        selectedItem,
+                                                        shownRasters.has(rasterKeyOf(selectedItem))
+                                                            ? "hide"
+                                                            : "show"
+                                                    )
+                                                }
                                                 data-testid="search-map-show-raster"
                                             >
-                                                Show raster
+                                                {shownRasters.has(rasterKeyOf(selectedItem))
+                                                    ? "Hide raster"
+                                                    : "Show raster"}
                                             </Button>
                                         )}
 
@@ -933,6 +955,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                     <SearchRasterLayers
                         map={mapLoaded ? (mapRef.current?.getMap() as any) ?? null : null}
                         requests={rasterRequests}
+                        onShownChange={setShownRasters}
                     />
                 </React.Suspense>
             )}
