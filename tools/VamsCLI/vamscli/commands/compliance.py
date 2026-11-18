@@ -291,6 +291,10 @@ def format_binding_change(result: Dict[str, Any]) -> str:
     lines.extend(format_binding_apply(result.get('apply') or {}))
     if result.get('waitTimedOut'):
         lines.append("Stopped waiting; the change is still being applied.")
+    replaced = result.get('replacedBy')
+    if isinstance(replaced, dict):
+        lines.append(f"Replaced by: {replaced.get('applyId') or 'no change in progress'}"
+                     + (f" ({replaced['status']})" if replaced.get('status') else ""))
     if (result.get('apply') or {}).get('status') == COMPLIANCE_BINDING_APPLY_APPLYING:
         lines.append(f"Follow it with: vamscli compliance bindings -d {result.get('databaseId')}"
                      " (or pass --wait)")
@@ -350,6 +354,7 @@ def _report_binding_change(ctx: click.Context, api_client: APIClient, database_i
         output_result(result, json_output, success_message=success_message)
         return result
     timed_out = False
+    replaced = None
     if wait and apply.get('status') == COMPLIANCE_BINDING_APPLY_APPLYING:
         output_status("Waiting for the binding change to be applied...", json_output)
         last, timed_out = _wait_for_binding_apply(api_client, database_id, apply, wait_timeout,
@@ -357,11 +362,19 @@ def _report_binding_change(ctx: click.Context, api_client: APIClient, database_i
         if last and last.get('applyId') == apply.get('applyId'):
             apply = last
             result = dict(result, apply=last, applyStatus=last.get('status'))
+        elif not timed_out:
+            # The binding read named a later change, or none: this one was replaced before it ended.
+            replaced = {'applyId': (last or {}).get('applyId'), 'status': (last or {}).get('status')}
+            result = dict(result, replacedBy=replaced)
         if timed_out:
             result = dict(result, waitTimedOut=True)
     status = apply.get('status')
     if not wait:
         message = "✓ The binding change was accepted and is being applied."
+    elif replaced is not None:
+        message = ("✗ The binding change was replaced by a later binding change"
+                   + (f" ({replaced['applyId']}, {replaced.get('status')})." if replaced.get('applyId')
+                      else "; the binding read names no change in progress."))
     elif status == COMPLIANCE_BINDING_APPLY_APPLIED:
         message = "✓ The binding change was applied."
     elif status == COMPLIANCE_BINDING_APPLY_FAILED:
