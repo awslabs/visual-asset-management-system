@@ -12,7 +12,11 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Pipelines** The RapidPipeline EKS Lambda signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud and `amazonaws.com.cn` in the China Regions. Previously the token always named an `amazonaws.com` STS host. ([#1593](https://github.com/awslabs/visual-asset-management-system/issues/1593))
+
 ### Chores
+
+-   **Backend tests** The Physna add-on tests' `handlers.auth` stub carries `AUTH_METHOD_JWT` and `AUTH_METHOD_API_KEY`, so a backend test run that collects the Physna tests before another test imports `customLogging.auditLogging` (for example `tests/handlers` alone) no longer fails at collection. ([#1451](https://github.com/awslabs/visual-asset-management-system/issues/1451))
 
 ### Known Outstanding Issues
 
@@ -581,6 +585,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: `vams-mcp setup-remote` for an external IdP now works when the deployment publishes the relative discovery path `idpAuthProviderDiscoveryEndpoint`: the path is joined to the provider URL, an absolute URL still works, and `--issuer` is the fallback when the discovery document cannot be read. An explicit `--user-id-claim` that differs from the deployment's published claim gives a note.
 -   **Web** The Three.js viewer opens files from an external S3 bucket whose CORS rule lists only the VAMS web origin. It now reads each file and referenced file through a presigned URL, so the browser sends the web origin instead of `null`. ([#1623](https://github.com/awslabs/visual-asset-management-system/issues/1623))
 -   **Web** Fixed the home-page "How it works" carousel working only with a pointer: Tab reaches its slide controls, the arrow keys change the slide, the focused slide's dot is outlined, and each control is named after its slide. ([#1573](https://github.com/awslabs/visual-asset-management-system/issues/1573))
+-   **Documentation** Fixed the uninstall guide's step 4 deleting other VAMS deployments' log groups in the same account and Region: its commands read the deployment's log groups from its AWS CloudFormation stack record, leave out those of a current stack of the same name, list them for review before anything is deleted, and include the API Gateway execution log group; the `/aws/apigateway/<STACK_NAME>` block, which matched no VAMS log group, is removed. ([#1572](https://github.com/awslabs/visual-asset-management-system/issues/1572))
 
 ### Chores
 
