@@ -13122,19 +13122,6 @@ components:
             required:
                 - assetId
                 - message
-        asset_links:
-            type: object
-            properties:
-                assetIdFrom:
-                    $ref: '#/components/schemas/id_regex'
-                assetIdTo:
-                    $ref: '#/components/schemas/id_regex'
-                relationshipType:
-                    $ref: "#/components/schemas/string256Param"
-            required:
-                - assetIdFrom
-                - assetIdTo
-                - relationshipType
         asset_path_pattern_regex:
             type: string
             pattern: ^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.]+){1,63}$
@@ -13170,13 +13157,6 @@ components:
                 type: string
                 deprecated: true
                 description: "Deprecated: the same value as userId (the user id, which need not be an email address). Read userId instead."
-        auth_routes:
-            type: object
-            properties:
-              routes:
-                type: array
-                items:
-                    $ref: "#/components/schemas/route"
         apiRoute:
             type: object
             properties:
@@ -16008,9 +15988,6 @@ components:
         filename_pattern:
             type: string
             pattern: ^[a-zA-Z0-9_\-.]+
-        file_type_regex: 
-                type: string
-                pattern: ^[\\.]([a-z0-9]){1,7}
         id_regex:
             type: string
             pattern: "^[-_a-zA-Z0-9]{3,63}$"
@@ -16165,24 +16142,6 @@ components:
                 - message
                 - uploadId
                 - assetId
-        location:
-            type: object
-            properties:
-                Key:
-                    type: string
-                    #example: blade-12345.stl
-                Bucket:
-                    type: string
-                    #example: training-models-vams-assets
-            required:
-                - Key
-                - Bucket
-        metadata:
-            type: object
-            properties:
-                assetPath:
-                    $ref: '#/components/schemas/asset_path_pattern_regex'
-        
         # Metadata Schema V2 API Schemas
         metadataSchemaEntityType:
             type: string
@@ -17455,17 +17414,6 @@ components:
                         $ref: "#/components/schemas/id_regex"
                 enabled:
                     type: boolean
-        role:
-            type: object
-            properties:
-                roleName:
-                    $ref: "#/components/schemas/object_name_pattern_regex"
-                description:
-                    $ref: "#/components/schemas/string256Param"                    
-            required:
-                - roleName
-                - description
-        
         # Role API Request/Response Schemas
         createRoleRequest:
             type: object
@@ -17626,16 +17574,6 @@ components:
                 - method
                 - route__path
                 - object__type
-        s3_access:
-            type: object
-            properties:
-                databaseId:
-                    $ref: '#/components/schemas/id_regex'
-                assetId:
-                    $ref: '#/components/schemas/asset_id_regex'
-        sagemaker_notebook_name_regex:
-            type: string
-            pattern: ^[a-zA-Z0-9](-*[a-zA-Z0-9])*
         string256Param:
             type: string
             maxLength: 256
@@ -17659,22 +17597,6 @@ components:
                 - entityName
                 - eventName
                 - subscribers
-        tag:
-            type: object
-            properties: 
-                tagName:
-                    #example:
-                    $ref: "#/components/schemas/object_name_pattern_regex"
-                description:
-                    $ref: "#/components/schemas/string256Param"
-                tagTypeName:
-                    #example:
-                    $ref: "#/components/schemas/object_name_pattern_regex"
-            required:
-                - tagName
-                - description
-                - tagTypeName
-        
         # Tag API Request/Response Schemas
         createTagRequest:
             type: object
@@ -17796,17 +17718,6 @@ components:
                 - tagName
                 - operation
                 - timestamp
-        tagType:
-            type: object
-            properties: 
-                tagTypeName:
-                    $ref: "#/components/schemas/object_name_pattern_regex"
-                description:
-                    $ref: "#/components/schemas/string256Param"
-            required: 
-                - tagTypeName
-                - description
-        
         # Tag Type API Request/Response Schemas
         createTagTypeRequest:
             type: object
@@ -17956,17 +17867,6 @@ components:
             properties:
                 email:
                     type: string
-        userRole:
-            type: object
-            properties: 
-                roleName:
-                    $ref: "#/components/schemas/object_name_pattern_regex"
-                description:
-                    $ref: "#/components/schemas/string256Param"
-            required:
-                - roleName
-                - description
-        
         # User Role API Request/Response Schemas
         createUserRolesRequest:
             type: object
@@ -18107,28 +18007,6 @@ components:
         uuid_regex:
             type: string
             pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
-        validatePagInfoParams:
-            type: object
-            properties:
-              maxItemsParam:
-                $ref: "#/components/parameters/maxItemsParam"
-              pageSizeParam:
-                $ref: "#/components/parameters/pageSizeParam"
-              startingTokenParam:
-                $ref: "#/components/parameters/startingTokenParam"
-        version:
-            type: object
-            properties:
-                Comment:
-                    type: string
-                Version:
-                    type: string
-                S3Version:
-                    type: string
-                DateModified:
-                    type: string
-                description:
-                    type: string
         assetUpdate:
             type: object
             properties:
@@ -18447,28 +18325,6 @@ components:
                 - relativePath
                 - isFolder
 
-        listAssetFilesRequest:
-            type: object
-            properties:
-                maxItems:
-                    type: integer
-                    description: "Maximum number of items to return"
-                    default: 1000
-                pageSize:
-                    type: integer
-                    description: "Number of items per page"
-                    default: 100
-                startingToken:
-                    type: string
-                    description: "Token for pagination"
-                prefix:
-                    type: string
-                    description: "Filter files by prefix"
-                includeArchived:
-                    type: boolean
-                    description: "Whether to include archived files"
-                    default: false
-        
         listAssetFilesResponse:
             type: object
             properties:
@@ -18481,19 +18337,6 @@ components:
                     description: "Token for pagination"
             required:
                 - items
-        
-        fileInfoRequest:
-            type: object
-            properties:
-                filePath:
-                    type: string
-                    description: "Path to the file relative to the asset root"
-                includeVersions:
-                    type: boolean
-                    description: "Whether to include version history"
-                    default: false
-            required:
-                - filePath
         
         fileInfoResponse:
             type: object
@@ -19054,34 +18897,6 @@ components:
                     type: boolean
                     default: false
                     description: "Whether to revert metadata and attributes to the target version state. When true, deletes all current metadata/attributes and restores from the target version."
-        
-        getAssetVersionRequest:
-            type: object
-            properties:
-                assetVersionId:
-                    type: string
-                    description: "Asset version ID to get details for"
-            required:
-                - assetVersionId
-        
-        getAssetVersionsRequestModel:
-            type: object
-            properties:
-                maxItems:
-                    type: integer
-                    description: "Maximum number of items to return"
-                    default: 100
-                pageSize:
-                    type: integer
-                    description: "Number of items per page"
-                    default: 100
-                startingToken:
-                    type: string
-                    description: "Token for pagination"
-                showArchived:
-                    type: boolean
-                    description: "Whether to include archived versions in the results"
-                    default: false
         
         bucket:
             type: object
