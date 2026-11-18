@@ -542,13 +542,16 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                         </li>
                         <li data-testid="map-note-raster">
                             A <strong>GeoTIFF or COG</strong> file whose header carries
-                            georeferencing. Its footprint box is its <code>location</code> metadata,
-                            which the metadata pipeline writes from the TIFF header (reprojected to
-                            WGS 84) when the extraction location option (
-                            <code>EXTRACT_GEO_LOCATION</code>) is on; a file with no georeferencing,
-                            or with the option off, has no box. <strong>Show raster</strong> on a
-                            result draws the raster itself from the file&apos;s own georeferencing
-                            tags, not from metadata.
+                            georeferencing. With the extraction location option (
+                            <code>EXTRACT_GEO_LOCATION</code>) on, the metadata pipeline writes its
+                            footprint box, reprojected to WGS 84, as its <code>location</code>{" "}
+                            metadata, unless the file already has a location, which is kept. There
+                            is no box for a file with no georeferencing, a user-defined or
+                            unrecognised coordinate system, or an extent that covers a pole, for a
+                            converted <code>&lt;file&gt;.cog.tif</code> whose source sits beside it
+                            (the source&apos;s box stands for both), or with the option off.{" "}
+                            <strong>Show raster</strong> on a result draws the raster from the
+                            file&apos;s own georeferencing tags, not from metadata.
                         </li>
                     </ul>
                 </Box>

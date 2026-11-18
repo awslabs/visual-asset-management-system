@@ -88,7 +88,13 @@ describe("Map view note for results without location data", () => {
         expect(raster).toHaveTextContent("location metadata");
         expect(raster).toHaveTextContent("reprojected to WGS 84");
         expect(raster).toHaveTextContent("EXTRACT_GEO_LOCATION");
-        expect(raster).toHaveTextContent("no georeferencing, or with the option off, has no box");
+        // r5-D4: what the extractor really does.
+        expect(raster).toHaveTextContent("unless the file already has a location, which is kept");
+        expect(raster).toHaveTextContent(
+            "no georeferencing, a user-defined or unrecognised coordinate system, or an extent that covers a pole"
+        );
+        expect(raster).toHaveTextContent("converted <file>.cog.tif whose source sits beside it");
+        expect(raster).toHaveTextContent("or with the option off");
         expect(raster).toHaveTextContent("Show raster");
         expect(raster).toHaveTextContent("not from metadata");
     });
