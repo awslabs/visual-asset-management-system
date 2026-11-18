@@ -8,7 +8,8 @@
  *
  * The viewer used to choose its own height. In a shorter frame the map was clipped and its zoom control
  * fell outside the frame; in a taller one, or in fullscreen, the frame's striped backdrop showed under
- * the map and behind the layer list. This spec opens a raster in the viewer on the View File page and
+ * the map and behind the layer list. This spec opens a raster in the viewer on the View File page and in
+ * the File Viewer modal (the File Manager's "Visualize File" eye) and
  * checks, at a phone, a tablet and a laptop width and in fullscreen, that the map's canvas is exactly its
  * column, the column and the map controls lie inside the frame, the layer list's slider stays in the
  * list, and none of the backdrop's stripe colours is visible.
@@ -20,8 +21,18 @@
  */
 
 import { test, expect, Page } from "@playwright/test";
-import { chooseViewer, featuresEnabled, findAssetFiles, openAssetFile } from "./support/fixtures";
+import {
+    chooseViewer,
+    featuresEnabled,
+    findAssetFiles,
+    openAssetFile,
+    openFileManager,
+    selectTreePath,
+} from "./support/fixtures";
 import { stripePixels } from "./support/mapFixtures";
+
+/** Below this viewer width the layer list wraps under the map (CogMapViewerComponent.STACKED_BELOW_PX). */
+const STACKED_BELOW_PX = 792;
 
 const WIDTHS = [
     { name: "phone", width: 390, height: 844 },
@@ -51,12 +62,14 @@ const inside = (inner: Box, outer: Box, slack = 1) =>
     inner.y + inner.h <= outer.y + outer.h + slack;
 
 /** Asserts the viewer fills its frame, with `where` naming the case in each message. */
-async function expectViewerFillsFrame(page: Page, where: string, stacked: boolean): Promise<void> {
+async function expectViewerFillsFrame(page: Page, where: string): Promise<void> {
     const frame = await boxOf(page, ".visualizer-container");
     const root = await boxOf(page, '[data-testid="cog-map-viewer"]');
     const mapColumn = await boxOf(page, '[data-testid="cog-map-column"]');
     const canvas = await boxOf(page, "canvas.maplibregl-canvas");
     expect(frame && root && mapColumn && canvas, `${where}: viewer parts are mounted`).toBeTruthy();
+    // The list sits under the map when the viewer itself (not the window) is narrower than this.
+    const stacked = root!.w < STACKED_BELOW_PX;
 
     // No offset or transform between the canvas and its column, or the column and the frame.
     for (const key of ["x", "y", "w", "h"] as const) {
@@ -133,64 +146,71 @@ async function expectViewerFillsFrame(page: Page, where: string, stacked: boolea
     expect(await stripePixels(page, png), `${where}: the frame's stripes show`).toBe(0);
 }
 
+/** The raster to open: E2E_COG_MAP_FILE, else the first .tif the API lists. Skips when there is none. */
+async function rasterSubject(
+    page: Page
+): Promise<{ databaseId: string; assetId: string; key: string }> {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    test.skip(
+        !(await featuresEnabled(page)).includes("LOCATIONSERVICES"),
+        "Location Service is off on this deployment, so the map viewer is not offered"
+    );
+    let ref: { databaseId: string; assetId: string; key: string } | undefined;
+    const named = process.env.E2E_COG_MAP_FILE;
+    if (named) {
+        const [databaseId, assetId, ...rest] = named.split("/");
+        ref = { databaseId, assetId, key: `/${rest.join("/").replace(/^\/+/, "")}` };
+    } else {
+        const found = await findAssetFiles(page, [".tif"], { maxBytes: 200 * 1024 * 1024 });
+        ref = found?.get(".tif");
+    }
+    test.skip(!ref, "No .tif file is readable in this environment");
+    return ref!;
+}
+
+/** Picks the GeoTIFF Map Viewer, waits for its first raster, and skips when the file is not drawable. */
+async function chooseMapViewerAndWaitForRaster(page: Page): Promise<void> {
+    await page
+        .getByText("Select viewer (required)")
+        .first()
+        .waitFor({ timeout: 30_000 })
+        .catch(() => undefined);
+    const offered = await page
+        .getByLabel(/select viewer/i)
+        .first()
+        .click()
+        .then(() => page.getByRole("option", { name: /GeoTIFF Map/i }).count())
+        .catch(() => 0);
+    await page.keyboard.press("Escape").catch(() => undefined);
+    test.skip(offered === 0, "The GeoTIFF Map Viewer is not offered for this file");
+    await chooseViewer(page, /GeoTIFF Map/i);
+
+    // A georeferenced raster adds a row; a refused file adds a notice instead.
+    const row = page.getByTestId("raster-layer-row").first();
+    const notice = page.getByTestId("raster-notice").first();
+    await expect(row.or(notice)).toBeVisible({ timeout: 60_000 });
+    test.skip(
+        (await row.count()) === 0,
+        "The file is not a raster the viewer draws (no georeference or too large): " +
+            ((await notice.innerText().catch(() => "")) || "no reason shown")
+    );
+    // Let the first tiles draw.
+    await page.waitForTimeout(3_000);
+}
+
 test.describe("GeoTIFF Map Viewer layout", () => {
-    test("fills its frame at phone, tablet and laptop widths and in fullscreen", async ({
+    test("fills its frame on the View File page at phone, tablet and laptop widths and in fullscreen", async ({
         page,
     }) => {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-        test.skip(
-            !(await featuresEnabled(page)).includes("LOCATIONSERVICES"),
-            "Location Service is off on this deployment, so the map viewer is not offered"
-        );
-
-        let ref: { databaseId: string; assetId: string; key: string } | undefined;
-        const named = process.env.E2E_COG_MAP_FILE;
-        if (named) {
-            const [databaseId, assetId, ...rest] = named.split("/");
-            ref = { databaseId, assetId, key: `/${rest.join("/").replace(/^\/+/, "")}` };
-        } else {
-            const found = await findAssetFiles(page, [".tif"], { maxBytes: 200 * 1024 * 1024 });
-            ref = found?.get(".tif");
-        }
-        test.skip(!ref, "No .tif file is readable in this environment");
-
+        const ref = await rasterSubject(page);
         await page.setViewportSize({ width: 1280, height: 800 });
-        await openAssetFile(page, ref!.databaseId, ref!.assetId, ref!.key.replace(/^\/+/, ""));
-        await page
-            .getByText("Select viewer (required)")
-            .first()
-            .waitFor({ timeout: 30_000 })
-            .catch(() => undefined);
-        const offered = await page
-            .getByLabel(/select viewer/i)
-            .first()
-            .click()
-            .then(() => page.getByRole("option", { name: /GeoTIFF Map/i }).count())
-            .catch(() => 0);
-        await page.keyboard.press("Escape").catch(() => undefined);
-        test.skip(offered === 0, "The GeoTIFF Map Viewer is not offered for this file");
-        await chooseViewer(page, /GeoTIFF Map/i);
-
-        // A georeferenced raster adds a row; a refused file adds a notice instead.
-        const row = page.getByTestId("raster-layer-row").first();
-        const notice = page.getByTestId("raster-notice").first();
-        await expect(row.or(notice)).toBeVisible({ timeout: 60_000 });
-        test.skip(
-            (await row.count()) === 0,
-            "The file is not a raster the viewer draws (no georeference or too large): " +
-                ((await notice.innerText().catch(() => "")) || "no reason shown")
-        );
-        // Let the first tiles draw.
-        await page.waitForTimeout(3_000);
+        await openAssetFile(page, ref.databaseId, ref.assetId, ref.key.replace(/^\/+/, ""));
+        await chooseMapViewerAndWaitForRaster(page);
 
         for (const size of WIDTHS) {
             await page.setViewportSize({ width: size.width, height: size.height });
             await page.waitForTimeout(1_200);
-            await expectViewerFillsFrame(
-                page,
-                `${size.name} ${size.width}px`,
-                size.width < 792 + 340
-            );
+            await expectViewerFillsFrame(page, `page ${size.name} ${size.width}px`);
         }
 
         // Fullscreen: the frame becomes the whole screen and the viewer follows it.
@@ -202,7 +222,31 @@ test.describe("GeoTIFF Map Viewer layout", () => {
             : page.locator(".visualizer-footer button").last();
         await toggle.click();
         await page.waitForTimeout(2_000);
-        await expectViewerFillsFrame(page, "fullscreen", false);
+        await expectViewerFillsFrame(page, "page fullscreen");
+        await page.keyboard.press("Escape");
+    });
+
+    test("fills its frame in the File Viewer modal at phone, tablet and laptop widths", async ({
+        page,
+    }) => {
+        const ref = await rasterSubject(page);
+        await page.setViewportSize({ width: 1280, height: 800 });
+        const name = ref.key.replace(/^\/+/, "");
+        await openFileManager(page, ref.databaseId, ref.assetId);
+        await selectTreePath(page, name);
+        const eye = page.getByRole("button", { name: `Visualize File ${name.split("/").pop()}` });
+        await expect(eye, "the Visualize File eye is absent for the selected raster").toBeVisible({
+            timeout: 30_000,
+        });
+        await eye.click();
+        await expect(page.getByRole("dialog").last()).toBeVisible({ timeout: 30_000 });
+        await chooseMapViewerAndWaitForRaster(page);
+
+        for (const size of WIDTHS) {
+            await page.setViewportSize({ width: size.width, height: size.height });
+            await page.waitForTimeout(1_200);
+            await expectViewerFillsFrame(page, `modal ${size.name} ${size.width}px`);
+        }
         await page.keyboard.press("Escape");
     });
 });
