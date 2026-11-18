@@ -383,6 +383,101 @@ describe("RasterLayerManager", () => {
         manager.dispose();
     });
 
+    it("hides a tile layer off the map and shows it again with its opacity and place (item 1)", async () => {
+        jest.useFakeTimers();
+        try {
+            const map = new FakeMap();
+            const request = jest.fn().mockResolvedValue("https://s3/fresh-show");
+            const manager = new RasterLayerManager(map, { ...OPTIONS(map), requestUrl: request });
+            manager.add(prepared("1.tif"));
+            manager.add(prepared("2.tif"));
+            const [one, two] = manager.entries();
+            manager.setOpacity(one.id, 0.3);
+            await manager.setVisible(one.id, false);
+            // No map layer or source remains for it, so no tile is fetched; the row stays, dimmed state set.
+            expect(manager.entries()[0].visible).toBe(false);
+            expect(map.sources.size).toBe(1);
+            expect(map.order.filter((id) => id.startsWith("vams-raster-layer"))).toHaveLength(1);
+            // The renewal timer is stopped: nothing is requested however long it stays hidden.
+            await jest.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+            expect(request.mock.calls.filter(([file]) => file.key === "1.tif")).toHaveLength(0);
+            request.mockClear();
+            // Zoom has nothing to act on, order still works, opacity can still be set.
+            expect(manager.zoomTo(one.id)).toBe(false);
+            manager.setOpacity(one.id, 0.4);
+            manager.move(one.id, "up");
+            expect(manager.entries().map((e) => e.id)).toEqual([two.id, one.id]);
+
+            await expect(manager.setVisible(one.id, true)).resolves.toBe(true);
+            // A tile layer asks for a fresh link first.
+            expect(request.mock.calls.filter(([file]) => file.key === "1.tif")).toHaveLength(1);
+            expect(manager.entries()[1].visible).toBe(true);
+            expect(map.sources.size).toBe(2);
+            const layers = map.order.filter((id) => id.startsWith("vams-raster-layer"));
+            expect(layers).toHaveLength(2);
+            expect(map.order.indexOf("geojson-fill-1")).toBeGreaterThan(
+                map.order.indexOf(layers[1])
+            );
+            expect(layers.some((id) => map.paint[id]["raster-opacity"] === 0.4)).toBe(true);
+            expect([...map.sources.values()].some((s) => s.url.includes("fresh-show"))).toBe(true);
+            manager.dispose();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    it("keeps a hidden placed image's blob URL until the layer is removed or the map goes (item 1)", async () => {
+        const map = new FakeMap();
+        const manager = new RasterLayerManager(map, OPTIONS(map));
+        manager.add(prepared("p.tif", "placed"));
+        const [entry] = manager.entries();
+        await manager.setVisible(entry.id, false);
+        expect(map.sources.size).toBe(0);
+        expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+        await expect(manager.setVisible(entry.id, true)).resolves.toBe(true);
+        expect(map.sources.size).toBe(1);
+        expect((URL.createObjectURL as jest.Mock).mock.calls).toHaveLength(1);
+        await manager.setVisible(entry.id, false);
+        manager.dispose();
+        expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+    });
+
+    it("counts hidden layers against the cap, so showing one always succeeds (item 1)", async () => {
+        const map = new FakeMap();
+        const manager = new RasterLayerManager(map, { ...OPTIONS(map), maxOverlays: 2 });
+        manager.add(prepared("1.tif"));
+        manager.add(prepared("2.tif"));
+        await manager.setVisible(manager.entries()[0].id, false);
+        const full = manager.add(prepared("3.tif"));
+        expect(full.ok).toBe(false);
+        expect((full as any).message).toMatch(/Up to 2 rasters/);
+        manager.dispose();
+    });
+
+    it("does not re-add a hidden layer when the style is restored (item 1)", async () => {
+        const map = new FakeMap();
+        const manager = new RasterLayerManager(map, OPTIONS(map));
+        manager.add(prepared("1.tif"));
+        await manager.setVisible(manager.entries()[0].id, false);
+        manager.restore();
+        expect(map.sources.size).toBe(0);
+        manager.dispose();
+    });
+
+    it("shows nothing and puts the API's reason on the row when the link for a hidden layer is refused (item 1)", async () => {
+        const map = new FakeMap();
+        const request = jest.fn().mockRejectedValue(new RasterDownloadRefused("Quarantined."));
+        const manager = new RasterLayerManager(map, { ...OPTIONS(map), requestUrl: request });
+        manager.add(prepared("1.tif"));
+        const [entry] = manager.entries();
+        await manager.setVisible(entry.id, false);
+        await expect(manager.setVisible(entry.id, true)).resolves.toBe(false);
+        expect(map.sources.size).toBe(0);
+        expect(manager.entries()[0].failed).toBe("Quarantined.");
+        expect(manager.entries()[0].retryable).toBe(false);
+        manager.dispose();
+    });
+
     it("gives up at once on a refusal from the API, with its reason and no Retry (r3-D2)", async () => {
         jest.useFakeTimers();
         try {

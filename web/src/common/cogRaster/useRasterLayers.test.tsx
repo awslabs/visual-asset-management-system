@@ -165,6 +165,7 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
                 sourceKey: "s",
                 file: COG,
                 retryable: true,
+                visible: true,
                 failed: "This raster could not be drawn: its map tiles could not be read or decoded.",
                 framable: true,
             },
@@ -177,6 +178,7 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
         zoomTo: jest.fn(),
         dismissNotice: jest.fn(),
         retry,
+        setVisible: jest.fn().mockResolvedValue(true),
     });
 
     it("calls retry with the raster's id", async () => {
@@ -212,6 +214,56 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
         expect(
             screen.getByRole("slider", { name: /Opacity of s.tif.cog.tif/ })
         ).toBeInTheDocument();
+    });
+
+    it("offers Hide in place of Remove, with a name, a pressed state and a status message (item 1)", async () => {
+        const props = layers(jest.fn(), "tile");
+        props.entries[0].failed = null as any;
+        render(<RasterLayerPanel layers={props} visibilityToggle />);
+        expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument();
+        const hide = screen.getByRole("button", { name: "Hide s.tif.cog.tif" });
+        expect(hide).toHaveAttribute("aria-pressed", "false");
+        await userEvent.click(hide);
+        expect(props.setVisible).toHaveBeenCalledWith("r1", false);
+        expect(screen.getByTestId("raster-visibility-status")).toHaveTextContent(
+            "s.tif.cog.tif hidden"
+        );
+    });
+
+    it("lists a hidden raster dimmed and labelled, with Show, and Zoom disabled (item 1)", async () => {
+        const props = layers(jest.fn(), "tile");
+        props.entries[0].failed = null as any;
+        props.entries[0].visible = false;
+        render(<RasterLayerPanel layers={props} visibilityToggle />);
+        expect(screen.getByTestId("raster-hidden-badge")).toHaveTextContent("Hidden");
+        expect(screen.getByTestId("raster-layer-row")).toHaveAttribute("data-hidden", "true");
+        const show = screen.getByRole("button", { name: "Show s.tif.cog.tif" });
+        expect(show).toHaveAttribute("aria-pressed", "true");
+        expect(screen.getByRole("button", { name: "Zoom to s.tif.cog.tif" })).toBeDisabled();
+        // Move stays available, and the opacity slider keeps its value for when it is shown again.
+        expect(screen.getByRole("button", { name: "Move s.tif.cog.tif down" })).toBeInTheDocument();
+        await userEvent.click(show);
+        expect(props.setVisible).toHaveBeenCalledWith("r1", true);
+        expect(screen.getByTestId("raster-visibility-status")).toHaveTextContent(
+            "s.tif.cog.tif shown"
+        );
+    });
+
+    it("is operable from the keyboard (item 1)", async () => {
+        const props = layers(jest.fn(), "tile");
+        props.entries[0].failed = null as any;
+        render(<RasterLayerPanel layers={props} visibilityToggle />);
+        screen.getByRole("button", { name: "Hide s.tif.cog.tif" }).focus();
+        await userEvent.keyboard("{Enter}");
+        expect(props.setVisible).toHaveBeenCalledWith("r1", false);
+    });
+
+    it("keeps Remove, and no toggle, where visibilityToggle is off (the Search map)", () => {
+        const props = layers(jest.fn(), "tile");
+        props.entries[0].failed = null as any;
+        render(<RasterLayerPanel layers={props} />);
+        expect(screen.getByRole("button", { name: "Remove s.tif.cog.tif" })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /^Hide / })).not.toBeInTheDocument();
     });
 
     it("offers no Retry on a raster that is not drawn from tiles", () => {

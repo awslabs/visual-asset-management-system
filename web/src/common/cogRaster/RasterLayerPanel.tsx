@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from "react";
+import React, { useState } from "react";
 import Alert from "@cloudscape-design/components/alert";
 import Badge from "@cloudscape-design/components/badge";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import SpaceBetween from "@cloudscape-design/components/space-between";
+import ToggleButton from "@cloudscape-design/components/toggle-button";
 import Slider from "@cloudscape-design/components/slider";
 import { RasterLayerEntry } from "./RasterLayerManager";
 import { RasterNotice, UseRasterLayers } from "./useRasterLayers";
@@ -26,7 +27,14 @@ export interface RasterLayerPanelProps {
         | "zoomTo"
         | "dismissNotice"
         | "retry"
-    >;
+    > &
+        Partial<Pick<UseRasterLayers, "setVisible">>;
+    /**
+     * Offers Hide / Show on each raster in place of Remove: a hidden raster stays in the list, dimmed, with
+     * its opacity and place, and is off the map. The GeoTIFF Map Viewer uses this (a raster leaves it by
+     * being deselected); the Search map keeps Remove.
+     */
+    visibilityToggle?: boolean;
     /** Shown when nothing is on the map yet. */
     emptyText?: string;
 }
@@ -46,18 +54,29 @@ const NoticeAlert: React.FC<{ notice: RasterNotice; onDismiss: (id: string) => v
     </Alert>
 );
 
+const HIDDEN_ROW_OPACITY = 0.55;
+
 const LayerRow: React.FC<{
     entry: RasterLayerEntry;
     index: number;
     count: number;
     layers: RasterLayerPanelProps["layers"];
-}> = ({ entry, index, count, layers }) => (
-    <div data-testid="raster-layer-row" style={{ padding: "8px 0" }}>
+    visibilityToggle: boolean;
+    announce: (message: string) => void;
+}> = ({ entry, index, count, layers, visibilityToggle, announce }) => (
+    <div
+        data-testid="raster-layer-row"
+        data-hidden={entry.visible ? undefined : "true"}
+        style={{ padding: "8px 0" }}
+    >
         <SpaceBetween size="xs">
             <SpaceBetween direction="horizontal" size="xs">
-                <Box variant="strong" data-testid="raster-layer-label">
-                    {entry.label}
-                </Box>
+                <span style={{ opacity: entry.visible ? 1 : HIDDEN_ROW_OPACITY }}>
+                    <Box variant="strong" data-testid="raster-layer-label">
+                        {entry.label}
+                    </Box>
+                </span>
+                {!entry.visible && <Badge data-testid="raster-hidden-badge">Hidden</Badge>}
                 {entry.mode === "tile" && <Badge color="green">COG tiles</Badge>}
                 {entry.approximate && (
                     <Badge color="red" data-testid="raster-approximate-badge">
@@ -94,15 +113,17 @@ const LayerRow: React.FC<{
                     Showing the COG made from {entry.sourceKey.split("/").pop()}.
                 </Box>
             )}
-            <Slider
-                value={Math.round(entry.opacity * 100)}
-                min={0}
-                max={100}
-                step={5}
-                valueFormatter={(value) => `${value}%`}
-                ariaLabel={`Opacity of ${entry.label}`}
-                onChange={({ detail }) => layers.setOpacity(entry.id, detail.value / 100)}
-            />
+            <div style={{ opacity: entry.visible ? 1 : HIDDEN_ROW_OPACITY }}>
+                <Slider
+                    value={Math.round(entry.opacity * 100)}
+                    min={0}
+                    max={100}
+                    step={5}
+                    valueFormatter={(value) => `${value}%`}
+                    ariaLabel={`Opacity of ${entry.label}`}
+                    onChange={({ detail }) => layers.setOpacity(entry.id, detail.value / 100)}
+                />
+            </div>
             <SpaceBetween direction="horizontal" size="xs">
                 <Button
                     iconName="angle-up"
@@ -122,18 +143,40 @@ const LayerRow: React.FC<{
                     iconName="search"
                     variant="inline-icon"
                     ariaLabel={`Zoom to ${entry.label}`}
+                    // A hidden layer is not on the map, so there is nothing to zoom to: show it first.
+                    disabled={!entry.visible}
                     onClick={() => layers.zoomTo(entry.id)}
                 >
                     Zoom to layer
                 </Button>
-                <Button
-                    iconName="close"
-                    variant="inline-icon"
-                    onClick={() => layers.remove(entry.id)}
-                    ariaLabel={`Remove ${entry.label}`}
-                >
-                    Remove
-                </Button>
+                {visibilityToggle && layers.setVisible && !entry.failed ? (
+                    <span data-testid="raster-layer-visibility">
+                        <ToggleButton
+                            pressed={!entry.visible}
+                            ariaLabel={
+                                entry.visible ? `Hide ${entry.label}` : `Show ${entry.label}`
+                            }
+                            onChange={({ detail }) => {
+                                // `pressed` is "hidden": pressing hides, pressing again shows.
+                                void layers.setVisible!(entry.id, !detail.pressed);
+                                announce(`${entry.label} ${detail.pressed ? "hidden" : "shown"}`);
+                            }}
+                        >
+                            {entry.visible ? "Hide" : "Show"}
+                        </ToggleButton>
+                    </span>
+                ) : (
+                    !visibilityToggle && (
+                        <Button
+                            iconName="close"
+                            variant="inline-icon"
+                            onClick={() => layers.remove(entry.id)}
+                            ariaLabel={`Remove ${entry.label}`}
+                        >
+                            Remove
+                        </Button>
+                    )
+                )}
             </SpaceBetween>
         </SpaceBetween>
     </div>
@@ -144,8 +187,14 @@ const LayerRow: React.FC<{
  * and remove, plus the reason any raster could not be shown. Shared by the file viewer and the
  * Search map.
  */
-const RasterLayerPanel: React.FC<RasterLayerPanelProps> = ({ layers, emptyText }) => {
+const RasterLayerPanel: React.FC<RasterLayerPanelProps> = ({
+    layers,
+    emptyText,
+    visibilityToggle = false,
+}) => {
     const { entries, notices, busy } = layers;
+    // Said to screen readers when a raster is hidden or shown (the button's own label changes too).
+    const [announcement, setAnnouncement] = useState("");
     // Listed top layer first, as map layer lists usually are.
     const topFirst = [...entries].reverse();
     return (
@@ -168,8 +217,25 @@ const RasterLayerPanel: React.FC<RasterLayerPanelProps> = ({ layers, emptyText }
                     index={entries.indexOf(entry)}
                     count={entries.length}
                     layers={layers}
+                    visibilityToggle={visibilityToggle}
+                    announce={setAnnouncement}
                 />
             ))}
+            <div
+                role="status"
+                aria-live="polite"
+                data-testid="raster-visibility-status"
+                style={{
+                    position: "absolute",
+                    width: 1,
+                    height: 1,
+                    overflow: "hidden",
+                    clip: "rect(0 0 0 0)",
+                    whiteSpace: "nowrap",
+                }}
+            >
+                {announcement}
+            </div>
         </SpaceBetween>
     );
 };

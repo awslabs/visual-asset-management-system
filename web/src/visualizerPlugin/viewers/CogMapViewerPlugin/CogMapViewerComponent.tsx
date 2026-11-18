@@ -219,7 +219,11 @@ const CogMapViewerComponent: React.FC<ViewerPluginProps> = (props) => {
             <div style={LIST_COLUMN_STYLE} data-testid="cog-layer-column">
                 <SpaceBetween size="s">
                     <Box variant="h3">Raster layers</Box>
-                    <RasterLayerPanel layers={layers} emptyText="No raster is on the map." />
+                    <RasterLayerPanel
+                        layers={layers}
+                        emptyText="No raster is on the map."
+                        visibilityToggle
+                    />
                 </SpaceBetween>
             </div>
         </div>

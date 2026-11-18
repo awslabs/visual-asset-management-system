@@ -36,6 +36,8 @@ export interface UseRasterLayers {
     /** Frames the raster; false while its extent is not known yet. */
     zoomTo: (id: string) => boolean;
     dismissNotice: (id: string) => void;
+    /** Hides or shows a raster; it stays in the list while hidden. */
+    setVisible: (id: string, visible: boolean) => Promise<boolean>;
     /** Draws a raster that failed again, from a fresh download link. */
     retry: (id: string) => Promise<boolean>;
 }
@@ -151,6 +153,11 @@ export function useRasterLayers(
         ),
         move: useCallback(
             (id: string, direction: "up" | "down") => manager.current?.move(id, direction),
+            []
+        ),
+        setVisible: useCallback(
+            (id: string, visible: boolean) =>
+                manager.current?.setVisible(id, visible) ?? Promise.resolve(false),
             []
         ),
         retry: useCallback(

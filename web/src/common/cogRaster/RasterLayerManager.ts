@@ -46,6 +46,11 @@ export interface RasterLayerEntry {
     retryable: boolean;
     /** The raster's extent is known, so "Zoom to layer" (and framing on open) can act. */
     framable: boolean;
+    /**
+     * False while the layer is hidden: it stays in the list with its opacity and place, but has no map
+     * layer or source (so no tiles are fetched) until it is shown again.
+     */
+    visible: boolean;
 }
 
 export const TILE_READ_FAILED_MESSAGE =
@@ -74,6 +79,8 @@ interface Internal {
     /** The one automatic retry after a refreshed URL still failed is waiting or done. */
     autoRetried: boolean;
     autoRetryTimer?: ReturnType<typeof setTimeout>;
+    /** A fresh link is being fetched to show a hidden tile layer. */
+    showing?: boolean;
 }
 
 export interface ManagerOptions {
@@ -182,7 +189,8 @@ export class RasterLayerManager {
         if (this.items.length >= this.max) {
             return {
                 ok: false,
-                message: `Up to ${this.max} rasters can be shown at once. Remove one to add another.`,
+                // Hidden layers count: they keep their place in the list and must be able to come back.
+                message: `Up to ${this.max} rasters can be listed at once. Remove or deselect one to add another.`,
             };
         }
 
@@ -202,6 +210,7 @@ export class RasterLayerManager {
                 failed: null,
                 retryable: true,
                 framable: false,
+                visible: true,
             },
             sourceId: `${ID_PREFIX}-src-${n}`,
             layerId: `${ID_PREFIX}-layer-${n}`,
@@ -277,6 +286,7 @@ export class RasterLayerManager {
         item.url = url;
         item.entry.failed = null;
         item.entry.retryable = true;
+        item.entry.visible = true;
         item.errorRefreshes = 0;
         item.errorRefreshDoneAt = 0;
         item.errorRefreshInFlight = false;
@@ -284,6 +294,60 @@ export class RasterLayerManager {
         this.removeFromMap(item);
         this.addToMap(item);
         this.startKeepFresh(item);
+        this.applyOrder();
+        this.notify();
+        return true;
+    }
+
+    /**
+     * Hides or shows a layer. Hiding takes the layer and its source off the map, stops the link
+     * renewal and any pending automatic retry, so no tile is fetched while it is hidden; the row keeps its
+     * opacity and place, and a placed image keeps its blob URL (revoked, as ever, when the layer is
+     * removed or the manager is disposed). Showing a tile layer asks for a fresh link first, since the
+     * old one may have expired; a refusal by the API puts its reason on the row. Resolves to the
+     * visibility the layer ends up with.
+     */
+    async setVisible(id: string, visible: boolean): Promise<boolean> {
+        const item = this.items.find((candidate) => candidate.entry.id === id);
+        if (!item || this.disposed || item.entry.failed) return false;
+        if (!visible) {
+            if (!item.entry.visible) return false;
+            item.entry.visible = false;
+            item.stopRefresh?.();
+            if (item.autoRetryTimer) clearTimeout(item.autoRetryTimer);
+            item.autoRetryTimer = undefined;
+            item.errorRefreshInFlight = false;
+            this.removeFromMap(item);
+            this.notify();
+            return false;
+        }
+        if (item.entry.visible || item.showing) return item.entry.visible;
+        if (item.entry.mode === "tile") {
+            item.showing = true;
+            let url: string;
+            try {
+                url = await (this.options.requestUrl ?? requestPresignedUrl)(item.entry.file);
+            } catch (error) {
+                item.showing = false;
+                if (this.items.includes(item)) {
+                    const refused = error instanceof RasterDownloadRefused;
+                    this.fail(item, refused ? error.message : REFRESH_GAVE_UP_MESSAGE, !refused);
+                }
+                return false;
+            }
+            item.showing = false;
+            if (this.disposed || !this.items.includes(item) || item.entry.failed) return false;
+            item.url = url;
+            item.entry.visible = true;
+            item.errorRefreshes = 0;
+            item.errorRefreshDoneAt = 0;
+            item.autoRetried = false;
+            this.addToMap(item);
+            this.startKeepFresh(item);
+        } else {
+            item.entry.visible = true;
+            this.addToMap(item);
+        }
         this.applyOrder();
         this.notify();
         return true;
@@ -319,7 +383,8 @@ export class RasterLayerManager {
 
     zoomTo(id: string): boolean {
         const item = this.items.find((candidate) => candidate.entry.id === id);
-        if (!item) return false;
+        // A hidden layer is not on the map, so there is nothing to zoom to until it is shown.
+        if (!item || !item.entry.visible) return false;
         const bounds = item.bounds ?? this.boundsFromSource(item);
         if (!bounds) return false;
         this.map.fitBounds(bounds, { padding: 40, maxZoom: 18 });
@@ -329,7 +394,9 @@ export class RasterLayerManager {
     /** Re-adds every layer after the map's style was replaced (a style change drops custom layers). */
     restore(): void {
         for (const item of this.items) {
-            if (!item.entry.failed && !this.map.getSource(item.sourceId)) this.addToMap(item);
+            if (item.entry.visible && !item.entry.failed && !this.map.getSource(item.sourceId)) {
+                this.addToMap(item);
+            }
         }
         this.applyOrder();
     }

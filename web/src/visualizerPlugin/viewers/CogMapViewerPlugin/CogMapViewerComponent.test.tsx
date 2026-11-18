@@ -42,6 +42,8 @@ const freshLayers = () => ({
     move: jest.fn(),
     zoomTo: jest.fn(() => false),
     dismissNotice: jest.fn(),
+    setVisible: jest.fn(),
+    retry: jest.fn(),
 });
 jest.mock("../../../common/cogRaster/useRasterLayers", () => ({
     useRasterLayers: () => mockLayers.value,

@@ -229,6 +229,36 @@ test.describe("GeoTIFF Map Viewer layout", () => {
         await page.keyboard.press("Escape");
     });
 
+    test("hides and shows a raster in the layer list instead of removing it", async ({ page }) => {
+        const ref = await rasterSubject(page);
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await openAssetFile(page, ref.databaseId, ref.assetId, ref.key.replace(/^\/+/, ""));
+        await chooseMapViewerAndWaitForRaster(page);
+
+        const row = page.getByTestId("raster-layer-row").first();
+        const label = (await row.getByTestId("raster-layer-label").innerText()).trim();
+        // A raster leaves the list by being deselected, not from the list.
+        await expect(page.getByRole("button", { name: /^Remove /i })).toHaveCount(0);
+        const hide = row.getByRole("button", { name: `Hide ${label}` });
+        await expect(hide).toHaveAttribute("aria-pressed", "false");
+        await hide.click();
+
+        // It stays in the list, marked hidden, with Zoom disabled, and the change is announced.
+        const show = row.getByRole("button", { name: `Show ${label}` });
+        await expect(show).toHaveAttribute("aria-pressed", "true");
+        await expect(row.getByTestId("raster-hidden-badge")).toBeVisible();
+        await expect(row.getByRole("button", { name: `Zoom to ${label}` })).toBeDisabled();
+        await expect(page.getByTestId("raster-visibility-status")).toHaveText(`${label} hidden`);
+        await expect(page.getByTestId("raster-layer-row")).toHaveCount(1);
+
+        // Show brings it back (the keyboard works as well as the mouse).
+        await show.focus();
+        await page.keyboard.press("Enter");
+        await expect(row.getByRole("button", { name: `Hide ${label}` })).toBeVisible();
+        await expect(row.getByTestId("raster-hidden-badge")).toHaveCount(0);
+        await expect(row.getByRole("button", { name: `Zoom to ${label}` })).toBeEnabled();
+    });
+
     test("fills its frame in the File Viewer modal at phone, tablet and laptop widths", async ({
         page,
     }) => {
