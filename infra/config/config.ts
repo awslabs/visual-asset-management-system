@@ -945,10 +945,10 @@ export function validateImageTo3dModelCacheGeneration(
 ): void {
     const generation = block.modelCacheGeneration;
     if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 0) {
+        const shown = JSON.stringify(generation);
         throw new Error(
             `Configuration Error: useImageTo3d.modelCacheGeneration must be a whole number of 0 or ` +
-                `more, not ${JSON.stringify(generation)}. Raise it by one to start every model on an ` +
-                `empty weight cache.`
+                `more, not ${shown}. Raise it by one to start every model on an empty weight cache.`
         );
     }
 }

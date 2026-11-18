@@ -395,9 +395,7 @@ export class ImageTo3dConstruct extends Construct {
                 OutputBucketPolicy: outputBucketPolicy,
                 EfsClientPolicy: efsClientPolicy,
             },
-            managedPolicies: [
-                iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
-            ],
+            managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess")],
         });
 
         // Grant access to any external asset bucket customer managed KMS keys so the
