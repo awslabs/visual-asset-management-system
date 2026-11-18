@@ -105,6 +105,17 @@ class TestEachRunStatus:
         _end(env, "FAILED", "Pipeline Failure: States.HeartbeatTimeout")
         assert _row(env)["errorMessage"] == "The archive job was stopped"
 
+    def test_a_heartbeat_timeout_while_queued_says_the_job_waited(self, env):
+        # pipelineEnd reports a job still waiting in the AWS Batch queue under its own name.
+        _end(env, "FAILED", "Pipeline Failure: ZipArchiveJobQueued: See AWS cloudwatch logs "
+                            "for error cause.")
+        assert _row(env)["status"] == "FAILED"
+        assert _row(env)["errorMessage"] == env.zd.MSG_JOB_QUEUED
+
+    def test_a_heartbeat_timeout_after_a_failed_start_says_the_job_could_not_start(self, env):
+        _end(env, "FAILED", "Pipeline Failure: ZipArchiveJobNotStarted")
+        assert _row(env)["errorMessage"] == env.zd.MSG_JOB_NOT_STARTED == "The archive job could not start"
+
     @pytest.mark.parametrize("error", ["ZipArchiveContainerStopped", "States.HeartbeatTimeout"])
     def test_an_executions_abort_still_wins_over_the_containers_stop(self, env, error):
         """D24 kept: an abort from the Executions page records ABORTED on the run before its Batch job
