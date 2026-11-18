@@ -714,7 +714,8 @@ def register(
             `memory` in MiB (at least 512). Returns the job as EDH reports it (HTTP 202); its `jobId`,
             with the same `backend`, is what kill_edh_container_job takes. An `EdhOutcomeUnknownError`
             error means EDH did not confirm the submission and the job may be running: call
-            list_edh_container_jobs before submitting again.
+            list_edh_container_jobs before submitting again. An `EdhQuotaExceededError` means EDH's
+            quota is used up; submitting again fails until a job ends.
 
             This starts real compute and incurs cost until the job finishes or is killed. Confirm with
             the user before calling it, and keep it out of `autoApprove`.

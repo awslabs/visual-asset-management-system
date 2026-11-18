@@ -25,6 +25,7 @@ from vamscli.utils.addon.edh_exceptions import (
     EdhImageNotFoundError,
     EdhOperationError,
     EdhOutcomeUnknownError,
+    EdhQuotaExceededError,
     EdhStartInProgressError,
     EdhUnavailableError,
     EdhWorkstationNotFoundError,
@@ -275,6 +276,7 @@ def test_the_edh_exceptions_are_business_logic_errors_under_one_base():
         "EdhContainerJobNotFoundError",
         "EdhAmiRecipeNotFoundError",
         "EdhAmiRecipeBuildNotFoundError",
+        "EdhQuotaExceededError",
     ):
         klass = getattr(edh_exceptions, name)
         assert issubclass(klass, edh_exceptions.EdhError), name
@@ -877,6 +879,62 @@ class TestUnconfirmedMutations:
         assert str(excinfo.value) == (
             f"Container job submission not confirmed (502): {JOB_SUBMITTED} "
             "Run 'vamscli edh container job list' to see its state.")
+
+
+EDH_CLIENT_SOURCE = EDH_HANDLERS / "common" / "edhClient.py"
+
+
+def _add_on_error_text(error_class: str):
+    """The (status, message) the add-on answers a typed EDH error with (`_ERROR_RESPONSES`)."""
+    for node in ast.walk(ast.parse(EDH_CLIENT_SOURCE.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "_ERROR_RESPONSES" for t in node.targets):
+            for row in node.value.elts:
+                if getattr(row.elts[0], "id", None) == error_class:
+                    return ast.literal_eval(row.elts[1]), ast.literal_eval(row.elts[2])
+    raise AssertionError(f"{error_class} not in _ERROR_RESPONSES")
+
+
+class TestQuotaRefusal:
+    """A 429 the add-on answers for an EDH quota is a refusal, not throttling: it is sent once and
+    reported with the add-on's own text."""
+
+    def test_the_cli_matches_the_add_ons_quota_text(self):
+        assert _add_on_error_text("EdhQuotaError") == (429, addon_constants.EDH_QUOTA_REACHED_API_MESSAGE)
+
+    def test_a_quota_429_is_sent_once_and_names_the_job_listing(self, monkeypatch):
+        profile_manager = Mock()
+        profile_manager.is_override_token.return_value = False
+        profile_manager.is_token_expired.return_value = False
+        profile_manager.load_auth_profile.return_value = {"access_token": "t"}
+        client = APIClient("https://api.example.com", profile_manager=profile_manager)
+        sends = []
+
+        def request(method, url, **kwargs):
+            sends.append((method, url))
+            response = requests.Response()
+            response.status_code = 429
+            response.url = url
+            response._content = json.dumps({"message": addon_constants.EDH_QUOTA_REACHED_API_MESSAGE}).encode()
+            response.headers["Content-Type"] = "application/json"
+            return response
+
+        monkeypatch.setattr(client.session, "request", request)
+        monkeypatch.setattr("vamscli.utils.retry_config.RetryConfig.sleep_with_progress", lambda *a, **k: None)
+        with pytest.raises(EdhQuotaExceededError) as excinfo:
+            client.submit_edh_container_job({"name": "render-1"})
+        assert len(sends) == 1
+        assert str(excinfo.value) == (
+            f"Container job submission refused (429): {addon_constants.EDH_QUOTA_REACHED_API_MESSAGE} "
+            "Run 'vamscli edh container job list' to see what counts toward it.")
+
+    def test_a_quota_429_on_a_route_with_no_listing_names_none(self, monkeypatch):
+        client = _client()
+        _capture(monkeypatch, client, "get",
+                 error=_http_error(429, {"message": addon_constants.EDH_QUOTA_REACHED_API_MESSAGE}))
+        with pytest.raises(EdhQuotaExceededError) as excinfo:
+            client.list_edh_workstations()
+        assert str(excinfo.value) == (
+            f"Workstation listing refused (429): {addon_constants.EDH_QUOTA_REACHED_API_MESSAGE}")
 
 
 class TestStartInProgress:
