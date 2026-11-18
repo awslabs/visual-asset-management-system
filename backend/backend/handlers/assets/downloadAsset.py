@@ -595,21 +595,27 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             logger.error(f"Validation error: {v}")
             return validation_error(body={'message': validation_error_message(v)}, event=event)
         
-        # Check authorization
         asset = get_asset_details(database_id, asset_id)
-        if not asset:
-            return validation_error(body={'message': "Asset not found"}, event=event)
-        
-        asset["object__type"] = "asset"
 
         # Fail closed: with no authenticated identity no authorization can be
         # evaluated, so deny rather than fall through to presigned-URL generation.
         if len(claims_and_roles["tokens"]) == 0:
             return authorization_error()
 
+        # Authorize before existence and the distributable check, so a refused caller gets the
+        # same 403 for a missing asset as for an existing one. A found record is checked as an
+        # annotated copy; for a missing one the request's ids stand in.
+        if asset:
+            authorization_object = {**asset, 'object__type': 'asset'}
+        else:
+            authorization_object = {'databaseId': database_id, 'assetId': asset_id, 'object__type': 'asset'}
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not (casbin_enforcer.enforce(asset, "GET") and casbin_enforcer.enforceAPI(event)):
+        if not (casbin_enforcer.enforceAPI(event)
+                and casbin_enforcer.enforce(authorization_object, "GET")):
             return authorization_error()
+
+        if not asset:
+            return general_error(status_code=404, body={'message': "Asset not found"}, event=event)
 
         # Process download request based on type
         try:

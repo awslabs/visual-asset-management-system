@@ -741,11 +741,11 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                   |
-| ------ | ----------------------------------------------------------------------------- |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable. |
-| `404`  | File not found.                                                               |
-| `500`  | Internal server error.                                                        |
+| Status | Description                                                                                                                                        |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable. |
+| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                    |
+| `500`  | Internal server error.                                                                                                                             |
 
 ---
 
@@ -773,11 +773,11 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                   |
-| ------ | ----------------------------------------------------------------------------- |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable. |
-| `404`  | File not found.                                                               |
-| `500`  | Internal server error.                                                        |
+| Status | Description                                                                                                                                        |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable. |
+| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                    |
+| `500`  | Internal server error.                                                                                                                             |
 
 ---
 
