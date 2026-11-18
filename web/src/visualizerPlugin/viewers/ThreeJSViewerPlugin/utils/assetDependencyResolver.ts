@@ -382,6 +382,19 @@ export class AssetDependencyResolver {
         return Array.from(this.blobUrls.values());
     }
 
+    /** The key a percent-encoded name decodes to, when it decodes to another in-asset key. */
+    private decodedKey(url: string, baseFileKey: string): string | undefined {
+        try {
+            const decoded = decodeURI(url);
+            if (decoded === url) return undefined;
+            const normalized = this.normalize(decoded, baseFileKey);
+            return normalized.kind === "key" ? normalized.key : undefined;
+        } catch {
+            // Not a valid escape sequence: the name is kept as written.
+            return undefined;
+        }
+    }
+
     /**
      * URL modifier for a `LoadingManager`: a URL naming a resolved file returns its blob URL,
      * `blob:`/`data:` URLs pass through, and anything else returns the placeholder and is recorded.
@@ -439,7 +452,12 @@ export class AssetDependencyResolver {
 
             const normalized = this.normalize(url, baseFileKey);
             if (normalized.kind === "key") {
-                this.recordUnloaded(normalized.key, "not-found");
+                // A loader may ask for a name as it is written percent-encoded; the file it names
+                // (and any reason already recorded for it) is under the decoded key.
+                this.recordUnloaded(
+                    this.decodedKey(url, baseFileKey) ?? normalized.key,
+                    "not-found"
+                );
             } else if (normalized.kind === "rejected") {
                 this.recordUnloaded(url, normalized.reason);
             } else if (normalized.kind === "udim") {

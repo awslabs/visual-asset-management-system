@@ -467,6 +467,27 @@ describe("loadWithDependencies", () => {
         expect(result.warnings).toBeUndefined();
     });
 
+    it("lists a missing percent-encoded glTF name once, under the file it names", async () => {
+        installFetch({});
+        installBundle();
+        // As GLTFLoader does, ask the manager for every URI the glTF still names.
+        mockedLoadFile.mockImplementation(async (gltf, _ext, _name, manager) => {
+            const json = JSON.parse(new TextDecoder().decode(gltf as ArrayBuffer));
+            json.images.forEach((image: any) => manager.resolveURL(image.uri));
+            return { object: {} };
+        });
+
+        const result = await loadWithDependencies({
+            arrayBuffer: buffer(JSON.stringify({ images: [{ uri: "name%20with%20space.png" }] })),
+            extension: "gltf",
+            fileKey: "m/a.gltf",
+            fileName: "a.gltf",
+            resolver: newResolver(),
+        });
+
+        expect(result.warnings).toEqual(["m/name with space.png (not found in this asset)"]);
+    });
+
     it("loads self-contained formats through an isolating manager without downloads", async () => {
         const requested = installFetch({});
         installBundle();
