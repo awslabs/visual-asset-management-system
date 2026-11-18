@@ -25,6 +25,7 @@ from models.compliance import (
     METADATA_FILE_SCOPES,
     AssetAttributesRule,
     ComplianceRule,
+    EnforcementLevel,
     EvaluationVerdict,
     FileStructureRule,
     MetadataCheck,
@@ -193,40 +194,54 @@ def schema_format(schema_body: Any) -> str:
     return VAMS_RULES_V1 if is_vams_rules_schema(parse_schema_body(schema_body)) else SCHEMA_FORMAT_LEGACY
 
 
+# The `status: error` results of the rules an evaluation could not read (`unreadable_rule_results`):
+# a rule that does not parse, and the rules of a parent `extends` names that was not found. The
+# messages name no schema and no rule content.
+UNREADABLE_RULE_MESSAGE = "The rule definition could not be read"
+UNRESOLVED_PARENT_RULE_NAME = "extends"
+UNRESOLVED_PARENT_MESSAGE = ("The parent schema was not found as a vams-rules-v1 schema, or the "
+                             "inheritance chain is too deep; its rules were not evaluated")
+
+
 def resolve_rules(
     schema_body: Dict[str, Any],
     load_parent: Callable[[str], Optional[Dict[str, Any]]],
     depth: int = 0,
+    unresolved: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Merged rule dicts for a schema body, following its `extends` chain.
 
     `load_parent(schema_name)` returns a parent's schema body (or None). A missing parent, a
     non-vams-rules parent, or a chain deeper than MAX_SCHEMA_INHERITANCE_DEPTH stops the walk
-    and the child's own rules are used from that point.
+    and the child's own rules are used from that point; the parent's name is then appended to
+    `unresolved` when one is given, so the evaluation records that rules were left out.
     """
     parent_name = schema_body.get("extends")
     if not parent_name:
         return schema_body.get("rules", {}) or {}
     if depth >= MAX_SCHEMA_INHERITANCE_DEPTH:
         logger.warning("Schema inheritance chain exceeds the depth bound; using child rules only")
+        if unresolved is not None:
+            unresolved.append(parent_name)
         return schema_body.get("rules", {}) or {}
 
     parent_body = load_parent(parent_name)
     if parent_body is None or not is_vams_rules_schema(parent_body):
         logger.warning("Parent schema not found or not vams-rules-v1; using child rules only")
+        if unresolved is not None:
+            unresolved.append(parent_name)
         return schema_body.get("rules", {}) or {}
 
-    parent_rules = resolve_rules(parent_body, load_parent, depth + 1)
+    parent_rules = resolve_rules(parent_body, load_parent, depth + 1, unresolved)
     return resolve_schema_inheritance(schema_body, {"rules": parent_rules})
 
 
 def parse_resolved_rules(rules: Dict[str, Any]) -> Dict[str, ComplianceRule]:
-    """Typed rule models for raw rule dicts; a rule that fails to parse is logged and skipped."""
+    """Typed rule models for raw rule dicts; a rule that fails to parse is logged and skipped
+    (`unreadable_rule_results` records it for the evaluation)."""
     parsed: Dict[str, ComplianceRule] = {}
     for rule_name, rule_def in (rules or {}).items():
-        if not isinstance(rule_def, dict):
-            continue
-        model = RULE_TYPE_MODELS.get(rule_def.get("ruleType"))
+        model = RULE_TYPE_MODELS.get(rule_def.get("ruleType")) if isinstance(rule_def, dict) else None
         if model is None:
             logger.warning(f"Unknown rule type in rule '{rule_name}'")
             continue
@@ -235,6 +250,32 @@ def parse_resolved_rules(rules: Dict[str, Any]) -> Dict[str, ComplianceRule]:
         except (ValueError, TypeError) as e:
             logger.warning(f"Failed to parse rule '{rule_name}': {e}")
     return parsed
+
+
+def unreadable_rule_results(rules: Dict[str, Any], parsed: Dict[str, ComplianceRule],
+                            unresolved_parents: List[str]) -> List[RuleResult]:
+    """One `status: error` result for each raw rule `parse_resolved_rules` left out of `parsed`,
+    and one for the rules of a parent the `extends` chain did not resolve (`unresolved_parents`).
+    The evaluation therefore records that it ran on part of its rules, and one whose every rule
+    is left out reaches no verdict rather than a compliant one. A result keeps the rule's own type
+    and enforcement when they are valid; otherwise it is recorded as `quarantine`, the strictest,
+    which applies when `TOOLING_FAILURES_APPLY_ENFORCEMENT` is set."""
+    results = []
+    for rule_name, rule_def in (rules or {}).items():
+        if rule_name in parsed:
+            continue
+        rule_def = rule_def if isinstance(rule_def, dict) else {}
+        rule_type = rule_def.get("ruleType")
+        enforcement = rule_def.get("enforcement")
+        results.append(_tooling_error(
+            str(rule_name), rule_type if isinstance(rule_type, str) and rule_type else "unknown",
+            enforcement if enforcement in {level.value for level in EnforcementLevel}
+            else EnforcementLevel.quarantine.value,
+            UNREADABLE_RULE_MESSAGE))
+    if unresolved_parents:
+        results.append(_tooling_error(UNRESOLVED_PARENT_RULE_NAME, UNRESOLVED_PARENT_RULE_NAME,
+                                      EnforcementLevel.quarantine.value, UNRESOLVED_PARENT_MESSAGE))
+    return results
 
 
 class RuleGroups(NamedTuple):

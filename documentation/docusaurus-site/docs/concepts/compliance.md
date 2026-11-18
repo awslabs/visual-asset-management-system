@@ -128,7 +128,7 @@ flowchart TD
     verdict --> audit[("Audit trail")]
 ```
 
-A rule whose tooling fails before it can decide (a workflow that cannot start, a metadata schema that does not exist) records an `error` result instead of a pass or fail. It takes no part in the verdict, so it never quarantines an asset; see [Tooling failures](#tooling-failures).
+A rule whose tooling fails before it can decide (a workflow that cannot start, a metadata schema that does not exist, a stored rule definition that can no longer be read) records an `error` result instead of a pass or fail. It takes no part in the verdict, so it never quarantines an asset; see [Tooling failures](#tooling-failures).
 
 ## First steps
 
@@ -155,7 +155,7 @@ From there, the [user guide](../user-guide/compliance.md) covers the Quarantine,
 -   **Only assets with a compliance record are tracked.** An asset gets a record when a schema binding reaches it, or when it is evaluated on demand against a named schema. The overview counts and lists only those assets, and removing a database binding deletes the records of the assets that inherited it, except a quarantined asset's.
 -   **Evaluation after an upload waits about a minute.** An upload is evaluated once, about 60 seconds after it completes, so that an upload sent as several requests is evaluated over all its files. See [Evaluation](#evaluation).
 -   **A version-coverage rule fails after every upload** until an asset version records the new files. Use `warn` for it unless that is the intended workflow. See [Version-coverage rules](#version-coverage-rules).
--   **A missing parent schema is ignored, with a warning when you save.** A schema whose `extends` names a schema that does not exist is saved, and evaluates with its own rules only. The save answers a warning saying the parent was not found as a `vams-rules-v1` schema you may read. See [Schema inheritance](#schema-inheritance).
+-   **A missing parent schema is ignored, with a warning when you save.** A schema whose `extends` names a schema that does not exist is saved, and evaluates with its own rules only; each evaluation records an `error` result named `extends` for the rules it could not inherit, so an evaluation with no rules of its own reaches no verdict instead of passing. The save answers a warning saying the parent was not found as a `vams-rules-v1` schema you may read. See [Schema inheritance](#schema-inheritance).
 -   **Deleting a database moves its compliance history.** The records, evaluations, cascades, database-scoped schemas and audit entries move under `<databaseId>#deleted`, so a database created later with the same id starts with none. See [Deleted databases](#deleted-databases).
 -   **Archived assets are left out.** An archived asset is not evaluated and is left out of the database overview and the quarantine list; its record returns when it is unarchived. See [Archived assets](#archived-assets).
 -   **Compliance data follows asset access.** A user whose permissions restrict assets sees an asset's compliance state, history, quarantine and audit entries only if they may open the asset itself. See [Who sees an asset's compliance data](#who-sees-an-assets-compliance-data).
