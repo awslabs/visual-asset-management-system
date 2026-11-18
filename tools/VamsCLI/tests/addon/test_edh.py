@@ -222,8 +222,7 @@ CATALOG_IMAGES = {'Items': [
 
 DUPLICATED = {"recipeId": "team-desktop", "source": "admin", "duplicatedFrom": "al2023-desktop",
               "assets": [{"id": "vamscli", "repoPath": "tools/VamsCLI"}]}
-STACK_NAME_TAKEN = ("AMI recipe creation refused (409): stackName is already used by recipe "
-                    "'al2023-desktop'")
+STACK_NAME_TAKEN = "AMI recipe creation refused (409): stackName is already used by another recipe"
 
 # The client's error for a recipe delete the service refuses while a build's AMI removal is pending.
 DELETE_REFUSED = "AMI recipe deletion refused (409): a build's AMI removal is pending"

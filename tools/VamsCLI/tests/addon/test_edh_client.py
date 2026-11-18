@@ -1177,7 +1177,7 @@ class TestAmiRecipeDuplicate:
         assert created == {}
 
     def test_a_refused_create_keeps_the_service_text(self, monkeypatch):
-        refusal = "stackName is already used by recipe 'al2023-desktop'"
+        refusal = "stackName is already used by another recipe"
         client, _, _ = _duplicating_client(monkeypatch, post_error=_http_error(409, {"message": refusal}))
         with pytest.raises(EdhOperationError) as excinfo:
             client.duplicate_edh_ami_recipe("al2023-desktop", "team-desktop", stack_name="Amazon Linux 2023 Desktop")

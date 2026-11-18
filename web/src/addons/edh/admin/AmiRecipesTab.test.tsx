@@ -805,7 +805,7 @@ it("duplicates a shipped recipe through the prefilled form, posting duplicateOf 
 
 it("keeps the duplicate form open and toasts the service's refusal", async () => {
     mutations.create.mutateAsync.mockRejectedValue(
-        new Error("stackName is already used by recipe 'other'")
+        new Error("stackName is already used by another recipe")
     );
     const user = userEvent.setup();
     render(<AmiRecipesTab can={() => true} />);
@@ -818,7 +818,7 @@ it("keeps the duplicate form open and toasts the service's refusal", async () =>
 
     await waitFor(() =>
         expect(mockToast.error).toHaveBeenCalledWith("Duplicate failed", {
-            description: "Mine (copy): stackName is already used by recipe 'other'",
+            description: "Mine (copy): stackName is already used by another recipe",
         })
     );
     expect(mutations.create.mutateAsync.mock.calls[0][0]).toMatchObject({
