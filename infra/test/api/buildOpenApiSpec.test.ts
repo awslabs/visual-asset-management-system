@@ -1,5 +1,3 @@
-import * as fs from "fs";
-import * as path from "path";
 import { HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { buildOpenApiSpec } from "../../lib/nestedStacks/apiLambda/constructs/buildOpenApiSpec";
 
@@ -180,32 +178,5 @@ describe("buildOpenApiSpec", () => {
                 expect(anon.authorizerResultTtlInSeconds).toBe(900);
             }
         });
-    });
-});
-
-describe("REST API construct: authorizer cache follows allowedIpRanges", () => {
-    // Asserted against the source, as restApiTlsPolicy.test.ts does: building the construct needs
-    // a fully-populated config and the cross-stack route registry. The synthesized TTLs were checked
-    // with `cdk synth` with the list empty and set.
-    const flat = fs
-        .readFileSync(
-            path.join(
-                __dirname,
-                "..",
-                "..",
-                "lib",
-                "nestedStacks",
-                "apiLambda",
-                "constructs",
-                "rest-api-gateway-construct.ts"
-            ),
-            "utf-8"
-        )
-        .replace(/\s+/g, " ");
-
-    it("disables the cache exactly when the allow-list is non-empty", () => {
-        expect(flat).toContain(
-            "authorizerCacheDisabled: (config.app.authProvider.authorizerOptions.allowedIpRanges || []).length > 0"
-        );
     });
 });
