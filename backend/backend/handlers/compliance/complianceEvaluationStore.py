@@ -66,7 +66,7 @@ import os
 import uuid
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple
 
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
@@ -1854,11 +1854,16 @@ def run_evaluation(
 
     try:
         return _evaluate_claimed(database_id, asset_id, schema_name, actor, evaluation_id,
-                                 evaluated_at, claimed_from)
+                                 evaluated_at, claimed.record)
     except Exception:
-        # Nothing the evaluation set out to record was written: the claim goes, so the change is
-        # not read as covered and a retry evaluates it.
-        _undo_claim(database_id, asset_id, evaluation_id, claimed, claimed_from)
+        # While the evaluation has recorded nothing, the claim goes, so the change is not read as
+        # covered and a retry evaluates it. Once its row exists (written before the first pipeline
+        # launch) the claim stays: a retry would launch the workflows again.
+        if _nothing_recorded(evaluation_id):
+            _undo_claim(database_id, asset_id, evaluation_id, claimed)
+        else:
+            logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} failed after its "
+                        "row was written; its claim stays")
         raise
 
 
@@ -1867,8 +1872,8 @@ def _evaluate_claimed(database_id: str, asset_id: str, schema_name: str, actor: 
                       ) -> Dict[str, Any]:
     """`run_evaluation` once its claim landed on the record (`claimed_from` is the record the claim
     was computed from): read the schema and the inputs, evaluate, launch the pipeline rules and
-    write the outcome. An exception raised here before the outcome is written leaves the claim to
-    `run_evaluation` to undo."""
+    write the outcome. An exception raised here before the evaluation row is written leaves the
+    claim to `run_evaluation` to undo; one raised later leaves it in place."""
     # The evaluation this one replaced on the row may still have a rule waiting for its workflow:
     # its outcome can no longer apply, so the rule does not launch (and a wait past its bound is
     # recorded as such).
@@ -2295,8 +2300,10 @@ def _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, previou
     write that lands between the read and the write fails it, and the claim is rebuilt from a
     consistent re-read, up to `_CLAIM_ATTEMPTS` tries.
 
-    Returns the record's revision after the claim (a positive int, truthy) when the claim landed;
-    False when the row as read belongs to a newer evaluation; `CLAIM_BUSY` (falsy) when the record
+    Returns a `LandedClaim` (truthy) when the claim landed: the record's revision after the claim,
+    the copy of the record the landed write was computed from (a retried claim's re-read, not the
+    caller's `previous`), and the attributes it wrote; False when the row as read belongs to a newer
+    evaluation; `CLAIM_BUSY` (falsy) when the record
     changed under every try (logged; nothing was written); `CLAIM_REBOUND` (falsy) when the record
     names a schema other than `schema_name`: the binding changed after the caller read it, so the
     evaluation it asked for is not the one the record is bound to now."""
@@ -2326,7 +2333,7 @@ def _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, previou
                 raise
             continue
         # The write was conditional on the revision read and added one to it.
-        return _revision_of(previous) + 1
+        return LandedClaim(_revision_of(previous) + 1, previous, tuple(sorted(set(claim) - {"updatedAt"})))
     logger.warning(f"Evaluation {evaluation_id} of {database_id}:{asset_id} did not start: the "
                    f"asset-state record changed under each of {_CLAIM_ATTEMPTS} claims; the next "
                    "evaluation decides the asset")
@@ -2342,32 +2349,46 @@ def _revision_of(record: Dict[str, Any]) -> int:
         return 0
 
 
-# The attributes a claim writes (`_claim_state_row`), which `_undo_claim` puts back.
-_CLAIM_FIELDS = ("lastEvaluationId", "lastEvaluatedAt", "lastEvaluationStatus", "complianceState",
-                 *AWAITING_REEVALUATION_FIELDS)
+class LandedClaim(NamedTuple):
+    """A claim `_claim_state_row` wrote: the record's revision after it, the copy of the record it
+    was computed from, and the attributes it set (besides `updatedAt`)."""
+    revision: int
+    record: Dict[str, Any]
+    fields: Tuple[str, ...]
 
 
-def _undo_claim(database_id: str, asset_id: str, evaluation_id: str, claim_revision: int,
-                claimed_from: Dict[str, Any]) -> None:
+def _nothing_recorded(evaluation_id: str) -> bool:
+    """Whether the evaluation has no row yet (strongly consistent read). A read that fails counts as
+    recorded, so the claim stays and `claim_orphaned` judges it later."""
+    try:
+        return get_evaluation(evaluation_id, consistent_read=True) is None
+    except Exception as e:
+        logger.warning(f"Evaluation {evaluation_id}: its row could not be read ({e}); the claim stays")
+        return False
+
+
+def _undo_claim(database_id: str, asset_id: str, evaluation_id: str, claim: LandedClaim) -> None:
     """Put the record back as it was before this evaluation's claim, when the evaluation failed
-    before it wrote anything else (an AWS error, D159's revision still the claim's): the pointers,
-    the status, a state the claim filled in and the awaiting-re-evaluation marker go back to their
-    values in `claimed_from` (a record the claim created is deleted), so the change the evaluation
-    was for is not taken as covered (`complianceTrigger.change_covered_by_last_evaluation`) and the
-    queue's retry evaluates it. Conditional on the record's revision being the claim's: a record
-    another writer changed since is left as it is. Best-effort: a failure here is logged, and the
-    claim's staleness bound (`claim_orphaned`) covers it."""
+    before it recorded anything (an AWS error before its row was written): each attribute the claim
+    set goes back to its value in the copy the claim was computed from, or is removed when that copy
+    had none (so a state is put back only where the claim filled one in), and a record the claim
+    created is deleted. The change the evaluation was for is then not taken as covered
+    (`complianceTrigger.change_covered_by_last_evaluation`) and the queue's retry evaluates it.
+    Conditional on the record's revision being the claim's: a record another writer changed since is
+    left as it is. Best-effort: a failure here is logged, and the claim's staleness bound
+    (`claim_orphaned`) covers it."""
+    claimed_from = claim.record
     try:
         if not claimed_from:
-            delete_asset_state(database_id, asset_id, {RECORD_REVISION_FIELD: claim_revision})
+            delete_asset_state(database_id, asset_id, {RECORD_REVISION_FIELD: claim.revision})
         else:
-            restored = {field: claimed_from[field] for field in _CLAIM_FIELDS
+            restored = {field: claimed_from[field] for field in claim.fields
                         if field in claimed_from}
             restored["updatedAt"] = now_iso()
             update_asset_state(
                 database_id, asset_id, restored,
-                remove_fields=tuple(field for field in _CLAIM_FIELDS if field not in claimed_from),
-                computed_from={RECORD_REVISION_FIELD: claim_revision})
+                remove_fields=tuple(field for field in claim.fields if field not in claimed_from),
+                computed_from={RECORD_REVISION_FIELD: claim.revision})
     except Exception as e:
         if is_conditional_check_failure(e):
             logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} failed; the record "

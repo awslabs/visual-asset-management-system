@@ -148,6 +148,55 @@ class TestAFailedEvaluationIsEvaluatedAgain:
         assert _evaluation_rows(w) == []
         assert w.state()["lastEvaluationId"] == "ev-running"
 
+    def test_an_undo_after_a_retried_claim_keeps_the_concurrent_write(self, held):
+        """A writer releases the record between the evaluation's read and its claim; the claim
+        lands on the re-read record and the evaluation then fails. The undo puts back the copy the
+        claim was computed from, not the first read: the release stands."""
+        w = held("none", state="quarantined", body=_synchronous())
+        real_update = store.update_asset_state
+        fired = []
+
+        def update(database_id, asset_id, updates, *args, **kwargs):
+            if not fired and "lastEvaluationId" in updates:
+                fired.append(True)
+                current = store.get_compliance_record(DB, ASSET, consistent_read=True)
+                real_update(DB, ASSET, {"complianceState": engine.STATE_COMPLIANT,
+                                        "updatedAt": store.now_iso()},
+                            remove_fields=("quarantineReason",), computed_from=current)
+            return real_update(database_id, asset_id, updates, *args, **kwargs)
+
+        with patch.object(store, "update_asset_state", side_effect=update), _fail_once():
+            with pytest.raises(ClientError):
+                store.run_evaluation(DB, ASSET, SCHEMA)
+        assert fired
+        state = w.state()
+        assert state["complianceState"] == engine.STATE_COMPLIANT, state
+        assert state.get("lastEvaluationStatus") == engine.EVALUATION_STATUS_COMPLETED
+
+    def test_a_failure_after_the_launch_leaves_the_claim_and_launches_once(self, held):
+        """The pending state write fails after the pipeline rule launched. The evaluation row
+        exists, so the claim stays: the queue's retry finds the change covered and launches
+        nothing, and the run's callback finalizes the evaluation (as on the base)."""
+        w = held("none", state="compliant", body=waits.schema_body(other_rules=False))
+        _bound_by_database(w)
+        real = store._write_evaluation_state
+        calls = []
+
+        def write(*args, **kwargs):
+            calls.append(True)
+            if len(calls) == 1:
+                raise THROTTLED
+            return real(*args, **kwargs)
+
+        event = _sns_event(_stream_message(change_source="assetEdit", change_at=_ago(minutes=1)))
+        with patch.object(store, "_write_evaluation_state", side_effect=write):
+            assert _deliver(event) == ["q-1"]
+            (row,) = _evaluation_rows(w)
+            assert w.state()["lastEvaluationId"] == row["evaluationId"]
+            assert _deliver(event) == []
+        assert len(w.launched()) == 1
+        assert len(_evaluation_rows(w)) == 1
+
 
 @pytest.mark.unit
 class TestAnEvaluationBegunBeforeABindingChangeDoesNotDecide:
