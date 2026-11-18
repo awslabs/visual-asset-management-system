@@ -130,8 +130,9 @@ When `useCodeBuild: false`, the container is built locally during CDK deployment
 
 :::note[The Amazon EFS file system is removed with the stack]
 This pipeline's Amazon EFS file system uses a `DESTROY` removal policy, so it is deleted on teardown and
-needs no manual step — and its contents are not retained. Training checkpoints written there do not
-repopulate themselves, so copy anything you need to keep before tearing the stack down. This pipeline
+needs no manual step — and its contents are not retained. Training does not write its checkpoints
+there: Isaac Lab writes them under the container's `logs` folder and the pipeline uploads them to the
+asset (see [Training output](#training-output)), which is where to find them. This pipeline
 creates no Amazon S3 model cache bucket of its own. See
 [AWS resources](../architecture/aws-resources.md#amazon-efs).
 :::
@@ -189,14 +190,24 @@ The rl_games configuration of `Isaac-AutoMate-Assembly-Direct-v0` collects 32 st
 
 Training results are added to the asset the run executed against. Both Isaac Lab workflows set `defaultOutputFileBaseExecutionPathExtension` to `/{{executionId}}/`, which places each output in a folder named for the workflow execution, immediately before the file name (see [Output path prefix](../api/workflows.md#output-path-prefix)):
 
-| Output                                 | Format  | Description                                                              |
-| -------------------------------------- | ------- | ------------------------------------------------------------------------ |
-| `checkpoints/<executionId>/model_*.pt` | PyTorch | Model checkpoint files saved during training                             |
-| `<executionId>/metrics.csv`            | CSV     | Training metrics exported from TensorBoard event files                   |
-| `<executionId>/*_git_diff.txt`         | Text    | Configuration diff files (converted from `.diff` for VAMS compatibility) |
-| `<executionId>/train-config.json`      | JSON    | Input configuration saved for reference                                  |
+| Output                            | Format  | Description                                                                   |
+| --------------------------------- | ------- | ----------------------------------------------------------------------------- |
+| `checkpoints/<executionId>/*`     | PyTorch | Model checkpoint files saved during training, named by the RL library (below) |
+| `<executionId>/metrics.csv`       | CSV     | Training metrics exported from TensorBoard event files                        |
+| `<executionId>/*_git_diff.txt`    | Text    | Configuration diff files (converted from `.diff` for VAMS compatibility)      |
+| `<executionId>/train-config.json` | JSON    | Input configuration saved for reference                                       |
 
 For example, a run whose execution id is `3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a` writes its last rsl_rl checkpoint to `checkpoints/3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a/model_99.pt`.
+
+The files that reach `checkpoints/<executionId>/` depend on `rlLibrary` (Isaac Lab 2.3.0 layouts):
+
+| `rlLibrary` | Files uploaded                                                                                |
+| ----------- | --------------------------------------------------------------------------------------------- |
+| `rsl_rl`    | `model_<iteration>.pt`                                                                        |
+| `rl_games`  | `<name>.pth` (best reward) and `last_<name>_ep_<epoch>_rew_<reward>.pth` (periodic and final) |
+| `skrl`      | `agent_<timestep>.pt` and `best_agent.pt`                                                     |
+
+A run that writes none of these still finishes, and its job log carries a `WARNING: no <library> checkpoint found` line. An evaluation with no `checkpointPath` takes the `.pt` or `.pth` file of the chosen library with the highest epoch, iteration or timestep in the run folder written most recently. `best_agent.pt` and the rl_games `<name>.pth` rank below numbered checkpoints, so name them in `checkpointPath` to evaluate the best one.
 
 ## Evaluation mode
 
@@ -233,7 +244,7 @@ The **Template tag** column names the execute-form field that supplies each para
 | `trainingConfig.recordVideo`     | `RECORD_VIDEO`      | `false`                      | Whether the evaluation video is uploaded to the asset. Recording always happens, because the Isaac Lab play script requires `--video` to terminate; this controls publication only.                                                              |
 | `trainingConfig.rlLibrary`       | `RL_LIBRARY`        | `"rsl_rl"`                   | RL library the policy was trained with. Selects the Isaac Lab play script, so it must match the library used for training. Options: `"rsl_rl"`, `"rl_games"`, `"skrl"`; any other value fails the execution rather than falling back.            |
 | `trainingConfig.checkpointPath`  | `CHECKPOINT_PATH`   | `null`                       | Path to the policy file within the asset, for example `checkpoints/<executionId>/model_300.pt` for a checkpoint a training run wrote. Leaving the field blank evaluates the highest-numbered checkpoint in the run folder written most recently. |
-| `trainingConfig.policyS3Uri`     | --                  | `null`                       | Amazon S3 URI to a `.pt` policy file. Operator-supplied, and must name the executing asset's own bucket. Omit it to use `checkpointPath` or auto-discovery.                                                                                      |
+| `trainingConfig.policyS3Uri`     | --                  | `null`                       | Amazon S3 URI to a `.pt` or `.pth` policy file. Operator-supplied, and must name the executing asset's own bucket. Omit it to use `checkpointPath` or auto-discovery.                                                                            |
 | `trainingConfig.stageAssetPaths` | --                  | `[]`                         | Files and folders of the executing asset to download into the container before the run. See [Asset files staged before the run](#asset-files-staged-before-the-run).                                                                             |
 
 ### Evaluation output
