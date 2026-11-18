@@ -1856,14 +1856,17 @@ def run_evaluation(
         return _evaluate_claimed(database_id, asset_id, schema_name, actor, evaluation_id,
                                  evaluated_at, claimed.record)
     except Exception:
-        # While the evaluation has recorded nothing, the claim goes, so the change is not read as
-        # covered and a retry evaluates it. Once its row exists (written before the first pipeline
-        # launch) the claim stays: a retry would launch the workflows again.
-        if _nothing_recorded(evaluation_id):
-            _undo_claim(database_id, asset_id, evaluation_id, claimed)
+        # While no workflow was launched, the claim goes, so the change is not read as covered and a
+        # retry evaluates it; a row the evaluation wrote whole (no pipeline rule launched) is marked
+        # not applied. Once a workflow was launched the claim stays: a retry would launch it again,
+        # and the run's callback decides the asset.
+        readable, row = _evaluation_row(evaluation_id)
+        if readable and not (row or {}).get("pipelineExecutions"):
+            if _undo_claim(database_id, asset_id, evaluation_id, claimed) and row is not None:
+                _mark_not_applied(evaluation_id, engine.NOT_APPLIED_NOT_RECORDED)
         else:
             logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} failed after its "
-                        "row was written; its claim stays")
+                        "pipeline rules were launched; its claim stays")
         raise
 
 
@@ -1872,8 +1875,8 @@ def _evaluate_claimed(database_id: str, asset_id: str, schema_name: str, actor: 
                       ) -> Dict[str, Any]:
     """`run_evaluation` once its claim landed on the record (`claimed_from` is the record the claim
     was computed from): read the schema and the inputs, evaluate, launch the pipeline rules and
-    write the outcome. An exception raised here before the evaluation row is written leaves the
-    claim to `run_evaluation` to undo; one raised later leaves it in place."""
+    write the outcome. An exception raised here before a workflow was launched leaves the claim to
+    `run_evaluation` to undo; one raised after the launch leaves it in place."""
     # The evaluation this one replaced on the row may still have a rule waiting for its workflow:
     # its outcome can no longer apply, so the rule does not launch (and a wait past its bound is
     # recorded as such).
@@ -2357,26 +2360,40 @@ class LandedClaim(NamedTuple):
     fields: Tuple[str, ...]
 
 
-def _nothing_recorded(evaluation_id: str) -> bool:
-    """Whether the evaluation has no row yet (strongly consistent read). A read that fails counts as
-    recorded, so the claim stays and `claim_orphaned` judges it later."""
+def _evaluation_row(evaluation_id: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """`(readable, row)`: the evaluation's row by a strongly consistent read (None when it has none).
+    A pipeline evaluation lists its `pipelineExecutions` on the row before its first launch; a row
+    without them launched nothing. A read that fails is `(False, None)`, so the claim stays and
+    `claim_orphaned` judges it later."""
     try:
-        return get_evaluation(evaluation_id, consistent_read=True) is None
+        return True, get_evaluation(evaluation_id, consistent_read=True)
     except Exception as e:
         logger.warning(f"Evaluation {evaluation_id}: its row could not be read ({e}); the claim stays")
-        return False
+        return False, None
 
 
-def _undo_claim(database_id: str, asset_id: str, evaluation_id: str, claim: LandedClaim) -> None:
+def _mark_not_applied(evaluation_id: str, reason: str) -> None:
+    """Record on the evaluation's row that its outcome did not reach the record (`notApplied`,
+    `notAppliedMessage`). Best-effort: a failure is logged."""
+    try:
+        update_evaluation(evaluation_id, {"notApplied": reason,
+                                          "notAppliedMessage": engine.NOT_APPLIED_MESSAGES[reason]})
+    except Exception as e:
+        logger.warning(f"Evaluation {evaluation_id} could not be marked not applied: {e}")
+
+
+def _undo_claim(database_id: str, asset_id: str, evaluation_id: str, claim: LandedClaim) -> bool:
     """Put the record back as it was before this evaluation's claim, when the evaluation failed
-    before it recorded anything (an AWS error before its row was written): each attribute the claim
+    before it launched a workflow (an AWS error before the launch, or in the state write of an
+    evaluation without one): each attribute the claim
     set goes back to its value in the copy the claim was computed from, or is removed when that copy
     had none (so a state is put back only where the claim filled one in), and a record the claim
     created is deleted. The change the evaluation was for is then not taken as covered
     (`complianceTrigger.change_covered_by_last_evaluation`) and the queue's retry evaluates it.
     Conditional on the record's revision being the claim's: a record another writer changed since is
-    left as it is. Best-effort: a failure here is logged, and the claim's staleness bound
-    (`claim_orphaned`) covers it."""
+    left as it is (so a state write that landed before it raised is kept). Best-effort: a failure
+    here is logged, and the claim's staleness bound (`claim_orphaned`) covers it. Returns whether the
+    claim was undone."""
     claimed_from = claim.record
     try:
         if not claimed_from:
@@ -2393,12 +2410,13 @@ def _undo_claim(database_id: str, asset_id: str, evaluation_id: str, claim: Land
         if is_conditional_check_failure(e):
             logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} failed; the record "
                         "changed since its claim and is left as it is")
-            return
+            return False
         logger.warning(f"Evaluation {evaluation_id} of {database_id}:{asset_id} failed and its "
                        f"claim could not be undone: {e}")
-        return
+        return False
     logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} failed; its claim was "
                 "undone so the change is evaluated again")
+    return True
 
 
 # A `pending_pipeline` claim older than this whose evaluation row does not exist belongs to a run
@@ -2447,9 +2465,10 @@ def _superseded_result(evaluation_id: str, previous: Dict[str, Any]) -> Dict[str
 class StateWrite:
     """What an evaluation's state write did (`_write_evaluation_state`): whether it landed
     (`written`, also its truth value), the asset's `compliance_state` after it (the state applied,
-    or the state left as it was), whether an exception applied to the verdict, and the human
-    decision that outranked the outcome (`not_applied`, `engine.outranking_decision`) when the
-    write recorded the evaluation without applying it (D159)."""
+    or the state left as it was), whether an exception applied to the verdict, and what outranked
+    the outcome (`not_applied`): the human decision (`engine.outranking_decision`) when the write
+    recorded the evaluation without applying it (D159), or `engine.NOT_APPLIED_BINDING_CHANGED` when
+    the evaluation began before the record's binding changed and nothing was written."""
 
     __slots__ = ("written", "compliance_state", "exception_applies", "not_applied")
 
@@ -2534,6 +2553,10 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
                 logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id}: the asset's "
                             "compliance record was removed; the outcome is not applied")
                 return StateWrite(False)
+        if engine.began_before_binding_change(previous, evaluated_at):
+            logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} began before the "
+                        "asset's binding changed; the asset state is left as it is")
+            return StateWrite(False, not_applied=engine.NOT_APPLIED_BINDING_CHANGED)
         if not engine.evaluation_owns_state_row(previous, evaluation_id, evaluated_at):
             logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} is older than "
                         f"the asset's last evaluation {previous.get('lastEvaluationId')}; the asset "

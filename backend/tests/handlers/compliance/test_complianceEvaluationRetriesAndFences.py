@@ -197,6 +197,34 @@ class TestAFailedEvaluationIsEvaluatedAgain:
         assert len(w.launched()) == 1
         assert len(_evaluation_rows(w)) == 1
 
+    def test_a_synchronous_state_write_failure_is_evaluated_again(self, held):
+        """An evaluation without pipeline rules writes its row whole, then its state write fails.
+        Nothing was launched, so the claim goes and the queue's retry decides the asset (here: a
+        failing quarantine rule); the first row is marked not applied."""
+        w = held("none", state="compliant", body=_synchronous(FAILING_NAME))
+        _bound_by_database(w)
+        real = store._write_evaluation_state
+        calls = []
+
+        def write(*args, **kwargs):
+            calls.append(True)
+            if len(calls) == 1:
+                raise THROTTLED
+            return real(*args, **kwargs)
+
+        event = _sns_event(_stream_message(change_source="assetEdit", change_at=_ago(minutes=1)))
+        with patch.object(store, "_write_evaluation_state", side_effect=write):
+            assert _deliver(event) == ["q-1"]
+            assert _deliver(event) == []
+        state = w.state()
+        assert (state["complianceState"], state["lastEvaluationStatus"]) == (
+            engine.STATE_QUARANTINED, engine.EVALUATION_STATUS_COMPLETED)
+        rows = {row["evaluationId"]: row for row in _evaluation_rows(w)}
+        assert len(rows) == 2
+        first = next(row for eid, row in rows.items() if eid != state["lastEvaluationId"])
+        assert first["notApplied"] == engine.NOT_APPLIED_NOT_RECORDED
+        assert rows[state["lastEvaluationId"]].get("notApplied") is None
+
 
 @pytest.mark.unit
 class TestAnEvaluationBegunBeforeABindingChangeDoesNotDecide:
@@ -215,8 +243,12 @@ class TestAnEvaluationBegunBeforeABindingChangeDoesNotDecide:
         assert (state["schemaName"], state["complianceState"]) == (
             OTHER_SCHEMA, engine.STATE_PENDING_EVALUATION)
         assert "quarantineReason" not in state or state["quarantineReason"] is None
-        # The verdict is recorded on the evaluation's own row only.
-        assert w.evaluation(started["evaluationId"])["status"] == engine.EVALUATION_STATUS_COMPLETED
+        # The verdict is recorded on the evaluation's own row only, marked not applied.
+        row = w.evaluation(started["evaluationId"])
+        assert row["status"] == engine.EVALUATION_STATUS_COMPLETED
+        assert (row["notApplied"], row["notAppliedMessage"]) == (
+            engine.NOT_APPLIED_BINDING_CHANGED,
+            engine.NOT_APPLIED_MESSAGES[engine.NOT_APPLIED_BINDING_CHANGED])
         assert [row for row in w.audits("compliance_check")
                 if row["evaluationId"] == started["evaluationId"]
                 and row.get("newState") == engine.STATE_QUARANTINED] == []
@@ -244,9 +276,17 @@ class TestAnEvaluationBegunBeforeABindingChangeDoesNotDecide:
             result = store.run_evaluation(DB, ASSET, SCHEMA)
         assert done
         assert result["verdict"] == engine.STATE_QUARANTINED
+        assert result["notApplied"] == engine.NOT_APPLIED_BINDING_CHANGED
+        assert w.evaluation(result["evaluationId"])["notApplied"] == engine.NOT_APPLIED_BINDING_CHANGED
         state = w.state()
         assert (state["schemaName"], state["complianceState"]) == (
             OTHER_SCHEMA, engine.STATE_PENDING_EVALUATION)
+
+    def test_a_manual_decision_field_never_reads_as_a_binding_change(self):
+        # Only a release or an exception grant on the record outranks an evaluation that way.
+        record = {"manualDecision": engine.NOT_APPLIED_BINDING_CHANGED,
+                  "manualDecisionAt": "2099-01-01T00:00:00+00:00"}
+        assert engine.outranking_decision(record, "2026-01-01T00:00:00+00:00") is None
 
     def test_an_evaluation_asked_for_the_schema_the_record_was_bound_to_before_does_not_run(self, held):
         w = held("none", state="compliant", body=_synchronous(FAILING_NAME))

@@ -119,10 +119,19 @@ MANUAL_DECISION_RELEASED = "released"
 MANUAL_DECISION_EXCEPTION_GRANTED = "exceptionGranted"
 # The evaluation-row `notAppliedMessage` of an evaluation whose outcome a later decision outranked;
 # its `notApplied` is the decision.
+# The human decisions recorded on the compliance record (`MANUAL_DECISION_FIELD`).
+MANUAL_DECISIONS = (MANUAL_DECISION_RELEASED, MANUAL_DECISION_EXCEPTION_GRANTED)
+# An evaluation outranked by a binding change made after it began (`began_before_binding_change`),
+# and one whose outcome could not be written to the record before its claim was undone.
+NOT_APPLIED_BINDING_CHANGED = "bindingChanged"
+NOT_APPLIED_NOT_RECORDED = "notRecorded"
 NOT_APPLIED_MESSAGES = {
     MANUAL_DECISION_RELEASED: "Not applied: the asset was released after this evaluation began",
     MANUAL_DECISION_EXCEPTION_GRANTED: (
         "Not applied: an exception was granted after this evaluation began"),
+    NOT_APPLIED_BINDING_CHANGED: (
+        "Not applied: the asset's compliance schema binding changed after this evaluation began"),
+    NOT_APPLIED_NOT_RECORDED: "Not applied: the outcome could not be written to the asset",
 }
 
 # Evaluation record statuses.
@@ -1531,7 +1540,7 @@ def outranking_decision(state_row: Optional[Dict[str, Any]], evaluated_at: Any) 
     side counts as before the evaluation, so the evaluation decides as it always did."""
     row = state_row or {}
     decision = row.get(MANUAL_DECISION_FIELD)
-    if decision not in NOT_APPLIED_MESSAGES:
+    if decision not in MANUAL_DECISIONS:
         return None
     decided, started = parse_timestamp(row.get(MANUAL_DECISION_AT_FIELD)), parse_timestamp(evaluated_at)
     if decided is None or started is None or decided <= started:
