@@ -9,7 +9,7 @@
  */
 
 import { createLoadingManager, isolatedUrlModifier } from "./assetDependencyResolver";
-import { checkUsdzSize, isUsdzBytes } from "./usdDependencies";
+import { checkZipSize, isUsdzBytes } from "./usdDependencies";
 
 export interface LoaderResult {
     object: any; // THREE.Object3D or THREE.Group
@@ -346,16 +346,22 @@ export async function load3DS(
 }
 
 /**
- * Load 3MF file
+ * Load a 3MF file. A 3MF is a zip package: its entry count and declared size are checked against
+ * ZIP_LIMITS before it is parsed, as a .usdz is.
  */
 export async function load3MF(
     arrayBuffer: ArrayBuffer,
     fileName: string,
     ThreeMFLoader: any,
-    manager?: any
+    manager?: any,
+    unzipSync?: (data: Uint8Array, opts: any) => any
 ): Promise<LoaderResult> {
     return new Promise((resolve, reject) => {
         try {
+            const bytes = new Uint8Array(arrayBuffer);
+            if (isUsdzBytes(bytes) && unzipSync) {
+                checkZipSize(bytes, unzipSync, "3MF");
+            }
             const loader = new ThreeMFLoader(manager);
             const object = loader.parse(arrayBuffer);
             resolve({ object });
@@ -383,7 +389,7 @@ export async function loadUSD(
             }
             const bytes = new Uint8Array(arrayBuffer);
             if (isUsdzBytes(bytes) && unzipSync) {
-                checkUsdzSize(bytes, unzipSync);
+                checkZipSize(bytes, unzipSync);
             }
             const loader = new USDLoader(manager);
             loader.parse(
@@ -515,7 +521,7 @@ export async function loadFile(
         case "3ds":
             return load3DS(arrayBuffer, fileName, TDSLoader, loadingManager);
         case "3mf":
-            return load3MF(arrayBuffer, fileName, ThreeMFLoader, loadingManager);
+            return load3MF(arrayBuffer, fileName, ThreeMFLoader, loadingManager, fflate?.unzipSync);
         case "usd":
         case "usda":
         case "usdc":
