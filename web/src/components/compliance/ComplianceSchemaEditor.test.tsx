@@ -12,7 +12,11 @@ import ComplianceSchemaEditor from "./ComplianceSchemaEditor";
 
 jest.mock("@monaco-editor/react", () => ({
     __esModule: true,
-    default: () => <div>Monaco Editor Mock</div>,
+    default: (props: { theme?: string }) => (
+        <div data-testid="monaco" data-theme={props.theme}>
+            Monaco Editor Mock
+        </div>
+    ),
     loader: { config: jest.fn() },
 }));
 
@@ -628,5 +632,30 @@ describe("ComplianceSchemaEditor Visual Builder and the JSON", () => {
         value = JSON.stringify(pipelineBody(), null, 2);
         rerender(editor());
         await waitFor(() => expect(onProblem).toHaveBeenLastCalledWith(null));
+    });
+});
+
+describe("ComplianceSchemaEditor theme", () => {
+    afterEach(() => document.body.classList.remove("awsui-dark-mode"));
+
+    it("uses the light editor theme in the light app theme", () => {
+        render(<ComplianceSchemaEditor value="{}" onChange={jest.fn()} />);
+        expect(screen.getByTestId("monaco")).toHaveAttribute("data-theme", "vs");
+    });
+
+    it("follows the app into dark mode", async () => {
+        render(<ComplianceSchemaEditor value="{}" onChange={jest.fn()} />);
+        act(() => {
+            document.body.classList.add("awsui-dark-mode");
+        });
+        await waitFor(() =>
+            expect(screen.getByTestId("monaco")).toHaveAttribute("data-theme", "vs-dark")
+        );
+    });
+
+    it("draws the editor border with the theme's input border colour", () => {
+        render(<ComplianceSchemaEditor value="{}" onChange={jest.fn()} />);
+        const frame = screen.getByTestId("monaco").parentElement as HTMLElement;
+        expect(frame.style.border).toContain("var(--vams-border-input)");
     });
 });
