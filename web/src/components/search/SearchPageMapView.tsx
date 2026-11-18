@@ -595,6 +595,9 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
             {/* Map */}
             <Map
                 ref={mapRef}
+                // Flat map: the basemap style selects the globe, which shows one hemisphere, so hits
+                // spread over the world (or either side of longitude 180) could not all be in view.
+                projection="mercator"
                 initialViewState={initialViewState}
                 style={{ height: "70vh", width: "100%" }}
                 mapStyle={mapStyleUrl}

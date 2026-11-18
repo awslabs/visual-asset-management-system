@@ -24,6 +24,7 @@ import { FIT_BOUNDS_OPTIONS } from "./utils/mapBounds";
 
 const mockEaseTo = jest.fn();
 const mockMap: { load: () => void } = { load: () => undefined };
+const mockMapProps: { last: any } = { last: null };
 
 jest.mock("react-map-gl/maplibre", () => {
     const ReactActual = jest.requireActual("react");
@@ -31,6 +32,7 @@ jest.mock("react-map-gl/maplibre", () => {
         __esModule: true,
         default: ReactActual.forwardRef((props: any, ref: any) => {
             const [instance, setInstance] = ReactActual.useState(null);
+            mockMapProps.last = props;
             mockMap.load = () =>
                 setInstance({
                     easeTo: mockEaseTo,
@@ -243,6 +245,11 @@ describe("Map view framing (D99)", () => {
             { lon: -179, lat: 1 },
             { lon: 180, lat: 0 }
         );
+    });
+
+    it("draws a flat map, so hits on both sides of the world can all be in view (UAT A)", () => {
+        render(view(stateWith([nlpAssetHit("det", DETROIT)])));
+        expect(mockMapProps.last.projection).toBe("mercator");
     });
 
     it("frames nothing when no result on the page has a location", () => {
