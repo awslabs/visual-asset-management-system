@@ -389,7 +389,7 @@ class TestDuplicateRecipes:
         with pytest.raises(recipes.RecipeConflict) as err:
             recipes.create_admin_recipe(
                 AmiRecipeRequestModel(**{**self.COPY, "stackName": self.SOURCE["stackName"]}), "carol")
-        assert str(err.value) == "stackName is already used by recipe 'al2023-desktop'"
+        assert str(err.value) == "stackName is already used by another recipe"
         assert store.get_recipe("al2023-copy") is None
 
     def test_without_duplicate_of_assets_are_still_refused(self, source):
@@ -451,7 +451,7 @@ class TestStackNameUniqueness:
         for name in ("VAMS AL2023 Desktop", "vams al2023 DESKTOP", "  VAMS AL2023 Desktop "):
             with pytest.raises(recipes.RecipeConflict) as err:
                 recipes.create_admin_recipe(AmiRecipeRequestModel(**{**self.MINE, "stackName": name}), "carol")
-            assert str(err.value) == "stackName is already used by recipe 'al2023-desktop'"
+            assert str(err.value) == "stackName is already used by another recipe"
         assert store.get_recipe("mine") is None
         created = recipes.create_admin_recipe(
             AmiRecipeRequestModel(**{**self.MINE, "stackName": "VAMS AL2023 Desktop 2"}), "carol")
@@ -463,7 +463,17 @@ class TestStackNameUniqueness:
         with pytest.raises(recipes.RecipeConflict) as err:
             recipes.create_admin_recipe(
                 AmiRecipeRequestModel(**{**self.MINE, "stackName": "VAMS AL2023 Desktop"}), "carol")
-        assert str(err.value) == "stackName is already used by recipe 'al2023-desktop'"
+        assert str(err.value) == "stackName is already used by another recipe"
+
+    def test_the_refusal_names_no_other_recipe_and_the_log_does(self, world, monkeypatch):
+        seeded()
+        log = MagicMock()
+        monkeypatch.setattr(recipes, "logger", log)
+        with pytest.raises(recipes.RecipeConflict) as err:
+            recipes.create_admin_recipe(
+                AmiRecipeRequestModel(**{**self.MINE, "stackName": "VAMS AL2023 Desktop"}), "carol")
+        assert "al2023-desktop" not in str(err.value)
+        assert "al2023-desktop" in " ".join(str(call.args[0]) for call in log.info.call_args_list)
 
     def test_update_refuses_another_recipes_stack_name_and_keeps_its_own(self, world):
         seeded()
@@ -473,7 +483,7 @@ class TestStackNameUniqueness:
             recipes.update_admin_recipe(
                 row, AmiRecipeRequestModel(**{**self.MINE, "stackName": "vams al2023 desktop"}), "dave")
 
-        assert str(err.value) == "stackName is already used by recipe 'al2023-desktop'"
+        assert str(err.value) == "stackName is already used by another recipe"
         assert store.get_recipe("mine")["stackName"] == "Mine"
         updated = recipes.update_admin_recipe(row, AmiRecipeRequestModel(**{**self.MINE, "rootSizeGb": 80}), "dave")
         assert updated["stackName"] == "Mine" and updated["rootSizeGb"] == 80
