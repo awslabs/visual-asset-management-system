@@ -863,6 +863,8 @@ The image completed and its AMI is kept, but registering the AMI in EDH, or atta
     vamscli edh admin ami-recipe register RECIPE_ID VERSION
     ```
 
+    A retry that fails again exits `1` with `Registration failed again: <reason>`.
+
 A successful retry makes the build `AVAILABLE` and retires the recipe's other `AVAILABLE` builds, a newer one included, and a retry the sweep completes on its own has the same effect. Retry an older build only if it should replace the current one; to keep a newer build, retire the older `REGISTER_FAILED` build with `vamscli edh admin ami-recipe retire RECIPE_ID VERSION --confirm`. That retire is refused while EDH lists no stack for the build (see [Retire Refused](#retire-refused)), and the sweep then keeps retrying the build until its five automatic attempts have failed. A retry refused with `the build's AMI has been deregistered` concerns a build that was already pruned; build the recipe again instead.
 
 ### Duplicate Refused

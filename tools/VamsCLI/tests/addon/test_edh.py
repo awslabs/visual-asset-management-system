@@ -1942,6 +1942,30 @@ class TestAmiRecipeNotFound:
             assert result.exit_code == 1
             assert json.loads(result.output) == {"error": RECIPE_NOT_FOUND, "error_type": "EdhAmiRecipeNotFoundError"}
 
+    def test_a_retry_that_failed_again_exits_1_with_the_reason(self, cli_runner, generic_command_mocks):
+        build = {"recipeId": "team-desktop", "version": 7, "status": "REGISTER_FAILED",
+                 "error": "EDH rejected the stack"}
+        with generic_command_mocks("addon.edh") as mocks:
+            mocks["api_client"].register_edh_ami_recipe_build.return_value = build
+            text = cli_runner.invoke(cli, ["edh", "admin", "ami-recipe", "register", "team-desktop", "7"])
+            assert text.exit_code == 1
+            assert "Registration failed again: EDH rejected the stack" in text.output
+            assert "Build registered in EDH" not in text.output
+            result = cli_runner.invoke(
+                cli, ["edh", "admin", "ami-recipe", "register", "team-desktop", "7", "--json-output"])
+            assert result.exit_code == 1
+            assert json.loads(result.output) == {
+                "error": "Registration failed again: EDH rejected the stack", "error_type": "EdhOperationError",
+                "status": "REGISTER_FAILED", "registrationError": "EDH rejected the stack"}
+
+    def test_a_retry_that_registered_the_build_succeeds(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks("addon.edh") as mocks:
+            mocks["api_client"].register_edh_ami_recipe_build.return_value = {
+                "recipeId": "team-desktop", "version": 7, "status": "AVAILABLE"}
+            result = cli_runner.invoke(cli, ["edh", "admin", "ami-recipe", "register", "team-desktop", "7"])
+            assert result.exit_code == 0
+            assert "Build registered in EDH" in result.output
+
     def test_register_of_a_missing_build_in_json_mode_is_one_error_object(self, cli_runner, generic_command_mocks):
         with generic_command_mocks("addon.edh") as mocks:
             mocks["api_client"].register_edh_ami_recipe_build.side_effect = EdhAmiRecipeBuildNotFoundError(

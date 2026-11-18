@@ -800,7 +800,7 @@ vamscli edh admin ami-recipe register al2023-desktop 4
 vamscli edh admin ami-recipe register al2023-desktop 4 --json-output
 ```
 
-The retry tags the AMI again and registers the stack, adopting an EDH stack that already carries the build's name. It returns the build row: `AVAILABLE` when registration completes, which also retires the recipe's other `AVAILABLE` builds (a newer one included) and prunes AMIs, or `REGISTER_FAILED` with the reason in `error`. Both answer HTTP 200 and the CLI prints `Build registered in EDH` for either, so read `status` in the returned row (for example `--json-output | jq -r '.status'`). It is refused with HTTP 409 `only a REGISTER_FAILED build can be re-registered`, `the build's AMI has been deregistered`, or `the build status changed` when another retry, a retire or pruning claimed the build first.
+The retry tags the AMI again and registers the stack, adopting an EDH stack that already carries the build's name. It returns the build row: `AVAILABLE` when registration completes, which also retires the recipe's other `AVAILABLE` builds (a newer one included) and prunes AMIs, or `REGISTER_FAILED` with the reason in `error`. Both answer HTTP 200. The CLI prints `Build registered in EDH` and exits 0 only for `AVAILABLE`; for `REGISTER_FAILED` it reports `Registration failed again: <reason>` and exits 1, and with `--json-output` the error object carries `status` and the reason as `registrationError`. It is refused with HTTP 409 `only a REGISTER_FAILED build can be re-registered`, `the build's AMI has been deregistered`, or `the build status changed` when another retry, a retire or pruning claimed the build first.
 
 ### edh admin ami-recipe retire
 

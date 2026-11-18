@@ -23,7 +23,7 @@ from ...utils.addon.edh_exceptions import (
     EdhAmiRecipeNotFoundError, EdhAmiRecipeBuildNotFoundError, EdhReservationFullError,
     EdhReservationNotPermittedError, EdhCapacityReservationNotFoundError, EdhStartFailedError, EdhStartStalledError,
     EdhStartWaitTimeoutError,
-    EdhUnavailableError, EdhOutcomeUnknownError,
+    EdhUnavailableError, EdhOutcomeUnknownError, EdhOperationError,
 )
 from ...utils.exceptions import APIError, InvalidRequestPathError, RouteNotDeployedError
 from ...utils.addon.edh_api_client import EDH_CAPACITY_RESERVATION_ID, EDH_CAPACITY_RESERVATION_ID_MESSAGE
@@ -84,6 +84,9 @@ def launch_retry_hint(bootstrap_id: str) -> str:
             f"'vamscli edh workstation get {bootstrap_id}'; only if it is not found, run the same create "
             f"again with --bootstrap-id {bootstrap_id}, which cannot launch a second workstation.")
 
+
+# The status a build keeps when its EDH registration failed (the AMI recipe service's store).
+AMI_BUILD_REGISTER_FAILED = 'REGISTER_FAILED'
 
 # The catalog's LAUNCH column: whether the role may launch into the reservation, not only see it.
 LAUNCH_ALLOWED_TEXT = 'yes'
@@ -2430,9 +2433,10 @@ def ami_recipe_builds(ctx: click.Context, recipe_id: str, json_output: bool):
 def ami_recipe_register(ctx: click.Context, recipe_id: str, version: int, json_output: bool):
     """Retry the EDH registration of a REGISTER_FAILED build and reset its automatic attempt count.
 
-    A build registers automatically when its image completes. Read `status` in the returned build:
-    AVAILABLE when the retry registered it (the recipe's other AVAILABLE builds are then retired), or
-    REGISTER_FAILED with the reason in `error`.
+    A build registers automatically when its image completes. The command succeeds when the retry
+    registered the build (status AVAILABLE; the recipe's other AVAILABLE builds are then retired). When
+    the build is still REGISTER_FAILED, it reports the reason from `error` and exits 1; with
+    --json-output the error carries `status` and the reason as `registrationError`.
 
     Examples:
         vamscli edh admin ami-recipe register al2023-desktop 1
@@ -2444,6 +2448,13 @@ def ami_recipe_register(ctx: click.Context, recipe_id: str, version: int, json_o
     output_status(f"Registering AMI recipe '{recipe_id}' build v{version} in EDH...", json_output)
     try:
         result = api_client.register_edh_ami_recipe_build(recipe_id, version)
+        if isinstance(result, dict) and result.get('status') == AMI_BUILD_REGISTER_FAILED:
+            # The route answers 200 with the build row whether or not the retry registered it.
+            failed = EdhOperationError(f"Registration failed again: {result.get('error') or 'no reason given'}")
+            # `error` is the JSON document's own message field, so the build's reason goes under
+            # `registrationError`.
+            failed.json_fields = {'status': result.get('status'), 'registrationError': result.get('error')}
+            raise failed
         output_result(result, json_output, success_message="Build registered in EDH", cli_formatter=format_json)
     except EdhAmiRecipeNotFoundError as e:
         output_error(e, json_output, error_type="Recipe Not Found",
