@@ -187,6 +187,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **API stack template under the CloudFormation limit** — A deployment with, for example, a customer managed key, every Lambda function in the VPC and Download as Zip failed on the `ApiBuilder2` nested stack, whose template was over 1,000,000 bytes. The shared CDK Nag suppressions are written only on the IAM roles and policies they apply to, so the template is about a third smaller; no resource is replaced. (issue #1647)
 -   **Cross-Region bucket downloads** — The web Content Security Policy admits presigned Amazon S3 URLs for an asset bucket in any Region of the partition, not only the deployment Region. (issue #1616)
 -   **API document parses strictly** — `VAMS_API.yaml` no longer defines `errorMessage` twice in the `complianceEvaluation` schema, so strict YAML and OpenAPI tools accept it. (issue #1498)
 -   A file manager selection made with Ctrl- or Shift-click while the file list is still loading keeps every selected item when more files arrive (#1497).
