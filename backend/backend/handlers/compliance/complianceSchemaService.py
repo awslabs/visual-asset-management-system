@@ -712,6 +712,9 @@ def register_schema(event, request: CreateSchemaRequestModel):
     current = _latest_schema_item(request.schemaName)
     if current and not _enforce(request.schemaName, _scope_of(current), "PUT"):
         return authorization_error()
+    # A new version of a system schema is written by the system user only, as an update is.
+    if current and current.get("isSystem") and claims_and_roles["tokens"][0] != SYSTEM_USER:
+        return general_error(body={"message": "System schemas cannot be modified"}, event=event)
 
     if current and databaseRetirement.is_deleted_scope(_scope_of(current)):
         return general_error(body={"message": DELETED_DATABASE_SCHEMA_MESSAGE}, event=event)
