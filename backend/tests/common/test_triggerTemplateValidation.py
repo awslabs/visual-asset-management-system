@@ -234,7 +234,7 @@ def _bundle_workflow_files():
     per-variant subdirectory of it, so both shapes are globbed."""
     root = _bundle_root()
     found = set()
-    for pattern in ("/**/vamsSchema/**/workflow.json", "/**/vamsSchema/workflow.json"):
+    for pattern in ("/**/vamsSchema*/**/workflow.json", "/**/vamsSchema*/workflow.json"):
         found.update(os.path.normpath(f) for f in glob.glob(root + pattern, recursive=True))
     return sorted(found)
 
@@ -245,7 +245,7 @@ def _walked_workflow_files():
     rather than trusted."""
     found = []
     for dirpath, _dirnames, filenames in os.walk(_bundle_root()):
-        if "workflow.json" in filenames and "vamsSchema" in dirpath.split(os.sep):
+        if "workflow.json" in filenames and any(part.startswith("vamsSchema") for part in dirpath.split(os.sep)):
             found.append(os.path.normpath(os.path.join(dirpath, "workflow.json")))
     return sorted(found)
 

@@ -43,7 +43,7 @@ type SearchAction =
     | { type: "SET_ERROR"; payload: string | null }
     | { type: "SET_RESULT"; payload: SearchResponse }
     | { type: "SET_SELECTED_ITEMS"; payload: SearchResult[] }
-    | { type: "CLEAR_SEARCH" }
+    | { type: "CLEAR_SEARCH"; payload?: { keepFilterKeys?: string[] } }
     | { type: "RESET_PAGINATION" }
     | { type: "ENTER_VIEWER_SELECT_MODE" }
     | { type: "EXIT_VIEWER_SELECT_MODE" }
@@ -167,13 +167,15 @@ function searchReducer(state: SearchState, action: SearchAction): SearchState {
                 selectedItems: action.payload,
             };
 
-        case "CLEAR_SEARCH":
-            return {
-                ...initialState,
-                filters: {
-                    _rectype: state.filters._rectype, // Only preserve record type filter
-                },
-            };
+        case "CLEAR_SEARCH": {
+            // The record type is kept, and so is each filter the caller names (a database route's
+            // locked database): Clear all filters returns the page to its defaults.
+            const filters: SearchFilters = { _rectype: state.filters._rectype };
+            for (const key of action.payload?.keepFilterKeys ?? []) {
+                if (state.filters[key]) filters[key] = state.filters[key];
+            }
+            return { ...initialState, filters };
+        }
 
         case "RESET_PAGINATION":
             return {
@@ -221,6 +223,49 @@ function searchReducer(state: SearchState, action: SearchAction): SearchState {
         default:
             return state;
     }
+}
+
+/**
+ * Keys kept in the filter state that are not a filter the user set: the record type is the page's
+ * mode (Clear all filters keeps it), and showResultExplanation is a display preference.
+ */
+const NON_USER_FILTER_KEYS = new Set(["_rectype", "showResultExplanation"]);
+
+/** Search options that are on until the user clears them; only a cleared one is a change. */
+const DEFAULT_ON_OPTION_KEYS = new Set(["includeMetadataInKeywordSearch", "includeSegments"]);
+
+/** Whether the filter stored under `key` narrows or changes the search from the page's default. */
+export function isUserFilterSet(key: string, filter: any): boolean {
+    if (NON_USER_FILTER_KEYS.has(key)) return false;
+    if (DEFAULT_ON_OPTION_KEYS.has(key)) return filter === false;
+    if (filter === null || filter === undefined || filter === false || filter === "") return false;
+    if (typeof filter !== "object") return true;
+    // A date or file size filter the user turned on, with or without its value yet.
+    if ("operator" in filter) return true;
+    // A multiselect holds `values`; a cleared one is removed rather than kept empty.
+    if (Array.isArray(filter.values)) return filter.values.length > 0;
+    // A select option or a flag: "all" and "" are the unset choices.
+    if ("value" in filter) return filter.value !== "all" && filter.value !== "";
+    // A shape such as the geo filter.
+    return true;
+}
+
+/**
+ * Whether the user has changed the search from the page's defaults, so Clear all filters has
+ * something to clear: a query, a filter, or a metadata filter row. The record type is not one, and
+ * on a database route (`databaseLocked`) neither is the database the route locks.
+ */
+export function hasUserSearchCriteria(
+    query: string,
+    filters: SearchFilters,
+    metadataFilters: MetadataFilter[],
+    { databaseLocked = false }: { databaseLocked?: boolean } = {}
+): boolean {
+    if (query.trim().length > 0) return true;
+    if (metadataFilters.length > 0) return true;
+    return Object.keys(filters).some(
+        (key) => !(databaseLocked && key === "str_databaseid") && isUserFilterSet(key, filters[key])
+    );
 }
 
 /**
@@ -321,8 +366,10 @@ export const useSearchState = (initialFilters?: SearchFilters, databaseId?: stri
         dispatch({ type: "SET_SELECTED_ITEMS", payload: items });
     }, []);
 
-    const clearSearch = useCallback(() => {
-        dispatch({ type: "CLEAR_SEARCH" });
+    // `keepFilterKeys` names filters that are part of the page rather than the user's choice (a
+    // database route's locked database); the record type is always kept.
+    const clearSearch = useCallback((keepFilterKeys: string[] = []) => {
+        dispatch({ type: "CLEAR_SEARCH", payload: { keepFilterKeys } });
     }, []);
 
     const resetPagination = useCallback(() => {
@@ -369,17 +416,12 @@ export const useSearchState = (initialFilters?: SearchFilters, databaseId?: stri
         [state.query, state.filters, state.metadataFilters, state.sort, state.pagination]
     );
 
-    // Check if search has active filters
-    const hasActiveFilters = useCallback(() => {
-        const hasQuery = state.query.trim().length > 0;
-        const hasFilters = Object.keys(state.filters).some((key) => {
-            const filter = state.filters[key];
-            return filter && filter.value !== "all" && filter.value !== "";
-        });
-        const hasMetadataFilters = state.metadataFilters.length > 0;
-
-        return hasQuery || hasFilters || hasMetadataFilters;
-    }, [state.query, state.filters, state.metadataFilters]);
+    // Whether Clear all filters has something to clear (see hasUserSearchCriteria).
+    const hasActiveFilters = useCallback(
+        (options: { databaseLocked?: boolean } = {}) =>
+            hasUserSearchCriteria(state.query, state.filters, state.metadataFilters, options),
+        [state.query, state.filters, state.metadataFilters]
+    );
 
     return {
         // State

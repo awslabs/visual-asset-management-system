@@ -22,7 +22,7 @@ os.environ.setdefault("OPENSEARCH_ENDPOINT_SSM_PARAM", "/test/endpoint")
 os.environ.setdefault("OPENSEARCH_TYPE", "provisioned")
 
 _SEARCH_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "backend", "handlers", "search", "search.py"
+    os.path.dirname(__file__), "..", "..", "..", "backend", "handlers", "osSemanticSearch", "search.py"
 )
 
 USER_ID = "filter-user"
@@ -63,6 +63,60 @@ def load_search_module(module_name):
             else:
                 sys.modules.pop(name, None)
     return module
+
+
+class FakeClock:
+    """A monotonic clock the search under test reads instead of the real one (``install_fake_clock``):
+    each in-memory fetch and each per-hit decision advances it by a set cost, so window sizes and the
+    time bound follow those costs and never how fast the runner is (#1633).
+
+    The defaults are a fast runner's: 10 ms a fetch and 0.1 ms a decision, so 2,020 candidates are
+    fetched and checked in well under a second of the 10 s bound and every window grows the full
+    SEARCH_FILL_GROWTH_FACTOR. A test about the time bound sets its own with ``costs``."""
+
+    FETCH_SECONDS = 0.01
+    FETCH_SECONDS_PER_HIT = 0.0
+    DECISION_SECONDS = 0.0001
+
+    def __init__(self):
+        self.now = 1000.0
+        self.costs(self.FETCH_SECONDS, self.FETCH_SECONDS_PER_HIT, self.DECISION_SECONDS)
+
+    def costs(self, fetch_seconds, fetch_seconds_per_hit, decision_seconds):
+        """Set what each fetch (plus a per-hit share) and each decision costs; returns the clock."""
+        self.fetch_seconds = fetch_seconds
+        self.fetch_seconds_per_hit = fetch_seconds_per_hit
+        self.decision_seconds = decision_seconds
+        return self
+
+    def monotonic(self):
+        return self.now
+
+
+def install_fake_clock(module, monkeypatch):
+    """Put ``module`` (a search.py from load_search_module) on a FakeClock for the rest of the test: its
+    ``time`` reads the clock, and every FakeSearchManager fetch and every per-hit decision advances it.
+    Returns the clock."""
+    from backend.tests.handlers.authz.opensearch_dsl_oracle import FakeSearchManager
+
+    clock = FakeClock()
+    monkeypatch.setattr(module, "time", clock)
+    fetch = FakeSearchManager.search_dual_index
+
+    def timed_fetch(self, asset_query, file_query, entity_types):
+        response = fetch(self, asset_query, file_query, entity_types)
+        clock.now += clock.fetch_seconds + clock.fetch_seconds_per_hit * len(response["hits"]["hits"])
+        return response
+
+    monkeypatch.setattr(FakeSearchManager, "search_dual_index", timed_fetch)
+    decide = module.DualIndexResponseProcessor._hit_decision
+
+    def timed_decision(self, hit, claims):
+        clock.now += clock.decision_seconds
+        return decide(self, hit, claims)
+
+    monkeypatch.setattr(module.DualIndexResponseProcessor, "_hit_decision", timed_decision)
+    return clock
 
 
 @contextlib.contextmanager

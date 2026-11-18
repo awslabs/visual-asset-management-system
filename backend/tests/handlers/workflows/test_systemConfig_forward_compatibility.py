@@ -257,8 +257,8 @@ class TestShippedBundlesRelyOnTheDefaults:
         root = os.path.normpath(os.path.join(
             os.path.dirname(__file__), "..", "..", "..", "..", "backendPipelines"))
         found = set()
-        for pattern in ("/**/vamsSchema/**/pipeline.json", "/**/vamsSchema/pipeline.json",
-                        "/**/vamsSchema/**/workflow.json", "/**/vamsSchema/workflow.json"):
+        for pattern in ("/**/vamsSchema*/**/pipeline.json", "/**/vamsSchema*/pipeline.json",
+                        "/**/vamsSchema*/**/workflow.json", "/**/vamsSchema*/workflow.json"):
             found.update(os.path.normpath(f) for f in glob.glob(root + pattern, recursive=True))
         return sorted(found)
 

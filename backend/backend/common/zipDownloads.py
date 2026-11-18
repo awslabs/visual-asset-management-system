@@ -103,6 +103,14 @@ MANIFEST_SCHEMA_VERSION = 1
 MANIFEST_FILE_NAME = "manifest.json"
 RESOLVED_MANIFEST_FILE_NAME = "resolved-manifest.jsonl"
 
+# Preview companions ({file}.previewFile.{ext}, common.s3PathPatterns.PREVIEW_FILE_PATTERN) are left out
+# of a zip download, as the asset file list hides them and the export folds them into their base file's
+# entry. The request manifest records the value under INCLUDE_PREVIEW_FILES_KEY, and the zipArchive
+# container applies it (its rules.include_preview_files; a Zip Archive run reads the same key from its
+# configBody). A selection that holds nothing but preview companions is refused with MSG_NO_FILES.
+INCLUDE_PREVIEW_FILES_KEY = "includePreviewFiles"
+ZIP_DOWNLOAD_INCLUDE_PREVIEW_FILES = False
+
 # A refusal or failure reason the zipArchive container writes is user-safe text it prefixes with this
 # marker; only such text is ever shown from a workflow's execution error.
 CONTAINER_REASON_PREFIX = "ZIPDOWNLOAD: "
@@ -115,6 +123,9 @@ LAUNCH_GRACE_SECONDS = 600
 
 MSG_DISABLED = "Zip downloads are not enabled for this deployment"
 MSG_NOT_FOUND = "Zip download not found"
+# The selection resolved to no file, for example only preview companions (INCLUDE_PREVIEW_FILES_KEY). The
+# zipArchive container refuses an empty member list with the same words (its resolve.enforce_limits).
+MSG_NO_FILES = "The selection has no files"
 MSG_CAP_REACHED = "You already have the maximum number of active zip downloads"
 MSG_LAUNCH_FAILED = "The archive job could not be started"
 # The zipArchive workflow refused the launch (a 4xx from the execute handler). Generic on purpose: the

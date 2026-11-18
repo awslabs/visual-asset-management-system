@@ -384,25 +384,29 @@ describe("SSM integration surface", () => {
         const canonical = Object.values(RESOURCE_PARAM_KEYS).flatMap((category) =>
             Object.values(category as Record<string, string>)
         );
-        // crOsReindexer is published only when the reindexer is built (search enabled), so it is the
-        // one canonical key allowed to be absent.
+        // The two reindexer names are published only when their function is built (OpenSearch or
+        // vector search enabled), so they are the canonical keys allowed to be absent.
         // The audit log queries table (dynamoTables/auditLogQueriesStorage) is built, and published,
         // only when audit log search is enabled; the EU Sovereign template turns it off.
         const searchOff = name === "eusovereign";
+        const optional = new Set<string>([
+            RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer,
+            RESOURCE_PARAM_KEYS.lambdaFunctions.vectorReindexer,
+        ]);
         const required = canonical.filter(
             (key) =>
-                key !== RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer &&
+                !optional.has(key) &&
                 !(searchOff && key === RESOURCE_PARAM_KEYS.dynamoTables.auditLogQueriesStorage)
         );
         for (const key of required) {
             expect(names.filter((n) => n.endsWith(`/resourceNames/${key}`))).toHaveLength(1);
         }
-        // 75 registry parameters (ResourceNamesBuilder, including the audit log queries table) + the three late-bound ones here (the
-        // workflow role ARN, the import function and the copy engine function), plus the reindexer
-        // when search is enabled.
+        // 76 registry parameters (ResourceNamesBuilder, including the audit log queries table) + the
+        // three late-bound ones here (the workflow role ARN, the import function and the copy engine
+        // function), plus one reindexer name per enabled search engine.
         const searchOffCount = searchOff ? 1 : 0;
-        expect(names.length).toBeGreaterThanOrEqual(78 - searchOffCount);
-        expect(names.length).toBeLessThanOrEqual(79 - searchOffCount);
+        expect(names.length).toBeGreaterThanOrEqual(79 - searchOffCount);
+        expect(names.length).toBeLessThanOrEqual(81 - searchOffCount);
     });
 
     test.each(ALL_TEMPLATES)("%s binds the workflow role ARN parameter to the role", (name) => {

@@ -158,6 +158,7 @@ API_METADATA_SCHEMA_BY_ID = "/database/{databaseId}/metadataSchema/{metadataSche
 API_SEARCH = "/search"
 API_SEARCH_SIMPLE = "/search/simple"
 API_SEARCH_MAPPING = "/search"
+API_SEARCH_NLP = "/search/nlp"
 
 # Pipeline API Endpoints
 API_PIPELINES = "/pipelines"
@@ -380,6 +381,7 @@ FEATURE_AUTHPROVIDER_COGNITO_SAML = "AUTHPROVIDER_COGNITO_SAML"
 FEATURE_AUTHPROVIDER_COGNITO_OIDC = "AUTHPROVIDER_COGNITO_OIDC"
 FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP = "AUTHPROVIDER_EXTERNALOAUTHIDP"
 FEATURE_DEADLINECLOUD_PIPELINES = "DEADLINECLOUD_PIPELINES"
+FEATURE_VECTORSEARCH = "VECTORSEARCH"
 FEATURE_ZIPDOWNLOADS = "ZIPDOWNLOADS"
 # Audit Log Search (the /audit API); present in the deployment's feature list unless
 # app.auditLogging.search.enabled is false (off in the EU Sovereign template).

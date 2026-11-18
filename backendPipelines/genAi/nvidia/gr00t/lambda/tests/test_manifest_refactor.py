@@ -6,8 +6,8 @@ the vendored manifestHelper, the vamsExecute lambda threading the metadata + inp
 S3 LOCATIONS (never inline content) while merging the gr00t training config at the boundary,
 and openPipeline location threading + sub-process registration.
 
-The gr00t pipeline has no consolidated_handler (rapidPipelineEKS) nor metadataGenerationPipeline
-(metadata3dLabeling) module; the analogous Stage-3 surface for gr00t is constructPipeline, which
+The gr00t pipeline has no consolidated_handler (rapidPipelineEKS) nor generateMetadata
+(system/genAiMetadata) module; the analogous Stage-3 surface for gr00t is constructPipeline, which
 threads the locations into the container command definition (covered below)."""
 
 import os
