@@ -96,35 +96,55 @@ export class ZipArchiveConstruct extends Construct {
         const account = cdk.Stack.of(this).account;
         const zip = props.config.app.pipelines.useZipDownloads;
 
-        // Asset buckets: read the selection (any version), and in mode 2 write the archive to the run's
-        // outputs prefix as a multipart upload.
+        // Asset buckets: read the selection (any version) under each record's prefix, list it there,
+        // and in mode 2 write the archive as a multipart upload under the run's outputs, which sit
+        // in `<prefix>pipelines/` of the run bucket.
         const inputBucketPolicy = new iam.PolicyDocument({
             statements: [
-                ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
+                ...s3AssetBuckets.getS3AssetBucketRecords().flatMap((record) => {
                     const prefix = record.prefix || "/";
                     // {bucketArn}/{prefix}*, with any leading slash stripped so the root prefix
                     // yields {bucketArn}/*.
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
                     const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
-                    return new iam.PolicyStatement({
-                        effect: iam.Effect.ALLOW,
-                        actions: [
-                            "s3:GetObject",
-                            // Every member is read at the S3 version the job resolved.
-                            "s3:GetObjectVersion",
-                            "s3:PutObject",
-                            "s3:AbortMultipartUpload",
-                            "s3:ListMultipartUploadParts",
-                            "s3:ListBucket",
-                            // Folder and whole-asset entries expand by ListObjectVersions.
-                            "s3:ListBucketVersions",
-                            "s3:GetBucketLocation",
-                        ],
-                        resources: [
-                            record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}/${objectPrefix}*`,
-                        ],
-                    });
+                    return [
+                        new iam.PolicyStatement({
+                            effect: iam.Effect.ALLOW,
+                            actions: [
+                                "s3:GetObject",
+                                // Every member is read at the S3 version the job resolved.
+                                "s3:GetObjectVersion",
+                            ],
+                            resources: [`${record.bucket.bucketArn}/${objectPrefix}*`],
+                        }),
+                        new iam.PolicyStatement({
+                            effect: iam.Effect.ALLOW,
+                            actions: [
+                                "s3:PutObject",
+                                "s3:AbortMultipartUpload",
+                                "s3:ListMultipartUploadParts",
+                            ],
+                            resources: [`${record.bucket.bucketArn}/${objectPrefix}pipelines/*`],
+                        }),
+                        new iam.PolicyStatement({
+                            effect: iam.Effect.ALLOW,
+                            actions: [
+                                "s3:ListBucket",
+                                // Folder and whole-asset entries expand by ListObjectVersions.
+                                "s3:ListBucketVersions",
+                            ],
+                            resources: [record.bucket.bucketArn],
+                            // A record registered at the bucket root lists the whole bucket.
+                            conditions: objectPrefix
+                                ? { StringLike: { "s3:prefix": [`${objectPrefix}*`] } }
+                                : undefined,
+                        }),
+                        new iam.PolicyStatement({
+                            effect: iam.Effect.ALLOW,
+                            actions: ["s3:GetBucketLocation"],
+                            resources: [record.bucket.bucketArn],
+                        }),
+                    ];
                 }),
             ],
         });
@@ -206,7 +226,8 @@ export class ZipArchiveConstruct extends Construct {
             ],
         });
 
-        // Container JOB role: what the zipArchive process itself calls.
+        // Container JOB role: what the zipArchive process itself calls. Pulling the image and writing
+        // the log stream are the execution role's.
         const containerJobRole = new iam.Role(this, "ZipArchiveContainerJobRole", {
             assumedBy: Service("ECS_TASKS").Principal,
             inlinePolicies: {
@@ -215,12 +236,7 @@ export class ZipArchiveConstruct extends Construct {
                 TablePolicy: tablePolicy,
                 StateTaskPolicy: stateTaskPolicy,
             },
-            managedPolicies: [
-                iam.ManagedPolicy.fromAwsManagedPolicyName(
-                    "service-role/AmazonECSTaskExecutionRolePolicy"
-                ),
-                iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
-            ],
+            managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess")],
         });
 
         // Cross-account external asset buckets encrypted with their own keys (no-op without them).
@@ -483,14 +499,17 @@ export class ZipArchiveConstruct extends Construct {
         });
 
         // CDK Nag suppressions
-        for (const role of [containerExecutionRole, containerJobRole]) {
+        for (const [role, managedReason] of [
+            [containerExecutionRole, NAG_REASON_ECS_TASK_EXECUTION_MANAGED],
+            [containerJobRole, "AWSXrayWriteOnlyAccess grants X-Ray segment writes only."],
+        ] as const) {
             NagSuppressions.addResourceSuppressions(
                 role,
                 [
-                    { id: "AwsSolutions-IAM4", reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED },
+                    { id: "AwsSolutions-IAM4", reason: managedReason },
                     {
                         id: "AwsSolutions-IAM5",
-                        reason: "The zipArchive container reads any file of the selected asset and writes under one object prefix.",
+                        reason: "The zipArchive container reads any file under an asset bucket's registered prefix (the selection is resolved at run time), writes only under that prefix's pipelines/ outputs and the auxiliary bucket's prepared-downloads prefix, and answers its own Step Functions task token.",
                     },
                 ],
                 true
