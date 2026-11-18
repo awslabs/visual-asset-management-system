@@ -283,21 +283,35 @@ const RasterImageViewerComponent: React.FC<ViewerPluginProps> = ({
         height: "100%",
         fontSize: "16px",
     };
+    // In the file viewer modal the viewer sits on the striped container background, so its own text
+    // is drawn on a theme panel to stay readable in both themes.
+    const panel: React.CSSProperties = {
+        background: "var(--vams-bg-primary)",
+        padding: "12px 16px",
+        borderRadius: "8px",
+    };
 
     if (phase.kind === "loading") {
         return (
             <div style={centered} data-testid="raster-viewer-loading">
-                <SpaceBetween direction="horizontal" size="xs">
-                    <Spinner />
-                    <span>{phase.text}</span>
-                </SpaceBetween>
+                <div
+                    style={{ ...panel, color: "var(--vams-text-secondary)" }}
+                    data-testid="raster-viewer-loading-panel"
+                >
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Spinner />
+                        <span>{phase.text}</span>
+                    </SpaceBetween>
+                </div>
             </div>
         );
     }
     if (phase.kind === "error") {
         return (
-            <div style={{ ...centered, color: "var(--vams-color-error)" }} role="alert">
-                {phase.message}
+            <div style={centered}>
+                <div style={{ ...panel, color: "var(--vams-color-error)" }} role="alert">
+                    {phase.message}
+                </div>
             </div>
         );
     }
@@ -367,11 +381,17 @@ const RasterImageViewerComponent: React.FC<ViewerPluginProps> = ({
                 />
             </div>
             {decoded && (
-                <Box variant="small" color="text-status-inactive" data-testid="raster-viewer-info">
-                    {kind === "tga" ? "TGA" : "TIFF"} · {decoded.width} × {decoded.height} px
-                    {typeof fileSize === "number" ? ` · ${formatBytes(fileSize)}` : ""}
-                    {decoded.conversion ? ` · ${decoded.conversion}` : ""}
-                </Box>
+                <div style={{ ...panel, padding: "4px 8px", alignSelf: "flex-start" }}>
+                    <Box
+                        variant="small"
+                        color="text-body-secondary"
+                        data-testid="raster-viewer-info"
+                    >
+                        {kind === "tga" ? "TGA" : "TIFF"} · {decoded.width} × {decoded.height} px
+                        {typeof fileSize === "number" ? ` · ${formatBytes(fileSize)}` : ""}
+                        {decoded.conversion ? ` · ${decoded.conversion}` : ""}
+                    </Box>
+                </div>
             )}
         </div>
     );
