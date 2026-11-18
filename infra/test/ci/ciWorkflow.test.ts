@@ -196,6 +196,16 @@ describe("CI workflow", () => {
             );
         });
 
+        test("the build job skips pushes to main and release/**, where docs.yml builds the site", () => {
+            const condition = /^\s+if:\s*(.*)$/m.exec(docsJob())?.[1] ?? "";
+            expect(condition).toContain(
+                "!(github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')))"
+            );
+            // Control: docs.yml really is the build on those branches.
+            const docs = read(".github/workflows/docs.yml");
+            expect(docs).toMatch(/push:\n\s+branches:\n\s+- main\n\s+- "release\/\*"/);
+        });
+
         test("the build job deploys nothing and keeps the read-only token", () => {
             const job = docsJob();
             expect(job).not.toBe("");
