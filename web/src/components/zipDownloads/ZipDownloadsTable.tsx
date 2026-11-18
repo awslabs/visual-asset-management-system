@@ -210,8 +210,9 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
 
     // The list the rows, the page token and every answer in flight belong to: the scope toggle and
     // the asset. A reused asset page hands the table another asset without remounting it. When the
-    // list changes, the rows and token go, and an answer sent for the previous list is dropped, so
-    // a late answer never replaces the rows or sends another route's token with Load more.
+    // list changes, the rows, token and the previous list's messages go, and an answer sent for the
+    // previous list is dropped, so a late answer never replaces the rows or sends another route's
+    // token with Load more.
     const listKey = `${showAllUsers ? "all" : "mine"}|${databaseId ?? ""}|${assetId ?? ""}`;
     const [shownListKey, setShownListKey] = useState(listKey);
     if (shownListKey !== listKey) {
@@ -222,6 +223,9 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         setLoading(false);
         setLoadingMore(false);
         setPollFailures(0);
+        setLoadError(null);
+        setPollError("");
+        setNotice(null);
     }
     const currentListKey = useRef(listKey);
     useLayoutEffect(() => {
