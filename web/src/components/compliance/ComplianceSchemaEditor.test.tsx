@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import FormField from "@cloudscape-design/components/form-field";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
@@ -571,5 +571,62 @@ describe("ComplianceSchemaEditor metadata rule scope", () => {
         expect(
             screen.getByText("'linkDirection' and 'relationshipType' apply to the links scope only")
         ).toBeInTheDocument();
+    });
+});
+
+describe("ComplianceSchemaEditor Visual Builder and the JSON", () => {
+    const FIX_JSON = /^Fix the JSON before using the Visual Builder\./;
+
+    it("asks to fix the JSON instead of opening a builder on JSON that does not parse", async () => {
+        const onChange = jest.fn();
+        render(
+            <ComplianceSchemaEditor
+                value={'{ "schemaFormat": "vams-rules-v1", "rules": {'}
+                onChange={onChange}
+            />
+        );
+        await userEvent.click(screen.getByRole("tab", { name: "Visual Builder" }));
+        expect(await screen.findByText(FIX_JSON)).toBeInTheDocument();
+        expect(screen.queryByText("Compliance Rules")).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Add property" })).not.toBeInTheDocument();
+        expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("stops offering the builder when the JSON stops parsing, and leaves the JSON alone", async () => {
+        const onChange = jest.fn();
+        const { rerender } = render(
+            <ComplianceSchemaEditor value={JSON.stringify(pipelineBody())} onChange={onChange} />
+        );
+        await openBuilder();
+        rerender(<ComplianceSchemaEditor value={'{ "rules": '} onChange={onChange} />);
+        expect(await screen.findByText(FIX_JSON)).toBeInTheDocument();
+        expect(screen.queryByPlaceholderText("rule-name")).not.toBeInTheDocument();
+        expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("drops a rule-name problem once the JSON is edited to a valid rule set", async () => {
+        let value = JSON.stringify(pipelineBody(), null, 2);
+        const onChange = jest.fn((json: string) => {
+            value = json;
+        });
+        const onProblem = jest.fn();
+        const editor = () => (
+            <ComplianceSchemaEditor
+                value={value}
+                onChange={onChange}
+                onRulesProblemChange={onProblem}
+            />
+        );
+        const { rerender } = render(editor());
+        await openBuilder();
+        fireEvent.change(screen.getByPlaceholderText("rule-name"), { target: { value: "" } });
+        rerender(editor());
+        await waitFor(() => expect(onProblem).toHaveBeenLastCalledWith("Rule name is required"));
+
+        // The rule is fixed in the JSON Editor tab.
+        await userEvent.click(screen.getByRole("tab", { name: "JSON Editor" }));
+        value = JSON.stringify(pipelineBody(), null, 2);
+        rerender(editor());
+        await waitFor(() => expect(onProblem).toHaveBeenLastCalledWith(null));
     });
 });

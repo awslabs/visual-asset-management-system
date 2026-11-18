@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useRef, useEffect, useCallback, useId, useState } from "react";
+import React, { useRef, useEffect, useCallback, useId, useMemo, useState } from "react";
 import Editor, { OnMount, OnValidate, loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
@@ -25,7 +25,6 @@ import Tabs from "@cloudscape-design/components/tabs";
 import FormField from "@cloudscape-design/components/form-field";
 import Input from "@cloudscape-design/components/input";
 import Select from "@cloudscape-design/components/select";
-import Toggle from "@cloudscape-design/components/toggle";
 import Button from "@cloudscape-design/components/button";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
 import Header from "@cloudscape-design/components/header";
@@ -394,39 +393,6 @@ const COMPLIANCE_META_SCHEMA = {
     },
 };
 
-interface PropertyDef {
-    name: string;
-    type: string;
-    description: string;
-    required: boolean;
-    enumValues: string;
-    minimum: string;
-    maximum: string;
-    minLength: string;
-    maxLength: string;
-}
-
-const EMPTY_PROPERTY: PropertyDef = {
-    name: "",
-    type: "string",
-    description: "",
-    required: false,
-    enumValues: "",
-    minimum: "",
-    maximum: "",
-    minLength: "",
-    maxLength: "",
-};
-
-const TYPE_OPTIONS = [
-    { value: "string", label: "String" },
-    { value: "number", label: "Number" },
-    { value: "integer", label: "Integer" },
-    { value: "boolean", label: "Boolean" },
-    { value: "array", label: "Array" },
-    { value: "object", label: "Object" },
-];
-
 const EMPTY_RULES_DRAFT: RulesDraft = { extends: "", rules: [] };
 
 const cardStyle: React.CSSProperties = {
@@ -637,12 +603,20 @@ export default function ComplianceSchemaEditor({
     const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
     const [markers, setMarkers] = useState<editor.IMarkerData[]>([]);
     const [activeTab, setActiveTab] = useState("json");
-    // Which body format the Visual Builder is editing; decided from the JSON on each sync.
-    const [builderMode, setBuilderMode] = useState<"properties" | "rules">("properties");
-    const [properties, setProperties] = useState<PropertyDef[]>([]);
-    const [additionalProperties, setAdditionalProperties] = useState(true);
     const [rulesDraft, setRulesDraft] = useState<RulesDraft>(EMPTY_RULES_DRAFT);
-    const rulesProblem = builderMode === "rules" ? ruleNamesError(rulesDraft) : null;
+    // The Visual Builder edits the JSON's rule set, so it is offered only while the JSON parses:
+    // a builder edit made from the last parsed draft would overwrite the JSON being edited.
+    const jsonParses = useMemo(() => {
+        try {
+            JSON.parse(value);
+            return true;
+        } catch {
+            return false;
+        }
+    }, [value]);
+    // The draft follows every JSON edit (see the sync below), so a problem the builder raised is
+    // dropped once the JSON no longer has it.
+    const rulesProblem = jsonParses ? ruleNamesError(rulesDraft) : null;
     useEffect(() => {
         onRulesProblemChange?.(rulesProblem);
     }, [rulesProblem, onRulesProblemChange]);
@@ -664,53 +638,21 @@ export default function ComplianceSchemaEditor({
 
             if (isVamsRulesBody(parsed)) {
                 setRulesDraft(rulesDraftFromBody(parsed));
-                setBuilderMode("rules");
                 return;
             }
 
             // The API accepts only vams-rules-v1 bodies, so any other document opens as an empty rule set.
             setRulesDraft(rulesDraftFromBody({ schemaFormat: VAMS_RULES_V1_FORMAT, rules: {} }));
-            setBuilderMode("rules");
         } catch {
-            // Don't sync on invalid JSON
+            // JSON that does not parse is not synced; the builder is not offered meanwhile.
         }
     }, []);
 
-    const buildJsonFromWizard = useCallback(() => {
-        const schema: any = { type: "object" };
-        const required: string[] = [];
-        const props: any = {};
-
-        for (const p of properties) {
-            if (!p.name.trim()) continue;
-            const propDef: any = { type: p.type };
-            if (p.description) propDef.description = p.description;
-            if (p.enumValues.trim()) {
-                propDef.enum = p.enumValues
-                    .split(",")
-                    .map((v) => v.trim())
-                    .filter(Boolean);
-            }
-            if (p.minimum !== "") propDef.minimum = Number(p.minimum);
-            if (p.maximum !== "") propDef.maximum = Number(p.maximum);
-            if (p.minLength !== "") propDef.minLength = Number(p.minLength);
-            if (p.maxLength !== "") propDef.maxLength = Number(p.maxLength);
-            if (p.required) required.push(p.name.trim());
-            props[p.name.trim()] = propDef;
-        }
-
-        if (required.length > 0) schema.required = required;
-        schema.properties = props;
-        schema.additionalProperties = additionalProperties;
-
-        return JSON.stringify(schema, null, 2);
-    }, [properties, additionalProperties]);
-
     useEffect(() => {
-        if (activeTab === "wizard" && value !== lastEmittedJson.current) {
+        if (value !== lastEmittedJson.current) {
             syncWizardFromJson(value);
         }
-    }, [activeTab, value, syncWizardFromJson]);
+    }, [value, syncWizardFromJson]);
 
     const handleEditorMount: OnMount = (editor, monaco) => {
         editorRef.current = editor;
@@ -733,30 +675,6 @@ export default function ComplianceSchemaEditor({
             onChange(newValue);
         }
     };
-
-    const handleWizardChange = () => {
-        emit(buildJsonFromWizard());
-    };
-
-    const updateProperty = (index: number, field: keyof PropertyDef, val: any) => {
-        const updated = [...properties];
-        updated[index] = { ...updated[index], [field]: val };
-        setProperties(updated);
-    };
-
-    const addProperty = () => {
-        setProperties([...properties, { ...EMPTY_PROPERTY }]);
-    };
-
-    const removeProperty = (index: number) => {
-        setProperties(properties.filter((_, i) => i !== index));
-    };
-
-    useEffect(() => {
-        if (activeTab === "wizard" && builderMode === "properties" && properties.length > 0) {
-            handleWizardChange();
-        }
-    }, [properties, additionalProperties]);
 
     const applyRulesDraft = (next: RulesDraft) => {
         setRulesDraft(next);
@@ -1526,159 +1444,6 @@ export default function ComplianceSchemaEditor({
         </SpaceBetween>
     );
 
-    const renderPropertiesBuilder = () => (
-        <SpaceBetween size="m">
-            <Header
-                variant="h3"
-                actions={
-                    <Button onClick={addProperty} disabled={readOnly}>
-                        Add property
-                    </Button>
-                }
-            >
-                Schema Properties
-            </Header>
-
-            {properties.length === 0 && (
-                <Box textAlign="center" color="text-status-inactive" padding="l">
-                    No properties defined. Click "Add property" to start.
-                </Box>
-            )}
-
-            {properties.map((prop, idx) => (
-                <div key={idx} style={cardStyle}>
-                    <SpaceBetween size="s">
-                        <ColumnLayout columns={3}>
-                            <FormField label="Name">
-                                <Input
-                                    value={prop.name}
-                                    onChange={({ detail }) =>
-                                        updateProperty(idx, "name", detail.value)
-                                    }
-                                    placeholder="property_name"
-                                    disabled={readOnly}
-                                />
-                            </FormField>
-                            <FormField label="Type">
-                                <Select
-                                    selectedOption={
-                                        TYPE_OPTIONS.find((o) => o.value === prop.type) ||
-                                        TYPE_OPTIONS[0]
-                                    }
-                                    onChange={({ detail }) =>
-                                        updateProperty(idx, "type", detail.selectedOption.value)
-                                    }
-                                    options={TYPE_OPTIONS}
-                                    disabled={readOnly}
-                                />
-                            </FormField>
-                            <FormField label="Required">
-                                <Toggle
-                                    checked={prop.required}
-                                    onChange={({ detail }) =>
-                                        updateProperty(idx, "required", detail.checked)
-                                    }
-                                    disabled={readOnly}
-                                >
-                                    Required
-                                </Toggle>
-                            </FormField>
-                        </ColumnLayout>
-                        <FormField label="Description">
-                            <Input
-                                value={prop.description}
-                                onChange={({ detail }) =>
-                                    updateProperty(idx, "description", detail.value)
-                                }
-                                placeholder="What this property represents"
-                                disabled={readOnly}
-                            />
-                        </FormField>
-                        <ColumnLayout columns={2}>
-                            {prop.type === "string" && (
-                                <FormField label="Allowed values (comma-separated)">
-                                    <Input
-                                        value={prop.enumValues}
-                                        onChange={({ detail }) =>
-                                            updateProperty(idx, "enumValues", detail.value)
-                                        }
-                                        placeholder="value1, value2, value3"
-                                        disabled={readOnly}
-                                    />
-                                </FormField>
-                            )}
-                            {(prop.type === "number" || prop.type === "integer") && (
-                                <>
-                                    <FormField label="Minimum">
-                                        <Input
-                                            value={prop.minimum}
-                                            onChange={({ detail }) =>
-                                                updateProperty(idx, "minimum", detail.value)
-                                            }
-                                            type="number"
-                                            disabled={readOnly}
-                                        />
-                                    </FormField>
-                                    <FormField label="Maximum">
-                                        <Input
-                                            value={prop.maximum}
-                                            onChange={({ detail }) =>
-                                                updateProperty(idx, "maximum", detail.value)
-                                            }
-                                            type="number"
-                                            disabled={readOnly}
-                                        />
-                                    </FormField>
-                                </>
-                            )}
-                            {prop.type === "string" && (
-                                <>
-                                    <FormField label="Min length">
-                                        <Input
-                                            value={prop.minLength}
-                                            onChange={({ detail }) =>
-                                                updateProperty(idx, "minLength", detail.value)
-                                            }
-                                            type="number"
-                                            disabled={readOnly}
-                                        />
-                                    </FormField>
-                                    <FormField label="Max length">
-                                        <Input
-                                            value={prop.maxLength}
-                                            onChange={({ detail }) =>
-                                                updateProperty(idx, "maxLength", detail.value)
-                                            }
-                                            type="number"
-                                            disabled={readOnly}
-                                        />
-                                    </FormField>
-                                </>
-                            )}
-                        </ColumnLayout>
-                        {!readOnly && (
-                            <Box float="right">
-                                <Button variant="link" onClick={() => removeProperty(idx)}>
-                                    Remove
-                                </Button>
-                            </Box>
-                        )}
-                    </SpaceBetween>
-                </div>
-            ))}
-
-            <FormField label="Additional properties">
-                <Toggle
-                    checked={additionalProperties}
-                    onChange={({ detail }) => setAdditionalProperties(detail.checked)}
-                    disabled={readOnly}
-                >
-                    Allow properties not defined above
-                </Toggle>
-            </FormField>
-        </SpaceBetween>
-    );
-
     return (
         <SpaceBetween size="xs">
             <Tabs
@@ -1765,10 +1530,14 @@ export default function ComplianceSchemaEditor({
                     {
                         id: "wizard",
                         label: "Visual Builder",
-                        content:
-                            builderMode === "rules"
-                                ? renderRulesBuilder()
-                                : renderPropertiesBuilder(),
+                        content: jsonParses ? (
+                            renderRulesBuilder()
+                        ) : (
+                            <Alert type="warning">
+                                Fix the JSON before using the Visual Builder. The JSON Editor tab
+                                lists where it does not parse.
+                            </Alert>
+                        ),
                     },
                 ]}
             />

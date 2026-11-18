@@ -322,3 +322,33 @@ describe("ComplianceSchemas rule-name errors", () => {
         ).toContain("renamed-rule");
     }, 20_000);
 });
+
+describe("ComplianceSchemas editor on each open", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("opens the next schema on the JSON Editor tab with no rule-name problem left over", async () => {
+        service().fetchComplianceSchemas.mockResolvedValue([true, []]);
+        service().createComplianceSchema.mockResolvedValue([true, { schemaName: "s2" }]);
+        render(<ComplianceSchemas />);
+        await userEvent.click(await screen.findByRole("button", { name: "Create Schema" }));
+        let dialog = await screen.findByRole("dialog");
+        await userEvent.click(within(dialog).getByRole("tab", { name: "Visual Builder" }));
+        fireEvent.change((await within(dialog).findAllByPlaceholderText("rule-name"))[0], {
+            target: { value: "" },
+        });
+        expect(await within(dialog).findByText("Rule name is required")).toBeInTheDocument();
+        await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+        await userEvent.click(screen.getByRole("button", { name: "Create Schema" }));
+        dialog = await screen.findByRole("dialog");
+        expect(within(dialog).getByRole("tab", { name: "JSON Editor" })).toHaveAttribute(
+            "aria-selected",
+            "true"
+        );
+        fireEvent.change(within(dialog).getByPlaceholderText(/engineering-asset-standard/), {
+            target: { value: "s2" },
+        });
+        await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+        await waitFor(() => expect(service().createComplianceSchema).toHaveBeenCalledTimes(1));
+    }, 20_000);
+});
