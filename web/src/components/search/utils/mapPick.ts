@@ -33,12 +33,48 @@ function partBoxes(geoJson: any): Box[] {
     );
 }
 
+/** Web Mercator y (in radians of x) for a latitude, clamped to the map's limit. */
+const mercatorY = (lat: number) =>
+    Math.log(
+        Math.tan(Math.PI / 4 + (Math.max(-85.051129, Math.min(85.051129, lat)) * Math.PI) / 360)
+    );
+
+/** Shoelace area of a ring in Web Mercator, so it matches what the user sees on the flat map. */
+function ringArea(ring: any): number {
+    if (!Array.isArray(ring) || ring.length < 3) return 0;
+    let twice = 0;
+    for (let i = 0; i < ring.length; i++) {
+        const [lon1, lat1] = ring[i];
+        const [lon2, lat2] = ring[(i + 1) % ring.length];
+        const x1 = (lon1 * Math.PI) / 180;
+        const x2 = (lon2 * Math.PI) / 180;
+        twice += x1 * mercatorY(lat2) - x2 * mercatorY(lat1);
+    }
+    return Math.abs(twice) / 2;
+}
+
+/** The polygon outer rings of a geometry: one per Polygon, one per member of a MultiPolygon. */
+function outerRings(geom: any, rings: any[]): void {
+    if (!geom) return;
+    if (geom.type === "Polygon") rings.push(geom.coordinates?.[0]);
+    else if (geom.type === "MultiPolygon")
+        for (const p of geom.coordinates ?? []) rings.push(p?.[0]);
+    else if (geom.type === "GeometryCollection")
+        for (const g of geom.geometries ?? []) outerRings(g, rings);
+}
+
 /**
- * The area, in square degrees, of a shape's parts' boxes. Each part counts on its own, so a footprint
- * split at longitude 180 is two small parts, not one box across the world.
+ * The area of a footprint as drawn on the flat map: the sum of its polygons' outer-ring areas in Web
+ * Mercator (shoelace). A rotated or skewed footprint counts its real area, not its box's, and a footprint
+ * split at longitude 180 is two small parts, not one shape across the world. A shape with an unreadable
+ * coordinate counts as infinitely large, so it never wins a pick over a readable one.
  */
 export function footprintArea(geoJson: any): number {
-    return partBoxes(geoJson).reduce((sum, [w, s, e, n]) => sum + (e - w) * (n - s), 0);
+    const geom = geoJson?.type === "Feature" ? geoJson.geometry : geoJson;
+    const rings: any[] = [];
+    outerRings(geom, rings);
+    const area = rings.reduce((sum, ring) => sum + ringArea(ring), 0);
+    return Number.isFinite(area) ? area : Infinity;
 }
 
 /**
