@@ -1027,6 +1027,13 @@ class DependencyResolver:
         # The incomplete-preview record (``FetchReport.skipped`` / ``not_followed``), in walk order.
         self.skipped_references: List[SkippedReference] = []
         self.not_followed: List[SkippedReference] = []
+        # ``FetchReport.edges``: every reference a read file names, as (the file's path, the path it names,
+        # or the reference as authored when it was refused), once each in walk order, which
+        # ``drop_left_out_references`` walks. Past MAX_GRAPH_EDGES the list is withheld (an empty
+        # ``FetchReport.edges``), so a partial graph never drops a skipped file from the report.
+        self.reference_edges: List[tuple] = []
+        self._reference_edge_set = set()
+        self.reference_edges_complete = True
         self._mdl_logged = set()
 
     # -- bounds -----------------------------------------------------------------------------------
@@ -1053,6 +1060,16 @@ class DependencyResolver:
     def _record_not_followed(self, rel: str, reason: str):
         if len(self.not_followed) < MAX_RECORDED_SKIPPED:
             self.not_followed.append(SkippedReference(rel, reason))
+
+    def _record_reference_edge(self, referrer: str, target: str):
+        edge = (referrer, target)
+        if edge in self._reference_edge_set:
+            return
+        if len(self.reference_edges) >= MAX_GRAPH_EDGES:
+            self.reference_edges_complete = False
+            return
+        self._reference_edge_set.add(edge)
+        self.reference_edges.append(edge)
 
     def _missing(self, node: _Node, reason: str):
         node.state = _MISSING
@@ -1129,6 +1146,7 @@ class DependencyResolver:
     def _consider(self, raw, percent_encoded: bool, required: bool, referrer: str, referrer_dir: str,
                   depth: int, queue: deque, kind: str = ""):
         relative = resolve_reference(raw, referrer_dir, percent_encoded=percent_encoded)
+        self._record_reference_edge(referrer, relative or (raw if isinstance(raw, str) else repr(raw)))
         target = local_path_for(self.local_root, relative) if relative else None
         if relative is None or target is None:
             if len(self.skipped_references) < MAX_RECORDED_SKIPPED:
@@ -1354,6 +1372,7 @@ class DependencyResolver:
         report.total_bytes = self.fetched_bytes
         report.skipped[:] = self.skipped_references
         report.not_followed[:] = self.not_followed
+        report.edges[:] = self.reference_edges if self.reference_edges_complete else []
 
 
 # --------------------------------------------------------------------------------------------------
