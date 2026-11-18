@@ -211,10 +211,12 @@ export default function CreateDatabase({
         retry: retryPermissions,
         can: canCallRoute,
     } = useAllowedRoutes();
-    // Compliance schema binding
+    // Compliance schema binding. Editing a database reads its current binding first, so the field
+    // also needs the binding's GET there; a new database has no binding to read.
     const canBindComplianceSchema =
         canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
-        canCallRoute("PUT", COMPLIANCE_BIND_DATABASE_API_ROUTE);
+        canCallRoute("PUT", COMPLIANCE_BIND_DATABASE_API_ROUTE) &&
+        (!initState?.databaseId || canCallRoute("GET", COMPLIANCE_BIND_DATABASE_API_ROUTE));
     // None removes a bound schema through the binding's DELETE; while none is bound it removes
     // nothing, so it stays offered then.
     const canUnbindComplianceSchema = canCallRoute("DELETE", COMPLIANCE_BIND_DATABASE_API_ROUTE);
