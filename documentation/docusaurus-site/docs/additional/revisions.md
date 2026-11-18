@@ -48,6 +48,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Other changes:**
 
+-   **Backend test subsets** — A test run that collects the Physna add-on tests before another test imports the audit logging module, such as `tests/handlers` alone, no longer fails at collection. (issue #1451)
+
 **Known issues:**
 
 ### 2.7.0
