@@ -66,7 +66,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
-from common.compliance.auditRecord import AUDIT_LIST_PARTITION, build_audit_item
+from common.compliance.auditRecord import build_audit_item
 
 DELETED_SUFFIX = "#deleted"
 RECORD_PREFIX = "databaseRetirement#"
@@ -113,6 +113,8 @@ AUDIT_DATABASE_COMPLIANCE_MOVED = "database_compliance_moved"
 SYSTEM_ACTOR = "SYSTEM_USER"
 
 PIPELINE_WAIT_INDEX = "PipelineRuleWaitIndex"
+# The audit table's index of one database's entries (partition `databaseId`, sort `timestamp`).
+AUDIT_DATABASE_INDEX = "DatabaseIndex"
 WAITING_RULE_CLOSED_MESSAGE = "Not started: the database was deleted"
 EVALUATION_CLOSED_MESSAGE = "Not completed: the database was deleted"
 
@@ -658,10 +660,13 @@ def _phase_read(tables: Tables, phase: str, database_id: str) -> Dict[str, Any]:
                 "kwargs": {"IndexName": "DatabaseIdIndex",
                            "KeyConditionExpression": Key("databaseId").eq(database_id)},
                 "move": _move_schema}
+    # shortcut: a DatabaseIndex still backfilling (an update that adds it to an existing audit
+    # table) fails the run, so the move ends in the job DLQ until a redrive after the index is
+    # active; read the date-ordered trail meanwhile if that window ever matters.
     return {"table": tables.audit, "method": "query",
-            "kwargs": {"IndexName": "AuditByDateGSI",
-                       "KeyConditionExpression": Key("allListPartition").eq(AUDIT_LIST_PARTITION),
-                       "FilterExpression": Attr("databaseId").eq(database_id)},
+            "kwargs": {"IndexName": AUDIT_DATABASE_INDEX,
+                       "KeyConditionExpression": Key("databaseId").eq(database_id)},
+            "cursorKeys": ("entryId", "databaseId", "timestamp"),
             "move": _move_audit}
 
 
@@ -759,6 +764,10 @@ def run(tables: Tables, database_id: str, deadline: float,
         pages += 1
         spec = _phase_read(tables, phase, database_id)
         kwargs = dict(spec["kwargs"], Limit=page_size)
+        if cursor and not set(spec.get("cursorKeys", ())) <= set(cursor):
+            # A cursor of another index (saved by an earlier version of the phase's read) starts
+            # the phase again; it reads only the rows that still carry the id, so none moves twice.
+            cursor = None
         if cursor:
             kwargs["ExclusiveStartKey"] = cursor
         response = getattr(spec["table"], spec["method"])(**kwargs)
