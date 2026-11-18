@@ -607,9 +607,10 @@ def details(ctx: click.Context, include_sub_executions: bool, json_output: bool)
               default='input',
               help='Which metadata collection to page: input (asset/file), inputDatabase, or output')
 @click.option('--pipeline-id', help="Only rows produced by this pipeline (one workflow step)")
-@click.option('--page-size', type=int,
+@click.option('--page-size', type=click.IntRange(min=1),
               help=f'Rows per page (max {MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE})')
-@click.option('--max-items', type=int, help='Maximum total rows to fetch (only with --auto-paginate)')
+@click.option('--max-items', type=click.IntRange(min=1),
+              help='Maximum total rows to fetch (only with --auto-paginate)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
 @click.option('--auto-paginate', is_flag=True, help='Automatically fetch all rows')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
@@ -752,9 +753,11 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
                      helpful_message="Use 'vamscli execution list' to see available executions.")
         raise click.ClickException(str(e))
     except InvalidExecutionDataError as e:
+        # The route also answers 400 for an invalid --pipeline-id or --page-size, so the token hint
+        # is given only when a token was sent.
         output_error(e, json_output, error_type="Invalid Metadata Page Request",
-                     helpful_message="A pagination token is only valid with the --collection and "
-                                     "--pipeline-id it was issued for.")
+                     helpful_message=("A pagination token is only valid with the --collection and "
+                                      "--pipeline-id it was issued for." if starting_token else None))
         raise click.ClickException(str(e))
 
 
@@ -765,9 +768,10 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
               help='Which file collection to page: input (workflow-level input files) or output '
                    '(per-pipeline output files)')
 @click.option('--pipeline-id', help="Only output rows produced by this pipeline (one workflow step)")
-@click.option('--page-size', type=int,
+@click.option('--page-size', type=click.IntRange(min=1),
               help=f'Rows per page (max {MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE})')
-@click.option('--max-items', type=int, help='Maximum total rows to fetch (only with --auto-paginate)')
+@click.option('--max-items', type=click.IntRange(min=1),
+              help='Maximum total rows to fetch (only with --auto-paginate)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
 @click.option('--auto-paginate', is_flag=True, help='Automatically fetch all rows')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
@@ -901,9 +905,11 @@ def details_files(ctx: click.Context, execution_id: str, collection: str,
                      helpful_message="Use 'vamscli execution list' to see available executions.")
         raise click.ClickException(str(e))
     except InvalidExecutionDataError as e:
+        # The route also answers 400 for an invalid --pipeline-id or --page-size, so the token hint
+        # is given only when a token was sent.
         output_error(e, json_output, error_type="Invalid File Page Request",
-                     helpful_message="A pagination token is only valid with the --collection and "
-                                     "--pipeline-id it was issued for.")
+                     helpful_message=("A pagination token is only valid with the --collection and "
+                                      "--pipeline-id it was issued for." if starting_token else None))
         raise click.ClickException(str(e))
     except BusinessLogicError as e:
         fields = getattr(e, 'json_fields', None) or {}
