@@ -174,7 +174,11 @@ def general_error(status_code: int = 400, body: dict = {'message': 'VAMS General
 
 
 def authorization_error(status_code: int = 403, body: dict = {'message': 'Not Authorized'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
-    logger.error("Not Authorized Error", extra={'statusCode': status_code, 'errorBody': body})
+    # A refusal is an expected client outcome, so a 4xx logs at WARNING and ERROR stays reserved for
+    # 5xx, as in general_error() and validation_error(). The denial itself is audited by the
+    # Casbin enforcer.
+    log_authorization_error = logger.error if status_code >= 500 else logger.warning
+    log_authorization_error("Not Authorized Error", extra={'statusCode': status_code, 'errorBody': body})
     
     #Logged as part of Casbin auth checks
     # # AUDIT LOG: Log authorization error if event provided
