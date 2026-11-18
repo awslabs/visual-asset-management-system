@@ -214,6 +214,12 @@ class TestPipelineEndAfterAHeartbeatTimeout:
             pipeline_end.lambda_handler(event, None)
         return sfn.send_task_failure.call_args.kwargs["error"], batch
 
+    @pytest.mark.parametrize("status", ["SUBMITTED", "PENDING", "RUNNABLE", "STARTING"])
+    def test_a_job_that_has_not_started_is_cancelled_and_reported_as_queued(self, status):
+        error, batch = self._end([{"jobId": "j1", "status": status, "createdAt": 1}])
+        assert error == "Pipeline Failure: ZipArchiveJobQueued"
+        assert batch.terminate_job.call_args.kwargs["jobId"] == "j1"
+
     def test_a_job_still_in_the_queue_is_cancelled_and_reported_as_queued(self):
         error, batch = self._end([{"jobId": "j1", "status": "RUNNABLE", "createdAt": 1}])
         assert error == "Pipeline Failure: ZipArchiveJobQueued"

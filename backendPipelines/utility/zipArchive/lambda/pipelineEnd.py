@@ -36,7 +36,8 @@ BATCH_JOB_QUEUE = os.environ.get("BATCH_JOB_QUEUE", "")
 HEARTBEAT_TIMEOUT_ERROR = "States.HeartbeatTimeout"
 JOB_QUEUED_ERROR = "ZipArchiveJobQueued"
 JOB_NOT_STARTED_ERROR = "ZipArchiveJobNotStarted"
-PRE_START_STATUSES = frozenset({"SUBMITTED", "PENDING", "RUNNABLE"})
+# STARTING is still before the container runs (the image is being pulled), so it ends the same way.
+PRE_START_STATUSES = frozenset({"SUBMITTED", "PENDING", "RUNNABLE", "STARTING"})
 
 
 def run_batch_job(job_name):

@@ -177,9 +177,9 @@ The archive job reached its 11-hour bound. Very large archives finish faster wit
 
 The Zip Archive container ended before the archive was written. "The archive job was stopped" means its AWS Batch job was terminated outside VAMS. "The archive job stopped responding" means the container stopped without warning, for example because it ran out of memory or its host was lost. Create the job again. If it recurs for the same selection, raise `computeMemoryGiB`.
 
-### A Job Fails With "The archive job waited too long to start" or "The archive job could not start"
+### A Job Fails With "The archive job waited too long to start" or "The archive job failed before it started"
 
-The job's container never ran. "The archive job waited too long to start" means the job was still waiting in the AWS Batch queue 30 minutes after it was submitted, usually behind other archive jobs or the account's AWS Fargate vCPU quota; VAMS cancels the queued job. Create the job again later, or raise the AWS Fargate On-Demand vCPU quota. "The archive job could not start" means AWS Batch failed the job before its container started, for example because the container image could not be pulled; the job's status reason is in the `pipelineEnd` function's log. Check that the image build finished (see [Container Image Build](#container-image-build)) and create the job again.
+The job's container never ran. "The archive job waited too long to start" means the job's container had not started 30 minutes after the job was submitted: the job was still waiting in the AWS Batch queue, usually behind other archive jobs or the account's AWS Fargate vCPU quota, or still starting. VAMS cancels the job. Create the job again later, or raise the AWS Fargate On-Demand vCPU quota. "The archive job failed before it started" means AWS Batch failed the job before its container started, for example because the container image could not be pulled; the job's status reason is in the `pipelineEnd` function's log. Check that the image build finished (see [Container Image Build](#container-image-build)) and create the job again.
 
 ### A Job Fails With "Cancelled from workflow executions"
 

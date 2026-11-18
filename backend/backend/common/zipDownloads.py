@@ -139,7 +139,7 @@ MSG_JOB_LOST = "The archive job stopped responding"
 # started, the zipArchive pipelineEnd reports where the job was instead: still waiting in the AWS
 # Batch queue (it cancels the job), or failed before its container ran.
 MSG_JOB_QUEUED = "The archive job waited too long to start; create it again later"
-MSG_JOB_NOT_STARTED = "The archive job could not start"
+MSG_JOB_NOT_STARTED = "The archive job failed before it started"
 # Error names in a run's executionError that identify those ends. The zipArchive pipelineEnd
 # reports the state's error as "Pipeline Failure: <Error>", which the workflow error handler records.
 CONTAINER_STOPPED_ERROR = "ZipArchiveContainerStopped"
