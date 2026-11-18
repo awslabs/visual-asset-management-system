@@ -333,8 +333,8 @@ MISSING_PARENT_WARNING_CODE = "extendsSchemaNotFound"
 # One message whether the parent is missing, is not vams-rules-v1, or exists but the caller may not
 # read it, so the warning confirms nothing about a schema the caller may not read.
 MISSING_PARENT_WARNING_MESSAGE = (
-    "The parent schema `extends` names was not found as a vams-rules-v1 schema you may read. If it "
-    "does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.")
+    "The parent schema named in `extends` was not found as a vams-rules-v1 schema you may read. If "
+    "it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.")
 
 
 def missing_parent_warnings(casbin_enforcer, schema_body):
