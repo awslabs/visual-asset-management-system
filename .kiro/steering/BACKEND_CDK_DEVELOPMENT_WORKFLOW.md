@@ -840,6 +840,12 @@ is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-
     effect without re-issuing a token. The value is informational for handlers and audit logs:
     `CasbinEnforcer` re-reads a user's roles from DynamoDB when it builds policy, so
     authorization does not depend on it. Do not reintroduce a role lookup in `preTokenGen`.
+-   **A raising `customAuthClaimsCheckOverride` denies the request.** `request_to_claims` marks
+    the claims `CLAIMS_CHECK_FAILED` (`claimsCheckFailed: True`) and empties `roles`;
+    `CasbinEnforcer` built from marked claims decides on a deny-all service
+    (`POLICY_TEXT_DENY_ALL`, never put in the per-user caches) and `enforceAPI` refuses when the
+    event's own claims carry the mark, so every route answers 403. `POST /auth/routes`, which
+    has no Tier 1 check, refuses it with the no-identity 403.
 -   **The authorizer owns the `vams:` context namespace**: `authenticate_request` copies a
     verified token's claims into the context except every key under the reserved `vams:` prefix
     (`RESERVED_CONTEXT_KEY_PREFIX`, matched without regard to case), then sets `vams:tokens` to

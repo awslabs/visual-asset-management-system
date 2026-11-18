@@ -30,7 +30,7 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.apiRoutes import API_AUTH_ROUTES, API_AUTH_ROUTES_API, API_AUTH_ROUTES_API_ALLOWED, get_public_api_routes
 from common.resourceNames import ResourceKeys, get_log_group_name
 from customLogging import auditLogging
-from handlers.auth import request_to_claims
+from handlers.auth import request_to_claims, CLAIMS_CHECK_FAILED
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler
@@ -302,7 +302,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         path = event['requestContext']['http']['path']
         method = event['requestContext']['http']['method']
 
-        if len(claims_and_roles["tokens"]) == 0 and not _use_local_mocks():
+        # No identity, or a failed custom claims check (request_to_claims), is refused here: POST
+        # /auth/routes has no Tier-1 check of its own to refuse it.
+        if (len(claims_and_roles["tokens"]) == 0 or claims_and_roles.get(CLAIMS_CHECK_FAILED)) \
+                and not _use_local_mocks():
             return authorization_error()
 
         # POST /auth/routes intentionally has no Tier-1 API Casbin check on
