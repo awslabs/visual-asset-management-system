@@ -1287,6 +1287,41 @@ value is deliberately double-encoded (see the comment in `SuperSplatViewerCompon
 same string to a fragment must preserve that double encoding byte-for-byte, or the presigned signature
 breaks and S3 returns 400.
 
+### 8.7 TIFF/TGA Viewer (`RasterImageViewerPlugin/`)
+
+Mirrors `web/src/visualizerPlugin/CLAUDE.md` "TIFF/TGA Viewer". `tiff-tga-viewer` opens `.tga`, `.tif` and `.tiff`, which no browser draws. It downloads the file, decodes it with `utif2` (TIFF) and `tga-js` (TGA), pure JavaScript with no `eval` and no CSP change, and draws to a `<canvas>`. `RasterImageDependencyManager` loads the decoders (and `pako`) with a dynamic `import()` so they stay out of the base bundle.
+
+-   **Untrusted input.** `rasterDecode.ts` reads the TIFF directory chain itself (`inspectTiff`): `UTIF.decode` follows a cyclic chain forever and builds an array of any length a tag names. Pixel and decoded-size caps, strip and tile bounds, a bounded inflate of deflate strips and a JPEG frame-size check run before `UTIF.decodeImage`. A new variant is refused rather than drawn wrongly (BigTIFF, separate colour planes, old-style JPEG, unknown compression, 16-bit palette).
+-   **Caps.** `customParameters.maxDecodeBytes` (256 MiB) and `maxDecodePixels` (100 megapixels) in `viewerConfig.json`. Above a cap or on a decode failure the viewer shows `fileInfo.previewFile` with a notice, else a plain message. A refused download (401/403/404/410) shows the shared message and never falls back.
+-   **Conversion.** Samples of more than 8 bits and floats are scaled between the 0.5th and 99.5th percentile; CMYK becomes RGB; 16-bit TGA is shown opaque (`tga-js` reads its alpha bit the wrong way round).
+-   **Decode worker.** Decoding runs in `rasterWorker.ts` (a same-origin module worker made by `createRasterWorker.ts`; the base CSP already allows `worker-src 'self' blob: data:`, so nothing changes there), so a large image does not freeze the tab and an out-of-memory worker ends in the fallback notice. The worker posts `{type: "ready"}` as its last statement and the page sends the file only after it. `rasterSession.ts` opens a session over the worker and falls back to decoding on the page (`RasterEngine`, same caps) when no worker can be created, when its script fails to load (blocked, 404 after a redeploy, no module worker support: an `error` before `ready`) or when it does not start within 15 s; only a worker that dies after it started ends in the "decoder stopped unexpectedly" notice. `dispose()` rejects a request still in flight. Module workers need Chrome/Edge 80, Firefox 114, Safari 15; `createRasterWorker.ts` holds `import.meta.url` so tests replace it with `jest.mock`. `pakoGlobal.ts` must be imported before `utif2` in the worker: `utif2` reads `self.pako` when `require` is not a function.
+-   **Display.** The TIFF Orientation tag (274, values 1-8) is applied after conversion (`orient`); the page picker lists oriented sizes. A truncated run-length TGA is refused (`rleCovers`) because `tga-js` would leave the missing pixels black.
+-   **Tests.** `rasterDecode.test.ts` builds its TIFF and TGA files in code (`rasterFixtures.testdata.ts`); real-file cases are in `web/e2e/viewers.spec.ts`.
+
+### 8.8 No Runtime CDN Fetches
+
+Mirrors `web/src/visualizerPlugin/CLAUDE.md` "CSP / `unsafe-eval`", "No runtime CDN fetches". A viewer library that loads a helper module from a public CDN at run time (unpkg, jsDelivr) is blocked by the CSP and cannot work in an air-gapped, GovCloud or EU Sovereign deployment. The install script rewrites each such URL in the built bundle to a same-origin copy (or turns the feature off), fails when an expected URL is missing, and fails when any reachable CDN URL remains: `web/customInstalls/online3dviewer/online3dviewerInstall.js` and `web/customInstalls/babylonjs/runtimeFetches.js`. Babylon.js 9's `@adobe/spz` path (SPZ version 4) stays off because Babylon loads it through an inline module script and it needs `unsafe-eval`; the BabylonJS viewer refuses SPZ version 4 with a message (`splatFileHead.ts`).
+
+### 8.9 Three.js Selection Highlight (`ThreeJSViewerPlugin/utils/selectionHighlight.ts`)
+
+Mirrors `web/src/visualizerPlugin/CLAUDE.md` "Three.js Selection Highlight".
+
+-   A selected object wears a highlight clone of its material library entry, made only by `createHighlightMaterial` and put back only by `releaseHighlight` / `syncSelectionHighlight`, which track each clone by identity (a `WeakMap` to the material it came from) and dispose it on deselect. Never detect a highlight from a colour value; the material editor can set any colour.
+-   A lit mesh material glows through `emissive` (0x4caf50, intensity 0.5). A material with no emissive colour (`PointsMaterial`, line and sprite materials, `MeshBasicMaterial`) is tinted green with `vertexColors` off.
+-   `supportsWireframe(material)` is false for point, line and sprite materials: Wireframe Mode (Controls tab), the material editor's Wireframe option and the material reset skip them. Never add a `wireframe` property to them.
+
+### 8.10 Three.js Referenced Files (`ThreeJSViewerPlugin/utils/`)
+
+Mirrors `web/src/visualizerPlugin/CLAUDE.md` "Three.js Referenced Files". Every Three.js format that names other files goes through one resolver, `assetDependencyResolver.ts`; never fetch a referenced file anywhere else.
+
+The viewer reads the main file and every referenced file from a presigned S3 URL that the authorized download route issues (`downloadAsset` through `core/presignedFetch.ts`, which caches a URL in memory for at most 60 seconds and never past its own `X-Amz-Expires`, less a margin of 10 seconds or 20 percent of its lifetime, whichever is smaller; `clearStoredSession()` clears the cache on every sign-out), with no `Authorization` header and no credentials. It does not follow the streaming route, whose 307 to the presigned URL is a cross-origin redirect that an external bucket's CORS rule refuses. A refused presign shows the API's own answer through `streamFailure.ts`; an error status from S3 itself is worded as an unavailable or expired link (`PresignedReadError`), after one re-presign when a reused URL got a 403, and is never shown as a VAMS permission or not-found answer. The presign request carries the viewer's abort signal. Needle USD, ThatOpen IFC, Cesium and VEERUM still read the streaming route.
+
+-   `assetDependencyResolver.ts`: path rules (relative to the naming file; nothing above the asset root, absolute, or with a scheme is fetched), named limits (`DEPENDENCY_LIMITS`), one download per key, presigned-URL reads (`core/presignedFetch.ts`), and the `LoadingManager` URL modifier: resolved names map to blob URLs, `blob:`/`data:` pass through, anything else gets a transparent placeholder and is recorded for the viewer's notice. `revokeAll()` runs in viewer cleanup.
+-   `dependencyLoading.ts`: `loadWithDependencies()` per format (glTF URI rewrite, OBJ `mtllib` + `MTLLoader`, COLLADA `<init_from>` pre-scan, 3DS/FBX probe parse). A USD load with no mesh, point or line throws `USD_NO_GEOMETRY_MESSAGE`, which the component shows instead of an empty canvas.
+-   `usdDependencies.ts`: collects USD asset paths (USDA `@…@` scan; USDC only asset-path-typed fields, via the bundled `USDCParser`); `subLayers` entries are listed, not downloaded, while `USD_FETCH_SUBLAYERS` is `false`. `checkUsdzSize()` (`USDZ_LIMITS`) runs before any `.usdz` is extracted.
+-   `fileLoaders.ts`: `loadFile()` passes a `LoadingManager` to every loader; without one it uses an isolating manager, so no loader fetches by URL on its own. `USD_FORMATS` and `OCCT_FORMATS` are checked against `viewerConfig.json` by `config/viewerConfig.test.ts`.
+-   The bundle (`web/customInstalls/threejs/threejsInstall.js`) exports `USDLoader`, `USDCParser`, `MTLLoader` and `fflate` (`zipSync`, `unzipSync`) for these modules.
+
 ---
 
 ## 9. Configuration System
