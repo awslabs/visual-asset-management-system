@@ -442,7 +442,6 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                         <label className="flex items-center gap-2 text-sm text-text-primary whitespace-nowrap">
                             Stopped for at least (minutes)
                             <input
-                                aria-label="Stopped minutes"
                                 type="number"
                                 min={1}
                                 className={`${control} w-24`}
