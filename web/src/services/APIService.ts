@@ -256,7 +256,11 @@ export const downloadAsset = async ({
         // Failure tuple is [false, message, status?]. The status is the HTTP status of the download
         // request when known (ApiError), so a caller fetching several entries can tell a per-entry
         // authorization denial (401/403) or archived version (410) apart from a generic failure.
-        // A request the AWS WAF web ACL blocked carries no status, so its message is shown.
+        // A request the AWS WAF web ACL blocked carries no status, so its message is shown; a
+        // request that got no response at all says the service could not be reached.
+        if (isNetworkFailure(error)) {
+            return [false, NETWORK_FAILURE_MESSAGE, undefined];
+        }
         // Check for 410 Gone status (archived file)
         if (error.status === 410) {
             return [false, "This file version has been archived and cannot be downloaded", 410];

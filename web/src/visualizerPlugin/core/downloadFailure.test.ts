@@ -15,9 +15,11 @@ import {
     DOWNLOAD_NOT_FOUND_MESSAGE,
     DOWNLOAD_UNAUTHENTICATED_MESSAGE,
     downloadFailureMessage,
+    downloadRefusalReason,
     downloadResponseStatus,
     downloadStatusMessage,
 } from "./streamFailure";
+import { NETWORK_FAILURE_MESSAGE } from "../../services/apiClient";
 
 const GENERIC = "Failed to download PDF file";
 
@@ -64,12 +66,22 @@ describe("downloadFailureMessage", () => {
     });
 
     it("keeps the viewer's generic wording for anything else", () => {
-        // No status: a request the WAF blocked, or a network error.
-        expect(downloadFailureMessage([false, "Request blocked"], GENERIC)).toBe(GENERIC);
         expect(downloadFailureMessage([false, "Internal error", 500], GENERIC)).toBe(GENERIC);
         // `downloadAsset` resolves to `false` for a non-authorization client error.
         expect(downloadFailureMessage(false, GENERIC)).toBe(GENERIC);
         expect(downloadFailureMessage(undefined, GENERIC)).toBe(GENERIC);
+        expect(downloadFailureMessage([false, "", undefined], GENERIC)).toBe(GENERIC);
+    });
+
+    it("shows the message of a download that got no API answer: a WAF block or no response", () => {
+        // `downloadAsset` returns no status for these, and the message says what happened.
+        const blocked = "Request blocked by the deployment's AWS WAF web ACL (request ID r-1)";
+        expect(downloadFailureMessage([false, blocked, undefined], GENERIC)).toBe(blocked);
+        expect(downloadFailureMessage([false, NETWORK_FAILURE_MESSAGE, undefined], GENERIC)).toBe(
+            NETWORK_FAILURE_MESSAGE
+        );
+        expect(downloadRefusalReason([false, blocked, undefined])).toBe(blocked);
+        expect(downloadRefusalReason([false, "Internal error", 500])).toBeNull();
     });
 
     it("[control] reads the status only from the tuple's third entry", () => {
