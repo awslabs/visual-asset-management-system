@@ -117,14 +117,14 @@ MANUAL_DECISION_AT_FIELD = "manualDecisionAt"
 MANUAL_DECISION_FIELDS = (MANUAL_DECISION_FIELD, MANUAL_DECISION_AT_FIELD)
 MANUAL_DECISION_RELEASED = "released"
 MANUAL_DECISION_EXCEPTION_GRANTED = "exceptionGranted"
-# The evaluation-row `notAppliedMessage` of an evaluation whose outcome a later decision outranked;
-# its `notApplied` is the decision.
 # The human decisions recorded on the compliance record (`MANUAL_DECISION_FIELD`).
 MANUAL_DECISIONS = (MANUAL_DECISION_RELEASED, MANUAL_DECISION_EXCEPTION_GRANTED)
 # An evaluation outranked by a binding change made after it began (`began_before_binding_change`),
 # and one whose outcome could not be written to the record before its claim was undone.
 NOT_APPLIED_BINDING_CHANGED = "bindingChanged"
 NOT_APPLIED_NOT_RECORDED = "notRecorded"
+# The evaluation-row `notApplied` values with their `notAppliedMessage`: the decision that outranked
+# the evaluation's outcome (a `MANUAL_DECISIONS` value), a binding change, or a write that failed.
 NOT_APPLIED_MESSAGES = {
     MANUAL_DECISION_RELEASED: "Not applied: the asset was released after this evaluation began",
     MANUAL_DECISION_EXCEPTION_GRANTED: (

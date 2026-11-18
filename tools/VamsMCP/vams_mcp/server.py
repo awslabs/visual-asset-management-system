@@ -2359,14 +2359,15 @@ def list_compliance_evaluations(
 
     Rows have evaluationId, schemaName, evaluatedAt, verdict, ruleResults and the pipeline rules'
     `executionId`. `exceptionApplied`: violations recorded, asset kept in `exception`. `notApplied`
-    with `notAppliedMessage` ("Not applied: the asset was released after this evaluation began"):
-    report it so, never as the asset's current state. A rule result with `status` `error` is NOT a
-    verdict (its tooling failed); the row has `hasRuleErrors` and `errorRules`: report the rule as not
-    evaluated. A `pending_pipeline` row lists `pipelineExecutions`; `waiting` means the rule waits for
-    a running execution of its workflow: report it as waiting, not as failed. `closedReason`
-    (superseded, assetArchived, assetDeleted, databaseDeleted): closed without a verdict, `errorMessage`
-    says why: report it as not completed, never as compliant. The walk is bounded: `truncated` means
-    rows were not seen; pass `NextToken` back as `starting_token`."""
+    (released, exceptionGranted, bindingChanged, notRecorded) with `notAppliedMessage`
+    ("Not applied: the asset was released after this evaluation began"): report it so, never as
+    the asset's current state. A rule result with `status` `error` is NOT a verdict (its tooling
+    failed; see `hasRuleErrors`, `errorRules`): report the rule as not evaluated. A
+    `pipelineExecutions` entry `waiting` waits for a running execution of its workflow: report it
+    so, not as failed. `closedReason` (superseded, assetArchived, assetDeleted, databaseDeleted):
+    closed without a verdict, `errorMessage` says why: report it as not completed, never as
+    compliant. The walk is bounded: `truncated` means rows were not seen; pass `NextToken` back as
+    `starting_token`."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_compliance_evaluations(
             database_id,

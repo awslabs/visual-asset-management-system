@@ -2831,7 +2831,7 @@ class TestAnOutrankedEvaluationSaysItWasNotApplied:
             result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database',
                                              '-a', 'my-asset'])
             assert result.exit_code == 0
-            assert 'Not applied: a decision made after this evaluation began outranks it' in \
+            assert "Not applied: this evaluation's outcome did not change the asset" in \
                 result.output
 
 

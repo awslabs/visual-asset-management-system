@@ -554,10 +554,11 @@ def format_evaluation(result: Dict[str, Any]) -> str:
     if result.get('exceptionApplied'):
         lines.append("Exception Applied: yes (violations recorded; the asset stays released)")
     if result.get('notApplied'):
-        # A release or exception grant made after the evaluation began outranked its outcome: the
-        # verdict is recorded, the asset's state is the decision's (D159).
+        # The verdict is recorded but did not change the asset's state: a release or exception
+        # grant made after the evaluation began outranked it (D159), the binding changed, or the
+        # outcome could not be written (`notApplied` names which; the message says it in words).
         lines.append(result.get('notAppliedMessage')
-                     or "Not applied: a decision made after this evaluation began outranks it")
+                     or "Not applied: this evaluation's outcome did not change the asset")
     if result.get('hasRuleErrors'):
         errored = result.get('errorRules') or []
         names = f": {', '.join(errored)}" if errored else ""
