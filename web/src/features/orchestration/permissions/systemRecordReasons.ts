@@ -20,4 +20,8 @@ export const SYSTEM_RECORD_REASONS = {
     addTrigger: "Triggers cannot be added to a system workflow.",
     deleteTrigger:
         "Triggers of a system workflow cannot be deleted. Use Edit to switch the trigger off.",
+    // A run whose triggerType is a system trigger (`System-...`), refused by the rerun route
+    // (SYSTEM_RERUN_REFUSED_MESSAGE in common/workflows/systemPipelines.py).
+    rerunSystemRun:
+        "Started by VAMS for a system feature, so it cannot be re-run. Start it again from that feature.",
 } as const;
