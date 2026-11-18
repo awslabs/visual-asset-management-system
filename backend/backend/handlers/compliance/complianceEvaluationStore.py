@@ -1184,19 +1184,34 @@ AWAITING_REEVALUATION_EVALUATION_PENDING = "evaluationPending"
 
 _OWNERSHIP_AT_NAME = "#ownedEvaluatedAt"
 _OWNERSHIP_ID_NAME = "#ownedEvaluationId"
+_OWNERSHIP_BINDING_NAME = "#ownedBindingChangedAt"
+_OWNERSHIP_KEY_NAME = "#ownedDatabaseId"
 
 
 def evaluation_ownership_condition(evaluation_id: str, evaluated_at: str,
+                                   record_must_exist: bool = True,
                                    ) -> Tuple[str, Dict[str, str], Dict[str, Any]]:
     """The write-time form of `engine.evaluation_owns_state_row`: the asset-state row records no
-    evaluation yet, or its last evaluation began before this one, or it is this evaluation. Applied
-    to every state write an evaluation makes, so two evaluations finalizing within the same instant
-    cannot let the older one land after the newer one's read."""
-    names = {_OWNERSHIP_AT_NAME: "lastEvaluatedAt", _OWNERSHIP_ID_NAME: "lastEvaluationId"}
+    evaluation yet, or its last evaluation began before this one, or it is this evaluation; and the
+    record's binding has not changed since this evaluation began (`engine.BINDING_CHANGED_AT_FIELD`).
+    Applied to every state write an evaluation makes, so two evaluations finalizing within the same
+    instant cannot let the older one land after the newer one's read, and an evaluation that began
+    under an earlier binding writes nothing once the binding changed.
+
+    `record_must_exist` (every write after the claim) also requires the record to exist: the claim
+    left it there, so a record that is gone was removed since (its binding removed, its asset
+    deleted), and the evaluation does not create it again. Only the claim may create the record."""
+    names = {_OWNERSHIP_AT_NAME: "lastEvaluatedAt", _OWNERSHIP_ID_NAME: "lastEvaluationId",
+             _OWNERSHIP_BINDING_NAME: engine.BINDING_CHANGED_AT_FIELD}
     values = {":ownedEvaluatedAt": evaluated_at, ":ownedEvaluationId": evaluation_id}
-    expression = (f"attribute_not_exists({_OWNERSHIP_AT_NAME}) OR "
+    expression = (f"(attribute_not_exists({_OWNERSHIP_AT_NAME}) OR "
                   f"{_OWNERSHIP_AT_NAME} < :ownedEvaluatedAt OR "
-                  f"{_OWNERSHIP_ID_NAME} = :ownedEvaluationId")
+                  f"{_OWNERSHIP_ID_NAME} = :ownedEvaluationId) AND "
+                  f"(attribute_not_exists({_OWNERSHIP_BINDING_NAME}) OR "
+                  f"{_OWNERSHIP_BINDING_NAME} < :ownedEvaluatedAt)")
+    if record_must_exist:
+        names[_OWNERSHIP_KEY_NAME] = "databaseId"
+        expression += f" AND attribute_exists({_OWNERSHIP_KEY_NAME})"
     return expression, names, values
 
 
@@ -1716,11 +1731,36 @@ def run_evaluation(
         result.update(verdict=EvaluationVerdict.error.value, superseded=False,
                       error=RECORD_CHANGED_MESSAGE)
         return result
+    if claimed is CLAIM_REBOUND:
+        # Bound to another schema since the caller read the record: the evaluation that binding
+        # queues (or the next one) decides the asset; nothing ran, nothing was written.
+        logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} was asked for a schema "
+                    "the record is no longer bound to; nothing is evaluated")
+        result = _superseded_result(evaluation_id, claimed_from)
+        result.update(error=BINDING_CHANGED_MESSAGE)
+        return result
     if not claimed:
         logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} found the asset-state "
                     "row claimed by a newer evaluation; nothing is evaluated")
         return _superseded_result(evaluation_id, claimed_from)
 
+    try:
+        return _evaluate_claimed(database_id, asset_id, schema_name, actor, evaluation_id,
+                                 evaluated_at, claimed_from)
+    except Exception:
+        # Nothing the evaluation set out to record was written: the claim goes, so the change is
+        # not read as covered and a retry evaluates it.
+        _undo_claim(database_id, asset_id, evaluation_id, claimed, claimed_from)
+        raise
+
+
+def _evaluate_claimed(database_id: str, asset_id: str, schema_name: str, actor: str,
+                      evaluation_id: str, evaluated_at: str, claimed_from: Dict[str, Any],
+                      ) -> Dict[str, Any]:
+    """`run_evaluation` once its claim landed on the record (`claimed_from` is the record the claim
+    was computed from): read the schema and the inputs, evaluate, launch the pipeline rules and
+    write the outcome. An exception raised here before the outcome is written leaves the claim to
+    `run_evaluation` to undo."""
     # The evaluation this one replaced on the row may still have a rule waiting for its workflow:
     # its outcome can no longer apply, so the rule does not launch (and a wait past its bound is
     # recorded as such).
@@ -1750,44 +1790,15 @@ def run_evaluation(
     unreadable_results = engine.unreadable_rule_results(raw_rules, typed_rules, unresolved_parents)
     groups = engine.split_rules(typed_rules)
 
-    asset_metadata = get_asset_metadata(database_id, asset_id)
-    metadata_schemas: Dict[str, Optional[Dict[str, Any]]] = {}
-    for rule in groups.metadata.values():
-        ref = rule.metadataSchemaRef
-        key = engine.metadata_schema_ref_key(ref, rule.scope)
-        if key not in metadata_schemas:
-            metadata_schemas[key] = get_metadata_schema(
-                engine.metadata_schema_lookup_database(ref, database_id), ref.schemaName,
-                engine.SCOPE_ENTITY_TYPE[rule.scope])
-    asset_links = get_asset_links(database_id, asset_id)
-    # Read only for the rule types that use them: an evaluation without a file-structure,
-    # version-coverage, asset-attribute or file-scope metadata rule lists no S3 objects and reads no
-    # file versions, and each metadata scope's rows are read only when a rule of that scope exists.
-    # The asset row is read once: a row read above for the record's name serves the rules too.
-    if engine.needs_asset_row(groups):
-        if asset_row is None:
-            asset_row = get_asset_item(database_id, asset_id)
-            _keep_record_name(database_id, asset_id, claimed_from, asset_row)
-    else:
-        asset_row = None
-    current_files = (get_current_files(database_id, asset_id, asset=asset_row)
-                     if engine.needs_current_files(groups) and asset_row is not None else None)
-    versioned_file_keys = (get_versioned_file_keys(database_id, asset_id)
-                           if engine.needs_versioned_file_keys(groups) else None)
-    file_metadata_by_path = (get_file_metadata_by_path(database_id, asset_id)
-                             if engine.needs_file_metadata(groups) else None)
-    file_attributes_by_path = (get_file_attributes_by_path(database_id, asset_id)
-                               if engine.needs_file_attributes(groups) else None)
-    link_metadata_by_id = (get_link_metadata(engine.link_ids_to_read(groups.metadata, asset_links))
-                           if engine.needs_link_metadata(groups) else None)
-
-    rule_results, pipeline_rules = engine.evaluate_rules(
-        typed_rules, asset_metadata, metadata_schemas, asset_links,
-        current_files=current_files, versioned_file_keys=versioned_file_keys,
-        asset_row=asset_row, file_metadata_by_path=file_metadata_by_path,
-        file_attributes_by_path=file_attributes_by_path, link_metadata_by_id=link_metadata_by_id)
+    rule_results, pipeline_rules = _evaluate_rules_on_asset(
+        database_id, asset_id, typed_rules, groups, asset_row, record=claimed_from)
     rule_results = unreadable_results + rule_results
-
+    if unreadable_results:
+        # A schema read in part reaches no verdict (whatever TOOLING_FAILURES_APPLY_ENFORCEMENT
+        # says), so no workflow is launched for it and the asset's state stays as it is.
+        rule_results.extend(engine.pipeline_rules_not_run(
+            pipeline_rules, engine.PIPELINE_RULE_NOT_RUN_MESSAGE))
+        pipeline_rules = {}
     base_record = _evaluation_record_base(evaluation_id, database_id, asset_id, schema_name,
                                           schema_version, evaluated_at, actor)
     started: List[Dict[str, Any]] = []
@@ -1815,6 +1826,7 @@ def run_evaluation(
     has_pending = bool(started)
     waiting_count = sum(1 for entry in started if entry["status"] == PIPELINE_EXECUTION_WAITING)
     verdict = (EvaluationVerdict.pending_pipeline if has_pending
+               else EvaluationVerdict.error if unreadable_results
                else engine.determine_verdict(rule_results))
     status = engine.evaluation_status_for(verdict)
     error_rules = engine.errored_rule_names(rule_results)
@@ -1863,7 +1875,8 @@ def run_evaluation(
         if exception_applies:
             record["exceptionApplied"] = True
         if verdict == EvaluationVerdict.error:
-            record["errorMessage"] = ALL_RULES_ERRORED_MESSAGE
+            record["errorMessage"] = (engine.UNREADABLE_SCHEMA_MESSAGE if unreadable_results
+                                      else ALL_RULES_ERRORED_MESSAGE)
         evaluation_table.put_item(Item=record)
         if error_rules:
             _write_evaluation_error_audit(database_id, asset_id, actor, schema_name, evaluation_id,
@@ -1926,6 +1939,94 @@ def run_evaluation(
             })
     return result
 
+
+
+def _evaluate_rules_on_asset(database_id: str, asset_id: str, typed_rules: Dict[str, Any],
+                             groups: Any, asset_row: Optional[Dict[str, Any]] = None,
+                             record: Optional[Dict[str, Any]] = None,
+                             ) -> Tuple[List[RuleResult], Dict[str, PipelineRule]]:
+    """Read what the schema's rules need from the asset (only the inputs a rule of the schema
+    uses) and run the synchronous rules: their results and the pipeline rules still to launch
+    (`engine.evaluate_rules`). `asset_row` is a row already read; `record` is the compliance record
+    an evaluation writes the asset's name onto when it reads the row (`_keep_record_name`), None for
+    a dry run, which writes nothing."""
+    asset_metadata = get_asset_metadata(database_id, asset_id)
+    metadata_schemas: Dict[str, Optional[Dict[str, Any]]] = {}
+    for rule in groups.metadata.values():
+        ref = rule.metadataSchemaRef
+        key = engine.metadata_schema_ref_key(ref, rule.scope)
+        if key not in metadata_schemas:
+            metadata_schemas[key] = get_metadata_schema(
+                engine.metadata_schema_lookup_database(ref, database_id), ref.schemaName,
+                engine.SCOPE_ENTITY_TYPE[rule.scope])
+    asset_links = get_asset_links(database_id, asset_id)
+    # Read only for the rule types that use them: an evaluation without a file-structure,
+    # version-coverage, asset-attribute or file-scope metadata rule lists no S3 objects and reads no
+    # file versions, and each metadata scope's rows are read only when a rule of that scope exists.
+    # The asset row is read once: a row read above for the record's name serves the rules too.
+    if engine.needs_asset_row(groups):
+        if asset_row is None:
+            asset_row = get_asset_item(database_id, asset_id)
+            if record is not None:
+                _keep_record_name(database_id, asset_id, record, asset_row)
+    else:
+        asset_row = None
+    current_files = (get_current_files(database_id, asset_id, asset=asset_row)
+                     if engine.needs_current_files(groups) and asset_row is not None else None)
+    versioned_file_keys = (get_versioned_file_keys(database_id, asset_id)
+                           if engine.needs_versioned_file_keys(groups) else None)
+    file_metadata_by_path = (get_file_metadata_by_path(database_id, asset_id)
+                             if engine.needs_file_metadata(groups) else None)
+    file_attributes_by_path = (get_file_attributes_by_path(database_id, asset_id)
+                               if engine.needs_file_attributes(groups) else None)
+    link_metadata_by_id = (get_link_metadata(engine.link_ids_to_read(groups.metadata, asset_links))
+                           if engine.needs_link_metadata(groups) else None)
+
+    rule_results, pipeline_rules = engine.evaluate_rules(
+        typed_rules, asset_metadata, metadata_schemas, asset_links,
+        current_files=current_files, versioned_file_keys=versioned_file_keys,
+        asset_row=asset_row, file_metadata_by_path=file_metadata_by_path,
+        file_attributes_by_path=file_attributes_by_path, link_metadata_by_id=link_metadata_by_id)
+    return rule_results, pipeline_rules
+
+
+def dry_run_evaluation(database_id: str, asset_id: str, schema_name: str) -> Dict[str, Any]:
+    """Evaluate an asset against a schema that is not its bound one, recording nothing: the rule
+    results and the verdict they give are returned, and no claim, evaluation row, state, audit
+    entry or name is written. No workflow is launched, so each pipeline rule is a `status: error`
+    result (`engine.DRY_RUN_PIPELINE_RULE_MESSAGE`) counted in `pipelineRulesNotRun`. A schema with a
+    rule that cannot be read reaches no verdict, as in an evaluation. Returns `{dryRun, verdict,
+    complianceState (the asset's, as it is), ruleResults, schemaVersion, hasRuleErrors, errorRules,
+    pipelineRulesNotRun}`, or `{dryRun, error}` when the schema is missing or not vams-rules-v1."""
+    schema_item = load_schema_item(schema_name)
+    if schema_item is None:
+        return {"dryRun": True, "error": "Schema not found"}
+    schema_body = engine.parse_schema_body(schema_item.get("schemaBody", "{}"))
+    if not engine.is_vams_rules_schema(schema_body):
+        return {"dryRun": True, "error": "Schema is not vams-rules-v1 format"}
+    unresolved_parents: List[str] = []
+    raw_rules = resolve_schema_rules(schema_body, unresolved_parents)
+    typed_rules = engine.parse_resolved_rules(raw_rules)
+    unreadable_results = engine.unreadable_rule_results(raw_rules, typed_rules, unresolved_parents)
+    rule_results, pipeline_rules = _evaluate_rules_on_asset(
+        database_id, asset_id, typed_rules, engine.split_rules(typed_rules))
+    rule_results = unreadable_results + rule_results + engine.pipeline_rules_not_run(
+        pipeline_rules, engine.PIPELINE_RULE_NOT_RUN_MESSAGE if unreadable_results
+        else engine.DRY_RUN_PIPELINE_RULE_MESSAGE)
+    verdict = (EvaluationVerdict.error if unreadable_results
+               else engine.determine_verdict(rule_results))
+    error_rules = engine.errored_rule_names(rule_results)
+    record = get_compliance_record(database_id, asset_id) or {}
+    return {
+        "dryRun": True,
+        "verdict": verdict.value,
+        "complianceState": record.get("complianceState", engine.STATE_UNKNOWN),
+        "ruleResults": [r.dict() for r in rule_results],
+        "schemaVersion": engine.schema_version_number(schema_item.get("internalVersion")),
+        "hasRuleErrors": bool(error_rules),
+        "errorRules": error_rules,
+        "pipelineRulesNotRun": len(pipeline_rules),
+    }
 
 def _evaluation_record_base(evaluation_id, database_id, asset_id, schema_name, schema_version,
                             evaluated_at, actor) -> Dict[str, Any]:
@@ -2038,16 +2139,24 @@ _CLAIM_ATTEMPTS = STATE_WRITE_ATTEMPTS
 class _ClaimBusy:
     """`_claim_state_row`'s answer when the record changed under every attempt: falsy like a lost
     claim, told apart from one (`CLAIM_BUSY`) so the evaluation reports it could not start rather
-    than that a newer one superseded it."""
+    than that a newer one superseded it. `CLAIM_REBOUND` is the answer for a record bound to another
+    schema since the caller read it."""
+
+    def __init__(self, name: str = "CLAIM_BUSY"):
+        self._name = name
 
     def __bool__(self) -> bool:
         return False
 
     def __repr__(self) -> str:
-        return "CLAIM_BUSY"
+        return self._name
 
 
 CLAIM_BUSY = _ClaimBusy()
+CLAIM_REBOUND = _ClaimBusy("CLAIM_REBOUND")
+# The error of an evaluation whose record names another schema than the one it was asked for.
+BINDING_CHANGED_MESSAGE = ("The asset's schema binding changed after the evaluation was requested; "
+                           "the evaluation under the binding now in force decides the asset")
 
 
 def _claim_marks_quarantine(previous: Dict[str, Any]) -> bool:
@@ -2078,12 +2187,17 @@ def _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, previou
     write that lands between the read and the write fails it, and the claim is rebuilt from a
     consistent re-read, up to `_CLAIM_ATTEMPTS` tries.
 
-    Returns True when the claim landed; False when the row as read belongs to a newer evaluation;
-    `CLAIM_BUSY` (falsy) when the record changed under every try (logged; nothing was written)."""
-    ownership = evaluation_ownership_condition(evaluation_id, evaluated_at)
+    Returns the record's revision after the claim (a positive int, truthy) when the claim landed;
+    False when the row as read belongs to a newer evaluation; `CLAIM_BUSY` (falsy) when the record
+    changed under every try (logged; nothing was written); `CLAIM_REBOUND` (falsy) when the record
+    names a schema other than `schema_name`: the binding changed after the caller read it, so the
+    evaluation it asked for is not the one the record is bound to now."""
+    ownership = evaluation_ownership_condition(evaluation_id, evaluated_at, record_must_exist=False)
     for attempt in range(_CLAIM_ATTEMPTS):
         if attempt:
             previous = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
+        if schema_name and previous.get("schemaName") and previous["schemaName"] != schema_name:
+            return CLAIM_REBOUND
         if not engine.evaluation_owns_state_row(previous, evaluation_id, evaluated_at):
             return False
         claim: Dict[str, Any] = {
@@ -2103,11 +2217,81 @@ def _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, previou
             if not is_conditional_check_failure(e):
                 raise
             continue
-        return True
+        # The write was conditional on the revision read and added one to it.
+        return _revision_of(previous) + 1
     logger.warning(f"Evaluation {evaluation_id} of {database_id}:{asset_id} did not start: the "
                    f"asset-state record changed under each of {_CLAIM_ATTEMPTS} claims; the next "
                    "evaluation decides the asset")
     return CLAIM_BUSY
+
+
+def _revision_of(record: Dict[str, Any]) -> int:
+    """The record's revision as an int (0 for a record, or none, that carries none)."""
+    revision = (record or {}).get(RECORD_REVISION_FIELD)
+    try:
+        return int(revision) if revision is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+# The attributes a claim writes (`_claim_state_row`), which `_undo_claim` puts back.
+_CLAIM_FIELDS = ("lastEvaluationId", "lastEvaluatedAt", "lastEvaluationStatus", "complianceState",
+                 *AWAITING_REEVALUATION_FIELDS)
+
+
+def _undo_claim(database_id: str, asset_id: str, evaluation_id: str, claim_revision: int,
+                claimed_from: Dict[str, Any]) -> None:
+    """Put the record back as it was before this evaluation's claim, when the evaluation failed
+    before it wrote anything else (an AWS error, D159's revision still the claim's): the pointers,
+    the status, a state the claim filled in and the awaiting-re-evaluation marker go back to their
+    values in `claimed_from` (a record the claim created is deleted), so the change the evaluation
+    was for is not taken as covered (`complianceTrigger.change_covered_by_last_evaluation`) and the
+    queue's retry evaluates it. Conditional on the record's revision being the claim's: a record
+    another writer changed since is left as it is. Best-effort: a failure here is logged, and the
+    claim's staleness bound (`claim_orphaned`) covers it."""
+    try:
+        if not claimed_from:
+            delete_asset_state(database_id, asset_id, {RECORD_REVISION_FIELD: claim_revision})
+        else:
+            restored = {field: claimed_from[field] for field in _CLAIM_FIELDS
+                        if field in claimed_from}
+            restored["updatedAt"] = now_iso()
+            update_asset_state(
+                database_id, asset_id, restored,
+                remove_fields=tuple(field for field in _CLAIM_FIELDS if field not in claimed_from),
+                computed_from={RECORD_REVISION_FIELD: claim_revision})
+    except Exception as e:
+        if is_conditional_check_failure(e):
+            logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} failed; the record "
+                        "changed since its claim and is left as it is")
+            return
+        logger.warning(f"Evaluation {evaluation_id} of {database_id}:{asset_id} failed and its "
+                       f"claim could not be undone: {e}")
+        return
+    logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} failed; its claim was "
+                "undone so the change is evaluated again")
+
+
+# A `pending_pipeline` claim older than this whose evaluation row does not exist belongs to a run
+# that stopped (its Lambda timed out) before it recorded anything: it no longer covers a change.
+# Above the longest timeout of a Lambda that evaluates (15 minutes).
+EVALUATION_CLAIM_STALE_SECONDS = 1200
+
+
+def claim_orphaned(record: Optional[Dict[str, Any]], now: Optional[datetime] = None) -> bool:
+    """Whether the record's last evaluation is a claim no run will complete: `pending_pipeline`,
+    begun more than EVALUATION_CLAIM_STALE_SECONDS ago, and no evaluation row carries its id (a run
+    writes its row before it launches anything and when it completes). The evaluation table is read
+    only for a claim that old."""
+    row = record or {}
+    if row.get("lastEvaluationStatus") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        return False
+    started = engine.parse_timestamp(row.get("lastEvaluatedAt"))
+    if started is None or not row.get("lastEvaluationId"):
+        return False
+    if (now or datetime.now(timezone.utc)) - started < timedelta(seconds=EVALUATION_CLAIM_STALE_SECONDS):
+        return False
+    return get_evaluation(row["lastEvaluationId"], consistent_read=True) is None
 
 
 def _superseded_result(evaluation_id: str, previous: Dict[str, Any]) -> Dict[str, Any]:
@@ -2215,6 +2399,12 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     for attempt in range(STATE_WRITE_ATTEMPTS):
         if attempt:
             previous = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
+            if not previous:
+                # The record was removed since the claim (its binding removed, its asset deleted):
+                # the evaluation does not create it again.
+                logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id}: the asset's "
+                            "compliance record was removed; the outcome is not applied")
+                return StateWrite(False)
         if not engine.evaluation_owns_state_row(previous, evaluation_id, evaluated_at):
             logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} is older than "
                         f"the asset's last evaluation {previous.get('lastEvaluationId')}; the asset "

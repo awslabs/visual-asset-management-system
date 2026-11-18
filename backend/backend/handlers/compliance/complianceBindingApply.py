@@ -129,6 +129,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from boto3.dynamodb.conditions import Attr, Key
 
 from common.compliance import databaseRetirement
+from common.compliance import evaluationEngine as engine
 from common.compliance import listing
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceEvaluationStore as store
@@ -1025,6 +1026,7 @@ def bind_record(database_id: str, asset_id: str, existing: Optional[Dict[str, An
                 "schemaName": schema_name,
                 "schemaSource": SCHEMA_SOURCE_DATABASE,
                 "updatedAt": written_at,
+                engine.BINDING_CHANGED_AT_FIELD: written_at,
                 **awaiting(written_at, schema_name, REASON_SCHEMA_BOUND),
                 **stamp,
             }
@@ -1036,6 +1038,7 @@ def bind_record(database_id: str, asset_id: str, existing: Optional[Dict[str, An
                 "schemaSource": SCHEMA_SOURCE_DATABASE,
                 "complianceState": STATE_PENDING_EVALUATION,
                 "updatedAt": written_at,
+                engine.BINDING_CHANGED_AT_FIELD: written_at,
                 **listing.asset_name_attributes(asset_id, asset_name),
                 **stamp,
             }
@@ -1075,7 +1078,7 @@ def unbind_record(database_id: str, item: Dict[str, Any], apply: Optional[Dict[s
             if item.get("complianceState") == STATE_QUARANTINED:
                 # No schema applies any more: the record keeps the quarantine and names none.
                 written_at = store.now_iso()
-                updates = {"updatedAt": written_at,
+                updates = {"updatedAt": written_at, engine.BINDING_CHANGED_AT_FIELD: written_at,
                            **awaiting(written_at, None, REASON_SCHEMA_UNBOUND)}
                 if apply:
                     updates[APPLY_STAMP_FIELD] = apply["applyId"]

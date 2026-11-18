@@ -91,6 +91,10 @@ MAX_EVALUATIONS_PAGE_SIZE = 200
 DEFAULT_OVERVIEW_PAGE_SIZE = 100
 MAX_OVERVIEW_PAGE_SIZE = listing.MAX_LISTING_PAGE_SIZE
 INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
+# An evaluation against a named schema: the refusal of a schema outside the asset's database, and
+# the message of a dry run (a named schema other than the bound one).
+SCHEMA_NOT_AVAILABLE_MESSAGE = "The schema is not available to the asset's database"
+DRY_RUN_MESSAGE = "Dry run completed: the asset's compliance state was not changed"
 # The attributes a LastEvaluatedKey of the evaluation table's AssetIndex carries (table key plus
 # index keys); a token missing one belongs to another listing and never reaches DynamoDB.
 EVALUATION_ASSET_INDEX_KEY_ATTRIBUTES = ("evaluationId", "databaseId:assetId", "evaluatedAt")
@@ -358,7 +362,13 @@ def _live_not_readable(access, database_id, asset_id):
 #######################
 
 def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestModel):
-    """Evaluate an asset against the requested schema (or its bound schema)."""
+    """Evaluate an asset against its bound schema; a named schema other than the bound one is a dry
+    run (`store.dry_run_evaluation`) that returns results and records nothing.
+
+    A named schema needs the schema GET in its scope (an absent name is checked as GLOBAL, so a
+    caller without schema read access is refused rather than told whether the name exists) and must
+    be GLOBAL or available to the asset's database, as binding it would require; both are decided
+    before the asset is read."""
     (valid, message) = _validate_database_and_asset(database_id, asset_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -367,6 +377,16 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
         return authorization_error()
     if not _enforce_asset_evaluation(database_id, asset_id, "POST"):
         return authorization_error()
+    if request.schemaName:
+        named = store.load_schema_item(request.schemaName)
+        named_scope = (named or {}).get("databaseId") or GLOBAL_DATABASE_ID
+        if not _enforce_schema(request.schemaName, named_scope, "GET"):
+            return authorization_error()
+        if named is None:
+            return general_error(body={"message": "Evaluation could not run: Schema not found"},
+                                 event=event)
+        if named_scope not in (GLOBAL_DATABASE_ID, database_id):
+            return general_error(body={"message": SCHEMA_NOT_AVAILABLE_MESSAGE}, event=event)
     if store.database_moving(database_id):
         return databaseRetirement.moving_response(event)
 
@@ -374,13 +394,18 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
         return general_error(body={"message": "Asset not found"}, event=event)
 
     current_state = store.get_compliance_record(database_id, asset_id) or {}
-    schema_name = request.schemaName or current_state.get("schemaName")
-    if not schema_name:
+    bound_schema = current_state.get("schemaName")
+    database_binding = None
+    if not bound_schema:
         # The database binding governs every asset of the database, whatever its auto-evaluation
         # says: an asset it does not record yet is registered under it and evaluated against it.
-        schema_name = (store.get_database_item(database_id) or {}).get("complianceSchemaName")
-        if schema_name:
-            store.register_under_database_binding(database_id, asset_id, schema_name)
+        database_binding = (store.get_database_item(database_id) or {}).get("complianceSchemaName")
+        bound_schema = database_binding
+    if request.schemaName and request.schemaName != bound_schema:
+        return _dry_run_answer(event, database_id, asset_id, request.schemaName)
+    schema_name = bound_schema
+    if database_binding:
+        store.register_under_database_binding(database_id, asset_id, schema_name)
     if not schema_name:
         return general_error(body={
             "message": "No schema specified and the asset has no bound schema",
@@ -394,6 +419,7 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
 
     return success(body={
         "message": "Evaluation completed",
+        "dryRun": False,
         "evaluationId": result.get("evaluationId"),
         "schemaName": schema_name,
         "schemaVersion": result.get("schemaVersion"),
@@ -411,6 +437,28 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
         # Of those, the rules waiting for a running execution of their workflow (it holds the
         # workflow's concurrency lock on this asset); they launch when it ends.
         "pipelineRulesWaiting": result.get("pipelineRulesWaiting", 0),
+    })
+
+
+def _dry_run_answer(event, database_id, asset_id, schema_name):
+    """The answer of an evaluation against a named schema other than the asset's bound one: its
+    results and verdict, with `dryRun: true`; nothing was recorded and no cascade is opened."""
+    result = store.dry_run_evaluation(database_id, asset_id, schema_name)
+    if result.get("error"):
+        return general_error(body={"message": "Evaluation could not run: " + result["error"]},
+                             event=event)
+    return success(body={
+        "message": DRY_RUN_MESSAGE,
+        "dryRun": True,
+        "schemaName": schema_name,
+        "schemaVersion": result.get("schemaVersion"),
+        "verdict": result.get("verdict"),
+        "complianceState": result.get("complianceState"),
+        "hasRuleErrors": bool(result.get("hasRuleErrors", False)),
+        "errorRules": result.get("errorRules", []),
+        "ruleResults": failure_access.rule_results_for_caller(
+            _execution_reads(), result.get("ruleResults", [])),
+        "pipelineRulesNotRun": result.get("pipelineRulesNotRun", 0),
     })
 
 

@@ -164,12 +164,86 @@ class TestRouteDispatch:
         assert response["statusCode"] == 200
         mocks["run_evaluation"].assert_called_once_with(DB, ASSET, "bound-schema", USER)
 
-    def test_post_evaluate_prefers_the_requested_schema(self):
+    def test_post_evaluate_of_a_named_schema_other_than_the_bound_one_is_a_dry_run(self):
+        """Its results are returned and nothing is recorded: no evaluation, no cascade."""
+        dry_run = {"dryRun": True, "verdict": "non_compliant", "complianceState": "compliant",
+                   "ruleResults": [], "schemaVersion": 2, "hasRuleErrors": False,
+                   "errorRules": [], "pipelineRulesNotRun": 1}
+        with patch(f"{STORE}.dry_run_evaluation", return_value=dry_run) as dry:
+            response, mocks = _run(
+                rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "requested"}),
+                compliance_record={"schemaName": "bound-schema"},
+                schema_item=schema_row("requested"))
+        assert response["statusCode"] == 200, response
+        body = body_of(response)
+        assert body["dryRun"] is True
+        assert body["message"] == svc.DRY_RUN_MESSAGE
+        assert (body["schemaName"], body["verdict"], body["complianceState"],
+                body["pipelineRulesNotRun"]) == ("requested", "non_compliant", "compliant", 1)
+        assert "evaluationId" not in body
+        dry.assert_called_once_with(DB, ASSET, "requested")
+        mocks["run_evaluation"].assert_not_called()
+        mocks["cascade"].assert_not_called()
+
+    def test_post_evaluate_naming_the_bound_schema_evaluates_it(self):
         response, mocks = _run(
-            rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "requested"}),
-            compliance_record={"schemaName": "bound-schema"})
-        assert response["statusCode"] == 200
-        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, "requested", USER)
+            rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "bound-schema"}),
+            compliance_record={"schemaName": "bound-schema"},
+            schema_item=schema_row("bound-schema"))
+        assert response["statusCode"] == 200, response
+        assert body_of(response)["dryRun"] is False
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, "bound-schema", USER)
+
+    def test_a_named_schema_the_caller_may_not_read_is_refused_before_the_asset_is_read(self):
+        casbin = enforcer()
+        casbin.enforce.side_effect = lambda obj, action: obj.get("object__type") != "complianceSchema"
+        with patch(f"{STORE}.dry_run_evaluation") as dry:
+            response, mocks = _run(
+                rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "requested"}),
+                compliance_record={"schemaName": "bound-schema"},
+                schema_item=schema_row("requested"), casbin=casbin)
+        assert response["statusCode"] == 403
+        dry.assert_not_called()
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_an_absent_named_schema_is_checked_in_the_global_scope(self):
+        casbin = enforcer()
+        response, _ = _run(
+            rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "missing"}),
+            compliance_record={"schemaName": "bound-schema"}, casbin=casbin)
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Evaluation could not run: Schema not found"
+        schema_checks = [call.args[0] for call in casbin.enforce.call_args_list
+                         if call.args[0].get("object__type") == "complianceSchema"]
+        assert schema_checks == [{"object__type": "complianceSchema",
+                                  "complianceSchemaName": "missing", "databaseId": "GLOBAL"}]
+
+    def test_a_named_schema_of_another_database_is_refused(self):
+        with patch(f"{STORE}.dry_run_evaluation") as dry:
+            response, mocks = _run(
+                rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "theirs"}),
+                compliance_record={"schemaName": "bound-schema"},
+                schema_item=schema_row("theirs", database_id=OTHER_DB))
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == svc.SCHEMA_NOT_AVAILABLE_MESSAGE
+        dry.assert_not_called()
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_a_named_schema_on_an_asset_without_a_binding_is_a_dry_run(self):
+        """No schema is bound (no record binding, no database binding): naming one changes no
+        state."""
+        with patch(f"{STORE}.dry_run_evaluation", return_value={"dryRun": True, "verdict": "compliant",
+                                                               "complianceState": "unknown"}) as dry, \
+                patch(f"{STORE}.get_database_item", return_value={"databaseId": DB}), \
+                patch(f"{STORE}.register_under_database_binding") as register:
+            response, mocks = _run(
+                rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "requested"}),
+                compliance_record=None, schema_item=schema_row("requested"))
+        assert response["statusCode"] == 200, response
+        assert body_of(response)["dryRun"] is True
+        dry.assert_called_once()
+        register.assert_not_called()
+        mocks["run_evaluation"].assert_not_called()
 
     def test_post_sweep_evaluates_every_bound_asset(self):
         response, mocks = _run(
@@ -467,7 +541,7 @@ class TestEvaluateFlow:
         assert body["hasRuleErrors"] is True
         assert body["verdict"] == "quarantined"
         assert body["complianceState"] == "exception"
-        assert set(body) == {"message", "evaluationId", "schemaName", "schemaVersion", "verdict",
+        assert set(body) == {"message", "dryRun", "evaluationId", "schemaName", "schemaVersion", "verdict",
                              "complianceState", "exceptionApplied", "hasRuleErrors", "ruleResults",
                              "pipelineRulesPending", "pipelineRulesWaiting"}
 

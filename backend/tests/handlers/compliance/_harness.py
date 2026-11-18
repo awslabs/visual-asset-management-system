@@ -369,23 +369,61 @@ def _clause_of(expression, keyword):
 
 
 def _condition_holds(row, expression, names, values):
-    """A ConditionExpression the store writes the asset-state row under: OR-clauses, or a
-    conjunction of parenthesized OR-groups (`(...) AND (...)`, `store.all_of`)."""
+    """A ConditionExpression the store writes the asset-state row under: clauses joined by OR and
+    AND (AND binding tighter, as in DynamoDB), grouped by parentheses to any depth (`store.all_of`
+    parenthesizes each condition it joins)."""
     expression = expression.strip()
-    if expression.startswith("(") and ") AND (" in expression:
-        groups = expression[1:-1].split(") AND (")
-        return all(_condition_holds(row, group, names, values) for group in groups)
-    return any(_ownership_clause_holds(row, clause, names, values)
-               for clause in expression.split(" OR "))
+    alternatives = _split_top_level(expression, " OR ")
+    if len(alternatives) > 1:
+        return any(_condition_holds(row, part, names, values) for part in alternatives)
+    conjuncts = _split_top_level(expression, " AND ")
+    if len(conjuncts) > 1:
+        return all(_condition_holds(row, part, names, values) for part in conjuncts)
+    if _wrapped(expression):
+        return _condition_holds(row, expression[1:-1], names, values)
+    return _ownership_clause_holds(row, expression, names, values)
+
+
+def _split_top_level(expression, separator):
+    """`expression` split at each `separator` outside parentheses."""
+    parts, depth, start, index = [], 0, 0, 0
+    while index < len(expression):
+        character = expression[index]
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        elif depth == 0 and expression.startswith(separator, index):
+            parts.append(expression[start:index])
+            index += len(separator)
+            start = index
+            continue
+        index += 1
+    parts.append(expression[start:])
+    return parts
+
+
+def _wrapped(expression):
+    """Whether the whole expression is one parenthesized group."""
+    if not expression.startswith("("):
+        return False
+    depth = 0
+    for index, character in enumerate(expression):
+        depth += 1 if character == "(" else -1 if character == ")" else 0
+        if depth == 0:
+            return index == len(expression) - 1
+    return False
 
 
 def _ownership_clause_holds(row, clause, names, values):
     """One clause of a ConditionExpression the evaluation store writes the asset-state row under:
-    `attribute_not_exists(#n)`, `#n < :v` (strings compare as DynamoDB compares them, by code
-    point) or `#n = :v`."""
+    `attribute_not_exists(#n)`, `attribute_exists(#n)`, `#n < :v` (strings compare as DynamoDB
+    compares them, by code point) or `#n = :v`."""
     clause = clause.strip()
     if clause.startswith("attribute_not_exists("):
         return names[clause[len("attribute_not_exists("):-1]] not in row
+    if clause.startswith("attribute_exists("):
+        return names[clause[len("attribute_exists("):-1]] in row
     for operator in (" < ", " = "):
         if operator in clause:
             name_token, value_token = clause.split(operator, 1)
