@@ -71,6 +71,10 @@ aws s3 sync s3://<AUXILIARY_BUCKET> s3://<BACKUP_BUCKET>/vams-backup/auxiliary-b
 External S3 buckets configured via `externalAssetBuckets` in `config.json` are not deleted by VAMS uninstall. Only the VAMS-managed bucket policies and event notifications are removed. Your data in external buckets remains intact.
 :::
 
+:::note[Transfer Acceleration on retained buckets]
+If `app.assetBuckets.useS3TransferAcceleration` was `true`, the retained asset and auxiliary buckets keep Amazon S3 Transfer Acceleration enabled after the stack is gone, because the setting belongs to the bucket. Nothing uses the accelerate host once VAMS is removed, so the setting costs nothing by itself. To suspend it before you reuse or share a bucket, run `aws s3api put-bucket-accelerate-configuration --bucket <BUCKET_NAME> --accelerate-configuration Status=Suspended`, or use **Properties > Transfer acceleration** in the console. VAMS never changes the setting on an external bucket, so an external bucket keeps whatever its owner configured. See [Amazon S3 Transfer Acceleration](s3-transfer-acceleration.md).
+:::
+
 ### Record stack resource identifiers
 
 Save the CloudFormation stack outputs and resource identifiers for reference during manual cleanup. Most VAMS resources live in nested stacks, so record those as well — this is where the physical identifier of the retained AWS KMS key is captured for [Step 8](#step-8-delete-the-aws-kms-key):

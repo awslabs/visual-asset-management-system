@@ -113,6 +113,53 @@ def check_bucket_versioning(bucket_name, bucket_region):
         logger.error("Error checking versioning for bucket " + str(bucket_name) + ": " + str(e))
         raise
 
+def verify_transfer_acceleration(bucket_name, bucket_region):
+    """Fail the deployment when a bucket flagged for S3 Transfer Acceleration does not have it
+    enabled. VAMS never enables acceleration on a bucket it does not own, and presigned URLs for the
+    accelerate host fail against a bucket without it, so the mismatch is raised here, naming the
+    bucket, its Region and the fix, rather than surfacing later as failed uploads and downloads.
+    Every failure is raised as an Exception carrying that text, because the CloudFormation failure
+    reason is the exception message and the operator reads it there, not in the log."""
+    try:
+        response = s3_client_for_region(bucket_region).get_bucket_accelerate_configuration(Bucket=bucket_name)
+    except ClientError as e:
+        code = e.response.get('Error', {}).get('Code', 'ClientError')
+        if code == 'NoSuchBucket':
+            fix = (
+                "The bucket does not exist in that Region. Create it (with Transfer Acceleration enabled), "
+                "correct the bucket ARN or bucketRegion of the entry, or set useS3TransferAcceleration to "
+                "false for it."
+            )
+        elif code in ('AccessDenied', 'AccessDeniedException', 'AllAccessDisabled'):
+            fix = (
+                "Allow s3:GetAccelerateConfiguration on the bucket in its bucket policy for this deployment's "
+                "account (the s3:* grant of the external bucket setup includes it), or set "
+                "useS3TransferAcceleration to false for the entry."
+            )
+        else:
+            fix = (
+                "Check that the bucket is reachable from this deployment in its Region, or set "
+                "useS3TransferAcceleration to false for the entry."
+            )
+        message = (
+            "Could not read the S3 Transfer Acceleration configuration of bucket " + str(bucket_name) +
+            " in Region " + str(bucket_region) + " (" + str(code) + "). " + fix
+        )
+        logger.error(message + " Original error: " + str(e))
+        raise Exception(message) from e
+    status = response.get('Status')
+    if status != 'Enabled':
+        message = (
+            "S3 Transfer Acceleration is requested for bucket " + str(bucket_name) + " (Region " +
+            str(bucket_region) + ") but its status is " + str(status or 'not configured') +
+            ". Enable Transfer Acceleration on the bucket (S3 console > Properties > Transfer acceleration) "
+            "and deploy again, or set useS3TransferAcceleration to false for it. VAMS does not change the "
+            "configuration of a bucket it does not own."
+        )
+        logger.error(message)
+        raise Exception(message)
+    logger.info(f"Bucket {bucket_name} Transfer Acceleration status: Enabled")
+
 def lambda_handler(event, context):
     """Main handler function for the Lambda"""
     logger.info(f"Event: {json.dumps(event)}")
@@ -163,6 +210,14 @@ def lambda_handler(event, context):
             # I/O data). Resolved at synth time per bucket record; exactly one record is default.
             is_default = bool(bucket.get('isDefault'))
 
+            # Whether S3 Transfer Acceleration is requested for this bucket. Verified before the row
+            # is written, so a bucket without it never gets a row that makes URLs use the accelerate host.
+            is_accelerated = bool(bucket.get('isAccelerated'))
+            # The check runs on Create and Update only. On Delete (and the cleanup after a rollback) a
+            # suspended acceleration or a revoked grant must never block removing the stack.
+            if is_accelerated and event.get('RequestType') in ('Create', 'Update'):
+                verify_transfer_acceleration(bucket_name, bucket_region)
+
             # Create or update the record in DynamoDB
             item = {
                 'bucketId': bucket_id,
@@ -175,6 +230,10 @@ def lambda_handler(event, context):
             }
             if bucket_account_id:
                 item['bucketAccountId'] = bucket_account_id
+            # Written only when true, so a row of a bucket without acceleration keeps today's shape
+            # (a missing attribute means false) and toggling the flag off removes it on the next deploy.
+            if is_accelerated:
+                item['isAccelerated'] = True
             table.put_item(Item=item)
             logger.info(f"Successfully added/updated record for bucket: {bucket_name} (region: {bucket_region}, versioning: {is_versioning_enabled}, default: {is_default})")
         
@@ -212,6 +271,26 @@ def lambda_handler(event, context):
 
     suppressCdkNagLambda(populateS3AssetBucketsTableLambda);
 
+    // S3 Transfer Acceleration (#1610): the Lambda verifies acceleration is enabled on every flagged
+    // bucket, so the read grant is scoped to the flagged buckets only. With no flagged bucket the
+    // statement is not emitted and the role's policy is unchanged.
+    const acceleratedBucketArns = Array.from(
+        new Set(
+            bucketRecords
+                .filter((record) => record.isAccelerated)
+                .map((record) => record.bucket.bucketArn)
+        )
+    );
+    if (acceleratedBucketArns.length > 0) {
+        populateS3AssetBucketsTableLambda.addToRolePolicy(
+            new iam.PolicyStatement({
+                actions: ["s3:GetAccelerateConfiguration"],
+                resources: acceleratedBucketArns,
+                effect: iam.Effect.ALLOW,
+            })
+        );
+    }
+
     // Prepare bucket data for the custom resource. isDefault is resolved per bucket record at synth
     // time (exactly one record is the VAMS default), so the Lambda writes the flag directly with no
     // name/ARN matching. bucketRegion is the record's Region, or the deployment Region for a bucket
@@ -223,6 +302,9 @@ def lambda_handler(event, context):
         isDefault: !!record.isDefault,
         bucketRegion: record.region || deploymentRegion,
         bucketAccountId: record.accountId,
+        // Present only when true, so the custom resource properties of a deployment without
+        // acceleration are unchanged.
+        ...(record.isAccelerated ? { isAccelerated: true } : {}),
     }));
 
     // Create the custom resource provider

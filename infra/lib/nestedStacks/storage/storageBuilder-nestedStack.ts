@@ -386,6 +386,11 @@ export function storageResourcesBuilder(
         // Create default bucket as before
         assetBucket = new s3.Bucket(scope, "AssetBucket", {
             ...s3DefaultProps,
+            // S3 Transfer Acceleration (#1610); the property is omitted, not false, when off so the
+            // template of an upgraded deployment is unchanged.
+            ...(Config.createdBucketAccelerated(config.app.assetBuckets)
+                ? { transferAcceleration: true }
+                : {}),
             cors: [
                 {
                     allowedOrigins: ["*"],
@@ -432,7 +437,9 @@ export function storageResourcesBuilder(
             config.app.assetBuckets.defaultNewBucketSyncDatabaseId,
             undefined,
             undefined,
-            !anyExternalIsDefault
+            !anyExternalIsDefault,
+            undefined,
+            Config.createdBucketAccelerated(config.app.assetBuckets)
         );
     }
 
@@ -527,7 +534,8 @@ export function storageResourcesBuilder(
                 bucketAccountId,
                 bucketKmsKeyArn,
                 !!bucketConfig.isDefault,
-                bucketRegion && bucketRegion != config.env.region ? bucketRegion : undefined
+                bucketRegion && bucketRegion != config.env.region ? bucketRegion : undefined,
+                bucketConfig.useS3TransferAcceleration === true
             );
         }
     }
@@ -998,6 +1006,11 @@ export function storageResourcesBuilder(
 
     const assetAuxiliaryBucket = new s3.Bucket(scope, "AssetAuxiliaryBucket", {
         ...s3DefaultProps,
+        // The auxiliary bucket follows the effective default asset bucket (#1610): the backend
+        // presigns its URLs for the accelerate host exactly when that bucket is accelerated.
+        ...(Config.effectiveDefaultBucketAccelerated(config.app.assetBuckets)
+            ? { transferAcceleration: true }
+            : {}),
         cors: [
             {
                 allowedOrigins: ["*"],
