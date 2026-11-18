@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Web** The file page offers the Preview option for any file that has a preview file, whichever of the file and the asset details loads first, and a version opened from the file's versions list keeps it. ([#1673](https://github.com/awslabs/visual-asset-management-system/issues/1673))
 -   **Pipelines** The RapidPipeline EKS Lambda signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud and `amazonaws.com.cn` in the China Regions. Previously the token always named an `amazonaws.com` STS host. ([#1593](https://github.com/awslabs/visual-asset-management-system/issues/1593))
 
 ### Chores

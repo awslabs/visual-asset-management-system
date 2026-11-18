@@ -46,6 +46,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **File page Preview option** — The file page offers the Preview option for any file that has a preview file, whichever of the file and the asset details loads first, and a version opened from the file's versions list keeps it. (issue #1673)
 -   **RapidPipeline EKS token in other partitions** — The pipeline signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud, instead of always naming an `amazonaws.com` host. (issue #1593)
 
 **Other changes:**
