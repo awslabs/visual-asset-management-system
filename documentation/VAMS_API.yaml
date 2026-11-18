@@ -1691,6 +1691,13 @@ paths:
     /database/{databaseId}:
         get:
             summary: "Get a database."
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
             responses:
                 "200":
                     description: OK
@@ -2022,9 +2029,12 @@ paths:
                         schema:
                             type: object
                             required:
-                                - databaseId
-                                - assetId
+                                - downloadType
                             properties:
+                                downloadType:
+                                    type: string
+                                    enum: [assetFile, assetPreview]
+                                    description: "assetFile signs URLs for the asset's files; assetPreview signs a URL for the asset's preview image (its previewLocation)."
                                 key:
                                     $ref: "#/components/schemas/asset_path_pattern_regex"
                                 keys:
