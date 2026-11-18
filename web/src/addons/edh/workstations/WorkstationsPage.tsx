@@ -45,7 +45,6 @@ import WorkstationStatusBadge, {
 } from "../components/WorkstationStatusBadge";
 import CapacityDetail from "../components/CapacityDetail";
 import DeleteWorkstationDialog from "../components/DeleteWorkstationDialog";
-import NotEnabledPanel from "../components/NotEnabledPanel";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
 import { useMinWidth } from "../components/useMinWidth";
@@ -900,20 +899,12 @@ const WorkstationsAndSimulations: React.FC = () => {
 };
 
 /**
- * The web route is visible to anyone whose `web` constraints allow it (the seeded admin role allows
- * every route), while the API routes exist only where the add-on stack is deployed — so the page
- * gates itself on the feature flag and says so rather than failing every request.
+ * The route is mounted only where `EDH_WORKSTATIONS` is on (`addons/addonRoutes.tsx`), so a
+ * bookmarked URL on a deployment without the add-on shows "Page not found". The Simulations tab
+ * follows `EDH_CONTAINERS`.
  */
 const WorkstationsPage: React.FC = () => {
     const enabledFeatures = useFeaturesEnabled();
-    if (!enabledFeatures.includes(addonFeaturesEnabled.EDH_WORKSTATIONS)) {
-        return (
-            <div className="orchestration-root orchestration-page space-y-4 bg-surface min-h-full">
-                <h1 className="text-text-primary">Workstations</h1>
-                <NotEnabledPanel />
-            </div>
-        );
-    }
     if (!enabledFeatures.includes(addonFeaturesEnabled.EDH_CONTAINERS)) {
         return <WorkstationsBoard />;
     }

@@ -305,25 +305,6 @@ describe("WorkstationsPage", () => {
         expect(screen.queryByText(/Could not refresh/)).not.toBeInTheDocument();
     });
 
-    it("renders the not-enabled panel and reads nothing when the flag is absent", () => {
-        const { appCache } = require("../../../services/appCache");
-        appCache.getItem.mockReturnValue({ featuresEnabled: [] });
-
-        renderPage();
-
-        const panel = screen.getByRole("status");
-        expect(panel).toHaveTextContent("EDH Workstations is not enabled in this deployment.");
-        expect(panel).toHaveTextContent("Ask a VAMS administrator to enable the add-on.");
-        // The neutral tone of an unavailable view, not the warning tone of a data caveat.
-        expect(panel).toHaveClass("bg-surface-container");
-        expect(panel).not.toHaveClass("bg-yellow-100");
-        expect(screen.queryByRole("table")).not.toBeInTheDocument();
-        expect(
-            screen.queryByRole("button", { name: "Launch Workstation" })
-        ).not.toBeInTheDocument();
-        expect(queries.useWorkstations).not.toHaveBeenCalled();
-    });
-
     it("shows an empty state with a call to action, not an empty table, when the caller has no workstations", () => {
         (queries.useWorkstations as jest.Mock).mockReturnValue(list([]));
         const { unmount } = renderPage();

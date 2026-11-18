@@ -325,7 +325,7 @@ web/src/addons/edh/
                   #   Launch Failures; describeStartFailure and StartFailureNotice, see Start Status) CapacityDetail.tsx
                   #   (the row's `Capacity:` line) DeleteWorkstationDialog.tsx TabStrip.tsx
                   #   (roving-tabindex tablist shared by both pages)
-                  #   EdhFeatureTabs.tsx NotEnabledPanel.tsx (both pages' "not enabled" notice) useTextFilter.ts (the toolbar search
+                  #   EdhFeatureTabs.tsx useTextFilter.ts (the toolbar search
                   #   the EDH lists share, and countText) useInFlight.ts (the synchronous double-submit guard every EDH mutation handler claims)
                   #   useMinWidth.ts (whether the viewport is at least a width wide, following resizes)
                   #   heldDialogTestSupport.ts (tests only: expectHeldOpen, the close button and backdrop of a
@@ -381,7 +381,7 @@ The web routes sit under `/edh/workstations` and `/edh/admin`, so the `web` gran
 
 The pages read the switches through `useFeaturesEnabled()` (`context/RuntimeConfigContext.ts`), and the navigation entries carry them in `featuresEnabledRestriction`, so both follow the secure config when it lands after a first login.
 
--   `EDH_WORKSTATIONS` -- the Workstations and Workstation Admin pages and their two navigation sections. The web route exists in every deployment and the seeded admin role allows every route, while the API routes exist only where the add-on stack is deployed, so both pages render the "not enabled" panel without the switch rather than failing every request
+-   `EDH_WORKSTATIONS` -- the Workstations and Workstation Admin pages and their two navigation sections. The web routes carry the switch in `featuresEnabledRestriction` (`addons/addonRoutes.tsx`), so `routeTableFor` leaves them unmounted without it: a bookmarked `#/edh/...` URL shows "Page not found", the API routes (which exist only where the add-on stack is deployed) are never called, and the routes are not offered to the web-route check (`addonFeatureRoutes.test.tsx`)
 -   `EDH_AMI_RECIPES` -- the **AMI Recipes** tab of the Workstation Admin page (`admin/AmiRecipesTab.tsx`); without it the tab is not in the strip
 -   `EDH_CONTAINERS` -- the Simulations tab of the Workstations page and the "Simulations" nav link (`#/edh/workstations/simulations/`, restricted to `EDH_WORKSTATIONS` and `EDH_CONTAINERS`); the tab is shown to every caller and its panel is gated (`WEB_DEVELOPMENT_WORKFLOW.md` Rule 12): a caller who may not list jobs sees a no-access notice inside it
 
