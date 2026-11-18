@@ -10,6 +10,7 @@ handler runs), and returns the parsed body unaltered — the EDH handlers use no
 
 import ast
 import json
+import uuid
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -25,6 +26,7 @@ from vamscli.utils.addon.edh_exceptions import (
     EdhImageNotFoundError,
     EdhOperationError,
     EdhOutcomeUnknownError,
+    EdhQuotaExceededError,
     EdhStartInProgressError,
     EdhUnavailableError,
     EdhWorkstationNotFoundError,
@@ -275,6 +277,7 @@ def test_the_edh_exceptions_are_business_logic_errors_under_one_base():
         "EdhContainerJobNotFoundError",
         "EdhAmiRecipeNotFoundError",
         "EdhAmiRecipeBuildNotFoundError",
+        "EdhQuotaExceededError",
     ):
         klass = getattr(edh_exceptions, name)
         assert issubclass(klass, edh_exceptions.EdhError), name
@@ -585,28 +588,38 @@ class TestAdminInstanceIdIsOnePathSegment:
 
 class TestOtherIdsAreEncodedAsOnePathSegment:
     """An image, recipe or job id is formatted into its route as one encoded segment, so a `?`, `#` or
-    `/` in it cannot drop or redirect part of the id: `12?x=1` addresses image `12?x=1`, never image 12."""
+    `/` in it cannot drop or redirect part of the id: `12?x=1` addresses image `12?x=1`, never image 12.
+    The requests are recorded at the session, below the client's path guard, so the URL asserted is the
+    one sent."""
 
-    @pytest.mark.parametrize("method,args,prefix", [
-        ("delete_edh_vdi_image", ("12?x=1",), "/addon/edh/admin/images/vdi/12%3Fx%3D1"),
-        ("delete_edh_simulation_image", ("12#x",), "/addon/edh/admin/images/simulation/12%23x"),
-        ("get_edh_ami_recipe", ("r/../x",), "/addon/edh/admin/ami-recipes/r%2F..%2Fx"),
+    @pytest.mark.parametrize("method,args,verb,path", [
+        ("delete_edh_vdi_image", ("12?x=1",), "DELETE", "/addon/edh/admin/images/vdi/12%3Fx%3D1"),
+        ("delete_edh_simulation_image", ("12#x",), "DELETE", "/addon/edh/admin/images/simulation/12%23x"),
+        ("get_edh_ami_recipe", ("r/x",), "GET", "/addon/edh/admin/ami-recipes/r%2Fx"),
     ])
-    def test_a_reserved_character_is_sent_encoded(self, monkeypatch, method, args, prefix):
+    def test_a_reserved_character_reaches_the_wire_encoded(self, monkeypatch, method, args, verb, path):
         client = _client()
-        sent = _record_verbs(monkeypatch, client)
-        try:
-            getattr(client, method)(*args)
-        except Exception:
-            pass
-        ((_verb, endpoint),) = sent
-        assert endpoint == prefix
+        sent = _record_requests(monkeypatch, client)
+        getattr(client, method)(*args)
+        assert sent == [(verb, "https://api.example.com" + path)]
+
+    def test_an_id_carrying_a_dot_segment_is_refused_unsent(self, monkeypatch):
+        """`r/../x` is encoded to `r%2F..%2Fx`, which the path guard reads as a `..` segment."""
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        with pytest.raises(APIError) as excinfo:
+            client.get_edh_ami_recipe("r/../x")
+        assert sent == []
+        error = excinfo.value
+        while not isinstance(error, InvalidRequestPathError) and error.__context__ is not None:
+            error = error.__context__
+        assert isinstance(error, InvalidRequestPathError)
 
     def test_a_plain_id_is_sent_as_it_is(self, monkeypatch):
         client = _client()
-        sent = _record_verbs(monkeypatch, client)
+        sent = _record_requests(monkeypatch, client)
         client.delete_edh_vdi_image("12")
-        assert sent == [("delete", "/addon/edh/admin/images/vdi/12")]
+        assert sent == [("DELETE", "https://api.example.com/addon/edh/admin/images/vdi/12")]
 
 
 class _SessionAnswer:
@@ -877,6 +890,97 @@ class TestUnconfirmedMutations:
         assert str(excinfo.value) == (
             f"Container job submission not confirmed (502): {JOB_SUBMITTED} "
             "Run 'vamscli edh container job list' to see its state.")
+
+
+EDH_CLIENT_SOURCE = EDH_HANDLERS / "common" / "edhClient.py"
+
+
+def _add_on_error_text(error_class: str):
+    """The (status, message) the add-on answers a typed EDH error with (`_ERROR_RESPONSES`)."""
+    for node in ast.walk(ast.parse(EDH_CLIENT_SOURCE.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "_ERROR_RESPONSES" for t in node.targets):
+            for row in node.value.elts:
+                if getattr(row.elts[0], "id", None) == error_class:
+                    return ast.literal_eval(row.elts[1]), ast.literal_eval(row.elts[2])
+    raise AssertionError(f"{error_class} not in _ERROR_RESPONSES")
+
+
+class TestQuotaRefusal:
+    """A 429 the add-on answers for an EDH quota is a refusal, not throttling: it is sent once and
+    reported with the add-on's own text."""
+
+    def test_the_cli_matches_the_add_ons_quota_text(self):
+        assert _add_on_error_text("EdhQuotaError") == (429, addon_constants.EDH_QUOTA_REACHED_API_MESSAGE)
+
+    def test_a_quota_429_is_sent_once_and_names_the_job_listing(self, monkeypatch):
+        profile_manager = Mock()
+        profile_manager.is_override_token.return_value = False
+        profile_manager.is_token_expired.return_value = False
+        profile_manager.load_auth_profile.return_value = {"access_token": "t"}
+        client = APIClient("https://api.example.com", profile_manager=profile_manager)
+        sends = []
+
+        def request(method, url, **kwargs):
+            sends.append((method, url))
+            response = requests.Response()
+            response.status_code = 429
+            response.url = url
+            response._content = json.dumps({"message": addon_constants.EDH_QUOTA_REACHED_API_MESSAGE}).encode()
+            response.headers["Content-Type"] = "application/json"
+            return response
+
+        monkeypatch.setattr(client.session, "request", request)
+        monkeypatch.setattr("vamscli.utils.retry_config.RetryConfig.sleep_with_progress", lambda *a, **k: None)
+        with pytest.raises(EdhQuotaExceededError) as excinfo:
+            client.submit_edh_container_job({"name": "render-1"})
+        assert len(sends) == 1
+        assert str(excinfo.value) == (
+            f"Container job submission refused (429): {addon_constants.EDH_QUOTA_REACHED_API_MESSAGE} "
+            "Run 'vamscli edh container job list' to see what counts toward it.")
+
+    def test_a_quota_429_on_a_route_with_no_listing_names_none(self, monkeypatch):
+        client = _client()
+        _capture(monkeypatch, client, "get",
+                 error=_http_error(429, {"message": addon_constants.EDH_QUOTA_REACHED_API_MESSAGE}))
+        with pytest.raises(EdhQuotaExceededError) as excinfo:
+            client.list_edh_workstations()
+        assert str(excinfo.value) == (
+            f"Workstation listing refused (429): {addon_constants.EDH_QUOTA_REACHED_API_MESSAGE}")
+
+
+class TestLaunchCarriesItsBootstrapId:
+    """A launch whose answer was lost may have been accepted: every error names the bootstrapId sent, so
+    the caller can look the launch up and re-send that id, which cannot launch a second workstation."""
+
+    LAUNCH = {"imageId": "12", "instanceType": "g5.2xlarge", "name": "Design desk", "rootSizeGb": 200,
+              "osFamily": "linux"}
+
+    def test_a_missing_bootstrap_id_is_generated_and_sent(self, monkeypatch):
+        client = _client()
+        seen = _capture(monkeypatch, client, "post", body={"state": "CREATING"})
+        client.create_edh_workstation(dict(self.LAUNCH))
+        assert uuid.UUID(seen["kwargs"]["data"]["bootstrapId"]).version == 4
+
+    def test_a_gateway_504_is_not_confirmed_and_names_the_bootstrap_id(self, monkeypatch):
+        client = _client()
+        seen = _capture(monkeypatch, client, "post", error=_http_error(504, {"message": "Endpoint request timed out"}))
+        with pytest.raises(EdhOutcomeUnknownError) as excinfo:
+            client.create_edh_workstation(dict(self.LAUNCH))
+        sent = seen["kwargs"]["data"]["bootstrapId"]
+        assert excinfo.value.json_fields == {"outcomeUnknown": True, "bootstrapId": sent}
+        assert "Run 'vamscli edh workstation list'" in str(excinfo.value)
+        assert EdhOutcomeUnknownError.json_fields == {"outcomeUnknown": True}  # the class is unchanged
+
+    @pytest.mark.parametrize("error", [
+        _http_error(400, {"message": "instanceType is not permitted in this deployment"}),
+        APIError("Request timed out"),
+    ])
+    def test_every_error_names_the_bootstrap_id_sent(self, monkeypatch, error):
+        client = _client()
+        _capture(monkeypatch, client, "post", error=error)
+        with pytest.raises(Exception) as excinfo:
+            client.create_edh_workstation({**self.LAUNCH, "bootstrapId": "b-given"})
+        assert excinfo.value.json_fields["bootstrapId"] == "b-given"
 
 
 class TestStartInProgress:
