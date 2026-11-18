@@ -116,6 +116,21 @@ class TestEachRunStatus:
         _end(env, "FAILED", "Pipeline Failure: ZipArchiveJobNotStarted")
         assert _row(env)["errorMessage"] == env.zd.MSG_JOB_NOT_STARTED == "The archive job could not start"
 
+    def test_the_job_states_own_timeout_reads_timed_out(self, env):
+        # pipelineEnd reports the 11-hour state bound as a failure, not as a TIMED_OUT run.
+        _end(env, "FAILED", "Pipeline Failure: States.Timeout: See AWS cloudwatch logs for error cause.")
+        assert _row(env)["errorMessage"] == env.zd.MSG_JOB_TIMED_OUT == "The archive job timed out"
+
+    def test_the_job_states_own_timeout_wins_over_the_stop_batch_caused(self, env):
+        # AWS Batch ends the attempt at the same 11-hour bound; the container records that stop.
+        _row(env)["stopReason"] = "The archive job was stopped"
+        _end(env, "FAILED", "Pipeline Failure: States.Timeout")
+        assert _row(env)["errorMessage"] == env.zd.MSG_JOB_TIMED_OUT
+
+    def test_a_heartbeat_timeout_is_not_read_as_the_state_timeout(self, env):
+        _end(env, "FAILED", "Pipeline Failure: States.HeartbeatTimeout")
+        assert _row(env)["errorMessage"] == env.zd.MSG_JOB_LOST
+
     @pytest.mark.parametrize("error", ["ZipArchiveContainerStopped", "States.HeartbeatTimeout"])
     def test_an_executions_abort_still_wins_over_the_containers_stop(self, env, error):
         """D24 kept: an abort from the Executions page records ABORTED on the run before its Batch job

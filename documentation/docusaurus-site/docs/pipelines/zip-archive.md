@@ -171,7 +171,7 @@ The archive was refused because the named file is archived, a deleted version, i
 
 ### A Job Fails With "The archive job timed out"
 
-The run reached the 12-hour task timeout. Very large archives finish faster with more compute: raise `computeVcpu` and `computeMemoryGiB`, or split the selection into several jobs.
+The archive job reached its 11-hour bound. Very large archives finish faster with more compute: raise `computeVcpu` and `computeMemoryGiB`, or split the selection into several jobs.
 
 ### A Job Fails With "The archive job was stopped" or "The archive job stopped responding"
 
