@@ -242,6 +242,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Key fixes:**
 
+-   **File page Preview toggle** — The Preview toggle requests the preview file without the source file's version ID, so a generated preview shows instead of failing with "File not found in S3". When an older version of the file is viewed, a notice on the Preview tab says the preview belongs to the latest version. (issue #1656)
 -   **External bucket ARNs name one bucket** — An `externalAssetBuckets` `bucketArn` must be `arn:<partition>:s3:::<bucket-name>`; any other value fails at configuration load with `Configuration Error: external bucket ARN "<arn>" is not valid.` Upgrade note: a `bucketArn` with a trailing slash or a key path used to import as the bucket name and now fails; list the bucket as `arn:<partition>:s3:::<bucket-name>` and set the key prefix in `baseAssetsPrefix`. A wildcard bucket ARN never synthesized, and the CDK Nag suppression for an external bucket's objects now covers only a named bucket. (issue #1650)
 -   **Cross-Region bucket downloads** — The web Content Security Policy admits presigned Amazon S3 URLs for an asset bucket in any Region of the partition, not only the deployment Region. (issue #1616)
 -   **API document parses strictly** — `VAMS_API.yaml` no longer defines `errorMessage` twice in the `complianceEvaluation` schema, so strict YAML and OpenAPI tools accept it. (issue #1498)
