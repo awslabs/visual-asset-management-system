@@ -851,4 +851,22 @@ describe("ZipDownloadsTable — Show all users (asset tab)", () => {
             expect.objectContaining({ startingToken: "all-token" })
         );
     });
+
+    it("drops the previous list's error when the user switches list", async () => {
+        mockAllowed = { ...ALL, [ALL_USERS_ROUTE]: true };
+        mockAssetList.mockResolvedValueOnce([false, "My jobs could not be read", 500]);
+        const all = deferred();
+        mockAllUsersList.mockReturnValueOnce(all.promise);
+        renderTable();
+        expect(await screen.findByText("My jobs could not be read")).toBeInTheDocument();
+
+        await userEvent.click(screen.getByText("Show all users"));
+
+        // While the all-users list loads, the other list's error is gone.
+        await waitFor(() => expect(screen.queryByText("My jobs could not be read")).toBeNull());
+        await act(async () => {
+            all.resolve(page([job("2", "SUCCEEDED", { requestedBy: "bob", isOwn: false })]));
+        });
+        expect(screen.getByText("archive-2.zip")).toBeInTheDocument();
+    });
 });
