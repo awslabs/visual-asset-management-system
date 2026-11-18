@@ -25,6 +25,7 @@ export interface RasterLayerPanelProps {
         | "move"
         | "zoomTo"
         | "dismissNotice"
+        | "retry"
     >;
     /** Shown when nothing is on the map yet. */
     emptyText?: string;
@@ -66,7 +67,20 @@ const LayerRow: React.FC<{
                 {entry.usedCog && <Badge>Converted COG</Badge>}
             </SpaceBetween>
             {entry.failed && (
-                <Alert type="error" data-testid="raster-layer-failed">
+                <Alert
+                    type="error"
+                    data-testid="raster-layer-failed"
+                    action={
+                        entry.mode === "tile" ? (
+                            <Button
+                                data-testid="raster-layer-retry"
+                                onClick={() => void layers.retry(entry.id)}
+                            >
+                                Retry
+                            </Button>
+                        ) : undefined
+                    }
+                >
                     {entry.failed}
                 </Alert>
             )}

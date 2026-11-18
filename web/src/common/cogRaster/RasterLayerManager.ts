@@ -64,6 +64,9 @@ interface Internal {
     /** When the last error-triggered refresh put a fresh URL on the map. */
     errorRefreshDoneAt: number;
     errorRefreshes: number;
+    /** The one automatic retry after a refreshed URL still failed is waiting or done. */
+    autoRetried: boolean;
+    autoRetryTimer?: ReturnType<typeof setTimeout>;
 }
 
 export interface ManagerOptions {
@@ -83,6 +86,18 @@ const ID_PREFIX = "vams-raster";
 const TILE_FAIL_WINDOW_MS = 30 * 1000;
 /** Error-triggered refreshes allowed over a layer's life before it is marked failed. */
 const MAX_ERROR_REFRESHES = 3;
+/**
+ * Wait before the single automatic retry: a read refused right after a fresh URL went on the map is
+ * most often a short S3 or network failure, which usually clears within seconds.
+ */
+export const AUTO_RETRY_DELAY_MS = 4 * 1000;
+
+/** The same file, whichever way it was named: leading slashes ignored, versions compared when both are given. */
+function sameFile(a: RasterFileRef, b: RasterFileRef): boolean {
+    const key = (file: RasterFileRef) => file.key.replace(/^\/+/, "");
+    if (a.databaseId !== b.databaseId || a.assetId !== b.assetId || key(a) !== key(b)) return false;
+    return !a.versionId || !b.versionId || a.versionId === b.versionId;
+}
 
 function boundsOfCorners(corners: [number, number][]): [[number, number], [number, number]] {
     const lons = corners.map((corner) => corner[0]);
@@ -124,9 +139,18 @@ export class RasterLayerManager {
         return this.items.some((item) => item.entry.id === id);
     }
 
+    /**
+     * True when the file drawn by a layer is this file. A source resolved to its converted COG and
+     * the same COG selected by itself are one raster, though their ids can differ in how the key and
+     * version are written.
+     */
+    hasFile(file: RasterFileRef): boolean {
+        return this.items.some((item) => sameFile(item.entry.file, file));
+    }
+
     add(prepared: PreparedRaster, opacity = 0.8): AddResult {
         if (this.disposed) return { ok: false, message: "The map is closed." };
-        if (this.has(prepared.id)) return { ok: true };
+        if (this.has(prepared.id) || this.hasFile(prepared.file)) return { ok: true };
         if (this.items.length >= this.max) {
             return {
                 ok: false,
@@ -157,6 +181,7 @@ export class RasterLayerManager {
             errorRefreshInFlight: false,
             errorRefreshDoneAt: 0,
             errorRefreshes: 0,
+            autoRetried: false,
         };
 
         if (prepared.mode === "placed" && prepared.placed) {
@@ -176,21 +201,58 @@ export class RasterLayerManager {
         this.addToMap(item);
         this.items.push(item);
 
-        if (prepared.mode === "tile") {
-            const handle = keepFresh(
-                prepared.file,
-                prepared.url,
-                (url) => this.replaceTileUrl(item, url),
-                this.options.requestUrl ?? requestPresignedUrl,
-                () => this.fail(item, REFRESH_GAVE_UP_MESSAGE)
-            );
-            item.stopRefresh = handle.stop;
-            item.refreshNow = handle.refreshNow;
-        }
+        if (prepared.mode === "tile") this.startKeepFresh(item);
 
         this.applyOrder();
         this.notify();
         return { ok: true };
+    }
+
+    private startKeepFresh(item: Internal): void {
+        const handle = keepFresh(
+            item.entry.file,
+            item.url,
+            (url) => this.replaceTileUrl(item, url),
+            this.options.requestUrl ?? requestPresignedUrl,
+            () => this.fail(item, REFRESH_GAVE_UP_MESSAGE)
+        );
+        item.stopRefresh = handle.stop;
+        item.refreshNow = handle.refreshNow;
+    }
+
+    /**
+     * Draws a failed raster again: asks for a fresh URL and rebuilds the layer in its place and with
+     * its opacity. True when the layer is back on the map; false when the raster is not failed or the
+     * URL could not be had (the row then says so).
+     */
+    async retry(id: string): Promise<boolean> {
+        const item = this.items.find((candidate) => candidate.entry.id === id);
+        if (!item || this.disposed || !item.entry.failed || item.entry.mode !== "tile")
+            return false;
+        let url: string;
+        try {
+            url = await (this.options.requestUrl ?? requestPresignedUrl)(item.entry.file);
+        } catch {
+            if (this.items.includes(item)) {
+                item.entry.failed = REFRESH_GAVE_UP_MESSAGE;
+                this.notify();
+            }
+            return false;
+        }
+        if (this.disposed || !this.items.includes(item)) return false;
+        item.stopRefresh?.();
+        item.url = url;
+        item.entry.failed = null;
+        item.errorRefreshes = 0;
+        item.errorRefreshDoneAt = 0;
+        item.errorRefreshInFlight = false;
+        item.autoRetried = false;
+        this.removeFromMap(item);
+        this.addToMap(item);
+        this.startKeepFresh(item);
+        this.applyOrder();
+        this.notify();
+        return true;
     }
 
     remove(id: string): void {
@@ -286,6 +348,7 @@ export class RasterLayerManager {
 
     private release(item: Internal): void {
         item.stopRefresh?.();
+        if (item.autoRetryTimer) clearTimeout(item.autoRetryTimer);
         this.removeFromMap(item);
         if (item.blobUrl) URL.revokeObjectURL(item.blobUrl);
     }
@@ -305,6 +368,7 @@ export class RasterLayerManager {
         if (item.entry.failed || !this.items.includes(item)) return;
         item.entry.failed = message;
         item.stopRefresh?.();
+        if (item.autoRetryTimer) clearTimeout(item.autoRetryTimer);
         this.removeFromMap(item);
         this.notify();
     }
@@ -334,7 +398,22 @@ export class RasterLayerManager {
         const now = Date.now();
         const soonAfterRefresh =
             item.errorRefreshDoneAt > 0 && now - item.errorRefreshDoneAt < TILE_FAIL_WINDOW_MS;
+        if (!soonAfterRefresh) item.autoRetried = false;
         if (soonAfterRefresh || item.errorRefreshes >= MAX_ERROR_REFRESHES) {
+            if (soonAfterRefresh && !item.autoRetried) {
+                // One automatic retry: a short outage of the store clears by itself. Errors while
+                // waiting are ignored; an error after the rebuilt layer ends in the failed row.
+                item.autoRetried = true;
+                item.errorRefreshInFlight = true;
+                item.autoRetryTimer = setTimeout(() => {
+                    item.autoRetryTimer = undefined;
+                    if (this.disposed || item.entry.failed || !item.refreshNow) return;
+                    void item.refreshNow().finally(() => {
+                        item.errorRefreshInFlight = false;
+                    });
+                }, AUTO_RETRY_DELAY_MS);
+                return;
+            }
             this.fail(item, TILE_READ_FAILED_MESSAGE);
             return;
         }

@@ -3,7 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MapLike, RasterLayerManager, firstLayerIdWithPrefix } from "./RasterLayerManager";
+import {
+    AUTO_RETRY_DELAY_MS,
+    MapLike,
+    RasterLayerManager,
+    firstLayerIdWithPrefix,
+} from "./RasterLayerManager";
 import { PreparedRaster } from "./rasterResolver";
 
 class FakeMap implements MapLike {
@@ -167,37 +172,190 @@ describe("RasterLayerManager", () => {
         manager.dispose();
     });
 
-    it("marks a tile layer failed when reads still fail right after a fresh URL (D4)", async () => {
+    it("retries once on its own when reads still fail right after a fresh URL, then marks it failed (r2-D4)", async () => {
+        jest.useFakeTimers();
+        try {
+            const map = new FakeMap();
+            const changes: any[] = [];
+            const request = jest.fn().mockResolvedValue("https://s3/fresh");
+            const manager = new RasterLayerManager(map, {
+                ...OPTIONS(map),
+                requestUrl: request,
+                onChange: (entries) => changes.push(entries),
+            });
+            manager.add(prepared("1.tif"));
+            const sourceId = [...map.sources.keys()][0];
+            const fail = () =>
+                map.listeners.get("error")!({
+                    sourceId: [...map.sources.keys()][0],
+                    error: new Error("Request failed"),
+                });
+            // maplibre reports a failed cog:// tile as "Request failed", with no status.
+            fail();
+            await jest.advanceTimersByTimeAsync(0);
+            expect(request).toHaveBeenCalledTimes(1);
+            expect(manager.entries()[0].failed).toBeNull();
+            // The fresh URL fails too: one automatic retry after a short wait, errors meanwhile ignored.
+            fail();
+            fail();
+            expect(manager.entries()[0].failed).toBeNull();
+            expect(request).toHaveBeenCalledTimes(1);
+            await jest.advanceTimersByTimeAsync(AUTO_RETRY_DELAY_MS);
+            expect(request).toHaveBeenCalledTimes(2);
+            expect(manager.entries()[0].failed).toBeNull();
+            expect(map.sources.size).toBe(1);
+            // The retry fails as well: the file cannot be read, not a passing outage.
+            fail();
+            await jest.advanceTimersByTimeAsync(0);
+            const [entry] = manager.entries();
+            expect(entry.failed).toMatch(/could not be drawn/);
+            expect(request).toHaveBeenCalledTimes(2);
+            // Its layer leaves the map; its row stays with the reason, and later errors are ignored.
+            expect(map.sources.size).toBe(0);
+            expect(changes[changes.length - 1][0].failed).toMatch(/could not be drawn/);
+            map.listeners.get("error")!({ sourceId, error: new Error("Request failed") });
+            expect(request).toHaveBeenCalledTimes(2);
+            manager.dispose();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    it("draws again after the single automatic retry when the store has recovered (r2-D4)", async () => {
+        jest.useFakeTimers();
+        try {
+            const map = new FakeMap();
+            const request = jest.fn().mockResolvedValue("https://s3/fresh");
+            const manager = new RasterLayerManager(map, { ...OPTIONS(map), requestUrl: request });
+            manager.add(prepared("1.tif"));
+            const err = () => ({
+                sourceId: [...map.sources.keys()][0],
+                error: new Error("Request failed"),
+            });
+            map.listeners.get("error")!(err());
+            await jest.advanceTimersByTimeAsync(0);
+            map.listeners.get("error")!(err());
+            await jest.advanceTimersByTimeAsync(AUTO_RETRY_DELAY_MS);
+            // No further error: the layer stays on the map with the last fresh URL.
+            await jest.advanceTimersByTimeAsync(60 * 1000);
+            expect(manager.entries()[0].failed).toBeNull();
+            expect([...map.sources.values()][0].url).toContain("fresh");
+            manager.dispose();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    it("retry() rebuilds a failed tile layer from a fresh URL, keeping place and opacity (r2-D4)", async () => {
+        jest.useFakeTimers();
+        try {
+            const map = new FakeMap();
+            const request = jest.fn().mockResolvedValue("https://s3/fresh2");
+            const manager = new RasterLayerManager(map, { ...OPTIONS(map), requestUrl: request });
+            manager.add(prepared("1.tif"));
+            const [one] = manager.entries();
+            manager.setOpacity(one.id, 0.4);
+            const err = () => ({
+                sourceId: [...map.sources.keys()][0],
+                error: new Error("Request failed"),
+            });
+            map.listeners.get("error")!(err());
+            await jest.advanceTimersByTimeAsync(0);
+            map.listeners.get("error")!(err());
+            await jest.advanceTimersByTimeAsync(AUTO_RETRY_DELAY_MS);
+            map.listeners.get("error")!(err());
+            await jest.advanceTimersByTimeAsync(0);
+            expect(manager.entries()[0].failed).toMatch(/could not be drawn/);
+            expect(map.sources.size).toBe(0);
+            request.mockClear();
+
+            await expect(manager.retry(one.id)).resolves.toBe(true);
+            expect(request).toHaveBeenCalledTimes(1);
+            expect(manager.entries()[0].failed).toBeNull();
+            expect(map.sources.size).toBe(1);
+            const layers = map.order.filter((id) => id.startsWith("vams-raster-layer"));
+            expect(layers).toHaveLength(1);
+            expect(map.order.indexOf("geojson-fill-1")).toBeGreaterThan(
+                map.order.indexOf(layers[0])
+            );
+            expect(map.paint[layers[0]]["raster-opacity"]).toBe(0.4);
+            expect([...map.sources.values()].some((s) => s.url.includes("fresh2"))).toBe(true);
+            // A rebuilt layer can fail and be retried again (counters were reset).
+            map.listeners.get("error")!({
+                sourceId: [...map.sources.keys()].pop(),
+                error: new Error("x"),
+            });
+            await jest.advanceTimersByTimeAsync(0);
+            expect(manager.entries()[0].failed).toBeNull();
+            manager.dispose();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    it("retry() does nothing for a raster that is not failed, and keeps the row failed when no URL can be had", async () => {
+        jest.useFakeTimers();
+        try {
+            const map = new FakeMap();
+            const request = jest.fn().mockResolvedValue("https://s3/fresh");
+            const manager = new RasterLayerManager(map, { ...OPTIONS(map), requestUrl: request });
+            manager.add(prepared("1.tif"));
+            const [one] = manager.entries();
+            await expect(manager.retry(one.id)).resolves.toBe(false);
+            await expect(manager.retry("nope")).resolves.toBe(false);
+            expect(request).not.toHaveBeenCalled();
+
+            const err = () => ({
+                sourceId: [...map.sources.keys()][0],
+                error: new Error("Request failed"),
+            });
+            map.listeners.get("error")!(err());
+            await jest.advanceTimersByTimeAsync(0);
+            map.listeners.get("error")!(err());
+            await jest.advanceTimersByTimeAsync(AUTO_RETRY_DELAY_MS);
+            map.listeners.get("error")!(err());
+            await jest.advanceTimersByTimeAsync(0);
+            request.mockRejectedValue(new Error("refused"));
+            await expect(manager.retry(one.id)).resolves.toBe(false);
+            expect(manager.entries()[0].failed).toMatch(/could not be renewed/);
+            expect(map.sources.size).toBe(0);
+            manager.dispose();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    it("shows a file once, however its key and version are written (r2-D5)", () => {
         const map = new FakeMap();
-        const changes: any[] = [];
-        const request = jest.fn().mockResolvedValue("https://s3/fresh");
-        const manager = new RasterLayerManager(map, {
-            ...OPTIONS(map),
-            requestUrl: request,
-            onChange: (entries) => changes.push(entries),
+        const manager = new RasterLayerManager(map, OPTIONS(map));
+        const cog = (key: string, versionId?: string): PreparedRaster => ({
+            ...prepared("x"),
+            id: `db/a/${key}${versionId ? `@${versionId}` : ""}`,
+            label: "a.tif.cog.tif",
+            file: { databaseId: "db", assetId: "a", key, versionId },
         });
-        manager.add(prepared("1.tif"));
-        const sourceId = [...map.sources.keys()][0];
-        // maplibre reports a failed cog:// tile as "Request failed", with no status.
-        map.listeners.get("error")!({ sourceId, error: new Error("Request failed") });
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(request).toHaveBeenCalledTimes(1);
-        expect(manager.entries()[0].failed).toBeNull();
-        // The fresh URL fails too: the file cannot be decoded, not an expired link.
-        map.listeners.get("error")!({
-            sourceId,
-            error: new RangeError("Invalid typed array length"),
+        expect(manager.add(cog("/maps/a.tif.cog.tif"))).toEqual({ ok: true });
+        // The same COG with the leading slash dropped, and with a version stamped on it.
+        expect(manager.add(cog("maps/a.tif.cog.tif"))).toEqual({ ok: true });
+        expect(manager.add(cog("maps/a.tif.cog.tif", "v3"))).toEqual({ ok: true });
+        expect(manager.entries()).toHaveLength(1);
+        expect(manager.hasFile({ databaseId: "db", assetId: "a", key: "maps/a.tif.cog.tif" })).toBe(
+            true
+        );
+        // Another asset, another key, or another explicit version is another raster.
+        manager.add(cog("/maps/b.tif.cog.tif"));
+        manager.add({
+            ...cog("/maps/a.tif.cog.tif"),
+            file: { databaseId: "db", assetId: "z", key: "/maps/a.tif.cog.tif" },
+            id: "db/z/maps/a",
         });
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(request).toHaveBeenCalledTimes(1);
-        const [entry] = manager.entries();
-        expect(entry.failed).toMatch(/could not be drawn/);
-        // Its layer leaves the map; its row stays with the reason, and later errors are ignored.
-        expect(map.sources.size).toBe(0);
-        expect(changes[changes.length - 1][0].failed).toMatch(/could not be drawn/);
-        map.listeners.get("error")!({ sourceId, error: new Error("Request failed") });
-        expect(request).toHaveBeenCalledTimes(1);
+        expect(manager.entries()).toHaveLength(3);
         manager.dispose();
+        const other = new RasterLayerManager(new FakeMap(), OPTIONS(map));
+        other.add(cog("/maps/a.tif.cog.tif", "v1"));
+        other.add(cog("/maps/a.tif.cog.tif", "v2"));
+        expect(other.entries()).toHaveLength(2);
+        other.dispose();
     });
 
     it("ignores further errors while a refresh is in flight", async () => {

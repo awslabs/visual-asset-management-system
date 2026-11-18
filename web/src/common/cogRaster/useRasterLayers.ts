@@ -35,6 +35,8 @@ export interface UseRasterLayers {
     /** Frames the raster; false while its extent is not known yet. */
     zoomTo: (id: string) => boolean;
     dismissNotice: (id: string) => void;
+    /** Draws a raster that failed again, from a fresh download link. */
+    retry: (id: string) => Promise<boolean>;
 }
 
 export interface UseRasterLayersOptions {
@@ -91,7 +93,7 @@ export function useRasterLayers(
             const id = rasterId(file);
             const label = rasterLabel(file.key);
             if (!manager.current) return false;
-            if (manager.current.has(id)) return true;
+            if (manager.current.has(id) || manager.current.hasFile(file)) return true;
             setNotices((current) => current.filter((n) => n.id !== id));
             setBusy((count) => count + 1);
             try {
@@ -142,6 +144,10 @@ export function useRasterLayers(
         ),
         move: useCallback(
             (id: string, direction: "up" | "down") => manager.current?.move(id, direction),
+            []
+        ),
+        retry: useCallback(
+            (id: string) => manager.current?.retry(id) ?? Promise.resolve(false),
             []
         ),
         zoomTo: useCallback((id: string) => manager.current?.zoomTo(id) ?? false, []),
