@@ -714,6 +714,15 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                             </Box>
                             <Button onClick={() => setFilterText("")}>Clear search</Button>
                         </Box>
+                    ) : nextToken ? (
+                        // The API's page held only jobs it does not list (expired, or on an asset
+                        // the caller can no longer read); older pages may still hold some.
+                        <Box textAlign="center" color="inherit" padding="m">
+                            <b>No download jobs on the pages loaded so far</b>
+                            <Box variant="p" color="inherit">
+                                Choose Load more to keep looking.
+                            </Box>
+                        </Box>
                     ) : (
                         <Box textAlign="center" color="inherit" padding="m">
                             <b>No download jobs</b>

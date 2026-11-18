@@ -601,6 +601,25 @@ describe("ZipDownloadsTable", () => {
         expect(screen.getByText("archive-req-b.zip")).toBeInTheDocument();
     });
 
+    it("says to load more, not that there are no jobs, when a page lists none but more remain", async () => {
+        mockGlobalList.mockResolvedValueOnce(page([], "tok"));
+        mockGlobalList.mockResolvedValueOnce(page([job("1", "SUCCEEDED")], null));
+        render(
+            <MemoryRouter>
+                <ZipDownloadsTable />
+            </MemoryRouter>
+        );
+        expect(
+            await screen.findByText("No download jobs on the pages loaded so far")
+        ).toBeInTheDocument();
+        expect(screen.getByText("Choose Load more to keep looking.")).toBeInTheDocument();
+        expect(screen.queryByText("No download jobs")).toBeNull();
+        expect(screen.queryByText(/Download as Zip/)).toBeNull();
+
+        await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+        expect(await screen.findByText("archive-1.zip")).toBeInTheDocument();
+    });
+
     it("says the search covers the loaded jobs while more pages remain", async () => {
         mockGlobalList.mockResolvedValue(page([job("1", "SUCCEEDED")], "tok"));
         render(
