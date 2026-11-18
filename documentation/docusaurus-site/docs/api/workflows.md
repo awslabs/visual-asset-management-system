@@ -428,7 +428,7 @@ Two conditions on an additional trigger of a type are rejected with `400`; the h
 
 Trigger endpoints are authorized on the parent workflow: API-level access is checked first, followed by object-level Casbin policy enforcement on the owning workflow.
 
-A trigger-launched execution runs as the reserved system identity rather than as the user whose action fired the trigger, and its execution record reflects this (`triggerType` `File-Upload`, `triggeredByUserId` set to the system identity). This is intentional: the user who uploaded a file may not hold permission to run the workflow, but the trigger must still process the upload reliably, so the execution is decoupled from the acting user's permissions. Executions started directly through the [execute endpoint](#execute-a-workflow) run as the calling user.
+An execution the system launches runs as the reserved system identity rather than as a user, and its execution record reflects this: `triggerType` is `File-Upload` when an upload trigger fired it and a system trigger value such as `System-Reindex` (the vector-search reindexer's runs) when VAMS launched it for a system feature, and `triggeredByUserId` is the system identity. This is intentional: the user who uploaded a file may not hold permission to run the workflow, but the trigger must still process the upload reliably, so the execution is decoupled from the acting user's permissions. Executions started directly through the [execute endpoint](#execute-a-workflow) run as the calling user.
 
 On a **system workflow** (`isSystem: true`) the triggers are part of the shipped bundle. [Set a trigger](#set-a-trigger) may switch a stored trigger on or off: `enabled` is free, and `inputFileFilters` and `defaultTemplateIds`, when sent, must equal the stored trigger — the comparison is made after the same normalisation the store applies, so re-sending the stored trigger with `enabled` flipped is accepted, and a body carrying only `enabled` keeps the stored filters and templates. A key with no stored trigger, a locked field that differs, and [Delete a trigger](#delete-a-trigger) are refused with `400` (`Triggers of system workflows cannot be added or deleted.`, or a message naming the field). A request that pairs `enabled` with a changed filter or template set is refused as a whole, so `enabled` is not changed either.
 
@@ -919,8 +919,9 @@ self-output, so a workflow with chaining enabled can fire on a file it wrote its
 group of them accepts one another's output in a cycle.
 :::
 
-The built-in Potree point-cloud preview, 3D preview thumbnail, and GenAI 3D metadata labeling workflows
-ship with chaining enabled, so a converted mesh or point cloud still receives a preview and metadata.
+The built-in Potree point-cloud preview, 3D preview thumbnail, and
+[SYSTEM GenAI metadata](../pipelines/system-genai-metadata.md) workflows ship with chaining enabled, so a
+converted mesh or point cloud still receives a preview and metadata.
 
 ### Output path prefix
 

@@ -110,8 +110,10 @@ def _status_tables(ddb):
 
 
 def _end_state_write(ddb, status, error=""):
+    # Whether the write recorded the end: the writer returns the completion announcement it won (published
+    # by record_execution_outputs once the run's locks are released), or None when its write was refused.
     return po._write_execution_outputs(
-        ddb, EXEC, PEXEC, WF_DB, WF_ID, "bucket", [], [], [], "log", "", "", "", status, error)
+        ddb, EXEC, PEXEC, WF_DB, WF_ID, "bucket", [], [], [], "log", "", "", "", status, error) is not None
 
 
 @pytest.mark.unit

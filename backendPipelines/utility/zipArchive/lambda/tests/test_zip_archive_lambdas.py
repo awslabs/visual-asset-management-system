@@ -104,10 +104,18 @@ class TestConstruct:
         assert definition["bucketRegions"] == {"b": "eu-west-1"}
 
     @pytest.mark.parametrize("config", [
-        {"format": "rar"}, {"compression": "lzma"}, {"includePatterns": "*.glb"}, {"typo": 1}])
+        {"format": "rar"}, {"compression": "lzma"}, {"includePatterns": "*.glb"}, {"typo": 1},
+        {"includePreviewFiles": "true"}, {"includePreviewFiles": 1}, {"includePreviewFiles": None},
+        {"includePreviewFiles": [True]}])
     def test_bad_archive_config_refused(self, config):
         with pytest.raises(ValueError):
             construct.archive_config(config)
+
+    @pytest.mark.parametrize("config", [{"includePreviewFiles": True}, {"includePreviewFiles": False}, {}])
+    def test_include_preview_files_takes_a_boolean_or_nothing(self, config):
+        """#1622: preview companions are left out unless the run's configBody sets this to true; a missing
+        key is false (the container reads it so), and only a JSON boolean is accepted."""
+        assert construct.archive_config(config) == config
 
     def test_unknown_mode_refused(self):
         with pytest.raises(ValueError):
@@ -190,6 +198,16 @@ class TestBundle:
         for name in os.listdir(template_dir):
             template = self._load("templates", name)
             construct.archive_config(json.loads(template["configBody"]))
+
+    def test_every_template_leaves_preview_files_out_explicitly(self):
+        """#1622: every shipped template states includePreviewFiles false and describes it."""
+        template_dir = os.path.join(_SCHEMA_DIR, "templates")
+        names = sorted(os.listdir(template_dir))
+        assert names  # control: the walk found the shipped templates
+        for name in names:
+            template = self._load("templates", name)
+            assert json.loads(template["configBody"])["includePreviewFiles"] is False, name
+            assert "includePreviewFiles" in template["inputInstructions"], name
 
     def test_no_file_upload_trigger(self):
         """A system archive must never fire on every upload."""

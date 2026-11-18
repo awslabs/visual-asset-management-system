@@ -67,6 +67,9 @@ describe("system records are documented", () => {
         // Who sets the flag, and that an API caller cannot.
         expect(body).toContain("Only the deployment's registration importer sets `isSystem`");
         expect(body).toContain("creates an ordinary record");
+        // The two bundles this deployment ships as system records.
+        expect(body).toContain("`SYSTEM - GenAI`");
+        expect(body).toContain("`SYSTEM - Preview`");
         for (const name of [
             "SYSTEM_PIPELINE_READONLY_MESSAGE",
             "SYSTEM_WORKFLOW_READONLY_MESSAGE",
@@ -94,6 +97,13 @@ describe("system records are documented", () => {
         expect(body).toContain("[System pipelines](#system-pipelines)");
     });
 
+    test("the built-in list names the shipped metadata pipeline", () => {
+        // Durable: the tip must name the pipeline the deployment ships. No negative assertion on the
+        // former wording — that would pin one past rewording (Rule 13's temporary case).
+        const tip = admonitionBody(concepts, ":::tip[Built-in pipelines]");
+        expect(tip).toContain("GenAI metadata generation");
+    });
+
     test("the data model states isSystem beside both record tables", () => {
         const dataModel = readDoc("architecture/data-model.md");
         const pipelines = section(dataModel, "### Pipeline Storage Table (V2)");
@@ -114,4 +124,116 @@ describe("system records are documented", () => {
             'System pipelines are read-only except "enabled"; "{field}" cannot be changed.'
         );
     });
+});
+
+describe("every shipped system bundle carries a SYSTEM category, and the pages say which", () => {
+    /** Every vamsSchema* directory under backendPipelines whose pipeline.json declares isSystem: true. */
+    function systemBundles(): string[] {
+        const found: string[] = [];
+        const walk = (dir: string): void => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                if (!entry.isDirectory() || entry.name === "node_modules") continue;
+                const full = path.join(dir, entry.name);
+                const pipelineFile = path.join(full, "pipeline.json");
+                // vamsSchema*: a pipeline folder may ship a second bundle beside its own (vamsSchemaMedia).
+                const inBundle = full.split(path.sep).some((part) => part.startsWith("vamsSchema"));
+                if (inBundle && fs.existsSync(pipelineFile)) {
+                    if (JSON.parse(fs.readFileSync(pipelineFile, "utf8")).isSystem === true) {
+                        found.push(full);
+                    }
+                }
+                walk(full);
+            }
+        };
+        walk(path.join(REPO, "backendPipelines"));
+        return found.sort();
+    }
+
+    const bundles = systemBundles();
+    const shipped = section(
+        readDoc("pipelines/system-pipelines.md"),
+        "## Shipped system pipelines"
+    );
+    const concepts = section(readDoc("concepts/pipelines-and-workflows.md"), SYSTEM_HEADING);
+
+    test("control: the walk finds the five shipped system bundles, Zip Archive and Media Preview included", () => {
+        expect(bundles).toHaveLength(5);
+        expect(bundles.some((dir) => dir.includes(path.join("utility", "zipArchive")))).toBe(true);
+        expect(
+            bundles.some((dir) => dir.endsWith(path.join("3dThumbnail", "vamsSchemaMedia")))
+        ).toBe(true);
+    });
+
+    test.each(bundles.map((dir) => [path.relative(REPO, dir), dir]))(
+        "%s: pipeline and workflow share a SYSTEM - <Area> category the pages name",
+        (_rel, dir) => {
+            const pipeline = JSON.parse(fs.readFileSync(path.join(dir, "pipeline.json"), "utf8"));
+            const workflow = JSON.parse(fs.readFileSync(path.join(dir, "workflow.json"), "utf8"));
+            expect(pipeline.category).toMatch(/^SYSTEM - \S/);
+            expect(workflow.category).toBe(pipeline.category);
+            expect(shipped).toContain(`\`${pipeline.category}\``);
+            expect(concepts).toContain(`\`${pipeline.category}\``);
+        }
+    );
+
+    test("the Media Preview Thumbnail row of the shipped table names its category", () => {
+        const row =
+            shipped.split("\n").find((line) => line.includes("`preview-media-thumbnail`")) ?? "";
+        expect(row).toContain("`SYSTEM - Preview`");
+    });
+
+    test("the Zip Archive row of the shipped table names its category", () => {
+        const row =
+            shipped.split("\n").find((line) => line.includes("`utility-zip-archive`")) ?? "";
+        expect(row).toContain("`SYSTEM - Utility`");
+    });
+
+    // D132: a compliance pipeline rule may use no system pipeline; every list of them names each bundle.
+    const RULE_NOTE_TITLE = ":::note[System pipelines cannot back a pipeline rule]";
+    const ruleLists: [string, string][] = [
+        [
+            "user-guide/compliance.md",
+            admonitionBody(readDoc("user-guide/compliance.md"), RULE_NOTE_TITLE),
+        ],
+        [
+            "CHANGELOG.md",
+            readRepo("CHANGELOG.md")
+                .split("\n")
+                .find((line) =>
+                    line.includes("A compliance pipeline rule cannot use a system pipeline")
+                ) ?? "",
+        ],
+        [
+            "additional/revisions.md",
+            readDoc("additional/revisions.md")
+                .split("\n")
+                .find((line) =>
+                    line.includes("A compliance pipeline rule cannot use a system pipeline")
+                ) ?? "",
+        ],
+    ];
+
+    test.each(ruleLists)(
+        "%s: the list of system pipelines a pipeline rule may not use is found",
+        (_doc, text) => {
+            // Control: an empty match would make every name check below vacuous.
+            expect(text.length).toBeGreaterThan(100);
+        }
+    );
+
+    test.each(
+        bundles.flatMap((dir) =>
+            ruleLists.map(([doc, text]) => [
+                path.relative(REPO, dir),
+                doc,
+                text,
+                JSON.parse(fs.readFileSync(path.join(dir, "pipeline.json"), "utf8")).pipelineName,
+            ])
+        )
+    )(
+        "%s: %s names its pipeline among those a pipeline rule may not use",
+        (_rel, _doc, text, name) => {
+            expect(text).toContain(name);
+        }
+    );
 });

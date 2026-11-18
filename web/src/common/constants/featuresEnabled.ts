@@ -7,6 +7,7 @@ export const featuresEnabled = {
     LOCATIONSERVICES: "LOCATIONSERVICES",
     NOOPENSEARCH: "NOOPENSEARCH",
     ALLOWUNSAFEEVAL: "ALLOWUNSAFEEVAL",
+    VECTORSEARCH: "VECTORSEARCH",
     // Download as Zip (prepared archive downloads); present only when app.pipelines.useZipDownloads.enabled
     ZIPDOWNLOADS: "ZIPDOWNLOADS",
     // Audit Log Search (the /audit API, page, CLI commands and MCP tools); present unless
