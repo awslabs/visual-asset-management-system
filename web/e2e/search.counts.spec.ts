@@ -20,6 +20,7 @@
 import { test, expect, Page } from "@playwright/test";
 import {
     apiContext,
+    cachedFeaturesEnabled,
     collectPageErrors,
     gotoSearch,
     readFeaturesEnabled,
@@ -43,6 +44,19 @@ interface SearchAnswer {
     hits: { hits: any[]; total: { value: number; relation?: string } };
     aggregations?: Record<string, { buckets?: Bucket[] }>;
     aggregationTotal?: number | null;
+}
+
+/**
+ * The keyword cases need the keyword engine: `POST /search` answers 404 on a deployment without
+ * OpenSearch (`NOOPENSEARCH`), so they skip there with the reason (#1634). Read from the app's own
+ * cached feature switches, as `searchModeCase` derives the engines.
+ */
+async function skipWithoutKeywordSearch(page: Page): Promise<void> {
+    const engines = searchModeCase(await cachedFeaturesEnabled(page));
+    test.skip(
+        engines !== "both" && engines !== "keyword-only",
+        "Keyword search is off: this deployment has no OpenSearch (NOOPENSEARCH)"
+    );
 }
 
 async function search(page: Page, body: Record<string, unknown>): Promise<SearchAnswer | null> {
@@ -76,6 +90,7 @@ function countsFromHits(hits: any[], field: string): Map<string, number> {
 
 test.describe("Search counts", () => {
     test("asset totals and facets count only listed records", async ({ page }) => {
+        await skipWithoutKeywordSearch(page);
         const answer = await search(page, {
             aggregations: true,
             entityTypes: ["asset"],
@@ -105,6 +120,7 @@ test.describe("Search counts", () => {
     });
 
     test("every counted asset on the first page can be opened", async ({ page }) => {
+        await skipWithoutKeywordSearch(page);
         const answer = await search(page, { entityTypes: ["asset"], from: 0, size: 10 });
         test.skip(!answer || answer.hits.hits.length === 0, "No assets this user can open");
         const ctx = await apiContext(page);
@@ -123,6 +139,7 @@ test.describe("Search counts", () => {
 
     test("the search page shows the same total, with + for a minimum", async ({ page }) => {
         const errors = collectPageErrors(page);
+        await skipWithoutKeywordSearch(page);
         const answer = await search(page, {
             aggregations: true,
             entityTypes: ["asset"],

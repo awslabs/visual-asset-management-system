@@ -94,6 +94,17 @@ const cases = [
     { ext: ".mcap", viewer: "Robotics", requiresFeature: "ALLOWUNSAFEEVAL", signedUrlChecks: true },
 ];
 
+/**
+ * The Three.js viewer's documented answer to a USD file with nothing it can draw (a layer file whose
+ * content sits in sublayers, variants or payloads): it shows `USD_NO_GEOMETRY_MESSAGE` in place of the
+ * scene and logs the same error. The first file of an extension the lookup finds can be such a layer
+ * (`/assemblies/arm.usda` of a scene, seen in the 2026-11-18 regression), so a USD case accepts that
+ * outcome, and only that line, when the page shows the message (#1634). Any other console error still
+ * fails the case.
+ */
+const USD_EMPTY_SCENE = /This USD scene opened, but the viewer found nothing in it to display/;
+const USD_EXTENSIONS = new Set([".usd", ".usda", ".usdc", ".usdz"]);
+
 // `maxBytes` keeps the scan off very large files, whose download alone can outlast a case's waits.
 const SCAN = { maxDatabases: 8, maxAssetsPerDatabase: 20, maxBytes: 50 * 1024 * 1024 };
 const LOOKUP_SCOPE = process.env.E2E_VIEWER_ASSET
@@ -297,8 +308,26 @@ for (const c of cases) {
         // Let the loader pull the file + render a frame, then check for runtime errors.
         await page.waitForTimeout(6000);
 
-        // No uncaught page errors or viewer-init console errors.
-        expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+        // No uncaught page errors or viewer-init console errors. A USD scene with nothing to draw is
+        // the viewer's documented, handled outcome when it shows its message (see USD_EMPTY_SCENE).
+        const emptyUsdScene =
+            c.viewer === "Three.js" &&
+            USD_EXTENSIONS.has(c.ext) &&
+            (await page
+                .getByText(USD_EMPTY_SCENE)
+                .first()
+                .isVisible()
+                .catch(() => false));
+        if (emptyUsdScene) {
+            test.info().annotations.push({
+                type: "note",
+                description: `${fileName} holds nothing the Three.js viewer can draw; the viewer showed its documented message`,
+            });
+        }
+        const counted = emptyUsdScene
+            ? errors.filter((line) => !USD_EMPTY_SCENE.test(line))
+            : errors;
+        expect(counted, `viewer errors for ${fileName}:\n${counted.join("\n")}`).toEqual([]);
 
         if (references) {
             const { appOriginFailures, cspViolations } = await references.summary();

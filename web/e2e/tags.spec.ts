@@ -16,26 +16,32 @@
  *
  * Data-independent (Rule 1): GLOBAL always exists, so every assertion here can use it; anything that
  * needs a real database derives it from the selector's own options and skips when there are none.
+ *
+ * Role-aware (#1634): a role that may not open Tag Management sees the app's "You do not have access
+ * to this page" panel instead, and the cases that need the page skip with that reason.
  */
 
 import { test, expect, Page } from "@playwright/test";
-import { collectPageErrors } from "./support/fixtures";
+import { collectPageErrors, NO_ACCESS_HEADING, pageAllowed } from "./support/fixtures";
 
 const TAGS_ROOT = "/#/auth/tags";
 const TAGS_GLOBAL = "/#/auth/tags/GLOBAL";
+const TAG_PAGE_DENIED = `This role may not open Tag Management (the app shows "${NO_ACCESS_HEADING}")`;
 
-async function gotoTagsRoot(page: Page) {
-    await page.goto(TAGS_ROOT);
+async function openTags(page: Page, route: string) {
+    await page.goto(route);
+    test.skip(!(await pageAllowed(page, /Tag Management/i)), TAG_PAGE_DENIED);
     await expect(page.getByRole("heading", { name: /Tag Management/i }).first()).toBeVisible({
         timeout: 30000,
     });
 }
 
+async function gotoTagsRoot(page: Page) {
+    await openTags(page, TAGS_ROOT);
+}
+
 async function gotoGlobalTags(page: Page) {
-    await page.goto(TAGS_GLOBAL);
-    await expect(page.getByRole("heading", { name: /Tag Management/i }).first()).toBeVisible({
-        timeout: 30000,
-    });
+    await openTags(page, TAGS_GLOBAL);
 }
 
 test.describe("first-load database selection", () => {
@@ -229,7 +235,7 @@ test.describe("switching scope replaces the listing", () => {
     test("a specific database shows none of the GLOBAL entries", async ({ page }) => {
         // Start in GLOBAL so the page holds global rows, then switch — the previous scope's rows must
         // not survive. The list only fetches on mount, so this is the case that regressed.
-        await page.goto(TAGS_GLOBAL);
+        await gotoGlobalTags(page);
         await expect(page.getByRole("heading", { name: /^Tag Management$/ }).first()).toBeVisible();
 
         await page
