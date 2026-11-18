@@ -125,7 +125,11 @@ test.describe("Pipelines page", () => {
                 );
             }
         }
-        await expect(menuItem(page, "Archive")).not.toHaveAttribute("aria-disabled", "true");
+        // An ordinary pipeline's Archive is usable; asserted only where the role is offered it, since
+        // an attribute check waits for an element a role without the route never sees (D134).
+        if (may.archive) {
+            await expect(menuItem(page, "Archive")).not.toHaveAttribute("aria-disabled", "true");
+        }
         // View replaces Edit on a system record only.
         await expect(menuItem(page, "View")).toHaveCount(0);
         await page.keyboard.press("Escape");

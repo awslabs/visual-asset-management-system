@@ -418,3 +418,4 @@ challenge manually.
 5. **Committing an ad-hoc or `_probe` spec** — these are per-change and stay untracked.
 6. **Hardcoding credentials or the base URL** — use `E2E_USERNAME` / `E2E_PASSWORD` / `E2E_BASE_URL`.
 7. **Claiming a web fix is verified without checking the deployed bundle hash** — see the warning above.
+8. **Asserting an action a role is not offered** — gate each menu-item or button assertion on the role's allowed routes, as the per-role loop does; Playwright needs the element to check its attributes (D134).
