@@ -64,7 +64,7 @@ The container decides its mode from the run manifest:
 
 ### Checks Before Writing
 
-Before it writes the first byte, the container resolves every folder and whole-asset entry to the current file versions (or to the versions recorded in an asset version) and head-checks every member on its pinned version. The whole archive is refused when a member is a delete marker, a missing version, in the GLACIER or DEEP_ARCHIVE storage class, marked archived or deleted (`vams-status`), or has an extension or media type on the executable blocklist, and when the member count or total size exceeds the limits. A refusal fails the run with a user-safe reason that names the asset-relative path. A zip download carries the deployment's blocklists and limits in its request manifest; a Zip Archive run applies the core blocklists.
+Before it writes the first byte, the container resolves every folder and whole-asset entry to the current file versions (or to the versions recorded in an asset version) and head-checks every member on its pinned version. The whole archive is refused when a member is a delete marker, a missing version, in the GLACIER or DEEP_ARCHIVE storage class, marked archived or deleted (`vams-status`), or has an extension or media type on the executable blocklist, when a member's path cannot be an entry name in the archive (a `.` or `..` segment, a backslash or a NUL character) or two members would have the same entry name, and when the member count or total size exceeds the limits. A refusal fails the run with a user-safe reason that names the asset-relative path. A zip download carries the deployment's blocklists and limits in its request manifest; a Zip Archive run applies the core blocklists.
 
 ### Streaming and Multipart Upload
 
@@ -167,7 +167,7 @@ The job role reads and lists object versions in the asset buckets, writes and ab
 
 ### A Job or Run Fails Naming a File
 
-The archive was refused because the named file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has a blocked file type, or the selection exceeds a limit. Unarchive or restore the file, or remove it from the selection, and create the job again.
+The archive was refused because the named file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has a blocked file type, because its path cannot be an entry name in the archive or two files would have the same entry name, or because the selection exceeds a limit. Unarchive or restore the file, or remove it from the selection, and create the job again.
 
 ### A Job Fails With "The archive job timed out"
 

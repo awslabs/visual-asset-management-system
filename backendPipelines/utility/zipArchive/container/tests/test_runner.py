@@ -268,6 +268,28 @@ class TestZipDownloadMode:
         assert table.row["status"] == "FAILED" and needle in table.row["errorMessage"]
         assert s3.completed == {} and s3.uploads == {}
 
+    @pytest.mark.parametrize("key", ["tex/../x.glb", "tex/./x.glb", "tex/a\\b.glb", "tex/a\x00b.glb", "tex/../"])
+    def test_a_name_the_writers_refuse_refuses_the_archive_before_the_upload(self, s3, key):
+        if key.endswith("/"):
+            s3.add(BASE + key, b"", content_type="")  # an empty folder's marker
+        else:
+            s3.add(BASE + key, b"X")
+        job, table = _zip_job(s3, _manifest(entries=[{"type": "folder", "key": BASE + "tex/", "relativePath": "/tex/"}]))
+        with pytest.raises(runner.ArchiveFailure) as e:
+            job.run()
+        assert e.value.refusal and repr("/" + key) in e.value.reason
+        assert table.row["status"] == "FAILED" and repr("/" + key) in table.row["errorMessage"]
+        assert s3.completed == {} and s3.uploads == {} and s3.aborted == []
+
+    def test_two_keys_with_one_archive_name_refuse_the_archive_before_the_upload(self, s3):
+        s3.add(BASE + "/a.glb", b"B" * 100)  # relative path '//a.glb', named 'a.glb' like '/a.glb'
+        job, table = _zip_job(s3, _manifest(entries=[{"type": "asset", "key": BASE, "relativePath": "/"}]))
+        with pytest.raises(runner.ArchiveFailure) as e:
+            job.run()
+        assert e.value.refusal and "'//a.glb'" in e.value.reason and "'/a.glb'" in e.value.reason
+        assert table.row["status"] == "FAILED"
+        assert s3.completed == {} and s3.uploads == {} and s3.aborted == []
+
     def test_deleted_pinned_version_refused(self, s3):
         s3.add(BASE + "gone.glb", b"", version="dm", delete_marker=True)
         job, table = _zip_job(s3, _manifest(pinned=[{"key": BASE + "gone.glb", "relativePath": "/gone.glb", "versionId": "dm", "size": 0}]))
@@ -438,6 +460,14 @@ class TestZipArchiveRunMode:
         job = self._job(s3, [{"bucket": ASSETS, "key": BASE, "versionId": ""}])
         with pytest.raises(runner.ArchiveFailure):
             job.run()
+
+    def test_a_name_the_writers_refuse_refuses_the_run_before_the_upload(self, s3):
+        s3.add(BASE + "d/../e.glb", b"E")
+        job = self._job(s3, [{"bucket": ASSETS, "key": BASE, "versionId": ""}])
+        with pytest.raises(runner.ArchiveFailure) as e:
+            job.run()
+        assert e.value.refusal and "'/d/../e.glb'" in e.value.reason
+        assert s3.completed == {} and s3.uploads == {} and s3.aborted == []
 
     def test_an_archive_s3_could_not_store_is_refused_before_streaming(self, s3, monkeypatch):
         # #1125 L1, the workflow run (mode 2): refused before the output upload starts.
