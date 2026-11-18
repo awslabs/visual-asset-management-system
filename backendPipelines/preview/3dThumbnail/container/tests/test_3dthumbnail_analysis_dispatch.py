@@ -17,6 +17,7 @@ import pytest
 np = pytest.importorskip("numpy", reason="the dispatcher moves numpy point arrays")
 
 from preview_pipeline.analysis import analysis, attributes  # noqa: E402
+from test_3dthumbnail_header_parsers import spz_v3_bytes, spz_v4_bytes  # noqa: E402
 
 PLY_MESH = (b"ply\nformat ascii 1.0\nelement vertex 8\nproperty float x\nproperty float y\n"
             b"property float z\nelement face 12\nproperty list uchar int vertex_indices\nend_header\n")
@@ -101,6 +102,18 @@ class TestAttributesOnlyRoutes:
         assert result.attributes[attributes.SYS_FORMAT]["details"]["isGaussianSplat"] is True
         assert result.render_skipped == "unsupported" and result.loader == "header"
         assert result.facts["pointcloud"].startswith("Gaussian splat with 3 splats")
+
+    @pytest.mark.parametrize("build,version", [(spz_v3_bytes, 3), (spz_v4_bytes, 4)])
+    def test_spz_of_either_layout_gets_its_point_count(self, tmp_path, render_stack, build, version):
+        """D131: an SPZ version 4 file (plaintext NGSP header, ZSTD streams) gets sys_pointcloud and
+        sys_format from its header like a gzip-wrapped version 3 file, instead of failing on gzip."""
+        result = analysis.analyze_local_file(_write(tmp_path, "unicorn.spz", build(points=49602, sh_degree=3)),
+                                             ".spz")
+        assert result.attributes[attributes.SYS_POINTCLOUD]["pointCount"] == 49602
+        details = result.attributes[attributes.SYS_FORMAT]["details"]
+        assert (details["container"], details["version"], details["shDegree"]) == ("spz", version, 3)
+        assert result.render_skipped == "unsupported" and result.loader == "header"
+        assert result.facts["pointcloud"] == "Gaussian splat with 49,602 splats in a spz container"
 
     def test_lcc_is_a_warning_only(self, tmp_path, render_stack):
         result = analysis.analyze_local_file(_write(tmp_path, "a.lcc"), ".lcc")

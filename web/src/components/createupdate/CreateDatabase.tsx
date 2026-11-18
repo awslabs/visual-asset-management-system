@@ -68,13 +68,15 @@ interface BucketOption {
     // The bucket's Region; absent on a bucket in the deployment Region registered without one.
     bucketRegion?: string | null;
     bucketAccountId?: string | null;
+    // Whether S3 Transfer Acceleration is on for the bucket, as the API reports it.
+    isAccelerated?: boolean;
 }
 
-// "name - prefix (region) (VAMS default)", with the optional parts present when known.
+// "name - prefix (region) (VAMS default) (accelerated)", with the optional parts present when known.
 function bucketOptionLabel(bucket: BucketOption): string {
     return `${bucket.bucketName}${bucket.baseAssetsPrefix ? ` - ${bucket.baseAssetsPrefix}` : ""}${
         bucket.bucketRegion ? ` (${bucket.bucketRegion})` : ""
-    }${bucket.isDefault ? " (VAMS default)" : ""}`;
+    }${bucket.isDefault ? " (VAMS default)" : ""}${bucket.isAccelerated ? " (accelerated)" : ""}`;
 }
 
 // null when the name holds only letters, digits, - and _; otherwise the character-set message

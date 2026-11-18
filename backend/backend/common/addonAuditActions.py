@@ -50,6 +50,7 @@ from common.addonApiRoutes import (
 from common.apiRouteTypes import DELETE, GET, POST, PUT
 from common.auditActionTypes import (
     GROUP_AUTH_CHANGES,
+    AuditLogGroup,
     AuditSpec,
     RouteMethod,
     SystemAction,
@@ -175,3 +176,9 @@ ADDON_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
     SystemAction("handlers.addon.edh.edhLaunchWorker", spec("edhWorkstationLaunch", "workstation")),
     SystemAction("handlers.addon.edh.edhSessionReconciler", spec("edhSessionReconcile", "workstation")),
 )
+
+# Audit log groups an add-on adds to the registry in ``common/auditLogGroups.py``. Empty today: no
+# add-on has a log group of its own. An entry needs its ``ResourceKeys`` attribute and CDK log group
+# ("Add an audit group" in docs/developer/audit-logging.md); a group of an add-on that is not
+# deployed sets ``addon_feature`` and is left out of the audit search.
+ADDON_AUDIT_LOG_GROUPS: Tuple[AuditLogGroup, ...] = ()

@@ -19,10 +19,18 @@ _PLY_SH_REST_COUNTS = {0: 0, 9: 1, 24: 2, 45: 3}
 # .splat: position 3 x f32, scale 3 x f32, colour 4 x u8, rotation 4 x u8 per splat.
 SPLAT_RECORD_BYTES = 32
 
-# .spz: gzip stream whose first 16 bytes are magic u32, version u32, numPoints u32, shDegree u8,
-# fractionalBits u8, flags u8, reserved u8 (little-endian). The magic spells "NGSP".
+# .spz, two layouts, told apart by the first bytes (nianticlabs/spz README, "Format detection"):
+#   versions 1-3: a gzip stream (1f 8b) whose first 16 bytes are magic u32, version u32, numPoints u32,
+#     shDegree u8, fractionalBits u8, flags u8, reserved u8;
+#   version 4: a 32-byte plaintext NgspFileHeader (the same first 15 fields, then numStreams u8,
+#     tocByteOffset u32 and 12 reserved bytes) before independently ZSTD-compressed attribute streams.
+# All fields little-endian; the magic spells "NGSP" in file order.
 SPZ_MAGIC = 0x5053474E
 SPZ_HEADER_BYTES = 16
+SPZ_V4_HEADER_BYTES = 32
+SPZ_V4_MIN_VERSION = 4
+_GZIP_MAGIC = b"\x1f\x8b"
+_SPZ_MAGIC_BYTES = struct.pack("<I", SPZ_MAGIC)
 
 # A SOG meta.json is a few kilobytes of JSON read whole into memory; one larger than this, as a bundle member
 # (by its central-directory size, before decompressing) or as a bare file, is refused.
@@ -94,8 +102,27 @@ def read_splat_header(path: str) -> dict:
 
 
 def read_spz_header(path: str) -> dict:
-    with gzip.open(path, "rb") as handle:
-        raw = handle.read(SPZ_HEADER_BYTES)
+    """The header of an .spz in either layout: the gzip-wrapped stream of versions 1-3, or the plaintext
+    ``NGSP`` header of version 4 (ZSTD streams, which are never decompressed here). Anything else is a
+    HeaderError rather than a gzip error."""
+    with open(path, "rb") as handle:
+        lead = handle.read(SPZ_V4_HEADER_BYTES)
+    if lead[:4] == _SPZ_MAGIC_BYTES:
+        if len(lead) < SPZ_V4_HEADER_BYTES:
+            raise HeaderError(".spz file is shorter than its version 4 header")
+        _magic, version, points, sh_degree, fractional_bits, flags, _streams, _toc = struct.unpack(
+            "<IIIBBBBI", lead[:20])
+        if version < SPZ_V4_MIN_VERSION:
+            raise HeaderError(f".spz plaintext header names version {version}; versions 1-3 are gzip streams")
+        return {"version": version, "points": points, "shDegree": sh_degree,
+                "fractionalBits": fractional_bits, "antialiased": bool(flags & 1)}
+    if lead[:2] != _GZIP_MAGIC:
+        raise HeaderError(".spz file is neither a gzip stream (versions 1-3) nor an NGSP header (version 4)")
+    try:
+        with gzip.open(path, "rb") as handle:
+            raw = handle.read(SPZ_HEADER_BYTES)
+    except (OSError, EOFError) as exc:
+        raise HeaderError(f".spz gzip stream could not be read: {exc}") from exc
     if len(raw) < SPZ_HEADER_BYTES:
         raise HeaderError(".spz stream is shorter than its header")
     magic, version, points, sh_degree, fractional_bits, flags, _reserved = struct.unpack("<IIIBBBB", raw)

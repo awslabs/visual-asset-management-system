@@ -189,6 +189,7 @@ const COMMERCIAL: ConfigShape = {
                 allowedIpRanges: [],
                 allowedVpceIds: [],
             },
+            useS3TransferAcceleration: false,
             externalAssetBuckets: null,
         },
         adminUserId: "administrator",

@@ -652,7 +652,8 @@ def get_buckets(query_params, claims_and_roles=None):
                 baseAssetsPrefix=deserialized_document.get('baseAssetsPrefix', ''),
                 isDefault=bool(deserialized_document.get('isDefault', False)),
                 bucketRegion=deserialized_document.get('bucketRegion') or None,
-                bucketAccountId=deserialized_document.get('bucketAccountId') or None
+                bucketAccountId=deserialized_document.get('bucketAccountId') or None,
+                isAccelerated=deserialized_document.get('isAccelerated') is True
             )
             items.append(bucket_model)
 

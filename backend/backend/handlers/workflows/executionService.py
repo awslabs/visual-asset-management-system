@@ -6710,15 +6710,20 @@ def permanent_delete_execution(event, execution_id):
             except botocore.exceptions.ClientError as e:
                 # A Step Functions execution whose history has expired (or was deleted) can no longer
                 # be running, so a stale non-terminal row is still deletable.
-                if e.response.get('Error', {}).get('Code', '') != 'ExecutionDoesNotExist':
-                    logger.info(f"Could not confirm execution terminal state (continuing to guard): {e}")
+                error_code = e.response.get('Error', {}).get('Code', '')
+                if error_code != 'ExecutionDoesNotExist':
+                    # A failed lookup (throttling, a denied DescribeExecution) is a service fault, not a
+                    # caller error, and the 400 below logs at WARNING, so this line is the ERROR.
+                    logger.error(f"Could not confirm execution terminal state for {execution_id} "
+                                 f"(error code {error_code or 'unknown'}; continuing to guard): {e}")
                     return validation_error(body={
                         "message": "Execution is in progress; abort it before permanent delete."},
                         event=event)
                 logger.info(f"Step Functions execution no longer exists for {execution_id}; "
                             "treating the row as not in progress")
             except Exception as e:
-                logger.info(f"Could not confirm execution terminal state (continuing to guard): {e}")
+                logger.exception(f"Could not confirm execution terminal state for {execution_id} "
+                                 f"(continuing to guard): {e}")
                 return validation_error(body={
                     "message": "Execution is in progress; abort it before permanent delete."}, event=event)
 

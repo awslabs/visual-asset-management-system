@@ -9,11 +9,15 @@
  * renderer's GPU resources but keeps the context until the canvas is garbage collected, so these
  * tests pin that unmounting releases the renderer, its scene environment, its canvas and its context
  * whatever the load outcome: a load that failed, one still in flight, and one that succeeded.
+ *
+ * Cleanup also aborts the run's downloads. That abort is a cancellation, not a failure: the load
+ * stops without logging or listing the file, while any other error is still logged and shown (#1643).
  */
 
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ThreeJSViewerComponent from "./ThreeJSViewerComponent";
+import { ThreeJSDependencyManager } from "./dependencies";
 import { loadFile } from "./utils/fileLoaders";
 import { applySceneEnvironment } from "./utils/sceneLighting";
 import { AssetDependencyResolver } from "./utils/assetDependencyResolver";
@@ -160,8 +164,8 @@ function installFakeThree(): void {
     };
 }
 
-function renderViewer(assetKey: string) {
-    return render(
+function viewerElement(assetKey: string) {
+    return (
         <ThreeJSViewerComponent
             assetId="asset-1"
             databaseId="db-1"
@@ -170,6 +174,10 @@ function renderViewer(assetKey: string) {
             onViewerModeChange={jest.fn()}
         />
     );
+}
+
+function renderViewer(assetKey: string) {
+    return render(viewerElement(assetKey));
 }
 
 function expectReleased(renderer: FakeRenderer, environment: { dispose: jest.Mock }) {
@@ -333,5 +341,137 @@ describe("ThreeJSViewerComponent cleanup", () => {
         view.unmount();
 
         expectReleased(renderers[0], environments[0]);
+    });
+});
+
+/**
+ * A fetch that holds the download of `heldKey` until its signal aborts, then rejects it with an
+ * AbortError as a browser does, and answers every other file at once.
+ */
+function fetchHoldingUntilAborted(heldKey: string) {
+    return jest.fn((url: string, init?: RequestInit) => {
+        if (String(url).includes(heldKey)) {
+            return new Promise((_resolve, reject) => {
+                init?.signal?.addEventListener("abort", () =>
+                    reject(new DOMException("The operation was aborted.", "AbortError"))
+                );
+            });
+        }
+        return Promise.resolve({
+            ok: true,
+            arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+        });
+    });
+}
+
+/** The scene-level failure line, logged once when no file could be shown. */
+const SCENE_ERROR_LINE = "Error loading ThreeJS assets:";
+
+/** The viewer's per-file failure lines ("Error loading <key>:"). */
+function loadErrorLines(): unknown[][] {
+    return (console.error as jest.Mock).mock.calls.filter(
+        (args) => /^Error loading /.test(String(args[0])) && args[0] !== SCENE_ERROR_LINE
+    );
+}
+
+/** Whether the scene-level failure line was logged. */
+function sceneErrorLogged(): boolean {
+    return (console.error as jest.Mock).mock.calls.some((args) => args[0] === SCENE_ERROR_LINE);
+}
+
+function mesh(): FakeObject3D {
+    const model = new FakeObject3D();
+    model.type = "Mesh";
+    (model as any).isMesh = true;
+    return model;
+}
+
+describe("ThreeJSViewerComponent load cancellation (#1643)", () => {
+    const originalFetch = global.fetch;
+    const mockedLoadThreeJS = ThreeJSDependencyManager.loadThreeJS as jest.Mock;
+
+    beforeEach(() => {
+        renderers = [];
+        environments = [];
+        installFakeThree();
+        mockedLoadFile.mockReset();
+        mockedApplySceneEnvironment.mockImplementation(() => {
+            const environment = { dispose: jest.fn() };
+            environments.push(environment);
+            return environment as any;
+        });
+        // Cleanup deletes window.THREE and the next run loads it again, as the real loader does.
+        mockedLoadThreeJS.mockImplementation(() => {
+            if (!(window as any).THREE) installFakeThree();
+            return Promise.resolve();
+        });
+        jest.spyOn(console, "log").mockImplementation(() => undefined);
+        jest.spyOn(console, "error").mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        global.fetch = originalFetch;
+        delete (window as any).THREE;
+        mockedLoadThreeJS.mockImplementation(() => Promise.resolve());
+        jest.restoreAllMocks();
+    });
+
+    it("cancels a download its own cleanup aborted, logging and listing nothing for it", async () => {
+        const fetchMock = fetchHoldingUntilAborted("models/first.glb");
+        global.fetch = fetchMock as any;
+        mockedLoadFile.mockResolvedValue({
+            object: mesh(),
+            warnings: ["second-tex.png (not found)"],
+        });
+
+        const view = renderViewer("models/first.glb");
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+        // Other files mid-download: the load effect re-runs and its cleanup aborts the download.
+        view.rerender(viewerElement("models/second.glb"));
+
+        // The second load completes and lists only its own referenced file.
+        expect(await screen.findByText("1 referenced file was not loaded")).toBeTruthy();
+        expect(screen.getByText("second-tex.png (not found)")).toBeTruthy();
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(loadErrorLines()).toEqual([]);
+        expect(sceneErrorLogged()).toBe(false);
+        expect(screen.queryByText(/failed to load/i)).toBeNull();
+        // The aborted file was never parsed: the only parse is the second file's.
+        expect(mockedLoadFile).toHaveBeenCalledTimes(1);
+
+        view.unmount();
+    });
+
+    it("still logs and shows a download that failed", async () => {
+        global.fetch = jest.fn(() => Promise.resolve({ ok: false, status: 500 })) as any;
+
+        const view = renderViewer("models/broken.glb");
+
+        expect(await screen.findByText(/broken\.glb \(500\)/)).toBeTruthy();
+        expect(loadErrorLines()).toHaveLength(1);
+        expect(loadErrorLines()[0][0]).toBe("Error loading models/broken.glb:");
+        expect(sceneErrorLogged()).toBe(true);
+        expect(mockedLoadFile).not.toHaveBeenCalled();
+
+        view.unmount();
+    });
+
+    it("still logs and shows an AbortError the viewer's own cleanup did not cause", async () => {
+        global.fetch = jest.fn(() =>
+            Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)) })
+        ) as any;
+        mockedLoadFile.mockRejectedValue(
+            new DOMException("The loader stopped reading.", "AbortError")
+        );
+
+        const view = renderViewer("models/part.glb");
+
+        expect(await screen.findByText(/The loader stopped reading/)).toBeTruthy();
+        expect(loadErrorLines()).toHaveLength(1);
+        expect(loadErrorLines()[0][0]).toBe("Error loading models/part.glb:");
+        expect(sceneErrorLogged()).toBe(true);
+
+        view.unmount();
     });
 });
