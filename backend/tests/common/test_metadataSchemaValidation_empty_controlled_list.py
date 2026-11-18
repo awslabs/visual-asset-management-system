@@ -55,4 +55,6 @@ def test_a_value_outside_the_list_is_still_refused():
     is_valid, errors, _ = validate_metadata_against_schema(_entry("purple"), _schema(), "PUT")
 
     assert not is_valid
-    assert errors == [f"Field '{LIST_KEY}' value 'purple' is not in controlled list: ['red', 'blue']"]
+    assert errors == ["A field value is not in the field's controlled list."]
+    # The refusal repeats neither the submitted value nor the list (backend Rule 11).
+    assert "purple" not in errors[0] and "red" not in errors[0]

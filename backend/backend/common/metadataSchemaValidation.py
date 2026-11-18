@@ -33,6 +33,15 @@ _cache_ttl = 60  # seconds
 # (pipelineService.MAX_REFERENCING_WORKFLOW_PAGES).
 MAX_SCHEMA_QUERY_PAGES = 20
 
+# Refusals that would otherwise repeat what the caller sent (a key outside the schema, a submitted
+# value) or a field's controlled list. The response stays generic (backend Rule 11); the field name
+# is logged.
+MSG_FIELD_NOT_IN_SCHEMA = ("A field is not defined in the metadata schema. Only schema-defined fields "
+                           "are allowed when restrictMetadataOutsideSchemas is enabled.")
+MSG_FIELD_TYPE_FIXED_BY_SCHEMA = ("A field's type is defined by its metadata schema and cannot be "
+                                  "changed.")
+MSG_VALUE_NOT_IN_CONTROLLED_LIST = "A field value is not in the field's controlled list."
+
 
 class SchemaLookupError(Exception):
     """A schema query did not complete, so the aggregated schema set is incomplete.
@@ -610,10 +619,8 @@ def validate_metadata_keys_against_schema(
     # Check each metadata key
     for field_name in metadata_dict.keys():
         if field_name not in aggregated_schema and field_name not in already_stored:
-            errors.append(
-                f"Field '{field_name}' is not defined in the metadata schema. "
-                f"Only schema-defined fields are allowed when restrictMetadataOutsideSchemas is enabled."
-            )
+            logger.info(f"Metadata field {field_name} is not defined in the metadata schema")
+            errors.append(MSG_FIELD_NOT_IN_SCHEMA)
     
     is_valid = len(errors) == 0
     return is_valid, errors
@@ -825,11 +832,9 @@ def validate_metadata_against_schema(
                     if existing_type:
                         existing_type_normalized = existing_type.lower() if isinstance(existing_type, str) else existing_type
                         if actual_type_normalized != existing_type_normalized:
-                            errors.append(
-                                f"Cannot change type of field '{field_name}' from '{_type_name(existing_type)}' "
-                                f"to '{_type_name(actual_type)}'. "
-                                f"Field type is defined by schema and cannot be changed."
-                            )
+                            logger.info(f"Metadata field {field_name} cannot change type from "
+                                        f"{_type_name(existing_type)} to {_type_name(actual_type)}")
+                            errors.append(MSG_FIELD_TYPE_FIXED_BY_SCHEMA)
     
     # Step 4: Validate dependsOn chains recursively (NEW - comprehensive)
     depends_valid, depends_errors = validate_depends_on_chain(
@@ -850,10 +855,10 @@ def validate_metadata_against_schema(
                 
                 if (controlled_list and not is_empty_value(actual_value)
                         and actual_value not in controlled_list):
-                    errors.append(
-                        f"Field '{field_name}' value '{actual_value}' is not in "
-                        f"controlled list: {controlled_list}"
-                    )
+                    # The value and the list are caller and schema content; only the field is logged.
+                    logger.info(f"Metadata field {field_name} has a value outside its controlled list "
+                                f"({len(controlled_list)} entries)")
+                    errors.append(MSG_VALUE_NOT_IN_CONTROLLED_LIST)
     
     is_valid = len(errors) == 0
     return is_valid, errors, metadata_with_defaults
