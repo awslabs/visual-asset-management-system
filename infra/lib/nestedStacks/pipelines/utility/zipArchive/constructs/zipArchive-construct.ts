@@ -380,6 +380,10 @@ export class ZipArchiveConstruct extends Construct {
         const archiveBatchJob = new tasks.LambdaInvoke(this, "ZipArchiveBatchJob", {
             lambdaFunction: executeBatchJobFunction,
             integrationPattern: sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
+            // executeBatchJob submits a Batch job on every call, so a retry after a Lambda service
+            // fault could start a second container on the same token and job row. The fault is
+            // caught like any other error and reaches pipelineEnd.
+            retryOnServiceExceptions: false,
             payload: sfn.TaskInput.fromObject({
                 taskToken: sfn.JsonPath.taskToken,
                 "jobName.$": "$.jobName",

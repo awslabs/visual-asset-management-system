@@ -285,4 +285,12 @@ describe("Coordinate transform timeout chain", () => {
             definition.TimeoutSeconds
         );
     });
+
+    test("the submitting token state does not retry, so one run submits one Batch job", () => {
+        // executeBatchJob submits on every call; CDK's default Retry on Lambda service exceptions
+        // would start a second container on the same task token.
+        const state = definition.States.CoordTransformBatchJob;
+        expect(state.Retry).toBeUndefined();
+        expect(state.Catch.some((c: any) => c.ErrorEquals.includes("States.ALL"))).toBe(true);
+    });
 });
