@@ -201,7 +201,7 @@ class VamsAuthenticationError(VamsCliError):
 
 
 class VamsAccessDeniedError(VamsCliError):
-    """Raised when VAMS refused the credential a call was made with (HTTP 401 or 403)."""
+    """Raised when VAMS did not accept the credential a call was made with (HTTP 401)."""
     pass
 
 
@@ -233,13 +233,13 @@ class VamsTransferError(VamsCliError):
 # The CLI exits with the same status for a refused credential as for any other failure, so a refusal
 # is recognised from the error it prints: the exception class a command names as the error type, the
 # heading the CLI's global handler puts on the message, or the CLI's own wording, which a command that
-# wraps the exception in a message of its own keeps.
-_ACCESS_DENIED_ERROR_TYPES = frozenset((
-    "PermissionDeniedError", "AuthenticationError", "OverrideTokenError", "TokenExpiredError"))
-_ACCESS_DENIED_HEADINGS = (
-    "Permission Denied:", "Authentication Error:", "Override Token Error:", "Token Expired:")
-_ACCESS_DENIED_WORDING = (
-    "Access forbidden.", "Authentication failed", "Override token authentication failed")
+# wraps the exception in a message of its own keeps. The API answers a key or token it does not accept
+# with 401, which the CLI raises as one of these. A 403 (PermissionDeniedError, "Access
+# forbidden.") is a denial of the call itself, on an entity, a role or the network path, which signing
+# in again does not change, so it is an ordinary error.
+_ACCESS_DENIED_ERROR_TYPES = frozenset(("AuthenticationError", "OverrideTokenError", "TokenExpiredError"))
+_ACCESS_DENIED_HEADINGS = ("Authentication Error:", "Override Token Error:", "Token Expired:")
+_ACCESS_DENIED_WORDING = ("Authentication failed", "Override token authentication failed")
 
 
 def _cli_error(message: str, error_type: str, exit_code: int = 1) -> VamsCliError:
