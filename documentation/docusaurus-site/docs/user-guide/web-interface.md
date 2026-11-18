@@ -162,7 +162,7 @@ VAMS includes 24 built-in viewer plugins covering 3D models, point clouds, Gauss
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
 :::tip
-If a file's extension matches multiple viewers, the viewer dropdown lists them with the lowest priority number first, and the file opens once you choose one. If the file has a preview image, the file page also offers a **Preview** option that shows it in the Preview Viewer.
+If a file's extension matches multiple viewers, the viewer dropdown lists them with the lowest priority number first, and the file opens once you choose one. If the file has a preview image, the file page also offers a **Preview** option that shows it in the Preview Viewer. The preview is always the one for the file's latest version. When you open an older version of the file and choose **Preview**, a notice above the viewer says the preview belongs to the latest version, not the version you are viewing; it does not appear for the latest version, on the **File** option, or when you view the file through an asset version.
 :::
 
 ---
