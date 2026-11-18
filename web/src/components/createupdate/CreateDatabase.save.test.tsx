@@ -310,3 +310,61 @@ describe(`${Synonyms.Database} editor save and compliance schema binding`, () =>
         expect(compliance.bindSchemaToDatabase).toHaveBeenLastCalledWith("db-new", "std");
     });
 });
+
+describe(`${Synonyms.Database} editor when a compliance read fails`, () => {
+    const schemaSelect = () =>
+        present(formField("Compliance Schema").findControl()?.findSelect(), "schema select");
+
+    it("does not offer the schema while the binding is unknown, and saves the fields only", async () => {
+        compliance.getDatabaseBindings.mockResolvedValue([false, "Not Authorized"]);
+        api.updateDatabase.mockResolvedValue([true, "Database updated"]);
+        const setOpen = jest.fn();
+        render(
+            <CreateDatabase
+                open={true}
+                setOpen={setOpen}
+                setReload={jest.fn()}
+                initState={database}
+            />
+        );
+        expect(
+            await screen.findByText("Could not load the compliance schema binding: Not Authorized")
+        ).toBeInTheDocument();
+        expect(schemaSelect().isDisabled()).toBe(true);
+
+        editDescription("an edited description");
+        submit("Update");
+        await waitFor(() => expect(closedWith(setOpen)).toBe(true));
+        expect(api.updateDatabase).toHaveBeenCalledTimes(1);
+        expect(compliance.bindSchemaToDatabase).not.toHaveBeenCalled();
+        expect(compliance.unbindSchemaFromDatabase).not.toHaveBeenCalled();
+    });
+
+    it("reads the binding again on Retry and then offers the field", async () => {
+        compliance.getDatabaseBindings
+            .mockResolvedValueOnce([false, "Internal Server Error"])
+            .mockResolvedValue([true, { databaseId: "db-one", databaseSchema: "std" }]);
+        render(
+            <CreateDatabase
+                open={true}
+                setOpen={jest.fn()}
+                setReload={jest.fn()}
+                initState={database}
+            />
+        );
+        await screen.findByText(
+            "Could not load the compliance schema binding: Internal Server Error"
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await waitFor(() => expect(schemaSelect().isDisabled()).toBe(false));
+        expect(schemaSelect().findTrigger().getElement()).toHaveTextContent("std");
+    });
+
+    it("says the schemas could not be loaded when their read fails", async () => {
+        compliance.fetchComplianceSchemas.mockResolvedValue([false, "Not Authorized"]);
+        await openEditor("std");
+        expect(
+            screen.getByText("Could not load the compliance schemas: Not Authorized")
+        ).toBeInTheDocument();
+    });
+});
