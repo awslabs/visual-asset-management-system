@@ -22,6 +22,7 @@ from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from common.apiRoutes import API_COMPLIANCE_SCHEMA_BY_NAME, API_COMPLIANCE_SCHEMAS
 from common.compliance import databaseRetirement, knownDatabase
@@ -759,22 +760,37 @@ def _schema_body_rejected(event, err):
     return validation_error(body={"message": message}, event=event)
 
 
+# The answer to a save that lost the race for its version number to a concurrent save of the schema.
+SCHEMA_VERSION_CONFLICT_MESSAGE = (
+    "The schema was saved by another request at the same time. Reload it and save again.")
+
+
 def _write_schema_version(event, schema_name, database_id, description, schema_body, is_system):
-    """Write the next internalVersion row of a schema."""
+    """Write the next internalVersion row of a schema. The row is written only if no row has that
+    version yet, so of two concurrent saves of one schema the second answers `409` instead of
+    replacing the first's version (an exception granted on a version keeps applying to its body)."""
     current = _latest_schema_item(schema_name)
     next_version = int(current["internalVersion"]) + 1 if current else 1
     now = datetime.now(timezone.utc).isoformat()
 
-    schema_table.put_item(Item={
-        "schemaName": schema_name,
-        "internalVersion": next_version,
-        "databaseId": database_id,
-        "description": description,
-        "schemaBody": json.dumps(schema_body),
-        "registeredAt": now,
-        "registeredBy": claims_and_roles["tokens"][0],
-        "isSystem": is_system,
-    })
+    try:
+        schema_table.put_item(Item={
+            "schemaName": schema_name,
+            "internalVersion": next_version,
+            "databaseId": database_id,
+            "description": description,
+            "schemaBody": json.dumps(schema_body),
+            "registeredAt": now,
+            "registeredBy": claims_and_roles["tokens"][0],
+            "isSystem": is_system,
+        }, ConditionExpression="attribute_not_exists(internalVersion)")
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+        logger.info(f"Schema '{schema_name}' v{next_version} was written by a concurrent save; "
+                    "this save is refused")
+        return general_error(status_code=409, body={"message": SCHEMA_VERSION_CONFLICT_MESSAGE},
+                             event=event)
 
     warnings = (shared_workflow_warnings(schema_body)
                 + missing_parent_warnings(CasbinEnforcer(claims_and_roles), schema_body))
