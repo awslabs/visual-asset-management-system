@@ -242,18 +242,18 @@ The tools of an optional add-on are registered only when the deployment enables 
 
 Ask the agent to call `vams_status`, or call it from the client's tool panel. It answers without calling the VAMS API, even when nobody is signed in.
 
-| Field                      | Meaning                                                                                                                              |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `authenticated`            | `true` when the tools can call VAMS. `false` when the profile is not set up, nobody is signed in, or VAMS refused the stored sign-in |
-| `profile`                  | The CLI profile in use                                                                                                               |
-| `apiUrl`                   | The deployment's API URL stored in that profile                                                                                      |
-| `userId`                   | The VAMS user the tools act as                                                                                                       |
-| `tokenExpired`             | `true` when the stored access token has expired. The next call renews it, or answers `NotAuthenticated` if VAMS refuses the renewal  |
-| `featureSwitches`          | The deployment's feature switches as of the last sign-in                                                                             |
-| `gates`                    | `reads`, `writes` and `destructive` (which tiers are registered), `addons` (the add-ons whose tools are registered) and `toolsets`   |
-| `mcpVersion`, `cliVersion` | The installed server and CLI versions                                                                                                |
-| `reason`, `user_action`    | Present when `authenticated` is `false`: why, and the command you run to sign in                                                     |
-| `note`                     | Present when the stored token has expired but has not been refused yet                                                               |
+| Field                      | Meaning                                                                                                                                                                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `authenticated`            | `true` when the tools can call VAMS. `false` when the profile is not set up, nobody is signed in, or VAMS refused the stored sign-in                                                                                                                                |
+| `profile`                  | The CLI profile in use                                                                                                                                                                                                                                              |
+| `apiUrl`                   | The deployment's API URL stored in that profile                                                                                                                                                                                                                     |
+| `userId`                   | The VAMS user the tools act as                                                                                                                                                                                                                                      |
+| `tokenExpired`             | `true` when the stored access token has expired. The next call renews it, or answers `NotAuthenticated` if VAMS refuses the renewal                                                                                                                                 |
+| `featureSwitches`          | The deployment's feature switches as of the last sign-in                                                                                                                                                                                                            |
+| `gates`                    | `reads`, `writes` and `destructive` (which tiers are registered), `addons` (the add-ons whose tools are registered) and `toolsets`; `auditSearch` appears only when Audit Log Search is off, with the sentence "Audit Log Search is not enabled on this deployment" |
+| `mcpVersion`, `cliVersion` | The installed server and CLI versions                                                                                                                                                                                                                               |
+| `reason`, `user_action`    | Present when `authenticated` is `false`: why, and the command you run to sign in                                                                                                                                                                                    |
+| `note`                     | Present when the stored token has expired but has not been refused yet                                                                                                                                                                                              |
 
 ### Signed-out behavior
 

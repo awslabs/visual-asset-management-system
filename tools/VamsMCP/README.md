@@ -186,7 +186,7 @@ billable Amazon CloudWatch Logs Insights query and audit records may be sensitiv
 VAMS, on by default (a deployment can turn it off with `app.auditLogging.search.enabled`; the EU Sovereign
 Cloud template does), and the tools need no write or destructive gate. On a deployment without it (no
 `AUDITLOGSEARCH` in the feature list read at sign-in) a local server registers no audit tool and
-`vams_status` reports `gates.auditSearch`; a remote server answers each audit call with "Audit Log Search is
+`vams_status` adds `gates.auditSearch` with the sentence "Audit Log Search is not enabled on this deployment" (the key is absent while the feature is on); a remote server answers each audit call with "Audit Log Search is
 not enabled on this deployment". Sign in again and restart the server after the setting changes; the API decides which log
 groups and rows a caller may see.
 
