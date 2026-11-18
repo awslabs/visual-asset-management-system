@@ -165,8 +165,7 @@ describe("buildOpenApiSpec", () => {
             );
             expect(authed.authorizerResultTtlInSeconds).toBe(0);
             expect(anon.authorizerResultTtlInSeconds).toBe(0);
-            // The identity sources are unchanged, so a missing Authorization header is still
-            // refused by API Gateway and the anonymous routes still invoke the authorizer.
+            // The identity sources are unchanged.
             expect(authed.identitySource).toBe("method.request.header.Authorization");
             expect(anon.identitySource).toBe("context.identity.sourceIp");
         });

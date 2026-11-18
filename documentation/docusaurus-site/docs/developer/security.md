@@ -208,7 +208,7 @@ Resolving MFA here rather than in each handler is what keeps identity-provider a
 
 ### Claims check — `customAuthClaimsCheckOverride`
 
-Called by `request_to_claims` after the claims structure is assembled from the authorizer context, receiving that structure and the request event, and returning the structure to use. Use it for handler-time claims restrictions — for example, dropping roles when a claim indicates a restricted session, or mapping an external attribute into `externalAttributes`.
+Called by `request_to_claims` after the claims structure is assembled from the authorizer context, receiving that structure and the request event, and returning the structure to use. Use it to refuse a request (raise; VAMS then answers `403`, as described below), to map an external attribute into `externalAttributes`, or to set `mfaEnabled` to `false`, which withholds the caller's roles that require MFA for that request.
 
 MFA state is already resolved before this hook runs, so read `claims_and_roles["mfaEnabled"]` rather than re-deriving it. VAMS fails closed around this hook: if it raises, the request is denied with `403` (see [Stage 3](#stage-3-the-handler-converts-context-into-claims)), and the denial is recorded against the caller's user ID.
 
