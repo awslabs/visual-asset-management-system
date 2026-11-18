@@ -77,7 +77,6 @@ RESERVATION_NOT_PERMITTED_LAUNCH_HINT = (
     "grant your role launching into this one.")
 
 
-
 def launch_retry_hint(bootstrap_id: str) -> str:
     """The remedy printed with a launch whose answer was lost: it may have been accepted."""
     return (f"The launch may have been accepted. Look for bootstrap id {bootstrap_id} with "
