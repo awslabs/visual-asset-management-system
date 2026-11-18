@@ -93,6 +93,8 @@ export type RefusalReason =
     | "no-georeference"
     | "unsupported-crs"
     | "not-cloud-optimized"
+    | "web-mercator-alias"
+    | "layout-unknown"
     | "too-large-to-place"
     | "too-many-pixels"
     | "crosses-antimeridian"
@@ -119,6 +121,12 @@ export const APPROXIMATE_PLACEMENT_NOTE = `This layer is shown with ${APPROXIMAT
  * 102100, 3785) are refused by the library, so such a file is placed instead.
  */
 export const TILE_MERCATOR_CODES = [3857, 102113];
+
+/**
+ * Web Mercator codes the COG Conversion pipeline (#1601, tiff_header.WEB_MERCATOR_CODES) counts as
+ * EPSG:3857: it leaves a COG in one of them unchanged, so converting such a COG writes nothing.
+ */
+export const PIPELINE_WEB_MERCATOR_CODES = [3857, 900913, 3785];
 
 /** Great-circle diagonal of a WGS84 box, in km. */
 export function bboxDiagonalKm(bbox: [number, number, number, number]): number {
@@ -167,9 +175,45 @@ export function decodeRefusal(plan: DecodePlan): RasterDecision | null {
     return null;
 }
 
-/** (a) A file in EPSG:3857 that is not cloud-optimized and too large to place as one image. */
-function notCloudOptimizedMessage(facts: RasterFacts): string {
-    return `This TIFF is in EPSG:3857 but is not a Cloud Optimized GeoTIFF (it has no tiling or overviews), and it is too large to place on the map as one image. ${CONVERT_HINT}`;
+/**
+ * A Web Mercator file the tile path cannot take and that is too large to place as one image. What is
+ * wrong depends on what the header says:
+ *  - not cloud-optimized (`isCog === false`): it lacks the tiling, or the overviews a large file needs;
+ *  - a COG in a Web Mercator alias the tile reader refuses (900913, 3785, 102100): the layout is fine and
+ *    only the CRS code is not one the reader accepts. The pipeline leaves 900913 and 3785 COGs unchanged,
+ *    so conversion is offered only for the other aliases;
+ *  - layout unknown (`isCog` not known): say so rather than call it "not a COG".
+ */
+function mercatorRefusal(
+    facts: RasterFacts,
+    code: number | null,
+    byArea: boolean
+): { reason: RefusalReason; message: string } {
+    const crs = crsLabel(facts.crs);
+    const size = byArea
+        ? "it covers too large an area to place on the map as one image"
+        : "it is too large to place on the map as one image";
+    if (facts.isCog === true) {
+        const pipelineSkips = code !== null && PIPELINE_WEB_MERCATOR_CODES.includes(code);
+        return {
+            reason: "web-mercator-alias",
+            message: `This COG is in ${crs}, a Web Mercator code the map viewer's tile reader does not accept (it reads EPSG:3857), and ${size}. ${
+                pipelineSkips
+                    ? `Re-save it with the EPSG:3857 code (for example with gdal_translate -a_srs EPSG:3857 -of COG); the ${COG_PIPELINE_NAME} leaves a COG already in Web Mercator unchanged.`
+                    : CONVERT_HINT
+            }`,
+        };
+    }
+    if (facts.isCog === false) {
+        return {
+            reason: "not-cloud-optimized",
+            message: `This TIFF is in ${crs} but is not a Cloud Optimized GeoTIFF (it is not tiled, or it lacks the overviews a large file needs), and ${size}. ${CONVERT_HINT}`,
+        };
+    }
+    return {
+        reason: "layout-unknown",
+        message: `This TIFF is in ${crs}, but whether it is a Cloud Optimized GeoTIFF could not be determined, and ${size}. If it is not one, the ${COG_PIPELINE_NAME} writes <file>.cog.tif beside it in EPSG:3857.`,
+    };
 }
 
 /**
@@ -236,11 +280,9 @@ export function decideRasterDisplay(facts: RasterFacts): RasterDecision {
 
     // From here the file is georeferenced, in a bundled CRS (Web Mercator without COG layout included),
     // and goes to the placed-image path if it is small enough.
-    const tooLarge: RasterDecision = {
-        kind: "refuse",
-        reason: mercator ? "not-cloud-optimized" : "too-large-to-place",
-        message: mercator ? notCloudOptimizedMessage(facts) : otherProjectionMessage(facts),
-    };
+    const tooLarge: RasterDecision = mercator
+        ? { kind: "refuse", ...mercatorRefusal(facts, code, false) }
+        : { kind: "refuse", reason: "too-large-to-place", message: otherProjectionMessage(facts) };
     if (facts.sizeBytes !== undefined && facts.sizeBytes > PLACED_IMAGE_MAX_FILE_BYTES) {
         return tooLarge;
     }
@@ -281,13 +323,13 @@ export function decideRasterDisplay(facts: RasterFacts): RasterDecision {
         };
     }
     if (bboxDiagonalKm(facts.bboxWgs84) > PLACED_IMAGE_MAX_DIAGONAL_KM) {
-        return {
-            kind: "refuse",
-            reason: mercator ? "not-cloud-optimized" : "too-large-to-place",
-            message: mercator
-                ? notCloudOptimizedMessage(facts)
-                : otherProjectionMessage(facts, true),
-        };
+        return mercator
+            ? { kind: "refuse", ...mercatorRefusal(facts, code, true) }
+            : {
+                  kind: "refuse",
+                  reason: "too-large-to-place",
+                  message: otherProjectionMessage(facts, true),
+              };
     }
     // Web Mercator corners map to the map's own projection exactly; any other CRS is approximate.
     return mercator

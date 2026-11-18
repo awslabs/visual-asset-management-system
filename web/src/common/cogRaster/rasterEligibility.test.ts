@@ -246,8 +246,67 @@ describe("messages say what is wrong (item 3)", () => {
     it("(a) says a large EPSG:3857 file that is not a COG is not cloud-optimized", () => {
         const text = message({ ...placeable, crs: "EPSG:3857", isCog: false, sizeBytes: big });
         expect(text).toMatch(/is in EPSG:3857 but is not a Cloud Optimized GeoTIFF/);
-        expect(text).toMatch(/no tiling or overviews/);
+        expect(text).toMatch(/not tiled, or it lacks the overviews a large file needs/);
         expect(text).toMatch(/COG Conversion pipeline/);
+    });
+
+    it.each([
+        ["EPSG:900913", true],
+        ["EPSG:3785", true],
+        ["EPSG:102100", false],
+    ])(
+        "(a) does not call a COG in the Web Mercator alias %s 'not a COG' (r5-D1)",
+        (crs, pipelineSkips) => {
+            const decision = decideRasterDisplay({
+                ...placeable,
+                crs,
+                isCog: true,
+                sizeBytes: big,
+            }) as any;
+            expect(decision).toMatchObject({ kind: "refuse", reason: "web-mercator-alias" });
+            expect(decision.message).toMatch(
+                new RegExp(`^This COG is in ${crs}, a Web Mercator code`)
+            );
+            expect(decision.message).not.toMatch(/not a Cloud Optimized GeoTIFF/);
+            if (pipelineSkips) {
+                // The pipeline leaves such a COG unchanged, so it is not offered.
+                expect(decision.message).toMatch(/Re-save it with the EPSG:3857 code/);
+                expect(decision.message).not.toMatch(/Convert it with/);
+            } else {
+                expect(decision.message).toMatch(/Convert it with the COG Conversion pipeline/);
+            }
+            // By area too.
+            const byArea = decideRasterDisplay({
+                ...placeable,
+                crs,
+                isCog: true,
+                bboxWgs84: [10, 50, 12, 52],
+            }) as any;
+            expect(byArea.reason).toBe("web-mercator-alias");
+            expect(byArea.message).toMatch(/covers too large an area/);
+        }
+    );
+
+    it("(a) says the layout could not be determined when it is unknown, not 'not a COG' (r5-D1)", () => {
+        const decision = decideRasterDisplay({
+            ...placeable,
+            crs: "EPSG:3857",
+            isCog: undefined,
+            sizeBytes: big,
+        }) as any;
+        expect(decision).toMatchObject({ kind: "refuse", reason: "layout-unknown" });
+        expect(decision.message).toMatch(/could not be determined/);
+        expect(decision.message).not.toMatch(/is not a Cloud Optimized GeoTIFF/);
+        expect(decision.message).toMatch(/If it is not one, the COG Conversion pipeline/);
+    });
+
+    it("still takes the tile path for a COG in EPSG:3857 or 102113", () => {
+        expect(decideRasterDisplay({ ...placeable, crs: "EPSG:3857", isCog: true }).kind).toBe(
+            "tile"
+        );
+        expect(decideRasterDisplay({ ...placeable, crs: "EPSG:102113", isCog: true }).kind).toBe(
+            "tile"
+        );
     });
 
     it("(c) says an image with too many pixels is too large to draw as an image", () => {
