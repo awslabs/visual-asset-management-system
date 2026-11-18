@@ -37,17 +37,19 @@ def confined_local_path(root: Path, relative_path: str) -> Optional[Path]:
 
     Leading slashes are removed, as an asset key starts with one. The path is refused when nothing is
     left, when a segment is ``..``, or when the joined path does not resolve to a location inside the
-    resolved ``root`` (an absolute or drive path, or a symlink leading out of it). The joined path is
-    returned unresolved, so the location reported is the one the caller named.
+    resolved ``root`` (an absolute or drive path, or a symlink leading out of it), or cannot be
+    resolved at all (a NUL character). The joined path is returned unresolved, so the location reported
+    is the one the caller named.
     """
     text = (relative_path or "").lstrip("/")
     if not text or ".." in text.replace("\\", "/").split("/"):
         return None
     candidate = Path(root) / text
-    root_resolved = Path(root).resolve()
-    if root_resolved not in candidate.resolve().parents:
+    try:
+        inside = Path(root).resolve() in candidate.resolve().parents
+    except (ValueError, OSError):
         return None
-    return candidate
+    return candidate if inside else None
 
 
 def parse_remote_timestamp(timestamp: Optional[str]) -> Optional[float]:
