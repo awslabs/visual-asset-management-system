@@ -499,6 +499,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Web** The Three.js viewer opens files from an external S3 bucket whose CORS rule lists only the VAMS web origin. It now reads each file and referenced file through a presigned URL, so the browser sends the web origin instead of `null`. ([#1623](https://github.com/awslabs/visual-asset-management-system/issues/1623))
 -   **Home-page carousel works from the keyboard** — Tab reaches the "How it works" carousel's slide controls, the arrow keys change the slide, the focused slide's dot is outlined, and each control is named after its slide; the other slides could be shown only with a pointer. (issue #1573)
 -   **Uninstall log group cleanup stays within the deployment** — Step 4 of the uninstall guide reads the log groups to delete from the deleted stack's AWS CloudFormation record, leaves out those of a current stack of the same name and lists them for review first, so it no longer deletes the groups of other VAMS deployments that share the `/aws/vendedlogs/` prefixes; it also covers the API Gateway execution log group. (issue #1572)
+-   **CLI verbose output masks presigned-URL secrets** — `--verbose` replaces the values of `X-Amz-Signature` and `X-Amz-Security-Token` with `***REDACTED***` and keeps the parameter names. The log file, command output and `--json-output` are unchanged. (PR #1700)
 
 **Documentation:**
 
@@ -507,6 +508,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Container notices** — `NOTICE.md` and the [Notices](notices.md) page record the three GenAI metadata container images' pinned third-party components (Blender, FFmpeg through `imageio-ffmpeg`, VTK, pypdfium2, tinytag, and the Word, PowerPoint, and Excel readers with their dependencies). (issue #316)
 -   **Switching between OpenSearch Serverless and provisioned** — The [OpenSearch](../developer/opensearch.md#switching-between-serverless-and-provisioned) developer guide describes moving an existing deployment from one OpenSearch option to the other: deploy with both options off, then with the other option on, then fill the new indexes with the reindex utility. (PR #325)
 -   **Upgrading with Download as Zip and large outputs** — The v2.6 to v2.7 [upgrade guide](../deployment/update-the-solution.md#v26-to-v27) and migration README list the tables, lifecycle rules, system records and interface endpoints the upgrade creates for Download as Zip and the large output copy engine, which no migration step touches, and the order for a v2.5 deployment that deploys v2.7 directly. The compliance user guide says that Download as Zip is refused for a quarantined asset and that a workflow still runs on one. (PR #325)
+-   **Remote MCP token forwarding** — The [Remote MCP Server](../mcp/remote-mcp-server.md#token-forwarding) page records that remote mode forwards each request's access token to the VAMS API by design, with the reasons and the controls that keep it safe. (PR #1700)
 
 **Other changes:**
 
@@ -552,6 +554,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Build and test tooling updates** — The web app builds with `vite` 8.3.5, `rolldown` 1.2.18 and `lightningcss` 1.33.0 and tests with `jest` 30.5 and `@playwright/test` 1.65.0; the documentation site uses `react` 19.3.1 and `mermaid` 12.3.0; the Babylon.js, PlayCanvas and Three.js viewer bundles build with `webpack` 5.112.2; the IFC/BIM viewer bundle uses `@thatopen/components-front` and `@thatopen/fragments` 3.6.1. (PR #1554)
 -   **Infrastructure toolchain updates** — `aws-cdk-lib` 2.275.0, the `aws-cdk` CLI 2.1148.0, `constructs` 10.8.1, the AWS SDK clients 3.1164.0, `@opensearch-project/opensearch` 3.9.0 and `esbuild` 0.28.2. The synthesized templates change only in the OpenSearch schema-deploy function's code. (PR #1553)
 -   **Python dependency updates** — The backend, the base Lambda layer and the pipeline test environment use `boto3` and `botocore` 1.43.126, with `mypy-boto3-stepfunctions` 1.43.117 in the base layer; the authorizer and EDH root key sync layers and the backend tests use `cryptography` 50.0.2; the backend tests use `pytest` 9.2.0, `pytest-mock` 3.17.0, `coverage` 7.17.2 and `moto` 5.2.5. (PR #1556)
+-   **CLI zip download tests** — The zip download tests check the request sent to the archive URL and every line `zip-download create --download-to --verbose` prints. (PR #1700)
 
 **Known issues:**
 
