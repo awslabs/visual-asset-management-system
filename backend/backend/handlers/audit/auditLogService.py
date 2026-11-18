@@ -732,6 +732,10 @@ def start_query(event: Dict[str, Any], enforcer: CasbinEnforcer, raw_filters: Di
     return _start_reserved(event, filters, plan, deployed, user_id)
 
 
+# Logs Insights error codes that mean the request itself is not acceptable.
+_CWL_BAD_REQUEST_CODES = frozenset({"InvalidParameterException", "MalformedQueryException"})
+
+
 def _start_reserved(event: Dict[str, Any], filters: SearchFilters, plan: Any,
                     deployed: Dict[str, Tuple[AuditLogGroup, str]], user_id: str) -> Dict[str, Any]:
     """Start the Logs Insights query and store the handle. The caller holds this user's slots; they are
@@ -741,8 +745,11 @@ def _start_reserved(event: Dict[str, Any], filters: SearchFilters, plan: Any,
         started = logs_client.start_query(
             logGroupNames=log_group_names, startTime=plan.start_time, endTime=plan.end_time,
             queryString=plan.query_string, limit=plan.limit)
-    except BaseException:
+    except BaseException as error:
         _give_back_user_slots(user_id)
+        if isinstance(error, ClientError) and error.response.get("Error", {}).get("Code") in _CWL_BAD_REQUEST_CODES:
+            # Logs Insights refused the window or the query: a request problem, not a server fault.
+            raise AuditSearchValidationError("window:rejected")
         raise
     cwl_query_id = started["queryId"]
 

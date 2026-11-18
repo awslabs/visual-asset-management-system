@@ -68,12 +68,12 @@ A handle is kept for `app.auditLogging.search.handleRetentionMinutes` (default 6
 
 ### Errors
 
-| Status | Message                                                 | When                                                             |
-| ------ | ------------------------------------------------------- | ---------------------------------------------------------------- |
-| 400    | `Invalid audit search request`                          | Any filter, window or term fails validation                      |
-| 400    | `Too many audit searches are running. Try again later.` | A concurrency cap is reached                                     |
-| 403    | `Not Authorized`                                        | Route not allowed, or any named log group unknown or not allowed |
-| 404    | `Query not found`                                       | Handle unknown, expired, foreign or no longer allowed            |
+| Status | Message                                                 | When                                                                                                                              |
+| ------ | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | `Invalid audit search request`                          | Any filter, window or term fails validation, including a window that starts more than 10 years back or that Logs Insights refuses |
+| 400    | `Too many audit searches are running. Try again later.` | A concurrency cap is reached                                                                                                      |
+| 403    | `Not Authorized`                                        | Route not allowed, or any named log group unknown or not allowed                                                                  |
+| 404    | `Query not found`                                       | Handle unknown, expired, foreign or no longer allowed                                                                             |
 
 ## Limits
 

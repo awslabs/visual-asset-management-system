@@ -399,6 +399,22 @@ class TestStart:
         assert start(env, startTime=NOW - 3 * 86400)[0] == 400
         assert start(env, startTime=NOW - 86400)[0] == 202
 
+    def test_a_window_older_than_any_log_retention_is_a_400_not_a_500(self, env):
+        status, body = start(env, startTime=1, endTime=2)
+        assert status == 400 and body == {"message": svc.MESSAGE_INVALID}
+        assert env.logs.started == []
+
+    def test_a_window_logs_insights_refuses_is_a_400_and_gives_the_slots_back(self, env, monkeypatch):
+        from botocore.exceptions import ClientError
+
+        def refused(**kwargs):
+            raise ClientError({"Error": {"Code": "InvalidParameterException", "Message": "startTime"}},
+                              "StartQuery")
+        monkeypatch.setattr(env.logs, "start_query", refused)
+        status, body = start(env)
+        assert status == 400 and body == {"message": svc.MESSAGE_INVALID}
+        assert env.table.items[svc.SLOT_ALL_KEY]["slotCount"] == 0
+
     def test_the_per_user_cap_refuses_a_third_open_search(self, env):
         assert start(env)[0] == 202 and start(env)[0] == 202
         status, body = start(env)
