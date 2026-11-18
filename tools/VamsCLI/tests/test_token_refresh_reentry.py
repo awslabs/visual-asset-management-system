@@ -20,7 +20,9 @@ from vamscli.utils.api_client import APIClient
 from vamscli.utils.exceptions import AuthenticationError, PermissionDeniedError
 
 BASE = "https://abc123.execute-api.us-west-2.amazonaws.com/api"
-AUTHORIZER_DENY = {"Message": "User is not authorized to access this resource with an explicit deny"}
+AUTHORIZER_DENY = {
+    "Message": "User is not authorized to access this resource with an explicit deny"
+}
 DEADLINE_SECONDS = 20
 
 
@@ -41,11 +43,18 @@ def _client_with_saved_credentials(monkeypatch):
     # No refresh token, so the refresh falls back to the saved credentials.
     profile_manager.load_auth_profile.return_value = {"access_token": "token-before"}
     profile_manager.load_credentials.return_value = {"username": "alice", "password": "secret"}
-    profile_manager.load_config.return_value = {"amplify_config": {
-        "region": "us-east-1", "cognitoUserPoolId": "us-east-1_pool", "cognitoAppClientId": "client"}}
+    profile_manager.load_config.return_value = {
+        "amplify_config": {
+            "region": "us-east-1",
+            "cognitoUserPoolId": "us-east-1_pool",
+            "cognitoAppClientId": "client",
+        }
+    }
     authenticator = MagicMock()
     authenticator.authenticate.return_value = {"access_token": "token-after"}
-    monkeypatch.setattr("vamscli.auth.cognito.CognitoAuthenticator", lambda *args, **kwargs: authenticator)
+    monkeypatch.setattr(
+        "vamscli.auth.cognito.CognitoAuthenticator", lambda *args, **kwargs: authenticator
+    )
     return APIClient(BASE, profile_manager=profile_manager), authenticator
 
 
@@ -71,11 +80,16 @@ def fresh_refresh_lock(monkeypatch):
     monkeypatch.setattr(api_client_module, "_TOKEN_REFRESH_LOCK", threading.Lock())
 
 
-@pytest.mark.parametrize("status, body, expected", [
-    (403, AUTHORIZER_DENY, PermissionDeniedError),
-    (401, {"message": "Unauthorized"}, AuthenticationError),
-])
-def test_a_re_authentication_whose_reads_are_refused_ends(monkeypatch, fresh_refresh_lock, status, body, expected):
+@pytest.mark.parametrize(
+    "status, body, expected",
+    [
+        (403, AUTHORIZER_DENY, PermissionDeniedError),
+        (401, {"message": "Unauthorized"}, AuthenticationError),
+    ],
+)
+def test_a_re_authentication_whose_reads_are_refused_ends(
+    monkeypatch, fresh_refresh_lock, status, body, expected
+):
     client, authenticator = _client_with_saved_credentials(monkeypatch)
     sent = []
 
@@ -113,7 +127,9 @@ def test_a_re_authentication_whose_reads_succeed_still_reads_them(monkeypatch, f
 
     assert "error" not in outcome, outcome
     assert outcome["result"].json() == {"Items": []}
-    client.profile_manager.save_feature_switches.assert_called_once_with({"featuresEnabled": "AUTHPROVIDER_COGNITO"})
+    client.profile_manager.save_feature_switches.assert_called_once_with(
+        {"featuresEnabled": "AUTHPROVIDER_COGNITO"}
+    )
 
 
 def test_the_refresh_flag_is_cleared_when_the_refresh_ends(monkeypatch, fresh_refresh_lock):

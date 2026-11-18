@@ -17,7 +17,6 @@ from unittest.mock import MagicMock
 
 from vamscli.utils.api_client import APIClient
 
-
 API_BASE = "https://abc123.execute-api.us-east-1.amazonaws.com/api"
 S3_HOST = "aux-bucket.s3.us-east-1.amazonaws.com"
 SIGNATURE = "5d41402abc4b2a76b9719d911017c592"
@@ -54,7 +53,9 @@ class _Adapter(BaseAdapter):
             # The transport's own message names the full URL, as urllib3's does.
             raise self.s3_raises(
                 f"HTTPSConnectionPool(host='{S3_HOST}', port=443): Max retries exceeded with url: "
-                f"{request.path_url}", request=request)
+                f"{request.path_url}",
+                request=request,
+            )
         response.status_code = self.s3_status
         response._content = b"<Error><Code>NoSuchKey</Code></Error>"
         return response
@@ -105,7 +106,9 @@ def test_a_status_from_the_redirect_target_names_the_host_and_status(follow):
 
 
 @pytest.mark.parametrize("follow", [True, False], ids=["redirect-followed", "envelope"])
-@pytest.mark.parametrize("raised", [requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout])
+@pytest.mark.parametrize(
+    "raised", [requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout]
+)
 def test_a_failure_to_reach_the_redirect_target_names_the_host_and_failure(follow, raised):
     error = _export_error(_Adapter(follow=follow, s3_raises=raised))
     _assert_names_only_the_host(error)
@@ -119,7 +122,8 @@ def test_a_failure_at_the_api_host_keeps_its_details_without_a_signature():
         def send(self, request, **kwargs):
             raise requests.exceptions.ConnectionError(
                 f"Max retries exceeded with url: {request.path_url}?X-Amz-Signature={SIGNATURE}",
-                request=request)
+                request=request,
+            )
 
         def close(self):
             pass
