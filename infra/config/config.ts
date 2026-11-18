@@ -4211,6 +4211,13 @@ export function getConfig(app: cdk.App): Config {
     // `ipaddress` module, so an IPv6 range is expressible and matches. Both endpoints of one
     // entry must be the same family — a mixed pair has no meaningful ordering, and the authorizer
     // skips it rather than allowing it, so rejecting it here is what surfaces the mistake.
+    // The list itself must be an array: the authorizer refuses every request when the value it
+    // receives is not a JSON array, so another shape is rejected here rather than deployed.
+    if (!Array.isArray(config.app.authProvider.authorizerOptions.allowedIpRanges)) {
+        throw new Error(
+            "Configuration Error: app.authProvider.authorizerOptions.allowedIpRanges must be an array of [min, max] IP address ranges ([] for no restriction)."
+        );
+    }
     if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
         for (let i = 0; i < config.app.authProvider.authorizerOptions.allowedIpRanges.length; i++) {
             const range = config.app.authProvider.authorizerOptions.allowedIpRanges[i];
