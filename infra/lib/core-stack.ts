@@ -11,6 +11,7 @@ import * as cloudTrail from "aws-cdk-lib/aws-cloudtrail";
 import * as logs from "aws-cdk-lib/aws-logs";
 import { ApiBuilderNestedStack } from "./nestedStacks/apiLambda/apiBuilder-nestedStack";
 import { ApiBuilder2NestedStack } from "./nestedStacks/apiLambda/apiBuilder2-nestedStack";
+import { ApiBuilder3NestedStack } from "./nestedStacks/apiLambda/apiBuilder3-nestedStack";
 import { StorageResourcesBuilderNestedStack } from "./nestedStacks/storage/storageBuilder-nestedStack";
 import { AuthBuilderNestedStack } from "./nestedStacks/auth/authBuilder-nestedStack";
 import { RouteRegistry } from "./nestedStacks/apiLambda/apiRouteRegistry";
@@ -271,6 +272,21 @@ export class CoreVAMSStack extends cdk.Stack {
             apiBuilder2NestedStack.addStackDependency(resourceNamesNestedStack);
             apiBuilder2NestedStack.addStackDependency(apiBuilderNestedStack);
 
+            //Deploy Backend API framework - third stack (nested stack).
+            //ApiBuilder2 is within a few percent of the 1,000,000 byte template-body limit in the
+            //every-Lambda-in-the-VPC cells, so new API endpoints are built here. It needs only the
+            //storage tables and the resource-name parameters, not the other API stacks.
+            const apiBuilder3NestedStack = new ApiBuilder3NestedStack(this, "ApiBuilder3", {
+                config: props.config,
+                registry: apiRouteRegistry,
+                storageResources: storageResourcesNestedStack.storageResources,
+                lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                vpc: this.vpc,
+                subnets: this.subnetsIsolated,
+            });
+            apiBuilder3NestedStack.addStackDependency(storageResourcesNestedStack);
+            apiBuilder3NestedStack.addStackDependency(resourceNamesNestedStack);
+
             //Deploy OpenSearch Serverless (nested stack)
             const searchBuilderNestedStack = new SearchBuilderNestedStack(
                 this,
@@ -413,6 +429,7 @@ export class CoreVAMSStack extends cdk.Stack {
             apiNestedStack.addStackDependency(authBuilderNestedStack);
             apiNestedStack.addStackDependency(apiBuilderNestedStack);
             apiNestedStack.addStackDependency(apiBuilder2NestedStack);
+            apiNestedStack.addStackDependency(apiBuilder3NestedStack);
             apiNestedStack.addStackDependency(searchBuilderNestedStack);
             apiNestedStack.addStackDependency(addonBuilderNestedStack);
             apiNestedStack.addStackDependency(customBuilderNestedStack);

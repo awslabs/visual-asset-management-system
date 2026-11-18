@@ -18,7 +18,6 @@ import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { generateUniqueNameHash } from "../../helper/security";
 import { buildTagService, buildCreateTagFunction } from "../../lambdaBuilder/tagFunctions";
-import { buildAuditLogService, AUDIT_LOG_ROUTES } from "../../lambdaBuilder/auditFunctions";
 import {
     buildTagTypeService,
     buildCreateTagTypeFunction,
@@ -104,8 +103,9 @@ export interface ApiBuilder2NestedStackProps {
  * ApiBuilderNestedStack so each carries its own budget against the two per-template CloudFormation
  * ceilings: 500 resources and a 1 MB template body. Resource counts are comfortable (the primary
  * stack emits 106, this one 69), but the primary template is already ~0.40 MB, so body size fills
- * well ahead of resource count and is what the split actually buys headroom against. New API
- * endpoints belong here.
+ * well ahead of resource count and is what the split actually buys headroom against. This stack is
+ * full in the cells that put every Lambda in the VPC (its template body is within a few percent of
+ * the 1,000,000 byte limit), so it takes no new endpoints: they belong in ApiBuilder3NestedStack.
  *
  * The REST API is materialized once, from what both stacks register into RouteRegistry, so its path
  * tree counts against a single API Gateway quota — resources per REST API, 122 of a default 300 —
@@ -133,26 +133,6 @@ export class ApiBuilder2NestedStack extends NestedStack {
             metadataServiceFunction,
             uploadFileFunction,
         } = props;
-
-        // Audit log search: one function, the audit log service, serves the five /audit routes. Core VAMS
-        // with no feature switch: it deploys unconditionally and access is decided only by authorization
-        // (Tier 1 route, Tier 2 per log group). Its table is in the storage stack ApiBuilder2 already
-        // depends on, so no further stack dependency is needed.
-        const auditLogService = buildAuditLogService(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        for (const route of AUDIT_LOG_ROUTES) {
-            attachFunctionToApi(this, auditLogService, {
-                routePath: route.routePath,
-                method: route.method,
-                registry: registry,
-            });
-        }
 
         //Tags Resources
         const tagService = buildTagService(

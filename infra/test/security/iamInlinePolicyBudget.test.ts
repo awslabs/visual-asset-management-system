@@ -127,7 +127,7 @@ const TERMINAL_WRITER_ROLES = [
 ];
 
 /** The nested stacks whose roles this budget covers: every API Lambda. */
-const API_STACKS = ["ApiBuilder", "ApiBuilder2"];
+const API_STACKS = ["ApiBuilder", "ApiBuilder2", "ApiBuilder3"];
 
 /**
  * Roles above the budget in at least one cell, keyed by the role's logical id prefix (the Lambda's
