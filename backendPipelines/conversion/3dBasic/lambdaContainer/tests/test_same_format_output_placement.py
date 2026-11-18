@@ -227,7 +227,7 @@ def _run(relative_path, output_type):
         uploaded["bucket"], uploaded["key"] = bucket, key
         return key
 
-    def _download(bucket, key, path):
+    def _download(bucket, key, path, **kwargs):
         downloaded["bucket"], downloaded["key"] = bucket, key
         # The real download always writes the file, and the handler reads it before loading.
         open(path, "wb").close()

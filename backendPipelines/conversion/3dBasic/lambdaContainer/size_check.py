@@ -85,6 +85,16 @@ def memory_limit_bytes(environ=None):
 # a runaway allocation without refusing an input the size check allows.
 ADDRESS_SPACE_OVERHEAD_BYTES = 2 * 1024 * MB
 
+# The largest single file the worker may write is OUTPUT_DISK_FACTOR times the bytes it was given
+# (the input and the files it references), never less than this floor, so a small model that expands
+# in an exporter is not refused while a runaway write stops at the limit.
+FILE_SIZE_FLOOR_BYTES = 64 * MB
+
+
+def file_size_limit_bytes(input_bytes):
+    """The worker's ``RLIMIT_FSIZE`` for a job whose input and referenced files total ``input_bytes``."""
+    return max(int(OUTPUT_DISK_FACTOR * max(int(input_bytes), 0)), FILE_SIZE_FLOOR_BYTES)
+
 
 def address_space_limit_bytes(environ=None):
     """The worker's ``RLIMIT_AS``: the function's memory plus the parsers' address-space overhead, or
@@ -138,10 +148,18 @@ def check_size(name, extension, size_bytes, memory_bytes=None, disk_free_bytes=N
 def head_size(client, bucket, key, version_id=""):
     """The size in bytes of the object, at ``version_id`` when given, from a HeadObject that reads
     no data."""
+    return head_object_info(client, bucket, key, version_id)[0]
+
+
+def head_object_info(client, bucket, key, version_id=""):
+    """``(size, etag)`` of the object, at ``version_id`` when given, from a HeadObject that reads no
+    data. The ETag is "" when the answer carries none."""
     kwargs = {"Bucket": bucket, "Key": key}
     if version_id:
         kwargs["VersionId"] = version_id
-    return int(client.head_object(**kwargs)["ContentLength"])
+    response = client.head_object(**kwargs)
+    etag = response.get("ETag", "") if hasattr(response, "get") else ""
+    return int(response["ContentLength"]), etag if isinstance(etag, str) else ""
 
 
 # Peak resident memory per decoded RGBA byte of a texture image, which the factors above do not cover

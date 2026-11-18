@@ -6,10 +6,14 @@
 ``lambda.py`` runs this module as a child process (``python conversion_worker.py <job> <result>``) so
 the parsers run
 
-- without the function's AWS credentials: the child is started with a scrubbed environment (no
-  ``AWS_*`` variable, ``HOME=/tmp``) and this module never creates an AWS client,
+- with none of the function's AWS credentials in its environment: the child is started with a
+  scrubbed environment (no ``AWS_*`` variable, ``HOME=/tmp``), the parent closes its own ``/proc``
+  files to it, and this module never creates an AWS client (the child still shares the user and the
+  network namespace of the parent),
 - under an address-space limit (``RLIMIT_AS``), so a model that expands past it fails with a
-  ``MemoryError`` the parent reports, instead of the function being killed for memory, and
+  ``MemoryError`` the parent reports, instead of the function being killed for memory, with a limit on
+  the size of any one file it writes and with core dumps off (a limit that is asked for and cannot be
+  applied fails the job), and
 - under a wall-clock limit the parent enforces, so a parse that does not finish cannot use the
   function's whole timeout.
 
@@ -116,15 +120,42 @@ def convert_model(job, trimesh=None):
     mesh.export(job["output_file"], file_type=job["output_filetype"].lstrip('.'))
 
 
-def _limit_address_space(limit_bytes):
-    """Cap this process's address space; a no-op when the platform has no RLIMIT_AS."""
-    if not limit_bytes:
+class LimitError(RuntimeError):
+    """A resource limit the job asked for could not be applied."""
+
+
+def _set_limit(resource, which, value):
+    """Set ``which`` to ``value`` (soft and hard); a lower hard limit already in force is kept, as it
+    is the stricter one. Raises ``LimitError`` when the limit cannot be applied."""
+    try:
+        _, hard = resource.getrlimit(which)
+        if hard != resource.RLIM_INFINITY:
+            value = min(value, hard)
+        resource.setrlimit(which, (value, value))
+    except (ValueError, OSError) as e:
+        raise LimitError(f"a resource limit could not be applied: {e}")
+
+
+def apply_limits(job):
+    """Apply the limits the job asks for before anything is parsed: the address space, the size of any
+    one file written, and no core dump. A limit that was asked for and cannot be applied raises
+    ``LimitError``, so the job never runs without it."""
+    address_space = job.get("address_space_bytes")
+    file_size = job.get("file_size_bytes")
+    if not address_space and not file_size:
         return
     try:
         import resource
-        resource.setrlimit(resource.RLIMIT_AS, (int(limit_bytes), int(limit_bytes)))
-    except (ImportError, ValueError, OSError):
-        pass
+    except ImportError:
+        raise LimitError("resource limits are not available on this platform")
+    if address_space:
+        _set_limit(resource, resource.RLIMIT_AS, int(address_space))
+    if file_size:
+        _set_limit(resource, resource.RLIMIT_FSIZE, int(file_size))
+        # A write past the limit then fails with an error instead of ending the process with a signal.
+        import signal
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    _set_limit(resource, resource.RLIMIT_CORE, 0)
 
 
 def _write_result(path, result):
@@ -136,9 +167,9 @@ def main(argv):
     job_path, result_path = argv[1], argv[2]
     with open(job_path, encoding="utf-8") as handle:
         job = json.load(handle)
-    # Before anything heavy is imported, so the limit covers the parsers' own allocations.
-    _limit_address_space(job.get("address_space_bytes"))
     try:
+        # Before anything heavy is imported, so the limits cover the parsers' own allocations.
+        apply_limits(job)
         convert_model(job)
     except MemoryError:
         _write_result(result_path, {"ok": False, "type": "MemoryError",

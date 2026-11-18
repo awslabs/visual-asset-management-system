@@ -164,7 +164,7 @@ class _Conversion:
 def _run_conversion(mod, conversion, input_key="xd130a6d6/parts/housing/model.obj",
                     output_filetype=".glb", relative_subdir="parts/housing", load_error=None,
                     companion_names=(), export_writes_nothing=False):
-    def _download(bucket, key, path):
+    def _download(bucket, key, path, **kwargs):
         # In-band: the working directory has to EXIST while the run is using it. Against a
         # hardcoded '/tmp' this is whatever the platform happens to have, not a directory the run
         # created for itself.

@@ -6,6 +6,7 @@ import json
 import boto3
 import os
 import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -28,6 +29,25 @@ from botocore.config import Config
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="conversionTrimeshPipeline")
+
+PR_SET_DUMPABLE = 4
+
+
+def _disable_dumpable():
+    """Mark this process non-dumpable (Linux), so the files under /proc/<pid>/ become root-owned and a
+    process of the same user, such as the worker child, can neither read this process's environment
+    nor attach to it. Returns False where the call is not available; nothing else depends on it."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        return libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) == 0
+    except Exception:  # noqa: BLE001 - a platform without it keeps the other limits
+        return False
+
+
+_DUMPABLE_DISABLED = _disable_dumpable()
 
 s3_client = boto3.client('s3', config=retry_config)
 s3 = boto3.resource('s3', config=retry_config)
@@ -59,24 +79,50 @@ def _s3_client_for_bucket(bucket_name):
     return client
 
 
-def download(bucket_name, object_key, file_path, version_id=""):
-    """Download the input to ``file_path``; ``version_id`` reads that version, empty the current one."""
+def download(bucket_name, object_key, file_path, version_id="", etag="", expected_size=None):
+    """Download the input to ``file_path``; ``version_id`` reads that version, empty the current one.
+
+    A read of the current object is made conditional on ``etag`` (the one the size check read), so an
+    object replaced after that check is refused rather than read. ``expected_size`` is the size that
+    check read; a file of any other size is refused."""
     logger.info(
         "Downloading Object from S3 Bucket. Bucket: {}, Object: {}, Version: {}, File Path: {}".format(
             bucket_name, object_key, version_id or "current", file_path
         )
     )
-    kwargs = {"ExtraArgs": {"VersionId": version_id}} if version_id else {}
+    client = _s3_client_for_bucket(bucket_name)
     try:
         with open(file_path, "wb") as data:
-            _s3_client_for_bucket(bucket_name).download_fileobj(bucket_name, object_key, data, **kwargs)
+            if version_id:
+                client.download_fileobj(bucket_name, object_key, data, ExtraArgs={"VersionId": version_id})
+            elif etag:
+                # download_fileobj accepts no IfMatch, so the object is read as one stream.
+                body = client.get_object(Bucket=bucket_name, Key=object_key, IfMatch=etag)["Body"]
+                try:
+                    shutil.copyfileobj(body, data, 8 * 1024 ** 2)
+                finally:
+                    body.close()
+            else:
+                client.download_fileobj(bucket_name, object_key, data)
     except ClientError as e:
         logger.exception(e)
-        if version_id and str(e.response.get("Error", {}).get("Code", "")) in _MISSING_VERSION_CODES:
+        code = str(e.response.get("Error", {}).get("Code", ""))
+        if version_id and code in _MISSING_VERSION_CODES:
             raise Exception(f"The input file {object_key} at version {version_id} no longer exists; "
                             f"it was deleted after the run started.")
+        if etag and not version_id and code in _CHANGED_OBJECT_CODES:
+            raise Exception(f"The input file {object_key} was changed while the run was starting. "
+                            f"Run the conversion again.")
         raise Exception("Could not download input file from S3 bucket")
+    if isinstance(expected_size, int) and not isinstance(expected_size, bool) \
+            and os.path.getsize(file_path) != expected_size:
+        raise Exception(f"The input file {object_key} was changed while the run was starting. "
+                        f"Run the conversion again.")
     return file_path
+
+
+# Error codes Amazon S3 answers a conditional read of an object that no longer matches with.
+_CHANGED_OBJECT_CODES = ("PreconditionFailed", "412")
 
 
 # Error codes Amazon S3 answers a read of a version that no longer exists with: NoSuchVersion or
@@ -99,8 +145,14 @@ def input_version_id(entry):
 def head_input_size(bucket_name, object_key, version_id=""):
     """The input's size in bytes at its launch version, read with a HeadObject before anything is
     downloaded."""
+    return head_input(bucket_name, object_key, version_id)[0]
+
+
+def head_input(bucket_name, object_key, version_id=""):
+    """``(size, etag)`` of the input at its launch version, read with a HeadObject before anything is
+    downloaded; the ETag is "" when the answer carries none."""
     try:
-        return size_check.head_size(_s3_client_for_bucket(bucket_name), bucket_name, object_key, version_id)
+        return size_check.head_object_info(_s3_client_for_bucket(bucket_name), bucket_name, object_key, version_id)
     except ClientError as e:
         logger.exception(e)
         if version_id and str(e.response.get("Error", {}).get("Code", "")) in _MISSING_VERSION_CODES:
@@ -437,16 +489,145 @@ def exported_files(export_dir):
     it cannot be opened at all.
     """
     found = []
-    for root, _, file_names in os.walk(export_dir):
-        for file_name in file_names:
-            relative = os.path.relpath(os.path.join(root, file_name), export_dir)
-            found.append(relative.replace(os.sep, "/"))
+    for root, dir_names, file_names in os.walk(export_dir):
+        for name in dir_names + file_names:
+            path = os.path.join(root, name)
+            info = os.lstat(path)
+            if stat.S_ISDIR(info.st_mode):
+                continue
+            relative = os.path.relpath(path, export_dir).replace(os.sep, "/")
+            # Only a regular file that has no other name is uploaded: a link would put the content of
+            # whatever it points at into the asset.
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise RuntimeError(
+                    f"The converter wrote {relative}, which is not a regular file, so the conversion "
+                    f"was stopped.")
+            found.append(relative)
     return sorted(found)
+
+
+def _proc_status(proc_root, pid):
+    """``(real uid, parent pid, has an address space)`` from /proc/<pid>/status, or None."""
+    try:
+        with open(os.path.join(proc_root, str(pid), "status"), encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return None
+    uid = ppid = None
+    for line in text.splitlines():
+        if line.startswith("Uid:"):
+            uid = int(line.split()[1])
+        elif line.startswith("PPid:"):
+            ppid = int(line.split()[1])
+    # Kernel threads and zombies have no address space.
+    return uid, ppid, "VmSize:" in text
+
+
+def _proc_start_ticks(proc_root, pid):
+    try:
+        with open(os.path.join(proc_root, str(pid), "stat"), encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+        return int(text[text.rindex(")") + 2:].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def reap_other_processes(proc_root="/proc", uid=None, own_pid=None, kill=os.kill, only=None, passes=5):
+    """Kill every process of this user other than this one, its ancestors and kernel threads, and return
+    the pids killed.
+
+    Killing the worker's process group does not reach a descendant that started its own session or
+    double-forked, and in a reused execution environment such a process would outlive the invocation
+    next to the following one's files. Processes that started before this one (the runtime's own, an
+    extension) are left alone. ``only`` limits the candidates to the pids it accepts (tests)."""
+    uid = os.getuid() if uid is None else uid
+    own_pid = os.getpid() if own_pid is None else own_pid
+    own_start = _proc_start_ticks(proc_root, own_pid)
+    protected = {own_pid}
+    pid = own_pid
+    while True:
+        status = _proc_status(proc_root, pid)
+        if status is None or not status[1] or status[1] in protected:
+            break
+        pid = status[1]
+        protected.add(pid)
+    killed = []
+    for _ in range(passes):
+        found = []
+        try:
+            names = os.listdir(proc_root)
+        except OSError:
+            break
+        for name in names:
+            if not name.isdigit() or int(name) in protected:
+                continue
+            candidate = int(name)
+            if only is not None and not only(candidate):
+                continue
+            status = _proc_status(proc_root, candidate)
+            if status is None or status[0] != uid or not status[2]:
+                continue
+            started = _proc_start_ticks(proc_root, candidate)
+            if own_start is not None and started is not None and started < own_start:
+                continue
+            found.append(candidate)
+        if not found:
+            break
+        for candidate in found:
+            try:
+                kill(candidate, 9)
+                killed.append(candidate)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        time.sleep(0.05)
+    return killed
+
+
+# Only inside a Lambda execution environment, where this process is the function's own and the other
+# processes of its user are the worker's descendants; elsewhere (a developer's machine) the user's
+# other processes are not the function's to stop.
+def _in_lambda_environment():
+    return bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+
+
+_STRAY_PROCESS_FILTER = None
+
+
+def reap_stray_processes():
+    if not _in_lambda_environment():
+        return []
+    try:
+        return reap_other_processes(only=_STRAY_PROCESS_FILTER)
+    except Exception as e:  # noqa: BLE001 - never replace the run's own outcome
+        logger.warning(f"Could not check for leftover processes: {e}")
+        return []
+
+
+def remove_work_dir(path):
+    """Remove the invocation's working directory, including entries the worker made unreadable, and
+    fail the run when anything is left."""
+    for root, dir_names, _ in os.walk(path):
+        for name in dir_names:
+            full = os.path.join(root, name)
+            if not os.path.islink(full):
+                try:
+                    os.chmod(full, 0o700)
+                except OSError:
+                    pass
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+    shutil.rmtree(path, ignore_errors=True)
+    if os.path.lexists(path):
+        logger.error("The working directory could not be removed")
+        raise RuntimeError("The conversion's working files could not be removed, so the run was stopped.")
 
 
 # The environment the worker child starts with: nothing from the function's own, so no AWS credential
 # or session token (AWS_*) and no other variable reaches the parsers. These are only what the
-# interpreter and its shared libraries need to start.
+# interpreter and its shared libraries need to start. (The child shares the user and the network
+# namespace with this process; this process is non-dumpable, which closes its /proc files.)
 WORKER_ENV_PASSTHROUGH = ("PATH", "LD_LIBRARY_PATH", "PYTHONPATH", "LANG", "LC_ALL", "TZ")
 # Seconds of the invocation kept for uploading the output and answering after the worker, so a
 # worker that uses its whole allowance still leaves the parent time to report the failure.
@@ -506,8 +687,9 @@ def run_worker(job, work_dir, timeout_seconds=None):
                 f"The conversion of {job['input_name']} did not finish within {int(timeout)} seconds "
                 f"and was stopped. Reduce the model's size and run the conversion again.")
         finally:
-            # Nothing the worker started outlives it.
+            # Nothing the worker started outlives it, including what left its process group.
             _kill_group(process)
+            reap_stray_processes()
 
     result = None
     try:
@@ -530,11 +712,22 @@ def run_worker(job, work_dir, timeout_seconds=None):
         raise RuntimeError(
             f"{job['input_name']} needs more memory to convert than this function has{limit}. "
             f"Reduce the model's size and run the conversion again.")
-    message = result.get("message") or "The conversion failed"
+    message = _without_work_dir(str(result.get("message") or "The conversion failed"), work_dir)
     if result.get("type") not in USER_ERRORS:
         # The child printed the traceback to its stderr; the message alone does not say where it failed.
+        # The detail stays in the log; the run's error does not carry it.
+        logger.error(f"Conversion worker failed with {str(result.get('type'))[:100]}: {message[:2000]}")
         _log_worker_stderr(stderr_path)
-    raise (ValueError if result.get("type") in USER_ERRORS else RuntimeError)(message)
+        raise RuntimeError(f"The conversion of {job['input_name']} failed unexpectedly. "
+                           f"The function's log has the detail.")
+    raise ValueError(message)
+
+
+def _without_work_dir(message, work_dir):
+    """``message`` with the invocation's working directory removed from any path in it."""
+    for prefix in {work_dir, os.path.realpath(work_dir)}:
+        message = message.replace(prefix.rstrip("/") + "/", "").replace(prefix, "")
+    return message
 
 
 def _kill_group(process):
@@ -582,7 +775,7 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
     # disk set what it can convert (see size_check.py), and an input over them fails here naming the
     # size, the limit and the resource, instead of ending in an out-of-memory kill or a full disk. The
     # same limit, less the input, bounds the files the input references.
-    input_size = head_input_size(input_bucket, input_key, input_version)
+    input_size, input_etag = head_input(input_bucket, input_key, input_version)
     size_limit = size_check.check_size(
         os.path.basename(input_key), input_s3_asset_extension, input_size,
         memory_bytes=size_check.memory_limit_bytes(), disk_free_bytes=size_check.free_disk_bytes(tempfile.gettempdir()))
@@ -615,7 +808,9 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
             raise ValueError(f"Input S3 key {input_key} cannot be staged locally")
         os.makedirs(os.path.dirname(temp_file), exist_ok=True)
         # The input is read at the run's launch version; the files it references as they are now.
-        download(input_bucket, input_key, temp_file, **({"version_id": input_version} if input_version else {}))
+        download(input_bucket, input_key, temp_file, **({"version_id": input_version} if input_version else {}),
+                 **({"etag": input_etag} if input_etag and not input_version else {}),
+                 expected_size=input_size)
         # An input whose text is not UTF-8 fails here, before its references are read or fetched.
         check_input_text(temp_file, input_s3_asset_extension, os.path.basename(input_key))
         memory_bytes = size_check.memory_limit_bytes()
@@ -645,6 +840,8 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
             "output_filetype": output_filetype,
             "input_name": os.path.basename(input_key),
             "address_space_bytes": size_check.address_space_limit_bytes(),
+            "file_size_bytes": size_check.file_size_limit_bytes(
+                input_size + (fetched.total_bytes if isinstance(getattr(fetched, "total_bytes", None), int) else 0)),
         }, work_dir)
 
         # Upload output file to S3. The converted file keeps the input file's subdirectory within the
@@ -678,7 +875,8 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
             uploadV2(output_bucket, f"{output_key}{relative_name}",
                      os.path.join(export_dir, relative_name)) #upload to storage
     finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
+        reap_stray_processes()
+        remove_work_dir(work_dir)
 
     logger.info("Conversion complete")
     return incomplete_message(os.path.basename(input_key), fetched)

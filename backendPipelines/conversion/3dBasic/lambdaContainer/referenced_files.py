@@ -511,6 +511,14 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
             extra = {"VersionId": version_id} if version_id else None
             with open(target, "wb") as handle:
                 client.download_fileobj(Bucket=bucket, Key=key, Fileobj=handle, ExtraArgs=extra)
+            if os.path.getsize(target) != size:
+                # Replaced between the size check and the read (a versioned object is pinned).
+                os.remove(target)
+                failure = f"{relative} changed while it was being read."
+                unavailable[relative] = failure
+                refuse(reference, rel_path, relative, failure,
+                       "it changed while it was being read; run the conversion again to include it")
+                continue
             if image and image_room is not None:
                 decoded = decoded_image_bytes(target, size)
                 if decoded > image_room:

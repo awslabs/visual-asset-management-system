@@ -112,7 +112,7 @@ class TestTheHandlerAppliesTheCheckBeforeExporting:
         trimesh_stub = MagicMock()
         trimesh_stub.load.return_value = loaded
         upload = MagicMock()
-        with patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p: open(p, "w").close())), \
+        with patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p, **kw: open(p, "w").close())), \
                 patch.object(mod, "uploadV2", upload), \
                 patch.object(mod, "run_worker", in_process_worker(trimesh_stub)):
             mod.convert_input_output(f"s3://abkt/{input_key}", "s3://obkt/files/", output_filetype)

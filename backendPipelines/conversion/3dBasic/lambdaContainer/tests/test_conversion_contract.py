@@ -126,7 +126,7 @@ class TestConvertInputOutput:
             uploaded["key"] = key
             return key
 
-        def _download(bucket, key, path):
+        def _download(bucket, key, path, **kwargs):
             # The real download always writes the file, and the handler reads it before loading.
             open(path, "wb").close()
             return path

@@ -190,7 +190,7 @@ class TestTheHandlerChecksBeforeFetchingOrLoading:
     def test_a_latin1_obj_fails_before_its_references_are_fetched_or_it_is_loaded(self):
         mod = _load()
 
-        def _download(bucket, key, path):
+        def _download(bucket, key, path, **kwargs):
             with open(path, "wb") as handle:
                 handle.write(b"mtllib w.mtl\n" + LATIN1_OBJ)
             return path

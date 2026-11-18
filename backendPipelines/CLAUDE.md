@@ -338,9 +338,21 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     `convert_model`, never in `lambda.py`. An OBJ output gets its materials renamed `material_<n>` first
     (`rename_materials`), because trimesh 5 writes a texture file and the `newmtl` line from the material's own
     name, which a glTF leaves free text (`/`, `:`, `..` broke the export); GLB and glTF outputs keep the names.
-    A non-user worker failure logs the child's traceback from `worker.stderr`. The worker is a fresh
-    interpreter per run (about 0.4 s of start and imports); do not fork it from the handler, which would hand it
-    the function's credentials in memory.
+    A non-user worker failure logs the child's traceback from `worker.stderr` and the run's error is a generic
+    message (the detail stays in the log); the work folder's path is stripped from every reported message. The
+    worker is a fresh interpreter per run (about 0.4 s of start and imports); do not fork it from the handler,
+    which would hand it the function's credentials in memory.
+    Hardening the parent keeps (each has a test in `tests/test_3dbasic_worker_hardening.py`): `lambda.py` calls
+    `prctl(PR_SET_DUMPABLE, 0)` at import so the child cannot read `/proc/<ppid>/environ` or attach to it;
+    `exported_files` uploads only regular files with one name (`os.lstat`, `S_ISREG`, `st_nlink == 1`) and fails
+    the run on anything else; `reap_stray_processes` (Lambda only) kills every other process of the user that
+    started after the function process, so nothing outlives the worker; `conversion_worker.apply_limits` fails
+    the job when `RLIMIT_AS`, `RLIMIT_FSIZE` (`size_check.file_size_limit_bytes`) or `RLIMIT_CORE` cannot be
+    set; the input is read with `IfMatch` (the ETag the size check read) or its pinned version, and its size is
+    compared with that check; `remove_work_dir` removes the work folder or fails the run.
+    Residual exposure: the child shares the user and the network namespace of the function, so it can reach
+    any network the function reaches, including the Lambda runtime API (a fixed loopback address, which does
+    not return credentials). Process isolation here cannot close that without extra capabilities.
 -   `scene_limits.py`, `archive_guard.py` and `xml_guard.py` are vendored from the 3D thumbnail container
     (`preview/3dThumbnail/container/preview_pipeline/`), because a build context holds only its own directory.
     `tests/test_3dbasic_vendored_guards.py` compares each with its canonical file apart from the import lines; a

@@ -71,7 +71,7 @@ class TestTheHandlerConvertsTheVersion:
         calls = []
 
         def _download(bucket, key, path, **kwargs):
-            calls.append((key, kwargs))
+            calls.append((key, {k: v for k, v in kwargs.items() if k != "expected_size"}))
             open(path, "wb").close()
             return path
 

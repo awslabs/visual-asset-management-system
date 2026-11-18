@@ -1,7 +1,7 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""conversion/3dBasic: the model is parsed and written in a child process that has no AWS credentials,
+"""conversion/3dBasic: the model is parsed and written in a child process that has none of the function's AWS credentials in its environment,
 an address-space limit and a wall-clock limit.
 
 ``lambda.run_worker`` starts ``conversion_worker.py`` with a scrubbed environment and reads back what
@@ -92,11 +92,15 @@ class TestTheWorkerOutcome:
         with pytest.raises(ValueError, match="^m.stl contains no geometry$"):
             _run(_load(), tmp_path, body)
 
-    def test_any_other_failure_is_raised_as_a_runtime_error_with_the_same_text(self, tmp_path):
+    def test_any_other_failure_is_raised_as_a_generic_runtime_error_and_logged_with_its_detail(self, tmp_path):
+        mod = _load()
         body = ("json.dump({'ok': False, 'type': 'KeyError', 'message': 'no loader for .xyzzy'},"
                 " open(result_path, 'w'))\nsys.exit(1)\n")
-        with pytest.raises(RuntimeError, match="^no loader for .xyzzy$"):
-            _run(_load(), tmp_path, body)
+        with patch.object(mod, "logger") as logger, pytest.raises(RuntimeError) as excinfo:
+            _run(mod, tmp_path, body)
+        assert str(excinfo.value).startswith("The conversion of m.stl failed unexpectedly")
+        assert "xyzzy" not in str(excinfo.value)
+        assert any("no loader for .xyzzy" in str(call) for call in logger.error.call_args_list)
 
     def test_a_worker_killed_without_a_result_reports_the_signal(self, tmp_path):
         body = "os.kill(os.getpid(), 9)\n"
@@ -228,7 +232,7 @@ class TestTheAddressSpaceLimit:
         with patch.object(mod, "run_worker", _worker), \
                 patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p, **kw: open(p, "w").close())), \
                 patch.object(mod, "uploadV2", MagicMock()), \
-                patch.object(mod, "head_input_size", MagicMock(return_value=10)), \
+                patch.object(mod, "head_input", MagicMock(return_value=(10, ""))), \
                 patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_MEMORY_SIZE": "5308"}):
             mod.convert_input_output("s3://abkt/xid/m.stl", "s3://obkt/files/", ".glb")
         assert captured["address_space_bytes"] == 5308 * 1024 ** 2 + size_check.ADDRESS_SPACE_OVERHEAD_BYTES
