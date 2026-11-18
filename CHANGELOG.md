@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: a boolean such as `true`, which earlier saved and ran as priority 1, is refused too; send the number instead. ([#1582](https://github.com/awslabs/visual-asset-management-system/issues/1582))
     -   Note: a workflow that uses a DeadlineCloud pipeline saved earlier with an out-of-range value is refused when its state machine is next built; set the pipeline's value within the range. ([#1581](https://github.com/awslabs/visual-asset-management-system/issues/1581))
 -   **Pipelines** The RapidPipeline EKS Lambda signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud and `amazonaws.com.cn` in the China Regions. Previously the token always named an `amazonaws.com` STS host. ([#1593](https://github.com/awslabs/visual-asset-management-system/issues/1593); [#1641](https://github.com/awslabs/visual-asset-management-system/pull/1641) by [@mangeshraut712](https://github.com/mangeshraut712))
+-   **Docs** Fixed step 4 of the uninstall guide deleting other VAMS deployments' log groups in the same account and Region: its commands read the deployment's log groups from its AWS CloudFormation stack record, leave out those of a current stack of the same name, list them for review before anything is deleted, and include the API Gateway execution log group. ([#1572](https://github.com/awslabs/visual-asset-management-system/issues/1572))
 
 ### Chores
 
