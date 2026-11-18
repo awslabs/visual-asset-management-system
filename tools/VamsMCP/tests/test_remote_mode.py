@@ -317,6 +317,34 @@ async def test_a_call_that_never_started_gives_its_slot_back_and_invites_a_retry
     assert "nothing ran" in waiting["error"] and "call the tool again" in waiting["error"].lower()
 
 
+async def test_a_call_cancelled_while_it_waits_for_a_worker_gives_its_slot_back(deployment, tmp_path, monkeypatch):
+    """A request cancelled from outside, as on a client disconnect, while its call waits for a worker
+    thread: the slot is freed at once, and the running call frees its own when it ends."""
+    import anyio
+
+    env = {"VAMS_MCP_TOOL_TIMEOUT": "10", "VAMS_MCP_TOOLSETS": "all", "VAMS_ENABLE_WRITES": "true"}
+    with remote_server_module(deployment.settings_dict("http://127.0.0.1:9/mcp"), tmp_path, env=env) as server:
+        limiter = anyio.CapacityLimiter(1)
+        monkeypatch.setattr(server, "_tool_limiter", lambda: limiter)
+        identity = VerifiedIdentity(deployment.token("alice"), "alice", "c", None)
+        arguments = {"database_id": "d", "description": "dddd", "default_bucket_id": "b"}
+        deployment.api_delay = 1.5
+        with request_context.acting_for(identity):
+            first = asyncio.ensure_future(server.create_database(**arguments))
+            await asyncio.sleep(0.3)
+            second = asyncio.ensure_future(server.create_database(**arguments))
+            await asyncio.sleep(0.3)
+            assert server._CALLS_IN_FLIGHT.get("alice") == 2
+            second.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await second
+            assert server._CALLS_IN_FLIGHT.get("alice") == 1  # only the call that is running
+            done = await asyncio.wait_for(first, timeout=10)
+        deployment.api_delay = 0
+        assert server._CALLS_IN_FLIGHT.get("alice", 0) == 0
+    assert "error_type" not in done
+
+
 def test_a_worker_that_starts_after_its_call_was_given_up_runs_nothing():
     from vams_mcp import server
 
