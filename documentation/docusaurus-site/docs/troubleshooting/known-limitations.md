@@ -138,6 +138,10 @@ The largest input the 3D Preview Thumbnail pipeline accepts is the free space of
 
 The Video SOP/BOM Extraction pipeline accepts at most **4 video files** per run (`limits.maxVideoFiles`), **4 GB** per video and **16 GB** per run (`config.ts` constants sized to the container's 100 GiB ephemeral volume), and **240 minutes** of summed audio (`limits.maxTotalDurationMinutes`, at most 480, the Amazon Transcribe ceiling). Templates and workflows cannot express these bounds, so the pipeline enforces them itself: the file count, extensions, and byte sizes are checked by the entry-point Lambda before any AWS Batch job is submitted, and the duration by the container from the extracted audio before the transcription starts. A refused run fails its pipeline step through the AWS Step Functions task token with a readable cause visible in the execution details (for example `VideoSopBomInputRejected: 5 video files selected; this deployment allows at most 4.`); no partial deliverables are written. Whole-asset and folder selections are refused by the execute API with a `400` response. See [Video SOP/BOM Extraction — Limits](../pipelines/video-sop-bom.md#limits).
 
+### Download as Zip Archive Size and Retention
+
+A Download as Zip archive is a single Amazon S3 object, so one archive holds at most 5 TiB, and a selection larger than that is refused rather than split; download it as several archives. An archive is kept for 7 days and the retention is not configurable, so download it within that time or request it again. See [Download as Zip Limits](../additional/quotas.md#download-as-zip-limits).
+
 ### Pipeline Output Path Requirements
 
 Pipeline containers must preserve the input file's relative subdirectory path when writing output files. The workflow process-output step expects outputs at the same relative location as the input file within the asset. Failure to maintain this structure results in files being written to incorrect locations.
