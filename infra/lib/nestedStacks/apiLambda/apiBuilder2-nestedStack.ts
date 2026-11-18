@@ -14,9 +14,8 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
-import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
-import { generateUniqueNameHash } from "../../helper/security";
+import { addIamNagSuppressions, generateUniqueNameHash } from "../../helper/security";
 import { buildTagService, buildCreateTagFunction } from "../../lambdaBuilder/tagFunctions";
 import {
     buildTagTypeService,
@@ -115,6 +114,9 @@ export class ApiBuilder2NestedStack extends NestedStack {
     // Name of the V2 vamsSchema import custom-resource lambda. Consumed by pipeline nested stacks to
     // register their built-in pipeline/workflow into the V2 tables at deploy (via VamsSchemaRegistration).
     public importGlobalPipelineWorkflowV2FunctionName = "";
+    // Name of the asset-less execute-workflow lambda. Consumed by the search nested stack's system-workflow
+    // launcher, which invokes it by a name-composed ARN so no function object crosses the stack boundary.
+    public executeWorkflowV2FunctionName = "";
     // The Lambdas here that list permission object types and validate constraints and permission
     // templates; the core stack tells them which add-ons are deployed (common/addonAppFeatures.ts).
     public addonFeatureListingFunctions: lambda.Function[] = [];
@@ -653,6 +655,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.POST,
             registry: registry,
         });
+        this.executeWorkflowV2FunctionName = executeWorkflowV2.functionName;
 
         // Wire the execution service's re-run path: it invokes executeWorkflowV2 (as the calling
         // user) to launch a fresh execution reconstructed from the stored records. A scoped
@@ -1004,21 +1007,17 @@ export class ApiBuilder2NestedStack extends NestedStack {
         // in the stack: it only covers the constraint/auth-table read wildcards and the CDK-generated
         // BucketNotifications/LogRetention custom-resource roles. Per-function log/S3 wildcards are
         // suppressed at their own builder (suppressCdkNagErrorsByGrantReadWrite(fun)).
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason:
-                        "Auth/constraint-table reads and CDK-generated custom-resource roles use " +
-                        "action/resource wildcards scoped to VAMS resources.",
-                    appliesTo: [
-                        { regex: "/Action::(dynamodb|logs|s3):.*/g" },
-                        { regex: "/^Resource::.*/g" },
-                    ],
-                },
-            ],
-            true
-        );
+        addIamNagSuppressions(this, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Auth/constraint-table reads and CDK-generated custom-resource roles use " +
+                    "action/resource wildcards scoped to VAMS resources.",
+                appliesTo: [
+                    { regex: "/Action::(dynamodb|logs|s3):.*/g" },
+                    { regex: "/^Resource::.*/g" },
+                ],
+            },
+        ]);
     }
 }

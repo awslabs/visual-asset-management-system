@@ -407,6 +407,37 @@ class TestCheckFileEligibilitySingleFile:
 
 
 @pytest.mark.unit
+class TestCheckFileEligibilityKeyQuarantine:
+    """A single-file download applies the quarantine block to the one resolved key (#1495): the block
+    runs after the key is resolved and before any S3 call or version lookup, and learns whether a
+    version was pinned (a pinned version of a preview companion is refused like a file)."""
+
+    @pytest.mark.parametrize("kwargs, pinned", [({}, False), ({"version_id": "v-old"}, True),
+                                                ({"asset_version_id": "2"}, True)])
+    def test_the_block_sees_the_resolved_key_and_the_pin(self, kwargs, pinned):
+        block = MagicMock()
+        _check(_s3(), '/dir/f.glb', check_key_quarantine=block,
+               resolve_file_version=MagicMock(return_value='v-pinned'), resolve_alias=MagicMock(), **kwargs)
+        block.assert_called_once_with('assets/pfx/dir/f.glb', pinned)
+
+    def test_a_refused_key_never_reaches_s3_or_the_version_lookup(self):
+        client = _s3()
+        resolve_file = MagicMock(return_value='v-pinned')
+        block = MagicMock(side_effect=VAMSGeneralErrorResponse("Asset is quarantined"))
+        with pytest.raises(VAMSGeneralErrorResponse):
+            _check(client, '/f.glb', asset_version_id='2', check_key_quarantine=block,
+                   resolve_file_version=resolve_file, resolve_alias=MagicMock())
+        client.head_object.assert_not_called()
+        resolve_file.assert_not_called()
+
+    def test_an_escaping_key_is_refused_before_the_block(self):
+        block = MagicMock()
+        with pytest.raises(VAMSGeneralErrorResponse):
+            _check(_s3(), ESCAPE_KEY, base=UNSLASHED_BASE, check_key_quarantine=block)
+        block.assert_not_called()
+
+
+@pytest.mark.unit
 class TestCheckFileEligibilityPin:
     def test_pin_replaces_the_per_file_version_and_is_headed(self):
         client = _s3()

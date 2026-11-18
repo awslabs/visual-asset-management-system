@@ -380,9 +380,8 @@ describe("VideoSopBomContainerJobRole", () => {
         );
         expect(wildcardRegion).toHaveLength(1);
         // The cross-Region inference-profile prefix is stripped: the ARN names the model, not the profile.
-        expect(wildcardRegion[0]).not.toMatch(
-            /foundation-model\/(global|us-gov|us|eu|apac|au|jp)\./
-        );
+        const foundationModelId = wildcardRegion[0].replace(/^.*foundation-model\//, "");
+        expect(Config.BEDROCK_INFERENCE_PROFILE_PREFIX.test(foundationModelId)).toBe(false);
         // The inference-profile ARN names the configured id exactly; no profile wildcard is granted.
         const configuredModelId = mockConfig.app.pipelines.useGenAiVideoSopBom.bedrockModelId;
         expect(configuredModelId).toMatch(/^global\./);

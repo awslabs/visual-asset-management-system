@@ -89,6 +89,7 @@ from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_bucket_name, get_table_name
 from common.s3 import (deployment_region, region_routing_s3_client, register_bucket_region,
                        validateUnallowedFileExtensionAndContentType)
+from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 from common.validators import validate
 from common.workflows import executionLocks as el
 from common.workflows import systemPipelines as sp
@@ -211,6 +212,15 @@ class ZipRefusal(VAMSGeneralErrorResponse):
 
     def __str__(self):
         return self.message
+
+
+def _refusal_message(error) -> str:
+    """The text a zip route answers a ``VAMSGeneralErrorResponse`` with: the message as raised, without
+    the "VAMS General Error: " prefix the base class puts on ``str()``, so the web, the CLI and the MCP
+    tools show the sentence the zip download pages quote (#1638), as the quarantine refusal already does
+    (``common/compliance/quarantineGuard.QuarantineBlockedResponse``). Refusals raised by the shared
+    helpers (download eligibility, asset versions) answer the same way on these routes."""
+    return getattr(error, "user_message", None) or str(error)
 
 
 class ZipLaunchRefused(Exception):
@@ -425,6 +435,12 @@ def _head(bucket, key, version_id=None):
     return s3.head_object(**params)
 
 
+def _archived_key(key) -> bool:
+    """Whether a key enters the archive: a preview companion ({file}.previewFile.{ext}) does not unless
+    the job includes preview files (zd.INCLUDE_PREVIEW_FILES_KEY), as the file list hides them."""
+    return zd.ZIP_DOWNLOAD_INCLUDE_PREVIEW_FILES or PREVIEW_FILE_PATTERN not in (key or "")
+
+
 def _is_delete_marker(error):
     """Whether a HeadObject error answered for a delete marker (x-amz-delete-marker: true)."""
     headers = (error.response.get("ResponseMetadata") or {}).get("HTTPHeaders") or {}
@@ -472,7 +488,7 @@ def _prescan_prefix(bucket, prefix, deadline, budget):
     """List the current (latest, not deleted) objects under a prefix within a budget.
 
     Returns (count, bytes, complete). Refuses on an archive storage class or a blocked extension.
-    Folder marker keys (ending in '/') are not files."""
+    Folder marker keys (ending in '/') are not files, and preview companions are not archived."""
     count, total, kwargs = 0, 0, {"Bucket": bucket, "Prefix": prefix, "MaxKeys": 1000}
     while True:
         if time.monotonic() > deadline or budget[0] <= 0:
@@ -480,7 +496,7 @@ def _prescan_prefix(bucket, prefix, deadline, budget):
         response = s3.list_object_versions(**kwargs)
         for version in response.get("Versions", []) or []:
             key = version.get("Key", "")
-            if not version.get("IsLatest") or key.endswith("/"):
+            if not version.get("IsLatest") or key.endswith("/") or not _archived_key(key):
                 continue
             if version.get("StorageClass") in ("GLACIER", "DEEP_ARCHIVE"):
                 raise ZipRefusal("The selection includes a file in an archive storage class; "
@@ -522,11 +538,14 @@ def _resolve_pinned(database_id, asset_id, bucket, base_key, request):
     recorded = {}
     for f in snapshot.get("files") or []:
         rel = (f.get("relativeKey") or "").lstrip("/")
-        if rel and f.get("versionId"):
+        if rel and f.get("versionId") and _archived_key(rel):
             recorded[rel] = f
     chosen = {}
     for entry in request.selection:
         rel = entry.relativePath.lstrip("/")
+        if entry.type == "file" and not _archived_key(rel):
+            # A preview companion is left out like in a folder or the whole asset, not refused.
+            continue
         if entry.type == "asset":
             chosen.update(recorded)
         elif entry.type == "folder":
@@ -560,11 +579,16 @@ def _resolve_current(bucket, base_key, request):
     entries, explicit = [], []
     for entry in request.selection:
         key = resolve_asset_file_key(base_key, entry.relativePath)
+        if entry.type == "file" and not _archived_key(key):
+            # A preview companion is left out like in a folder or the whole asset, not refused.
+            continue
         record = {"type": entry.type, "key": key, "relativePath": entry.relativePath}
         if entry.type == "file":
             record["versionId"] = entry.versionId or None
             explicit.append(record)
         entries.append(record)
+    if not entries:
+        raise ZipRefusal(zd.MSG_NO_FILES)
     if len(explicit) > HEAD_CHECK_MAX_FILES:
         raise ZipRefusal(f"Select at most {HEAD_CHECK_MAX_FILES} individual files, or select their "
                          f"folder")
@@ -958,8 +982,8 @@ def create_job(event, database_id, asset_id):
         return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as e:
         # The request outcome records the refusal as failed, with the status's generic reason.
-        return general_error(status_code=getattr(e, "status_code", 400), body={"message": str(e)},
-                             event=event)
+        return general_error(status_code=getattr(e, "status_code", 400),
+                             body={"message": _refusal_message(e)}, event=event)
 
     now = zd.utc_now()
     request_id = zd.new_request_id()
@@ -1019,6 +1043,7 @@ def create_job(event, database_id, asset_id):
         "limits": {"maxFiles": MAX_FILES_PER_REQUEST, "maxTotalBytes": MAX_TOTAL_BYTES_PER_REQUEST},
         "blockedExtensions": sorted(UNALLOWED_FILE_EXTENSION_LIST),
         "blockedContentTypes": sorted(UNALLOWED_MIME_LIST),
+        zd.INCLUDE_PREVIEW_FILES_KEY: zd.ZIP_DOWNLOAD_INCLUDE_PREVIEW_FILES,
     }
     s3.put_object(Bucket=aux_bucket_name, Key=row["manifestKey"],
                   Body=json.dumps(manifest).encode("utf-8"), ContentType="application/json")
@@ -1351,7 +1376,7 @@ def job_url(event, database_id, asset_id, request_id):
     except QuarantineBlockedResponse as refusal:
         return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)}, event=event)
+        return general_error(body={"message": _refusal_message(e)}, event=event)
     row = _reconcile(row)
     if row.get("status") != zd.STATUS_SUCCEEDED:
         return general_error(status_code=409, body={"message": zd.MSG_NOT_READY}, event=event)
@@ -1574,8 +1599,8 @@ def handle_api_request(event, context: LambdaContext) -> APIGatewayProxyResponse
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(status_code=getattr(v, "status_code", 400), body={"message": str(v)},
-                             event=event)
+        return general_error(status_code=getattr(v, "status_code", 400),
+                             body={"message": _refusal_message(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)

@@ -112,7 +112,7 @@ KNOWN_REMAINING = {
     # a fixture the test owns, not over production behaviour -- and one is an exact-list pin on a
     # produced label list.
     "handlers/pipelines/test_pipelineService_paging.py": 8,
-    "handlers/search/test_simple_search_paging_and_merge.py": 2,
+    "handlers/osSemanticSearch/test_simple_search_paging_and_merge.py": 2,
     "handlers/tags/test_tagService_paging.py": 2,
     "handlers/tagTypes/test_tagTypeService_paging.py": 4,
     "handlers/workflows/test_executions_authz_bound.py": 8,
@@ -183,7 +183,7 @@ NEVER_LEGITIMATE_CEILINGS = {
     "handlers/indexing/test_sqsBucketSync_orchestration_publish_logging.py": 1,
     "handlers/pipelines/test_pipelineService_bounds.py": 5,
     "handlers/pipelines/test_pipelineService_paging.py": 5,
-    "handlers/search/test_pagination_performance.py": 1,
+    "handlers/osSemanticSearch/test_pagination_performance.py": 1,
     "handlers/tags/test_tagService_paging.py": 2,
     "handlers/tagTypes/test_tagTypeService_paging.py": 2,
     "handlers/userRoles/test_userRolesService_authz_fail_closed.py": 2,

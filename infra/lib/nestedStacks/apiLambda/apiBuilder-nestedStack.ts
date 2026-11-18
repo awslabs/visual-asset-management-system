@@ -52,7 +52,7 @@ import {
     buildAssetLinksService,
     buildCreateAssetLinkFunction,
 } from "../../lambdaBuilder/assetsLinkFunctions";
-import { buildSearchFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
+import { buildSearchFunction } from "../../lambdaBuilder/osSemanticSearchFunctions";
 import { buildRoleService, buildCreateRoleFunction } from "../../lambdaBuilder/roleFunctions";
 import { buildUserRolesService } from "../../lambdaBuilder/userRoleFunctions";
 import { buildSendEmailFunction } from "../../lambdaBuilder/sendEmailFunctions";
@@ -62,7 +62,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { authResources } from "../auth/authBuilder-nestedStack";
 import { DynamoDbMetadataSchemaDefaultsConstruct } from "./constructs/dynamodb-metadataschema-defaults-construct";
 import * as iam from "aws-cdk-lib/aws-iam";
-import { kmsKeyPolicyStatementGenerator } from "../../helper/security";
+import { addIamNagSuppressions, kmsKeyPolicyStatementGenerator } from "../../helper/security";
 import { Service } from "../../../lib/helper/service-helper";
 import { RouteRegistry, attachFunctionToApi } from "./apiRouteRegistry";
 
@@ -1200,26 +1200,18 @@ export class ApiBuilderNestedStack extends NestedStack {
             true
         );
 
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: "Not providing IAM wildcard permissions to constraint tables.",
-                },
-            ],
-            true
-        );
+        addIamNagSuppressions(this, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Not providing IAM wildcard permissions to constraint tables.",
+            },
+        ]);
 
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: "Wildcard scoped to deployment-named SQS queues and EventBridge buses via config.name. External (non-VAMS) resources require user-configured resource-based policies. Pipeline resources are created at runtime, so ARNs cannot be known at deploy time.",
-                },
-            ],
-            true
-        );
+        addIamNagSuppressions(this, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Wildcard scoped to deployment-named SQS queues and EventBridge buses via config.name. External (non-VAMS) resources require user-configured resource-based policies. Pipeline resources are created at runtime, so ARNs cannot be known at deploy time.",
+            },
+        ]);
     }
 }

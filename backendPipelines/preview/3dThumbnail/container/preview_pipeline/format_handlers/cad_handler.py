@@ -39,6 +39,16 @@ logger = get_logger()
 
 SUPPORTED_EXTENSIONS = {".stp", ".step"}
 
+# Every B-rep container the OCP readers open (the SYSTEM GenAI metadata Render3D path); the thumbnail
+# gate above is a subset of it.
+SHAPE_EXTENSIONS = {".stp", ".step", ".iges", ".igs", ".brep"}
+
+# STEP declares its length unit as an SI_UNIT with an optional prefix, or as a named conversion unit.
+_STEP_SI_UNIT = re.compile(r"SI_UNIT\s*\(\s*(\.\w+\.|\$)\s*,\s*\.METRE\.\s*\)", re.IGNORECASE)
+_STEP_CONVERSION_UNIT = re.compile(r"CONVERSION_BASED_UNIT\s*\(\s*'([^']+)'", re.IGNORECASE)
+_SI_PREFIX_NAMES = {".MILLI.": "millimetre", ".CENTI.": "centimetre", ".MICRO.": "micrometre",
+                    ".KILO.": "kilometre", ".DECI.": "decimetre", "$": "metre"}
+
 # Linear deflection as a share of the bounding-box diagonal, and the angular deflection in radians.
 RELATIVE_LINEAR_DEFLECTION = 0.002
 ANGULAR_DEFLECTION = 0.35
@@ -388,3 +398,191 @@ def tessellate_parts(parts, limit: SceneLimit = None, drop_backdrops: bool = Tru
     logger.info(f"Tessellated CAD model: {len(vertices)} vertices, {len(triangles)} faces"
                 f"{', coloured' if coloured else ''}")
     return mesh
+
+
+# --------------------------------------------------------------------------------------------------
+# B-rep helpers for the SYSTEM GenAI metadata Render3D path (preview_pipeline.analysis)
+# --------------------------------------------------------------------------------------------------
+
+def load_shape(file_path: str):
+    """Read a B-rep file into an OCP ``TopoDS_Shape``: STEP through ``STEPControl_Reader``, IGES through
+    ``IGESControl_Reader``, BREP through ``BRepTools.Read_s``."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in (".stp", ".step"):
+        return read_step_shape(file_path)
+    if ext in (".iges", ".igs"):
+        from OCP.IGESControl import IGESControl_Reader
+        reader = IGESControl_Reader()
+        status = reader.ReadFile(file_path)
+        if status != 1:
+            raise ValueError(f"Failed to read IGES file, status: {status}")
+        reader.TransferRoots()
+        return reader.OneShape()
+    if ext == ".brep":
+        from OCP.BRep import BRep_Builder
+        from OCP.BRepTools import BRepTools
+        from OCP.TopoDS import TopoDS_Shape
+        shape = TopoDS_Shape()
+        if not BRepTools.Read_s(shape, file_path, BRep_Builder()):
+            raise ValueError(f"Failed to read BREP file: {file_path}")
+        return shape
+    raise ValueError(f"Unsupported CAD format: {ext}")
+
+
+def face_downcast(topods):
+    """The ``TopoDS`` static cast from a ``TopoDS_Shape`` to a ``TopoDS_Face``: ``Face`` in OCP 7.8+,
+    ``Face_s`` in earlier OCP releases."""
+    cast = getattr(topods, "Face", None)
+    return cast if cast is not None else topods.Face_s
+
+
+def tessellate_shape(shape, tolerance: float = 0.1) -> pv.PolyData:
+    """Triangulate every face of the shape at ``tolerance`` and assemble one PolyData."""
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.TopoDS import TopoDS
+
+    mesh = BRepMesh_IncrementalMesh(shape, tolerance)
+    mesh.Perform()
+
+    vertices_list = []
+    faces_list = []
+    vertex_offset = 0
+
+    # TopExp_Explorer.Current() yields a TopoDS_Shape; BRep_Tool.Triangulation_s accepts only a TopoDS_Face.
+    to_face = face_downcast(TopoDS)
+    explorer = TopExp_Explorer(shape, TopAbs_FACE)
+    while explorer.More():
+        face = to_face(explorer.Current())
+        location = TopLoc_Location()
+        triangulation = BRep_Tool.Triangulation_s(face, location)
+
+        if triangulation is not None:
+            for i in range(1, triangulation.NbNodes() + 1):
+                node = triangulation.Node(i)
+                vertices_list.append([node.X(), node.Y(), node.Z()])
+
+            for i in range(1, triangulation.NbTriangles() + 1):
+                tri = triangulation.Triangle(i)
+                n1, n2, n3 = tri.Get()
+                faces_list.extend([3, n1 - 1 + vertex_offset, n2 - 1 + vertex_offset, n3 - 1 + vertex_offset])
+
+            vertex_offset += triangulation.NbNodes()
+
+        explorer.Next()
+
+    if not vertices_list:
+        raise ValueError("No geometry found in CAD file after tessellation")
+
+    vertices = np.array(vertices_list, dtype=np.float64)
+    faces = np.array(faces_list, dtype=np.int64)
+    pv_mesh = pv.PolyData(vertices, faces)
+    n_faces = len(faces) // 4
+    logger.info(f"Tessellated CAD model (OCP): {len(vertices)} vertices, {n_faces} faces")
+    return pv_mesh
+
+
+def shape_statistics(shape) -> dict:
+    """Counts of solids, shells, faces, wires, edges and vertices in the shape."""
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopAbs import (TopAbs_SOLID, TopAbs_SHELL, TopAbs_FACE, TopAbs_WIRE, TopAbs_EDGE,
+                            TopAbs_VERTEX)
+
+    counts = {}
+    for name, kind in (("solids", TopAbs_SOLID), ("shells", TopAbs_SHELL), ("faces", TopAbs_FACE),
+                       ("wires", TopAbs_WIRE), ("edges", TopAbs_EDGE), ("vertices", TopAbs_VERTEX)):
+        explorer = TopExp_Explorer(shape, kind)
+        count = 0
+        while explorer.More():
+            count += 1
+            explorer.Next()
+        counts[name] = count
+    return counts
+
+
+def shape_geometry(shape) -> dict:
+    """Axis-aligned bounds, dimensions, volume, surface area and centre of mass in the file's units.
+
+    The volume is the volume of the shape's solids, None when it has none: OCCT's volume integral over a
+    shell or a face that bounds no solid is not a volume (a closed surface model reads as the volume it
+    encloses, a loose face beside a solid adds a sliver that depends on where the face lies). The centre
+    of mass is the solids' when there are any, else the surfaces'."""
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+
+    box = Bnd_Box()
+    BRepBndLib.Add_s(shape, box, True)
+    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    # The box from the triangulation is enlarged by the mesh deflection, and the box from the geometry is loose
+    # on freeform faces (a B-spline's poles); each holds the shape, so their overlap does too and is the tighter
+    # of the two on every axis: exact for planes, cylinders and the other analytic faces.
+    geometric = Bnd_Box()
+    BRepBndLib.Add_s(shape, geometric, False)
+    gx0, gy0, gz0, gx1, gy1, gz1 = geometric.Get()
+    xmin, ymin, zmin = max(xmin, gx0), max(ymin, gy0), max(zmin, gz0)
+    xmax, ymax, zmax = min(xmax, gx1), min(ymax, gy1), min(zmax, gz1)
+
+    volume = 0.0
+    weighted = [0.0, 0.0, 0.0]
+    solids = 0
+    explorer = TopExp_Explorer(shape, TopAbs_SOLID)
+    while explorer.More():
+        solid_props = GProp_GProps()
+        BRepGProp.VolumeProperties_s(explorer.Current(), solid_props)
+        mass = float(solid_props.Mass())
+        centre = solid_props.CentreOfMass()
+        volume += mass
+        weighted = [weighted[0] + mass * centre.X(), weighted[1] + mass * centre.Y(), weighted[2] + mass * centre.Z()]
+        solids += 1
+        explorer.Next()
+    surface_props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(shape, surface_props)
+    if solids and volume:
+        centre_of_mass = [value / volume for value in weighted]
+    else:
+        surface_centre = surface_props.CentreOfMass()
+        centre_of_mass = [float(surface_centre.X()), float(surface_centre.Y()), float(surface_centre.Z())]
+
+    return {
+        "boundsMin": [float(xmin), float(ymin), float(zmin)],
+        "boundsMax": [float(xmax), float(ymax), float(zmax)],
+        "dimensions": [float(xmax - xmin), float(ymax - ymin), float(zmax - zmin)],
+        "volume": volume if solids else None,
+        "surfaceArea": float(surface_props.Mass()),
+        "centerOfMass": centre_of_mass,
+    }
+
+
+def declared_step_units(file_path: str, scan_bytes: int = 2_000_000):
+    """The length unit an ASCII STEP file declares (``millimetre``, ``metre``, ``inch``, ...), read from
+    its unit entities within the first ``scan_bytes``; None when none is declared there."""
+    with open(file_path, "rb") as handle:
+        text = handle.read(scan_bytes).decode("latin-1", "replace")
+    conversion = _STEP_CONVERSION_UNIT.search(text)
+    if conversion:
+        return conversion.group(1).strip().lower()
+    si_unit = _STEP_SI_UNIT.search(text)
+    if si_unit:
+        prefix = si_unit.group(1).upper()
+        return _SI_PREFIX_NAMES.get(prefix, prefix.strip(".").lower() + "metre")
+    return None
+
+
+def estimated_units(max_dimension: float) -> str:
+    """A unit guess from the model's largest extent, for files that declare none."""
+    if max_dimension <= 0:
+        return "unknown"
+    if max_dimension < 1:
+        return "meters (estimated)"
+    if max_dimension < 100:
+        return "centimeters (estimated)"
+    if max_dimension < 1000:
+        return "millimeters (estimated)"
+    return "unknown"

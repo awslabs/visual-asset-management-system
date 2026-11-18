@@ -91,9 +91,12 @@ export const BLENDERAGENT_STABILITY_INFERENCE_PROFILES = [
     "us.stability.stable-image-erase-object-v1:0",
 ] as const;
 
-/** The foundation-model id underneath a cross-Region inference-profile prefix. */
+/**
+ * The foundation-model id underneath a cross-Region inference-profile prefix
+ * (Config.BEDROCK_INFERENCE_PROFILE_PREFIXES); a bare model id is returned as it is.
+ */
 function foundationModelId(modelId: string): string {
-    return modelId.replace(/^(global|us-gov|us|eu|apac)\./, "");
+    return modelId.replace(Config.BEDROCK_INFERENCE_PROFILE_PREFIX, "");
 }
 
 /**
