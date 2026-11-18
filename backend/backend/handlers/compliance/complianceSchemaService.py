@@ -806,7 +806,7 @@ def _mark_latest_versions_once(clock=None):
                 _set_marker(name, version, marked=False)
         if not any(marked for version, marked in found if version == latest):
             _set_marker(name, latest, marked=True)
-            current = _latest_schema_item(name)
+            current = _latest_schema_item(name, consistent_read=True)
             if current and int(current.get("internalVersion", 0)) != latest:
                 # A save replaced the version while it was being marked.
                 _set_marker(name, latest, marked=False)
@@ -870,12 +870,14 @@ def _scope_of(item):
     return (item or {}).get("databaseId") or GLOBAL_DATABASE_ID
 
 
-def _latest_schema_item(schema_name):
-    """The highest internalVersion row of a schema, or None."""
+def _latest_schema_item(schema_name, consistent_read=False):
+    """The highest internalVersion row of a schema, or None (`consistent_read` sees a save that
+    committed just before)."""
     response = schema_table.query(
         KeyConditionExpression=Key("schemaName").eq(schema_name),
         ScanIndexForward=False,
         Limit=1,
+        ConsistentRead=consistent_read,
     )
     items = response.get("Items", [])
     return items[0] if items else None
@@ -1126,7 +1128,8 @@ def _bound_outside(schema_name, scope):
     ):
         return True
     scan_kwargs = {
-        "FilterExpression": Attr("complianceSchemaName").eq(schema_name) & Attr("databaseId").ne(scope),
+        "FilterExpression": Attr("complianceSchemaName").eq(schema_name) & Attr("databaseId").ne(scope)
+        & ~Attr("databaseId").contains(deleted_marker),
         "ProjectionExpression": "databaseId",
     }
     while True:

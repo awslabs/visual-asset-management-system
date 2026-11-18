@@ -151,6 +151,15 @@ class TestTheMovesTheBindingsAllow:
         status, body = _move(DB_A)
         assert status == 200, body
 
+    def test_a_deleted_databases_row_does_not_hold_it(self, tables):
+        # A database delete keeps the row under `<databaseId>#deleted` with its binding; nobody can
+        # remove that binding, so it must not refuse a move.
+        _schema(tables, "GLOBAL")
+        tables["databaseStorage"].put_item(Item={"databaseId": f"{DB_B}#deleted",
+                                                 "complianceSchemaName": SCHEMA})
+        status, body = _move(DB_A)
+        assert status == 200, body
+
     def test_keeping_the_scope_reads_no_binding(self, tables):
         _schema(tables, DB_A)
         _bind_database(tables, DB_B)

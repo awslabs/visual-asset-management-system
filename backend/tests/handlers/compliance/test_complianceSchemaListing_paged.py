@@ -178,6 +178,22 @@ class TestRowsSavedBeforeTheMarkerAreMarkedOnce:
         assert tables["complianceSchemaStorage"].get_item(
             Key=svc.LATEST_MARKER_BACKFILL_KEY).get("Item")
 
+    def test_the_check_after_marking_reads_consistently(self, tables):
+        # A save that committed just before the check must be seen, or its predecessor keeps the
+        # marker for good.
+        self._legacy(tables, "old-a", (1,))
+        real_query = tables["complianceSchemaStorage"].query
+        reads = []
+
+        def query(**kwargs):
+            if "IndexName" not in kwargs:
+                reads.append(kwargs.get("ConsistentRead"))
+            return real_query(**kwargs)
+        with patch.object(svc.schema_table, "query", side_effect=query):
+            status, _ = _list()
+        assert status == 200
+        assert reads == [True]
+
     def test_a_later_listing_reads_nothing_for_it(self, tables):
         self._legacy(tables, "old-a", (1,))
         _list()
