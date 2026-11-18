@@ -13,6 +13,11 @@ name and reads no extra table.
 ordering): a caller who is not allowed to read the asset receives the authorization denial and
 never learns whether the asset is quarantined.
 
+Preview images are not the asset's content and are still served for a quarantined asset (#1495):
+the asset preview image and a file's ``{file}.previewFile.{ext}`` companion, each at its current
+version, through the download and stream routes (``is_preview_object``). The files and their
+versions, several files at once, export and the auxiliary viewer data stay blocked.
+
 A refusal is an expected answer of a control working as configured, not a failure. Each guarded
 handler catches ``QuarantineBlockedResponse`` ahead of its ``VAMSGeneralErrorResponse`` handling
 (which logs with a traceback) and answers it with ``quarantine_refusal``: one INFO line naming the
@@ -26,6 +31,11 @@ from botocore.config import Config
 from customLogging.logger import safeLogger
 from models.common import VAMSGeneralErrorResponse, general_error
 from common.resourceNames import ResourceKeys, get_table_name
+from common.s3PathPatterns import (
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    PREVIEW_FILE_PATTERN,
+    preview_file_has_allowed_extension,
+)
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
@@ -96,15 +106,53 @@ compliance_asset_state_table = (
 )
 
 
-def check_quarantine_block(database_id, asset_id):
+def is_preview_object(object_key, asset_preview=False):
+    """Whether ``object_key``, the resolved S3 key a handler is about to serve, is a preview image,
+    which a quarantined asset still serves (#1495).
+
+    With ``asset_preview`` the key is the asset's preview image as the asset row records it
+    (``previewLocation``, written by the server when a preview upload completes): its name must end
+    in an allowed preview extension (``ALLOWED_PREVIEW_FILE_EXTENSIONS``). Otherwise the key must name
+    a file's preview companion ``{file}.previewFile.{ext}``: the marker (``PREVIEW_FILE_PATTERN``)
+    once in the key's last segment, after a base file name, followed by an allowed extension.
+
+    The test is on the resolved key, not the request text, and fails closed: a key with a ``.`` or
+    ``..`` segment, an empty or trailing segment, a ``%`` or a backslash is not a preview, so a marker
+    in a folder name, an encoded or a traversal path never reaches another object. Matching is
+    case-sensitive on the marker, as S3 keys are; the extension is compared in lower case, as
+    ``preview_file_has_allowed_extension`` does."""
+    if not isinstance(object_key, str) or not object_key or "%" in object_key or "\\" in object_key:
+        return False
+    segments = object_key.lstrip("/").split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        return False
+    name = segments[-1]
+    if asset_preview:
+        stem, dot, extension = name.rpartition(".")
+        return bool(stem and dot) and ("." + extension).lower() in ALLOWED_PREVIEW_FILE_EXTENSIONS
+    if name.count(PREVIEW_FILE_PATTERN) != 1 or name.startswith(PREVIEW_FILE_PATTERN):
+        return False
+    return preview_file_has_allowed_extension(name)
+
+
+def check_quarantine_block(database_id, asset_id, object_key=None, asset_preview=False):
     """Raise ``QuarantineBlockedResponse`` when the asset is quarantined without a granted exception.
 
     A no-op when the quarantine block is off. Otherwise reads the asset's compliance state row:
     a ``complianceState`` of ``quarantined`` with no ``exceptionGranted`` raises; a missing row,
     any other state, or a granted exception returns normally. The refusal is logged once, by the
     handler that answers it (``quarantine_refusal``), where the route is known.
+
+    ``object_key`` is the resolved key of the one object the request serves, passed only by the
+    single-object routes (one file's download, the asset preview download, the stream routes) and
+    only for the object's current version. When it is a preview image (``is_preview_object``, with
+    ``asset_preview`` for the asset's preview location) the asset's state is not read and the
+    object is served. Every other request (a file, a file version, several files, export, the
+    auxiliary viewer data) passes no key and is guarded for the whole asset.
     """
     if not quarantine_blocks_download or compliance_asset_state_table is None:
+        return
+    if object_key is not None and is_preview_object(object_key, asset_preview=asset_preview):
         return
     response = compliance_asset_state_table.get_item(
         Key={"databaseId": database_id, "assetId": asset_id}

@@ -110,7 +110,7 @@ describe("normal mode Commit Changes", () => {
         const input = await screen.findByLabelText("declared value");
         fireEvent.change(input, { target: { value: "edited" } });
 
-        const commit = await screen.findByRole("button", { name: "Commit all changes" });
+        const commit = await screen.findByRole("button", { name: /^Commit Changes/ });
         expect(commit).toBeEnabled();
     });
 
@@ -120,7 +120,7 @@ describe("normal mode Commit Changes", () => {
         const input = await screen.findByLabelText("declared value");
         fireEvent.change(input, { target: { value: "" } });
 
-        const commit = await screen.findByRole("button", { name: "Commit all changes" });
+        const commit = await screen.findByRole("button", { name: /^Commit Changes/ });
         expect(commit).toBeDisabled();
     });
 });
@@ -177,7 +177,7 @@ describe("Bulk Edit Save All", () => {
     it("accepts an unchanged CSV re-import of a record with a saved value outside the list", async () => {
         const onSave = renderBulk();
 
-        fireEvent.click(screen.getByRole("button", { name: "Import from CSV" }));
+        fireEvent.click(screen.getByRole("button", { name: "Import CSV" }));
         const dialog = screen
             .getAllByRole("dialog")
             .find((d) => within(d).queryByText("Import Metadata from CSV")) as HTMLElement;
