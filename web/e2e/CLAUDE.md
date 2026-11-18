@@ -379,13 +379,32 @@ distributable asset with a top-level file), skipping when the deployment has non
 | `E2E_ZIP_CREATE=1`                            | Creates one zip job on that asset and deletes it again (cancel, then delete)                                                                                                                                                                                                                       |
 | `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD` | A second user for the ownership check (signs in with `signInAs`; never hardcoded): get and delete of the admin's job answer 404, and its URL follows the API's own decision, the all-users list's `canDownload` for that job (200, or 400 when a member is no longer downloadable; 404 without it) |
 
-Map specs. `search.mapframing.spec.ts` route-mocks the Search answer (hits on several continents and a
-footprint split at longitude 180), so it needs no data; it reads the map's camera through
-`support/mapFixtures.ts` (`mapCamera`, `isInView`, projection-independent) and skips when the deployment
-has no Map view. `viewers.cogmap.layout.spec.ts` opens a raster in the GeoTIFF Map Viewer and checks it
-fills its frame at 390, 820 and 1280 px and in fullscreen (`stripePixels` counts the frame backdrop's
-stripe colours; none may show). It finds a `.tif` through the API and skips, with the reason, when
-location services are off or the file is not a raster the viewer draws:
+Map specs. All three live in the `chromium` project, read the map through `support/mapFixtures.ts`, and
+skip with a reason when the deployment has no Map view or location services are off.
+
+-   `search.mapframing.spec.ts` route-mocks the Search answer (hits on several continents, a footprint
+    split at longitude 180, one footprint that spans the world), so it needs no data, and checks every hit
+    is in the viewport.
+-   `search.mappopup.spec.ts` route-mocks hits with a large footprint and a small one over it, a footprint
+    split at 180 and an L-shaped one, clicks the map with the real mouse at a chosen longitude and
+    latitude, and checks the popup's anchor is within 3 px of the click and the smaller of overlapping
+    footprints opens.
+-   `viewers.cogmap.layout.spec.ts` opens a raster in the GeoTIFF Map Viewer on the View File page and in
+    the File Viewer modal (the File Manager's Visualize File eye) and checks it fills its frame at 390,
+    820 and 1280 px, and in fullscreen on the page: canvas equal to its column, map, list and the
+    viewer's own map controls inside the frame, and none of the frame backdrop's stripe colours visible.
+    A third case hides and shows a raster with its Hide toggle (one name, `aria-pressed`, the status line,
+    Zoom disabled while hidden). It waits on the picker's options and on the layout settling (two equal
+    reads of the boxes, canvas equal to its column) rather than on fixed sleeps. It finds a `.tif` through
+    the API and skips, with the reason, when the file is not a raster the viewer draws.
+
+| Helper (`support/mapFixtures.ts`) | Use for                                                                                  |
+| --------------------------------- | ---------------------------------------------------------------------------------------- |
+| `mapCamera(page)`                 | The first map's centre, zoom and canvas size (found through React; no global is exposed) |
+| `pixelOf` / `isInView`            | Where a longitude and latitude falls in the canvas, by flat Web Mercator maths           |
+| `mapJumpTo(page, lon, lat, zoom)` | Move the map without animation before a click                                            |
+| `popupAnchorPx(page)`             | The open popup's anchor in canvas pixels, from its DOM transform                         |
+| `stripePixels(page, png)`         | Count of the visualizer frame backdrop's stripe colours in a screenshot                  |
 
 | Variable                              | Effect                                                                                  |
 | ------------------------------------- | --------------------------------------------------------------------------------------- |
