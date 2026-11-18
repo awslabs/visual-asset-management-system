@@ -541,11 +541,12 @@ def _hand_over(cascade_id: str, run: int, nodes: Dict[str, str],
 
 
 def _complete_cascade(cascade_id: str, results: List[Dict[str, Any]]) -> None:
-    """Mark the cascade completed with its results."""
+    """Mark the cascade completed with its results. The earlier runs' `partialResults` are part of
+    `results` and are removed, so the row does not carry them twice."""
     cascade_table.update_item(
         Key={"cascadeId": cascade_id},
-        UpdateExpression="SET #s = :state, completedAt = :now, results = :results",
-        ExpressionAttributeNames={"#s": "state"},
+        UpdateExpression="SET #s = :state, completedAt = :now, results = :results REMOVE #pr",
+        ExpressionAttributeNames={"#s": "state", "#pr": PARTIAL_RESULTS_FIELD},
         ExpressionAttributeValues={
             ":state": CASCADE_STATE_COMPLETED,
             ":now": datetime.now(timezone.utc).isoformat(),

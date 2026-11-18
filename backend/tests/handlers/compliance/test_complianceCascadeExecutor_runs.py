@@ -124,6 +124,8 @@ class TestARunNearItsDeadlineHandsOver:
         assert row["state"] == "completed"
         assert [(entry["node"], entry["evaluationId"]) for entry in json.loads(row["results"])] == [
             (f"{DB}:B", "eval-B"), (f"{DB}:C", "eval-C"), (f"{DB}:D", "eval-D")]
+        # The earlier run's results are in `results`; the completed row does not keep them twice.
+        assert "partialResults" not in row
         assert [a["event_type"] for a in world.audits] == ["cascade_completed"]
 
     def test_a_run_that_no_longer_holds_the_cascade_does_nothing(self, world):
