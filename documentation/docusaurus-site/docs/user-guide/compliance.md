@@ -692,7 +692,7 @@ A quarantined asset stays quarantined while it is re-evaluated. When an edit, **
 
 1. In the quarantine list, locate the asset you want to release.
 2. Choose **Release**.
-3. Enter the reason for the release in the confirmation dialog. It is required and recorded in the audit log.
+3. Enter the reason for the release in the confirmation dialog. It is required (up to 1,024 characters) and recorded in the audit log.
 4. Choose **Release asset**. The asset state changes from `quarantined` to `compliant`.
 
 A release made while an evaluation of the asset is still running (for example while a pipeline rule runs or waits) stands: when that evaluation ends, its verdict is recorded in the asset's evaluation history with **Not applied** and the reason ("the asset was released after this evaluation began"), and the asset stays released with no new quarantine or notification. An exception granted while an evaluation runs stands the same way. The next evaluation (an edit, **Evaluate Now**, a sweep) decides the asset as usual. If the asset left quarantine by another way while you were releasing it, the release answers that the asset is not quarantined.
@@ -707,7 +707,7 @@ If an asset must remain available despite the failure:
 
 1. In the quarantine list, locate the asset.
 2. Choose **Exception**.
-3. Enter the reason for the exception in the confirmation dialog. It is required and recorded in the audit log.
+3. Enter the reason for the exception in the confirmation dialog. It is required (up to 1,024 characters) and recorded in the audit log.
 4. Choose **Grant exception**.
 
 The asset's **Compliance** tab offers the same two actions, **Release** and **Grant Exception**, on a quarantined asset.
