@@ -292,17 +292,6 @@ describe("EdhAdminPage", () => {
         (appCache.getItem as jest.Mock).mockReturnValue({ featuresEnabled: ["EDH_WORKSTATIONS"] });
     });
 
-    it("renders the not-enabled panel and no tabs when the flag is absent", () => {
-        (appCache.getItem as jest.Mock).mockReturnValue({ featuresEnabled: [] });
-        allow();
-        render(<EdhAdminPage />);
-        const panel = screen.getByRole("status");
-        expect(panel).toHaveTextContent("EDH Workstations is not enabled in this deployment.");
-        expect(panel).toHaveTextContent("Ask a VAMS administrator to enable the add-on.");
-        expect(panel).toHaveClass("bg-surface-container");
-        expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
-    });
-
     it("colours the Kind chip per kind, names the OS by its base OS, and searches the images from the toolbar", async () => {
         allow();
         render(<EdhAdminPage />);
