@@ -171,6 +171,44 @@ async function rasterSubject(
     return ref!;
 }
 
+/**
+ * Waits until the viewer's layout has settled after a resize: the canvas has taken its column's box and
+ * the boxes are the same on two reads in a row. Replaces a fixed sleep, so a slow host waits longer and
+ * a fast one not at all.
+ */
+async function waitForLayout(page: Page): Promise<void> {
+    let previous = "";
+    await expect
+        .poll(
+            async () => {
+                const now = await page.evaluate(() => {
+                    const box = (selector: string) => {
+                        const element = document.querySelector(selector);
+                        if (!element) return null;
+                        const r = element.getBoundingClientRect();
+                        return [r.x, r.y, r.width, r.height].map(Math.round);
+                    };
+                    return JSON.stringify([
+                        box(".visualizer-container"),
+                        box('[data-testid="cog-map-viewer"]'),
+                        box('[data-testid="cog-map-column"]'),
+                        box("canvas.maplibregl-canvas"),
+                    ]);
+                });
+                const [, , column, canvas] = JSON.parse(now);
+                const settled =
+                    now === previous &&
+                    column !== null &&
+                    canvas !== null &&
+                    column.every((v: number, i: number) => Math.abs(v - canvas[i]) <= 1);
+                previous = now;
+                return settled;
+            },
+            { timeout: 30_000, intervals: [250] }
+        )
+        .toBe(true);
+}
+
 /** Picks the GeoTIFF Map Viewer, waits for its first raster, and skips when the file is not drawable. */
 async function chooseMapViewerAndWaitForRaster(page: Page): Promise<void> {
     await page
@@ -178,12 +216,14 @@ async function chooseMapViewerAndWaitForRaster(page: Page): Promise<void> {
         .first()
         .waitFor({ timeout: 30_000 })
         .catch(() => undefined);
-    const offered = await page
+    // Open the picker and wait for its options before deciding: counting at once can read 0 while the
+    // list is still rendering, which would skip a viewer that is offered.
+    await page
         .getByLabel(/select viewer/i)
         .first()
-        .click()
-        .then(() => page.getByRole("option", { name: /GeoTIFF Map/i }).count())
-        .catch(() => 0);
+        .click();
+    await expect(page.getByRole("option").first()).toBeVisible({ timeout: 30_000 });
+    const offered = await page.getByRole("option", { name: /GeoTIFF Map/i }).count();
     await page.keyboard.press("Escape").catch(() => undefined);
     test.skip(offered === 0, "The GeoTIFF Map Viewer is not offered for this file");
     await chooseViewer(page, /GeoTIFF Map/i);
@@ -212,19 +252,19 @@ test.describe("GeoTIFF Map Viewer layout", () => {
 
         for (const size of WIDTHS) {
             await page.setViewportSize({ width: size.width, height: size.height });
-            await page.waitForTimeout(1_200);
+            await waitForLayout(page);
             await expectViewerFillsFrame(page, `page ${size.name} ${size.width}px`);
         }
 
         // Fullscreen: the frame becomes the whole screen and the viewer follows it.
         await page.setViewportSize({ width: 1280, height: 800 });
-        await page.waitForTimeout(800);
+        await waitForLayout(page);
         const fullscreen = page.getByRole("button", { name: /full ?screen/i }).first();
         const toggle = (await fullscreen.count())
             ? fullscreen
             : page.locator(".visualizer-footer button").last();
         await toggle.click();
-        await page.waitForTimeout(2_000);
+        await waitForLayout(page);
         await expectViewerFillsFrame(page, "page fullscreen");
         await page.keyboard.press("Escape");
     });
@@ -278,7 +318,7 @@ test.describe("GeoTIFF Map Viewer layout", () => {
 
         for (const size of WIDTHS) {
             await page.setViewportSize({ width: size.width, height: size.height });
-            await page.waitForTimeout(1_200);
+            await waitForLayout(page);
             await expectViewerFillsFrame(page, `modal ${size.name} ${size.width}px`);
         }
         await page.keyboard.press("Escape");
