@@ -25,12 +25,8 @@ import {
     deleteUserApiKey,
     fetchAllowedApiRoutes,
 } from "../../services/APIService";
-import { appCache } from "../../services/appCache";
-import {
-    isApiRouteAllowed,
-    ALLOWED_API_ROUTES_CACHE_KEY,
-    ALLOWED_API_ROUTES_CACHE_TTL_MILLIS,
-} from "../../common/constants/authRoutes";
+import { isApiRouteAllowed } from "../../common/constants/authRoutes";
+import { cacheAllowedApiRoutes } from "../../FedAuth/allowedApiRoutesCache";
 import {
     API_KEY_LISTING_PAGE_SIZE,
     USER_API_KEY_MAX_EXPIRATION_DAYS,
@@ -168,11 +164,7 @@ export default function ApiKeys() {
                 try {
                     const result = await fetchAllowedApiRoutes();
                     if (result[0] === true && result[1]?.routes) {
-                        appCache.setItemWithExpiry(
-                            ALLOWED_API_ROUTES_CACHE_KEY,
-                            result[1],
-                            ALLOWED_API_ROUTES_CACHE_TTL_MILLIS
-                        );
+                        cacheAllowedApiRoutes(result[1]);
                         admin = isApiRouteAllowed("/auth/api-keys", "GET");
                         user = isApiRouteAllowed("/auth/user/api-keys", "GET");
                     } else if (result[2] === 404) {

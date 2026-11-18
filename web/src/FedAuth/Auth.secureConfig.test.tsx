@@ -557,3 +557,33 @@ describe("Auth external OAuth access token without the configured user id claim"
         expect(signOut).toHaveBeenCalled();
     });
 });
+
+/**
+ * The cached allowed-routes listing gates links such as Admin - Auth's "API Keys (all users)". A
+ * reload fetches it again even when a cached copy is still fresh, since that copy may expire minutes
+ * later and the renewal timer starts at page load.
+ */
+describe("Auth allowed-routes listing", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        seedMode(COGNITO_CONFIG);
+        mockGetSecureConfig.mockResolvedValue(SECURE_CONFIG);
+    });
+
+    it("fetches the listing on load even when a cached copy is still fresh", async () => {
+        const { fetchAllowedApiRoutes } = jest.requireMock("../services/APIService");
+        appCache.setItemWithExpiry("allowedApiRoutes", { userId: "u1", routes: [] }, 60_000);
+        fetchAllowedApiRoutes.mockResolvedValue([
+            true,
+            { userId: "u1", routes: [{ path: "/auth/api-keys", methods: ["GET"] }] },
+        ]);
+
+        renderAuth();
+
+        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
+        await waitFor(() =>
+            expect(appCache.getItemWithExpiry("allowedApiRoutes").routes).toHaveLength(1)
+        );
+        expect(fetchAllowedApiRoutes).toHaveBeenCalledTimes(1);
+    });
+});
