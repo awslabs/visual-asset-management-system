@@ -10,11 +10,12 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
--   **Web** New GeoTIFF Map Viewer for `.tif` and `.tiff` files, shown when location services are enabled. A Cloud Optimized GeoTIFF in Web Mercator (EPSG:3857) streams onto the map as an exact overlay. A small georeferenced TIFF in another common coordinate system (up to 128 MiB and about 100 km across) is placed approximately and labelled so. Other files show a message pointing to COG conversion. Several rasters can be shown together, each with its own opacity, order, zoom and remove controls. ([#1599](https://github.com/awslabs/visual-asset-management-system/issues/1599))
--   **Web** Search map: a TIFF file result with a footprint has a **Show raster** action that overlays the raster on the map. ([#1599](https://github.com/awslabs/visual-asset-management-system/issues/1599))
+-   **Web** New GeoTIFF Map Viewer for `.tif` and `.tiff` files, shown when location services are enabled. A Cloud Optimized GeoTIFF in Web Mercator (EPSG:3857) streams onto the map as an exact overlay. A small georeferenced TIFF in another common coordinate system (up to 128 MiB and about 100 km across) is placed approximately and labelled so. Other files show a message that says what is wrong (a COG or TIFF in another projection, named with its EPSG code, a TIFF that is not cloud-optimized, too many pixels, no georeferencing, or a crossing of longitude 180) and points to the COG Conversion pipeline where conversion helps. Several rasters can be shown together, each with its own opacity, order, zoom and hide/show controls. ([#1599](https://github.com/awslabs/visual-asset-management-system/issues/1599))
+-   **Web** Search map: a TIFF file result with a footprint has a **Show raster** action that overlays the raster on the map. The note shown when no result has location data lists GeoTIFF and COG files and how their footprint box is derived. ([#1599](https://github.com/awslabs/visual-asset-management-system/issues/1599))
 
 ### Bug Fixes
 
+-   **Web** Search map: all results with a location are in view, including results on both sides of longitude 180 and one footprint that spans the world; the map is drawn flat. A click on a footprint opens that result's popup at the click, and the smallest of several overlapping footprints opens, where the popup used to open at the centre of the shape's box (the other side of the world for a footprint split at longitude 180). ([#1599](https://github.com/awslabs/visual-asset-management-system/issues/1599))
 -   **Pipelines** The RapidPipeline EKS Lambda signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud and `amazonaws.com.cn` in the China Regions. Previously the token always named an `amazonaws.com` STS host. ([#1593](https://github.com/awslabs/visual-asset-management-system/issues/1593))
 
 ### Chores

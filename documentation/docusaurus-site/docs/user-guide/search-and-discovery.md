@@ -182,6 +182,14 @@ In natural-language mode the map shows the same page of the natural-language ans
 
 GeoJSON polygons and multi-polygons are rendered as filled shapes with outline borders. Points are rendered as map markers.
 
+#### GeoTIFF and COG files on the map
+
+In Files mode, a GeoTIFF or Cloud Optimized GeoTIFF (`.tif`, `.tiff`) whose header carries georeferencing appears on the map as a footprint box. The box is the file's `location` metadata, which the [SYSTEM GenAI metadata pipeline](../pipelines/system-genai-metadata.md#location) writes from the TIFF header, reprojected to WGS 84, when its `EXTRACT_GEO_LOCATION` option is on (the default). A file with no georeferencing, or a deployment with the option off, has no box and is not plotted. A converted COG (`<file>.cog.tif`) carries no box of its own; its source's box stands for both.
+
+Choosing a footprint opens a popup at the point you clicked. Where footprints overlap, the smallest one under the click opens. For a TIFF result the popup has a **Show raster** button, which draws the raster itself on the map under the footprints. It reads the file's own georeferencing tags, not the metadata, so it needs the file to be georeferenced even if the box was edited or removed. The same button reads **Hide raster** while the raster is shown. The [GeoTIFF Map Viewer](../concepts/viewers.md#geotiff-map-viewer) describes which files are drawn exactly, which approximately, and which are refused; a file in another projection than EPSG:3857 can be converted with the COG Conversion pipeline, which writes `<file>.cog.tif` beside it in EPSG:3857.
+
+The map is drawn flat, and it frames every result with a location, including results on both sides of longitude 180.
+
 ![Map view with three asset results plotted as markers on Seattle, Spokane and Portland, under the line 3 of 3 results with location data](/img/asset_search_mapView__dark_20261110_v2.7.png)
 
 ### Geospatial filter

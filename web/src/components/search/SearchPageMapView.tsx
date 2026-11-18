@@ -540,6 +540,16 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                             optional <strong>altitude</strong> metadata fields (numeric or string
                             values).
                         </li>
+                        <li data-testid="map-note-raster">
+                            A <strong>GeoTIFF or COG</strong> file whose header carries
+                            georeferencing. Its footprint box is its <code>location</code> metadata,
+                            which the metadata pipeline writes from the TIFF header (reprojected to
+                            WGS 84) when the extraction location option (
+                            <code>EXTRACT_GEO_LOCATION</code>) is on; a file with no georeferencing,
+                            or with the option off, has no box. <strong>Show raster</strong> on a
+                            result draws the raster itself from the file&apos;s own georeferencing
+                            tags, not from metadata.
+                        </li>
                     </ul>
                 </Box>
             )}
