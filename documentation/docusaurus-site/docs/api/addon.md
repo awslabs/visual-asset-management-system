@@ -638,16 +638,16 @@ Lists the sessions whose state is `STOPPED` or `ORPHANED` — EDH reports them s
 
 #### Query parameters
 
-| Parameter     | Type    | Required | Description                                                  |
-| ------------- | ------- | -------- | ------------------------------------------------------------ |
-| `idleMinutes` | integer | No       | Idle threshold in minutes; `120` when omitted, at least `1`. |
+| Parameter     | Type    | Required | Description                                                                   |
+| ------------- | ------- | -------- | ----------------------------------------------------------------------------- |
+| `idleMinutes` | integer | No       | Idle threshold in minutes; `120` when omitted, from `1` to `525600` (a year). |
 
 #### Responses
 
-| HTTP  | Body                                                                                                                                         |
-| ----- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `200` | `{ "Items": [<instance item> + { "stale": true, "staleReason": "stopped" \| "missingInEdh" }, ...], "idleMinutes": <threshold in minutes> }` |
-| `400` | `{ "message": "idleMinutes must be an integer" }` or `{ "message": "idleMinutes must be at least 1" }`                                       |
+| HTTP  | Body                                                                                                                                                          |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200` | `{ "Items": [<instance item> + { "stale": true, "staleReason": "stopped" \| "missingInEdh" }, ...], "idleMinutes": <threshold in minutes> }`                  |
+| `400` | `{ "message": "idleMinutes must be an integer" }`, `{ "message": "idleMinutes must be at least 1" }` or `{ "message": "idleMinutes must be at most 525600" }` |
 
 #### Authorization
 

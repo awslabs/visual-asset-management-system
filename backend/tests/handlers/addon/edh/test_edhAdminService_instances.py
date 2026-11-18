@@ -257,6 +257,25 @@ class TestStaleInstances:
         assert response["statusCode"] == 400
         assert fakes.edh.calls == []
 
+    @pytest.mark.parametrize("value", ["525601", str(10 ** 10)])
+    def test_an_idle_minutes_value_above_a_year_is_400(self, monkeypatch, value):
+        fakes = install_admin_fakes(monkeypatch, edh=_client())
+
+        response = fakes.module.lambda_handler(make_event("GET", STALE_PATH, query={"idleMinutes": value}), {})
+
+        assert response["statusCode"] == 400
+        assert response_body(response)["message"] == "idleMinutes must be at most 525600"
+        assert fakes.edh.calls == []
+
+    def test_the_largest_idle_minutes_value_is_accepted(self, monkeypatch):
+        fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=_rows())
+
+        response = fakes.module.lambda_handler(
+            make_event("GET", STALE_PATH, query={"idleMinutes": "525600"}), {})
+
+        assert response["statusCode"] == 200
+        assert response_body(response)["idleMinutes"] == 525600
+
     def test_null_query_parameters_on_a_rest_event_use_the_default(self, monkeypatch):
         fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=_rows())
 

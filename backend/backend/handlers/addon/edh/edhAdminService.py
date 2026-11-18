@@ -127,6 +127,8 @@ _STACK_LABEL_ID = re.compile(r"\(id:\s*(\d+)\)\s*$")
 # Stale views: a desktop EDH reports stopped whose row last changed at least idleMinutes ago (or that
 # has no row to time against), and a row EDH no longer lists at all.
 STALE_IDLE_MINUTES_DEFAULT = 120
+# A year. A larger threshold lists nothing a year cannot, and an unbounded one overflows the cutoff.
+STALE_IDLE_MINUTES_MAX = 525600
 STALE_REASON_STOPPED = "stopped"
 STALE_REASON_MISSING = "missingInEdh"
 STOPPED_STATES = frozenset({STATE_STOPPED, STATE_ORPHANED})
@@ -950,6 +952,9 @@ def list_stale_instances(event):
         return validation_error(body={'message': "idleMinutes must be an integer"}, event=event)
     if idle_minutes < 1:
         return validation_error(body={'message': "idleMinutes must be at least 1"}, event=event)
+    if idle_minutes > STALE_IDLE_MINUTES_MAX:
+        return validation_error(body={'message': f"idleMinutes must be at most {STALE_IDLE_MINUTES_MAX}"},
+                                event=event)
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=idle_minutes)
     client = EdhClient(profile="api")

@@ -10627,10 +10627,11 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - name: idleMinutes
                   in: query
                   required: false
-                  description: "Idle threshold in minutes; 120 when omitted, at least 1."
+                  description: "Idle threshold in minutes; 120 when omitted, from 1 to 525600 (a year)."
                   schema:
                       type: integer
                       minimum: 1
+                      maximum: 525600
                       default: 120
             responses:
                 "200":
@@ -10640,7 +10641,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/edhStaleInstanceList"
                 "400":
-                    description: "`idleMinutes` is not an integer or is below 1."
+                    description: "`idleMinutes` is not an integer, is below 1 or is above 525600."
                     content:
                         application/json:
                             schema:
