@@ -501,7 +501,7 @@ A download reports a file as failed without transferring it.
 
 **Resolution:**
 
-Ask an administrator to rename or move the file in the asset. To fetch it anyway, use `--flatten-download-tree`, which writes each file under its name alone, or remove the symbolic link from the download directory.
+Ask an administrator to rename or move the file in the asset. To fetch it anyway, use `--flatten-download-tree` (`assets download`) or `--flatten-downloads` (`assets export --download`), which writes each file under its name alone, or remove the symbolic link from the download directory.
 
 ---
 

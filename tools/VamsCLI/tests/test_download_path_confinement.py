@@ -49,6 +49,7 @@ class TestConfinedLocalPath:
             "/folder/../../a.txt",
             "a/..",
             "folder\\..\\..\\a.txt",
+            "/a\x00b.txt",
         ],
     )
     def test_a_path_that_leaves_the_target_is_refused(self, tmp_path, relative):
