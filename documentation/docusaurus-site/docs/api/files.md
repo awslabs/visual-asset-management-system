@@ -800,8 +800,8 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 | Status | Description                                                                                                                                                                  |
 | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | The asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable.                                                                                                |
-| `404`  | File not found.                                                                                                                                                              |
+| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable.                           |
+| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                                              |
 | `500`  | Internal server error.                                                                                                                                                       |
 
 ---
@@ -833,8 +833,8 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 | Status | Description                                                                                                                                                                  |
 | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | The asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable.                                                                                                |
-| `404`  | File not found.                                                                                                                                                              |
+| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable.                           |
+| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                                              |
 | `500`  | Internal server error.                                                                                                                                                       |
 
 ---
