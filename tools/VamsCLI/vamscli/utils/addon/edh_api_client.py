@@ -33,6 +33,7 @@ from .edh_exceptions import (
     EdhUnavailableError, EdhOutcomeUnknownError, EdhStartInProgressError,
     EdhContainerJobNotFoundError, EdhAmiRecipeNotFoundError, EdhAmiRecipeBuildNotFoundError,
     EdhReservationFullError, EdhCapacityReservationNotFoundError, EdhDisplaySessionEndedError,
+    EdhQuotaExceededError,
 )
 
 
@@ -195,6 +196,11 @@ class EdhAPIClientMixin:
             if _edh_body_code(e.response) == EDH_DISPLAY_SESSION_ENDED_CODE:
                 return EdhDisplaySessionEndedError(f"{operation} refused (409): {error_message}")
             return EdhOperationError(f"{operation} refused (409): {error_message}")
+        if status_code == 429:
+            # _make_request resends a throttling 429 and raises RetryExhaustedError when it persists,
+            # so a 429 here is the add-on's quota refusal, which resending cannot clear.
+            hint = f" Run '{list_command}' to see what counts toward it." if list_command else ""
+            return EdhQuotaExceededError(f"{operation} refused (429): {_as_sentence(error_message)}{hint}")
         if list_command is not None and (
                 status_code == 504
                 or (status_code == 502 and _edh_body_flag(e.response, "outcomeUnknown"))):
@@ -1638,6 +1644,7 @@ class EdhAPIClientMixin:
         Raises:
             InvalidEdhRequestError: When the request is rejected
             EdhOperationError: When the submission is refused
+            EdhQuotaExceededError: When EDH refused the job for a quota (429)
             EdhOutcomeUnknownError: When EDH did not confirm the submission; it may be in progress
             EdhUnavailableError: When the EDH cluster did not answer
             AuthenticationError: When authentication fails

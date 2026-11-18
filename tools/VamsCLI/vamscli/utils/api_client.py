@@ -299,7 +299,7 @@ from ..constants import (
     API_ZIP_DOWNLOADS_GLOBAL, API_ZIP_DOWNLOADS_ASSET_ALL_USERS, FEATURE_ZIPDOWNLOADS,
     ZIP_DOWNLOADS_DISABLED_API_MESSAGE,
     ZIP_DOWNLOADS_DISABLED_MESSAGE, ZIP_DOWNLOAD_NOT_FOUND_API_MESSAGE,
-    ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE, ZIP_DOWNLOAD_ACTIVE_STATUSES,
+    ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE, ZIP_DOWNLOAD_ACTIVE_STATUSES, EDH_QUOTA_REACHED_API_MESSAGE,
     ZIP_DOWNLOAD_TERMINAL_STATUSES, ZIP_DOWNLOAD_STREAM_TIMEOUT, ZIP_DOWNLOAD_STREAM_CHUNK_BYTES,
     ZIP_DOWNLOAD_INTENT_PARAM, ZIP_DOWNLOAD_CANCEL_INTENT,
     API_COMPLIANCE_SCHEMAS, API_COMPLIANCE_SCHEMA_BY_NAME,
@@ -346,8 +346,9 @@ from .custom_api_client import CustomAPIClientMixin
 from .request_paths import _path_segment, route_path  # noqa: F401 - route_path is re-exported
 
 # The exact 429 bodies that are a handler's business refusal rather than throttling
-# (_is_business_refusal_429): retrying cannot clear them.
-_BUSINESS_REFUSAL_429_MESSAGES = (ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE,)
+# (_is_business_refusal_429): retrying cannot clear them. The per-user active zip download cap, and an
+# EDH quota refusal.
+_BUSINESS_REFUSAL_429_MESSAGES = (ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE, EDH_QUOTA_REACHED_API_MESSAGE)
 
 
 def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) -> str:
@@ -551,8 +552,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                 pass
             
             # Handle 429 rate limiting with exponential backoff. A 429 whose body is a known business
-            # refusal (the per-user active zip download cap) is not throttling: backing off cannot
-            # clear it, so it goes straight to the caller's status mapping.
+            # refusal (the per-user active zip download cap, an EDH quota) is not throttling: backing
+            # off cannot clear it, so it goes straight to the caller's status mapping.
             if response.status_code == 429 and not _is_business_refusal_429(response):
                 if retry_config.should_retry(throttle_retry_count):
                     # Parse Retry-After header if present

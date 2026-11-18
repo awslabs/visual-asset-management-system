@@ -1193,7 +1193,10 @@ until it finishes or is killed; like the workstation tools it stays out of
 cluster for the experimental `eks` backend), its `command` is a token list and
 `environment` a name→value map, sent under the request model's `command` /
 `environment` keys, and `memory` is in MiB (at least 512). It answers 202 with
-the job's `jobId` and `backend`, the pair `kill_edh_container_job` takes.
+the job's `jobId` and `backend`, the pair `kill_edh_container_job` takes. When
+EDH's quota is used up it answers `error_type` `EdhQuotaExceededError` (HTTP 429,
+`The EDH quota for this operation has been reached.`): the client does not resend
+it, and submitting again fails until a job ends (`list_edh_container_jobs`).
 `start_edh_ami_recipe_build` starts an EC2 Image Builder build instance that is
 billed until the image completes; like the other compute tools it stays out of
 `autoApprove`.

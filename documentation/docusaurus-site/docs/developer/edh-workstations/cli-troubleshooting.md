@@ -759,6 +759,20 @@ Jobs are listed and killed under your own EDH identity on one backend: another u
 
 Use `vamscli edh container job list` (with `--backend eks --cluster NAME` for EKS jobs) and pass the row's `jobId` verbatim, with the same `--backend`, `--cluster` and `--namespace` options.
 
+### Job Submission Refused for a Quota
+
+**Symptoms:**
+
+-   `edh container job submit` reports `Container job submission refused (429): The EDH quota for this operation has been reached.`, with `error_type` `EdhQuotaExceededError` under `--json-output`
+
+**Cause:**
+
+EDH refused the job because a quota, budget or target-node limit is used up. This is not throttling: the CLI sends the request once and does not back off, because resending cannot clear the limit.
+
+**Resolution:**
+
+Run `vamscli edh container job list` to see the jobs that count toward the limit. Submit again after one of them ends, or kill a job you no longer need with `vamscli edh container job kill`. If the limit is too low for the work, ask the EDH administrator to raise it.
+
 ---
 
 ## AMI Recipes
