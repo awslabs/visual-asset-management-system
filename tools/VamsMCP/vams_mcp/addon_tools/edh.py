@@ -436,18 +436,25 @@ def register(
 
         @mcp.tool(title="Stop EDH workstation", annotations=COMPUTE)
         @tool_result
-        def stop_edh_workstation(session_id: str) -> Dict[str, Any]:
+        def stop_edh_workstation(session_id: str, confirm: bool = False) -> Dict[str, Any]:
             """Stop one of the authenticated user's ACTIVE EDH workstations, or a CREATING one whose
             `lastError` is START_STALLED (a start EDH accepted and has not finished after 30 minutes;
-            start it again once it reads STOPPED); returns the updated record,
+            start it again once it reads STOPPED). Stopping closes the desktop's open applications
+            and interrupts its compute; the disk is kept, and start_edh_workstation starts it again.
+            Confirm with the user first, then call with `confirm=True`: without it the tool returns
+            an error and stops nothing. Keep it out of `autoApprove`. Returns the updated record,
             whose `activity` reads `stopping` while EDH still stops the desktop (and whose
             `startFailure` is null). The record carries the image fields `imageName`, `recipeId`,
             `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest` as a
-            list_edh_workstations row does. Stopping interrupts whatever is running on the desktop's
-            compute, and is reversible with start_edh_workstation. An `EdhOutcomeUnknownError` error
-            means EDH did not confirm the stop; call list_edh_workstations before retrying. Confirm
-            with the user before calling it, and keep it out of `autoApprove`."""
+            list_edh_workstations row does. An `EdhOutcomeUnknownError` error means EDH did not
+            confirm the stop; call list_edh_workstations before retrying."""
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
+            # A client-side interlock the owner chose for this tool (2026-11-18): the stop request
+            # has no confirmation field, so the tool asks for one (tools/VamsMCP/CLAUDE.md, Add-on Tools).
+            if not confirm:
+                raise ValueError(
+                    "Stopping a workstation closes its open applications. Confirm with the user, then "
+                    "call stop_edh_workstation again with confirm=True.")
             return client.api.stop_edh_workstation(session_id)
 
         @mcp.tool(title="Register EDH desktop image", annotations=WRITE)

@@ -72,7 +72,7 @@ def test_start_returns_the_accepted_record_unchanged(client, tools):
     ("list_edh_workstations", "list_edh_workstations", ()),
     ("get_edh_workstation", "get_edh_workstation", ("s-1",)),
     ("list_edh_admin_instances", "list_edh_admin_instances", ()),
-    ("stop_edh_workstation", "stop_edh_workstation", ("s-1",)),
+    ("stop_edh_workstation", "stop_edh_workstation", ("s-1", True)),
 ])
 def test_the_workstation_tools_pass_activity_and_start_failure_through(client, tools, tool, method, args):
     body = {"Items": [REFUSED, ACCEPTED]} if tool.startswith("list") else dict(REFUSED)
