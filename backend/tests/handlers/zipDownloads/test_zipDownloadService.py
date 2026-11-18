@@ -429,6 +429,27 @@ class TestCreate:
         response = _create(e, {"selection": [{"type": "folder", "relativePath": "/textures/"}]})
         assert response["statusCode"] == 400
 
+    def test_file_limit_applies_to_individual_files(self, env):
+        e = h.load_handlers(env={"ZIP_DOWNLOAD_MAX_FILES_PER_REQUEST": "1"})
+        h.put_asset(e)
+        e.s3.objects = env.s3.objects
+        response = _create(e, {"selection": [{"type": "file", "relativePath": "/textures/t1.png"},
+                                             {"type": "file", "relativePath": "/textures/t2.png"}]})
+        assert response["statusCode"] == 400
+        assert "more than 1 files" in h.body_of(response)["message"]
+        assert e.zip.items == {}
+        assert e.lam.calls == []
+
+    def test_byte_limit_applies_to_individual_files(self, env):
+        e = h.load_handlers(env={"ZIP_DOWNLOAD_MAX_TOTAL_BYTES_PER_REQUEST": "40"})
+        h.put_asset(e)
+        e.s3.objects = env.s3.objects
+        response = _create(e, FILE_SELECTION)
+        assert response["statusCode"] == 400
+        assert "larger than 40 bytes" in h.body_of(response)["message"]
+        assert e.zip.items == {}
+        assert e.lam.calls == []
+
     def test_active_cap_429(self, env):
         for _ in range(5):
             assert _create(env, FILE_SELECTION)["statusCode"] == 200

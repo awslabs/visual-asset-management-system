@@ -560,6 +560,7 @@ def _resolve_current(bucket, base_key, request):
                          f"folder")
     sizes = _check_members(bucket, explicit) if explicit else []
     files, total, complete = len(explicit), sum(sizes), True
+    _enforce_limits(files, total)
     deadline = time.monotonic() + PRESCAN_MAX_SECONDS
     budget = [PRESCAN_MAX_OBJECTS]
     for record in entries:
