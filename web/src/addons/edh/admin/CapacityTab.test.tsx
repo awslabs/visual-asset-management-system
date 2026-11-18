@@ -394,6 +394,27 @@ describe("CapacityTab", () => {
         expect(tile("Reserved slots")).toHaveTextContent("3 of 6 in use");
     });
 
+    it("keeps the running workstations and their tile when a later poll of the sessions fails", () => {
+        mount(() => true, {
+            sessions: query(SESSIONS, { error: new Error("Service unavailable") }),
+        });
+        expect(tile("Running")).toHaveTextContent(/^4$/);
+        expect(Object.keys(tableCells("Running workstations by instance type").rows)).toEqual([
+            "g5.xlarge",
+            "m7i.large",
+            "t3.large",
+        ]);
+        expect(
+            tableCells("Capacity reservation use").rows["Render pool"]["VAMS workstations"]
+        ).toHaveTextContent(/^2$/);
+        expect(
+            screen.getByText(
+                "Could not refresh: Service unavailable. The list shows the last answer."
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/Error loading sessions/)).not.toBeInTheDocument();
+    });
+
     it("reports a failed capacity read in its own part and keeps the reservations", () => {
         mount(() => true, { capacity: query(undefined, { error: new Error("EDH refused") }) });
         expect(screen.getByRole("alert")).toHaveTextContent("Error loading capacity: EDH refused");
