@@ -161,8 +161,9 @@ def load(file_path: str, asset_root: str = None, report: dict = None) -> pv.Poly
         raise ValueError("No valid mesh geometry found in USD stage")
     if skipped:
         for type_name, entry in skipped.items():
-            logger.warning(f"{entry['count']} {type_name} prims are not drawn by the 3D Preview Thumbnail; "
-                           f"first {len(entry['paths'])}: " + ", ".join(entry["paths"]))
+            count = entry["count"]
+            logger.warning(f"{count} {type_name} {'prim is' if count == 1 else 'prims are'} not drawn by the "
+                           f"3D Preview Thumbnail; first {len(entry['paths'])}: " + ", ".join(entry["paths"]))
     if any(context.mdl_unread.values()):
         logger.info(f"{sum(context.mdl_unread.values())} prims are not coloured by their MDL material: "
                     + _counted(context.mdl_unread))

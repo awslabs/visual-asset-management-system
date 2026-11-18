@@ -78,8 +78,24 @@ class TestSkippedPrimsAreNamed:
         with caplog.at_level(logging.WARNING):
             _load(_stage(tmp_path, _MESH + _POINTS + _CURVES))
         messages = [record.getMessage() for record in caplog.records]
-        assert any("1 Points prims are not drawn" in m and "/World/Dust" in m for m in messages)
-        assert any("1 BasisCurves prims are not drawn" in m and "/World/Hair" in m for m in messages)
+        assert any("1 Points prim is not drawn" in m and "/World/Dust" in m for m in messages)
+        assert any("1 BasisCurves prim is not drawn" in m and "/World/Hair" in m for m in messages)
+
+    def test_every_type_reads_singular_for_one_and_plural_for_more(self, tmp_path, caplog):
+        for name in usd_handler._UNDRAWN_TYPES:
+            for count in (1, 2):
+                caplog.clear()
+                prims = "".join(f'\n    def {name} "X{i}"\n    {{\n    }}' for i in range(count))
+                with caplog.at_level(logging.WARNING):
+                    _load(_stage(tmp_path, _MESH + prims, f"{name}{count}.usda"))
+                lines = [r.getMessage() for r in caplog.records if "not drawn by the 3D Preview" in r.getMessage()]
+                expected = (f"1 {name} prim is not drawn" if count == 1 else f"2 {name} prims are not drawn")
+                assert len(lines) == 1 and lines[0].startswith(expected), (name, count, lines)
+                described = usd_handler.describe_skipped({name: {"count": count, "paths": []}})
+                assert described == (f"1 {name} prim" if count == 1 else f"2 {name} prims")
+                sentence = core._skipped_prims_sentence({name: {"count": count, "paths": []}})
+                assert sentence == (f"1 {name} prim is not drawn by the 3D Preview Thumbnail." if count == 1
+                                    else f"2 {name} prims are not drawn by the 3D Preview Thumbnail.")
 
     def test_the_paths_are_bounded(self, tmp_path):
         many = "".join(_POINTS.replace('"Dust"', f'"Dust{i}"') for i in range(12))
