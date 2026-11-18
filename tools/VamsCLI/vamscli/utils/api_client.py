@@ -7911,21 +7911,32 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
     # ---- Schemas ------------------------------------------------------
 
-    def list_compliance_schemas(self, database_id: Optional[str] = None) -> Dict[str, Any]:
+    def list_compliance_schemas(self, database_id: Optional[str] = None,
+                                max_items: Optional[int] = None,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
         """
-        List compliance schemas using the /compliance/schemas GET endpoint.
+        List one page of compliance schemas using the /compliance/schemas GET endpoint.
 
         Args:
             database_id: When given, only schemas scoped to this database plus GLOBAL schemas are
                 returned; otherwise every schema the caller may read.
+            max_items: Schemas per page (1-200; the handler applies 100 when omitted)
+            starting_token: The NextToken of a previous page
 
         Returns:
-            API response data: {"schemas": [...]} — the latest version of each schema. The route
-            returns the whole list in one response and takes no paging parameters.
+            API response data: {"schemas": [...], "NextToken"?: str, "createScopes"?: [...]} — the
+            latest version of each schema, in schemaName order. `NextToken` is present while more
+            schemas remain; a page can be short, or empty, while it is (rows the caller may not
+            read are left out). `createScopes` is on every page of a listing without database_id.
+
+        Raises:
+            InvalidComplianceDataError: When max_items or the pagination token is rejected
         """
-        params = {'databaseId': database_id} if database_id else None
+        params = dict(self._compliance_page_params(max_items, starting_token) or {})
+        if database_id:
+            params['databaseId'] = database_id
         return self._compliance_request(
-            'GET', API_COMPLIANCE_SCHEMAS, "Listing compliance schemas", params=params)
+            'GET', API_COMPLIANCE_SCHEMAS, "Listing compliance schemas", params=params or None)
 
     def get_compliance_schema(self, schema_name: str) -> Dict[str, Any]:
         """
@@ -7964,7 +7975,9 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
         Raises:
             DatabaseNotFoundError: When the scoping database does not exist
-            InvalidComplianceDataError: When the schema body or fields are rejected
+            InvalidComplianceDataError: When the schema body or fields are rejected, or databaseId
+                names a database while an existing schema of that name is bound (database binding
+                or asset override) in another database; GLOBAL is not refused for that reason
         """
         return self._compliance_request(
             'POST', API_COMPLIANCE_SCHEMAS, "Compliance schema registration", body=schema_data)
@@ -7985,8 +7998,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
         Raises:
             ComplianceSchemaNotFoundError: When the schema does not exist
-            InvalidComplianceDataError: When the new body is rejected, or the schema is a system
-                schema that cannot be modified
+            InvalidComplianceDataError: When the new body is rejected, the schema is a system
+                schema that cannot be modified, or databaseId names a database while the schema is
+                bound (database binding or asset override) in another database; moving it to
+                GLOBAL is not refused for that reason
         """
         endpoint = route_path(API_COMPLIANCE_SCHEMA_BY_NAME, schemaName=schema_name)
         return self._compliance_request(
@@ -8117,22 +8132,33 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Evaluate an asset using the /compliance/evaluate/{databaseId}/{assetId} POST endpoint.
 
         Args:
-            schema_name: Schema to evaluate against; defaults to the asset's bound schema
+            schema_name: Schema to evaluate against; defaults to the asset's bound schema. The
+                caller needs read access to it, and it must be GLOBAL or available to the asset's
+                database.
 
         Returns:
             API response data: {message, evaluationId, schemaName, verdict, complianceState,
-            ruleResults, pipelineRulesPending, pipelineRulesWaiting}. The metadata and
-            relationship rules run synchronously; each pipeline rule launches a workflow execution
-            and is counted in pipelineRulesPending. A pipeline rule whose workflow's concurrency
-            lock another execution holds waits for it to end and then launches; it is counted in
-            pipelineRulesWaiting as well. While the asset holds an active exception against the schema
-            evaluated, a failing verdict leaves complianceState `exception` rather than
-            quarantining the asset. Naming a schema evaluates against it without changing the
-            asset's binding.
+            ruleResults, pipelineRulesPending, pipelineRulesWaiting, dryRun: False}. The metadata
+            and relationship rules run synchronously; each pipeline rule launches a workflow
+            execution and is counted in pipelineRulesPending. A pipeline rule whose workflow's
+            concurrency lock another execution holds waits for it to end and then launches; it is
+            counted in pipelineRulesWaiting as well. While the asset holds an active exception
+            against the schema evaluated, a failing verdict leaves complianceState `exception`
+            rather than quarantining the asset.
+
+            Naming a schema other than the asset's bound one is a dry run: {message, dryRun: True,
+            schemaName, schemaVersion, verdict, complianceState (the asset's current state,
+            unchanged), ruleResults, hasRuleErrors, errorRules, pipelineRulesNotRun} and no
+            evaluationId. Nothing is recorded: no evaluation record, no state change, no audit
+            entry, no workflow launch, no cascade. Pipeline rules do not run in a dry run; each is
+            a rule result with status `error`, counted in pipelineRulesNotRun.
 
         Raises:
             AssetNotFoundError: When the asset does not exist
-            InvalidComplianceDataError: When no schema is given and the asset has none bound
+            ComplianceSchemaNotFoundError: When the named schema does not exist
+            InvalidComplianceDataError: When no schema is given and the asset has none bound, or
+                the named schema is not available to the asset's database
+            PermissionDeniedError: When the caller may not read the named schema (403)
         """
         endpoint = route_path(API_COMPLIANCE_EVALUATE_ASSET, databaseId=database_id, assetId=asset_id)
         body = {'schemaName': schema_name} if schema_name else {}
@@ -8154,9 +8180,11 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             NextToken?}. `skipped` counts the bound assets not evaluated: `skippedNotAuthorized`
             those the caller is not authorized to evaluate or may not read (never listed) and
             `skippedArchived` the archived ones the caller may see (their records are left as they
-            are; an archived asset the caller may not see is counted nowhere). `assetsRemaining`
-            counts the bound assets still to evaluate; while it is above 0 the response carries
-            `NextToken`, which the next call passes back to continue.
+            are; an archived asset the caller may not see is counted nowhere). A call reads the
+            bound assets a page at a time under a time budget and may end before it has read them
+            all: `NextToken` is present while any asset remains (read or not), and the next call
+            passes it back to continue. `assetsRemaining` counts only the assets this call read
+            and did not reach; it can be 0 while `NextToken` is present.
         """
         endpoint = route_path(API_COMPLIANCE_SWEEP_SCHEMA, schemaName=schema_name)
         body = {'startingToken': starting_token} if starting_token else {}
@@ -8181,9 +8209,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             NextToken?}. `skippedArchived` counts the archived assets the caller may see, which
             are not evaluated (their records are left as they are; 0 for a caller who may not see
             the database's archive), `skippedNotAuthorized` the assets the caller may not read
-            (not evaluated, never listed), and `skipped` the two. While `assetsRemaining` is above
-            0 the response
-            carries `NextToken`: pass it back to continue. `registered` counts assets of a bound
+            (not evaluated, never listed), and `skipped` the two. `NextToken` is present while any
+            tracked asset remains (read or not): pass it back to continue. `assetsRemaining` counts
+            only the assets this call read and did not reach; it can be 0 while `NextToken` is
+            present. `registered` counts assets of a bound
             database registered under the binding by this call; `withoutSchema` counts tracked
             assets whose record names no schema (not evaluated).
         """
