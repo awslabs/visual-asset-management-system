@@ -269,7 +269,7 @@ When two or more pipeline rules of a schema name the same workflow, the schema s
 :::
 
 :::note[A parent schema that was not found]
-When a schema's `extends` names a parent that was not found as a `vams-rules-v1` schema you may read, the schema still saves, and the answer carries an `extendsSchemaNotFound` warning: **The parent schema '_name_' was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.** The Schemas page shows it beside the success message, and the CLI prints it. The same message is shown for a parent you may not read, so check the name with an administrator if you expect it to exist. See [Schema inheritance](../concepts/compliance.md#schema-inheritance).
+When a schema's `extends` names a parent that was not found as a `vams-rules-v1` schema you may read, the schema still saves, and the answer carries an `extendsSchemaNotFound` warning: **The parent schema named in `extends` was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.** The Schemas page shows it beside the success message, and the CLI prints it. The same message is shown for a parent you may not read, so check the name with an administrator if you expect it to exist. See [Schema inheritance](../concepts/compliance.md#schema-inheritance).
 :::
 
 ### Updating a schema
