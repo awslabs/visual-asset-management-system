@@ -34,6 +34,7 @@ import { useViewerRegistryReady } from "../../visualizerPlugin/core/useViewerReg
 
 import Synonyms from "../../synonyms";
 import { usePageTitle } from "../../hooks/usePageTitle";
+import { buildSingleViewerEntry } from "./singleViewerEntry";
 import "./ViewFile.css";
 
 // TypeScript interfaces
@@ -359,20 +360,13 @@ function ViewFileForAsset() {
     const [fileViewMode, setFileViewMode] = useState<ViewerMode>("visualize");
     const viewerRegistryReady = useViewerRegistryReady();
 
-    // The single-file entry exactly as the visualize path hands it to the viewer: the preview tab
-    // swaps in the preview key, and a file viewed through an ASSET version is fetched by that version
-    // rather than pinned to an S3 versionId.
+    // The single-file entry exactly as the visualize path hands it to the viewer (see
+    // buildSingleViewerEntry: the preview tab swaps in the preview key and drops the source file's
+    // S3 version id).
     const singleViewerEntry = useMemo(
         () =>
             !isMultiFileMode && singleFileInfo
-                ? {
-                      ...singleFileInfo,
-                      versionId: effectiveAssetVersionId ? undefined : singleFileInfo.versionId,
-                      key:
-                          viewType === "preview"
-                              ? singleFileInfo.previewFile || singleFileInfo.key
-                              : singleFileInfo.key,
-                  }
+                ? buildSingleViewerEntry(singleFileInfo, viewType, effectiveAssetVersionId)
                 : null,
         // `singleFileInfo` is rebuilt every render, so the memo keys on its fields instead.
         // eslint-disable-next-line react-hooks/exhaustive-deps
