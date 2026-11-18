@@ -186,6 +186,13 @@ const IMAGE_TO_3D_STATE_MACHINE_TIMEOUT = Duration.hours(3);
 const IMAGE_TO_3D_BATCH_STATE_TIMEOUT = IMAGE_TO_3D_STATE_MACHINE_TIMEOUT.minus(
     Duration.minutes(15)
 );
+/**
+ * A partial download or lock in the shared EFS weight cache older than this has no live owner: every
+ * job's attempt ends within IMAGE_TO_3D_BATCH_ATTEMPT_DURATION. The hour of margin covers clock skew
+ * between instances and a slow write that touches a file late. Passed to entrypoint.sh as
+ * HF_CACHE_STALE_MINUTES.
+ */
+const IMAGE_TO_3D_HF_CACHE_STALE_AGE = IMAGE_TO_3D_BATCH_ATTEMPT_DURATION.plus(Duration.hours(1));
 
 export class ImageTo3dConstruct extends Construct {
     public pipelineVamsLambdaFunctionName: string;
@@ -835,6 +842,12 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
                     { name: "AWS_REGION", value: region },
                     { name: "S3_MODEL_BUCKET", value: modelCacheBucket.bucketName },
                     { name: "S3_MODEL_PREFIX", value: `imageTo3d/hf_cache/${modelKey}` },
+                    // Age past which entrypoint.sh removes a partial download or lock from the shared
+                    // weight cache: longer than any live job, whose attempt is bounded here.
+                    {
+                        name: "HF_CACHE_STALE_MINUTES",
+                        value: String(IMAGE_TO_3D_HF_CACHE_STALE_AGE.toMinutes()),
+                    },
                     // The Bedrock model the Blender agent reasons with. Present on every job definition so
                     // the container has one source for it; only the agent reads it.
                     {

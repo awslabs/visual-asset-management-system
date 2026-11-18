@@ -195,6 +195,28 @@ describe("Image to 3D timeout chain", () => {
     test("pipelineEnd can end the run's job on either queue after a state timeout", () => {
         expectBatchStateTimeoutCleanup(template);
     });
+
+    test("the weight cache's stale age, passed to every job, outlasts the job's attempt", () => {
+        // entrypoint.sh removes partial downloads and locks older than this from the cache other
+        // jobs share; a file younger than the attempt bound may still belong to a live job.
+        const jobDefinitions = Object.values(
+            template.findResources("AWS::Batch::JobDefinition")
+        ) as any[];
+        expect(jobDefinitions.length).toBeGreaterThan(0);
+        for (const jobDefinition of jobDefinitions) {
+            const env = Object.fromEntries(
+                jobDefinition.Properties.ContainerProperties.Environment.map((e: any) => [
+                    e.Name,
+                    e.Value,
+                ])
+            );
+            const staleMinutes = Number(env.HF_CACHE_STALE_MINUTES);
+            expect(Number.isInteger(staleMinutes)).toBe(true);
+            expect(staleMinutes * 60).toBeGreaterThan(
+                jobDefinition.Properties.Timeout.AttemptDurationSeconds
+            );
+        }
+    });
 });
 
 describe("Point cloud Potree viewer timeout chain", () => {

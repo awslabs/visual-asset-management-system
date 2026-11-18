@@ -247,28 +247,41 @@ class TestTheStartupSweepSparesLiveDownloads:
     ENTRYPOINT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                               "entrypoint.sh")
 
-    def _sweep(self, hf_home):
+    def _sweep(self, hf_home, stale_minutes="180"):
         with open(self.ENTRYPOINT, encoding="utf-8") as handle:
             script = handle.read()
         start = script.index("HF_CACHE=")
         end = script.index("\nfi\n", start) + len("\nfi\n")
+        env = {k: v for k, v in os.environ.items() if k != "HF_CACHE_STALE_MINUTES"}
+        env["HF_HOME"] = str(hf_home)
+        if stale_minutes is not None:
+            env["HF_CACHE_STALE_MINUTES"] = stale_minutes
         subprocess.run(["bash", "-c", "set -e\n" + script[start:end]],  # nosec B603 B607
-                       env={**os.environ, "HF_HOME": str(hf_home)}, check=True)
+                       env=env, check=True)
 
-    def test_old_leftovers_go_and_fresh_files_stay(self, tmp_path):
+    def _cache(self, tmp_path):
+        """An old and a fresh partial download and lock; returns (old files, fresh files)."""
         blobs = tmp_path / "models--org--name" / "blobs"
         locks = tmp_path / ".locks" / "models--org--name"
         blobs.mkdir(parents=True)
         locks.mkdir(parents=True)
-        old_partial, old_lock = blobs / "old.incomplete", locks / "old.lock"
-        live_partial, live_lock = blobs / "live.incomplete", locks / "live.lock"
-        for path in (old_partial, old_lock, live_partial, live_lock):
+        old = (blobs / "old.incomplete", locks / "old.lock")
+        live = (blobs / "live.incomplete", locks / "live.lock")
+        for path in old + live:
             path.write_bytes(b"x")
         four_hours_ago = time.time() - 4 * 3600
-        for path in (old_partial, old_lock):
+        for path in old:
             os.utime(path, (four_hours_ago, four_hours_ago))
+        return old, live
 
+    def test_old_leftovers_go_and_fresh_files_stay(self, tmp_path):
+        old, live = self._cache(tmp_path)
         self._sweep(tmp_path)
+        assert not any(path.exists() for path in old)
+        assert all(path.exists() for path in live)
 
-        assert not old_partial.exists() and not old_lock.exists()
-        assert live_partial.exists() and live_lock.exists()
+    @pytest.mark.parametrize("stale_minutes", [None, "", "0", "three hours"])
+    def test_without_an_age_from_the_job_definition_nothing_is_removed(self, tmp_path, stale_minutes):
+        old, live = self._cache(tmp_path)
+        self._sweep(tmp_path, stale_minutes)
+        assert all(path.exists() for path in old + live)

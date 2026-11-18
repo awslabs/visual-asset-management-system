@@ -8,14 +8,17 @@ export HF_XET_DISABLE=1
 # Sweep stale download artifacts from prior crashed runs. The HF cache is on a shared EFS mount, so
 # a lock left behind by one instance blocks every later run on every instance. Other jobs on other
 # instances may be downloading into the same cache right now, so only files older than any live job
-# are removed: a job's AWS Batch attempt is bounded at 2 hours (IMAGE_TO_3D_BATCH_ATTEMPT_DURATION in
-# imageTo3d-construct.ts), so a partial download or lock untouched for 3 hours has no live owner.
+# are removed. That age comes from the job definition (HF_CACHE_STALE_MINUTES, derived from the
+# Batch attempt duration in imageTo3d-construct.ts); without a whole number of minutes nothing is
+# removed.
 HF_CACHE=${HF_HOME:-/mnt/efs/imageto3d-models/hf_cache}
-STALE_MINUTES=180
-if [ -d "$HF_CACHE" ]; then
+STALE_MINUTES=${HF_CACHE_STALE_MINUTES:-}
+if [ -d "$HF_CACHE" ] && [[ "$STALE_MINUTES" =~ ^[1-9][0-9]*$ ]]; then
     find "$HF_CACHE" -name "*.incomplete" -mmin +"$STALE_MINUTES" -delete 2>/dev/null || true
     find "$HF_CACHE" -name "*.lock"       -mmin +"$STALE_MINUTES" -delete 2>/dev/null || true
     rm -rf "$HF_CACHE/xet" 2>/dev/null || true
+elif [ -d "$HF_CACHE" ]; then
+    echo "HF_CACHE_STALE_MINUTES is not set to a whole number of minutes; leaving the shared cache as it is" >&2
 fi
 
 cd /opt/ml/code
