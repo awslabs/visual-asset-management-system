@@ -14,7 +14,9 @@ Every schema record the GET routes return carries a top-level `schemaFormat` (`v
 `legacy`) derived from the stored body.
 """
 
+import base64
 import json
+import time
 from datetime import datetime, timezone
 
 import boto3
@@ -25,7 +27,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from common.apiRoutes import API_COMPLIANCE_SCHEMA_BY_NAME, API_COMPLIANCE_SCHEMAS
-from common.compliance import databaseRetirement, knownDatabase
+from common.compliance import databaseRetirement, knownDatabase, listing
 from common.compliance import evaluationEngine as engine
 from common.compliance.auditRecord import build_audit_item
 from common.dynamodb import query_all_items, query_has_match
@@ -69,6 +71,27 @@ COMPLIANCE_BINDING_OBJECT_TYPE = "complianceBinding"
 DELETED_DATABASE_MARKER = "#deleted"
 # The system actor: the only identity that registers or modifies system schemas.
 SYSTEM_USER = "SYSTEM_USER"
+
+# Only a schema's latest version row carries `latestVersion` (always LATEST_VERSION_MARKER), so the
+# listing reads one row per schema from LatestVersionIndex (partition `latestVersion`, sort
+# `schemaName`). A save writes the new version with it and removes it from the one it replaces, in
+# one transaction; the default-schema seed writes it on version 1.
+LATEST_VERSION_INDEX = "LatestVersionIndex"
+LATEST_VERSION_ATTRIBUTE = "latestVersion"
+LATEST_VERSION_MARKER = "latest"
+LATEST_VERSION_KEYS = (LATEST_VERSION_ATTRIBUTE, "schemaName", "internalVersion")
+DEFAULT_SCHEMA_PAGE_SIZE = 100
+INVALID_PAGINATION_TOKEN_MESSAGE = listing.INVALID_PAGINATION_TOKEN_MESSAGE
+INVALID_PAGE_SIZE_MESSAGE = "maxItems must be an integer"
+# shortcut: schema rows saved before the marker existed (development stacks; no release carried
+# compliance before 2.7.0) are marked by the first listing (`_mark_latest_versions_once`), which
+# records that it finished in this row of the schema table (a name the schema-name validator
+# refuses, no `databaseId`, no marker, so no index and no schema read finds it). Remove it in the
+# release after 2.7.0.
+LATEST_MARKER_BACKFILL_KEY = {"schemaName": "#latestVersionMarked", "internalVersion": 0}
+# A listing spends at most this long marking rows; one that runs out answers from what is marked,
+# and the next listing goes on.
+LATEST_MARKER_BACKFILL_SECONDS = 10
 
 try:
     schema_table_name = get_table_name(ResourceKeys.COMPLIANCE_SCHEMA_STORAGE_TABLE)
@@ -438,9 +461,10 @@ def handle_get_request(event):
                    schemaName=path_params.get("schemaName"))
         return response
     if API_COMPLIANCE_SCHEMAS.matches(path):
-        response = list_schemas(event, knownDatabase.decoded_scope(query_params.get("databaseId")))
+        response = list_schemas(event, knownDatabase.decoded_scope(query_params.get("databaseId")),
+                                query_params)
         log_action(event, "complianceSchemaList", **audit_outcome(response),
-                   request_parameters=request_parameters(query_params, ("databaseId",)),
+                   request_parameters=request_parameters(query_params, ("databaseId", "maxItems")),
                    item_count=response_count(response, "schemas"))
         return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
@@ -600,68 +624,187 @@ def creatable_scopes(casbin_enforcer):
             if casbin_enforcer.enforce(_schema_object("", database_id), "POST")]
 
 
-def list_schemas(event, database_id_filter=None):
-    """List the latest version of every schema, filtered to those the caller may GET.
+def list_schemas(event, database_id_filter=None, query_params=None):
+    """One page of the latest version of each schema the caller may GET, by name.
 
-    With `databaseId`, only GLOBAL schemas and those scoped to that database are listed
-    (DatabaseIdIndex GSI); without it, every partition of the GSI is read.
+    The page is read from LatestVersionIndex, one row per schema (no earlier version is read), up
+    to `maxItems` (default DEFAULT_SCHEMA_PAGE_SIZE, at most `listing.MAX_LISTING_PAGE_SIZE`)
+    schemas, from `startingToken` on; `NextToken` is present while more remain. A page can be short,
+    or empty, while a `NextToken` is present: the rows the caller may not read are left out, and
+    each request reads a bounded part of the index (`listing.query_page`). With `databaseId`, only
+    GLOBAL schemas and those scoped to that database are listed; without it, every schema the caller
+    may read, and `createScopes`.
     """
+    query_params = query_params or {}
     presenter = databaseRetirement.Presenter(evaluation_table)
+    scopes = None
     if database_id_filter:
         (valid, message) = knownDatabase.validate_scope(database_id_filter)
         if not valid:
             return validation_error(body={"message": message}, event=event)
-        database_ids = [GLOBAL_DATABASE_ID]
+        scopes = {GLOBAL_DATABASE_ID}
         # While a deleted database's schemas move under `<databaseId>#deleted`, those still under
         # the live id are the deleted database's, not the live id's (`databaseRetirement`).
         if database_id_filter != GLOBAL_DATABASE_ID and not presenter.moving(database_id_filter):
-            database_ids.append(database_id_filter)
-        items = _query_schemas_for_databases(database_ids)
-    else:
-        stored = _query_all_schemas()
-        # The retirement records of every schema's database are read together (D133).
-        presenter.prime(item.get("databaseId") for item in stored)
-        items = [presenter.present(item) for item in stored]
-
-    schemas_by_name = {}
-    for item in items:
-        name = item["schemaName"]
-        version = int(item.get("internalVersion", 1))
-        if name not in schemas_by_name or version > schemas_by_name[name]["version"]:
-            schemas_by_name[name] = normalize_schema_item(item)
+            scopes.add(database_id_filter)
+    page_size = listing.page_size_of(query_params.get("maxItems"), DEFAULT_SCHEMA_PAGE_SIZE)
+    if page_size is None:
+        return validation_error(body={"message": INVALID_PAGE_SIZE_MESSAGE}, event=event)
+    start_key = None
+    if query_params.get("startingToken"):
+        start_key = _decode_listing_token(query_params["startingToken"])
+        if start_key is None:
+            return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+    if casbin_enforcer is None:
+        # List filtering passes nothing without tokens: an empty page, nothing read.
+        return success(body={"schemas": [], **({} if database_id_filter else {"createScopes": []})})
+    _mark_latest_versions_once()
+
+    presented = {}
+
+    def prime(items):
+        # The retirement records of a read's schema databases are read together (D133).
+        if scopes is None:
+            presenter.prime(item.get("databaseId") for item in items)
+
+    def accept(item):
+        if scopes is not None:
+            if (item.get("databaseId") or GLOBAL_DATABASE_ID) not in scopes:
+                return False
+            schema = normalize_schema_item(item)
+        else:
+            schema = normalize_schema_item(presenter.present(item))
+        if not casbin_enforcer.enforce(
+                _schema_object(schema["schemaName"], schema["databaseId"]), "GET"):
+            return False
+        presented[(item["schemaName"], int(item.get("internalVersion", 1)))] = schema
+        return True
+
+    items, next_key, _reads = listing.query_page(
+        schema_table,
+        {"IndexName": LATEST_VERSION_INDEX,
+         "KeyConditionExpression": Key(LATEST_VERSION_ATTRIBUTE).eq(LATEST_VERSION_MARKER)},
+        page_size, LATEST_VERSION_KEYS, start_key=start_key, accept=accept, prepare=prime)
+
+    # A save replaces the marker in one transaction, so a name has one marked row; should a page
+    # still meet two (a backfill racing a save), the higher version is listed.
+    schemas_by_name = {}
+    for item in items:
+        schema = presented[(item["schemaName"], int(item.get("internalVersion", 1)))]
+        held = schemas_by_name.get(schema["schemaName"])
+        if held is None or schema["version"] > held["version"]:
+            schemas_by_name[schema["schemaName"]] = schema
     allowed = []
     for schema in schemas_by_name.values():
-        # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
-        if casbin_enforcer and casbin_enforcer.enforce(
-                _schema_object(schema["schemaName"], schema["databaseId"]), "GET"):
-            schema["permissions"] = schema_permissions(casbin_enforcer, schema, database_id_filter)
-            allowed.append(schema)
+        schema["permissions"] = schema_permissions(casbin_enforcer, schema, database_id_filter)
+        allowed.append(schema)
 
     body = {"schemas": allowed}
+    if next_key is not None:
+        body["NextToken"] = listing.encode_token(_token_key(next_key))
     if not database_id_filter:
         # The Schemas page's create form offers these scopes only.
-        body["createScopes"] = creatable_scopes(casbin_enforcer) if casbin_enforcer else []
+        body["createScopes"] = creatable_scopes(casbin_enforcer)
     return success(body=body)
 
 
-def _query_schemas_for_databases(database_ids):
-    """Every schema row whose databaseId is one of `database_ids` (DatabaseIdIndex, paged)."""
-    items = []
-    for database_id in database_ids:
-        items.extend(query_all_items(
-            schema_table,
-            IndexName="DatabaseIdIndex",
-            KeyConditionExpression=Key("databaseId").eq(database_id),
-        ))
-    return items
+def _token_key(key):
+    """A LatestVersionIndex key as a token carries it (the version as an int)."""
+    return {LATEST_VERSION_ATTRIBUTE: key.get(LATEST_VERSION_ATTRIBUTE),
+            "schemaName": key.get("schemaName"),
+            "internalVersion": int(key.get("internalVersion", 0))}
 
 
-def _query_all_schemas():
-    """Every schema row. The schema table has no constant-partition index, so the complete
-    unfiltered listing is a scan paged to exhaustion (schemas are administrator-defined and few)."""
-    return _scan_all_items(schema_table)
+def _decode_listing_token(token):
+    """The LatestVersionIndex key a schema listing token carries, or None for a token that is not
+    one: not Base64 JSON, not an object with exactly the index's keys, a marker that is not the
+    index's, a name that is not a string, or a version that is not a positive integer. A key of
+    another listing is refused here rather than failing the read."""
+    try:
+        decoded = json.loads(base64.b64decode(token, validate=True).decode("utf-8"))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(decoded, dict) or set(decoded) != set(LATEST_VERSION_KEYS):
+        return None
+    version = decoded.get("internalVersion")
+    if (decoded.get(LATEST_VERSION_ATTRIBUTE) != LATEST_VERSION_MARKER
+            or not isinstance(decoded.get("schemaName"), str) or not decoded["schemaName"]
+            or isinstance(version, bool) or not isinstance(version, int) or version < 1):
+        return None
+    return {LATEST_VERSION_ATTRIBUTE: LATEST_VERSION_MARKER, "schemaName": decoded["schemaName"],
+            "internalVersion": version}
+
+
+def _mark_latest_versions_once(clock=None):
+    """Mark the latest version of every schema saved before the marker existed (see
+    LATEST_MARKER_BACKFILL_KEY), once: when the backfill row records that it ran, nothing is read.
+    Otherwise the table's keys are scanned (projected to the name, the version and the marker), and
+    only a latest version that carries no marker is written, conditionally (it still exists and
+    still has none); a marker found on an earlier version is removed. A row a save marked meanwhile
+    is left alone, and a version marked here that a save has since replaced loses the marker again.
+    Bounded by LATEST_MARKER_BACKFILL_SECONDS: a run that stops before the end leaves the backfill
+    row unwritten and the next listing starts again, writing only what is still unmarked."""
+    if schema_table.get_item(Key=LATEST_MARKER_BACKFILL_KEY, ConsistentRead=True).get("Item"):
+        return
+    clock = clock or time.monotonic
+    started = clock()
+    versions = {}
+    scan_kwargs = {"ProjectionExpression": "schemaName, internalVersion, #lv",
+                   "ExpressionAttributeNames": {"#lv": LATEST_VERSION_ATTRIBUTE}}
+    while True:
+        response = schema_table.scan(**scan_kwargs)
+        for item in response.get("Items", []):
+            name = item.get("schemaName")
+            if not isinstance(name, str) or name == LATEST_MARKER_BACKFILL_KEY["schemaName"]:
+                continue
+            versions.setdefault(name, []).append(
+                (int(item.get("internalVersion", 0)), LATEST_VERSION_ATTRIBUTE in item))
+        if "LastEvaluatedKey" not in response:
+            break
+        if clock() - started > LATEST_MARKER_BACKFILL_SECONDS:
+            logger.info("Schema latest-version backfill ran out of time; the next listing goes on")
+            return
+        scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+    for name, found in versions.items():
+        if clock() - started > LATEST_MARKER_BACKFILL_SECONDS:
+            logger.info("Schema latest-version backfill ran out of time; the next listing goes on")
+            return
+        latest = max(version for version, _marked in found)
+        for version, marked in found:
+            if version != latest and marked:
+                _set_marker(name, version, marked=False)
+        if not any(marked for version, marked in found if version == latest):
+            _set_marker(name, latest, marked=True)
+            current = _latest_schema_item(name)
+            if current and int(current.get("internalVersion", 0)) != latest:
+                # A save replaced the version while it was being marked.
+                _set_marker(name, latest, marked=False)
+    schema_table.put_item(Item={**LATEST_MARKER_BACKFILL_KEY, "markedAt": datetime.now(
+        timezone.utc).isoformat()})
+    logger.info(f"Schema latest-version backfill done: {len(versions)} schemas")
+
+
+def _set_marker(schema_name, version, marked):
+    """Set (or remove) the latest-version marker on one version row, conditional on the row
+    existing and, when setting, carrying none yet. A row that no longer qualifies is left alone."""
+    key = {"schemaName": schema_name, "internalVersion": version}
+    names = {"#lv": LATEST_VERSION_ATTRIBUTE, "#n": "schemaName"}
+    try:
+        if marked:
+            schema_table.update_item(
+                Key=key, UpdateExpression="SET #lv = :marker",
+                ConditionExpression="attribute_exists(#n) AND attribute_not_exists(#lv)",
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues={":marker": LATEST_VERSION_MARKER})
+        else:
+            schema_table.update_item(
+                Key=key, UpdateExpression="REMOVE #lv",
+                ConditionExpression="attribute_exists(#n)", ExpressionAttributeNames=names)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
 
 
 def _scan_all_items(table, **scan_kwargs):
@@ -783,20 +926,38 @@ def _write_schema_version(event, schema_name, database_id, description, schema_b
     current = _latest_schema_item(schema_name)
     next_version = int(current["internalVersion"]) + 1 if current else 1
     now = datetime.now(timezone.utc).isoformat()
+    item = {
+        "schemaName": schema_name,
+        "internalVersion": next_version,
+        "databaseId": database_id,
+        "description": description,
+        "schemaBody": json.dumps(schema_body),
+        "registeredAt": now,
+        "registeredBy": claims_and_roles["tokens"][0],
+        "isSystem": is_system,
+        LATEST_VERSION_ATTRIBUTE: LATEST_VERSION_MARKER,
+    }
 
     try:
-        schema_table.put_item(Item={
-            "schemaName": schema_name,
-            "internalVersion": next_version,
-            "databaseId": database_id,
-            "description": description,
-            "schemaBody": json.dumps(schema_body),
-            "registeredAt": now,
-            "registeredBy": claims_and_roles["tokens"][0],
-            "isSystem": is_system,
-        }, ConditionExpression="attribute_not_exists(internalVersion)")
+        if current is None:
+            schema_table.put_item(Item=item, ConditionExpression="attribute_not_exists(internalVersion)")
+        else:
+            # The new version takes the latest-version marker from the one it replaces, in one
+            # transaction, so the listing never reads two versions of a name, or none.
+            schema_table.meta.client.transact_write_items(TransactItems=[
+                {"Put": {"TableName": schema_table.name, "Item": item,
+                         "ConditionExpression": "attribute_not_exists(internalVersion)"}},
+                {"Update": {"TableName": schema_table.name,
+                            "Key": {"schemaName": schema_name,
+                                    "internalVersion": current["internalVersion"]},
+                            "UpdateExpression": "REMOVE #lv",
+                            "ConditionExpression": "attribute_exists(#n)",
+                            "ExpressionAttributeNames": {"#lv": LATEST_VERSION_ATTRIBUTE,
+                                                         "#n": "schemaName"}}},
+            ])
     except ClientError as e:
-        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+        if e.response.get("Error", {}).get("Code") not in (
+                "ConditionalCheckFailedException", "TransactionCanceledException"):
             raise
         logger.info(f"Schema '{schema_name}' v{next_version} was written by a concurrent save; "
                     "this save is refused")

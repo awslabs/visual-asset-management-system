@@ -324,8 +324,16 @@ def schema_row(schema_name=SCHEMA, version=1, body=None, database_id="GLOBAL", i
 
 
 def put_items(table):
-    """Every `Item=` a mock table received through `put_item`, in call order."""
-    return [call.kwargs["Item"] for call in table.put_item.call_args_list]
+    """Every `Item=` a mock table received through `put_item`, in call order, then every item it
+    received as a `Put` of a transaction (`table.meta.client.transact_write_items`, as a schema save
+    that replaces a version writes it)."""
+    items = [call.kwargs["Item"] for call in table.put_item.call_args_list]
+    client = getattr(getattr(table, "meta", None), "client", None)
+    transactions = getattr(getattr(client, "transact_write_items", None), "call_args_list", None)
+    if isinstance(transactions, list):
+        items += [entry["Put"]["Item"] for call in transactions
+                  for entry in call.kwargs.get("TransactItems", []) if "Put" in entry]
+    return items
 
 
 def update_values(table):

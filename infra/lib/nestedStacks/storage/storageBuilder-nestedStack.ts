@@ -2572,6 +2572,22 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // The latest version of each schema, by name: only a schema's latest version row carries
+    // `latestVersion` (always "latest"; a save moves it to the new version in one transaction), so
+    // the schema listing reads one row per schema and pages by name.
+    complianceSchemaStorageTable.addGlobalSecondaryIndex({
+        indexName: "LatestVersionIndex",
+        partitionKey: {
+            name: "latestVersion",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "schemaName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const complianceAssetStateStorageTable = new dynamodb.Table(
         scope,
         "ComplianceAssetStateStorageTable",
