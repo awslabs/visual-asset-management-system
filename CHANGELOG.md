@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Web** On the Search page's Map view, clicking a file's footprint opens its popup at the click instead of at the centre of the footprint's box, which for a large or L-shaped footprint was away from the click and for a footprint split at longitude 180 was on the other side of the world. When footprints overlap, the smallest one under the click opens, so a small footprint under a large one can be opened. (issue #1683)
 -   **Pipelines** The RapidPipeline EKS Lambda signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud and `amazonaws.com.cn` in the China Regions. Previously the token always named an `amazonaws.com` STS host. ([#1593](https://github.com/awslabs/visual-asset-management-system/issues/1593))
 
 ### Chores
