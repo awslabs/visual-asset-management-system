@@ -4,23 +4,19 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import {
-    Box,
-    Button,
-    Container,
-    Header,
-    SpaceBetween,
-    Table,
-    TextFilter,
-    Modal,
-    FormField,
-    Input,
-    Select,
-    Flashbar,
-    FlashbarProps,
-    RadioGroup,
-    SelectProps,
-} from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import Container from "@cloudscape-design/components/container";
+import Header from "@cloudscape-design/components/header";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Table from "@cloudscape-design/components/table";
+import TextFilter from "@cloudscape-design/components/text-filter";
+import Modal from "@cloudscape-design/components/modal";
+import FormField from "@cloudscape-design/components/form-field";
+import Input from "@cloudscape-design/components/input";
+import Select, { SelectProps } from "@cloudscape-design/components/select";
+import Flashbar, { FlashbarProps } from "@cloudscape-design/components/flashbar";
+import RadioGroup from "@cloudscape-design/components/radio-group";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Pagination from "@cloudscape-design/components/pagination";
 import { usePageTitle } from "../hooks/usePageTitle";
