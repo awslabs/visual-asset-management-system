@@ -399,6 +399,7 @@ const ComplianceQuarantine: React.FC = () => {
                                               {canRelease && itemAllows(item, "release") && (
                                                   <Button
                                                       variant="inline-link"
+                                                      ariaLabel={`Release ${assetLabel(item)}`}
                                                       onClick={() => setReleaseTarget(item)}
                                                   >
                                                       Release
@@ -408,6 +409,9 @@ const ComplianceQuarantine: React.FC = () => {
                                                   itemAllows(item, "exception") && (
                                                       <Button
                                                           variant="inline-link"
+                                                          ariaLabel={`Exception for ${assetLabel(
+                                                              item
+                                                          )}`}
                                                           onClick={() => setExceptionTarget(item)}
                                                       >
                                                           Exception

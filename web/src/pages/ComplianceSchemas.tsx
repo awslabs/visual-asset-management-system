@@ -936,6 +936,7 @@ export default function ComplianceSchemas() {
                                                       {canUpdate && itemAllows(item, "edit") && (
                                                           <Button
                                                               variant="inline-link"
+                                                              ariaLabel={`Edit ${item.schemaName}`}
                                                               disabled={legacy}
                                                               onClick={() => openEditModal(item)}
                                                           >
@@ -945,6 +946,7 @@ export default function ComplianceSchemas() {
                                                       {canSweep && (
                                                           <Button
                                                               variant="inline-link"
+                                                              ariaLabel={`Sweep ${item.schemaName}`}
                                                               disabled={
                                                                   legacy ||
                                                                   (sweepingSchema !== null &&
