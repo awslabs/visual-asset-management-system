@@ -24,7 +24,8 @@ jest.mock("react-map-gl/maplibre", () => {
         // A button stands in for a click on the first polygon of the map.
         default: ReactActual.forwardRef((props: any, ref: any) => {
             ReactActual.useImperativeHandle(ref, () => ({
-                fitBounds: () => undefined,
+                easeTo: () => undefined,
+                getCanvas: () => ({ clientWidth: 600, clientHeight: 400 }),
                 getMap: () => ({ fake: true }),
             }));
             ReactActual.useEffect(() => props.onLoad?.(), []);

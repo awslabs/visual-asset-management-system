@@ -36,7 +36,7 @@ import {
 import { extractLocationData } from "./utils/locationUtils";
 import { hasLocationOnlyMetadata, isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
-import { FIT_BOUNDS_OPTIONS, locationDataBounds } from "./utils/mapBounds";
+import { FIT_BOUNDS_OPTIONS, cameraForBounds, locationDataBounds } from "./utils/mapBounds";
 import {
     MAP_MARKER_SIZE_PX,
     MAP_PIN_PATH,
@@ -460,7 +460,15 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
         if (!mapLoaded || !mapRef.current) return;
         const bounds = locationDataBounds(locationData);
         if (!bounds) return;
-        mapRef.current.fitBounds(bounds, FIT_BOUNDS_OPTIONS);
+        const map = mapRef.current;
+        const canvas = map.getCanvas();
+        const camera = cameraForBounds(bounds, {
+            width: canvas.clientWidth,
+            height: canvas.clientHeight,
+            padding: FIT_BOUNDS_OPTIONS.padding,
+            maxZoom: FIT_BOUNDS_OPTIONS.maxZoom,
+        });
+        if (camera) map.easeTo({ ...camera, duration: FIT_BOUNDS_OPTIONS.duration });
     }, [locationData, mapLoaded]);
 
     // Handle pagination
