@@ -23,10 +23,7 @@ jest.mock("react-map-gl/maplibre", () => {
     return {
         __esModule: true,
         default: ReactActual.forwardRef((props: any, ref: any) => {
-            ReactActual.useImperativeHandle(ref, () => ({
-                easeTo: () => undefined,
-                getCanvas: () => ({ clientWidth: 600, clientHeight: 400 }),
-            }));
+            ReactActual.useImperativeHandle(ref, () => ({ fitBounds: () => undefined }));
             return <div data-testid="map">{props.children}</div>;
         }),
         // A marker is a button that selects its result, as a click on the map does.

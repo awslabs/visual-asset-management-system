@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { BOUNDS_PADDING_DEGREES, cameraForBounds, locationDataBounds } from "./mapBounds";
+import { BOUNDS_PADDING_DEGREES, locationDataBounds } from "./mapBounds";
 
 const P = BOUNDS_PADDING_DEGREES;
 
@@ -92,133 +92,111 @@ describe("locationDataBounds (D99)", () => {
         ).toBeNull();
     });
 
-    it("takes the shortest way round for results either side of the antimeridian (UAT A)", () => {
-        // A footprint split at 180 (two parts) beside Bay Area footprints: the frame is the Pacific
-        // between them, not the world from -180 to 180.
+    describe("longitudes take the shortest way round (UAT A)", () => {
+        const rect = (w: number, e: number, s: number, n: number) => [
+            [
+                [w, s],
+                [e, s],
+                [e, n],
+                [w, n],
+                [w, s],
+            ],
+        ];
+        const polygon = (w: number, e: number, s: number, n: number) => ({
+            type: "Polygon",
+            coordinates: rect(w, e, s, n),
+        });
         const split = {
             type: "MultiPolygon",
-            coordinates: [
-                [
-                    [
-                        [-180, -1],
-                        [-179, -1],
-                        [-179, 1],
-                        [-180, 1],
-                        [-180, -1],
-                    ],
-                ],
-                [
-                    [
-                        [179, -1],
-                        [180, -1],
-                        [180, 1],
-                        [179, 1],
-                        [179, -1],
-                    ],
-                ],
-            ],
+            coordinates: [rect(-180, -179, -1, 1), rect(179, 180, -1, 1)],
         };
-        const bay = {
-            type: "Polygon",
-            coordinates: [
-                [
-                    [-123, 37],
-                    [-122, 37],
-                    [-122, 38],
-                    [-123, 38],
-                    [-123, 37],
+        const geo = (geoJson: any) => ({ type: "geojson" as const, geoJson });
+        const point = (longitude: number, latitude: number) => ({
+            type: "point" as const,
+            latitude,
+            longitude,
+        });
+        const west = (bounds: any) => bounds[0][0];
+        const east = (bounds: any) => bounds[1][0];
+
+        it("frames the Pacific for a footprint split at 180 beside Bay Area files", () => {
+            const bounds = locationDataBounds([geo(polygon(-123, -122, 37, 38)), geo(split)]);
+            expectBox(bounds, [179 - P, -1 - P, -122 + 360 + P, 38 + P]);
+        });
+
+        it("frames both sides of 180 for points at 179 and -179", () => {
+            const bounds = locationDataBounds([point(179, 0), point(-179, 0)]);
+            expect(west(bounds)).toBeCloseTo(179 - P, 6);
+            expect(east(bounds)).toBeCloseTo(181 + P, 6);
+        });
+
+        it("keeps a split footprint alone as its two narrow parts, not the world", () => {
+            const bounds = locationDataBounds([geo(split)]);
+            expect(west(bounds)).toBeCloseTo(179 - P, 6);
+            expect(east(bounds)).toBeCloseTo(181 + P, 6);
+        });
+
+        it("frames the world for one shape whose own vertices span it (a latitude-cropped global raster)", () => {
+            const bounds = locationDataBounds([geo(polygon(-180, 180, 10, 20))]);
+            expectBox(bounds, [-180 - P, 10 - P, 180 + P, 20 + P]);
+        });
+
+        it("keeps all of one wide shape (-170..170)", () => {
+            const bounds = locationDataBounds([geo(polygon(-170, 170, 10, 20))]);
+            expectBox(bounds, [-170 - P, 10 - P, 170 + P, 20 + P]);
+        });
+
+        it("keeps a wide shape and a Bay Area point together", () => {
+            const bounds = locationDataBounds([
+                geo(polygon(-180, 180, 10, 20)),
+                point(-122.4, 37.8),
+            ]);
+            expectBox(bounds, [-180 - P, 10 - P, 180 + P, 37.8 + P]);
+        });
+
+        it("spans the world for points on several continents", () => {
+            const bounds = locationDataBounds([point(-100, 40), point(10, 50), point(100, -30)]);
+            expect(west(bounds)).toBeCloseTo(-100 - P, 6);
+            expect(east(bounds)).toBeCloseTo(100 + P, 6);
+        });
+
+        it("crosses 180 when that is the shorter way between far-apart continents", () => {
+            // Asia (139) to North America (-123): 98 degrees east across the Pacific, not 262 the other way.
+            const bounds = locationDataBounds([point(139, 35), point(-123, 37)]);
+            expect(west(bounds)).toBeCloseTo(139 - P, 6);
+            expect(east(bounds)).toBeCloseTo(-123 + 360 + P, 6);
+        });
+
+        it("frames a single point and one polygon as before", () => {
+            expectBox(locationDataBounds([point(20, 10)]), [20 - P, 10 - P, 20 + P, 10 + P]);
+            expectBox(locationDataBounds([geo(polygon(-123, -122, 37, 38))]), [
+                -123 - P,
+                37 - P,
+                -122 + P,
+                38 + P,
+            ]);
+        });
+
+        it("keeps polar latitudes as they are and is null for an empty set", () => {
+            expectBox(locationDataBounds([point(0, 89), point(10, -89)]), [
+                0 - P,
+                -89 - P,
+                10 + P,
+                89 + P,
+            ]);
+            expect(locationDataBounds([])).toBeNull();
+        });
+
+        it("counts each part of a MultiPoint and each member of a GeometryCollection", () => {
+            const multi = {
+                type: "MultiPoint",
+                coordinates: [
+                    [179, 0],
+                    [-179, 0],
                 ],
-            ],
-        };
-        const bounds: any = locationDataBounds([
-            { type: "geojson", geoJson: bay },
-            { type: "geojson", geoJson: split },
-        ]);
-        expect(bounds[0][0]).toBeCloseTo(179 - P, 6);
-        expect(bounds[1][0]).toBeCloseTo(-122 + 360 + P, 6);
-        expect(bounds[0][1]).toBeCloseTo(-1 - P, 6);
-        expect(bounds[1][1]).toBeCloseTo(38 + P, 6);
-    });
-
-    it("spreads over the world when results are on several continents", () => {
-        const bounds: any = locationDataBounds([
-            { type: "point", latitude: 40, longitude: -100 },
-            { type: "point", latitude: 50, longitude: 10 },
-            { type: "point", latitude: -30, longitude: 100 },
-        ]);
-        expect(bounds[0][0]).toBeCloseTo(-100 - P, 6);
-        expect(bounds[1][0]).toBeCloseTo(100 + P, 6);
-    });
-});
-
-describe("cameraForBounds (UAT A)", () => {
-    const view = { width: 493, height: 630, padding: 40, maxZoom: 14 };
-
-    it("centres a box and lets its width set the zoom", () => {
-        const camera = cameraForBounds(
-            [
-                [-10, 0],
-                [10, 10],
-            ],
-            view
-        )!;
-        expect(camera.center[0]).toBeCloseTo(0, 6);
-        expect(camera.center[1]).toBeGreaterThan(4.9);
-        expect(camera.center[1]).toBeLessThan(5.1);
-        // 413 px for 20 degrees: log2(413 / 512 * 18)
-        expect(camera.zoom).toBeCloseTo(Math.log2((413 / 512) * 18), 3);
-    });
-
-    it("wraps the centre of an antimeridian box into -180..180 and shows all of it", () => {
-        const camera = cameraForBounds(
-            [
-                [179, -1],
-                [239, 38],
-            ],
-            view
-        )!;
-        expect(camera.center[0]).toBeCloseTo(-151, 6);
-        // 60 degrees over 413 px.
-        expect(camera.zoom).toBeCloseTo(Math.log2((413 / 512) * 6), 3);
-    });
-
-    it("never zooms past maxZoom for a point, nor below the minimum for the world", () => {
-        const point = cameraForBounds(
-            [
-                [20 - P, 10 - P],
-                [20 + P, 10 + P],
-            ],
-            view
-        )!;
-        expect(point.zoom).toBeLessThanOrEqual(14);
-        const world = cameraForBounds(
-            [
-                [-180, -60],
-                [180, 80],
-            ],
-            view
-        )!;
-        expect(world.zoom).toBe(0);
-    });
-
-    it("is null for a box or view that cannot be framed", () => {
-        expect(
-            cameraForBounds(
-                [
-                    [NaN, 0],
-                    [1, 1],
-                ],
-                view
-            )
-        ).toBeNull();
-        expect(
-            cameraForBounds(
-                [
-                    [0, 0],
-                    [1, 1],
-                ],
-                { ...view, width: 0 }
-            )
-        ).toBeNull();
+            };
+            expect(west(locationDataBounds([geo(multi)]))).toBeCloseTo(179 - P, 6);
+            expect(east(locationDataBounds([geo(multi)]))).toBeCloseTo(181 + P, 6);
+        });
     });
 });

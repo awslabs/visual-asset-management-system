@@ -12,111 +12,106 @@ export const BOUNDS_PADDING_DEGREES = 0.01;
 /** The framing options of the Map view: room around the pins, and no street-level zoom on one point. */
 export const FIT_BOUNDS_OPTIONS = { padding: 40, duration: 1000, maxZoom: 14 };
 
-/** The lowest zoom of a frame, so a world-wide spread shows the whole world. */
-export const MIN_FRAME_ZOOM = 0;
-
 /**
- * The longitudes' shortest covering arc as [west, east], with `east` above 180 when the arc crosses the
- * antimeridian. The arc is the full circle minus the widest gap between neighbouring longitudes, so a
- * raster footprint split at 180 (its western part near -180, its eastern near 180) and a point at the
- * Bay Area frame the Pacific between them, not the whole world from -180 to 180.
+ * The covering arc of a set of longitude intervals, as [west, east] with `east` above 180 when the arc
+ * crosses the antimeridian: the full circle minus the widest stretch that no interval covers. Each
+ * interval is one shape's own [min, max] (a point is a single value), so a shape that spans a wide
+ * range keeps all of it covered, and a footprint split at 180 (two parts, one near -180 and one near 180)
+ * beside Bay Area files frames the Pacific between them instead of the whole world.
  */
-function shortestLongitudeArc(lons: number[]): [number, number] {
-    const sorted = [...new Set(lons.map((lon) => Math.max(-180, Math.min(180, lon))))].sort(
-        (a, b) => a - b
-    );
-    if (sorted.length === 1) return [sorted[0], sorted[0]];
-    // The gap that closes the circle, from the last longitude round to the first.
-    let widest = sorted[0] + 360 - sorted[sorted.length - 1];
-    let start = 0;
-    for (let i = 0; i < sorted.length - 1; i++) {
-        const gap = sorted[i + 1] - sorted[i];
+function coveringArc(intervals: Array<[number, number]>): [number, number] {
+    const sorted = intervals
+        .map(
+            ([a, b]) =>
+                [Math.max(-180, Math.min(180, a)), Math.max(-180, Math.min(180, b))] as [
+                    number,
+                    number
+                ]
+        )
+        .sort((x, y) => x[0] - y[0]);
+    // Merge overlapping intervals into the covered runs.
+    const runs: Array<[number, number]> = [];
+    for (const [start, end] of sorted) {
+        const last = runs[runs.length - 1];
+        if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+        else runs.push([start, end]);
+    }
+    // The widest uncovered stretch: between two runs, or round the back from the last run to the first.
+    let widest = runs[0][0] + 360 - runs[runs.length - 1][1];
+    let after = -1;
+    for (let i = 0; i < runs.length - 1; i++) {
+        const gap = runs[i + 1][0] - runs[i][1];
         if (gap > widest) {
             widest = gap;
-            start = i + 1;
+            after = i;
         }
     }
-    if (start === 0) return [sorted[0], sorted[sorted.length - 1]];
-    return [sorted[start], sorted[start - 1] + 360];
+    if (after === -1) return [runs[0][0], runs[runs.length - 1][1]];
+    return [runs[after + 1][0], runs[after][1] + 360];
+}
+
+/** The longitude interval and the latitudes of each part of a GeoJSON geometry, one entry per part. */
+function geometryParts(geom: any, parts: Array<{ lons: number[]; lats: number[] }>): void {
+    if (!geom) return;
+    const vertices = (coords: any, into: { lons: number[]; lats: number[] }) => {
+        if (!Array.isArray(coords)) return;
+        if (typeof coords[0] === "number" && typeof coords[1] === "number") {
+            into.lons.push(coords[0]);
+            into.lats.push(coords[1]);
+            return;
+        }
+        for (const c of coords) vertices(c, into);
+    };
+    const part = (coords: any) => {
+        const into = { lons: [] as number[], lats: [] as number[] };
+        vertices(coords, into);
+        if (into.lons.length) parts.push(into);
+    };
+    switch (geom.type) {
+        case "MultiPolygon":
+        case "MultiLineString":
+            for (const member of geom.coordinates ?? []) part(member);
+            break;
+        case "MultiPoint":
+            for (const member of geom.coordinates ?? []) part(member);
+            break;
+        case "GeometryCollection":
+            for (const sub of geom.geometries ?? []) geometryParts(sub, parts);
+            break;
+        default:
+            // Point, LineString, Polygon: one part. Unknown types with coordinates count as one part.
+            if (geom.coordinates) part(geom.coordinates);
+    }
 }
 
 /**
  * The box that holds every plotted result: each point marker and every vertex of each GeoJSON shape
  * (a Feature's geometry, a geometry, or each member of a GeometryCollection), with
- * BOUNDS_PADDING_DEGREES on every side. Longitudes take the shortest way round the globe, so `east`
- * can exceed 180 for results either side of the antimeridian. Null when no result carries a coordinate.
+ * BOUNDS_PADDING_DEGREES on every side. Longitudes are the covering arc of the parts' own intervals, so
+ * `east` can exceed 180 for results either side of the antimeridian; MapLibre's `fitBounds` frames such a
+ * box on a flat map. Null when no result carries a coordinate.
  */
 export function locationDataBounds(items: LocationData[]): LngLatBoundsLike | null {
-    const lats: number[] = [];
-    const lons: number[] = [];
-
-    // Walk arbitrary nested coordinate arrays from a GeoJSON geometry.
-    const collect = (coords: any) => {
-        if (!Array.isArray(coords)) return;
-        if (typeof coords[0] === "number" && typeof coords[1] === "number") {
-            lons.push(coords[0]);
-            lats.push(coords[1]);
-            return;
-        }
-        for (const c of coords) collect(c);
-    };
+    const parts: Array<{ lons: number[]; lats: number[] }> = [];
 
     for (const item of items) {
         if (item.type === "point" && item.latitude !== undefined && item.longitude !== undefined) {
-            lats.push(item.latitude);
-            lons.push(item.longitude);
+            parts.push({ lons: [item.longitude], lats: [item.latitude] });
             continue;
         }
         if (item.type === "geojson" && item.geoJson) {
             const geom = item.geoJson?.type === "Feature" ? item.geoJson.geometry : item.geoJson;
-            if (geom?.coordinates) collect(geom.coordinates);
-            if (geom?.geometries) {
-                for (const sub of geom.geometries) {
-                    if (sub?.coordinates) collect(sub.coordinates);
-                }
-            }
+            geometryParts(geom, parts);
         }
     }
 
-    if (lats.length === 0) return null;
-    const [west, east] = shortestLongitudeArc(lons);
+    if (parts.length === 0) return null;
+    const lats = parts.flatMap((part) => part.lats);
+    const [west, east] = coveringArc(
+        parts.map((part) => [Math.min(...part.lons), Math.max(...part.lons)] as [number, number])
+    );
     return [
         [west - BOUNDS_PADDING_DEGREES, Math.min(...lats) - BOUNDS_PADDING_DEGREES],
         [east + BOUNDS_PADDING_DEGREES, Math.max(...lats) + BOUNDS_PADDING_DEGREES],
     ];
-}
-
-const mercatorY = (lat: number) =>
-    Math.log(
-        Math.tan(Math.PI / 4 + (Math.max(-85.051129, Math.min(85.051129, lat)) * Math.PI) / 360)
-    );
-
-/**
- * The camera (centre and zoom) that shows `bounds` in a view of `width` x `height` px with `padding` px
- * on every side, computed for the flat Web Mercator the tiles and footprints are drawn in. The map's own
- * `fitBounds` is not used because the basemap style may select the globe projection, whose fit gives a
- * view of the wrong place and scale for a box more than a few tens of degrees wide (a world-wide
- * footprint framed West Africa). Null for an unusable box or view.
- */
-export function cameraForBounds(
-    bounds: LngLatBoundsLike,
-    view: { width: number; height: number; padding: number; maxZoom: number; minZoom?: number }
-): { center: [number, number]; zoom: number } | null {
-    const [[west, south], [east, north]] = bounds as [[number, number], [number, number]];
-    if (![west, south, east, north].every(Number.isFinite)) return null;
-    if (!(view.width > 0) || !(view.height > 0)) return null;
-    // Never let padding consume the view.
-    const padX = Math.min(view.padding, view.width / 4);
-    const padY = Math.min(view.padding, view.height / 4);
-    const lonSpan = Math.max(east - west, 1e-9);
-    const worldY = Math.max((mercatorY(north) - mercatorY(south)) / (2 * Math.PI), 1e-12);
-    const zoomX = Math.log2(((view.width - 2 * padX) / 512) * (360 / lonSpan));
-    const zoomY = Math.log2((view.height - 2 * padY) / 512 / worldY);
-    const zoom = Math.max(view.minZoom ?? MIN_FRAME_ZOOM, Math.min(zoomX, zoomY, view.maxZoom));
-    const midY = (mercatorY(north) + mercatorY(south)) / 2;
-    const lat = (Math.atan(Math.exp(midY)) * 360) / Math.PI - 90;
-    let lng = (west + east) / 2;
-    while (lng > 180) lng -= 360;
-    while (lng < -180) lng += 360;
-    return { center: [lng, lat], zoom };
 }

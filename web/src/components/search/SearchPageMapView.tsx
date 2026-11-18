@@ -36,7 +36,7 @@ import {
 import { extractLocationData } from "./utils/locationUtils";
 import { hasLocationOnlyMetadata, isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
-import { FIT_BOUNDS_OPTIONS, cameraForBounds, locationDataBounds } from "./utils/mapBounds";
+import { FIT_BOUNDS_OPTIONS, locationDataBounds } from "./utils/mapBounds";
 import {
     MAP_MARKER_SIZE_PX,
     MAP_PIN_PATH,
@@ -460,15 +460,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
         if (!mapLoaded || !mapRef.current) return;
         const bounds = locationDataBounds(locationData);
         if (!bounds) return;
-        const map = mapRef.current;
-        const canvas = map.getCanvas();
-        const camera = cameraForBounds(bounds, {
-            width: canvas.clientWidth,
-            height: canvas.clientHeight,
-            padding: FIT_BOUNDS_OPTIONS.padding,
-            maxZoom: FIT_BOUNDS_OPTIONS.maxZoom,
-        });
-        if (camera) map.easeTo({ ...camera, duration: FIT_BOUNDS_OPTIONS.duration });
+        mapRef.current.fitBounds(bounds, FIT_BOUNDS_OPTIONS);
     }, [locationData, mapLoaded]);
 
     // Handle pagination
@@ -595,8 +587,8 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
             {/* Map */}
             <Map
                 ref={mapRef}
-                // Flat map: the basemap style selects the globe, which shows one hemisphere, so hits
-                // spread over the world (or either side of longitude 180) could not all be in view.
+                // Flat map: the basemap style selects the globe, whose fit-to-bounds frames the wrong
+                // place for results spread over the world or either side of longitude 180.
                 projection="mercator"
                 initialViewState={initialViewState}
                 style={{ height: "70vh", width: "100%" }}

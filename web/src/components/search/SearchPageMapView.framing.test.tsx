@@ -20,9 +20,9 @@ import { act, render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import SearchPageMapView from "./SearchPageMapView";
 import { INITIAL_STATE } from "./SearchPageTypes";
-import { FIT_BOUNDS_OPTIONS } from "./utils/mapBounds";
+import { BOUNDS_PADDING_DEGREES, FIT_BOUNDS_OPTIONS } from "./utils/mapBounds";
 
-const mockEaseTo = jest.fn();
+const mockFitBounds = jest.fn();
 const mockMap: { load: () => void } = { load: () => undefined };
 const mockMapProps: { last: any } = { last: null };
 
@@ -33,11 +33,7 @@ jest.mock("react-map-gl/maplibre", () => {
         default: ReactActual.forwardRef((props: any, ref: any) => {
             const [instance, setInstance] = ReactActual.useState(null);
             mockMapProps.last = props;
-            mockMap.load = () =>
-                setInstance({
-                    easeTo: mockEaseTo,
-                    getCanvas: () => ({ clientWidth: 600, clientHeight: 500 }),
-                });
+            mockMap.load = () => setInstance({ fitBounds: mockFitBounds });
             ReactActual.useImperativeHandle(ref, () => instance, [instance]);
             ReactActual.useEffect(() => {
                 if (instance) props.onLoad?.({ type: "load" });
@@ -121,32 +117,25 @@ const view = (state: any) => (
     </MemoryRouter>
 );
 
-/** The camera `easeTo` was last given. */
-const lastCamera = () => mockEaseTo.mock.calls[mockEaseTo.mock.calls.length - 1][0];
+/** The box `fitBounds` was last given, as [[west, south], [east, north]]. */
+const lastBounds = () => mockFitBounds.mock.calls[mockFitBounds.mock.calls.length - 1][0];
 
-/** The point sits inside the 600 x 500 view the camera frames, with the padding to spare. */
 const expectFramed = (...points: Array<{ lon: number; lat: number }>) => {
-    const { center, zoom, duration } = lastCamera();
-    expect(duration).toBe(FIT_BOUNDS_OPTIONS.duration);
-    const scale = 512 * 2 ** zoom;
-    const y = (lat: number) =>
-        Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)) / (2 * Math.PI);
-    for (const point of points) {
-        let dLon = point.lon - center[0];
-        while (dLon > 180) dLon -= 360;
-        while (dLon < -180) dLon += 360;
-        const px = 300 + (dLon / 360) * scale;
-        const py = 250 - (y(point.lat) - y(center[1])) * scale;
-        expect(px).toBeGreaterThanOrEqual(FIT_BOUNDS_OPTIONS.padding - 1);
-        expect(px).toBeLessThanOrEqual(600 - FIT_BOUNDS_OPTIONS.padding + 1);
-        expect(py).toBeGreaterThanOrEqual(FIT_BOUNDS_OPTIONS.padding - 1);
-        expect(py).toBeLessThanOrEqual(500 - FIT_BOUNDS_OPTIONS.padding + 1);
-    }
+    const [[west, south], [east, north]] = lastBounds();
+    const lons = points.map((p) => p.lon);
+    const lats = points.map((p) => p.lat);
+    expect(west).toBeCloseTo(Math.min(...lons) - BOUNDS_PADDING_DEGREES, 6);
+    expect(south).toBeCloseTo(Math.min(...lats) - BOUNDS_PADDING_DEGREES, 6);
+    expect(east).toBeCloseTo(Math.max(...lons) + BOUNDS_PADDING_DEGREES, 6);
+    expect(north).toBeCloseTo(Math.max(...lats) + BOUNDS_PADDING_DEGREES, 6);
+    expect(mockFitBounds.mock.calls[mockFitBounds.mock.calls.length - 1][1]).toEqual(
+        FIT_BOUNDS_OPTIONS
+    );
 };
 
 describe("Map view framing (D99)", () => {
     beforeEach(() => {
-        mockEaseTo.mockReset();
+        mockFitBounds.mockReset();
         jest.spyOn(console, "log").mockImplementation(() => undefined);
     });
     afterEach(() => jest.restoreAllMocks());
@@ -154,11 +143,11 @@ describe("Map view framing (D99)", () => {
     it("frames every point of a natural-language answer already in hand when the map loads", () => {
         render(view(stateWith([nlpAssetHit("det", DETROIT), nlpAssetHit("sea", SEATTLE)])));
         // No map instance yet: nothing to move.
-        expect(mockEaseTo).not.toHaveBeenCalled();
+        expect(mockFitBounds).not.toHaveBeenCalled();
 
         act(() => mockMap.load());
 
-        expect(mockEaseTo).toHaveBeenCalledTimes(1);
+        expect(mockFitBounds).toHaveBeenCalledTimes(1);
         expectFramed(DETROIT, SEATTLE);
     });
 
@@ -167,17 +156,17 @@ describe("Map view framing (D99)", () => {
             view(stateWith([nlpAssetHit("det", DETROIT), nlpAssetHit("sea", SEATTLE)]))
         );
         act(() => mockMap.load());
-        expect(mockEaseTo).toHaveBeenCalledTimes(1);
+        expect(mockFitBounds).toHaveBeenCalledTimes(1);
 
         // The next page of the answer held: the view gets the next slice, with no new search.
         rerender(view(stateWith([nlpAssetHit("aus", AUSTIN), nlpAssetHit("bos", BOSTON)], 2)));
 
-        expect(mockEaseTo).toHaveBeenCalledTimes(2);
+        expect(mockFitBounds).toHaveBeenCalledTimes(2);
         expectFramed(AUSTIN, BOSTON);
 
         // And back to the first page.
         rerender(view(stateWith([nlpAssetHit("det", DETROIT), nlpAssetHit("sea", SEATTLE)], 0)));
-        expect(mockEaseTo).toHaveBeenCalledTimes(3);
+        expect(mockFitBounds).toHaveBeenCalledTimes(3);
         expectFramed(DETROIT, SEATTLE);
     });
 
@@ -185,17 +174,17 @@ describe("Map view framing (D99)", () => {
         const { rerender } = render(view(stateWith([])));
         act(() => mockMap.load());
         // Nothing plotted yet: no box to frame.
-        expect(mockEaseTo).not.toHaveBeenCalled();
+        expect(mockFitBounds).not.toHaveBeenCalled();
 
         rerender(
             view(stateWith([keywordAssetHit("det", DETROIT), keywordAssetHit("sea", SEATTLE)]))
         );
 
-        expect(mockEaseTo).toHaveBeenCalledTimes(1);
+        expect(mockFitBounds).toHaveBeenCalledTimes(1);
         expectFramed(DETROIT, SEATTLE);
     });
 
-    it("frames the Pacific, with every hit in view, for a footprint split at 180 beside Bay Area files (UAT A)", () => {
+    it("draws a flat map and frames both sides of longitude 180 for a split footprint beside Bay Area files (UAT A)", () => {
         const fileHit = (id: string, geo: any) => ({
             _index: "file",
             _id: `db#${id}`,
@@ -233,28 +222,20 @@ describe("Map view framing (D99)", () => {
                 result: { hits: { total: { value: 2, relation: "eq" }, hits }, aggregations: {} },
             } as any)
         );
-        act(() => mockMap.load());
-        expect(mockEaseTo).toHaveBeenCalledTimes(1);
-        // The camera sits in the western Pacific half of the world, not at longitude 0.
-        const { center } = lastCamera();
-        expect(Math.abs(center[0])).toBeGreaterThan(120);
-        expectFramed(
-            { lon: -123, lat: 37 },
-            { lon: -122, lat: 38 },
-            { lon: 179, lat: -1 },
-            { lon: -179, lat: 1 },
-            { lon: 180, lat: 0 }
-        );
-    });
-
-    it("draws a flat map, so hits on both sides of the world can all be in view (UAT A)", () => {
-        render(view(stateWith([nlpAssetHit("det", DETROIT)])));
         expect(mockMapProps.last.projection).toBe("mercator");
+        act(() => mockMap.load());
+        expect(mockFitBounds).toHaveBeenCalledTimes(1);
+        const [[west, south], [east, north]] = lastBounds();
+        // The Pacific between 179 and -122 (238 when counted eastward), not the world from -180 to 180.
+        expect(west).toBeCloseTo(179 - BOUNDS_PADDING_DEGREES, 6);
+        expect(east).toBeCloseTo(238 + BOUNDS_PADDING_DEGREES, 6);
+        expect(south).toBeCloseTo(-1 - BOUNDS_PADDING_DEGREES, 6);
+        expect(north).toBeCloseTo(38 + BOUNDS_PADDING_DEGREES, 6);
     });
 
     it("frames nothing when no result on the page has a location", () => {
         render(view(stateWith([{ ...nlpAssetHit("x", DETROIT), _source: { str_assetid: "x" } }])));
         act(() => mockMap.load());
-        expect(mockEaseTo).not.toHaveBeenCalled();
+        expect(mockFitBounds).not.toHaveBeenCalled();
     });
 });
