@@ -55,6 +55,7 @@ import govcloudTemplate from "../../config/config.template.govcloud.json";
 import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import cdkJson from "../../cdk.json";
 import { newTestApp } from "./testApp";
+import { vectorIndexNameFor } from "./vectorIndexName";
 import { canonicalJson, sharedSynth, synthCacheKey } from "./synthCache";
 import { SplatToolboxConstruct } from "../../lib/nestedStacks/pipelines/3dRecon/splatToolbox/constructs/splatToolbox-construct";
 
@@ -167,6 +168,7 @@ function escapeRegExp(s: string): string {
  * config `synthTemplate` synthesizes, for a test that builds part of the app from it. The ALB's
  * domain host and certificate ARN are replaced only when the shipped template enables the ALB, so
  * a mutate that enables it on the commercial template keeps that template's placeholder values.
+ * Exported also so the fill can be asserted without a synth.
  */
 export function buildTemplateConfig(name: TemplateName, mutate?: (c: any) => void): Config.Config {
     const t = TARGET[name];
@@ -202,10 +204,18 @@ export function buildTemplateConfig(name: TemplateName, mutate?: (c: any) => voi
     internal.openSearchFileIndexName = "files";
     internal.resourceNamesSSMParamPrefix = `/${stackName}/resourceNames`;
     internal.openSearchDomainEndpointSSMParam = `/${stackName}/aos/endPoint`;
+    internal.openSearchAssetIndexNameSSMParam = `/${stackName}/aos/assetIndexName`;
+    internal.openSearchFileIndexNameSSMParam = `/${stackName}/aos/fileIndexName`;
     internal.locationServiceApiKeyArnSSMParam = `/${stackName}/location/apiKeyArn`;
     internal.webUrlDeploymentSSMParam = `/${stackName}/web/deployedUrl`;
 
     mutate?.(internal);
+    // Derived after the mutator so an arm that enables or re-points vector search names the index
+    // from the block it synthesizes with. getConfig() derives this field the same way and never
+    // reads it from config.json, so the block is the only input here too.
+    internal.vectorIndexName = vectorIndexNameFor(
+        internal.app?.pipelines?.useSystemGenAiMetadata?.bedrockModels
+    );
     assertNoUntrackedDockerAsset(config);
     return config;
 }

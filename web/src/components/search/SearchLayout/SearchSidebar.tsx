@@ -4,14 +4,24 @@
  */
 
 import React from "react";
-import { Box, SpaceBetween, Container } from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Checkbox from "@cloudscape-design/components/checkbox";
 import ModeSelector from "./ModeSelector";
 import BasicFiltersPanel from "./BasicFiltersPanel";
 import AdvancedFiltersPanel from "./AdvancedFiltersPanel";
 import MetadataSearchPanel from "./MetadataSearchPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import GeoFilterPanel from "./GeoFilterPanel";
-import { SearchFilters, MetadataFilter, SearchPreferences } from "../types";
+import ReducedFiltersPanel from "./ReducedFiltersPanel";
+import {
+    SearchFilters,
+    MetadataFilter,
+    SearchPreferences,
+    SearchMode,
+    isTotalLowerBound,
+} from "../types";
+import { nlpCountsAreMinimums } from "../utils/nlpResultPaging";
 
 interface SearchSidebarProps {
     // Mode
@@ -47,7 +57,11 @@ interface SearchSidebarProps {
     showMapThumbnails?: boolean;
     onMapThumbnailToggle?: () => void;
     useMapView?: boolean;
-    isMapView?: boolean;
+
+    /** True when OpenSearch is off: only the mode selector and the natural-language filters render. */
+    reduced?: boolean;
+    /** The effective search mode; the `Search inside files` checkbox renders only under `nlp`. */
+    searchMode?: SearchMode;
 }
 
 const SearchSidebar: React.FC<SearchSidebarProps> = ({
@@ -73,22 +87,68 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
     showMapThumbnails,
     onMapThumbnailToggle,
     useMapView,
-    isMapView = false,
+    reduced = false,
+    searchMode = "keyword",
 }) => {
+    const modeSelector = (
+        <ModeSelector
+            recordType={recordType}
+            onRecordTypeChange={onRecordTypeChange}
+            showThumbnails={showThumbnails}
+            onThumbnailToggle={onThumbnailToggle}
+            showMapThumbnails={showMapThumbnails}
+            onMapThumbnailToggle={onMapThumbnailToggle}
+            useMapView={useMapView}
+            disabled={loading}
+        />
+    );
+
+    // Natural-language mode only: whether segment vectors (video windows, document chunks) join
+    // the ranking. Cleared sends `includeSegments: false`; checked leaves the route's default.
+    const segmentsCheckbox = searchMode === "nlp" && (
+        <Checkbox
+            onChange={({ detail }) => onFilterChange("includeSegments", detail.checked)}
+            checked={filters.includeSegments !== false}
+            disabled={loading}
+            description="Also matches file contents, including image and video scenes."
+        >
+            Search inside files
+        </Checkbox>
+    );
+
+    // A count that is a minimum ("132+") makes every facet count beside it one too. Natural-language
+    // counts are minimums because matching is approximate; a keyword total is one when some
+    // permission rules can't be counted in advance, and its buckets are then minimums as well
+    // (docs/api/search.md, "Counts and permissions").
+    const countsAreMinimums =
+        searchMode === "nlp" ? nlpCountsAreMinimums(searchResult) : isTotalLowerBound(searchResult);
+
+    if (reduced) {
+        return (
+            <Box padding={{ top: "n", bottom: "s", horizontal: "s" }}>
+                <SpaceBetween direction="vertical" size="m">
+                    {modeSelector}
+                    {segmentsCheckbox}
+                    <ReducedFiltersPanel
+                        filters={filters}
+                        onFilterChange={onFilterChange}
+                        loading={loading}
+                        searchResult={searchResult}
+                        databaseLocked={databaseLocked}
+                        recordType={recordType}
+                        countsAreMinimums={countsAreMinimums}
+                    />
+                </SpaceBetween>
+            </Box>
+        );
+    }
+
     return (
         <Box padding={{ top: "n", bottom: "s", horizontal: "s" }}>
             <SpaceBetween direction="vertical" size="m">
                 {/* Mode Selector - Prominent at top */}
-                <ModeSelector
-                    recordType={recordType}
-                    onRecordTypeChange={onRecordTypeChange}
-                    showThumbnails={showThumbnails}
-                    onThumbnailToggle={onThumbnailToggle}
-                    showMapThumbnails={showMapThumbnails}
-                    onMapThumbnailToggle={onMapThumbnailToggle}
-                    useMapView={useMapView}
-                    disabled={loading}
-                />
+                {modeSelector}
+                {segmentsCheckbox}
 
                 {/* Basic Filters */}
                 <BasicFiltersPanel
@@ -98,6 +158,7 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
                     searchResult={searchResult}
                     databaseLocked={databaseLocked}
                     recordType={recordType}
+                    countsAreMinimums={countsAreMinimums}
                 />
 
                 {/* Advanced Filters */}
@@ -106,6 +167,7 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
                     onFilterChange={onFilterChange}
                     loading={loading}
                     recordType={recordType}
+                    searchMode={searchMode}
                 />
 
                 {/* Metadata Search */}
@@ -119,7 +181,6 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
                     metadataOperator={metadataOperator}
                     onOperatorChange={onMetadataOperatorChange}
                     disabled={loading}
-                    isMapView={isMapView}
                 />
 
                 {/* Geospatial Filter (after Metadata Search) */}
@@ -137,6 +198,7 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
                     disabled={loading}
                     filters={filters}
                     onFilterChange={onFilterChange}
+                    searchMode={searchMode}
                 />
             </SpaceBetween>
         </Box>

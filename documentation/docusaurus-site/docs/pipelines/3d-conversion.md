@@ -202,5 +202,5 @@ Each conversion starts a new worker process, which starts an interpreter and imp
 ## Related Resources
 
 -   [Pipeline System Overview](overview.md)
--   [CAD/Mesh Metadata Extraction Pipeline](cad-mesh-extraction.md) -- extracts metadata from similar file formats
+-   [SYSTEM - GenAI Metadata Generation Pipeline](system-genai-metadata.md) -- extracts attributes and generates metadata for the same file formats
 -   [3D Preview Thumbnail Pipeline](3d-thumbnail.md) -- generates visual previews from converted files

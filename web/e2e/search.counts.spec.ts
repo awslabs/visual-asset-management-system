@@ -8,17 +8,33 @@
  *
  * Totals and aggregation buckets count only records the signed-in user can open. An exact total
  * (`hits.total.relation` "eq") is shown as is; a minimum ("gte"), which some permission rules
- * produce, is shown with "+". Run it once per role under test: the assertions hold for any role, and
- * a constrained role is where a count over records the user cannot open would show.
+ * produce, is shown with "+". A natural-language total above zero is always a minimum, because the
+ * vector index matches approximately; that case skips where vector search is off. Run it once per
+ * role under test: the assertions hold for any role, and a constrained role is where a count over
+ * records the user cannot open would show.
  *
  * Non-mutating (Rule 2): it searches and reads. Data-independent (Rule 1): every expectation is
  * derived from what the search returns, and a check that needs records skips when there are none.
  */
 
 import { test, expect, Page } from "@playwright/test";
-import { apiContext, collectPageErrors } from "./support/fixtures";
+import {
+    apiContext,
+    cachedFeaturesEnabled,
+    collectPageErrors,
+    gotoFresh,
+    gotoSearch,
+    readFeaturesEnabled,
+    searchCountBadge,
+    searchCountBadgeText,
+    searchModeCase,
+    searchQueryBox,
+    selectSearchMode,
+} from "./support/fixtures";
 
 const PAGE_SIZE = 100;
+/** A description most indexed content matches somewhat; any answer, zero included, is checked. */
+const NLP_QUERY = "a part of a machine";
 
 interface Bucket {
     key: string;
@@ -29,6 +45,19 @@ interface SearchAnswer {
     hits: { hits: any[]; total: { value: number; relation?: string } };
     aggregations?: Record<string, { buckets?: Bucket[] }>;
     aggregationTotal?: number | null;
+}
+
+/**
+ * The keyword cases need the keyword engine: `POST /search` answers 404 on a deployment without
+ * OpenSearch (`NOOPENSEARCH`), so they skip there with the reason (#1634). Read from the app's own
+ * cached feature switches, as `searchModeCase` derives the engines.
+ */
+async function skipWithoutKeywordSearch(page: Page): Promise<void> {
+    const engines = searchModeCase(await cachedFeaturesEnabled(page));
+    test.skip(
+        engines !== "both" && engines !== "keyword-only",
+        "Keyword search is off: this deployment has no OpenSearch (NOOPENSEARCH)"
+    );
 }
 
 async function search(page: Page, body: Record<string, unknown>): Promise<SearchAnswer | null> {
@@ -62,6 +91,7 @@ function countsFromHits(hits: any[], field: string): Map<string, number> {
 
 test.describe("Search counts", () => {
     test("asset totals and facets count only listed records", async ({ page }) => {
+        await skipWithoutKeywordSearch(page);
         const answer = await search(page, {
             aggregations: true,
             entityTypes: ["asset"],
@@ -91,6 +121,7 @@ test.describe("Search counts", () => {
     });
 
     test("every counted asset on the first page can be opened", async ({ page }) => {
+        await skipWithoutKeywordSearch(page);
         const answer = await search(page, { entityTypes: ["asset"], from: 0, size: 10 });
         test.skip(!answer || answer.hits.hits.length === 0, "No assets this user can open");
         const ctx = await apiContext(page);
@@ -109,6 +140,7 @@ test.describe("Search counts", () => {
 
     test("the search page shows the same total, with + for a minimum", async ({ page }) => {
         const errors = collectPageErrors(page);
+        await skipWithoutKeywordSearch(page);
         const answer = await search(page, {
             aggregations: true,
             entityTypes: ["asset"],
@@ -120,17 +152,62 @@ test.describe("Search counts", () => {
         const pageAnswer = page.waitForResponse(
             (r) => r.request().method() === "POST" && /\/search$/.test(new URL(r.url()).pathname)
         );
-        await page.goto("/#/search");
+        // A fresh load: the page is already on `/` (the switches and the API context were read there),
+        // and a hash change while the app starts can leave it on Home (D135).
+        await gotoFresh(page, "/#/search");
         const shown = await (await pageAnswer).json();
         const total = Math.max(shown.aggregationTotal ?? 0, shown.hits?.total?.value ?? 0);
         test.skip(total === 0, "No search results for this user");
 
-        const suffix = shown.hits?.total?.relation === "gte" ? "+" : "";
-        await expect(
-            page.getByText(`${total.toLocaleString()}${suffix} results`).first()
-        ).toBeVisible({
+        // The page's own wording: "+" only for a minimum, and "1 result" for exactly one. Matched
+        // exactly, so "1 result" cannot pass on a page that reads "1 results" (or "11 results").
+        const expected = searchCountBadgeText({
+            value: total,
+            relation: shown.hits?.total?.relation,
+        });
+        await expect(page.getByText(expected, { exact: true }).first()).toBeVisible({
             timeout: 30000,
         });
+        expect(errors).toEqual([]);
+    });
+
+    test("a natural-language total shows with + unless it is an exact zero", async ({ page }) => {
+        const errors = collectPageErrors(page);
+        await gotoSearch(page);
+        const features = await readFeaturesEnabled(page);
+        test.skip(features === null, "No cached secure-config; the app has not loaded it yet");
+        const engines = searchModeCase(features ?? []);
+        test.skip(
+            engines !== "both" && engines !== "nlp-only",
+            "Vector search (VECTORSEARCH) is not enabled in this environment"
+        );
+        await gotoSearch(page, { tab: "unified-search" });
+        if (engines === "both") await selectSearchMode(page, "nlp");
+
+        const pageAnswer = page.waitForResponse(
+            (r) =>
+                r.request().method() === "POST" && /\/search\/nlp$/.test(new URL(r.url()).pathname),
+            { timeout: 60_000 }
+        );
+        await searchQueryBox(page).fill(NLP_QUERY);
+        await searchQueryBox(page).press("Enter");
+        const response = await pageAnswer;
+        test.skip(response.status() === 503, "The vector index is being built");
+        expect(response.status(), await response.text()).toBe(200);
+        const answer = (await response.json()) as SearchAnswer;
+
+        // The page counts what the route counted, never fewer than the hits it returned.
+        const { total } = answer.hits;
+        const value = Math.max(total.value ?? 0, answer.hits.hits.length);
+        expect(["eq", "gte"]).toContain(total.relation);
+        // Matching is approximate, so the route reports every total above zero as a minimum and
+        // the badge carries a "+"; only an exact zero reads "0 results".
+        if (value > 0) expect(total.relation).toBe("gte");
+        const expected = searchCountBadgeText({ value, relation: total.relation });
+        test.info().annotations.push({ type: "natural-language total", description: expected });
+        if (value > 0) expect(expected).toBe(`${value.toLocaleString()}+ results`);
+        if (value === 0 && total.relation === "eq") expect(expected).toBe("0 results");
+        await expect(searchCountBadge(page)).toHaveText(expected, { timeout: 30_000 });
         expect(errors).toEqual([]);
     });
 });

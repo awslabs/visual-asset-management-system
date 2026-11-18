@@ -58,6 +58,16 @@ describe("ExecutionOutputTypeBadges", () => {
         expect(screen.getByTestId("output-type-badge-file").tagName).toBe("SPAN");
     });
 
+    it("names the Result button by the text it shows (#1592)", () => {
+        renderBadges(["Result"]);
+        expect(screen.getByRole("button", { name: /^Result: / })).toBe(
+            screen.getByTestId("output-type-badge-result")
+        );
+        expect(screen.getByTestId("output-type-badge-result")).toHaveAccessibleName(
+            "Result: view the execution result"
+        );
+    });
+
     it("opens the result surface when the Result badge is clicked", async () => {
         useExecutionResults.mockReturnValue({
             data: {

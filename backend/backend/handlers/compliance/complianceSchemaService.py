@@ -31,6 +31,7 @@ from common.dynamodb import query_all_items, query_has_match
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from common.workflows import pipelineRecords as pr
+from common.workflows import systemRecords
 from common.compliance.routeAudit import (
     audit_outcome, created_value, failure_outcome, request_parameters, response_count,
 )
@@ -187,6 +188,39 @@ def pipeline_rules_refused(event, casbin_enforcer, schema_body, stored_body=None
             return authorization_error(body={
                 "message": PIPELINE_RULE_REFUSED_MESSAGE.format(rule=rule_name),
                 "ruleName": rule_name})
+    return None
+
+
+def _rule_uses_system_record(ref):
+    """Whether a pipeline rule's `pipelineRef` names a system workflow or pipeline: its workflow row,
+    the rule's own pipeline row or a pipeline the workflow runs carries `isSystem`
+    (`systemRecords.names_system_record`). One GetItem for the workflow and one per pipeline, the
+    reads `may_run_workflow` makes; a row that does not exist is not a system record."""
+    database_id = ref.get("databaseId")
+    workflow = workflow_table.get_item(
+        Key={"databaseId": database_id, "workflowId": ref.get("workflowId")}).get("Item")
+    keys = systemRecords.workflow_pipeline_keys(workflow) + [
+        (ref.get("pipelineDatabaseId"), ref.get("pipelineId"))]
+    pipelines = [pipeline_table.get_item(
+        Key={"databaseId": pipeline_database_id, "pipelineId": pipeline_id}).get("Item")
+        for pipeline_database_id, pipeline_id in dict.fromkeys(keys)]
+    return systemRecords.names_system_record(workflow, pipelines)
+
+
+def system_pipeline_rule_refused(event, schema_body, stored_body=None):
+    """The `400` refusing a save whose new or changed pipeline rule uses a system workflow or
+    pipeline (`systemRecords.SYSTEM_RECORD_PIPELINE_RULE_MESSAGE`, naming the rule); None when no
+    such rule uses one. Applies to every caller, the system user included. It runs after
+    `pipeline_rules_refused`, so a caller who may not run a rule's workflow, or whose rule names a
+    workflow or pipeline that does not exist, gets that 403 and never learns whether it is a system
+    record. A rule left as it was is not re-checked: a stored rule that uses a system record is
+    recorded as an error when it is evaluated (`complianceEvaluationStore`)."""
+    for rule_name, ref in changed_pipeline_rules(schema_body, stored_body):
+        if _rule_uses_system_record(ref):
+            logger.info(f"Schema save refused: pipeline rule '{rule_name}' uses a system pipeline")
+            return validation_error(body={
+                "message": systemRecords.SYSTEM_RECORD_PIPELINE_RULE_MESSAGE,
+                "ruleName": rule_name}, event=event)
     return None
 
 
@@ -726,8 +760,9 @@ def register_schema(event, request: CreateSchemaRequestModel):
     err = schema_reference_error(request.schemaBody, request.databaseId)
     if err:
         return _schema_body_rejected(event, err)
-    refused = pipeline_rules_refused(event, CasbinEnforcer(claims_and_roles), request.schemaBody,
-                                     _stored_body(current))
+    refused = (pipeline_rules_refused(event, CasbinEnforcer(claims_and_roles), request.schemaBody,
+                                      _stored_body(current))
+               or system_pipeline_rule_refused(event, request.schemaBody, _stored_body(current)))
     if refused is not None:
         return refused
 
@@ -827,8 +862,9 @@ def update_schema(event, schema_name, request: UpdateSchemaRequestModel):
     err = schema_reference_error(schema_body, database_id)
     if err:
         return _schema_body_rejected(event, err)
-    refused = pipeline_rules_refused(event, CasbinEnforcer(claims_and_roles), schema_body,
-                                     _stored_body(current))
+    refused = (pipeline_rules_refused(event, CasbinEnforcer(claims_and_roles), schema_body,
+                                      _stored_body(current))
+               or system_pipeline_rule_refused(event, schema_body, _stored_body(current)))
     if refused is not None:
         return refused
 

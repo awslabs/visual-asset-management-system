@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { Flashbar, FlashbarProps } from "@cloudscape-design/components";
+import Flashbar, { FlashbarProps } from "@cloudscape-design/components/flashbar";
 import { ToastNotification } from "../types";
 
 interface ToastManagerProps {
@@ -20,6 +20,8 @@ const ToastManager: React.FC<ToastManagerProps> = ({ toasts, onDismiss }) => {
         header: toast.title,
         content: toast.message,
         dismissible: toast.dismissible,
+        dismissLabel: "Dismiss notification",
+        statusIconAriaLabel: toast.type.charAt(0).toUpperCase() + toast.type.slice(1),
         onDismiss: () => onDismiss(toast.id),
     }));
 

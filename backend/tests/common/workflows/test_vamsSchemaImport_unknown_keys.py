@@ -45,7 +45,7 @@ _PIPELINES_ROOT = os.path.join(_REPO_ROOT, "backendPipelines")
 _EXPECTED_BUNDLE_KEYS = {
     "conversion/3dBasic/vamsSchema",
     "preview/3dThumbnail/vamsSchema",
-    "genAi/metadata3dLabeling/vamsSchema",
+    "system/genAiMetadata/vamsSchema",
     "simulation/isaacLabTraining/vamsSchema/training",
 }
 

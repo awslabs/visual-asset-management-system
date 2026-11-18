@@ -7,7 +7,8 @@ downloadAsset always evaluated the block after its Casbin checks; what changes i
 is the shared ``common.compliance.quarantineGuard`` rather than a handler-local copy with its own
 table bootstrap. These tests pin that binding and the ordering it must keep: a denied caller gets
 403 with no state-table read, an authorized caller on a quarantined asset gets 400 with the shared
-message and no presigned URL. Both download types (`assetFile` and `assetPreview`) pass the guard.
+message and no presigned URL. A file download passes the guard; the asset preview image is still
+served for a quarantined asset (#1495, `test_quarantine_serves_previews.py`).
 """
 
 import importlib.util
@@ -260,10 +261,11 @@ class TestDownloadQuarantineBlockAfterAuthorization:
 
 @pytest.mark.unit
 class TestPreviewDownloadQuarantineBlock:
-    """`downloadType: assetPreview` mints a presigned URL for the asset's preview object through the
-    same guard as the file download, after authorization and after the distributable check."""
+    """`downloadType: assetPreview` mints a presigned URL for the asset's preview image, after
+    authorization and after the distributable check. The preview image is not the asset's content,
+    so a quarantined asset still serves it (#1495) and the asset's state is not read for it."""
 
-    def test_authorized_caller_on_quarantined_asset_preview_gets_400_and_no_presigned_url(self):
+    def test_authorized_caller_on_quarantined_asset_preview_gets_the_preview_url(self):
         m = _load()
         s3, enforcer = _wire(m)
         table = _state_table(_quarantined())
@@ -271,14 +273,14 @@ class TestPreviewDownloadQuarantineBlock:
         with _guard_enabled(table):
             response = m.lambda_handler(_event("assetPreview"), MagicMock())
 
-        assert_is_the_quarantine_refusal(response)
-        assert _SIGNED_URL not in response["body"]
-        table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})
+        assert response["statusCode"] == 200, response
+        assert json.loads(response["body"])["downloadUrl"] == _SIGNED_URL
+        table.get_item.assert_not_called()
         enforcer.return_value.enforce.assert_called_once()
-        s3.generate_presigned_url.assert_not_called()
-        m.log_file_download.assert_not_called()
+        s3.generate_presigned_url.assert_called_once()
+        m.log_file_download.assert_called_once()
 
-    def test_non_quarantined_asset_preview_is_signed_after_one_guard_read(self):
+    def test_non_quarantined_asset_preview_is_signed_without_a_guard_read(self):
         m = _load()
         s3, _enforcer = _wire(m)
         table = _state_table({"databaseId": _DB, "assetId": _ASSET, "complianceState": "compliant"})
@@ -290,7 +292,7 @@ class TestPreviewDownloadQuarantineBlock:
         body = json.loads(response["body"])
         assert body["downloadUrl"] == _SIGNED_URL
         assert body["downloadType"] == "assetPreview"
-        table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})
+        table.get_item.assert_not_called()
         s3.generate_presigned_url.assert_called_once()
         m.log_file_download.assert_called_once()
 
@@ -324,11 +326,11 @@ class TestPreviewDownloadQuarantineBlock:
 @pytest.mark.unit
 class TestTheRefusalIsLoggedOnceWithoutATraceback:
     """D174: a quarantine refusal is an expected 400, logged once at INFO with the database, the
-    asset and the route (single file, several files, preview), without a traceback."""
+    asset and the route (single file, several files), without a traceback."""
 
     @pytest.mark.parametrize("download_type,keys", [
-        ("assetFile", None), ("assetFile", ["/model.glb", "/texture.png"]), ("assetPreview", None),
-    ], ids=["single", "bulk", "preview"])
+        ("assetFile", None), ("assetFile", ["/model.glb", "/texture.png"]),
+    ], ids=["single", "bulk"])
     def test_the_refusal_is_one_info_line_naming_database_asset_and_route(self, download_type,
                                                                           keys):
         m = _load()
