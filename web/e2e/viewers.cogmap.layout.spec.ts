@@ -104,14 +104,17 @@ async function expectViewerFillsFrame(page: Page, where: string): Promise<void> 
         );
     }
 
-    // Every map control (zoom buttons, attribution) is drawn inside the frame.
+    // Every control of the viewer's own map (zoom buttons, attribution) is drawn inside the frame;
+    // other maps on the page (the File Manager's hidden ones) are not its concern.
     const controls = await page.evaluate(() =>
-        [...document.querySelectorAll(".maplibregl-ctrl-group, .maplibregl-ctrl-attrib")].map(
-            (e) => {
-                const r = e.getBoundingClientRect();
-                return { x: r.x, y: r.y, w: r.width, h: r.height };
-            }
-        )
+        [
+            ...document.querySelectorAll(
+                '[data-testid="cog-map-viewer"] .maplibregl-ctrl-group, [data-testid="cog-map-viewer"] .maplibregl-ctrl-attrib'
+            ),
+        ].map((e) => {
+            const r = e.getBoundingClientRect();
+            return { x: r.x, y: r.y, w: r.width, h: r.height };
+        })
     );
     expect(controls.length, `${where}: the map has controls`).toBeGreaterThan(0);
     for (const control of controls) {

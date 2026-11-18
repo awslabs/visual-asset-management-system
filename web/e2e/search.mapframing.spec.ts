@@ -154,6 +154,30 @@ test.describe("Search map framing", () => {
         }
     });
 
+    test("one wide footprint (a latitude-cropped global raster) frames the world, not a sliver", async ({
+        page,
+    }) => {
+        const global: Probe = {
+            name: "a global raster footprint",
+            key: "/e2e-global.tif",
+            geo: { type: "Polygon", coordinates: ring(-180, 180, 10, 20) },
+            inView: [
+                [-170, 10],
+                [170, 20],
+                [0, 15],
+            ],
+        };
+        const camera = await openMapWithHits(page, [global, PROBES[0]]);
+        for (const [lon, lat] of global.inView) {
+            expect(isInView(camera, lon, lat), `(${lon}, ${lat}) is outside the viewport`).toBe(
+                true
+            );
+        }
+        // The map cannot zoom out past the world filling its height, so the very edges (+-180) may sit a
+        // few pixels outside a window wider than it is tall; everything else of the world is in view.
+        expect(camera.zoom).toBeLessThan(1);
+    });
+
     test("a single located hit is framed, not the world", async ({ page }) => {
         const camera = await openMapWithHits(page, [PROBES[0]]);
         expect(isInView(camera, -122.5, 37.5, 20)).toBe(true);
