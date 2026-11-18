@@ -23,8 +23,9 @@ from ...utils.addon.edh_exceptions import (
     EdhAmiRecipeNotFoundError, EdhAmiRecipeBuildNotFoundError, EdhReservationFullError,
     EdhReservationNotPermittedError, EdhCapacityReservationNotFoundError, EdhStartFailedError, EdhStartStalledError,
     EdhStartWaitTimeoutError,
-    EdhUnavailableError,
+    EdhUnavailableError, EdhOutcomeUnknownError,
 )
+from ...utils.exceptions import APIError, InvalidRequestPathError, RouteNotDeployedError
 from ...utils.addon.edh_api_client import EDH_CAPACITY_RESERVATION_ID, EDH_CAPACITY_RESERVATION_ID_MESSAGE
 
 # ROOT_SIZE_GB_MAX bounds every root volume, in GiB; ROOT_SIZE_GB_MIN is the workstation model's floor
@@ -74,6 +75,15 @@ RESERVATION_NOT_PERMITTED_LAUNCH_HINT = (
     "Launch without --capacity-reservation-id for an on-demand workstation, choose a reservation whose "
     "LAUNCH column reads yes in 'vamscli edh catalog capacity-reservations', or ask an administrator to "
     "grant your role launching into this one.")
+
+
+
+def launch_retry_hint(bootstrap_id: str) -> str:
+    """The remedy printed with a launch whose answer was lost: it may have been accepted."""
+    return (f"The launch may have been accepted. Look for bootstrap id {bootstrap_id} with "
+            f"'vamscli edh workstation get {bootstrap_id}'; only if it is not found, run the same create "
+            f"again with --bootstrap-id {bootstrap_id}, which cannot launch a second workstation.")
+
 
 # The catalog's LAUNCH column: whether the role may launch into the reservation, not only see it.
 LAUNCH_ALLOWED_TEXT = 'yes'
@@ -659,8 +669,9 @@ def workstation_list(ctx: click.Context, json_output: bool):
                    'lease`). Honoured only when the admin lease policy is enabled and not forced; '
                    'overridden when forced; rejected when disabled or above leaseHours.')
 @click.option('--bootstrap-id', default=None, type=click.UUID,
-              help='Idempotency key (UUID); generated when omitted. Re-send it only when the create '
-                   'response was lost: a repeat returns the existing record and launches nothing')
+              help='Idempotency key (UUID); generated when omitted, and printed before the request and '
+                   'in any error. Re-send it only when the create response was lost: a repeat returns '
+                   'the existing record and launches nothing')
 @click.option('--capacity-reservation-id', default=None, callback=_capacity_reservation_id,
               help='Optional registered capacity reservation to launch into (see `edh catalog '
                    'capacity-reservations`); its instance type and platform must match the launch. '
@@ -694,8 +705,9 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
     # Setup/auth already validated by decorator
     api_client = _api_client(ctx)
 
+    launch_id = str(bootstrap_id) if bootstrap_id else str(uuid.uuid4())
     data: Dict[str, Any] = {
-        'bootstrapId': str(bootstrap_id) if bootstrap_id else str(uuid.uuid4()),
+        'bootstrapId': launch_id,
         'imageId': image_id,
         'instanceType': instance_type,
         'name': name,
@@ -708,7 +720,7 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
     if capacity_reservation_id is not None:
         data['capacityReservationId'] = capacity_reservation_id
 
-    output_status(f"Launching workstation '{name}'...", json_output)
+    output_status(f"Launching workstation '{name}' (bootstrap id {launch_id})...", json_output)
 
     try:
         result = api_client.create_edh_workstation(data)
@@ -726,8 +738,19 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
         output_error(e, json_output, error_type="Capacity Reservation Not Permitted",
                      helpful_message=RESERVATION_NOT_PERMITTED_LAUNCH_HINT)
         raise click.ClickException(str(e))
+    except EdhOutcomeUnknownError as e:
+        output_error(e, json_output, error_type="EDH Error", helpful_message=launch_retry_hint(launch_id))
+        raise click.ClickException(str(e))
     except EdhError as e:
         output_error(e, json_output, error_type="EDH Error")
+        raise click.ClickException(str(e))
+    except (RouteNotDeployedError, InvalidRequestPathError) as e:
+        # Refused before any launch could be accepted.
+        output_error(e, json_output, error_type="API Error")
+        raise click.ClickException(str(e))
+    except APIError as e:
+        # A request that failed on the way (a timeout, a dropped connection) may have reached VAMS.
+        output_error(e, json_output, error_type="API Error", helpful_message=launch_retry_hint(launch_id))
         raise click.ClickException(str(e))
 
 

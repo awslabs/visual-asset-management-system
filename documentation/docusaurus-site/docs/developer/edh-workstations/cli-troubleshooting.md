@@ -973,7 +973,7 @@ The VAMS proxy could not complete a call to the EDH REST API within its budget (
 
 **Resolution:**
 
-1. Do not re-run a launch that is still `CREATING`; watch it with `vamscli edh workstation list`, selecting the row by its `bootstrapId` (the list shows its `sessionId` once EDH assigns one). A launch that ended `ORPHANED` is not retried by re-sending its `--bootstrap-id`: the API answers with the stored record unchanged and launches nothing. Delete the record and launch again without `--bootstrap-id` (a new key is generated); see [Launch Ended ORPHANED](#launch-ended-orphaned). Re-send a `create` with its original `--bootstrap-id` only when the first response was lost, to read the record it created instead of launching a second workstation:
+1. Do not re-run a launch that is still `CREATING`; watch it with `vamscli edh workstation list`, selecting the row by its `bootstrapId` (the list shows its `sessionId` once EDH assigns one). A launch that ended `ORPHANED` is not retried by re-sending its `--bootstrap-id`: the API answers with the stored record unchanged and launches nothing. Delete the record and launch again without `--bootstrap-id` (a new key is generated); see [Launch Ended ORPHANED](#launch-ended-orphaned). Re-send a `create` with its original `--bootstrap-id` only when the first response was lost, to read the record it created instead of launching a second workstation. `create` prints the bootstrap id before it sends the request, and a failed `create` names it in its error (`bootstrapId` under `--json-output`); look it up with `vamscli edh workstation get BOOTSTRAP_ID` first:
 
     ```bash
     vamscli edh workstation delete BOOTSTRAP_ID --confirm

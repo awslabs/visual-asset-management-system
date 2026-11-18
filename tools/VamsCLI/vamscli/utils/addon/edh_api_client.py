@@ -9,6 +9,7 @@ before it has finished loading.
 """
 
 import re
+import uuid
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
@@ -123,6 +124,14 @@ def _edh_ami_build_not_found(response, recipe_id: str, version: int) -> Optional
     if message == _EDH_AMI_RECIPE_BUILD_NOT_FOUND_MESSAGE:
         return EdhAmiRecipeBuildNotFoundError(f"AMI recipe '{recipe_id}' build v{version} not found")
     return None
+
+
+def _with_json_field(exc: Exception, name: str, value: Any) -> Exception:
+    """``exc`` carrying ``name`` in its own ``json_fields`` beside those of its class, for --json-output
+    and the MCP tool result; the class's dict is never changed."""
+    fields = getattr(exc, "json_fields", None)
+    exc.json_fields = {**(fields if isinstance(fields, dict) else {}), name: value}
+    return exc
 
 
 def _as_sentence(text: str) -> str:
@@ -255,6 +264,11 @@ class EdhAPIClientMixin:
             desktop back from EDH, lastError null, launchAttempts 0.
             The launch runs asynchronously; poll get_edh_workstation with the bootstrapId.
 
+        A bootstrapId is generated when ``data`` has none, and every business error this method raises
+        carries the one sent in its ``json_fields``: when the answer was lost, the launch may have been
+        accepted, and re-sending that id cannot launch a second workstation. A global error (a throttled,
+        blocked or refused request) is an answer that nothing was carried out and passes unchanged.
+
         Raises:
             InvalidEdhRequestError: When the request is rejected, among others with "instanceType does
                 not match the image's architecture" when the image's profile lists the type only under
@@ -266,24 +280,31 @@ class EdhAPIClientMixin:
             EdhReservationNotPermittedError: When the caller's role may see the capacity reservation
                 but not launch into it (403 RESERVATION_NOT_PERMITTED)
             EdhOperationError: When the launch is refused for the record's current state
+            EdhOutcomeUnknownError: When EDH did not confirm the launch (a gateway 504, or a flagged
+                502); it may have been accepted
             EdhUnavailableError: When the EDH cluster did not answer, or the capacity reservation
                 could not be read (503)
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
+        body = dict(data)
+        bootstrap_id = body.get('bootstrapId') or str(uuid.uuid4())
+        body['bootstrapId'] = bootstrap_id
         try:
-            response = self.post(API_EDH_WORKSTATIONS, data=data, include_auth=True,
+            response = self.post(API_EDH_WORKSTATIONS, data=body, include_auth=True,
                                  raise_http_errors=True)
             return response.json()
 
         except requests.exceptions.HTTPError as e:
-            raise self._edh_error(e, "Workstation launch")
+            raise _with_json_field(
+                self._edh_error(e, "Workstation launch", list_command=_EDH_WORKSTATION_LISTING),
+                'bootstrapId', bootstrap_id)
 
         except GlobalInfrastructureError:
             raise
 
         except Exception as e:
-            raise APIError(f"Failed to launch workstation: {e}")
+            raise _with_json_field(APIError(f"Failed to launch workstation: {e}"), 'bootstrapId', bootstrap_id)
 
     def get_edh_workstation(self, session_id: str) -> Dict[str, Any]:
         """

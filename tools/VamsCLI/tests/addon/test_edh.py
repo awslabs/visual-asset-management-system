@@ -367,6 +367,40 @@ class TestWorkstationCreate:
             assert 'Workstation launch accepted' in result.output
             assert 'CREATING' in result.output
 
+    def test_create_names_the_bootstrap_id_before_it_sends(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].create_edh_workstation.return_value = WORKSTATION
+            result = cli_runner.invoke(cli, self.ARGS)
+            sent = mocks['api_client'].create_edh_workstation.call_args.args[0]['bootstrapId']
+            assert f"(bootstrap id {sent})" in result.output
+
+    def test_a_launch_not_confirmed_names_its_bootstrap_id_for_a_safe_retry(self, cli_runner, generic_command_mocks):
+        from vamscli.utils.addon.edh_exceptions import EdhOutcomeUnknownError
+
+        launch_id = '0b8f1c2e-7d4a-4f3e-9c1b-2a3d4e5f6a7b'
+        error = EdhOutcomeUnknownError("Workstation launch not confirmed (504): EDH did not confirm the request.")
+        error.json_fields = {**EdhOutcomeUnknownError.json_fields, 'bootstrapId': launch_id}
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].create_edh_workstation.side_effect = error
+            result = cli_runner.invoke(cli, self.ARGS + ['--bootstrap-id', launch_id, '--json-output'])
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data['bootstrapId'] == launch_id and data['outcomeUnknown'] is True
+
+            text = cli_runner.invoke(cli, self.ARGS + ['--bootstrap-id', launch_id])
+            assert text.exit_code == 1
+            assert f"vamscli edh workstation get {launch_id}" in text.output
+            assert f"--bootstrap-id {launch_id}" in text.output
+
+    def test_a_launch_refused_before_sending_gets_no_retry_hint(self, cli_runner, generic_command_mocks):
+        from vamscli.utils.exceptions import RouteNotDeployedError
+
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].create_edh_workstation.side_effect = RouteNotDeployedError("No deployed API route")
+            result = cli_runner.invoke(cli, self.ARGS)
+            assert result.exit_code == 1
+            assert "may have been accepted" not in result.output
+
     def test_create_forwards_an_explicit_bootstrap_id_and_the_windows_family(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:
             mocks['api_client'].create_edh_workstation.return_value = WORKSTATION
