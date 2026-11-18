@@ -28,6 +28,9 @@ export interface S3AssetBucketRecord {
     // Marks this bucket record as the VAMS default asset bucket (houses all pipeline template
     // data + execution-time run I/O under the pipelines/ prefix). Exactly one record is default.
     isDefault: boolean;
+    // S3 Transfer Acceleration is requested for this bucket (#1610). The table populator writes it
+    // to the row and verifies the bucket has acceleration enabled.
+    isAccelerated: boolean;
 }
 
 // Global array to store bucket records
@@ -41,7 +44,8 @@ export function addS3AssetBucket(
     accountId?: string,
     kmsKeyArn?: string,
     isDefault?: boolean,
-    region?: string
+    region?: string,
+    isAccelerated?: boolean
 ): void {
     s3AssetBucketRecords.push({
         bucket,
@@ -53,6 +57,7 @@ export function addS3AssetBucket(
         region,
         kmsKeyArn,
         isDefault: !!isDefault,
+        isAccelerated: !!isAccelerated,
     });
 }
 

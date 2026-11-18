@@ -459,7 +459,7 @@ export interface ConfigPublic {
                 setting2: boolean;
             };
         };
-        // assetBuckets: createNewBucket, defaultNewBucketSyncDatabaseId,
+        // assetBuckets: createNewBucket, defaultNewBucketSyncDatabaseId, useS3TransferAcceleration (created default + auxiliary bucket; commercial partition only; default false),
         // externalAssetBuckets (bucketArn, baseAssetsPrefix, defaultSyncDatabaseId,
         // optional bucketAccountId/bucketRegion/bucketKmsKeyArn),
         // presignedUrlNetworkRestrictions (allowedIpRanges/allowedVpceIds; mutually exclusive;
