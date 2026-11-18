@@ -225,3 +225,83 @@ class TestSampleShare:
         stage.GetRootLayer().Save()
         path = str(tmp_path / "far.usda")
         np.testing.assert_allclose(_bounds(_load(path, 100_000)), _bounds(_load(path, 10 ** 9)), atol=1e-6)
+
+
+def _mixed(tmp_path, heavy, grass, name="mixed.usda"):
+    """``heavy`` instances of a 1,600-vertex sheet and ``grass`` single-triangle cards over the same area."""
+    from pxr import Gf, UsdGeom
+
+    stage = _stage(tmp_path / name)
+    _dense_mesh(stage, "/World/hp/Mesh")
+    sheets = UsdGeom.PointInstancer.Define(stage, "/World/Heavy")
+    sheets.GetPrototypesRel().AddTarget("/World/hp")
+    sheets.GetPositionsAttr().Set([Gf.Vec3f((n % 10) * 6.0, 0, (n // 10) * 6.0) for n in range(heavy)])
+    sheets.GetProtoIndicesAttr().Set([0] * heavy)
+    UsdGeom.Xform.Define(stage, "/World/gp")
+    card = UsdGeom.Mesh.Define(stage, "/World/gp/Card")
+    card.GetPointsAttr().Set([Gf.Vec3f(0, 0, 0), Gf.Vec3f(0.1, 0, 0), Gf.Vec3f(0.05, 0.4, 0)])
+    card.GetFaceVertexCountsAttr().Set([3])
+    card.GetFaceVertexIndicesAttr().Set([0, 1, 2])
+    grass_instancer = UsdGeom.PointInstancer.Define(stage, "/World/Grass")
+    grass_instancer.GetPrototypesRel().AddTarget("/World/gp")
+    side = max(1, int(np.ceil(np.sqrt(grass))))
+    grass_instancer.GetPositionsAttr().Set(
+        [Gf.Vec3f((n % side) * 60.0 / side, 0, (n // side) * 60.0 / side) for n in range(grass)])
+    grass_instancer.GetProtoIndicesAttr().Set([0] * grass)
+    stage.GetRootLayer().Save()
+    return str(tmp_path / name)
+
+
+def _sampled_load(path, cap, caplog, cheap_items=None):
+    import logging
+
+    saved = getattr(usd_handler, "MAX_CHEAP_ITEMS", None)
+    if cheap_items is not None:
+        usd_handler.MAX_CHEAP_ITEMS = cheap_items
+    try:
+        with caplog.at_level(logging.INFO):
+            return _load(path, cap)
+    finally:
+        if saved is None:
+            usd_handler.__dict__.pop("MAX_CHEAP_ITEMS", None)
+        else:
+            usd_handler.MAX_CHEAP_ITEMS = saved
+
+
+@pytest.mark.unit
+@requires_real("pxr", "pyvista", "vtk", "PIL")
+class TestSampleBudget:
+    def test_cheap_items_cannot_squeeze_out_the_heavy_ones(self, tmp_path, caplog):
+        path = _mixed(tmp_path, 91, 40_000)          # 145,600 heavy + 120,000 cheap vertices
+        cap = 100_000
+        data = _sampled_load(path, cap, caplog)
+        assert data.n_points <= 0.9 * cap + 3
+        assert not any("still passes" in r.getMessage() for r in caplog.records), "the sampled walk hit the cap"
+        sheets = (np.asarray(data.points)[:, 1] != 0).sum()      # the sheets are bumpy, the grass is flat
+        assert sheets >= 0.5 * 0.9 * cap * 0.75 * 0.99          # heavy items keep at least their share
+
+    def test_a_walk_over_the_forced_outermost_items_never_reaches_the_cap(self, tmp_path, caplog):
+        path = _native_grid(tmp_path, 12, 12)
+        data = _sampled_load(path, 100_000, caplog)
+        assert data.n_points <= 90_000 + 2 * MESH_VERTICES * 3
+        assert not any("still passes" in r.getMessage() for r in caplog.records)
+
+    def test_the_kept_cheap_items_are_thinned_past_their_item_count(self, tmp_path, caplog):
+        path = _mixed(tmp_path, 91, 40_000)
+        small = _sampled_load(path, 100_000, caplog, cheap_items=2_000)
+        assert 0 < small.n_points <= 90_000 + 3
+
+    def test_all_cheap_items_are_sampled_to_the_budget(self, tmp_path, caplog):
+        path = _cube_scatter(tmp_path, 30_000)       # 240,000 vertices, every item the same cost
+        data = _sampled_load(path, 100_000, caplog)
+        assert 0.75 * 90_000 <= data.n_points <= 90_000
+
+    def test_all_heavy_items_are_sampled_to_the_budget(self, tmp_path, caplog):
+        path = _mixed(tmp_path, 200, 0)              # 320,000 vertices, all heavy
+        data = _sampled_load(path, 100_000, caplog)
+        assert 0.75 * 90_000 <= data.n_points <= 90_000
+
+    def test_the_same_file_gives_the_same_points_twice(self, tmp_path, caplog):
+        path = _mixed(tmp_path, 91, 40_000)
+        first, second = _sampled_load(path, 100_000, caplog), _sampled_load(path, 100_000, caplog)
+        np.testing.assert_array_equal(np.asarray(first.points), np.asarray(second.points))

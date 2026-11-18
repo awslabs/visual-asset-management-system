@@ -244,8 +244,8 @@ def _collect_scene(root, xform_cache, context):
     parts, roots = _collect_parts(root, xform_cache, context, plan)
     logger.warning(f"Stage expands past {MAX_POINTS} vertices (about {plan.total_vertices:,} in "
                    f"{plan.total_items:,} gprims and instances); the preview shows {plan.kept_items:,} of "
-                   f"them: every small one, the outermost ones and an evenly spread "
-                   f"{plan.fraction:.0%} of the rest, so it covers the whole scene")
+                   f"them: the outermost ones, the small ones within a quarter of the budget and an evenly "
+                   f"spread {plan.fraction:.0%} of the rest, so it covers the whole scene")
     return parts, roots
 
 
@@ -255,6 +255,11 @@ SAMPLE_BUDGET_SHARE = 0.9
 # An item whose vertex count is at most this share of the stage's average per item is always kept: a
 # small, distinct object costs the budget next to nothing and the sample must not drop it.
 LIGHT_ITEM_SHARE = 0.25
+# The items kept whole because they are cheap take at most this share of the budget left after the
+# outermost items, and at most MAX_CHEAP_ITEMS of them; the rest of the budget is for the heavy items, which
+# therefore always get at least the remaining share.
+CHEAP_BUDGET_SHARE = 0.25
+MAX_CHEAP_ITEMS = 500_000
 _GOLDEN = 0.6180339887498949
 
 
@@ -360,33 +365,73 @@ def _sample_plan(root, xform_cache, context):
                     high_pick[axis] = (whi[axis], gprim_index)
 
     gprim_costs = np.asarray(gprim_costs, dtype=np.int64)
-    total_items = len(gprim_costs) + sum(len(entry[1]) for entry in instancers)
-    total_vertices = int(gprim_costs.sum()) + sum(int(entry[1].sum()) for entry in instancers)
-    average = total_vertices / max(total_items, 1)
-    threshold = average * LIGHT_ITEM_SHARE
-
-    light_vertices = int(gprim_costs[gprim_costs <= threshold].sum()) + sum(
-        int(entry[1][entry[1] <= threshold].sum()) for entry in instancers)
-    heavy_vertices = total_vertices - light_vertices
-    budget = MAX_POINTS * SAMPLE_BUDGET_SHARE
-    if heavy_vertices <= 0:
-        fraction = 1.0
-    else:
-        fraction = float(min(1.0, max(0.02, (budget - light_vertices) / heavy_vertices)))
-
-    gprim_keep = (gprim_costs <= threshold) | _spread(len(gprim_costs), fraction)
+    gprim_forced = np.zeros(len(gprim_costs), dtype=bool)
     for axis in range(3):
         for index in (low_pick[axis][1], high_pick[axis][1]):
             if index >= 0:
-                gprim_keep[index] = True
-    instancer_keep = {}
-    for path, costs, translations in instancers:
-        keep = (costs <= threshold) | _spread(len(costs), fraction)
+                gprim_forced[index] = True
+    groups = [(gprim_costs, gprim_forced)]
+    for _, costs, translations in instancers:
+        forced = np.zeros(len(costs), dtype=bool)
         for axis in range(3):
-            keep[int(translations[:, axis].argmin())] = True
-            keep[int(translations[:, axis].argmax())] = True
-        instancer_keep[str(path)] = keep
-    return _SamplePlan(fraction, gprim_keep, instancer_keep, total_vertices, total_items)
+            forced[int(translations[:, axis].argmin())] = True
+            forced[int(translations[:, axis].argmax())] = True
+        groups.append((costs, forced))
+
+    total_items = sum(len(costs) for costs, _ in groups)
+    total_vertices = sum(int(costs.sum()) for costs, _ in groups)
+    average = total_vertices / max(total_items, 1)
+    threshold = average * LIGHT_ITEM_SHARE
+    budget = MAX_POINTS * SAMPLE_BUDGET_SHARE
+
+    # The outermost items are always read, so their cost is charged to the budget first.
+    forced_cost = sum(int(costs[forced].sum()) for costs, forced in groups)
+    remaining = max(budget - forced_cost, 0.0)
+    cheap = [(costs <= threshold) & ~forced for costs, forced in groups]
+    heavy = [(costs > threshold) & ~forced for costs, forced in groups]
+    cheap_total = sum(int(costs[mask].sum()) for (costs, _), mask in zip(groups, cheap))
+    cheap_count = sum(int(mask.sum()) for mask in cheap)
+
+    def spread_cost(masks, fraction):
+        return sum(int(costs[mask & _spread(len(costs), fraction)].sum())
+                   for (costs, _), mask in zip(groups, masks))
+
+    def spread_count(masks, fraction):
+        return sum(int((mask & _spread(len(mask), fraction)).sum()) for mask in masks)
+
+    # Cheap items are kept whole while they fit a fixed share of what remains and within an item
+    # count (each kept item costs time to place); past either they are thinned by the same spread.
+    cheap_allow = CHEAP_BUDGET_SHARE * remaining
+    cheap_fraction = _largest_fraction(
+        lambda f: spread_cost(cheap, f) <= cheap_allow and spread_count(cheap, f) <= MAX_CHEAP_ITEMS)
+    if cheap_total <= cheap_allow and cheap_count <= MAX_CHEAP_ITEMS:
+        cheap_fraction = 1.0
+    cheap_kept = spread_cost(cheap, cheap_fraction)
+    heavy_allow = remaining - cheap_kept
+    heavy_fraction = _largest_fraction(lambda f: spread_cost(heavy, f) <= heavy_allow)
+
+    keeps = []
+    for (costs, forced), c_mask, h_mask in zip(groups, cheap, heavy):
+        count = len(costs)
+        keeps.append(forced | (c_mask & _spread(count, cheap_fraction)) | (h_mask & _spread(count, heavy_fraction)))
+    gprim_keep = keeps[0]
+    instancer_keep = {str(entry[0]): keep for entry, keep in zip(instancers, keeps[1:])}
+    return _SamplePlan(heavy_fraction, gprim_keep, instancer_keep, total_vertices, total_items)
+
+
+def _largest_fraction(fits):
+    """The largest fraction in [0, 1] (to 1e-4) for which ``fits(fraction)`` holds, ``fits`` being
+    monotone: a larger fraction keeps more. 1.0 when everything fits."""
+    if fits(1.0):
+        return 1.0
+    low, high = 0.0, 1.0
+    for _ in range(14):
+        middle = (low + high) / 2
+        if fits(middle):
+            low = middle
+        else:
+            high = middle
+    return low
 
 
 def _count_instancer(prim, xform_cache, context, cache):
