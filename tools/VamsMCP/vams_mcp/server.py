@@ -3059,9 +3059,10 @@ if CONFIG.enable_writes:
         workflow that takes exactly one file needs exactly one file selected, else the rule records an
         `error` result. A pipeline writing no `compliance-output.json` is checked on `execution_success`
         and `processing_duration_seconds` only. Saving a pipeline rule needs the right to run its workflow,
-        else 403 "Not authorized to run the workflow of pipeline rule '<name>'". `database_id` scopes the
-        schema (omitted: GLOBAL). Response `warnings`: `pipelineRulesShareWorkflow` (rules that share a
-        workflow run one after another); `extendsSchemaNotFound` (the `extends` parent was not found, or you
+        else 403 "Not authorized to run the workflow of pipeline rule rules[<n>]" (the rule's position
+        in `rules`, from 0). `database_id` scopes the schema (omitted: GLOBAL). Response `warnings`:
+        `pipelineRulesShareWorkflow` (rules that share a workflow run one after another);
+        `extendsSchemaNotFound` (the `extends` parent was not found, or you
         may not read it: do not tell the user the parent does not exist; relay the message)."""
         payload: Dict[str, Any] = {"schemaName": schema_name, "schemaBody": schema_body}
         if database_id:

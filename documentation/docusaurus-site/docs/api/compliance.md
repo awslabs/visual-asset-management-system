@@ -263,7 +263,7 @@ An `extendsSchemaNotFound` entry is returned when the body's `extends` names a p
 ```json
 {
     "code": "extendsSchemaNotFound",
-    "message": "The parent schema 'base-standard' was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.",
+    "message": "The parent schema `extends` names was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.",
     "extends": "base-standard"
 }
 ```
@@ -275,8 +275,8 @@ Each pipeline rule whose `pipelineRef` is new (on registration, every pipeline r
 
 ```json
 {
-    "message": "Not authorized to run the workflow of pipeline rule 'coord-accuracy'",
-    "ruleName": "coord-accuracy"
+    "message": "Not authorized to run the workflow of pipeline rule rules[1]",
+    "rulePosition": 1
 }
 ```
 
@@ -288,7 +288,7 @@ The answer is the same when the workflow or a pipeline does not exist, and every
 | Status | Description                                                                                                                                                                                                                        |
 | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, a body that is not a valid `vams-rules-v1` document, the scoping database is absent, or the name exists and belongs to a system schema (`System schemas cannot be modified`) or to a deleted database's schema |
-| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                                                                                              |
+| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`rulePosition` is the rule's position in `rules`)                                                                                       |
 | `409`  | The compliance data of a deleted database with the scope's id is still being moved, or another request saved the schema at the same time (`The schema was saved by another request at the same time. Reload it and save again.`)   |
 | `500`  | Internal server error                                                                                                                                                                                                              |
 
@@ -359,7 +359,7 @@ A system schema (`isSystem: true`) is updated or deleted only by the system user
 | Status | Description                                                                                                                                                                                                                                            |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `400`  | Invalid parameters or body, the schema or scoping database does not exist, the schema is a system schema, or the schema belongs to a deleted database                                                                                                  |
-| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                                                                                                                  |
+| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`rulePosition` is the rule's position in `rules`)                                                                                                           |
 | `409`  | The compliance data of a deleted database with the schema's current or new scope id is still being moved, or another request saved the schema at the same time (`The schema was saved by another request at the same time. Reload it and save again.`) |
 | `500`  | Internal server error                                                                                                                                                                                                                                  |
 

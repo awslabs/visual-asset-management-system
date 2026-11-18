@@ -11612,7 +11612,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule '<name>'` with `ruleName`. The same answer is given when the workflow or a pipeline does not exist."
+                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule rules[<n>]` with `rulePosition`, the rule's position in the body's `rules`. The same answer is given when the workflow or a pipeline does not exist."
                     content:
                         application/json:
                             schema:
@@ -11699,7 +11699,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule '<name>'` with `ruleName`. The same answer is given when the workflow or a pipeline does not exist."
+                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule rules[<n>]` with `rulePosition`, the rule's position in the body's `rules`. The same answer is given when the workflow or a pipeline does not exist."
                     content:
                         application/json:
                             schema:
@@ -21621,13 +21621,13 @@ components:
 
         pipelineRuleRefusedError:
             type: object
-            description: "A schema save refused because a new or changed pipeline rule names a workflow the caller may not run (POST on its execute route, GET on the workflow and its pipelines). Also returned, with no `ruleName`, for any other authorization refusal."
+            description: "A schema save refused because a new or changed pipeline rule names a workflow the caller may not run (POST on its execute route, GET on the workflow and its pipelines). Also returned, with no `rulePosition`, for any other authorization refusal."
             properties:
                 message:
                     type: string
-                ruleName:
-                    type: string
-                    description: "The first pipeline rule refused."
+                rulePosition:
+                    type: integer
+                    description: "The position, counting from 0, of the first pipeline rule refused in the body's `rules`."
             required:
                 - message
 
