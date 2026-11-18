@@ -14,7 +14,7 @@ Read the AWS blog post [GPU-Accelerated Robotic Simulation Training with NVIDIA 
 | **Configuration flag** | `app.pipelines.useIsaacLabTraining.enabled`                                                                                       |
 | **Execution type**     | Lambda (asynchronous with callback)                                                                                               |
 | **Launch**             | Manual only -- neither workflow registers a trigger                                                                               |
-| **Compute**            | AWS Batch with GPU instances (G6, G6E, G5 families)                                                                               |
+| **Compute**            | AWS Batch with single-GPU instances (G6, GR6, G6E, G5 families)                                                                   |
 | **Storage**            | Amazon Elastic File System (Amazon EFS) for checkpoints                                                                           |
 | **Training timeout**   | 8 hours for the workflow step, including the wait for a GPU instance and the image pull. The AWS Batch job limit is also 8 hours. |
 | **Evaluation timeout** | 2 hours for the workflow step, including the wait for a GPU instance                                                              |
@@ -66,23 +66,56 @@ Add the following to your `config.json` under `app.pipelines`:
                 "acceptNvidiaEula": true,
                 "useCodeBuild": true,
                 "autoRegisterWithVAMS": true,
-                "keepWarmInstance": false
+                "keepWarmInstance": false,
+                "instanceTypes": ["g6.4xlarge", "g6e.2xlarge", "g5.4xlarge"]
             }
         }
     }
 }
 ```
 
-| Option                 | Default | Description                                                                                                                                                                                                                                                                   |
-| ---------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`              | `false` | Enable or disable the pipeline deployment.                                                                                                                                                                                                                                    |
-| `acceptNvidiaEula`     | `false` | **Required when enabled.** You must accept the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license) by setting this to `true`. Deployment fails if this is `false` when the pipeline is enabled. |
-| `useCodeBuild`         | `false` | Build the container image via AWS CodeBuild + ECR instead of local Docker. Recommended for the large Isaac Lab GPU image.                                                                                                                                                     |
-| `autoRegisterWithVAMS` | `true`  | Automatically register both the `isaaclab-training` and `isaaclab-evaluation` pipelines and workflows with VAMS at deploy time.                                                                                                                                               |
-| `keepWarmInstance`     | `false` | When `true`, maintains one warm GPU instance (8 vCPUs for g6.2xlarge) in the AWS Batch compute environment. Reduces cold-start latency at the cost of continuous GPU instance charges.                                                                                        |
+| Option                 | Default                                                                                                                                                             | Description                                                                                                                                                                                                                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`              | `false`                                                                                                                                                             | Enable or disable the pipeline deployment.                                                                                                                                                                                                                                                          |
+| `acceptNvidiaEula`     | `false`                                                                                                                                                             | **Required when enabled.** You must accept the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license) by setting this to `true`. Deployment fails if this is `false` when the pipeline is enabled.                       |
+| `useCodeBuild`         | `false`                                                                                                                                                             | Build the container image via AWS CodeBuild + ECR instead of local Docker. Recommended for the large Isaac Lab GPU image.                                                                                                                                                                           |
+| `autoRegisterWithVAMS` | `true`                                                                                                                                                              | Automatically register both the `isaaclab-training` and `isaaclab-evaluation` pipelines and workflows with VAMS at deploy time.                                                                                                                                                                     |
+| `keepWarmInstance`     | `false`                                                                                                                                                             | When `true`, maintains one warm GPU instance in the AWS Batch compute environment. The floor is the 8 vCPUs one job needs, and every instance type in `instanceTypes` can run the job, so the warm instance can take it. Reduces cold-start latency at the cost of continuous GPU instance charges. |
+| `instanceTypes`        | `["g6.4xlarge", "g6.8xlarge", "g6.16xlarge", "gr6.4xlarge", "gr6.8xlarge", "g6e.2xlarge", "g6e.4xlarge", "g6e.8xlarge", "g5.4xlarge", "g5.8xlarge", "g5.16xlarge"]` | The GPU instance types the compute environment may launch. See [Instance types](#instance-types).                                                                                                                                                                                                   |
 
 :::warning[NVIDIA EULA acceptance required]
 The Isaac Lab container is built from the NVIDIA NGC base image. You must review and accept the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license) before enabling this pipeline. The CDK deployment will fail with a validation error if `acceptNvidiaEula` is not set to `true`.
+:::
+
+## Instance types
+
+One Isaac Lab job asks AWS Batch for 8 vCPUs, 32,768 MiB of memory and 1 GPU. The compute environment holds only the types in `app.pipelines.useIsaacLabTraining.instanceTypes`, with no CPU-only instance classes added. AWS Batch accepts a compute environment whose instance types cannot hold the job and then leaves the job `RUNNABLE` with no error, so VAMS checks every type when the configuration loads and fails the deployment for one that cannot run the job. Each type needs:
+
+-   **One NVIDIA GPU with RT cores and 16 GB or more of video memory.** Isaac Sim needs both. The G5 (A10G, 24 GB), G6 and GR6 (L4, 24 GB) and G6E (L40S, 48 GB) families qualify. The G4dn (T4) and P-series (V100, A100, H100) families do not.
+-   **A single GPU.** A multi-GPU size such as `g6e.12xlarge` leaves the other GPUs idle and billed.
+-   **At least 8 vCPUs.**
+-   **More registered memory than 32,768 MiB.** The Amazon ECS agent registers less than the installed memory, so `g5.2xlarge` and `g6.2xlarge` (32 GiB installed) never hold the job.
+
+The default list meets all four:
+
+| Instance type | GPU     | vCPUs | Memory  |
+| ------------- | ------- | ----- | ------- |
+| g6.4xlarge    | 1x L4   | 16    | 64 GiB  |
+| g6.8xlarge    | 1x L4   | 32    | 128 GiB |
+| g6.16xlarge   | 1x L4   | 64    | 256 GiB |
+| gr6.4xlarge   | 1x L4   | 16    | 128 GiB |
+| gr6.8xlarge   | 1x L4   | 32    | 256 GiB |
+| g6e.2xlarge   | 1x L40S | 8     | 64 GiB  |
+| g6e.4xlarge   | 1x L40S | 16    | 128 GiB |
+| g6e.8xlarge   | 1x L40S | 32    | 256 GiB |
+| g5.4xlarge    | 1x A10G | 16    | 64 GiB  |
+| g5.8xlarge    | 1x A10G | 32    | 128 GiB |
+| g5.16xlarge   | 1x A10G | 64    | 256 GiB |
+
+A type VAMS does not know, such as one from a newly released family, is accepted with a warning that asks you to confirm it offers the same. Narrowing the list reduces the places AWS Batch can find capacity: when EC2 has no On-Demand capacity for the listed types in the deployment's subnets, the job stays `RUNNABLE` until the workflow's heartbeat fails the run.
+
+:::note[AWS GovCloud (US) and AWS European Sovereign Cloud]
+Instance type availability varies by Region. Before you enable the pipeline in either partition, confirm that the types you list are offered in the Region and Availability Zones of your subnets, for example with `aws ec2 describe-instance-type-offerings --location-type availability-zone --filters Name=instance-type,Values=g6e.2xlarge --region <region>`, and remove the ones that are not.
 :::
 
 ## Container Build Options
@@ -138,7 +171,7 @@ creates no Amazon S3 model cache bucket of its own. See
 
 ## Prerequisites
 
--   **GPU instance availability** -- Request quota increases for G6, G6E, or G5 instance families in your deployment region if needed. The compute environment uses `BEST_FIT_PROGRESSIVE` allocation across multiple instance types for optimal availability.
+-   **GPU instance availability** -- Request quota increases for the G6, G6E, or G5 instance families in your deployment region if needed. The compute environment uses `BEST_FIT_PROGRESSIVE` allocation across the instance types listed in `instanceTypes`. Confirm that each type is offered in your Region and Availability Zones, because AWS Batch can find capacity only among the types it is given. See [Instance types](#instance-types).
 -   **VPC with NAT Gateway** -- The pipeline requires private subnets with internet access (via NAT Gateway) because the Isaac Lab container needs to download NVIDIA Omniverse assets at runtime. Its compute runs in `pipelineNetwork.privateSubnets.pipeline`, which the VPC builder creates as `PRIVATE_WITH_EGRESS`.
 
 :::warning[Air-gapped deployments]

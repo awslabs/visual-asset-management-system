@@ -218,7 +218,20 @@
                 "acceptNvidiaEula": false,
                 "useCodeBuild": false,
                 "autoRegisterWithVAMS": true,
-                "keepWarmInstance": false
+                "keepWarmInstance": false,
+                "instanceTypes": [
+                    "g6.4xlarge",
+                    "g6.8xlarge",
+                    "g6.16xlarge",
+                    "gr6.4xlarge",
+                    "gr6.8xlarge",
+                    "g6e.2xlarge",
+                    "g6e.4xlarge",
+                    "g6e.8xlarge",
+                    "g5.4xlarge",
+                    "g5.8xlarge",
+                    "g5.16xlarge"
+                ]
             },
             "useNvidiaCosmos": {
                 "enabled": false,

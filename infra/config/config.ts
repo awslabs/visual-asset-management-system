@@ -123,6 +123,34 @@ export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
 export const COSMOS3_NANO_GPU_COUNT = 4;
 export const COSMOS3_SUPER_GPU_COUNT = 8;
 
+// What one Isaac Lab Batch job reserves, and so what every instance type in its compute environment
+// must offer. The isaacLabTraining construct passes these to the job definition, and
+// validateIsaacLabInstanceTypes() checks each configured instance type against them: AWS Batch accepts
+// a compute environment whose types cannot hold the job, then leaves the job RUNNABLE with no error.
+export const ISAAC_LAB_JOB_VCPUS = 8;
+export const ISAAC_LAB_JOB_MEMORY_MIB = 32768;
+export const ISAAC_LAB_JOB_GPUS = 1;
+
+// The instance types the Isaac Lab compute environment uses when app.pipelines.useIsaacLabTraining
+// names none. Every one carries one NVIDIA RT-core GPU with 24 GB or more of video memory (L4, A10G
+// or L40S; Isaac Sim needs RT cores and 16 GB), at least ISAAC_LAB_JOB_VCPUS vCPUs, and more
+// registered memory than ISAAC_LAB_JOB_MEMORY_MIB. g5.2xlarge and g6.2xlarge are left out: their
+// 32 GiB of installed memory registers below the 32,768 MiB the job asks for. The list is wide on
+// purpose, because AWS Batch can only find capacity among the types it is given.
+export const DEFAULT_ISAAC_LAB_INSTANCE_TYPES: readonly string[] = [
+    "g6.4xlarge",
+    "g6.8xlarge",
+    "g6.16xlarge",
+    "gr6.4xlarge",
+    "gr6.8xlarge",
+    "g6e.2xlarge",
+    "g6e.4xlarge",
+    "g6e.8xlarge",
+    "g5.4xlarge",
+    "g5.8xlarge",
+    "g5.16xlarge",
+];
+
 // CloudWatch log-group name patterns the executionLogs Lambda (the execution logs view) may read
 // registered sub-process logs from when app.pipelines.executionLogReadPrefixes is absent. Each entry is
 // used verbatim as an IAM log-group resource name (a trailing `*` is a prefix match; none is an exact
@@ -433,6 +461,8 @@ export const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
     "g6.12xlarge": 4,
     "g6.24xlarge": 4,
     "g6.48xlarge": 8,
+    "gr6.4xlarge": 1,
+    "gr6.8xlarge": 1,
     "g6e.xlarge": 1,
     "g6e.2xlarge": 1,
     "g6e.4xlarge": 1,
@@ -450,6 +480,55 @@ export const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
     "p5.48xlarge": 8,
     "p5e.48xlarge": 8,
     "p5en.48xlarge": 8,
+};
+
+// vCPUs and installed memory (MiB) of the accelerated instance types whose GPU has RT cores and 16 GB
+// or more of video memory: g5 (A10G, 24 GB), g6 and gr6 (L4, 24 GB) and g6e (L40S, 48 GB). The names
+// that also appear in GPU_COUNT_BY_INSTANCE_TYPE carry their GPU count there. A type outside this
+// table is not rejected on size alone; see validateIsaacLabInstanceTypes().
+export const ISAAC_LAB_CAPABLE_INSTANCE_SPECS: Record<
+    string,
+    { vcpus: number; memoryMiB: number }
+> = {
+    "g5.xlarge": { vcpus: 4, memoryMiB: 16384 },
+    "g5.2xlarge": { vcpus: 8, memoryMiB: 32768 },
+    "g5.4xlarge": { vcpus: 16, memoryMiB: 65536 },
+    "g5.8xlarge": { vcpus: 32, memoryMiB: 131072 },
+    "g5.16xlarge": { vcpus: 64, memoryMiB: 262144 },
+    "g5.12xlarge": { vcpus: 48, memoryMiB: 196608 },
+    "g5.24xlarge": { vcpus: 96, memoryMiB: 393216 },
+    "g5.48xlarge": { vcpus: 192, memoryMiB: 786432 },
+    "g6.xlarge": { vcpus: 4, memoryMiB: 16384 },
+    "g6.2xlarge": { vcpus: 8, memoryMiB: 32768 },
+    "g6.4xlarge": { vcpus: 16, memoryMiB: 65536 },
+    "g6.8xlarge": { vcpus: 32, memoryMiB: 131072 },
+    "g6.16xlarge": { vcpus: 64, memoryMiB: 262144 },
+    "g6.12xlarge": { vcpus: 48, memoryMiB: 196608 },
+    "g6.24xlarge": { vcpus: 96, memoryMiB: 393216 },
+    "g6.48xlarge": { vcpus: 192, memoryMiB: 786432 },
+    "gr6.4xlarge": { vcpus: 16, memoryMiB: 131072 },
+    "gr6.8xlarge": { vcpus: 32, memoryMiB: 262144 },
+    "g6e.xlarge": { vcpus: 4, memoryMiB: 32768 },
+    "g6e.2xlarge": { vcpus: 8, memoryMiB: 65536 },
+    "g6e.4xlarge": { vcpus: 16, memoryMiB: 131072 },
+    "g6e.8xlarge": { vcpus: 32, memoryMiB: 262144 },
+    "g6e.16xlarge": { vcpus: 64, memoryMiB: 524288 },
+    "g6e.12xlarge": { vcpus: 48, memoryMiB: 393216 },
+    "g6e.24xlarge": { vcpus: 96, memoryMiB: 786432 },
+    "g6e.48xlarge": { vcpus: 192, memoryMiB: 1572864 },
+};
+
+// Instance families Isaac Sim cannot use, with the reason. GPUs without RT cores cannot run its
+// renderer (A100, H100, V100), and the T4 in g4dn reports about 15 GiB, under the 16 GB it needs.
+const ISAAC_LAB_UNSUPPORTED_FAMILIES: Record<string, string> = {
+    g4dn: "its NVIDIA T4 GPU reports about 15 GiB of video memory, under the 16 GB Isaac Sim needs",
+    p3: "its NVIDIA V100 GPU has no RT cores, which Isaac Sim needs",
+    p3dn: "its NVIDIA V100 GPU has no RT cores, which Isaac Sim needs",
+    p4d: "its NVIDIA A100 GPU has no RT cores, which Isaac Sim needs",
+    p4de: "its NVIDIA A100 GPU has no RT cores, which Isaac Sim needs",
+    p5: "its NVIDIA H100 GPU has no RT cores, which Isaac Sim needs",
+    p5e: "its NVIDIA H200 GPU has no RT cores, which Isaac Sim needs",
+    p5en: "its NVIDIA H200 GPU has no RT cores, which Isaac Sim needs",
 };
 
 /** Strings a CDK context value or environment variable may use to mean true. */
@@ -741,6 +820,89 @@ function validateInstanceTypeGpuCount(
                     `GPU(s). This tier's jobs reserve ${requiredGpus} GPUs, so AWS Batch can never ` +
                     `place them on it and they stay RUNNABLE without reporting an error. Use an ` +
                     `instance type with at least ${requiredGpus} GPUs (for example g6e.12xlarge).`
+            );
+        }
+    }
+}
+
+/**
+ * Memory (MiB) the Amazon ECS agent registers for an instance with the given installed memory, as a
+ * conservative estimate. The agent registers what the operating system reports, which is less than
+ * the installed amount (AWS documents 7,985 MiB for an 8 GiB m4.large, 97.5%), and the Batch AMI holds
+ * back a further 32 MiB. 97% less 32 MiB stays under both, so a type that clears the job's memory by
+ * this estimate clears it in practice. A 32 GiB type registers about 31.5 GiB and never fits a job
+ * that asks for 32,768 MiB.
+ */
+export function estimatedRegisteredMemoryMiB(installedMiB: number): number {
+    return Math.floor(installedMiB * 0.97) - 32;
+}
+
+/**
+ * Checks the instance types of the Isaac Lab compute environment against the job they must run.
+ *
+ * Throws for a type that the Isaac Lab job can never run on, because AWS Batch accepts the compute
+ * environment and then leaves the job RUNNABLE without an error:
+ *  - an empty list, or an entry that is not a string;
+ *  - a family with no RT-core GPU or too little video memory (g4dn, P-series);
+ *  - a type with a GPU count other than the job's one (a larger one idles the rest and bills for it);
+ *  - a type with fewer vCPUs than the job asks for, or too little registered memory.
+ * Warns, rather than throwing, for a type this table does not know, so a newly released family can be
+ * tried, and says that the deployer must confirm it.
+ */
+export function validateIsaacLabInstanceTypes(instanceTypes: unknown, configPath: string) {
+    if (
+        !Array.isArray(instanceTypes) ||
+        instanceTypes.length === 0 ||
+        instanceTypes.some((t) => typeof t !== "string" || t.trim() === "")
+    ) {
+        throw new Error(
+            `Configuration Error: ${configPath} must be a non-empty list of EC2 instance type names ` +
+                `(for example g6e.2xlarge). AWS Batch cannot run the Isaac Lab job without one.`
+        );
+    }
+    for (const instanceType of instanceTypes as string[]) {
+        const family = instanceType.split(".")[0];
+        const unsupportedReason = ISAAC_LAB_UNSUPPORTED_FAMILIES[family];
+        if (unsupportedReason) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which Isaac Lab cannot ` +
+                    `use: ${unsupportedReason}. Use a G5, G6, GR6 or G6e instance type with one GPU ` +
+                    `(for example g6e.2xlarge).`
+            );
+        }
+        const spec = ISAAC_LAB_CAPABLE_INSTANCE_SPECS[instanceType];
+        if (spec === undefined) {
+            console.warn(
+                `Configuration Warning: ${configPath} includes ${instanceType}, whose size and GPU VAMS ` +
+                    `cannot verify. The Isaac Lab job needs ${ISAAC_LAB_JOB_VCPUS} vCPUs, ` +
+                    `${ISAAC_LAB_JOB_MEMORY_MIB} MiB of registered memory, ${ISAAC_LAB_JOB_GPUS} GPU and an ` +
+                    `NVIDIA GPU with RT cores and 16 GB of video memory. Confirm the type offers them, ` +
+                    `because AWS Batch leaves the job RUNNABLE on a type that does not.`
+            );
+            continue;
+        }
+        const gpus = GPU_COUNT_BY_INSTANCE_TYPE[instanceType];
+        if (gpus !== ISAAC_LAB_JOB_GPUS) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which has ${gpus} GPUs. ` +
+                    `The Isaac Lab job uses ${ISAAC_LAB_JOB_GPUS}, so a type with more leaves the others ` +
+                    `idle and billed. Use a single-GPU type (for example g6e.4xlarge).`
+            );
+        }
+        if (spec.vcpus < ISAAC_LAB_JOB_VCPUS) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which has ${spec.vcpus} ` +
+                    `vCPUs. The Isaac Lab job needs ${ISAAC_LAB_JOB_VCPUS}, so AWS Batch can never place it ` +
+                    `there. Use a type with at least ${ISAAC_LAB_JOB_VCPUS} vCPUs.`
+            );
+        }
+        const registeredMiB = estimatedRegisteredMemoryMiB(spec.memoryMiB);
+        if (registeredMiB < ISAAC_LAB_JOB_MEMORY_MIB) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which has ${spec.memoryMiB} ` +
+                    `MiB of installed memory and registers about ${registeredMiB} MiB with Amazon ECS. The ` +
+                    `Isaac Lab job asks for ${ISAAC_LAB_JOB_MEMORY_MIB} MiB, so AWS Batch can never place ` +
+                    `it there. Use a type with more memory (for example g6e.2xlarge or g6.4xlarge).`
             );
         }
     }
@@ -1276,6 +1438,7 @@ export function getConfig(app: cdk.App): Config {
             useCodeBuild: false,
             autoRegisterWithVAMS: true,
             keepWarmInstance: false,
+            instanceTypes: [...DEFAULT_ISAAC_LAB_INSTANCE_TYPES],
         };
     }
 
@@ -1289,6 +1452,21 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.pipelines.useIsaacLabTraining.keepWarmInstance == undefined) {
         config.app.pipelines.useIsaacLabTraining.keepWarmInstance = false;
+    }
+
+    if (config.app.pipelines.useIsaacLabTraining.instanceTypes == undefined) {
+        config.app.pipelines.useIsaacLabTraining.instanceTypes = [
+            ...DEFAULT_ISAAC_LAB_INSTANCE_TYPES,
+        ];
+    }
+
+    // Every instance type must be able to run the job: Batch otherwise accepts the compute
+    // environment and leaves the job RUNNABLE without an error.
+    if (config.app.pipelines.useIsaacLabTraining.enabled) {
+        validateIsaacLabInstanceTypes(
+            config.app.pipelines.useIsaacLabTraining.instanceTypes,
+            "app.pipelines.useIsaacLabTraining.instanceTypes"
+        );
     }
 
     // Validate NVIDIA EULA acceptance when Isaac Lab Training is enabled
@@ -5460,6 +5638,7 @@ export interface ConfigPublic {
                 useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
                 keepWarmInstance: boolean;
+                instanceTypes: string[];
             };
             usePreview3dThumbnail: {
                 enabled: boolean;
