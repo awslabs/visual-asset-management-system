@@ -13,7 +13,8 @@
  *
  * Keep them byte-for-byte in sync with those files. `makeDefaultConfig()`
  * returns a deep clone so callers can freely mutate. GovCloud differs from
- * Commercial in ~12 values (FIPS, KMS, govCloud, VPC, OpenSearch serverless-
+ * Commercial in ~13 values (FIPS, KMS, govCloud, VPC with cross-Region S3
+ * endpoints off, OpenSearch serverless-
  * vs-provisioned, Location Service, ALB-vs-CloudFront, bedrock model id, GenAI
  * auto-trigger). EU Sovereign Cloud is GovCloud with 4 further differences
  * (region, FIPS off, aws-eusc certificate ARN, amazonaws.eu ECR URIs).
@@ -487,7 +488,7 @@ const COMMERCIAL: ConfigShape = {
 };
 
 /**
- * The GovCloud preset is the Commercial preset with the ~12 GovCloud-specific
+ * The GovCloud preset is the Commercial preset with the ~13 GovCloud-specific
  * overrides applied. Building it from a clone guarantees the two stay
  * structurally identical except for the documented differences.
  */
@@ -497,6 +498,9 @@ function buildGovCloud(): ConfigShape {
     cfg.app.useKmsCmkEncryption.enabled = true;
     cfg.app.govCloud.enabled = true;
     cfg.app.useGlobalVpc.enabled = true;
+    // Cross-Region AWS PrivateLink to Amazon S3 exists in the commercial partition only, and
+    // getConfig() refuses this flag elsewhere once a bucket in another Region is added.
+    cfg.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
     cfg.app.openSearch.useServerless.enabled = false;
     cfg.app.openSearch.useServerless.nextGen = false;
     cfg.app.openSearch.useServerless.allowPublic = false;

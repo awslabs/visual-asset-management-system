@@ -358,6 +358,41 @@ jobs:
                   include-hidden-files: true
                   retention-days: 1
 
+    # Builds the documentation site on every pull request and on pushes to development and
+    # development-*, without deploying it. The site fails its build on a broken link or anchor
+    # (docusaurus.config.ts), and docs.yml builds it only on pushes to main and release/**, so without
+    # this job a broken link merged on development would first fail at release time. Pushes to main
+    # and release/** skip it: docs.yml builds the site there.
+    docs-build:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) && !(github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))) }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup node
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+                  cache: npm
+                  cache-dependency-path: documentation/docusaurus-site/package-lock.json
+
+            - name: Pin npm version
+              run: npm install -g npm@11.19.1
+
+            - name: Npm ci documentation site
+              working-directory: documentation/docusaurus-site
+              run: npm ci
+
+            - name: Build documentation site
+              working-directory: documentation/docusaurus-site
+              run: npm run build
+
     # One TypeScript type check over all of infra (lib, bin, config, test). The infra Jest suite
     # compiles transpile-only (infra/tsconfig.json sets isolatedModules), so a type error fails here and
     # not in the shards.

@@ -43,9 +43,12 @@ def _asset():
     }
 
 
-def _written_row(runner):
+def _written_row(runner, stored=None):
+    """Run `runner` against an in-memory asset table holding `stored` (default: the row the
+    operation reads; `{}`: no live row) and return the live row afterwards, or None when there is
+    none."""
     av = _assetVersions
-    asset_table = MagicMock(name="asset_table")
+    asset_table = SiblingFakeAssetTable(None if stored == {} else (stored or _asset()))
     with patch.object(av, "asset_table", asset_table), \
             patch.object(av, "get_asset_with_permissions", side_effect=lambda *a, **k: _asset()), \
             patch.object(av, "get_asset_s3_location", return_value=("asset-bucket", f"{ASSET}/")), \
@@ -60,8 +63,9 @@ def _written_row(runner):
             patch.object(av, "mark_assetVersion_as_current", return_value=True), \
             patch.object(av, "send_subscription_email"):
         runner(av)
-    assert asset_table.put_item.call_count == 1
-    return asset_table.put_item.call_args.kwargs["Item"]
+    # A targeted update of the stamped attributes, never the operation's copy of the row put back.
+    assert asset_table.put_item_calls == []
+    return asset_table.items.get((DB, ASSET))
 
 
 def _create(av):
@@ -96,6 +100,18 @@ class TestAssetVersionProvenance:
     def test_a_previous_workflow_execution_id_is_dropped(self, runner):
         assert "lastChangeWorkflowExecutionId" not in _written_row(runner)
 
+    def test_attributes_written_while_the_version_was_made_are_kept(self, runner):
+        # An upload completion lands while the version operation runs on the copy it read first.
+        later_upload = "2026-04-01T08:00:00+00:00"
+        row = _written_row(runner, stored={**_asset(), "lastUploadAt": later_upload,
+                                           "description": "edited meanwhile"})
+        assert row["lastUploadAt"] == later_upload
+        assert row["description"] == "edited meanwhile"
+        assert row["currentVersionId"] == "6"
+
+    def test_an_asset_archived_meanwhile_is_not_recreated(self, runner):
+        assert _written_row(runner, stored={}) is None
+
 
 # S3 calls that write an object (and so raise an S3 event the file indexer relays to the compliance
 # trigger).
@@ -108,9 +124,14 @@ def _record_writes(runner, target_files=()):
     row it wrote (`("stamp", lastAssetVersionAt)`), and every S3 client / resource call it made."""
     av = _assetVersions
     events = []
-    asset_table = MagicMock(name="asset_table")
-    asset_table.put_item.side_effect = lambda **kwargs: events.append(
-        ("stamp", kwargs["Item"]["lastAssetVersionAt"]))
+    asset_table = SiblingFakeAssetTable(_asset())
+    apply_update = asset_table.update_item
+
+    def _update_item(**kwargs):
+        apply_update(**kwargs)
+        events.append(("stamp", asset_table.updated_attributes[-1]["lastAssetVersionAt"]))
+
+    asset_table.update_item = _update_item
 
     def _copy(source_bucket, source_key, source_version_id, dest_bucket, dest_key):
         events.append(("copy", datetime.now(timezone.utc).isoformat()))

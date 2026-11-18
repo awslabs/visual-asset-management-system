@@ -201,7 +201,10 @@ class World:
             del self.locks.rows[key]
 
     def deliver(self, event):
-        return callback.lambda_handler(event, MagicMock())
+        # The writer that announces a run's end has recorded that status on its main row first.
+        recorded = {"executionStatus": (event.get("detail") or {}).get("status")}
+        with patch.object(callback, "read_execution_record", return_value=recorded):
+            return callback.lambda_handler(event, MagicMock())
 
     def end(self, execution_id, output=FAILING, status="SUCCEEDED", release=True):
         """The run ends: its locks are released, then its completion event reaches the callback."""

@@ -5875,7 +5875,8 @@ def handle_get_request(event):
     Note on ordering: parameter validation runs BEFORE the Tier-1 enforceAPI check
     here (the reverse of the gold-standard placement) to preserve this endpoint's
     existing response behavior exactly -- a malformed request returns its 400
-    validation error regardless of the caller's API authorization.
+    validation error regardless of the caller's API authorization. excludeStatus is
+    checked after Tier 1, as the global list does.
     """
     pathParams = event.get('pathParameters', {}) or {}
     queryParameters = event.get('queryStringParameters', {})
@@ -5926,11 +5927,6 @@ def handle_get_request(event):
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
 
-    # excludeStatus: known statuses only, and never the one the status filter selects (fixed 400s).
-    _excluded, message = parse_list_status_filter(queryParameters)
-    if message:
-        return validation_error(body={'message': message}, event=event)
-
     # Body field validation (workflowDatabaseId) via the request model.
     request_model = parse(body, model=ListExecutionsRequestModel)
     workflow_database_id = request_model.workflowDatabaseId
@@ -5944,6 +5940,12 @@ def handle_get_request(event):
 
     if not method_allowed_on_api:
         return authorization_error()
+
+    # excludeStatus: known statuses only, and never the one the status filter selects (fixed 400s).
+    # excludeStatus is validated after Tier 1, as the global list does.
+    _excluded, message = parse_list_status_filter(queryParameters)
+    if message:
+        return validation_error(body={'message': message}, event=event)
 
     logger.info("Listing Workflow Executions")
     return get_executions(

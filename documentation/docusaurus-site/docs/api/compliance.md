@@ -74,7 +74,7 @@ The listing is not paged; a schema appears once, at its highest version. The top
 
 ## Register a compliance schema
 
-Registers a schema body under a name. Registering a name that already exists writes the next version of that schema; the highest version is the one evaluation reads. The request is authorized on `POST` of the `complianceSchema` object in the target scope (`databaseId`, `GLOBAL` when omitted); re-registering an existing name also needs `PUT` on it in its current scope.
+Registers a schema body under a name. Registering a name that already exists writes the next version of that schema; the highest version is the one evaluation reads. The request is authorized on `POST` of the `complianceSchema` object in the target scope (`databaseId`, `GLOBAL` when omitted); re-registering an existing name also needs `PUT` on it in its current scope. A system schema (`isSystem: true`) gets a new version from the system user only; any other caller receives `400`, as on update.
 
 :::note[Schema names are unique across all databases]
 Schema names form one name space across `GLOBAL` and every database: a name that one scope uses cannot be registered as a second schema in another scope. Registering it again writes the next version of the existing schema (moving it to the scope the request names), and so needs `PUT` on that schema in its current scope; a caller who may not change it there gets `403`. Choose a name that is unique for the whole deployment, for example prefixed with the database ID.
@@ -229,7 +229,7 @@ Its result names the failing files, at most ten:
 See [Metadata rules](../concepts/compliance.md#metadata-rules) for the scopes in full.
 
 :::note[Only vams-rules-v1 documents are accepted]
-`schemaBody` must be a `vams-rules-v1` document: an object with `schemaFormat` set to `vams-rules-v1` and at least one rule under `rules`. A plain JSON Schema, a template file's envelope (`metadata`, `schemaName`, `schemaBody`) or any other object is rejected with `400` and the message `schemaBody must be a vams-rules-v1 document`; the specific validation failure is written to the handler's log. A pipeline rule's `inputFiles` selects which of the asset's files the workflow receives (`matching`, `wholeAsset` or `explicit`); the modes and the arity rule are described in [Pipeline rules](../concepts/compliance.md#pipeline-rules).
+`schemaBody` must be a `vams-rules-v1` document: an object with `schemaFormat` set to `vams-rules-v1` and at least one rule under `rules`. A rule name may not start with `$`, which is reserved for results an evaluation records itself. A plain JSON Schema, a template file's envelope (`metadata`, `schemaName`, `schemaBody`) or any other object is rejected with `400` and the message `schemaBody must be a vams-rules-v1 document`; the specific validation failure is written to the handler's log. A pipeline rule's `inputFiles` selects which of the asset's files the workflow receives (`matching`, `wholeAsset` or `explicit`); the modes and the arity rule are described in [Pipeline rules](../concepts/compliance.md#pipeline-rules).
 :::
 
 ### Response
@@ -263,7 +263,7 @@ An `extendsSchemaNotFound` entry is returned when the body's `extends` names a p
 ```json
 {
     "code": "extendsSchemaNotFound",
-    "message": "The parent schema 'base-standard' was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.",
+    "message": "The parent schema named in `extends` was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.",
     "extends": "base-standard"
 }
 ```
@@ -275,8 +275,8 @@ Each pipeline rule whose `pipelineRef` is new (on registration, every pipeline r
 
 ```json
 {
-    "message": "Not authorized to run the workflow of pipeline rule 'coord-accuracy'",
-    "ruleName": "coord-accuracy"
+    "message": "Not authorized to run the workflow of pipeline rule rules[1]",
+    "rulePosition": 1
 }
 ```
 
@@ -285,12 +285,12 @@ The answer is the same when the workflow or a pipeline does not exist, and every
 
 ### Error responses
 
-| Status | Description                                                                                                                                                            |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, a body that is not a valid `vams-rules-v1` document, the scoping database is absent, or the name exists and belongs to a deleted database's schema |
-| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                                  |
-| `409`  | The compliance data of a deleted database with the scope's id is still being moved                                                                                     |
-| `500`  | Internal server error                                                                                                                                                  |
+| Status | Description                                                                                                                                                                                                                        |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, a body that is not a valid `vams-rules-v1` document, the scoping database is absent, or the name exists and belongs to a system schema (`System schemas cannot be modified`) or to a deleted database's schema |
+| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`rulePosition` is the rule's position in `rules`)                                                                                       |
+| `409`  | The compliance data of a deleted database with the scope's id is still being moved, or another request saved the schema at the same time (`The schema was saved by another request at the same time. Reload it and save again.`)   |
+| `500`  | Internal server error                                                                                                                                                                                                              |
 
 ---
 
@@ -356,12 +356,12 @@ A system schema (`isSystem: true`) is updated or deleted only by the system user
 
 ### Error responses
 
-| Status | Description                                                                                                                                           |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters or body, the schema or scoping database does not exist, the schema is a system schema, or the schema belongs to a deleted database |
-| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                 |
-| `409`  | The compliance data of a deleted database with the schema's current or new scope id is still being moved                                              |
-| `500`  | Internal server error                                                                                                                                 |
+| Status | Description                                                                                                                                                                                                                                            |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or body, the schema or scoping database does not exist, the schema is a system schema, or the schema belongs to a deleted database                                                                                                  |
+| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`rulePosition` is the rule's position in `rules`)                                                                                                           |
+| `409`  | The compliance data of a deleted database with the schema's current or new scope id is still being moved, or another request saved the schema at the same time (`The schema was saved by another request at the same time. Reload it and save again.`) |
+| `500`  | Internal server error                                                                                                                                                                                                                                  |
 
 ---
 
@@ -1423,17 +1423,17 @@ GET /compliance/audit
 
 ### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                                                                                                           |
-| --------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
-| `eventType`     | string | No       | `null`  | Restrict the page to one event type — see [Event types](#event-types).                                                |
-| `databaseId`    | string | No       | `null`  | Only entries of this database (a deleted database's history: `<databaseId>%23deleted`); only they are read.           |
-| `assetId`       | string | No       | `null`  | Only entries of this asset; requires `databaseId`, and combines with `eventType`.                                     |
-| `text`          | string | No       | `null`  | Case-insensitive contains on the asset name recorded with the entry, the asset ID or the actor.                       |
-| `startDate`     | string | No       | `null`  | ISO-8601 timestamp; only entries at or after it are returned.                                                         |
-| `endDate`       | string | No       | `null`  | ISO-8601 timestamp; only entries at or before it are returned.                                                        |
-| `maxItems`      | number | No       | `100`   | Entries per page. A larger value is reduced to 200; the remainder follows `NextToken`. Takes precedence over `limit`. |
-| `limit`         | number | No       | `100`   | Alias of `maxItems`, read when `maxItems` is absent.                                                                  |
-| `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                                            |
+| Parameter       | Type   | Required | Default | Description                                                                                                                     |
+| --------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `eventType`     | string | No       | `null`  | Restrict the page to one event type — see [Event types](#event-types).                                                          |
+| `databaseId`    | string | No       | `null`  | Only entries of this database (a deleted database's history: `<databaseId>%23deleted`); only they are read.                     |
+| `assetId`       | string | No       | `null`  | Only entries of this asset; requires `databaseId`, and combines with `eventType`.                                               |
+| `text`          | string | No       | `null`  | Case-insensitive contains on the asset name recorded with the entry, the asset ID or the actor.                                 |
+| `startDate`     | string | No       | `null`  | ISO-8601 date or timestamp, compared in UTC (a value with no offset is read as UTC); only entries at or after it are returned.  |
+| `endDate`       | string | No       | `null`  | ISO-8601 date or timestamp, compared in UTC (a value with no offset is read as UTC); only entries at or before it are returned. |
+| `maxItems`      | number | No       | `100`   | Entries per page. A larger value is reduced to 200; the remainder follows `NextToken`. Takes precedence over `limit`.           |
+| `limit`         | number | No       | `100`   | Alias of `maxItems`, read when `maxItems` is absent.                                                                            |
+| `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                                                      |
 
 ### Response
 

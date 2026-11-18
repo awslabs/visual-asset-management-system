@@ -911,7 +911,8 @@ def create_schema(ctx: click.Context, schema_name: str, schema_file: str,
 
     Saving a pipeline rule needs the right to run its workflow (the execute route and a read of the
     workflow and its pipelines); without it the save is refused with "Not authorized to run the
-    workflow of pipeline rule '<name>'". An update re-checks only the pipeline rules it changes.
+    workflow of pipeline rule rules[<n>]" (the rule's position in the body's rules, from 0). An
+    update re-checks only the pipeline rules it changes.
 
     The schema body must be a vams-rules-v1 document: {"schemaFormat": "vams-rules-v1",
     "rules": {...}} where each rule has a ruleType (pipeline, metadata, relationship,

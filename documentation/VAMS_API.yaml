@@ -595,7 +595,7 @@ paths:
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update metadata for an asset link (bulk operation)."
-            description: "Update existing metadata items for a specific asset link. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            description: "Update existing metadata items for a specific asset link. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions; a REPLACE_ALL that removes stored keys also requires the DELETE method on this route and returns 403 without it). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -5928,7 +5928,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update metadata for an asset (bulk operation)."
-            description: "Update existing metadata items for a specific asset. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            description: "Update existing metadata items for a specific asset. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions; a REPLACE_ALL that removes stored keys also requires the DELETE method on this route and returns 403 without it). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -6172,7 +6172,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update metadata or attributes for a file (bulk operation)."
-            description: "Update existing metadata or attribute items for a specific file. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). File attributes only support 'string' metadataValueType. Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            description: "Update existing metadata or attribute items for a specific file. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions; a REPLACE_ALL that removes stored keys also requires the DELETE method on this route and returns 403 without it). File attributes only support 'string' metadataValueType. Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -6384,7 +6384,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update metadata for a database (bulk operation)."
-            description: "Update existing metadata items for a specific database. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            description: "Update existing metadata items for a specific database. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions; a REPLACE_ALL that removes stored keys also requires the DELETE method on this route and returns 403 without it). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -11633,19 +11633,19 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, or the name belongs to a deleted database's schema."
+                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, or the name belongs to a system schema (`System schemas cannot be modified`; only the system user writes its next version) or to a deleted database's schema."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule '<name>'` with `ruleName`. The same answer is given when the workflow or a pipeline does not exist."
+                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule rules[<n>]` with `rulePosition`, the rule's position in the body's `rules`. The same answer is given when the workflow or a pipeline does not exist."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/pipelineRuleRefusedError"
                 "409":
-                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or another request saved the schema at the same time (`The schema was saved by another request at the same time. Reload it and save again.`)."
                     content:
                         application/json:
                             schema:
@@ -11726,13 +11726,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule '<name>'` with `ruleName`. The same answer is given when the workflow or a pipeline does not exist."
+                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule rules[<n>]` with `rulePosition`, the rule's position in the body's `rules`. The same answer is given when the workflow or a pipeline does not exist."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/pipelineRuleRefusedError"
                 "409":
-                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or another request saved the schema at the same time (`The schema was saved by another request at the same time. Reload it and save again.`)."
                     content:
                         application/json:
                             schema:
@@ -19392,7 +19392,7 @@ components:
                     type: string
                     enum: [update, replace_all]
                     default: "update"
-                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items; removing stored keys also requires the DELETE method on the route, else 403)"
             required:
                 - metadata
             example:
@@ -19528,7 +19528,7 @@ components:
                     type: string
                     enum: [update, replace_all]
                     default: "update"
-                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items; removing stored keys also requires the DELETE method on the route, else 403)"
             required:
                 - metadata
             example:
@@ -19686,7 +19686,7 @@ components:
                     type: string
                     enum: [update, replace_all]
                     default: "update"
-                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items; removing stored keys also requires the DELETE method on the route, else 403)"
             required:
                 - filePath
                 - type
@@ -19845,7 +19845,7 @@ components:
                     type: string
                     enum: [update, replace_all]
                     default: "update"
-                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items; removing stored keys also requires the DELETE method on the route, else 403)"
             required:
                 - metadata
             example:
@@ -21068,7 +21068,7 @@ components:
                     description: "Name of a parent schema whose rules are inherited. A rule of the same name in this schema replaces the parent's."
                 rules:
                     type: object
-                    description: "Rules keyed by rule name. At least one rule is required."
+                    description: "Rules keyed by rule name. At least one rule is required. A rule name may not start with `$` (reserved for results an evaluation records itself)."
                     additionalProperties:
                         oneOf:
                             - $ref: "#/components/schemas/compliancePipelineRule"
@@ -21591,13 +21591,13 @@ components:
 
         pipelineRuleRefusedError:
             type: object
-            description: "A schema save refused because a new or changed pipeline rule names a workflow the caller may not run (POST on its execute route, GET on the workflow and its pipelines). Also returned, with no `ruleName`, for any other authorization refusal."
+            description: "A schema save refused because a new or changed pipeline rule names a workflow the caller may not run (POST on its execute route, GET on the workflow and its pipelines). Also returned, with no `rulePosition`, for any other authorization refusal."
             properties:
                 message:
                     type: string
-                ruleName:
-                    type: string
-                    description: "The first pipeline rule refused."
+                rulePosition:
+                    type: integer
+                    description: "The position, counting from 0, of the first pipeline rule refused in the body's `rules`."
             required:
                 - message
 
@@ -22957,13 +22957,13 @@ components:
       complianceAuditStartDateParam:
         name: startDate
         in: query
-        description: "ISO-8601 timestamp; only entries at or after it are returned"
+        description: "ISO-8601 date or timestamp, compared in UTC (a value with no offset is read as UTC); only entries at or after it are returned"
         schema:
             type: string
       complianceAuditEndDateParam:
         name: endDate
         in: query
-        description: "ISO-8601 timestamp; only entries at or before it are returned"
+        description: "ISO-8601 date or timestamp, compared in UTC (a value with no offset is read as UTC); only entries at or before it are returned"
         schema:
             type: string
       complianceStartingTokenParam:
