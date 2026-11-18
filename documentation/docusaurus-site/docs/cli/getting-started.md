@@ -96,14 +96,14 @@ See [Setup and Authentication Commands](commands/setup-and-auth.md) for the full
 If your VAMS deployment uses an external OAuth identity provider (IdP), use the token override mechanism:
 
 ```bash
-vamscli auth set-override -u your.email@example.com --token "eyJhbGciOiJ..."
+echo "$VAMS_TOKEN" | vamscli auth set-override -u your.email@example.com --token-stdin
 ```
 
 You can specify an expiration time for the override token using Unix timestamps, ISO 8601 format, or relative seconds:
 
 ```bash
-vamscli auth set-override -u user@example.com --token "token..." --expires-at "+3600"
-vamscli auth set-override -u user@example.com --token "token..." --expires-at "2025-12-31T23:59:59Z"
+echo "$VAMS_TOKEN" | vamscli auth set-override -u user@example.com --token-stdin --expires-at "+3600"
+echo "$VAMS_TOKEN" | vamscli auth set-override -u user@example.com --token-stdin --expires-at "2025-12-31T23:59:59Z"
 ```
 
 :::warning[Override Token Limitations]
@@ -115,7 +115,7 @@ Override tokens do not support automatic refresh. When an override token expires
 If you have a VAMS API key (created through the web UI or API), you can use it directly without a password login. Store the key as an override token, naming the user ID the key was created for:
 
 ```bash
-vamscli auth set-override -u api-key-user@example.com --token "your-api-key-value"
+echo "$VAMS_API_KEY" | vamscli auth set-override -u api-key-user@example.com --token-stdin
 ```
 
 The override persists in the profile and is used by every subsequent command until it is replaced by another `auth set-override` or `auth login`, or removed with `vamscli auth clear-override`.

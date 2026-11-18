@@ -50,8 +50,14 @@ Ensure the CLI is available and authenticated **for the current user/session**.
    for this session. Discover syntax via `vamscli auth --help` and
    `vamscli api-key --help`, and prefer, in order:
     - **Pre-set user API key** applied via the CLI's token-override mechanism
-      (recommended). Ask the user to provide a scoped **user** API key.
-    - **Interactive login** (Cognito username/password) as a fallback.
+      (recommended). Ask the user to provide a scoped **user** API key, and pass
+      it on standard input (`auth login --user-id <id> --token-override-stdin` or
+      `auth set-override -u <id> --token-stdin`), never as a command-line
+      argument: every argument of a running process is readable from the OS
+      process table.
+    - **Interactive login** (Cognito username/password) as a fallback. In a
+      script, the password goes on standard input (`--password-stdin`), not
+      `-p`.
     - **Optional bootstrap**: on request, walk the user through creating a
       profile and a new user API key, then registering it. A profile signed in
       with a temporary session key (an API key whose name starts with the
