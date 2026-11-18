@@ -40,12 +40,13 @@ Metadata schema validation is enforced only when metadata is created or updated 
 
 Amazon API Gateway waits for the integration timeout configured in `app.api.apiGatewayRest.apiGatewayTimeoutTime` — `29` seconds by default — before returning a `504`. The underlying AWS Lambda function continues executing for up to **15 minutes**. This affects:
 
-| Operation                              | Impact                                             |
-| -------------------------------------- | -------------------------------------------------- |
-| Listing assets with thousands of files | Response may time out while Lambda completes       |
-| Asset export with deep link trees      | Large response payloads take time to assemble      |
-| Bulk metadata operations               | Individual batch writes continue after timeout     |
-| Amazon OpenSearch re-indexing          | Lambda may complete indexing after API returns 504 |
+| Operation                              | Impact                                                                                 |
+| -------------------------------------- | -------------------------------------------------------------------------------------- |
+| Listing assets with thousands of files | Response may time out while Lambda completes                                           |
+| Asset export with deep link trees      | Large response payloads take time to assemble                                          |
+| Bulk metadata operations               | Individual batch writes continue after timeout                                         |
+| Amazon OpenSearch re-indexing          | Lambda may complete indexing after API returns 504                                     |
+| Copying or moving a large file         | Amazon S3 copies the file within the request; the copy continues after API returns 504 |
 
 Deployments that routinely operate on assets with many files or many relationships can raise the integration timeout up to `300` seconds so these operations complete within a single synchronous request. Values above `29` seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md). The 15-minute AWS Lambda timeout remains the outer bound.
 

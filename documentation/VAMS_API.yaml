@@ -3467,7 +3467,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/moveFile:
         post:
             summary: "Move or rename a file within an asset."
-            description: "Move a file to a different path or rename it in place. Handles both moving files to different directories and renaming files within the same directory. Source file must not be archived, and destination must not exist (including archived versions). Preview files and auxiliary files are automatically moved/renamed with the base file."
+            description: "Move a file to a different path or rename it in place. Handles both moving files to different directories and renaming files within the same directory. Source file must not be archived, and destination must not exist (including archived versions). Preview files and auxiliary files are automatically moved/renamed with the base file. The copy runs within the request: when copying a large file outlasts the Amazon API Gateway integration timeout (app.api.apiGatewayRest.apiGatewayTimeoutTime, 29 seconds by default), API Gateway answers 504 while the AWS Lambda function keeps copying."
             requestBody:
                 required: true
                 content:
@@ -3518,6 +3518,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/copyFile:
         post:
             summary: "Copy a file within an asset, to another asset, or across databases."
+            description: "The copy runs within the request: when copying a large file outlasts the Amazon API Gateway integration timeout (app.api.apiGatewayRest.apiGatewayTimeoutTime, 29 seconds by default), API Gateway answers 504 while the AWS Lambda function keeps copying."
             requestBody:
                 required: true
                 content:
@@ -8176,7 +8177,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /uploads/{uploadId}:
         get:
             summary: "Get the status of an upload whose large files are ingested asynchronously."
-            description: "Returns the upload's status and the outcome of each file it accepted for asynchronous ingestion (files over 1 GiB, largeFileAsynchronousHandling in the completion response). Completion keeps the record of such an upload with status processing_async and one PENDING entry per file; each file then becomes SUCCEEDED or FAILED, and the upload completed or completed_with_errors. The record is kept for 7 days. An upload whose files all landed at completion has no record, so it answers 404. Requires GET on the upload's asset. A missing upload, an upload of another database, a missing asset and an asset the caller may not read all answer the same 404."
+            description: "Returns the upload's status and the outcome of each file it accepted for asynchronous ingestion (files over 1 GiB, largeFileAsynchronousHandling in the completion response). Completion keeps the record of such an upload with status processing_async and one PENDING entry per file; each file then becomes SUCCEEDED or FAILED, and the upload completed or completed_with_errors. The record is kept for 7 days. A user upload whose files all landed at completion has no record, so it answers 404; the upload a workflow execution makes to store its pipeline outputs keeps its record with status completed or completed_with_errors and answers 200. Requires GET on the upload's asset. A missing upload, an upload of another database, a missing asset and an asset the caller may not read all answer the same 404."
             parameters:
                 - name: "uploadId"
                   in: path
@@ -8218,7 +8219,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: "Upload not found: no record (including an upload whose files all landed at completion, and a record past its 7 days), another database, or an asset the caller may not read."
+                    description: "Upload not found: no record (including a user upload whose files all landed at completion, and a record past its 7 days), another database, or an asset the caller may not read."
                     content:
                         application/json:
                             schema:
@@ -8250,7 +8251,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/completeUploadResponse"
                 "400":
-                    description: Invalid parameters. A missing upload also answers 400.
+                    description: "Invalid parameters. A missing upload also answers 400, and so does a second completion of an upload whose record is kept for its asynchronously processed files ('Upload has already been completed.')."
                     content:
                         application/json:
                             schema:
@@ -18305,7 +18306,7 @@ components:
                     nullable: true
                 previewFile:
                     type: string
-                    description: "Path to the preview file for this file: the newest non-archived `.previewFile.` object when several exist. Empty string if no preview file exists."
+                    description: "Path to the preview file for this file: the newest non-archived `.previewFile.` object, or, in a listing with includeArchived=true, the newest archived one when the file has no other. Empty string if no preview file exists."
                 changeSource:
                     type: string
                     description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate). Blank or absent for versions created before change provenance tracking was introduced."
