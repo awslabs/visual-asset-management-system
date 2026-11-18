@@ -613,16 +613,19 @@ def save_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
         logger.exception(f"Error saving asset file versions: {e}")
         return False
 
-def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) -> Optional[Dict]:
+def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
+                            raise_errors: bool = False) -> Optional[Dict]:
     """Get file versions for a specific asset version
 
     Args:
         databaseId: The database ID
         assetId: The asset ID
         assetVersionId: The asset version ID
+        raise_errors: Re-raise a failed read instead of answering None, for a caller that must
+            tell a read failure from a snapshot with no files
 
     Returns:
-        Dictionary with file versions or None if not found
+        Dictionary with file versions or None if not found (or, without raise_errors, unreadable)
     """
     try:
         # Query using the table PK (databaseId:assetId:assetVersionId is now the table PK)
@@ -662,6 +665,8 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
         
     except Exception as e:
         logger.exception(f"Error getting asset file versions: {e}")
+        if raise_errors:
+            raise
         return None
 
 def resolve_file_version_from_asset_version(databaseId: str, assetId: str, assetVersionId: str, fileKey: str) -> str:

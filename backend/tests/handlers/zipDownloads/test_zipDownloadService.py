@@ -473,7 +473,7 @@ class TestVersionPinning:
         import sys
         fake = _t.ModuleType("handlers.assets.assetVersions")
         fake.validate_asset_version_exists = lambda db, a, v: True
-        fake.get_asset_file_versions = lambda db, a, v: {"files": files}
+        fake.get_asset_file_versions = lambda db, a, v, **_kw: {"files": files}
         fake.resolve_asset_version_id_from_alias = lambda db, a, alias: (alias_map or {})[alias]
         monkeypatch.setitem(sys.modules, "handlers.assets.assetVersions", fake)
 
@@ -499,6 +499,23 @@ class TestVersionPinning:
             ("/a.glb", "va1"), ("/textures/t1.png", "vt1")]
         # A pinned run launches on the whole asset; the manifest is the authority.
         assert json.loads(env.lam.calls[0][2]["body"])["inputFiles"][0]["relativeFileKey"] == "/"
+
+    def test_a_snapshot_that_cannot_be_read_answers_500_not_a_selection_refusal(self, env, monkeypatch):
+        import sys
+        self._versions(env, monkeypatch, [])
+
+        def _unreadable(db, a, v, raise_errors=False):
+            # The real helper's shape: None for a failed read unless asked to raise.
+            if raise_errors:
+                raise RuntimeError("table unavailable")
+            return None
+
+        monkeypatch.setattr(sys.modules["handlers.assets.assetVersions"], "get_asset_file_versions",
+                            _unreadable)
+        response = _create(env, {"selection": FILE_SELECTION["selection"], "assetVersionId": "3"})
+        assert response["statusCode"] == 500
+        assert env.zip.items == {}
+        assert env.lam.calls == []
 
     def test_alias_resolution(self, env, monkeypatch):
         self._versions(env, monkeypatch, [{"relativeKey": "/a.glb", "versionId": "va1", "size": 100}],

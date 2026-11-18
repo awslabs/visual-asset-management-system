@@ -517,7 +517,8 @@ def _resolve_pinned(database_id, asset_id, bucket, base_key, request):
         asset_version_id = resolve_asset_version_id_from_alias(database_id, asset_id,
                                                                request.assetVersionIdAlias)
     validate_asset_version_exists(database_id, asset_id, asset_version_id)
-    snapshot = get_asset_file_versions(database_id, asset_id, asset_version_id) or {}
+    # A failed read raises (answered 500), so it is never reported as a selection the version lacks.
+    snapshot = get_asset_file_versions(database_id, asset_id, asset_version_id, raise_errors=True) or {}
     recorded = {}
     for f in snapshot.get("files") or []:
         rel = (f.get("relativeKey") or "").lstrip("/")
