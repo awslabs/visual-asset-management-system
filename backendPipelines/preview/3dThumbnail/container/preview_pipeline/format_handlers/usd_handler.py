@@ -66,6 +66,11 @@ MAX_POINTS = 30_000_000
 _RENDERED_PURPOSES = ("default", "render")
 _IMPLICIT_RESOLUTION = 24
 
+# The names of the root prims the last ``load`` left out because it drew the default prim only; empty
+# when it drew the whole stage. The caller reads it to leave out of the incomplete-preview report the
+# referenced files only those prims use.
+left_out_root_prims = []
+
 # MDL material families whose base colour is read from the shader's inputs, by the lower-case file
 # name prefix of the module (OmniPBR.mdl, OmniPBR_ClearCoat.mdl, OmniSurface.mdl, OmniSurfaceLite.mdl):
 # (diffuse texture input, base colour constant input, tint input or None). The texture replaces the
@@ -103,6 +108,8 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
     """
     from pxr import Usd, UsdGeom
 
+    global left_out_root_prims
+    left_out_root_prims = []
     ext = os.path.splitext(file_path)[1].lower()
     logger.info(f"Loading USD file: {file_path} (format: {ext})")
 
@@ -114,24 +121,28 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
     xform_cache = UsdGeom.XformCache(time)
     context = _LoadContext(file_path, asset_root or os.path.dirname(os.path.abspath(file_path)), time)
 
+    # What the default prim composes is the stage's content (what another file gets when it references
+    # this one); the other root prims are a thumbnail rig, a lights or camera set, scratch geometry.
+    # When it draws nothing, the whole stage is drawn as a stage without a default prim is.
     parts = []
-    iterator = iter(Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies()))
-    for prim in iterator:
-        if prim.IsPseudoRoot():
-            continue
-        if not _is_rendered(prim, time):
-            iterator.PruneChildren()
-            continue
-        if prim.IsA(UsdGeom.PointInstancer):
-            parts.extend(_expand_point_instancer(prim, xform_cache, context))
-            iterator.PruneChildren()
-            continue
-        part = _gprim_part(prim, np.array(xform_cache.GetLocalToWorldTransform(prim)), context)
-        if part is not None:
-            parts.append(part)
-        if context.points_total > MAX_POINTS:
-            logger.warning(f"Stage expands past {MAX_POINTS} vertices; remaining prims are skipped")
-            break
+    default_prim = _default_prim(stage)
+    if default_prim is not None:
+        parts = _collect_parts(default_prim, xform_cache, context)
+        if parts:
+            others = [child.GetName() for child in stage.GetPseudoRoot().GetChildren()
+                      if child.GetPath() != default_prim.GetPath()]
+            left_out_root_prims = list(others)
+            if others:
+                logger.info(f"Drawing the default prim {default_prim.GetPath()} only; "
+                            f"root prims left out: {', '.join(others[:MAX_SUMMARY_ENTRIES])}"
+                            + (f" and {len(others) - MAX_SUMMARY_ENTRIES} more"
+                               if len(others) > MAX_SUMMARY_ENTRIES else ""))
+        else:
+            logger.info(f"The default prim {default_prim.GetPath()} draws no geometry; "
+                        f"drawing the whole stage")
+            context.points_total = 0
+    if not parts:
+        parts = _collect_parts(stage.GetPseudoRoot(), xform_cache, context)
 
     if not parts:
         raise ValueError("No valid mesh geometry found in USD stage")
@@ -157,6 +168,43 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
     logger.info(f"Loaded USD model: {pv_mesh.n_points} vertices, {pv_mesh.n_cells} faces "
                 f"from {len(parts)} prims")
     return pv_mesh
+
+
+def _default_prim(stage):
+    """The stage's default prim when it is a defined, active root prim, else None."""
+    prim = stage.GetDefaultPrim()
+    if not prim or not prim.IsActive() or not prim.IsDefined():
+        return None
+    parent = prim.GetParent()
+    if not parent or not parent.IsPseudoRoot():
+        return None
+    return prim
+
+
+def _collect_parts(root, xform_cache, context):
+    """The (points, triangles, colours) parts of the gprims at and under ``root``, in traversal order."""
+    from pxr import Usd, UsdGeom
+
+    time = context.time
+    parts = []
+    iterator = iter(Usd.PrimRange(root, Usd.TraverseInstanceProxies()))
+    for prim in iterator:
+        if prim.IsPseudoRoot():
+            continue
+        if not _is_rendered(prim, time):
+            iterator.PruneChildren()
+            continue
+        if prim.IsA(UsdGeom.PointInstancer):
+            parts.extend(_expand_point_instancer(prim, xform_cache, context))
+            iterator.PruneChildren()
+            continue
+        part = _gprim_part(prim, np.array(xform_cache.GetLocalToWorldTransform(prim)), context)
+        if part is not None:
+            parts.append(part)
+        if context.points_total > MAX_POINTS:
+            logger.warning(f"Stage expands past {MAX_POINTS} vertices; remaining prims are skipped")
+            break
+    return parts
 
 
 class _LoadContext:

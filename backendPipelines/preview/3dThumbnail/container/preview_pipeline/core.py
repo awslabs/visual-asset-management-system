@@ -347,9 +347,10 @@ def _run_preview_stage(
     # OBJ materials and textures, FBX textures, LCC data files and LCC2 chunks) from the input's own asset. A rejected or missing
     # reference is skipped; the input still renders, and the run reports the preview as incomplete.
     incomplete = None
+    fetch_report = None
+    fetch_error = None
     if not localTest and not streamed and dependencies.has_references(ext):
         fetch_report = dependencies.FetchReport()
-        fetch_error = None
         try:
             with timer.phase("fetch"):
                 dependencies.fetch_referenced_files(
@@ -365,9 +366,20 @@ def _run_preview_stage(
         except Exception as e:
             logger.warning(f"Failed to fetch some referenced files: {e}")
             fetch_error = e
-        incomplete = dependencies.incomplete_preview(fetch_report, fetch_error)
-        if incomplete is not None:
-            incomplete.log()
+
+    def summarize_incomplete():
+        """The incomplete-preview summary, logged. It is built after the load, so a skipped file that
+        only a root prim the USD handler left out reaches is not reported."""
+        if fetch_report is None:
+            return None
+        if ext in usd_handler.SUPPORTED_EXTENSIONS and usd_handler.left_out_root_prims:
+            dependencies.drop_left_out_references(
+                fetch_report, dependencies.relative_to_root(stage_input.objectKey, reference_root_key),
+                local_filepath, usd_handler.left_out_root_prims)
+        summary = dependencies.incomplete_preview(fetch_report, fetch_error)
+        if summary is not None:
+            summary.log()
+        return summary
 
     # Load with appropriate handler, then bring the geometry within the render budgets
     try:
@@ -384,6 +396,7 @@ def _run_preview_stage(
             pv_data = geometry_budget.apply_budgets(pv_data, budgets)
     except MemoryError:
         logger.exception("Out of memory while loading the input")
+        summarize_incomplete()
         return _error_response(
             stage,
             f"Out of memory loading the 3D file ({ext}) within the task's "
@@ -391,7 +404,9 @@ def _run_preview_stage(
             f"{resources.memory_advice(resources.compute_tier())}")
     except Exception as e:
         logger.exception(f"Failed to load file: {e}")
+        summarize_incomplete()
         return _error_response(stage, f"Failed to load 3D file ({ext}): {str(e)}")
+    incomplete = summarize_incomplete()
 
     # Detect and normalize up-axis to Y-up for consistent rendering (splat scenes are oriented by
     # their handler)
