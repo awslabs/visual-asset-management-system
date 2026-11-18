@@ -196,7 +196,7 @@ Retention is the fixed `common/zipDownloads.ZIP_DOWNLOAD_RETENTION_DAYS` (7; CDK
 -   [ ] **Configure Permissions**: Grant appropriate DynamoDB/S3/SNS permissions
 -   [ ] **Configure VPC**: Add VPC/subnet configuration based on config flags
 -   [ ] **Add KMS Permissions**: Include KMS key permissions for encryption
--   [ ] **Add API Routes**: Register routes in `apiBuilder3-nestedStack.ts` (preferred; the API stacks stay split so each keeps its own CloudFormation per-template budget, and `apiBuilder2` is closed to new endpoints — see Rule 6)
+-   [ ] **Add API Routes**: Register routes in `apiBuilder2-nestedStack.ts` (preferred; the two API stacks stay split so each keeps its own CloudFormation per-template budget — see Rule 6)
 -   [ ] **Follow Naming Conventions**: Use consistent naming patterns
 
 #### **Step 4: API Gateway Integration**
@@ -1203,9 +1203,9 @@ return {
 
 ### **Rule 6: API Routes MUST Be Registered in an apiBuilder Nested Stack**
 
-Put new endpoints in `apiBuilder3-nestedStack.ts` (`apiBuilder2` is within a few percent of the 1,000,000 byte template body limit when every Lambda is in the VPC). Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts`, `apiBuilder2-nestedStack.ts` and `apiBuilder3-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. A fork registers its routes from `infra/lib/nestedStacks/custom/customResources.ts`, built inside the `CustomBuilder` nested stack, which the REST API stack depends on. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
+Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. A fork registers its routes from `infra/lib/nestedStacks/custom/customResources.ts`, built inside the `CustomBuilder` nested stack, which the REST API stack depends on. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
 
-**Do not consolidate the API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 116 resources in a ~0.51 MB template and `apiBuilder2` emits 161 in ~0.67 MB, so body size fills well ahead of resource count and is what the split buys headroom against. The body binds when every Lambda is in the VPC (`useGlobalVpc.useForAllLambdas`): there `apiBuilder2` was 986,768 bytes before audit log search and 1,009,044 with it, and CloudFormation refused the change set. `apiBuilder3` now holds the audit log search, tag, tag-type and auth-constraint services, and `infra/test/api/nestedTemplateSizeGuard.test.ts` fails when any template in the worst-case cells (commercial, GovCloud, EU Sovereign) exceeds 920,000 bytes (960,000 in the two cells that stack every optional feature or use a long base name). It measures what `cdk synth` writes, with the CLI's path metadata and a 26-character reference stack name; template size grows by about 2,700 bytes per extra character of `app.baseStackName`. When it fails, build the new functions in a new nested stack; do not raise the number.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 116 resources in a ~0.51 MB template and `apiBuilder2` emits 182 in ~0.77 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 129 nodes from 107 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
@@ -2411,7 +2411,7 @@ if __name__ == '__main__':
 -   [ ] Error handling comprehensive with proper exceptions
 -   [ ] CDK lambda builders created with proper permissions
 -   [ ] Storage resources added to interface and builder
--   [ ] API routes registered in apiBuilder3-nestedStack.ts (or apiBuilder for a shared function instance)
+-   [ ] API routes registered in apiBuilder2-nestedStack.ts (or apiBuilder for a shared function instance)
 -   [ ] Frontend service methods added with proper patterns
 -   [ ] CLI API client methods added with proper exceptions
 
@@ -2841,7 +2841,7 @@ A file can hold several `<file>.previewFile.<ext>` objects (a pipeline re-run in
 
 -   [ ] Follows `assetFunctions.ts` patterns for lambda builders
 -   [ ] Updates `storageBuilder-nestedStack.ts` for new resources
--   [ ] Registers routes in `apiBuilder3-nestedStack.ts` (or `apiBuilder` for a shared function instance)
+-   [ ] Registers routes in `apiBuilder2-nestedStack.ts` (or `apiBuilder` for a shared function instance)
 -   [ ] Configures proper IAM permissions
 -   [ ] Includes KMS key permissions
 -   [ ] Configures VPC/subnet based on config flags
@@ -3053,7 +3053,7 @@ required_table = dynamodb.Table(required_table_name)
 #### **Step 5: Register API Routes**
 
 ```typescript
-// infra/lib/nestedStacks/apiLambda/apiBuilder3-nestedStack.ts
+// infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts
 // Add route registrations using attachFunctionToApi (pass the cross-stack `registry`)
 ```
 
@@ -3139,7 +3139,7 @@ required_table = dynamodb.Table(required_table_name)
 
 1. **Always** follow `assetFunctions.ts` patterns for lambda builders
 2. **Always** update `storageBuilder-nestedStack.ts` for new resources
-3. **Always** register routes in `apiBuilder3-nestedStack.ts` (or `apiBuilder` for a shared function instance)
+3. **Always** register routes in `apiBuilder2-nestedStack.ts` (or `apiBuilder` for a shared function instance)
 4. **Always** configure proper IAM permissions
 5. **Always** include KMS key permissions
 6. **Always** configure VPC/subnet based on config flags

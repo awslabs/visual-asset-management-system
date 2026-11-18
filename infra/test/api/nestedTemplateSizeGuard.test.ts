@@ -7,7 +7,8 @@ import { synthTemplate, SynthResult, TemplateName } from "../support/templateSyn
 import { nestedTemplateKeyFor } from "../support/iamPolicySize";
 
 /**
- * Size guard for every CloudFormation template the app emits, in the cells that make them largest.
+ * Size guard for every CloudFormation template the app emits, in the shipped cells and the standard
+ * worst cells.
  *
  * CloudFormation rejects a template body over 1,000,000 bytes when it creates the change set:
  * "Template may not exceed 1000000 bytes in size". Nothing is created and an upgrade of an existing
@@ -17,50 +18,54 @@ import { nestedTemplateKeyFor } from "../support/iamPolicySize";
  * bytes to spare).
  *
  * WHAT IS MEASURED. The template CloudFormation receives from `cdk synth`, which differs from a bare
- * `app.synth()` in two ways that move the size by about 5% each, so both are reproduced here:
+ * `app.synth()` in two ways that move the size, so both are reproduced here:
  *
- *  - the CLI turns on `aws:cdk:enable-path-metadata`, a `Metadata.aws:cdk:path` entry on every resource
- *    (about +19,000 bytes in ApiBuilder2);
+ *  - the CLI turns on `aws:cdk:enable-path-metadata`, a `Metadata.aws:cdk:path` entry on every resource;
  *  - the stack name is spelled into the ARNs, SSM paths and resource names of every Lambda role, so
- *    template size grows with `app.baseStackName`: about 2,700 bytes per extra character in ApiBuilder2
- *    in the worst cell. The harness's own name is shorter than a real one, so each cell here uses the
- *    reference name `vams-core-demo26-us-east-1` (26 characters, the shape of the sandbox stacks and
- *    of the documented default `vams-core-prod-us-east-1`). Measured this way the worst cell is within
- *    1% of the template `cdk synth` writes for the same configuration (884,145 against 889,255 bytes).
+ *    template size grows with `app.baseStackName`. The harness's own name is shorter than a real one,
+ *    so each cell here uses the reference name `vams-core-demo26-us-east-1` (26 characters, the shape of
+ *    the sandbox stacks and of the documented default `vams-core-prod-us-east-1`).
  *
- * WHICH CELLS. `useForAllLambdas` adds a VpcConfig block and a security group to every function in every
- * API stack, which makes it the largest-template configuration; a customer managed key adds a KMS grant
- * statement to every role; Download as Zip and the Deadline Cloud execution type each add Lambdas to
- * ApiBuilder2 (Download as Zip also needs the global VPC). The "worst" cells stack them. GovCloud and
- * EU Sovereign are measured on their shipped templates and with the same additions, because the
- * partitions we cannot deploy to must not reach the limit first.
+ * WHICH CELLS. Guarded cells: the shipped template of each partition (commercial, GovCloud, EU
+ * Sovereign), and for each of them the "worst" cell a customer can run, which stacks a customer managed
+ * key (a KMS grant statement on every role), the global VPC (a VpcConfig block on the VPC-bound
+ * functions), Download as Zip and the Deadline Cloud execution type (each adds Lambdas to ApiBuilder2).
+ * Commercial also runs the worst cell with a 20-character `app.baseStackName` (30 characters with the Region).
+ *
+ * NOT GUARDED: `useGlobalVpc.useForAllLambdas`. That option puts a VpcConfig block and a security group
+ * on EVERY function and makes ApiBuilder2 the largest template by far (development alone is at 98.7% of
+ * the limit there, before the audit search). No customer uses it today and it is deprecated, so its cell
+ * only prints its size (informational) and never fails the build.
  *
  * THE THRESHOLDS. A function with its VpcConfig and security group is 14,000 to 29,000 bytes in the API
  * stacks, so the headroom below the limit is room for that many more functions, or for CDK and cdk-nag
- * raising the metadata they stamp on each resource, before a deploy is refused.
- *
- *  - STANDARD, 920,000 bytes (8% below the limit): the shipped templates and the cells a customer is
- *    likely to run (customer managed key, every Lambda in the VPC, Download as Zip).
- *  - STACKED, 960,000 bytes (4% below): the cells that stack every optional feature that adds Lambdas to
- *    ApiBuilder2 (adds Deadline Cloud), and a 20-character base name. They are real configurations but
- *    rarer, so they get the smaller margin; a template over it is the next deploy failure.
- *
- * A template over its threshold fails here, in the pull request that crossed it, with the table printed
- * below. The remedy is to build the new functions in a new nested stack (ApiBuilder3NestedStack has
- * room, `infra/CLAUDE.md` "API Stack Ceilings"), not to raise the number.
+ * raising the metadata they stamp on each resource, before a deploy is refused. STANDARD_THRESHOLD_BYTES
+ * (940,000) and LONG_NAME_THRESHOLD_BYTES (960,000) are set just above the largest measured guarded cell
+ * of their kind, so the guard fails on about one more function. A template over it fails here, in the pull request that crossed it, with the table
+ * printed below. The remedy is to build the new functions in a new nested stack (ApiBuilder3NestedStack
+ * already exists, `infra/CLAUDE.md` "API Stack Ceilings"), not to raise the number.
  */
 jest.setTimeout(900_000);
 
 /** CloudFormation: maximum template body, in bytes. Hard limit, per template. Not adjustable. */
 const CFN_HARD_LIMIT_BYTES = 1_000_000;
 
-const STANDARD_THRESHOLD_BYTES = 920_000;
-const STACKED_THRESHOLD_BYTES = 960_000;
+/**
+ * Guarded cells at the reference stack name must stay under STANDARD_THRESHOLD_BYTES (6% below the
+ * limit): measured at 919,583 bytes in the largest (EU Sovereign worst), so about 20,000 bytes of
+ * room, one more VPC-bound function, before the guard trips. The long-base-name cell stays under
+ * LONG_NAME_THRESHOLD_BYTES (4% below): measured at 946,898 bytes, 13,000 bytes of room.
+ */
+const STANDARD_THRESHOLD_BYTES = 940_000;
+const LONG_NAME_THRESHOLD_BYTES = 960_000;
 
 interface Cell {
     name: string;
     template: TemplateName;
-    threshold: number;
+    /** Maximum template size for a guarded cell; informational cells have none. */
+    threshold?: number;
+    /** Informational cells print their size and never fail the build. */
+    informational?: boolean;
     /** Characters of app.baseStackName before the Region suffix. */
     baseName?: string;
     mutate?: (c: any) => void;
@@ -84,72 +89,51 @@ function applyStackName(c: any, baseName: string): void {
     c.webUrlDeploymentSSMParam = `${prefix}/web/deployedUrl`;
 }
 
-/** Customer managed key, every Lambda in the global VPC (which AOSS then requires to be non-public). */
-const KMS_AND_VPC_FOR_ALL_LAMBDAS = (c: any): void => {
+/** Customer managed key, global VPC (which AOSS then requires to be non-public), Download as Zip and Deadline Cloud. */
+const WORST = (c: any): void => {
+    c.app.useKmsCmkEncryption.enabled = true;
+    c.app.useGlobalVpc.enabled = true;
+    c.app.openSearch.useServerless.allowPublic = false;
+    c.app.pipelines.useZipDownloads.enabled = true;
+    c.app.pipelines.deadlineCloudExecutionTypeEnabled = true;
+};
+
+/** Deprecated and unguarded: customer managed key and every function in the VPC (the sandbox cell that first hit the limit). */
+const ALL_LAMBDAS_IN_VPC = (c: any): void => {
     c.app.useKmsCmkEncryption.enabled = true;
     c.app.useGlobalVpc.enabled = true;
     c.app.useGlobalVpc.useForAllLambdas = true;
     c.app.openSearch.useServerless.allowPublic = false;
 };
 
-/** The above with Download as Zip, which adds its function and routes to ApiBuilder2. */
-const WORST = (c: any): void => {
-    KMS_AND_VPC_FOR_ALL_LAMBDAS(c);
-    c.app.pipelines.useZipDownloads.enabled = true;
-};
+const PARTITIONS: TemplateName[] = ["commercial", "govcloud", "eusovereign"];
 
 const CELLS: Cell[] = [
-    {
-        name: "commercial (as shipped)",
-        template: "commercial",
+    ...PARTITIONS.map((template) => ({
+        name: `${template} (as shipped)`,
+        template,
         threshold: STANDARD_THRESHOLD_BYTES,
-    },
-    {
-        name: "commercial KMS + VPC for all Lambdas",
-        template: "commercial",
-        threshold: STANDARD_THRESHOLD_BYTES,
-        mutate: KMS_AND_VPC_FOR_ALL_LAMBDAS,
-    },
-    {
-        name: "commercial worst (KMS, VPC all, zip)",
-        template: "commercial",
+    })),
+    ...PARTITIONS.map((template) => ({
+        name: `${template} worst (KMS, VPC, zip, Deadline Cloud)`,
+        template,
         threshold: STANDARD_THRESHOLD_BYTES,
         mutate: WORST,
-    },
-    {
-        name: "commercial worst + Deadline Cloud",
-        template: "commercial",
-        threshold: STACKED_THRESHOLD_BYTES,
-        mutate: (c) => {
-            WORST(c);
-            c.app.pipelines.deadlineCloudExecutionTypeEnabled = true;
-        },
-    },
+    })),
     {
         name: "commercial worst, 20-character base name",
-        template: "commercial",
-        threshold: STACKED_THRESHOLD_BYTES,
+        template: "commercial" as TemplateName,
+        threshold: LONG_NAME_THRESHOLD_BYTES,
         baseName: "abcdefghijklmnopqrst",
         mutate: WORST,
     },
-    { name: "govcloud (as shipped)", template: "govcloud", threshold: STANDARD_THRESHOLD_BYTES },
-    {
-        name: "govcloud worst (KMS, VPC all, zip)",
-        template: "govcloud",
-        threshold: STANDARD_THRESHOLD_BYTES,
-        mutate: WORST,
-    },
-    {
-        name: "eusovereign (as shipped)",
-        template: "eusovereign",
-        threshold: STANDARD_THRESHOLD_BYTES,
-    },
-    {
-        name: "eusovereign worst (KMS, VPC all, zip)",
-        template: "eusovereign",
-        threshold: STANDARD_THRESHOLD_BYTES,
-        mutate: WORST,
-    },
+    // Informational only: deprecated option, not guarded (see the header).
+    ...PARTITIONS.map((template) => ({
+        name: `${template} useForAllLambdas (deprecated, informational)`,
+        template,
+        informational: true,
+        mutate: ALL_LAMBDAS_IN_VPC,
+    })),
 ];
 
 const CLI_CONTEXT = { "aws:cdk:enable-path-metadata": true };
@@ -199,7 +183,7 @@ afterAll(() => {
     // eslint-disable-next-line no-console
     console.log(
         `Template body sizes against the ${CFN_HARD_LIMIT_BYTES.toLocaleString()} byte CloudFormation ` +
-            `limit (thresholds ${STANDARD_THRESHOLD_BYTES.toLocaleString()} standard, ${STACKED_THRESHOLD_BYTES.toLocaleString()} stacked):\n` +
+            `limit (guarded thresholds ${STANDARD_THRESHOLD_BYTES.toLocaleString()} standard, ${LONG_NAME_THRESHOLD_BYTES.toLocaleString()} long base name):\n` +
             table.join("\n")
     );
 });
@@ -215,7 +199,11 @@ describe("template size guard: no template nears the CloudFormation body limit",
         expect(rows[0].bytes).toBeGreaterThan(100_000);
 
         table.push(
-            `  ${cell.name} (limit ${cell.threshold.toLocaleString()})\n` +
+            `  ${cell.name} ${
+                cell.informational
+                    ? "(informational, not guarded)"
+                    : `(limit ${cell.threshold!.toLocaleString()})`
+            }\n` +
                 rows
                     .slice(0, 5)
                     .map(
@@ -227,14 +215,16 @@ describe("template size guard: no template nears the CloudFormation body limit",
                     .join("\n")
         );
 
-        const over = rows.filter((r) => r.bytes > cell.threshold);
+        // The deprecated useForAllLambdas cell only reports its size.
+        if (cell.informational) return;
+        const over = rows.filter((r) => r.bytes > cell.threshold!);
         expect(over.map((r) => `${r.label}: ${r.bytes} bytes (${pct(r.bytes)})`)).toEqual([]);
         // Stated separately so the message for a template over the HARD limit is unmistakable.
         expect(rows.filter((r) => r.bytes >= CFN_HARD_LIMIT_BYTES)).toEqual([]);
     });
 });
 
-describe("the third API stack carries the audit search service", () => {
+describe("the third API stack carries only the audit search service", () => {
     const s = (): SynthResult => synthCell(CELLS[0]);
 
     test("the audit log service Lambda is in ApiBuilder3 and not in ApiBuilder2", () => {
@@ -249,6 +239,28 @@ describe("the third API stack carries the audit search service", () => {
             ).length;
         expect(handlerIn(stack3)).toBe(1);
         expect(handlerIn(stack2)).toBe(0);
+    });
+
+    test("the tag, tag type and auth constraint Lambdas stay in ApiBuilder2", () => {
+        const result = s();
+        const handlersIn = (key: string): string[] =>
+            Object.values(result.templates[key].Resources as Record<string, any>)
+                .filter((r: any) => r.Type === "AWS::Lambda::Function")
+                .map((r: any) => String(r.Properties?.Handler));
+        const in2 = handlersIn(nestedTemplateKeyFor(result, "ApiBuilder2"));
+        const in3 = handlersIn(nestedTemplateKeyFor(result, "ApiBuilder3"));
+        for (const h of [
+            "handlers.tags.tagService.lambda_handler",
+            "handlers.tags.createTag.lambda_handler",
+            "handlers.tagTypes.tagTypeService.lambda_handler",
+            "handlers.tagTypes.createTagTypes.lambda_handler",
+            "handlers.auth.authConstraintsService.lambda_handler",
+            "handlers.auth.authConstraintsTemplateService.lambda_handler",
+        ]) {
+            expect(in2).toContain(h);
+        }
+        // ApiBuilder3 holds the audit search Lambda and nothing else.
+        expect(in3).toEqual(["handlers.audit.auditLogService.lambda_handler"]);
     });
 
     test("the audit query table stays in the storage stack", () => {

@@ -273,9 +273,9 @@ export class CoreVAMSStack extends cdk.Stack {
             apiBuilder2NestedStack.addStackDependency(apiBuilderNestedStack);
 
             //Deploy Backend API framework - third stack (nested stack).
-            //ApiBuilder2 is within a few percent of the 1,000,000 byte template-body limit in the
-            //every-Lambda-in-the-VPC cells, so new API endpoints are built here. It needs only the
-            //storage tables and the resource-name parameters, not the other API stacks.
+            //Holds the audit log search Lambda and its /audit routes (kept out of ApiBuilder2 to leave
+            //that template headroom under the 1,000,000 byte limit). It needs only the storage tables
+            //and the resource-name parameters, not the other API stacks.
             const apiBuilder3NestedStack = new ApiBuilder3NestedStack(this, "ApiBuilder3", {
                 config: props.config,
                 registry: apiRouteRegistry,
@@ -361,7 +361,7 @@ export class CoreVAMSStack extends cdk.Stack {
             const addonFeaturesEnabled = addonBuilderNestedStack.enabledFeatures.join(",");
             for (const listingFunction of [
                 ...apiBuilderNestedStack.addonFeatureListingFunctions,
-                ...apiBuilder3NestedStack.addonFeatureListingFunctions,
+                ...apiBuilder2NestedStack.addonFeatureListingFunctions,
             ]) {
                 listingFunction.addEnvironment(ADDON_FEATURES_ENABLED_ENV, addonFeaturesEnabled);
             }

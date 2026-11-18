@@ -75,12 +75,10 @@ CoreVAMSStack (root)
   |     +-- ResourceNamesBuilder (publishes 75 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
-  |     +-- ApiBuilder2 (secondary API stack: asset history, the pipeline / pipeline template /
-  |     |    workflow / workflow trigger / execution routes, and the compliance routes + trigger /
-  |     |    workflow-callback Lambdas; closed to new endpoints)
+  |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
+  |     |    the pipeline / pipeline template / workflow / workflow trigger / execution routes,
+  |     |    and the compliance routes + trigger / workflow-callback Lambdas)
   |     |                                                    -> storage, resourceNames, ApiBuilder
-  |     +-- ApiBuilder3 (third API stack, home of new endpoints: Tags, Tag Types, Auth Constraints,
-  |     |    audit log search)                              -> storage, resourceNames
   |     +-- SearchBuilder (OpenSearch)                       -> storage, resourceNames
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
   |     |    (its vamsSchema registration custom resources invoke an ApiBuilder2 Lambda)
@@ -90,7 +88,7 @@ CoreVAMSStack (root)
   |     +-- CustomBuilder (fork extension point)             -> storage, resourceNames
   |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)
   |     |                                                    -> storage, AuthBuilder, ApiBuilder,
-  |     |                                                       ApiBuilder2, ApiBuilder3, SearchBuilder, AddonBuilder,
+  |     |                                                       ApiBuilder2, SearchBuilder, AddonBuilder,
   |     |                                                       CustomBuilder
   |     +-- StaticWeb (CloudFront or ALB hosting)            -> storage, RestApi, AuthBuilder
   |

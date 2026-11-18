@@ -17,6 +17,15 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { generateUniqueNameHash } from "../../helper/security";
+import { buildTagService, buildCreateTagFunction } from "../../lambdaBuilder/tagFunctions";
+import {
+    buildTagTypeService,
+    buildCreateTagTypeFunction,
+} from "../../lambdaBuilder/tagTypeFunctions";
+import {
+    buildAuthConstraintsFunction,
+    buildAuthConstraintsTemplateFunction,
+} from "../../lambdaBuilder/authFunctions";
 import {
     buildAssetHistoryFunction,
     buildLargeObjectCopyEngine,
@@ -94,9 +103,8 @@ export interface ApiBuilder2NestedStackProps {
  * ApiBuilderNestedStack so each carries its own budget against the two per-template CloudFormation
  * ceilings: 500 resources and a 1 MB template body. Resource counts are comfortable (the primary
  * stack emits 106, this one 69), but the primary template is already ~0.40 MB, so body size fills
- * well ahead of resource count and is what the split actually buys headroom against. This stack is
- * full in the cells that put every Lambda in the VPC (its template body is within a few percent of
- * the 1,000,000 byte limit), so it takes no new endpoints: they belong in ApiBuilder3NestedStack.
+ * well ahead of resource count and is what the split actually buys headroom against. New API
+ * endpoints belong here.
  *
  * The REST API is materialized once, from what both stacks register into RouteRegistry, so its path
  * tree counts against a single API Gateway quota — resources per REST API, 122 of a default 300 —
@@ -107,6 +115,9 @@ export class ApiBuilder2NestedStack extends NestedStack {
     // Name of the V2 vamsSchema import custom-resource lambda. Consumed by pipeline nested stacks to
     // register their built-in pipeline/workflow into the V2 tables at deploy (via VamsSchemaRegistration).
     public importGlobalPipelineWorkflowV2FunctionName = "";
+    // The Lambdas here that list permission object types and validate constraints and permission
+    // templates; the core stack tells them which add-ons are deployed (common/addonAppFeatures.ts).
+    public addonFeatureListingFunctions: lambda.Function[] = [];
 
     constructor(parent: Construct, name: string, props: ApiBuilder2NestedStackProps) {
         super(parent, name);
@@ -121,6 +132,137 @@ export class ApiBuilder2NestedStack extends NestedStack {
             metadataServiceFunction,
             uploadFileFunction,
         } = props;
+
+        //Tags Resources
+        const tagService = buildTagService(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, tagService, {
+            routePath: "/tags",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, tagService, {
+            routePath: "/tags/{tagId}",
+            method: apigateway.HttpMethod.DELETE,
+            registry: registry,
+        });
+
+        const createTagFunction = buildCreateTagFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, createTagFunction, {
+            routePath: "/tags",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, createTagFunction, {
+            routePath: "/tags",
+            method: apigateway.HttpMethod.PUT,
+            registry: registry,
+        });
+
+        //Tag Types Resources
+        const tagTypeService = buildTagTypeService(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, tagTypeService, {
+            routePath: "/tag-types",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, tagTypeService, {
+            routePath: "/tag-types/{tagTypeId}",
+            method: apigateway.HttpMethod.DELETE,
+            registry: registry,
+        });
+
+        const createTagTypeFunction = buildCreateTagTypeFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, createTagTypeFunction, {
+            routePath: "/tag-types",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, createTagTypeFunction, {
+            routePath: "/tag-types",
+            method: apigateway.HttpMethod.PUT,
+            registry: registry,
+        });
+
+        // Auth constraints service and its routes.
+        const authConstraintsService = buildAuthConstraintsFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        // permissionObjects must be registered before the {constraintId} route so the
+        // literal path is not captured by the {constraintId} template.
+        attachFunctionToApi(this, authConstraintsService, {
+            routePath: "/auth/constraints/permissionObjects",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, authConstraintsService, {
+            routePath: "/auth/constraints",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        const constraintMethods = [
+            apigateway.HttpMethod.GET,
+            apigateway.HttpMethod.POST,
+            apigateway.HttpMethod.PUT,
+            apigateway.HttpMethod.DELETE,
+        ];
+        for (let i = 0; i < constraintMethods.length; i++) {
+            attachFunctionToApi(this, authConstraintsService, {
+                routePath: "/auth/constraints/{constraintId}",
+                method: constraintMethods[i],
+                registry: registry,
+            });
+        }
+
+        const authConstraintsTemplateService = buildAuthConstraintsTemplateFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, authConstraintsTemplateService, {
+            routePath: "/auth/constraintsTemplateImport",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        this.addonFeatureListingFunctions.push(
+            authConstraintsService,
+            authConstraintsTemplateService
+        );
 
         //Asset History Resources
         const assetHistoryFunction = buildAssetHistoryFunction(
