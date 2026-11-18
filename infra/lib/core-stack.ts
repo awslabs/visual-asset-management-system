@@ -361,7 +361,7 @@ export class CoreVAMSStack extends cdk.Stack {
             const addonFeaturesEnabled = addonBuilderNestedStack.enabledFeatures.join(",");
             for (const listingFunction of [
                 ...apiBuilderNestedStack.addonFeatureListingFunctions,
-                ...apiBuilder2NestedStack.addonFeatureListingFunctions,
+                ...apiBuilder3NestedStack.addonFeatureListingFunctions,
             ]) {
                 listingFunction.addEnvironment(ADDON_FEATURES_ENABLED_ENV, addonFeaturesEnabled);
             }

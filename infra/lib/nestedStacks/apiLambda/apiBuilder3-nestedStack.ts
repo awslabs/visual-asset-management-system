@@ -9,7 +9,18 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as apigateway from "aws-cdk-lib/aws-apigatewayv2";
 import { buildAuditLogService, AUDIT_LOG_ROUTES } from "../../lambdaBuilder/auditFunctions";
+import { buildTagService, buildCreateTagFunction } from "../../lambdaBuilder/tagFunctions";
+import {
+    buildTagTypeService,
+    buildCreateTagTypeFunction,
+} from "../../lambdaBuilder/tagTypeFunctions";
+import {
+    buildAuthConstraintsFunction,
+    buildAuthConstraintsTemplateFunction,
+} from "../../lambdaBuilder/authFunctions";
 import { RouteRegistry, attachFunctionToApi } from "./apiRouteRegistry";
 import * as Config from "../../../config/config";
 
@@ -37,7 +48,9 @@ export interface ApiBuilder3NestedStackProps {
  * when any template nears the limit in the worst-case cells, so the next stack to fill up is caught
  * before a deploy.
  *
- * It holds the audit log search service (five `/audit` routes). That service is core VAMS with no feature switch: it deploys unconditionally and access is decided only by authorization (Tier 1
+ * It holds the tag, tag type and auth constraint services moved out of ApiBuilder2 (stateless CRUD
+ * functions with no queue or state machine) and the audit log search service (five `/audit`
+ * routes). The audit service is core VAMS with no feature switch: it deploys unconditionally and access is decided only by authorization (Tier 1
  * route, Tier 2 per log group). Its handle table lives in the storage stack, so moving the function
  * between nested stacks replaces only the stateless function, its role and its log group.
  *
@@ -46,6 +59,10 @@ export interface ApiBuilder3NestedStackProps {
  * where a function is built.
  */
 export class ApiBuilder3NestedStack extends NestedStack {
+    // The Lambdas here that list permission object types and validate constraints and permission
+    // templates; the core stack tells them which add-ons are deployed (common/addonAppFeatures.ts).
+    public addonFeatureListingFunctions: lambda.Function[] = [];
+
     constructor(parent: Construct, name: string, props: ApiBuilder3NestedStackProps) {
         super(parent, name);
 
@@ -66,6 +83,137 @@ export class ApiBuilder3NestedStack extends NestedStack {
                 registry: registry,
             });
         }
+
+        //Tags Resources
+        const tagService = buildTagService(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, tagService, {
+            routePath: "/tags",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, tagService, {
+            routePath: "/tags/{tagId}",
+            method: apigateway.HttpMethod.DELETE,
+            registry: registry,
+        });
+
+        const createTagFunction = buildCreateTagFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, createTagFunction, {
+            routePath: "/tags",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, createTagFunction, {
+            routePath: "/tags",
+            method: apigateway.HttpMethod.PUT,
+            registry: registry,
+        });
+
+        //Tag Types Resources
+        const tagTypeService = buildTagTypeService(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, tagTypeService, {
+            routePath: "/tag-types",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, tagTypeService, {
+            routePath: "/tag-types/{tagTypeId}",
+            method: apigateway.HttpMethod.DELETE,
+            registry: registry,
+        });
+
+        const createTagTypeFunction = buildCreateTagTypeFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, createTagTypeFunction, {
+            routePath: "/tag-types",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, createTagTypeFunction, {
+            routePath: "/tag-types",
+            method: apigateway.HttpMethod.PUT,
+            registry: registry,
+        });
+
+        // Auth constraints service and its routes.
+        const authConstraintsService = buildAuthConstraintsFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        // permissionObjects must be registered before the {constraintId} route so the
+        // literal path is not captured by the {constraintId} template.
+        attachFunctionToApi(this, authConstraintsService, {
+            routePath: "/auth/constraints/permissionObjects",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, authConstraintsService, {
+            routePath: "/auth/constraints",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        const constraintMethods = [
+            apigateway.HttpMethod.GET,
+            apigateway.HttpMethod.POST,
+            apigateway.HttpMethod.PUT,
+            apigateway.HttpMethod.DELETE,
+        ];
+        for (let i = 0; i < constraintMethods.length; i++) {
+            attachFunctionToApi(this, authConstraintsService, {
+                routePath: "/auth/constraints/{constraintId}",
+                method: constraintMethods[i],
+                registry: registry,
+            });
+        }
+
+        const authConstraintsTemplateService = buildAuthConstraintsTemplateFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, authConstraintsTemplateService, {
+            routePath: "/auth/constraintsTemplateImport",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        this.addonFeatureListingFunctions.push(
+            authConstraintsService,
+            authConstraintsTemplateService
+        );
 
         // Nag suppressions, scoped with appliesTo exactly as in ApiBuilder2: the audit-table and log
         // group wildcards and the CDK-generated custom-resource roles, not every IAM5 wildcard.
