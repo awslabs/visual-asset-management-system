@@ -175,12 +175,17 @@ const buildVersionCompareFiles = (
 /**
  * The asset's current files from the list-files API, keyed as a version snapshot keys its files.
  * The API names a file by `relativePath`, which starts with "/", while a snapshot's `relativeKey`
- * has no leading slash and lists no folders, so folders are skipped and the slash is dropped.
+ * usually has no leading slash and lists no folders, so folders are skipped and the slash is
+ * dropped. A snapshot created with an explicit file list may keep a leading "/", so its keys are
+ * matched without it too.
  */
+/** A file's path without its leading "/", the form both sides are matched in. */
+const withoutLeadingSlash = (path: unknown): string => String(path ?? "").replace(/^\/+/, "");
+
 const currentFilesByRelativeKey = (files: any[]): Map<string, FileVersion> => {
     const byKey = new Map<string, FileVersion>();
     files.forEach((file: any) => {
-        const relativeKey = String(file?.relativePath ?? "").replace(/^\/+/, "");
+        const relativeKey = withoutLeadingSlash(file?.relativePath);
         if (file?.isFolder || !relativeKey) {
             return;
         }
@@ -284,7 +289,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
 
                             // Add all keys from version files
                             versionDetails.files.forEach((file: FileVersion) => {
-                                allKeys.add(file.relativeKey);
+                                allKeys.add(withoutLeadingSlash(file.relativeKey));
                             });
 
                             // Add all keys from current files
@@ -295,7 +300,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                             // Create comparison objects
                             allKeys.forEach((key) => {
                                 const versionFile = versionDetails.files.find(
-                                    (f: FileVersion) => f.relativeKey === key
+                                    (f: FileVersion) => withoutLeadingSlash(f.relativeKey) === key
                                 );
                                 const currentFile = currentByKey.get(key);
 
