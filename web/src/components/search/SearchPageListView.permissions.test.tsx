@@ -5,7 +5,8 @@
 
 /**
  * The search list view's Create Asset and Delete Selected actions are disabled, with the reason, when
- * the page says the signed-in role may not use them; with no reason they behave as before.
+ * the page says the signed-in role may not use them (a selection with an archived row can only be
+ * permanently deleted, so it needs that permission); with no reason they behave as before.
  */
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -44,11 +45,16 @@ const state = {
 const CREATE_REASON = `Your role does not allow creating ${Synonyms.assets}.`;
 const DELETE_REASON = `Your role does not allow archiving or deleting ${Synonyms.assets}.`;
 
-const mount = (assetActionDisabledReasons?: { create?: string; delete?: string }) =>
+const PERMANENT_DELETE_REASON = `Your role does not allow permanently deleting ${Synonyms.assets}.`;
+
+const mount = (
+    assetActionDisabledReasons?: { create?: string; delete?: string; permanentDelete?: string },
+    viewState: any = state
+) =>
     render(
         <MemoryRouter>
             <SearchPageListView
-                state={state}
+                state={viewState}
                 dispatch={jest.fn()}
                 onCreateAsset={jest.fn()}
                 assetActionDisabledReasons={assetActionDisabledReasons}
@@ -89,5 +95,19 @@ describe("Search list view asset actions by permission", () => {
         expect(deleteButton()).not.toHaveAttribute("aria-disabled");
         fireEvent.click(createButton());
         expect(onCreateAsset).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps Delete Selected for a live selection when the role may archive but not permanently delete", () => {
+        mount({ permanentDelete: PERMANENT_DELETE_REASON });
+        expect(deleteButton()).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("disables Delete Selected for a selection with an archived row when the role may not permanently delete", () => {
+        mount(
+            { permanentDelete: PERMANENT_DELETE_REASON },
+            { ...state, selectedItems: [{ ...hit._source, _id: "a1", bool_archived: true }] }
+        );
+        expect(deleteButton()).toHaveAttribute("aria-disabled", "true");
+        expect(deleteButton()).toHaveAccessibleDescription(PERMANENT_DELETE_REASON);
     });
 });

@@ -4,8 +4,8 @@
  */
 
 /**
- * The search page gives its result list the reasons Create Asset and Delete Selected are unavailable
- * to the signed-in role. Roles come from the shipped database-readonly and database-user templates
+ * The search page gives its result list the reasons Create Asset, Delete Selected and permanent delete
+ * are unavailable to the signed-in role. Roles come from the shipped database-readonly and database-user templates
  * (their allowed-routes listings are in templateRoleRoutes.testdata.ts) and the administrator.
  */
 
@@ -38,6 +38,7 @@ jest.mock("../../components/search", () => ({
 }));
 
 const mockFetchAllowedApiRoutes = APIService.fetchAllowedApiRoutes as jest.Mock;
+const PERMANENT_DELETE_REASON = `Your role does not allow permanently deleting ${Synonyms.assets}.`;
 
 async function reasonsFor(routes: any[]) {
     mockFetchAllowedApiRoutes.mockResolvedValue(allowedRoutesResponse(routes));
@@ -65,6 +66,7 @@ describe("search page asset actions by role", () => {
         expect(await reasonsFor(DATABASE_READONLY_ROUTES)).toEqual({
             create: `Your role does not allow creating ${Synonyms.assets}.`,
             delete: `Your role does not allow archiving or deleting ${Synonyms.assets}.`,
+            permanentDelete: PERMANENT_DELETE_REASON,
         });
     });
 
@@ -78,14 +80,35 @@ describe("search page asset actions by role", () => {
         await waitFor(() =>
             expect(
                 mockContainerProps[mockContainerProps.length - 1].assetActionDisabledReasons
-            ).toEqual({ create: PERMISSIONS_FAILED_REASON, delete: PERMISSIONS_FAILED_REASON })
+            ).toEqual({
+                create: PERMISSIONS_FAILED_REASON,
+                delete: PERMISSIONS_FAILED_REASON,
+                permanentDelete: PERMISSIONS_FAILED_REASON,
+            })
         );
     });
 
-    it.each([
-        ["database-user", DATABASE_USER_ROUTES],
-        ["administrator", ADMIN_ROUTES],
-    ])("the %s role may create and delete", async (_, routes) => {
-        expect(await reasonsFor(routes)).toEqual({ create: undefined, delete: undefined });
+    it("a database-user role may create and archive but not permanently delete", async () => {
+        expect(await reasonsFor(DATABASE_USER_ROUTES)).toEqual({
+            create: undefined,
+            delete: undefined,
+            permanentDelete: PERMANENT_DELETE_REASON,
+        });
+    });
+
+    it("a role with the deleteAsset route may create, archive and permanently delete", async () => {
+        const routes = [
+            ...ADMIN_ROUTES,
+            {
+                path: "/database/{databaseId}/assets/{assetId}/deleteAsset",
+                methods: ["DELETE"],
+                category: "test",
+            },
+        ];
+        expect(await reasonsFor(routes)).toEqual({
+            create: undefined,
+            delete: undefined,
+            permanentDelete: undefined,
+        });
     });
 });

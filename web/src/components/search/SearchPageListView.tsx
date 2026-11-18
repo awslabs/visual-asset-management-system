@@ -773,6 +773,10 @@ function SearchPageListView({
     const hasArchivedAssetSelected = state?.selectedItems?.some(
         (item: any) => item.bool_archived === true || item.status === "archived"
     );
+    // A selection with an archived row can only be permanently deleted, so it needs that permission.
+    const deleteSelectedDisabledReason =
+        assetActionDisabledReasons?.delete ??
+        (hasArchivedAssetSelected ? assetActionDisabledReasons?.permanentDelete : undefined);
 
     // Filter out undefined/null column names and add preview column if showPreviewThumbnails is enabled
     let enhancedColumnDefinitions = orderedColumnNames
@@ -1261,9 +1265,9 @@ function SearchPageListView({
                                             disabled={
                                                 state?.selectedItems?.length === 0 ||
                                                 state?.disableSelection ||
-                                                !!assetActionDisabledReasons?.delete
+                                                !!deleteSelectedDisabledReason
                                             }
-                                            disabledReason={assetActionDisabledReasons?.delete}
+                                            disabledReason={deleteSelectedDisabledReason}
                                             onClick={() => {
                                                 setShowDeleteModal(true);
                                             }}
@@ -1392,6 +1396,7 @@ function SearchPageListView({
                 mode="asset"
                 selectedAssets={state?.selectedItems || []}
                 forceDeleteMode={hasArchivedAssetSelected}
+                canPermanentlyDelete={!assetActionDisabledReasons?.permanentDelete}
                 onSuccess={(operation) => {
                     setShowDeleteModal(false);
 

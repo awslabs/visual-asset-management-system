@@ -54,9 +54,12 @@ EXPECTED_LISTING = {
         "/database/{databaseId}/assets/{assetId}/metadata": {"GET", "POST"},
     },
 }
-# Every route either listing names; each template is evaluated on all of them, so a route missing from
-# a template's listing asserts that the role is offered no method on it.
-GATED_ROUTE_PATHS = sorted(set().union(*(listing.keys() for listing in EXPECTED_LISTING.values())))
+# Routes the web gates an action on that no template above grants, so neither listing names them.
+UNLISTED_GATED_ROUTES = {"/database/{databaseId}/assets/{assetId}/deleteAsset"}
+# Every route either listing names, plus the unlisted ones; each template is evaluated on all of them,
+# so a route missing from a template's listing asserts that the role is offered no method on it.
+GATED_ROUTE_PATHS = sorted(
+    UNLISTED_GATED_ROUTES.union(*(listing.keys() for listing in EXPECTED_LISTING.values())))
 
 
 def _stored_constraints(template_name):
