@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file. See [standa
 ### Bug Fixes
 
 -   **Pipelines** The RapidPipeline EKS Lambda signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud and `amazonaws.com.cn` in the China Regions. Previously the token always named an `amazonaws.com` STS host. ([#1593](https://github.com/awslabs/visual-asset-management-system/issues/1593))
+-   **Web** The Search page's Map view is a flat map, and it frames every located result: a footprint split at longitude 180 or results on several continents no longer leave the view on an empty area. The map previously followed the basemap style's globe, whose fit-to-bounds chose the wrong view. ([#1680](https://github.com/awslabs/visual-asset-management-system/issues/1680))
 
 ### Chores
 

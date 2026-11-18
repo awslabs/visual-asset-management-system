@@ -47,6 +47,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Key fixes:**
 
 -   **RapidPipeline EKS token in other partitions** — The pipeline signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud, instead of always naming an `amazonaws.com` host. (issue #1593)
+-   **Search Map view framing** — The Map view is a flat map and frames every located result, including a footprint split at longitude 180 and results on several continents, instead of showing an empty area. (issue #1680)
 
 **Other changes:**
 
