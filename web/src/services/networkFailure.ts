@@ -25,3 +25,21 @@ export function requestFailureMessage(error: any, fallback: string): string {
     if (isNetworkFailure(error)) return NETWORK_FAILURE_MESSAGE;
     return error?.message || fallback;
 }
+
+const UNANSWERED = Symbol("unanswered");
+
+/**
+ * Marks a failure tuple whose request got no API answer and whose message says what happened: one
+ * that never reached the service (`NETWORK_FAILURE_MESSAGE`), or one the deployment's AWS WAF web
+ * ACL blocked (its message with the request ID). Non-enumerable, so the tuple still destructures
+ * and compares as before.
+ */
+export function markUnanswered<T extends unknown[]>(tuple: T): T {
+    Object.defineProperty(tuple, UNANSWERED, { value: true, enumerable: false });
+    return tuple;
+}
+
+/** Whether a failure tuple was marked by `markUnanswered`. */
+export function isUnanswered(result: unknown): boolean {
+    return Array.isArray(result) && (result as any)[UNANSWERED] === true;
+}

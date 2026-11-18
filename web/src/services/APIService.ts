@@ -9,7 +9,7 @@ import {
     isRequestBlocked,
     NETWORK_FAILURE_MESSAGE,
 } from "./apiClient";
-import { requestFailureMessage } from "./networkFailure";
+import { markUnanswered, requestFailureMessage } from "./networkFailure";
 import { default as vamsConfig } from "../config";
 import { ensureApiStage } from "../utils/apiEndpoint";
 
@@ -260,7 +260,7 @@ export const downloadAsset = async ({
         // A request the AWS WAF web ACL blocked carries no status, so its message is shown; a
         // request that got no response at all says the service could not be reached.
         if (isNetworkFailure(error)) {
-            return [false, NETWORK_FAILURE_MESSAGE, undefined];
+            return markUnanswered([false, NETWORK_FAILURE_MESSAGE, undefined]);
         }
         // Check for 410 Gone status (archived file)
         if (error.status === 410) {
@@ -271,12 +271,14 @@ export const downloadAsset = async ({
         // block is on, D166) instead of its generic text (core/streamFailure.ts).
         // It is present only with the status (an ApiError carries the parsed body; it is read by
         // shape so a test double of the client without the class is not a TypeError here).
-        const status = isRequestBlocked(error) ? undefined : error?.status;
+        const blocked = isRequestBlocked(error);
+        const status = blocked ? undefined : error?.status;
         const failure: any[] = [false, error?.message, status];
         if (typeof status === "number" && typeof error?.body?.message === "string") {
             failure.push(error.body.message);
         }
-        return failure;
+        // Only these two failures carry no API answer and a message that says what happened.
+        return blocked ? markUnanswered(failure) : failure;
     }
 };
 
