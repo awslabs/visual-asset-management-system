@@ -155,7 +155,12 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
     const navigate = useNavigate();
     const assetScoped = !!(databaseId && assetId);
     const documentVisible = useDocumentVisible();
-    const { loading: permissionsLoading, failed: permissionsFailed, can } = useAllowedRoutes();
+    const {
+        loading: permissionsLoading,
+        failed: permissionsFailed,
+        retry: retryPermissions,
+        can,
+    } = useAllowedRoutes();
 
     const canList = can("GET", assetScoped ? ZIP_ROUTES.asset : ZIP_ROUTES.global);
     // "Show all users" is offered only when the API's route listing allows the all-users route; the
@@ -544,7 +549,23 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         },
     ];
 
-    if (!permissionsLoading && !permissionsFailed && !canList) {
+    // A failed check leaves the role's routes unknown: nothing is listed, so say so and offer the
+    // check again rather than show the list as loading.
+    if (!permissionsLoading && permissionsFailed) {
+        return (
+            <Alert
+                type="error"
+                statusIconAriaLabel="Error"
+                header="Your permissions could not be checked"
+                action={<Button onClick={() => retryPermissions()}>Retry</Button>}
+            >
+                The check for what your role may do did not complete, so the Download Queue is not
+                shown.
+            </Alert>
+        );
+    }
+
+    if (!permissionsLoading && !canList) {
         return (
             <Alert
                 type="info"

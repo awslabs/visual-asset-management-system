@@ -26,13 +26,23 @@ jest.mock("../../services/APIService", () => ({
 
 // The Tier-1 gate is the API's own decision; each test says which routes it allows.
 let mockAllowed: Record<string, boolean> = {};
+// Set when the allowed-routes check itself failed: can() then answers false for every route.
+let mockPermissionsFailed = false;
+const mockRetryPermissions = jest.fn();
 jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
     useAllowedRoutes: () => ({
         loading: false,
-        failed: false,
-        can: (method: string, path: string) => !!mockAllowed[`${method} ${path}`],
+        failed: mockPermissionsFailed,
+        retry: mockRetryPermissions,
+        can: (method: string, path: string) =>
+            !mockPermissionsFailed && !!mockAllowed[`${method} ${path}`],
     }),
 }));
+
+beforeEach(() => {
+    mockPermissionsFailed = false;
+    mockRetryPermissions.mockReset();
+});
 
 const ALL = {
     "GET /database/{databaseId}/assets/{assetId}/download/zip": true,
@@ -244,6 +254,17 @@ describe("ZipDownloadsTable", () => {
         expect(
             within(rowFor("archive-1.zip")).getByRole("button", { name: "Delete archive-1.zip" })
         ).toHaveAttribute("aria-disabled", "true");
+    });
+
+    it("says the permission check failed, with Retry, instead of loading forever", async () => {
+        mockPermissionsFailed = true;
+        renderTable();
+
+        expect(screen.getByText("Your permissions could not be checked")).toBeInTheDocument();
+        expect(screen.queryByText("Loading download jobs")).toBeNull();
+        expect(mockAssetList).not.toHaveBeenCalled();
+        await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+        expect(mockRetryPermissions).toHaveBeenCalledTimes(1);
     });
 
     it("does not load while its tab is inactive", () => {
