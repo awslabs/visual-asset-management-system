@@ -17,6 +17,7 @@ import Input from "@cloudscape-design/components/input";
 import Select, { SelectProps } from "@cloudscape-design/components/select";
 import Flashbar, { FlashbarProps } from "@cloudscape-design/components/flashbar";
 import RadioGroup from "@cloudscape-design/components/radio-group";
+import Badge from "@cloudscape-design/components/badge";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Pagination from "@cloudscape-design/components/pagination";
 import { usePageTitle } from "../hooks/usePageTitle";
@@ -64,6 +65,13 @@ export const SCHEMA_ACTIONS_COLUMN_WIDTH = 150;
 
 /** Shown on a schema row whose body is not a vams-rules-v1 document. */
 export const LEGACY_SCHEMA_LABEL = "Legacy — cannot be bound or evaluated";
+
+/** Why a legacy schema's Edit and Sweep are unavailable, shown beneath them in its row. */
+export const LEGACY_SCHEMA_ACTION_REASON = "A legacy schema cannot be updated or swept.";
+
+/** The line a system schema's dialog shows (it opens read-only for every caller but the system). */
+export const SYSTEM_SCHEMA_NOTE =
+    "This schema is registered by the system; only the system updates it.";
 
 /** What a schema row's Format column shows, which the column sorts by. */
 const schemaFormatLabel = (schema: ComplianceSchema): string => {
@@ -867,9 +875,12 @@ export default function ComplianceSchemas() {
                                 id: "schemaName",
                                 header: "Schema Name",
                                 cell: (item) => (
-                                    <Button variant="link" onClick={() => openEditModal(item)}>
-                                        {item.schemaName}
-                                    </Button>
+                                    <SpaceBetween direction="horizontal" size="xs">
+                                        <Button variant="link" onClick={() => openEditModal(item)}>
+                                            {item.schemaName}
+                                        </Button>
+                                        {item.isSystem && <Badge>System</Badge>}
+                                    </SpaceBetween>
                                 ),
                                 sortingField: "schemaName",
                                 sortingComparator: byText((item) => item.schemaName),
@@ -925,39 +936,67 @@ export default function ComplianceSchemas() {
                                           minWidth: SCHEMA_ACTIONS_COLUMN_WIDTH,
                                           cell: (item: ComplianceSchema) => {
                                               // A legacy schema cannot be updated or evaluated.
+                                              // Cloudscape shows no disabled reason on an inline
+                                              // link, so the row says why beneath its links, and
+                                              // the links name that line as their description.
                                               const legacy =
                                                   complianceSchemaFormat(item) === "legacy";
+                                              const offerEdit =
+                                                  canUpdate && itemAllows(item, "edit");
+                                              const legacyReasonId = `schema-legacy-reason-${encodeURIComponent(
+                                                  item.schemaName
+                                              )}`;
+                                              const describedBy = legacy
+                                                  ? legacyReasonId
+                                                  : undefined;
                                               return (
-                                                  <SpaceBetween direction="horizontal" size="s">
-                                                      {canUpdate && itemAllows(item, "edit") && (
-                                                          <Button
-                                                              variant="inline-link"
-                                                              ariaLabel={`Edit ${item.schemaName}`}
-                                                              disabled={legacy}
-                                                              onClick={() => openEditModal(item)}
+                                                  <SpaceBetween size="xxs">
+                                                      <SpaceBetween direction="horizontal" size="s">
+                                                          {offerEdit && (
+                                                              <Button
+                                                                  variant="inline-link"
+                                                                  ariaLabel={`Edit ${item.schemaName}`}
+                                                                  ariaDescribedby={describedBy}
+                                                                  disabled={legacy}
+                                                                  onClick={() =>
+                                                                      openEditModal(item)
+                                                                  }
+                                                              >
+                                                                  Edit
+                                                              </Button>
+                                                          )}
+                                                          {canSweep && (
+                                                              <Button
+                                                                  variant="inline-link"
+                                                                  ariaLabel={`Sweep ${item.schemaName}`}
+                                                                  ariaDescribedby={describedBy}
+                                                                  disabled={
+                                                                      legacy ||
+                                                                      (sweepingSchema !== null &&
+                                                                          sweepingSchema !==
+                                                                              item.schemaName)
+                                                                  }
+                                                                  loading={
+                                                                      sweepingSchema ===
+                                                                      item.schemaName
+                                                                  }
+                                                                  onClick={() =>
+                                                                      handleSweep(item.schemaName)
+                                                                  }
+                                                              >
+                                                                  Sweep
+                                                              </Button>
+                                                          )}
+                                                      </SpaceBetween>
+                                                      {legacy && (offerEdit || canSweep) && (
+                                                          <Box
+                                                              variant="small"
+                                                              color="text-body-secondary"
                                                           >
-                                                              Edit
-                                                          </Button>
-                                                      )}
-                                                      {canSweep && (
-                                                          <Button
-                                                              variant="inline-link"
-                                                              ariaLabel={`Sweep ${item.schemaName}`}
-                                                              disabled={
-                                                                  legacy ||
-                                                                  (sweepingSchema !== null &&
-                                                                      sweepingSchema !==
-                                                                          item.schemaName)
-                                                              }
-                                                              loading={
-                                                                  sweepingSchema === item.schemaName
-                                                              }
-                                                              onClick={() =>
-                                                                  handleSweep(item.schemaName)
-                                                              }
-                                                          >
-                                                              Sweep
-                                                          </Button>
+                                                              <span id={legacyReasonId}>
+                                                                  {LEGACY_SCHEMA_ACTION_REASON}
+                                                              </span>
+                                                          </Box>
                                                       )}
                                                   </SpaceBetween>
                                               );
@@ -993,6 +1032,9 @@ export default function ComplianceSchemas() {
                     }
                 >
                     <SpaceBetween size="m">
+                        {viewOnly && editingSchema?.isSystem && (
+                            <Box variant="p">{SYSTEM_SCHEMA_NOTE}</Box>
+                        )}
                         {formError && (
                             <div ref={formErrorRef} role="alert">
                                 <Box color="text-status-error">{formError}</Box>

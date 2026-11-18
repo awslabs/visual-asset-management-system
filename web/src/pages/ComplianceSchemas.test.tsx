@@ -7,7 +7,12 @@ import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Synonyms from "../synonyms";
-import ComplianceSchemas, { LEGACY_SCHEMA_LABEL, sweepMessage } from "./ComplianceSchemas";
+import ComplianceSchemas, {
+    LEGACY_SCHEMA_ACTION_REASON,
+    LEGACY_SCHEMA_LABEL,
+    SYSTEM_SCHEMA_NOTE,
+    sweepMessage,
+} from "./ComplianceSchemas";
 
 jest.mock("@monaco-editor/react", () => ({
     __esModule: true,
@@ -384,4 +389,43 @@ describe("ComplianceSchemas editor on each open", () => {
         await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
         await waitFor(() => expect(service().createComplianceSchema).toHaveBeenCalledTimes(1));
     }, 20_000);
+});
+
+describe("ComplianceSchemas system and legacy schemas", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("says why a legacy schema's Edit and Sweep are unavailable", async () => {
+        service().fetchComplianceSchemas.mockResolvedValue([true, [legacySchema]]);
+        render(<ComplianceSchemas />);
+        await screen.findByText("old-json-schema");
+        const row = rowOf("old-json-schema");
+        expect(
+            within(row).getByRole("button", { name: "Edit old-json-schema" })
+        ).toHaveAccessibleDescription(LEGACY_SCHEMA_ACTION_REASON);
+        expect(
+            within(row).getByRole("button", { name: "Sweep old-json-schema" })
+        ).toHaveAccessibleDescription(LEGACY_SCHEMA_ACTION_REASON);
+    });
+
+    it("marks a system schema and says in its dialog that only the system updates it", async () => {
+        service().fetchComplianceSchemas.mockResolvedValue([
+            true,
+            [
+                {
+                    ...rulesSchema,
+                    schemaName: "vams-default",
+                    isSystem: true,
+                    permissions: { edit: false },
+                },
+            ],
+        ]);
+        render(<ComplianceSchemas />);
+        await screen.findByText("vams-default");
+        expect(within(rowOf("vams-default")).getByText("System")).toBeInTheDocument();
+
+        await userEvent.click(screen.getByRole("button", { name: "vams-default" }));
+        const dialog = await screen.findByRole("dialog");
+        expect(within(dialog).getByText("View Schema")).toBeInTheDocument();
+        expect(within(dialog).getByText(SYSTEM_SCHEMA_NOTE)).toBeInTheDocument();
+    });
 });
