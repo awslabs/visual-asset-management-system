@@ -13,13 +13,11 @@ the same sha:
 - ``__main__.py``: outside ``localTest`` the image reads ``run(json.loads(sys.argv[1]))``, the command's
   first argument and nothing else. ``sys.argv[2]`` is read only when ``sys.argv[1] == "localTest"``.
   (3dThumbnail ``preview_pipeline/__main__.py`` lines 47 and 75; pcPotreeViewer ``__main__.py`` 26/36;
-  coordinateTransform ``coord_transform_pipeline/__main__.py`` 27/55; metadata3dLabeling
-  ``main/__main__.py`` 26/36.)
+  coordinateTransform ``coord_transform_pipeline/__main__.py`` 27/55.)
 - ``core.run``: ``PipelineDefinition(**params)``, then ``PipelineStage(**definition.stages.pop(0))``.
 - the stage: ``StageInput(**stage.inputFile)`` and ``StageOutput(**stage.<output>)`` (3dThumbnail
   ``core.py`` 204-205; pcPotreeViewer ``pipelines/pdal/pipeline.py`` and ``pipelines/potree/pipeline.py``
-  37-38; coordinateTransform ``core.py`` 203-205; metadata3dLabeling
-  ``pipelines/blenderRenderer/pipeline.py`` 77-78).
+  37-38; coordinateTransform ``core.py`` 203-205).
 
 Each of those is a plain ``@dataclass``, so an unknown key anywhere in the definition raises ``TypeError``.
 """
@@ -35,7 +33,6 @@ SNAPSHOTS = {
     "3dThumbnail": ("thumbnail_objects.py", ("outputFiles",)),
     "pcPotreeViewer": ("potree_objects.py", ("outputFiles",)),
     "coordinateTransform": ("coord_transform_objects.py", ("outputFiles", "outputMetadata")),
-    "metadata3dLabeling": ("metadata3d_labeling_objects.py", ("outputFiles",)),
 }
 
 

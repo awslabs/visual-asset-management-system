@@ -43,8 +43,14 @@ const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo, 
                 const isCompleted = index < currentIndex;
                 const jumpable =
                     !!onJumpTo && !isCurrent && (canJumpTo ? canJumpTo(step.id) : isCompleted);
+                // A step button's name starts with the text it shows (Label in Name, #1592): the
+                // badge's number and the label, then what the button does. A completed step's badge
+                // is a check mark, a symbol rather than text, so in a step button it is hidden from
+                // assistive technology and the name starts with the label.
+                const badgeNumber = isCompleted ? "" : `${index + 1} `;
                 const badge = (
                     <div
+                        aria-hidden={(jumpable && isCompleted) || undefined}
                         className={`flex shrink-0 items-center justify-center w-8 h-8 rounded-full text-sm font-medium ${
                             isCurrent
                                 ? "bg-blue-600 text-white"
@@ -78,10 +84,15 @@ const Stepper: React.FC<StepperProps> = ({ steps, current, onJumpTo, canJumpTo, 
                             <BusyButton
                                 busy={busy}
                                 onClick={() => onJumpTo?.(step.id)}
-                                aria-label={`Go to step ${step.label}`}
+                                aria-label={`${badgeNumber}${step.label}: go to step ${index + 1}`}
                                 className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 hover:bg-surface-hover focus:outline-none focus:ring-2 focus:ring-blue-500"
                             >
                                 {badge}
+                                {/* A space between the badge and the label, so the button's text reads
+                                    "2 Pipeline overrides" rather than "2Pipeline overrides" to a tool
+                                    that joins its text nodes without a separator (axe-core's
+                                    label-content-name-mismatch, #1592). A white-space-only run between
+                                    flex items is not rendered, so nothing moves on screen. */}{" "}
                                 {label}
                             </BusyButton>
                         ) : (

@@ -2,7 +2,7 @@
 
 The Zip Archive pipeline (`utility-zip-archive`) streams selected files, folders, or a whole asset into one zip, tar, or tar.gz archive. It serves the [Download as Zip](../user-guide/zip-downloads.md) feature, and it can also be run as an ordinary workflow that writes the archive back into the asset as a new file. The pipeline runs as an AWS Batch Fargate container that reads the selected file versions from Amazon S3 and writes the archive to Amazon S3 as a multipart upload, without staging data on disk, so an archive can reach the 5 TiB Amazon S3 object limit.
 
-The pipeline and its workflow are **system** records: VAMS registers them in the `GLOBAL` database with the fixed IDs `utility-zip-archive` when `app.pipelines.useZipDownloads.enabled` is `true`, and they are read-only through the API except for their `enabled` toggles and template content. Runs of the workflow are hidden from the execution lists unless system runs are included.
+The pipeline and its workflow are **system** records: VAMS registers them in the `GLOBAL` database with the fixed IDs `utility-zip-archive` and the `SYSTEM - Utility` category when `app.pipelines.useZipDownloads.enabled` is `true`, and they are read-only through the API except for their `enabled` toggles and template content. Runs of the workflow are hidden from the execution lists unless system runs are included.
 
 ## Archive Formats
 
@@ -64,7 +64,7 @@ The container decides its mode from the run manifest:
 
 ### Checks Before Writing
 
-Before it writes the first byte, the container resolves every folder and whole-asset entry to the current file versions (or to the versions recorded in an asset version) and head-checks every member on its pinned version. The whole archive is refused when a member is a delete marker, a missing version, in the GLACIER or DEEP_ARCHIVE storage class, marked archived or deleted (`vams-status`), or has an extension or media type on the executable blocklist, and when the member count or total size exceeds the limits. A refusal fails the run with a user-safe reason that names the asset-relative path. A zip download carries the deployment's blocklists and limits in its request manifest; a Zip Archive run applies the core blocklists.
+Before it writes the first byte, the container resolves every folder and whole-asset entry to the current file versions (or to the versions recorded in an asset version) and head-checks every member on its pinned version. Preview companions (keys containing `.previewFile.`, such as `model.glb.previewFile.png`), which the asset file list hides, are left out of the members unless `includePreviewFiles` is `true`: a Zip Archive run reads it from its template configuration body, and a zip download from its request manifest, which records `false`. A folder that holds only preview companions then counts as empty, and a selection with no member left is refused with `The selection has no files`. The whole archive is refused when a member is a delete marker, a missing version, in the GLACIER or DEEP_ARCHIVE storage class, marked archived or deleted (`vams-status`), or has an extension or media type on the executable blocklist, and when the member count or total size exceeds the limits. A refusal fails the run with a user-safe reason that names the asset-relative path. A zip download carries the deployment's blocklists and limits in its request manifest; a Zip Archive run applies the core blocklists.
 
 ### Streaming and Multipart Upload
 
@@ -113,16 +113,17 @@ The workflow's settings are fixed by the deployment (a system workflow is read-o
 
 ### Template Configuration Body
 
-| Key               | Type     | Default             | Description                                                                                                                                |
-| ----------------- | -------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `format`          | string   | `zip`               | `zip`, `tar`, or `tar.gz`.                                                                                                                 |
-| `compression`     | string   | `store`             | `store` or `deflate`. `deflate` applies to `zip` only.                                                                                     |
-| `outputFileName`  | string   | `<assetId>-archive` | Name of the archive file. The extension for the format is added, and characters other than letters, digits, space, and `._()-` become `_`. |
-| `includePatterns` | string[] | all files           | Glob patterns; a file is included when its asset-relative path (without the leading `/`) or its file name matches one.                     |
-| `excludePatterns` | string[] | none                | Glob patterns, matched the same way, that leave a file out.                                                                                |
-| `assetVersionId`  | string   | current files       | Archive the file versions recorded in this asset version instead of the current files.                                                     |
+| Key                   | Type     | Default             | Description                                                                                                                                            |
+| --------------------- | -------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `format`              | string   | `zip`               | `zip`, `tar`, or `tar.gz`.                                                                                                                             |
+| `compression`         | string   | `store`             | `store` or `deflate`. `deflate` applies to `zip` only.                                                                                                 |
+| `outputFileName`      | string   | `<assetId>-archive` | Name of the archive file. The extension for the format is added, and characters other than letters, digits, space, and `._()-` become `_`.             |
+| `includePatterns`     | string[] | all files           | Glob patterns; a file is included when its asset-relative path (without the leading `/`) or its file name matches one.                                 |
+| `excludePatterns`     | string[] | none                | Glob patterns, matched the same way, that leave a file out.                                                                                            |
+| `assetVersionId`      | string   | current files       | Archive the file versions recorded in this asset version instead of the current files.                                                                 |
+| `includePreviewFiles` | boolean  | `false`             | `true` also archives the files' preview companions (`{file}.previewFile.{ext}`); `false`, or no key, leaves them out. Only a JSON boolean is accepted. |
 
-Any other key fails the run. The same checks as for a zip download apply: the run fails, naming the file, when a selected file is archived, a deleted version, in an archive storage class, or has a blocked file type.
+Any other key, and an `includePreviewFiles` value that is not `true` or `false`, fails the run. The shipped template `zip-archive-store` sets `"includePreviewFiles": false` and lists every key in its input instructions. The same checks as for a zip download apply: the run fails, naming the file, when a selected file is archived, a deleted version, in an archive storage class, or has a blocked file type.
 
 ### Example Template Configuration Body
 

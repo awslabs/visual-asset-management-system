@@ -1,0 +1,33 @@
+{
+    "workflowName": "SYSTEM - GenAI Asset Summary",
+    "category": "SYSTEM - GenAI",
+    "description": "Runs the SYSTEM GenAI asset summary pipeline on a whole asset or one folder of it: one description, keywords and classification of the asset from its files' genai_* metadata, written as genai_asset_* asset metadata. Run it after the SYSTEM GenAI metadata pipeline has described the files. Locked per asset, so a second summary of the same asset is refused while one runs.",
+    "isSystem": true,
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "crossAssetAllowed": false,
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": true,
+            "folderAllowed": true
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": true,
+            "fileAttributes": true,
+            "databaseMetadata": false,
+            "assetFileMetadata": true,
+            "metadataSchema": true
+        },
+        "inputFileFilters": {
+            "allow": ["*"],
+            "exclude": ["*.previewFile.*"]
+        },
+        "concurrencyRestriction": "perAsset",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": false
+        },
+        "allowWorkflowTriggerChaining": false
+    }
+}

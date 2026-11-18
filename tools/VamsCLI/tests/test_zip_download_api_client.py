@@ -170,6 +170,20 @@ class TestErrorMapping:
         with pytest.raises(expected):
             client.create_zip_download("db", "a", {"selection": []})
 
+    @pytest.mark.parametrize("status,message", [
+        (400, "The selection has no files"),
+        (410, "File version has been archived and cannot be downloaded"),
+    ])
+    def test_a_refusal_reaches_the_user_in_the_api_words(self, monkeypatch, status, message):
+        """#1638: the API answers a zip refusal without a "VAMS General Error:" prefix, and the CLI (and
+        the MCP tools, which use this client) show that sentence after their own framing, adding none."""
+        client = _client()
+        _Wire(monkeypatch, client, _response({"message": message}, status=status))
+        with pytest.raises(InvalidZipDownloadRequestError) as refused:
+            client.create_zip_download("db", "a", {"selection": []})
+        assert str(refused.value) == f"Zip download request refused: {message}"
+        assert "VAMS General Error" not in str(refused.value)
+
     @pytest.mark.parametrize("status,expected", [
         (409, ZipDownloadNotReadyError), (410, ZipDownloadExpiredError)])
     def test_url_errors(self, monkeypatch, status, expected):

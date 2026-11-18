@@ -30,6 +30,12 @@ import {
 } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
+import { appCache } from "../../../services/appCache";
+import { isZipDownloadsEnabled } from "../../../components/zipDownloads/zipDownloads";
+import {
+    featuresEnabled,
+    normalizeFeaturesEnabled,
+} from "../../../common/constants/featuresEnabled";
 import type { Execution, NotAbortableSubExecution } from "../types";
 import { resourceTypeLabel } from "./resourceTypeLabels";
 
@@ -49,8 +55,8 @@ const SEARCH_LABEL = "Search";
 /**
  * URL query parameter (inside the HashRouter location) holding the "Show system runs" choice, and the
  * list query parameter it is sent as. Absent means "the server's default": system workflow runs are
- * hidden, except on a list scoped to one system workflow, where the server shows them and says so in
- * the response's `includeSystem`.
+ * hidden, except on a list scoped to one system workflow, a system trigger value (System-<Identifier>)
+ * or an execution group, where the server shows them and says so in the response's `includeSystem`.
  */
 export const INCLUDE_SYSTEM_PARAM = "includeSystem";
 
@@ -144,6 +150,15 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
     const [searchText, setSearchText] = useState("");
     const [statusFilter, setStatusFilter] = useState("");
     const [triggerFilter, setTriggerFilter] = useState("");
+    // A System-Reindex run is started only by the vector-search reindexer and a System-ZipDownload run
+    // only by Download as Zip, so the trigger filter offers each value only on a deployment with that
+    // feature on.
+    const [vectorSearchEnabled] = useState(() =>
+        normalizeFeaturesEnabled(appCache.getItem("config")?.featuresEnabled).includes(
+            featuresEnabled.VECTORSEARCH
+        )
+    );
+    const [zipDownloadsEnabled] = useState(() => isZipDownloadsEnabled());
     // Workflow-database / workflow filters. Only meaningful in the global scope: a WORKFLOW-scoped
     // board already has these pinned by the scope (see useExecutions), so the controls are hidden
     // there rather than offering a choice that would be overridden.
@@ -818,11 +833,20 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
                         onChange={(e) => setTriggerFilter(e.target.value)}
                         className={control}
                     >
-                        {/* Values are the stored trigger vocabulary ("Manual"/"File-Upload"), which
-                            is what the server-side triggerType filter compares against. */}
+                        {/* Values are the stored trigger vocabulary ("Manual"/"File-Upload") and the
+                            system trigger values of the vector-search reindex runs ("System-Reindex")
+                            and the Download as Zip runs ("System-ZipDownload"), which this board
+                            offers (the server keys on the System- format and names no value); that is
+                            what the server-side triggerType filter compares against. */}
                         <option value="">All triggers</option>
                         <option value="Manual">Manual</option>
                         <option value="File-Upload">File upload</option>
+                        {vectorSearchEnabled && (
+                            <option value="System-Reindex">System reindex</option>
+                        )}
+                        {zipDownloadsEnabled && (
+                            <option value="System-ZipDownload">Zip download</option>
+                        )}
                     </select>
                     {isGlobalScope && (
                         <select

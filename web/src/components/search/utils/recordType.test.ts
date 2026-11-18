@@ -5,7 +5,7 @@
 
 import fs from "fs";
 import path from "path";
-import { isFileHitSource, RECORD_TYPE_FIELD } from "./recordType";
+import { hasLocationOnlyMetadata, isFileHitSource, RECORD_TYPE_FIELD } from "./recordType";
 import { FIELD_MAPPINGS } from "../types";
 
 describe("record-type discriminator", () => {
@@ -75,5 +75,25 @@ describe("search components", () => {
         const documentRead = /(?:source|_source|hit|row|item)\s*[?]?\.\s*_rectype\b/;
         const offenders = files.filter((file) => documentRead.test(fs.readFileSync(file, "utf-8")));
         expect(offenders).toEqual([]);
+    });
+});
+
+// A natural-language asset hit carries its asset's location keys in MD_, not its metadata (D83).
+describe("hasLocationOnlyMetadata", () => {
+    const vector = { distance: 0.1 };
+    const asset = { [RECORD_TYPE_FIELD]: "asset", MD_: { latitude: "1", longitude: "2" } };
+    const file = { [RECORD_TYPE_FIELD]: "file", MD_: { latitude: "1", longitude: "2" } };
+
+    it("is true for a natural-language asset hit", () => {
+        expect(hasLocationOnlyMetadata(asset, vector, false)).toBe(true);
+    });
+
+    it("is false for a natural-language file hit, which carries its file's whole MD_", () => {
+        expect(hasLocationOnlyMetadata(file, vector, false)).toBe(false);
+        expect(hasLocationOnlyMetadata(asset, vector, true)).toBe(false);
+    });
+
+    it("is false for a keyword hit, which has no vector details", () => {
+        expect(hasLocationOnlyMetadata(asset, undefined, false)).toBe(false);
     });
 });

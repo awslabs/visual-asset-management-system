@@ -1,0 +1,484 @@
+{
+    "image-seed-off": {
+        "outputs": {
+            "assetMetadata": null,
+            "attributes": {
+                "metadata": [
+                    {
+                        "metadataKey": "sys_file",
+                        "metadataValue": "{\"contentType\": \"image/jpeg\", \"etag\": \"img1\", \"ext\": \".jpg\", \"name\": \"site.jpg\", \"sizeBytes\": 2048, \"versionId\": \"v2\"}",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "sys_image",
+                        "metadataValue": "{\"exif\": {\"gps\": {\"latitude\": 47.37, \"longitude\": 8.54}, \"make\": \"Canon\", \"model\": \"EOS R5\"}, \"height\": 4000, \"mode\": \"RGB\", \"width\": 6000}",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_width",
+                        "metadataValue": "6000",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_height",
+                        "metadataValue": "4000",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_color_mode",
+                        "metadataValue": "RGB",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_camera",
+                        "metadataValue": "Canon EOS R5",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_model",
+                        "metadataValue": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_generated_at",
+                        "metadataValue": "<generated-at>",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_source_modalities",
+                        "metadataValue": "file-attributes, asset-metadata, image",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_complexity",
+                        "metadataValue": "medium",
+                        "metadataValueType": "string"
+                    }
+                ],
+                "type": "attribute",
+                "updateType": "update"
+            },
+            "metadata": {
+                "metadata": [
+                    {
+                        "metadataKey": "location",
+                        "metadataValue": "{\"type\":\"Point\",\"coordinates\":[8.54,47.37]}",
+                        "metadataValueType": "geojson"
+                    },
+                    {
+                        "metadataKey": "genai_title",
+                        "metadataValue": "Brass gear pump",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_description",
+                        "metadataValue": "A brass gear pump with an inlet flange.",
+                        "metadataValueType": "multiline_string"
+                    },
+                    {
+                        "metadataKey": "genai_keywords",
+                        "metadataValue": "pump, gear pump, brass",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_category",
+                        "metadataValue": "Industrial Equipment",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_subcategory",
+                        "metadataValue": "Pump",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_style",
+                        "metadataValue": "technical/CAD",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_materials",
+                        "metadataValue": "brass, steel",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_colors",
+                        "metadataValue": "gold, gray",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_primary_color",
+                        "metadataValue": "gold",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_objects",
+                        "metadataValue": "pump housing",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_size_estimate",
+                        "metadataValue": "about 30 cm long",
+                        "metadataValueType": "string"
+                    }
+                ],
+                "type": "metadata",
+                "updateType": "update"
+            }
+        },
+        "request": {
+            "inferenceConfig": {
+                "maxTokens": 2048,
+                "temperature": 0.2
+            },
+            "messages": [
+                {
+                    "content": [
+                        {
+                            "text": "Describe and classify this file for search indexing.\nAsset name: Gear Pump\nAsset description: A brass gear pump\nAsset tags: pump\nDatabase: dbM\nFile: /photos/site.jpg (class: image, extension: .jpg)\nFile attributes (JSON): {\"sys_file\":{\"contentType\":\"image/jpeg\",\"etag\":\"img1\",\"ext\":\".jpg\",\"name\":\"site.jpg\",\"sizeBytes\":2048,\"versionId\":\"v2\"},\"sys_image\":{\"exif\":{\"gps\":{\"latitude\":47.37,\"longitude\":8.54},\"make\":\"Canon\",\"model\":\"EOS R5\"},\"height\":4000,\"mode\":\"RGB\",\"width\":6000}}\nFile facts: dimensions: 6000 x 4000 px\nCATEGORY OPTIONS (pick one category and, when one fits, one of its subcategories):\n- Vehicle: Land, sea, air and space vehicles and their major assemblies. Subcategories: Car, Truck, Motorcycle, Aircraft, Watercraft, Spacecraft, Rail, Vehicle Part\n- Industrial Equipment: Machinery, tools and plant equipment used in production or maintenance. Subcategories: Machine, Pump, Valve, Robot, Tool, Conveyor, Engine, Fixture\n- Architecture: Buildings, structures and building elements. Subcategories: Residential, Commercial, Industrial, Historic, Structural Element, Facade, Roof, Site Plan\n- Interior & Furniture: Furnishings, fixtures and interior decor. Subcategories: Seating, Table, Storage, Bed, Lighting, Kitchen, Bathroom, Decor\n- Terrain & Environment: Landscapes, terrain, vegetation and outdoor scenes. Subcategories: Terrain, Vegetation, Water Body, Urban Scene, Rural Scene, Survey Scan, Geological\n- Character & Creature: Humans, animals and fictional beings. Subcategories: Human, Animal, Fantasy Creature, Robot Character, Mannequin, Anatomy\n- Prop & Object: Everyday objects, containers, weapons and small items. Subcategories: Household Item, Container, Weapon, Sports Equipment, Toy, Food, Musical Instrument, Sign\n- Infrastructure & Utility: Roads, bridges, pipelines, power and communication networks. Subcategories: Road, Bridge, Tunnel, Pipeline, Power, Telecom, Rail Infrastructure, Street Furniture\n- Medical & Scientific: Medical devices, anatomy, laboratory and scientific instruments. Subcategories: Medical Device, Anatomical Model, Laboratory Equipment, Molecular, Scientific Instrument, Prosthetic\n- Electronics: Consumer and industrial electronic devices and components. Subcategories: Computer, Phone, Camera, Display, Circuit Board, Sensor, Appliance, Cable & Connector\n- Document: Written documents, drawings and presentations. Subcategories: Report, Specification, Drawing, Manual, Presentation, Form, Correspondence, Source Code\n- Media: Photographs, video and audio recordings. Subcategories: Photograph, Render, Video Recording, Animation, Audio Recording, Music, Screenshot, Icon\n- Data: Tabular, geospatial and structured data files. Subcategories: Tabular, Geospatial, Time Series, Configuration, Log, Simulation Output, Schema\n- Other: Content that fits none of the other categories. Subcategories: Abstract, Test Asset, Unknown\nSTYLE OPTIONS: realistic, stylized, low-poly, technical/CAD, scanned, schematic, other\nMATERIAL OPTIONS: metal, steel, aluminium, plastic, wood, glass, concrete, stone, brick, fabric, leather, rubber, ceramic, composite, paper, other\nCOLOR OPTIONS: black, white, gray, silver, red, orange, yellow, green, blue, purple, pink, brown, beige, gold, transparent, multicolor\nYou may use values outside these lists when none fits.\n1 rendered view(s) or frame(s) of the file follow."
+                        },
+                        {
+                            "image": {
+                                "format": "png",
+                                "source": {
+                                    "bytes": {
+                                        "bytesLength": 108
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "role": "user"
+                }
+            ],
+            "modelId": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "system": [
+                {
+                    "text": "You are a digital asset librarian describing one file from an asset management system so it can be searched and classified. You receive the asset's name, description and tags, the file's path and class, the file's technical attributes as JSON, the classification vocabulary to choose from, optionally existing metadata, optionally an excerpt of the file's text, and optionally rendered views or frames of the file. Return ONLY a JSON object with exactly these keys: \"title\" (string, at most 80 characters naming the content), \"description\" (string, at most 1200 characters of plain prose describing what the file contains and depicts), \"keywords\" (array of 8 to 15 lowercase strings of one to three words each), \"category\" (one category from CATEGORY OPTIONS), \"subcategory\" (one of that category's subcategories, or null), \"style\" (one of STYLE OPTIONS, or null), \"materials\" (array of strings from MATERIAL OPTIONS, empty when none is visible), \"colors\" (array of strings from COLOR OPTIONS, the dominant color first, empty when none applies), \"objects\" (array of strings naming the distinct objects, parts or entities visible or described; empty when none), \"complexity\" (one of \"low\", \"medium\", \"high\"), \"orientation\" (for 3D content the up axis and facing direction, e.g. \"Z-up, front faces -Y\"; otherwise null), \"sizeEstimate\" (the real-world size in words when it can be judged, otherwise null), \"textSummary\" (string, at most 2000 characters summarising any text content, or null when the file carries no text). Do not wrap the JSON in markdown fences and do not add any other text."
+                }
+            ]
+        }
+    },
+    "mesh-with-reusable-keys": {
+        "outputs": {
+            "assetMetadata": null,
+            "attributes": {
+                "metadata": [
+                    {
+                        "metadataKey": "sys_file",
+                        "metadataValue": "{\"contentType\": \"model/gltf-binary\", \"etag\": \"abc123\", \"ext\": \".glb\", \"name\": \"pump.glb\", \"sizeBytes\": 1024, \"versionId\": \"v1\"}",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "sys_geometry",
+                        "metadataValue": "{\"boundsMax\": [0.5, 1.0, 1.5], \"boundsMin\": [-0.5, -1.0, -1.5], \"dimensions\": {\"depth\": 3.0, \"height\": 2.0, \"width\": 1.0}, \"extentMax\": 3.0, \"units\": \"m\"}",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "sys_statistics",
+                        "metadataValue": "{\"faces\": 12, \"meshCount\": 1, \"triangles\": 1200, \"vertices\": 8, \"watertight\": true}",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_dimensions",
+                        "metadataValue": "{\"x\":1.0,\"y\":2.0,\"z\":3.0}",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_bounds_min",
+                        "metadataValue": "{\"x\":-0.5,\"y\":-1.0,\"z\":-1.5}",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_bounds_max",
+                        "metadataValue": "{\"x\":0.5,\"y\":1.0,\"z\":1.5}",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_units",
+                        "metadataValue": "m",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_extent_max",
+                        "metadataValue": "3",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_size_category",
+                        "metadataValue": "large",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_vertex_count",
+                        "metadataValue": "8",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_face_count",
+                        "metadataValue": "12",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_triangle_count",
+                        "metadataValue": "1200",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_mesh_count",
+                        "metadataValue": "1",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "ext_watertight",
+                        "metadataValue": "true",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_model",
+                        "metadataValue": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_generated_at",
+                        "metadataValue": "<generated-at>",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_source_modalities",
+                        "metadataValue": "file-attributes, asset-metadata, seed-metadata, renders",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_complexity",
+                        "metadataValue": "medium",
+                        "metadataValueType": "string"
+                    }
+                ],
+                "type": "attribute",
+                "updateType": "update"
+            },
+            "metadata": {
+                "metadata": [
+                    {
+                        "metadataKey": "genai_title",
+                        "metadataValue": "Brass gear pump",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_description",
+                        "metadataValue": "A brass gear pump with an inlet flange.",
+                        "metadataValueType": "multiline_string"
+                    },
+                    {
+                        "metadataKey": "genai_keywords",
+                        "metadataValue": "pump, gear pump, brass",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_category",
+                        "metadataValue": "Industrial Equipment",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_subcategory",
+                        "metadataValue": "Pump",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_style",
+                        "metadataValue": "technical/CAD",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_materials",
+                        "metadataValue": "brass, steel",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_colors",
+                        "metadataValue": "gold, gray",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_primary_color",
+                        "metadataValue": "gold",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_objects",
+                        "metadataValue": "pump housing",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_size_estimate",
+                        "metadataValue": "about 30 cm long",
+                        "metadataValueType": "string"
+                    }
+                ],
+                "type": "metadata",
+                "updateType": "update"
+            }
+        },
+        "request": {
+            "inferenceConfig": {
+                "maxTokens": 2048,
+                "temperature": 0.2
+            },
+            "messages": [
+                {
+                    "content": [
+                        {
+                            "text": "Describe and classify this file for search indexing.\nAsset name: Gear Pump\nAsset description: A brass gear pump\nAsset tags: pump\nDatabase: dbM\nFile: /models/pump.glb (class: mesh, extension: .glb)\nFile attributes (JSON): {\"sys_file\":{\"contentType\":\"model/gltf-binary\",\"etag\":\"abc123\",\"ext\":\".glb\",\"name\":\"pump.glb\",\"sizeBytes\":1024,\"versionId\":\"v1\"},\"sys_geometry\":{\"boundsMax\":[0.5,1.0,1.5],\"boundsMin\":[-0.5,-1.0,-1.5],\"dimensions\":{\"depth\":3.0,\"height\":2.0,\"width\":1.0},\"extentMax\":3.0,\"units\":\"m\"},\"sys_statistics\":{\"faces\":12,\"meshCount\":1,\"triangles\":1200,\"vertices\":8,\"watertight\":true}}\nFile facts: dimensions: 1.0 x 2.0 x 3.0 m\nCATEGORY OPTIONS (pick one category and, when one fits, one of its subcategories):\n- Vehicle: Land, sea, air and space vehicles and their major assemblies. Subcategories: Car, Truck, Motorcycle, Aircraft, Watercraft, Spacecraft, Rail, Vehicle Part\n- Industrial Equipment: Machinery, tools and plant equipment used in production or maintenance. Subcategories: Machine, Pump, Valve, Robot, Tool, Conveyor, Engine, Fixture\n- Architecture: Buildings, structures and building elements. Subcategories: Residential, Commercial, Industrial, Historic, Structural Element, Facade, Roof, Site Plan\n- Interior & Furniture: Furnishings, fixtures and interior decor. Subcategories: Seating, Table, Storage, Bed, Lighting, Kitchen, Bathroom, Decor\n- Terrain & Environment: Landscapes, terrain, vegetation and outdoor scenes. Subcategories: Terrain, Vegetation, Water Body, Urban Scene, Rural Scene, Survey Scan, Geological\n- Character & Creature: Humans, animals and fictional beings. Subcategories: Human, Animal, Fantasy Creature, Robot Character, Mannequin, Anatomy\n- Prop & Object: Everyday objects, containers, weapons and small items. Subcategories: Household Item, Container, Weapon, Sports Equipment, Toy, Food, Musical Instrument, Sign\n- Infrastructure & Utility: Roads, bridges, pipelines, power and communication networks. Subcategories: Road, Bridge, Tunnel, Pipeline, Power, Telecom, Rail Infrastructure, Street Furniture\n- Medical & Scientific: Medical devices, anatomy, laboratory and scientific instruments. Subcategories: Medical Device, Anatomical Model, Laboratory Equipment, Molecular, Scientific Instrument, Prosthetic\n- Electronics: Consumer and industrial electronic devices and components. Subcategories: Computer, Phone, Camera, Display, Circuit Board, Sensor, Appliance, Cable & Connector\n- Document: Written documents, drawings and presentations. Subcategories: Report, Specification, Drawing, Manual, Presentation, Form, Correspondence, Source Code\n- Media: Photographs, video and audio recordings. Subcategories: Photograph, Render, Video Recording, Animation, Audio Recording, Music, Screenshot, Icon\n- Data: Tabular, geospatial and structured data files. Subcategories: Tabular, Geospatial, Time Series, Configuration, Log, Simulation Output, Schema\n- Other: Content that fits none of the other categories. Subcategories: Abstract, Test Asset, Unknown\nSTYLE OPTIONS: realistic, stylized, low-poly, technical/CAD, scanned, schematic, other\nMATERIAL OPTIONS: metal, steel, aluminium, plastic, wood, glass, concrete, stone, brick, fabric, leather, rubber, ceramic, composite, paper, other\nCOLOR OPTIONS: black, white, gray, silver, red, orange, yellow, green, blue, purple, pink, brown, beige, gold, transparent, multicolor\nYou may use values outside these lists when none fits.\nExisting file metadata:\n- Colour: red\n- Material: cast iron\n- PART_NO: GP-100\nExisting asset metadata:\n- PROJECT: Alpha\n- autoGeneratedKeywords: pump, legacy\nExisting database metadata:\n- SITE: Plant 7\nExisting file attributes:\n- SOURCE_SCANNER: Leica RTC360\n2 rendered view(s) or frame(s) of the file follow."
+                        },
+                        {
+                            "image": {
+                                "format": "png",
+                                "source": {
+                                    "bytes": {
+                                        "bytesLength": 108
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "image": {
+                                "format": "png",
+                                "source": {
+                                    "bytes": {
+                                        "bytesLength": 108
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "role": "user"
+                }
+            ],
+            "modelId": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "system": [
+                {
+                    "text": "You are a digital asset librarian describing one file from an asset management system so it can be searched and classified. You receive the asset's name, description and tags, the file's path and class, the file's technical attributes as JSON, the classification vocabulary to choose from, optionally existing metadata, optionally an excerpt of the file's text, and optionally rendered views or frames of the file. Return ONLY a JSON object with exactly these keys: \"title\" (string, at most 80 characters naming the content), \"description\" (string, at most 1200 characters of plain prose describing what the file contains and depicts), \"keywords\" (array of 8 to 15 lowercase strings of one to three words each), \"category\" (one category from CATEGORY OPTIONS), \"subcategory\" (one of that category's subcategories, or null), \"style\" (one of STYLE OPTIONS, or null), \"materials\" (array of strings from MATERIAL OPTIONS, empty when none is visible), \"colors\" (array of strings from COLOR OPTIONS, the dominant color first, empty when none applies), \"objects\" (array of strings naming the distinct objects, parts or entities visible or described; empty when none), \"complexity\" (one of \"low\", \"medium\", \"high\"), \"orientation\" (for 3D content the up axis and facing direction, e.g. \"Z-up, front faces -Y\"; otherwise null), \"sizeEstimate\" (the real-world size in words when it can be judged, otherwise null), \"textSummary\" (string, at most 2000 characters summarising any text content, or null when the file carries no text). Do not wrap the JSON in markdown fences and do not add any other text."
+                }
+            ]
+        }
+    },
+    "text-file-no-images": {
+        "outputs": {
+            "assetMetadata": null,
+            "attributes": {
+                "metadata": [
+                    {
+                        "metadataKey": "sys_file",
+                        "metadataValue": "{\"ext\": \".txt\", \"name\": \"notes.txt\", \"sizeBytes\": 40}",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_model",
+                        "metadataValue": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_generated_at",
+                        "metadataValue": "<generated-at>",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_source_modalities",
+                        "metadataValue": "file-attributes, asset-metadata, seed-metadata, file-text",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_complexity",
+                        "metadataValue": "medium",
+                        "metadataValueType": "string"
+                    }
+                ],
+                "type": "attribute",
+                "updateType": "update"
+            },
+            "metadata": {
+                "metadata": [
+                    {
+                        "metadataKey": "genai_title",
+                        "metadataValue": "Brass gear pump",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_description",
+                        "metadataValue": "A brass gear pump with an inlet flange.",
+                        "metadataValueType": "multiline_string"
+                    },
+                    {
+                        "metadataKey": "genai_keywords",
+                        "metadataValue": "pump, gear pump, brass",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_category",
+                        "metadataValue": "Industrial Equipment",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_subcategory",
+                        "metadataValue": "Pump",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_style",
+                        "metadataValue": "technical/CAD",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_materials",
+                        "metadataValue": "brass, steel",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_colors",
+                        "metadataValue": "gold, gray",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_primary_color",
+                        "metadataValue": "gold",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_objects",
+                        "metadataValue": "pump housing",
+                        "metadataValueType": "string"
+                    },
+                    {
+                        "metadataKey": "genai_size_estimate",
+                        "metadataValue": "about 30 cm long",
+                        "metadataValueType": "string"
+                    }
+                ],
+                "type": "metadata",
+                "updateType": "update"
+            }
+        },
+        "request": {
+            "inferenceConfig": {
+                "maxTokens": 2048,
+                "temperature": 0.2
+            },
+            "messages": [
+                {
+                    "content": [
+                        {
+                            "text": "Describe and classify this file for search indexing.\nAsset name: Gear Pump\nAsset description: A brass gear pump\nAsset tags: pump\nDatabase: dbM\nFile: /docs/notes.txt (class: text, extension: .txt)\nFile attributes (JSON): {\"sys_file\":{\"ext\":\".txt\",\"name\":\"notes.txt\",\"sizeBytes\":40}}\nCATEGORY OPTIONS (pick one category and, when one fits, one of its subcategories):\n- Vehicle: Land, sea, air and space vehicles and their major assemblies. Subcategories: Car, Truck, Motorcycle, Aircraft, Watercraft, Spacecraft, Rail, Vehicle Part\n- Industrial Equipment: Machinery, tools and plant equipment used in production or maintenance. Subcategories: Machine, Pump, Valve, Robot, Tool, Conveyor, Engine, Fixture\n- Architecture: Buildings, structures and building elements. Subcategories: Residential, Commercial, Industrial, Historic, Structural Element, Facade, Roof, Site Plan\n- Interior & Furniture: Furnishings, fixtures and interior decor. Subcategories: Seating, Table, Storage, Bed, Lighting, Kitchen, Bathroom, Decor\n- Terrain & Environment: Landscapes, terrain, vegetation and outdoor scenes. Subcategories: Terrain, Vegetation, Water Body, Urban Scene, Rural Scene, Survey Scan, Geological\n- Character & Creature: Humans, animals and fictional beings. Subcategories: Human, Animal, Fantasy Creature, Robot Character, Mannequin, Anatomy\n- Prop & Object: Everyday objects, containers, weapons and small items. Subcategories: Household Item, Container, Weapon, Sports Equipment, Toy, Food, Musical Instrument, Sign\n- Infrastructure & Utility: Roads, bridges, pipelines, power and communication networks. Subcategories: Road, Bridge, Tunnel, Pipeline, Power, Telecom, Rail Infrastructure, Street Furniture\n- Medical & Scientific: Medical devices, anatomy, laboratory and scientific instruments. Subcategories: Medical Device, Anatomical Model, Laboratory Equipment, Molecular, Scientific Instrument, Prosthetic\n- Electronics: Consumer and industrial electronic devices and components. Subcategories: Computer, Phone, Camera, Display, Circuit Board, Sensor, Appliance, Cable & Connector\n- Document: Written documents, drawings and presentations. Subcategories: Report, Specification, Drawing, Manual, Presentation, Form, Correspondence, Source Code\n- Media: Photographs, video and audio recordings. Subcategories: Photograph, Render, Video Recording, Animation, Audio Recording, Music, Screenshot, Icon\n- Data: Tabular, geospatial and structured data files. Subcategories: Tabular, Geospatial, Time Series, Configuration, Log, Simulation Output, Schema\n- Other: Content that fits none of the other categories. Subcategories: Abstract, Test Asset, Unknown\nSTYLE OPTIONS: realistic, stylized, low-poly, technical/CAD, scanned, schematic, other\nMATERIAL OPTIONS: metal, steel, aluminium, plastic, wood, glass, concrete, stone, brick, fabric, leather, rubber, ceramic, composite, paper, other\nCOLOR OPTIONS: black, white, gray, silver, red, orange, yellow, green, blue, purple, pink, brown, beige, gold, transparent, multicolor\nYou may use values outside these lists when none fits.\nExisting database metadata:\n- SITE: Plant 7\nFile text excerpt:\nMaintenance notes for the gear pump."
+                        }
+                    ],
+                    "role": "user"
+                }
+            ],
+            "modelId": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "system": [
+                {
+                    "text": "You are a digital asset librarian describing one file from an asset management system so it can be searched and classified. You receive the asset's name, description and tags, the file's path and class, the file's technical attributes as JSON, the classification vocabulary to choose from, optionally existing metadata, optionally an excerpt of the file's text, and optionally rendered views or frames of the file. Return ONLY a JSON object with exactly these keys: \"title\" (string, at most 80 characters naming the content), \"description\" (string, at most 1200 characters of plain prose describing what the file contains and depicts), \"keywords\" (array of 8 to 15 lowercase strings of one to three words each), \"category\" (one category from CATEGORY OPTIONS), \"subcategory\" (one of that category's subcategories, or null), \"style\" (one of STYLE OPTIONS, or null), \"materials\" (array of strings from MATERIAL OPTIONS, empty when none is visible), \"colors\" (array of strings from COLOR OPTIONS, the dominant color first, empty when none applies), \"objects\" (array of strings naming the distinct objects, parts or entities visible or described; empty when none), \"complexity\" (one of \"low\", \"medium\", \"high\"), \"orientation\" (for 3D content the up axis and facing direction, e.g. \"Z-up, front faces -Y\"; otherwise null), \"sizeEstimate\" (the real-world size in words when it can be judged, otherwise null), \"textSummary\" (string, at most 2000 characters summarising any text content, or null when the file carries no text). Do not wrap the JSON in markdown fences and do not add any other text."
+                }
+            ]
+        }
+    }
+}

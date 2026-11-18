@@ -39,6 +39,11 @@ SYSTEM_WORKFLOW_ARCHIVE_MESSAGE = (
     "System workflows cannot be archived or restored through the API; the deployment owns them.")
 SYSTEM_TEMPLATE_LOCKED_MESSAGE = "Templates of system pipelines cannot be added or deleted."
 SYSTEM_TRIGGER_LOCKED_MESSAGE = "Triggers of system workflows cannot be added or deleted."
+# A compliance pipeline rule that names a system workflow or pipeline: refused when a schema is saved,
+# and recorded as the rule's error result when a schema stored before the refusal is evaluated.
+SYSTEM_RECORD_PIPELINE_RULE_MESSAGE = (
+    "A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata "
+    "rule on its genai_* fields.")
 
 # The one field a PUT may change on a system pipeline or workflow.
 SYSTEM_UPDATE_ALLOWED_FIELDS = frozenset({"enabled"})
@@ -56,6 +61,27 @@ _TEMPLATE_STORED_DEFAULTS = {
 
 # A system workflow's trigger: the locked fields. `enabled` is free.
 TRIGGER_LOCKED_FIELDS = ("inputFileFilters", "defaultTemplateIds")
+
+
+def is_system_record(record) -> bool:
+    """Whether a stored pipeline or workflow row is a system record (`isSystem` set by the import)."""
+    return isinstance(record, dict) and bool(record.get("isSystem", False))
+
+
+def workflow_pipeline_keys(workflow) -> list:
+    """`(pipelineDatabaseId, pipelineId)` of every pipeline a workflow row runs, in step order (a step
+    without its own database runs a pipeline of the workflow's)."""
+    if not isinstance(workflow, dict):
+        return []
+    return [(step.get("pipelineDatabaseId") or workflow.get("databaseId", ""), step.get("pipelineId", ""))
+            for step in workflow.get("specifiedPipelines", []) or [] if isinstance(step, dict)]
+
+
+def names_system_record(workflow, pipelines) -> bool:
+    """Whether a compliance pipeline rule uses a system record: its workflow row, or any of the
+    pipeline rows given (the rule's own pipeline and the workflow's steps), is a system record. A row
+    that was not found (None) is not one."""
+    return is_system_record(workflow) or any(is_system_record(pipeline) for pipeline in pipelines)
 
 
 def is_schema_import_call(event) -> bool:
