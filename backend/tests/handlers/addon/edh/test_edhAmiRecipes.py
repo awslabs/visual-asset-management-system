@@ -29,8 +29,8 @@ BUILD_TIMED_OUT = recipes.BUILD_TIMEOUT_MINUTES + 5
 FORBIDDEN = type("ForbiddenException", (Exception,), {})
 
 PARAMETER_MISSING = ClientError({"Error": {"Code": "ParameterNotFound", "Message": "missing"}}, "GetParameter")
-PARENT_UNREADABLE = ("not started: SSM parameter /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 "
-                     "could not be read (ParameterNotFound)")
+# The build row records the fixed refusal; the parameter name and error code are logged only.
+PARENT_UNREADABLE = "not started: the parent image's SSM parameter could not be read"
 
 ARN_BEFORE_CLAIMS = "arn:aws:imagebuilder:us-east-1:123456789012:image/x/1.0.0/7"
 
@@ -301,7 +301,7 @@ class TestAdminRecipes:
         body = {**RECIPE_BODY, "recipeId": "names-prefix",
                 "components": [RECIPE_BODY["components"][0], {"name": "big", "data": data}]}
         monkeypatch.setenv("EDH_SESSION_SECRET_PREFIX", "")
-        with pytest.raises(recipes.RecipeConflict, match="unresolved placeholder.*DEPLOY_sessionSecretPrefix"):
+        with pytest.raises(recipes.RecipeConflict, match="^a component document names a placeholder the recipe does not declare$"):
             recipes.create_admin_recipe(AmiRecipeRequestModel(**body), "carol")
         assert store.get_recipe("names-prefix") is None
         # A value as long as its token keeps the document at 16000 characters; one more is refused.
@@ -315,12 +315,14 @@ class TestAdminRecipes:
     def test_an_undeclared_placeholder_is_refused_at_create_and_at_update(self, world):
         body = {**RECIPE_BODY, "recipeId": "typo",
                 "components": [{"name": "baseline", "data": "schemaVersion: 1.0\n# ${PARAM_missing}\n"}]}
-        with pytest.raises(recipes.RecipeConflict, match="PARAM_missing"):
+        # The refusal names no placeholder from the recipe (Rule 11); the builder logs which.
+        refusal = "^a component document names a placeholder the recipe does not declare$"
+        with pytest.raises(recipes.RecipeConflict, match=refusal):
             recipes.create_admin_recipe(AmiRecipeRequestModel(**body), "carol")
         assert store.get_recipe("typo") is None
         admin_row = recipes.create_admin_recipe(
             AmiRecipeRequestModel(**{**body, "parameters": {"missing": "x"}}), "carol")
-        with pytest.raises(recipes.RecipeConflict, match="PARAM_missing"):
+        with pytest.raises(recipes.RecipeConflict, match=refusal):
             recipes.update_admin_recipe(admin_row, AmiRecipeRequestModel(**body), "dave")
         assert store.get_recipe("typo")["parameters"] == {"missing": "x"}
 
@@ -531,13 +533,15 @@ class TestStartBuild:
 
     def test_an_unresolvable_parent_is_a_conflict(self, world):
         row = seeded(parentImage="edhStack:Nope")
-        with pytest.raises(recipes.RecipeConflict, match="Nope"):
+        with pytest.raises(recipes.RecipeConflict) as err:
             recipes.start_build(row, "carol", only_if_changed=False)
+        assert str(err.value) == "EDH lists no stack of the recipe's kind with the parent image's name"
 
     def test_an_unresolved_component_placeholder_is_a_conflict(self, world):
         row = seeded(components=[{"name": "broken", "data": "schemaVersion: 1.0\n# ${PARAM_missing}\n"}])
-        with pytest.raises(recipes.RecipeConflict, match="PARAM_missing"):
+        with pytest.raises(recipes.RecipeConflict) as err:
             recipes.start_build(row, "carol", only_if_changed=False)
+        assert str(err.value) == "a component document names a placeholder the recipe does not declare"
         assert not store.list_builds(row["recipeId"])
 
 
