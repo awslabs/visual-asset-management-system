@@ -88,6 +88,7 @@ const CORE_NON_FORM_PATHS: readonly string[] = [
     "app.assetBuckets.externalAssetBuckets.bucketAccountId",
     "app.assetBuckets.externalAssetBuckets.bucketRegion",
     "app.assetBuckets.externalAssetBuckets.bucketKmsKeyArn",
+    "app.assetBuckets.externalAssetBuckets.useS3TransferAcceleration",
     // Component: fields/ExternalBridgesField.tsx
     "app.pipelines.externalPipelineBridges.accountId",
     "app.pipelines.externalPipelineBridges.roleArnPattern",
