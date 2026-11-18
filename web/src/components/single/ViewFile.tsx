@@ -34,7 +34,11 @@ import { useViewerRegistryReady } from "../../visualizerPlugin/core/useViewerReg
 
 import Synonyms from "../../synonyms";
 import { usePageTitle } from "../../hooks/usePageTitle";
-import { buildSingleViewerEntry } from "./singleViewerEntry";
+import {
+    buildSingleViewerEntry,
+    OLDER_VERSION_PREVIEW_NOTICE,
+    previewIsOfLatestVersionOnly,
+} from "./singleViewerEntry";
 import "./ViewFile.css";
 
 // TypeScript interfaces
@@ -385,6 +389,50 @@ function ViewFileForAsset() {
             viewType,
         ]
     );
+    // The file's latest version, read while the Preview tab shows a file version, so the tab can say
+    // when its preview belongs to a different (the latest) version than the one being viewed.
+    const [latestFileVersionId, setLatestFileVersionId] = useState<string | undefined>(undefined);
+    const previewKeyForLookup = !isMultiFileMode ? singleFileInfo?.key : undefined;
+    const lookupLatestVersion =
+        viewType === "preview" &&
+        !!previewKeyForLookup &&
+        !!singleFileInfo?.previewFile &&
+        !!singleFileInfo?.versionId &&
+        !effectiveAssetVersionId;
+    useEffect(() => {
+        setLatestFileVersionId(undefined);
+        if (!lookupLatestVersion || !databaseId || !assetId) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const [success, response] = await fetchFileInfo({
+                    databaseId,
+                    assetId,
+                    fileKey: previewKeyForLookup,
+                    includeVersions: true,
+                });
+                if (cancelled || !success) return;
+                const info = typeof response === "string" ? JSON.parse(response) : response;
+                const latest = info?.versions?.find((v: any) => v.isLatest);
+                setLatestFileVersionId(latest?.versionId || info?.versionId || undefined);
+            } catch (error) {
+                // Without the latest version the page cannot tell, so it shows no notice.
+                console.error("Could not read the latest file version:", error);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [lookupLatestVersion, previewKeyForLookup, databaseId, assetId]);
+    const showOlderVersionPreviewNotice =
+        !isMultiFileMode &&
+        !!singleFileInfo &&
+        previewIsOfLatestVersionOnly(
+            singleFileInfo,
+            viewType,
+            effectiveAssetVersionId,
+            latestFileVersionId
+        );
     const canCompareSingleFile =
         viewerRegistryReady &&
         viewType === "file" &&
@@ -1074,49 +1122,60 @@ function ViewFileForAsset() {
                                                 </Box>
                                             </Container>
                                         ) : (
-                                            <div
-                                                style={{
-                                                    height: "65vh",
-                                                    maxHeight: "700px",
-                                                    minHeight: "100px",
-                                                    position: "relative",
-                                                    overflow: "hidden",
-                                                }}
-                                            >
+                                            <>
+                                                {showOlderVersionPreviewNotice && (
+                                                    <Alert
+                                                        type="info"
+                                                        statusIconAriaLabel="Info"
+                                                        data-testid="older-version-preview-notice"
+                                                    >
+                                                        {OLDER_VERSION_PREVIEW_NOTICE}
+                                                    </Alert>
+                                                )}
                                                 <div
-                                                    id="view-edit-asset-right-column"
-                                                    className={viewerMode}
                                                     style={{
-                                                        height: "100%",
-                                                        width: "100%",
-                                                        position: "absolute",
-                                                        top: 0,
-                                                        left: 0,
+                                                        height: "65vh",
+                                                        maxHeight: "700px",
+                                                        minHeight: "100px",
+                                                        position: "relative",
                                                         overflow: "hidden",
                                                     }}
                                                 >
-                                                    <DynamicViewer
-                                                        key={`${viewType}-${effectiveFileViewMode}-${assetId}-${
-                                                            singleFileInfo?.key || "no-file"
-                                                        }-${
-                                                            effectiveAssetVersionId ||
-                                                            singleFileInfo?.versionId ||
-                                                            "no-version"
-                                                        }`}
-                                                        files={viewerFiles}
-                                                        mode={effectiveFileViewMode}
-                                                        assetId={assetId!}
-                                                        databaseId={databaseId!}
-                                                        assetVersionId={effectiveAssetVersionId}
-                                                        viewerMode={viewerMode}
-                                                        onViewerModeChange={changeViewerMode}
-                                                        showViewerSelector={true}
-                                                        isPreviewMode={viewType === "preview"}
-                                                        onDeletePreview={undefined}
-                                                        sizingMode="container"
-                                                    />
+                                                    <div
+                                                        id="view-edit-asset-right-column"
+                                                        className={viewerMode}
+                                                        style={{
+                                                            height: "100%",
+                                                            width: "100%",
+                                                            position: "absolute",
+                                                            top: 0,
+                                                            left: 0,
+                                                            overflow: "hidden",
+                                                        }}
+                                                    >
+                                                        <DynamicViewer
+                                                            key={`${viewType}-${effectiveFileViewMode}-${assetId}-${
+                                                                singleFileInfo?.key || "no-file"
+                                                            }-${
+                                                                effectiveAssetVersionId ||
+                                                                singleFileInfo?.versionId ||
+                                                                "no-version"
+                                                            }`}
+                                                            files={viewerFiles}
+                                                            mode={effectiveFileViewMode}
+                                                            assetId={assetId!}
+                                                            databaseId={databaseId!}
+                                                            assetVersionId={effectiveAssetVersionId}
+                                                            viewerMode={viewerMode}
+                                                            onViewerModeChange={changeViewerMode}
+                                                            showViewerSelector={true}
+                                                            isPreviewMode={viewType === "preview"}
+                                                            onDeletePreview={undefined}
+                                                            sizingMode="container"
+                                                        />
+                                                    </div>
                                                 </div>
-                                            </div>
+                                            </>
                                         )}
 
                                         {/* File list (multi-file mode only) */}

@@ -60,22 +60,39 @@ jest.mock("../../visualizerPlugin/components/DynamicViewer", () => {
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ViewFile = require("./ViewFile").default;
 
-const state = (assetVersionId?: string) => ({
+const state = (assetVersionId?: string, versionId = "source-v1") => ({
     filename: "a.glb",
     key: "asset1/a.glb",
     isDirectory: false,
-    versionId: "source-v1",
+    versionId,
     assetVersionId,
     previewFile: "asset1/a.glb.previewFile.gif",
 });
 
+const NOTICE = "This preview belongs to the latest version of the file";
+
+/** Answers the page's file-info lookup: `source-v2` is the latest version. */
+const answerVersions = () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { fetchFileInfo } = require("../../services/APIService");
+    fetchFileInfo.mockResolvedValue([
+        true,
+        {
+            versions: [
+                { versionId: "source-v2", isLatest: true },
+                { versionId: "source-v1", isLatest: false },
+            ],
+        },
+    ]);
+};
+
 const lastFile = () => mockFiles[mockFiles.length - 1][0];
 
-const open = async (assetVersionId?: string) => {
+const open = async (assetVersionId?: string, versionId?: string) => {
     mockLocation = {
         pathname: "/databases/db1/assets/asset1/file",
         search: "",
-        state: state(assetVersionId),
+        state: state(assetVersionId, versionId),
     };
     render(<ViewFile />);
     await waitFor(() => expect(screen.getByTestId("viewer")).toBeInTheDocument());
@@ -87,6 +104,7 @@ const open = async (assetVersionId?: string) => {
 
 beforeEach(() => {
     mockFiles.length = 0;
+    answerVersions();
 });
 
 describe("ViewFile preview tab", () => {
@@ -103,5 +121,40 @@ describe("ViewFile preview tab", () => {
         });
         await waitFor(() => expect(lastFile().key).toBe("asset1/a.glb"));
         expect(lastFile().versionId).toBe("source-v1");
+    });
+
+    it("says the preview belongs to the latest version when an older file version is viewed", async () => {
+        await open(undefined, "source-v1");
+        expect(await screen.findByText(new RegExp(NOTICE))).toBeInTheDocument();
+        // The request is unchanged: the preview file, no version id.
+        expect(lastFile().key).toBe("asset1/a.glb.previewFile.gif");
+        expect(lastFile().versionId).toBeUndefined();
+    });
+
+    it("shows no notice for the latest file version", async () => {
+        const { fetchFileInfo } = require("../../services/APIService");
+        await open(undefined, "source-v2");
+        await waitFor(() => expect(fetchFileInfo).toHaveBeenCalled());
+        await act(async () => {
+            await Promise.resolve();
+        });
+        expect(screen.queryByText(new RegExp(NOTICE))).not.toBeInTheDocument();
+    });
+
+    it("shows no notice on the File tab of an older version", async () => {
+        await open(undefined, "source-v1");
+        await screen.findByText(new RegExp(NOTICE));
+        await act(async () => {
+            fireEvent.click(screen.getByText("File"));
+        });
+        expect(screen.queryByText(new RegExp(NOTICE))).not.toBeInTheDocument();
+    });
+
+    it("shows no notice when viewing through an asset version", async () => {
+        await open("3", "source-v1");
+        await act(async () => {
+            await Promise.resolve();
+        });
+        expect(screen.queryByText(new RegExp(NOTICE))).not.toBeInTheDocument();
     });
 });

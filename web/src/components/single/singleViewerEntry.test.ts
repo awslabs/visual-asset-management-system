@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { buildSingleViewerEntry } from "./singleViewerEntry";
+import { buildSingleViewerEntry, previewIsOfLatestVersionOnly } from "./singleViewerEntry";
 
 const file = {
     key: "asset1/model.glb",
@@ -34,5 +34,31 @@ describe("buildSingleViewerEntry", () => {
         expect(buildSingleViewerEntry(file, "file", "3").versionId).toBeUndefined();
         const entry = buildSingleViewerEntry(file, "preview", "3");
         expect(entry).toMatchObject({ key: file.previewFile, versionId: undefined });
+    });
+});
+
+describe("previewIsOfLatestVersionOnly", () => {
+    it("is true on the preview tab of a file version that is not the latest", () => {
+        expect(previewIsOfLatestVersionOnly(file, "preview", undefined, "source-v2")).toBe(true);
+    });
+
+    it("is false for the latest file version", () => {
+        expect(previewIsOfLatestVersionOnly(file, "preview", undefined, "source-v1")).toBe(false);
+    });
+
+    it("is false on the file tab, through an asset version, without a preview file", () => {
+        expect(previewIsOfLatestVersionOnly(file, "file", undefined, "source-v2")).toBe(false);
+        expect(previewIsOfLatestVersionOnly(file, "preview", "3", "source-v2")).toBe(false);
+        const noPreview = { ...file, previewFile: undefined };
+        expect(previewIsOfLatestVersionOnly(noPreview, "preview", undefined, "source-v2")).toBe(
+            false
+        );
+    });
+
+    it("is false while the latest version is unknown", () => {
+        expect(previewIsOfLatestVersionOnly(file, "preview", undefined, undefined)).toBe(false);
+        expect(previewIsOfLatestVersionOnly({ ...file, versionId: undefined }, "preview")).toBe(
+            false
+        );
     });
 });
