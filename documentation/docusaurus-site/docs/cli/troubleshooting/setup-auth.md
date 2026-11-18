@@ -17,10 +17,11 @@ This page covers issues encountered while configuring VamsCLI, signing in, manag
 
 -   `vamscli setup` fails with `Invalid base URL. Please provide an https URL (plain http is accepted only for localhost or a loopback address).`
 -   `vamscli setup` fails with `Invalid API Gateway URL extracted from amplify config: http://...`
+-   `vamscli setup` fails with `The deployment redirected the configuration read to plain http (...)`
 
 **Cause:**
 
-The URL passed to `vamscli setup` is missing a scheme or host, uses a scheme other than `https`, or uses plain `http` for a host other than `localhost` or a loopback address. The same rule applies to the API URL the deployment publishes in its Amplify configuration, because every later command sends your sign-in token to that URL.
+The URL passed to `vamscli setup` is missing a scheme or host, uses a scheme other than `https`, or uses plain `http` for a host other than `localhost` or a loopback address. The same rule applies to the API URL the deployment publishes in its Amplify configuration, because every later command sends your sign-in token to that URL, and to a redirect the configuration read follows.
 
 **Resolution:**
 
@@ -33,6 +34,8 @@ vamscli setup https://abc123.execute-api.us-west-2.amazonaws.com
 ```
 
 When targeting the Amazon API Gateway `execute-api` endpoint directly, pass the bare endpoint URL — VamsCLI appends the REST API stage path (`/api`) for you. A `403 Missing Authentication Token` on the first setup call usually means the endpoint URL is otherwise incorrect (wrong API id or Region) rather than a missing stage. Through a CloudFront/ALB/custom-domain front, use the front's URL unchanged.
+
+A profile already set up with an `http` URL keeps working. To move it to `https`, run `vamscli setup https://<url> --force` (with `--profile <name>` before `setup` for another profile), then sign in again with `vamscli auth login`: `--force` replaces the profile, its sign-in included.
 
 ### Failed to Fetch Amplify Configuration
 
