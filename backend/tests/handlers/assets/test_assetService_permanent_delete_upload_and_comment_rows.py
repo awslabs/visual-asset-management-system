@@ -5,7 +5,8 @@
 
 Both are found with a query (the upload table's AssetIdGSI, the comment table's assetId partition)
 and every row found is deleted, so the query is paged to exhaustion: a row past the first page
-would otherwise outlive the asset.
+would otherwise outlive the asset. An upload record is deleted only when it names the asset's
+database, since asset ids are unique per database only.
 """
 
 from unittest.mock import MagicMock
@@ -18,8 +19,8 @@ from tests.handlers.assets.test_assetService_permanent_delete_notification impor
     _delete_permanently, _prepare)
 
 
-def _upload(upload_id):
-    return {"uploadId": upload_id, "assetId": "a1"}
+def _upload(upload_id, database_id="db1"):
+    return {"uploadId": upload_id, "assetId": "a1", "databaseId": database_id}
 
 
 def _comment(comment_key):
@@ -53,6 +54,17 @@ class TestPermanentDeleteRemovesEveryUploadAndComment:
         assert {c.kwargs["Key"]["uploadId"] for c in uploads.delete_item.call_args_list} >= {"u-1", "u-2"}
         assert {c.kwargs["Key"]["assetVersionId:commentId"]
                 for c in comments.delete_item.call_args_list} >= {"1:c-1", "1:c-2"}
+
+    def test_an_upload_record_of_a_same_id_asset_in_another_database_is_kept(self, monkeypatch):
+        # Asset ids are unique per database only: the upload index answers both databases' rows.
+        uploads, _, upload_pager, _ = self._run(
+            monkeypatch,
+            upload_pages=[{"Items": [_upload("u-own"), _upload("u-other", database_id="db2")]}],
+            comment_pages=[{"Items": []}])
+        upload_pager.assert_paged_to_exhaustion()
+        deleted = {c.kwargs["Key"]["uploadId"] for c in uploads.delete_item.call_args_list}
+        assert "u-own" in deleted
+        assert "u-other" not in deleted
 
     def test_an_asset_with_no_uploads_or_comments_deletes_none(self, monkeypatch):
         uploads, comments, *_ = self._run(monkeypatch, upload_pages=[{"Items": []}],
