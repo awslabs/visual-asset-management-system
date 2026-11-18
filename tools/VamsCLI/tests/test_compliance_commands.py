@@ -1270,6 +1270,23 @@ class TestComplianceEvaluationCommands:
             assert result.exit_code == 0, result.output
             assert 'Records of deleted assets removed (not evaluated): 3' in result.output
 
+    def test_sweep_adds_up_each_calls_skip_counts(self, cli_runner, generic_command_mocks):
+        # Each call counts only the rows it read, so the merged result adds the counts up.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_database_compliance.side_effect = [
+                {'assetsTriggered': [{'databaseId': 'd', 'assetId': 'a'}], 'skipped': 3,
+                 'skippedNotAuthorized': 2, 'skippedArchived': 1, 'withoutSchema': 1,
+                 'assetsRemaining': 0, 'NextToken': 'tok-2'},
+                {'assetsTriggered': [{'databaseId': 'd', 'assetId': 'b'}], 'skipped': 1,
+                 'skippedNotAuthorized': 0, 'skippedArchived': 1, 'withoutSchema': 2,
+                 'assetsRemaining': 0},
+            ]
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-d', 'd', '--json-output'])
+            assert result.exit_code == 0, result.output
+            body = json.loads(result.output)
+            assert (body['skipped'], body['skippedNotAuthorized'], body['skippedArchived'],
+                    body['withoutSchema']) == (4, 2, 2, 3)
+
     def test_sweep_stops_with_the_token_when_a_call_makes_no_progress(self, cli_runner,
                                                                     generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
