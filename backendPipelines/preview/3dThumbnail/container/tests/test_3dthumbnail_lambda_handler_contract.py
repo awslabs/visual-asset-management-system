@@ -86,7 +86,7 @@ class _FakeS3:
     def get_json(self, bucket, key):
         return self.json.get((bucket, key))
 
-    def put_json(self, bucket, key, payload):
+    def put_json_payload(self, bucket, key, payload):
         self.json[(bucket, key)] = payload
         return key
 
@@ -679,12 +679,12 @@ class TestS3Helpers:
             with pytest.raises(ClientError):
                 s3_utils.get_json("b", "k")
 
-    def test_put_json_and_put_file_set_content_types(self, tmp_path):
+    def test_put_json_payload_and_put_file_set_content_types(self, tmp_path):
         client = MagicMock()
         path = tmp_path / "f.png"
         path.write_bytes(b"png")
         with patch.object(s3_utils, "client", client):
-            assert s3_utils.put_json("b", "k.json", {"a": 1}) == "k.json"
+            assert s3_utils.put_json_payload("b", "k.json", {"a": 1}) == "k.json"
             assert s3_utils.put_file("b", "k.png", str(path), "image/png") == "k.png"
         json_call, file_call = client.put_object.call_args_list
         assert json_call.kwargs["ContentType"] == "application/json"
