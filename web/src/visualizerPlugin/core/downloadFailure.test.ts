@@ -20,6 +20,7 @@ import {
     downloadStatusMessage,
 } from "./streamFailure";
 import { NETWORK_FAILURE_MESSAGE } from "../../services/apiClient";
+import { markUnanswered } from "../../services/networkFailure";
 
 const GENERIC = "Failed to download PDF file";
 
@@ -74,14 +75,27 @@ describe("downloadFailureMessage", () => {
     });
 
     it("shows the message of a download that got no API answer: a WAF block or no response", () => {
-        // `downloadAsset` returns no status for these, and the message says what happened.
+        // `downloadAsset` returns no status for these, marks them, and the message says what happened.
         const blocked = "Request blocked by the deployment's AWS WAF web ACL (request ID r-1)";
-        expect(downloadFailureMessage([false, blocked, undefined], GENERIC)).toBe(blocked);
-        expect(downloadFailureMessage([false, NETWORK_FAILURE_MESSAGE, undefined], GENERIC)).toBe(
-            NETWORK_FAILURE_MESSAGE
+        expect(downloadFailureMessage(markUnanswered([false, blocked, undefined]), GENERIC)).toBe(
+            blocked
         );
-        expect(downloadRefusalReason([false, blocked, undefined])).toBe(blocked);
+        expect(
+            downloadFailureMessage(
+                markUnanswered([false, NETWORK_FAILURE_MESSAGE, undefined]),
+                GENERIC
+            )
+        ).toBe(NETWORK_FAILURE_MESSAGE);
+        expect(downloadRefusalReason(markUnanswered([false, blocked, undefined]))).toBe(blocked);
         expect(downloadRefusalReason([false, "Internal error", 500])).toBeNull();
+    });
+
+    it("keeps the viewer's wording for a status-less failure downloadAsset did not mark", () => {
+        // For example a token fetch that failed before the request, or an abort's own text.
+        expect(downloadFailureMessage([false, "No current user", undefined], GENERIC)).toBe(
+            GENERIC
+        );
+        expect(downloadRefusalReason([false, "The operation was aborted.", undefined])).toBeNull();
     });
 
     it("[control] reads the status only from the tuple's third entry", () => {

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { isUnanswered } from "../../services/networkFailure";
+
 /** The message of a plain authorization denial: the API's "Not Authorized" or API Gateway's own. */
 const PERMISSION_DENIAL = /^(not authorized|user is not authorized\b|forbidden$|access denied)/i;
 
@@ -75,17 +77,14 @@ export function apiRefusalMessage(
 /**
  * The message of a failed `downloadAsset` tuple that carries no status because no API answer came
  * back: a request the deployment's AWS WAF web ACL blocked (its message with the request ID) or one
- * that never reached the service (`NETWORK_FAILURE_MESSAGE`). `downloadAsset` returns these as
- * `[false, message, undefined]`; a tuple with a status, or without the third entry, gives undefined.
+ * that never reached the service (`NETWORK_FAILURE_MESSAGE`). `downloadAsset` marks only these two
+ * (`markUnanswered`); any other tuple, such as a status-less failure for another reason, gives
+ * undefined.
  */
 function unansweredDownloadMessage(response: unknown): string | undefined {
-    if (!Array.isArray(response) || response[0] !== false || response.length < 3) {
-        return undefined;
-    }
-    if (downloadResponseStatus(response) !== undefined || typeof response[1] !== "string") {
-        return undefined;
-    }
-    return response[1].trim() || undefined;
+    if (!isUnanswered(response) || (response as unknown[])[0] !== false) return undefined;
+    const message = (response as unknown[])[1];
+    return typeof message === "string" ? message.trim() || undefined : undefined;
 }
 
 /**
