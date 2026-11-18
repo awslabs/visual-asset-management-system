@@ -117,25 +117,15 @@ export function downloadStatusMessage(
     return apiRefusalMessage(status, apiMessage) ?? subject;
 }
 
-/** The `message` of a failed response's JSON body (read from a clone), if it carries one. */
-export async function responseApiMessage(response: Response): Promise<string | undefined> {
-    try {
-        const body = await response.clone().json();
-        return typeof body?.message === "string" ? body.message : undefined;
-    } catch {
-        return undefined;
-    }
-}
-
 /**
- * `downloadStatusMessage` for a failed streaming-route response a viewer fetched itself, with the
- * API's own message read from the response body.
+ * The text of `streamResponseFailure` for a failed streaming-route response a viewer fetched
+ * itself, with the API's own message read from the response body.
  */
 export async function streamResponseFailureMessage(
     response: Response,
     subject: string
 ): Promise<string> {
-    return downloadStatusMessage(response.status, subject, await responseApiMessage(response));
+    return (await streamResponseFailure(response, subject)).message;
 }
 
 /**
@@ -157,14 +147,45 @@ export function isApiRefusalError(error: unknown): error is ApiRefusalError {
 }
 
 /**
+ * What a streaming-route 403 says beyond a plain denial: the message and request ID of a block by
+ * the deployment's AWS WAF web ACL (`blockedBy: "waf"`), or the route's own reason (an asset that
+ * does not allow file distribution). undefined for a denial by the authorizer or by Casbin, which
+ * carries no reason of its own.
+ */
+function forbiddenReason(body: any): string | undefined {
+    if (body?.blockedBy === "waf" && typeof body.message === "string") {
+        const requestId =
+            typeof body.requestId === "string" && body.requestId
+                ? ` (request ID ${body.requestId})`
+                : "";
+        return `${body.message}${requestId}`;
+    }
+    const reason = typeof body?.message === "string" ? body.message.trim() : "";
+    return reason && !PERMISSION_DENIAL.test(reason) ? reason : undefined;
+}
+
+/** The JSON body of a failed response (read from a clone), if it carries one. */
+async function responseBody(response: Response): Promise<any> {
+    try {
+        return await response.clone().json();
+    } catch {
+        return undefined;
+    }
+}
+
+/**
  * The error a viewer throws for a failed streaming-route response it fetched itself: an
- * `ApiRefusalError` carrying the API's reason when the API refused the file with one, else an Error
- * with `streamResponseFailureMessage`'s text (the worded 401/403/404/410/429 sentences, or
- * `subject`).
+ * `ApiRefusalError` carrying the reason when the API refused the file with one, or when a 403 says
+ * more than a plain denial (an AWS WAF block with its request ID, an asset that is not
+ * distributable), else an Error with the worded 401/403/404/410 sentence or `subject`.
  */
 export async function streamResponseFailure(response: Response, subject: string): Promise<Error> {
-    const apiMessage = await responseApiMessage(response);
-    const refusal = apiRefusalMessage(response.status, apiMessage);
+    const body = await responseBody(response);
+    const apiMessage = typeof body?.message === "string" ? body.message : undefined;
+    const refusal =
+        response.status === 403
+            ? forbiddenReason(body)
+            : apiRefusalMessage(response.status, apiMessage);
     if (refusal) return new ApiRefusalError(refusal);
     return new Error(downloadStatusMessage(response.status, subject, apiMessage));
 }
@@ -204,23 +225,12 @@ export function describeStreamFailure(subject: string, failure: StreamFailure): 
     if (status >= 200 && status < 300) {
         return `Unable to display ${subject}: the viewer could not read the file.`;
     }
-    if (status === 403 && body?.blockedBy === "waf" && typeof body.message === "string") {
-        const requestId =
-            typeof body.requestId === "string" && body.requestId
-                ? ` (request ID ${body.requestId})`
-                : "";
-        return `Unable to load ${subject}: ${body.message}${requestId}.`;
-    }
     if (status === 401) {
         return `Unable to load ${subject}: your session is no longer valid. Sign in again.`;
     }
     if (status === 403) {
-        // A denial by the authorizer or by Casbin carries no reason of its own; any other 403 (an
-        // asset that does not allow file distribution) names what to change.
-        const reason = typeof body?.message === "string" ? body.message.trim() : "";
-        if (!reason || PERMISSION_DENIAL.test(reason)) {
-            return `Unable to load ${subject}: you don't have permission to view it.`;
-        }
+        const reason = forbiddenReason(body);
+        if (!reason) return `Unable to load ${subject}: you don't have permission to view it.`;
         return `Unable to load ${subject}: ${reason.replace(/\.$/, "")}.`;
     }
     if (status === 404) return `Unable to load ${subject}: it was not found.`;

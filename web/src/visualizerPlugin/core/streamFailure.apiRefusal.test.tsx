@@ -129,6 +129,49 @@ describe("the API's refusal reason", () => {
         expect(failed.message).toBe("Failed to load: a.glb (500)");
     });
 
+    it("keeps a stream 403's own reason and an AWS WAF block's message, and words only a plain denial as permission", async () => {
+        const response = (status: number, body: any) =>
+            ({ status, clone: () => ({ json: async () => body }) } as unknown as Response);
+
+        const waf = await streamResponseFailure(
+            response(403, {
+                message: "Request blocked by the web application firewall",
+                blockedBy: "waf",
+                requestId: "req-123",
+            }),
+            "Failed to load: a.usdz (403)"
+        );
+        expect(isApiRefusalError(waf)).toBe(true);
+        expect(waf.message).toBe(
+            "Request blocked by the web application firewall (request ID req-123)"
+        );
+
+        const notDistributable = await streamResponseFailure(
+            response(403, { message: "Asset not distributable" }),
+            "Failed to load: a.ifc (403)"
+        );
+        expect(isApiRefusalError(notDistributable)).toBe(true);
+        expect(notDistributable.message).toBe("Asset not distributable");
+        expect(
+            await streamResponseFailureMessage(
+                response(403, { message: "Asset not distributable" }),
+                "Failed to load: a.ifc (403)"
+            )
+        ).toBe("Asset not distributable");
+
+        const forbidden = await streamResponseFailure(
+            response(403, { message: "Forbidden" }),
+            "Failed to load: a.ifc (403)"
+        );
+        expect(isApiRefusalError(forbidden)).toBe(false);
+        expect(forbidden.message).toBe(DOWNLOAD_FORBIDDEN_MESSAGE);
+        const noBody = await streamResponseFailure(
+            response(403, undefined),
+            "Failed to load: a.ifc (403)"
+        );
+        expect(noBody.message).toBe(DOWNLOAD_FORBIDDEN_MESSAGE);
+    });
+
     it("names a stream refusal as the stream viewers word it", () => {
         expect(
             describeStreamFailure("the point cloud preview", {
