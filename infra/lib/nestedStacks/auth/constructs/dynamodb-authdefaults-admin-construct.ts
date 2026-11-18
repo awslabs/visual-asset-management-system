@@ -1976,6 +1976,115 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "complianceBinding",
                 },
             },
+            // Only admin is seeded for auditLog (fail-closed for every other role).
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: "initial_admin_allow_auditlog",
+                },
+                constraintId: {
+                    S: "initial_admin_allow_auditlog",
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "auditLogGroup",
+                                },
+                                id: {
+                                    S: "admin_all_auditlog",
+                                },
+                                operator: {
+                                    S: "contains",
+                                },
+                                value: {
+                                    S: ".*",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow GET/PUT/POST/DELETE on all audit log groups for admin",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-get-all-auditlog",
+                                },
+                                permission: {
+                                    S: "GET",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-put-all-auditlog",
+                                },
+                                permission: {
+                                    S: "PUT",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-post-all-auditlog",
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-delete-all-auditlog",
+                                },
+                                permission: {
+                                    S: "DELETE",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: "admin-allow-all-auditlog",
+                },
+                objectType: {
+                    S: "auditLog",
+                },
+            },
             ...addonAdminDefaultConstraints(props.config, roleNameAdmin),
         ];
 

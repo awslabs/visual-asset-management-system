@@ -134,6 +134,7 @@ class TestConstraintMatrixValuesUnchanged:
             'complianceSchemaName',
             'complianceState',
             'cascadeId',
+            'auditLogGroup',
             'object__type',
             'route__path',
         ]
