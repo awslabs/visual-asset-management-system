@@ -1834,13 +1834,13 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         # 5. Delete from asset uploads table if available
         if asset_upload_table:
             try:
-                # Query using the GSI to find uploads for this asset
-                response = asset_upload_table.query(
+                # Query using the GSI to find uploads for this asset, every page: each row found is
+                # deleted, so a row past the first page would otherwise be left behind
+                for item in query_all_items(
+                    asset_upload_table,
                     IndexName='AssetIdGSI',
                     KeyConditionExpression=Key('assetId').eq(assetId)
-                )
-                
-                for item in response.get('Items', []):
+                ):
                     if 'uploadId' in item:
                         asset_upload_table.delete_item(Key={'uploadId': item['uploadId'], 'assetId': assetId})
                         deleted_items["dynamodb_tables"].append(f"{asset_upload_table_name} (uploadId={item['uploadId']}, assetId={assetId})")
@@ -1850,12 +1850,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         # 6. Delete from comments table if available
         if comment_table:
             try:
-                # Query to find all comments for this asset
-                response = comment_table.query(
+                # Query to find all comments for this asset, every page (as for the uploads above)
+                for item in query_all_items(
+                    comment_table,
                     KeyConditionExpression=Key('assetId').eq(assetId)
-                )
-                
-                for item in response.get('Items', []):
+                ):
                     if 'assetVersionId:commentId' in item:
                         comment_table.delete_item(Key={
                             'assetId': assetId,
