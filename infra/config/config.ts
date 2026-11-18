@@ -310,6 +310,16 @@ export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
  */
 export const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
 
+/**
+ * An external asset bucket ARN that names one bucket: `arn:<partition>:s3:::<name>` with nothing after
+ * the name. The name rules are the ones `s3.Bucket.fromBucketAttributes()` applies to an imported bucket
+ * (legacy naming: 3 to 63 characters of letters, digits, `.`, `_` and `-`, a letter or digit at both
+ * ends, no `..`, `.-` or `-.`, not shaped like an IPv4 address), so a name the import would refuse fails
+ * here with the configuration message instead. Mirrored in the ConfigBuilder `validation.ts`.
+ */
+export const EXTERNAL_BUCKET_ARN_PATTERN =
+    /^arn:[a-z-]+:s3:::(?!\d{1,3}(\.\d{1,3}){3}$)(?!.*(\.\.|\.-|-\.))[A-Za-z0-9][A-Za-z0-9._-]{1,61}[A-Za-z0-9]$/;
+
 // Partitions in which VAMS creates a Regional API Gateway custom domain name for the REST API
 // (`app.api.apiGatewayRest.customDomain`). Amazon API Gateway offers Regional custom domain names in
 // the commercial and AWS GovCloud (US) partitions; any other partition is rejected until its support
@@ -4800,6 +4810,24 @@ export function validateExecutionLogReadPrefixes(prefixes: string[]): void {
 }
 
 /**
+ * Throws a Configuration Error unless `bucketArn` matches `EXTERNAL_BUCKET_ARN_PATTERN`. `*` and `?`
+ * are rejected because the bucket grant and its CDK Nag suppression are built from this value and a
+ * wildcard would widen the grant to every matching bucket. A key prefix or trailing slash is rejected
+ * because the bucket import drops it silently while the bucket registry keys on the full ARN, so the
+ * prefix belongs in `baseAssetsPrefix`. Exported for unit testing.
+ */
+export function assertExternalBucketArnShape(bucketArn: unknown): void {
+    if (typeof bucketArn !== "string" || !EXTERNAL_BUCKET_ARN_PATTERN.test(bucketArn)) {
+        // JSON form, so a non-string, an empty value or trailing whitespace is visible in the message.
+        throw new Error(
+            `Configuration Error: external bucket ARN ${String(
+                JSON.stringify(bucketArn)
+            )} is not valid. It must name one bucket as arn:<partition>:s3:::<bucket-name>, with no wildcard (* or ?) and nothing after the name; the name is 3 to 63 characters of letters, digits, '.', '_' and '-', starts and ends with a letter or digit, has no '..', '.-' or '-.', and is not shaped like an IP address. List the bucket as arn:<partition>:s3:::<bucket-name> and set the key prefix in baseAssetsPrefix.`
+        );
+    }
+}
+
+/**
  * Validates the externalAssetBuckets configuration. A single bucket ARN may be
  * registered under multiple prefixes, but the prefixes must not overlap (S3 permits
  * only one notification configuration per bucket and cannot route an object to an
@@ -4850,6 +4878,10 @@ export function validateExternalAssetBuckets(
         value && value != "" && value != "UNDEFINED" ? value : undefined;
 
     for (const bucketConfig of externalAssetBuckets) {
+        // The external bucket ARN must name exactly one bucket: no wildcard, no key prefix. The
+        // grants and the CDK Nag suppression on the bucket's objects are built from this value.
+        assertExternalBucketArnShape(bucketConfig.bucketArn);
+
         // The external bucket ARN must use the same partition as the deployment.
         const arnPartition = bucketConfig.bucketArn.split(":")[1];
         if (arnPartition && arnPartition != deploymentPartition) {

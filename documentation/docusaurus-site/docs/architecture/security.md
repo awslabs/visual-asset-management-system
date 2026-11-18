@@ -258,34 +258,35 @@ flowchart TD
 
 **Tier 1 -- API Route Authorization** controls which API endpoints a user's role can access. Policies use `api` and `web` object types to gate route-level access.
 
-**Tier 2 -- Object Entity Authorization** controls which specific data entities a user can access. Policies use entity-type constraints (`database`, `asset`, `pipeline`, `workflow`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`, `complianceSchema`, `complianceEvaluation`, `complianceCascade`, `complianceBinding`) with attribute-based rules. API keys have no object type: access to them is governed at Tier 1 through `api` constraints on `/auth/api-keys` and `/auth/user/api-keys`.
+**Tier 2 -- Object Entity Authorization** controls which specific data entities a user can access. Policies use entity-type constraints (`database`, `asset`, `pipeline`, `workflow`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`, `complianceSchema`, `complianceEvaluation`, `complianceCascade`, `complianceBinding`, `auditLog`) with attribute-based rules. API keys have no object type: access to them is governed at Tier 1 through `api` constraints on `/auth/api-keys` and `/auth/user/api-keys`.
 
 ### Constraint Fields
 
 The following fields can be used in ABAC policy rules:
 
-| Field                      | Description                                                                   |
-| -------------------------- | ----------------------------------------------------------------------------- |
-| `databaseId`               | Database identifier                                                           |
-| `assetName`                | Asset name                                                                    |
-| `assetType`                | Asset type classification                                                     |
-| `tags`                     | Asset tags -- a **list** of values, so it takes `is_one_of` / `is_not_one_of` |
-| `tagName`                  | Tag name                                                                      |
-| `tagTypeName`              | Tag type name                                                                 |
-| `roleName`                 | Role name                                                                     |
-| `userId`                   | User identifier                                                               |
-| `pipelineId`               | Pipeline identifier                                                           |
-| `pipelineExecutionType`    | Pipeline execution type (`Lambda`, `SQS`, `EventBridge`, `DeadlineCloud`)     |
-| `workflowId`               | Workflow identifier                                                           |
-| `category`                 | Pipeline or workflow category, the grouping label assigned when it is created |
-| `name`                     | Pipeline name or workflow name (the display name, not the identifier)         |
-| `metadataSchemaName`       | Metadata schema name                                                          |
-| `metadataSchemaEntityType` | Metadata entity type                                                          |
-| `complianceSchemaName`     | Compliance schema name                                                        |
-| `complianceState`          | Asset compliance state (for example `quarantined`)                            |
-| `cascadeId`                | Compliance cascade identifier                                                 |
-| `object__type`             | Entity type for Tier 2 enforcement                                            |
-| `route__path`              | API route path for Tier 1 enforcement                                         |
+| Field                      | Description                                                                                                           |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`               | Database identifier                                                                                                   |
+| `assetName`                | Asset name                                                                                                            |
+| `assetType`                | Asset type classification                                                                                             |
+| `tags`                     | Asset tags -- a **list** of values, so it takes `is_one_of` / `is_not_one_of`                                         |
+| `tagName`                  | Tag name                                                                                                              |
+| `tagTypeName`              | Tag type name                                                                                                         |
+| `roleName`                 | Role name                                                                                                             |
+| `userId`                   | User identifier                                                                                                       |
+| `pipelineId`               | Pipeline identifier                                                                                                   |
+| `pipelineExecutionType`    | Pipeline execution type (`Lambda`, `SQS`, `EventBridge`, `DeadlineCloud`)                                             |
+| `workflowId`               | Workflow identifier                                                                                                   |
+| `category`                 | Pipeline or workflow category, the grouping label assigned when it is created                                         |
+| `name`                     | Pipeline name or workflow name (the display name, not the identifier)                                                 |
+| `metadataSchemaName`       | Metadata schema name                                                                                                  |
+| `metadataSchemaEntityType` | Metadata entity type                                                                                                  |
+| `complianceSchemaName`     | Compliance schema name                                                                                                |
+| `complianceState`          | Asset compliance state (for example `quarantined`)                                                                    |
+| `cascadeId`                | Compliance cascade identifier                                                                                         |
+| `auditLogGroup`            | Audit log group key, on the `auditLog` object type; the seeded `admin` role is the only role that holds it by default |
+| `object__type`             | Entity type for Tier 2 enforcement                                                                                    |
+| `route__path`              | API route path for Tier 1 enforcement                                                                                 |
 
 Each object type accepts only the fields that are meaningful for it. `category` and `name` are valid on the
 `pipeline` and `workflow` object types, which lets a role be scoped to a family of pipelines or workflows

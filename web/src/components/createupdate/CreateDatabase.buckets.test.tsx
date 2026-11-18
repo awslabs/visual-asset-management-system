@@ -141,3 +141,55 @@ describe("CreateDatabase bucket list empty message", () => {
         );
     });
 });
+
+describe("CreateDatabase bucket option labels", () => {
+    const optionTexts = async (items: Record<string, unknown>[]) => {
+        fetchBuckets.mockResolvedValue({ Items: items });
+        render(form(true));
+        await waitFor(() => expect(fetchBuckets).toHaveBeenCalledTimes(1));
+        const select = createWrapper(document.body).findSelect('[data-testid="database-bucket"]');
+        select!.openDropdown();
+        await waitFor(() => expect(select!.findDropdown().findOptions().length).toBe(items.length));
+        return select!
+            .findDropdown()
+            .findOptions()
+            .map((o) => o.getElement().textContent ?? "");
+    };
+
+    it("marks only the buckets the API reports as accelerated", async () => {
+        const texts = await optionTexts([
+            {
+                bucketId: "bucket-one",
+                bucketName: "fast",
+                baseAssetsPrefix: "/",
+                bucketRegion: "us-west-2",
+                isAccelerated: true,
+            },
+            {
+                bucketId: "bucket-two",
+                bucketName: "plain",
+                baseAssetsPrefix: "/",
+                isAccelerated: false,
+            },
+            { bucketId: "bucket-three", bucketName: "legacy", baseAssetsPrefix: "/" },
+        ]);
+        expect(texts[0]).toContain("fast - / (us-west-2) (accelerated)");
+        expect(texts[1]).not.toContain("accelerated");
+        expect(texts[2]).not.toContain("accelerated");
+    });
+
+    it("keeps the Region and default markers ahead of the accelerated one", async () => {
+        const texts = await optionTexts([
+            {
+                bucketId: "bucket-one",
+                bucketName: "fast",
+                baseAssetsPrefix: "/",
+                bucketRegion: "us-east-1",
+                isDefault: true,
+                isAccelerated: true,
+            },
+            { bucketId: "bucket-two", bucketName: "other", baseAssetsPrefix: "/" },
+        ]);
+        expect(texts[0]).toContain("fast - / (us-east-1) (VAMS default) (accelerated)");
+    });
+});

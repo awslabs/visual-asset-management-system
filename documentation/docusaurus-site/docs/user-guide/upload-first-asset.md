@@ -16,13 +16,13 @@ Assets in VAMS are organized into databases. If your administrator has already c
 2. Select the **Create Database** button in the top-right corner of the page.
 3. In the **Create Database** modal, fill in the following fields:
 
-| Field                                 | Requirements                                                             | Description                                                                                                                       |
-| ------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| **Database Name**                     | 4-63 characters, alphanumeric plus `-` and `_` only. Cannot be "GLOBAL". | A unique identifier for your database. This cannot be changed after creation.                                                     |
-| **Database Description**              | 4-256 characters.                                                        | A human-readable description of the database's purpose.                                                                           |
-| **Default Bucket and Prefix**         | Required. Select from available buckets.                                 | The Amazon S3 bucket where assets in this database will be stored. If only one bucket is available, it is selected automatically. |
-| **Restrict Metadata Outside Schemas** | Optional checkbox.                                                       | When enabled, only metadata fields defined in applied metadata schemas are allowed.                                               |
-| **Restrict File Upload Extensions**   | Optional. Comma-separated list (e.g., `.jpg,.png,.pdf`).                 | Limits file uploads to specified extensions. Leave blank or enter `.all` to allow all file types.                                 |
+| Field                                 | Requirements                                                             | Description                                                                                                                                                                                                   |
+| ------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Database Name**                     | 4-63 characters, alphanumeric plus `-` and `_` only. Cannot be "GLOBAL". | A unique identifier for your database. This cannot be changed after creation.                                                                                                                                 |
+| **Database Description**              | 4-256 characters.                                                        | A human-readable description of the database's purpose.                                                                                                                                                       |
+| **Default Bucket and Prefix**         | Required. Select from available buckets.                                 | The Amazon S3 bucket where assets in this database will be stored. If only one bucket is available, it is selected automatically. A bucket with S3 Transfer Acceleration turned on is marked `(accelerated)`. |
+| **Restrict Metadata Outside Schemas** | Optional checkbox.                                                       | When enabled, only metadata fields defined in applied metadata schemas are allowed.                                                                                                                           |
+| **Restrict File Upload Extensions**   | Optional. Comma-separated list (e.g., `.jpg,.png,.pdf`).                 | Limits file uploads to specified extensions. Leave blank or enter `.all` to allow all file types.                                                                                                             |
 
 4. Select **Create Database**.
 
@@ -248,7 +248,7 @@ If you uploaded a file in a supported format (such as `.gltf`, `.obj`, `.e57`, `
 | `.csv`                                          | Columnar Data Viewer  | Tabular data browsing                            |
 
 :::tip
-If a file has a preview image, the file page offers a **Preview** option that shows the image, including for a file that has no dedicated viewer.
+If a file has a preview image, the file page offers a **Preview** option that shows the image, including for a file that has no dedicated viewer. When you view an older version of the file, a notice on **Preview** says the preview belongs to the latest version.
 :::
 
 ---

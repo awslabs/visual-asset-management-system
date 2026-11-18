@@ -264,6 +264,7 @@ CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES = [
     'complianceEvaluation',
     'complianceCascade',
     'complianceBinding',
+    'auditLog',
 ]
 
 ALLOWED_CONSTRAINT_OPERATORS = [
@@ -305,6 +306,10 @@ CORE_PERMISSION_CONSTRAINT_FIELDS = {
             "complianceSchemaName": "",
             "complianceState": "",
             "cascadeId": "",
+
+            # auditLog: the audit log group key. Matched with the usual operators, not a closed
+            # enum, so a group registered later needs no change here.
+            "auditLogGroup": "",
 
             "object__type": "",
             "route__path": "",
@@ -385,6 +390,10 @@ CORE_CONSTRAINT_OBJECT_TYPE_FIELDS = {
         {"label": "Cascade ID", "value": "cascadeId"}]},
     "complianceBinding": {"label": "Compliance Binding", "fields": [
         {"label": "Database ID", "value": "databaseId"}]},
+    # auditLogGroup is the audit log group key (a token such as "authorization"). Additive: a later
+    # databaseId field can be added without changing a stored auditLog constraint.
+    "auditLog": {"label": "Audit Log", "fields": [
+        {"label": "Audit Log Group", "value": "auditLogGroup"}]},
 }
 
 _MERGED_CONSTRAINT_CONSTANTS = merge_constraint_extensions(
