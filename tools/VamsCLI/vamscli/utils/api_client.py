@@ -13,6 +13,10 @@ from urllib.parse import quote, unquote, urljoin, urlparse
 # batch cascades to Forbidden. This module-level lock serializes refreshes; a thread that finds
 # the access token already changed since its failed request reuses it instead of refreshing again.
 _TOKEN_REFRESH_LOCK = threading.Lock()
+# Set on a thread while it holds _TOKEN_REFRESH_LOCK. A re-authentication with saved credentials reads
+# the login profile and the feature switches while the lock is held; a 401 or 403 on those reads must
+# not ask for another refresh, because the lock is not reentrant and the thread would wait on itself.
+_REFRESH_IN_PROGRESS = threading.local()
 
 # Keys an error body may carry the server's message under, in preference order. VAMS handlers return
 # `message`; Amazon API Gateway's own responses use `Message` — an authorizer deny and an unknown
@@ -753,17 +757,28 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             # An injected token is never refreshed or replaced from a profile.
             return False
 
+        if getattr(_REFRESH_IN_PROGRESS, "active", False):
+            # A request made by this thread's own refresh: it is answered without a further refresh.
+            log_auth_diagnostic(
+                auth_type="token_refresh", status="nested_request_not_refreshed",
+                details={'profile_name': self.profile_manager.profile_name})
+            return False
+
         with _TOKEN_REFRESH_LOCK:
-            # Another thread may have already refreshed while we waited for the lock. If the saved
-            # access token differs from the one our failed request carried, treat it as refreshed.
-            if token_before is not None:
-                current = (self.profile_manager.load_auth_profile() or {}).get('access_token')
-                if current and current != token_before:
-                    log_auth_diagnostic(
-                        auth_type="token_refresh", status="reused_concurrent_refresh",
-                        details={'profile_name': self.profile_manager.profile_name})
-                    return True
-            return self._do_refresh_token()
+            _REFRESH_IN_PROGRESS.active = True
+            try:
+                # Another thread may have already refreshed while we waited for the lock. If the saved
+                # access token differs from the one our failed request carried, treat it as refreshed.
+                if token_before is not None:
+                    current = (self.profile_manager.load_auth_profile() or {}).get('access_token')
+                    if current and current != token_before:
+                        log_auth_diagnostic(
+                            auth_type="token_refresh", status="reused_concurrent_refresh",
+                            details={'profile_name': self.profile_manager.profile_name})
+                        return True
+                return self._do_refresh_token()
+            finally:
+                _REFRESH_IN_PROGRESS.active = False
 
     def _do_refresh_token(self) -> bool:
         """Perform the actual token refresh / re-auth. Callers hold _TOKEN_REFRESH_LOCK."""
