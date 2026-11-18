@@ -370,7 +370,9 @@ describe("base images are not pulled from a floating tag", () => {
         ).not.toBeNull();
         expect(FLOATING_TAG.exec("FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04")).not.toBeNull();
         expect(
-            FLOATING_TAG.exec(`FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04@sha256:${"b".repeat(64)}`)
+            FLOATING_TAG.exec(
+                `FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04@sha256:${"b".repeat(64)}`
+            )
         ).toBeNull();
         // A build stage reference and an ARG-supplied base are not image tags.
         expect(FLOATING_TAG.exec("FROM builder")).toBeNull();
@@ -548,6 +550,20 @@ const UPSTREAM_CLONE_DOCKERFILES: { label: string; file: string }[] = [
         label: "gr00t",
         file: path.join(PIPELINES_DIR, "genAi", "nvidia", "gr00t", "container", "Dockerfile"),
     },
+    {
+        // Not deployed today (its construct asset is commented out), held to the same rules so it
+        // builds what was reviewed the day it is wired back in.
+        label: "cosmos predict v1",
+        file: path.join(
+            PIPELINES_DIR,
+            "genAi",
+            "nvidia",
+            "cosmos",
+            "predict",
+            "containerv1",
+            "Dockerfile"
+        ),
+    },
     // All seven Image to 3D images clone at least one upstream repository.
     ...IMAGE_TO_3D_MODELS.map((model) => ({
         label: `image to 3d ${model}`,
@@ -593,7 +609,7 @@ describe("the container images that clone an upstream repository pin its revisio
     it("[control] the Dockerfiles are all present and all clone something", () => {
         // Both halves matter. A missing file would make every assertion below pass on an empty string,
         // and an image that stopped cloning would make the pin assertions vacuously true.
-        expect(UPSTREAM_CLONE_DOCKERFILES.length).toBe(12);
+        expect(UPSTREAM_CLONE_DOCKERFILES.length).toBe(13);
         const cloneCounts = UPSTREAM_CLONE_DOCKERFILES.map(({ label, file }) => {
             expect(fs.existsSync(file)).toBe(true);
             return `${label}=${cloneInstructions(fs.readFileSync(file, "utf-8")).length}`;
@@ -604,6 +620,8 @@ describe("the container images that clone an upstream repository pin its revisio
             "cosmos transfer=1",
             "cosmos reason=1",
             "gr00t=1",
+            // cosmos-predict1, and APEX inside the environment-setup RUN
+            "cosmos predict v1=2",
             // MoGe
             "image to 3d blenderagent=1",
             "image to 3d hunyuan3d=1",
@@ -747,7 +765,9 @@ describe("the Image to 3D images check what they download", () => {
         expect(DOWNLOAD.test("RUN apt-get install -y curl git unzip")).toBe(false);
         expect(DOWNLOAD.test('RUN curl -fsSL -o /tmp/x "https://example.com/x"')).toBe(true);
         expect(SHA256_CHECK.test('echo "${SHA}  /tmp/x" | sha256sum -c -')).toBe(true);
-        expect(SHA256_CHECK.test("python -c \"assert os.path.getsize(p) > 150_000_000\"")).toBe(false);
+        expect(SHA256_CHECK.test('python -c "assert os.path.getsize(p) > 150_000_000"')).toBe(
+            false
+        );
     });
 
     it("every download is checked against a SHA-256 in the same instruction", () => {

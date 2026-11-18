@@ -24,9 +24,10 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install Python dependencies
-COPY ./requirements.txt ./requirements.txt
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Install Python dependencies: every package at the version and hash in the lock (generated from
+# requirements.txt; its header holds the command that regenerates it), as wheels only.
+COPY ./requirements.lock ./requirements.lock
+RUN pip3 install --no-cache-dir --require-hashes --only-binary :all: -r requirements.lock
 
 # Copy coord_xform library source
 # (bundled into build context by CDK from coord-xform-pipeline/src/coord_xform/)

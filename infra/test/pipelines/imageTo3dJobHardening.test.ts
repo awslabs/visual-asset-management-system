@@ -116,10 +116,10 @@ function definitionText(template: Template): string {
         typeof part === "string"
             ? part
             : part.Ref
-              ? `\${Ref:${part.Ref}}`
-              : part["Fn::GetAtt"]
-                ? `\${GetAtt:${part["Fn::GetAtt"].join(".")}}`
-                : JSON.stringify(part);
+            ? `\${Ref:${part.Ref}}`
+            : part["Fn::GetAtt"]
+            ? `\${GetAtt:${part["Fn::GetAtt"].join(".")}}`
+            : JSON.stringify(part);
     const definition = (machines[0] as any).Properties.DefinitionString;
     return typeof definition === "string"
         ? definition
@@ -199,7 +199,9 @@ describe("Image to 3D jobs with a GPU model and the Blender agent enabled", () =
         // Each model's Batch state names its queue; only the agent's names the CPU one.
         expect(queueOfState(template, "blenderagent")).toBe(cpuQueueId);
         expect(queueOfState(template, "triposr")).not.toBe(cpuQueueId);
-        expect(queueOfState(template, "triposr")).toMatch(/^ImageTo3dPipelineImageTo3dBatchJobQueue/);
+        expect(queueOfState(template, "triposr")).toMatch(
+            /^ImageTo3dPipelineImageTo3dBatchJobQueue/
+        );
     });
 
     it("pipelineEnd can end a timed-out job on the CPU queue too", () => {
@@ -246,7 +248,9 @@ describe("Image to 3D jobs with a GPU model and the Blender agent enabled", () =
     });
 
     it("instance user data gives the model cache to the containers' uid", () => {
-        const templates = Object.values(template.findResources("AWS::EC2::LaunchTemplate")) as any[];
+        const templates = Object.values(
+            template.findResources("AWS::EC2::LaunchTemplate")
+        ) as any[];
         expect(templates).toHaveLength(1);
         const userData = JSON.stringify(templates[0].Properties.LaunchTemplateData.UserData);
         expect(userData).toContain("chown -R 10000:10000 /mnt/efs/imageto3d-models");
