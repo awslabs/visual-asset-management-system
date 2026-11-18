@@ -57,13 +57,31 @@ export function apiRefusalMessage(
 }
 
 /**
+ * The message of a failed `downloadAsset` tuple that carries no status because no API answer came
+ * back: a request the deployment's AWS WAF web ACL blocked (its message with the request ID) or one
+ * that never reached the service (`NETWORK_FAILURE_MESSAGE`). `downloadAsset` returns these as
+ * `[false, message, undefined]`; a tuple with a status, or without the third entry, gives undefined.
+ */
+function unansweredDownloadMessage(response: unknown): string | undefined {
+    if (!Array.isArray(response) || response[0] !== false || response.length < 3) {
+        return undefined;
+    }
+    if (downloadResponseStatus(response) !== undefined || typeof response[1] !== "string") {
+        return undefined;
+    }
+    return response[1].trim() || undefined;
+}
+
+/**
  * Why a preview or a download did not load, for a surface that otherwise shows its own fixed text
  * ("No preview available ..."): the API's refusal reason (`apiRefusalMessage`) of a failed
- * `downloadAsset` tuple, else null.
+ * `downloadAsset` tuple, or the message of one that got no API answer (a WAF block, no response),
+ * else null.
  */
 export function downloadRefusalReason(response: unknown): string | null {
     return (
         apiRefusalMessage(downloadResponseStatus(response), downloadResponseApiMessage(response)) ??
+        unansweredDownloadMessage(response) ??
         null
     );
 }
@@ -72,14 +90,17 @@ export function downloadRefusalReason(response: unknown): string | null {
  * The user-facing message for a failed `downloadAsset`, decided ONLY by the status the API returned
  * (never by the caller's role or any client-side rule): 401 is a missing or expired session, 403 a
  * permission denial, 410 an
- * archived version, 404 a missing file, and anything else returns `subject`, the viewer's own
- * generic wording (e.g. "Failed to download PDF file").
+ * archived version, 404 a missing file, a request with no API answer (a WAF block, no response) its
+ * own message, and anything else returns `subject`, the viewer's own generic wording (e.g. "Failed
+ * to download PDF file").
  *
  * This is the one place every core viewer turns a download failure into a sentence, so the wording
  * is identical across them (#1211). The Text Diff Viewer classifies per side with the same 403
  * wording.
  */
 export function downloadFailureMessage(response: unknown, subject: string): string {
+    const unanswered = unansweredDownloadMessage(response);
+    if (unanswered) return unanswered;
     return downloadStatusMessage(
         downloadResponseStatus(response),
         subject,
