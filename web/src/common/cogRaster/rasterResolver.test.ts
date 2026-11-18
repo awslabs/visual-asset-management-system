@@ -206,7 +206,7 @@ describe("prepareRaster from the header", () => {
         headers({ [FILE.key]: "striped-3857.tif" });
         const result: any = await prepareRaster(FILE, { sizeBytes: 500 * 1024 ** 2 });
         expect(result).toMatchObject({ refused: true, reason: "not-cloud-optimized" });
-        expect(result.message).toMatch(/TIF-to-COG pipeline/);
+        expect(result.message).toMatch(/COG Conversion pipeline/);
     });
 
     it("refuses a file over the extent limit with the convert message", async () => {

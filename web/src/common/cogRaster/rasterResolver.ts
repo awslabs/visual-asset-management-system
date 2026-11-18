@@ -12,7 +12,7 @@ import { readTiffFacts } from "./tiffHeader";
 
 /**
  * Attribute keys the viewer reads. `ext_*` are the promoted raster facts the system metadata pipeline
- * writes for a TIFF (#1600). `cog_link_*` are the flat keys the TIF-to-COG pipeline (#1601) writes:
+ * writes for a TIFF (#1600). `cog_link_*` are the flat keys the COG Conversion pipeline (#1601) writes:
  * `cog_link_cogFile` on the source, and `cog_link_cogOfVersionId` and `cog_link_outputCrs` on the
  * COG. All are looked up by key in one place so a rename in either pipeline is a one-line change here.
  */

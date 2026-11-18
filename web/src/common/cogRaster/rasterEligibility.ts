@@ -42,8 +42,28 @@ export const PLACED_IMAGE_TARGET_PIXELS = 2048;
 /** Most rasters shown at once on one map; adding past it is refused with a message. */
 export const MAX_RASTER_OVERLAYS = 8;
 
-export const CONVERT_HINT =
-    "Convert it with the TIF-to-COG pipeline (Web Mercator output) to show it as an exact overlay.";
+/** The pipeline's name as its documentation gives it (pipelines/cog-conversion.md, `useCogConversion`). */
+export const COG_PIPELINE_NAME = "COG Conversion pipeline";
+
+export const CONVERT_HINT = `Convert it with the ${COG_PIPELINE_NAME}, which writes <file>.cog.tif beside it in EPSG:3857, to show it as an exact overlay.`;
+
+/**
+ * The CRS as the messages name it: the code, with the family where it is one people know ("EPSG:32610
+ * (UTM zone 10N)"). Falls back to the text as given.
+ */
+export function crsLabel(crs: string | null | undefined): string {
+    const code = parseEpsgCode(crs);
+    if (code === null) return crs ? String(crs) : "an unknown coordinate system";
+    if (code >= 32601 && code <= 32660) return `EPSG:${code} (UTM zone ${code - 32600}N)`;
+    if (code >= 32701 && code <= 32760) return `EPSG:${code} (UTM zone ${code - 32700}S)`;
+    if (code === 4326) return "EPSG:4326 (WGS 84, longitude/latitude)";
+    return `EPSG:${code}`;
+}
+
+/** "COG" for a cloud-optimized file, "TIFF" otherwise, so a message says what the file is. */
+function fileKind(facts: RasterFacts): string {
+    return facts.isCog === true ? "COG" : "TIFF";
+}
 
 /** The image of a TIFF the placed-image path would decode, from the header alone. */
 export interface DecodePlan {
@@ -92,7 +112,7 @@ export const ANTIMERIDIAN_MESSAGE =
 
 export const APPROXIMATE_PLACEMENT_LABEL = "approximate placement (not reprojected)";
 
-export const APPROXIMATE_PLACEMENT_NOTE = `This layer is shown with ${APPROXIMATE_PLACEMENT_LABEL}. Converting the file with the TIF-to-COG pipeline gives an exact overlay.`;
+export const APPROXIMATE_PLACEMENT_NOTE = `This layer is shown with ${APPROXIMATE_PLACEMENT_LABEL}. Converting the file with the ${COG_PIPELINE_NAME} gives an exact overlay.`;
 
 /**
  * Codes the COG tile library itself accepts as Web Mercator. Other Web Mercator aliases (900913,
@@ -141,10 +161,26 @@ export function decodeRefusal(plan: DecodePlan): RasterDecision | null {
                 "en-US"
             )} x ${plan.height.toLocaleString(
                 "en-US"
-            )} pixels with no smaller overview, too large to draw in the browser. ${CONVERT_HINT}`,
+            )} pixels with no smaller overview, too large to draw in the browser as an image. ${CONVERT_HINT}`,
         };
     }
     return null;
+}
+
+/** (a) A file in EPSG:3857 that is not cloud-optimized and too large to place as one image. */
+function notCloudOptimizedMessage(facts: RasterFacts): string {
+    return `This TIFF is in EPSG:3857 but is not a Cloud Optimized GeoTIFF (it has no tiling or overviews), and it is too large to place on the map as one image. ${CONVERT_HINT}`;
+}
+
+/**
+ * (b) A COG or TIFF in a projection other than EPSG:3857 that is too large to place as an approximate
+ * image: says what the file is and which projection, not only that it is "too large".
+ */
+function otherProjectionMessage(facts: RasterFacts, byArea = false): string {
+    const limit = byArea ? "covers too large an area for that" : "is too large for that";
+    return `This ${fileKind(facts)} is in ${crsLabel(
+        facts.crs
+    )}. The map viewer draws EPSG:3857 COGs exactly and places only small files in another projection as an approximate image; this one ${limit}. ${CONVERT_HINT}`;
 }
 
 /**
@@ -168,7 +204,7 @@ export function decideRasterDisplay(facts: RasterFacts): RasterDecision {
             kind: "refuse",
             reason: "no-georeference",
             message:
-                "This TIFF has no geographic reference, so it cannot be placed on the map. Open it in the image viewer instead.",
+                "This TIFF has no georeferencing (no coordinate system or tie points in its header), so it cannot be placed on the map. Open it in the image viewer instead.",
         };
     }
 
@@ -191,7 +227,9 @@ export function decideRasterDisplay(facts: RasterFacts): RasterDecision {
             return {
                 kind: "refuse",
                 reason: "unsupported-crs",
-                message: `This TIFF uses ${facts.crs}, an unsupported CRS for direct display. ${CONVERT_HINT}`,
+                message: `This ${fileKind(facts)} is in ${crsLabel(
+                    facts.crs
+                )}, which the map viewer does not support (unsupported CRS). The map viewer draws EPSG:3857 COGs exactly. ${CONVERT_HINT}`,
             };
         }
     }
@@ -201,9 +239,7 @@ export function decideRasterDisplay(facts: RasterFacts): RasterDecision {
     const tooLarge: RasterDecision = {
         kind: "refuse",
         reason: mercator ? "not-cloud-optimized" : "too-large-to-place",
-        message: mercator
-            ? `This file is not cloud-optimized and is too large to stream directly. ${CONVERT_HINT}`
-            : `This file is too large to place on the map without conversion. ${CONVERT_HINT}`,
+        message: mercator ? notCloudOptimizedMessage(facts) : otherProjectionMessage(facts),
     };
     if (facts.sizeBytes !== undefined && facts.sizeBytes > PLACED_IMAGE_MAX_FILE_BYTES) {
         return tooLarge;
@@ -248,7 +284,9 @@ export function decideRasterDisplay(facts: RasterFacts): RasterDecision {
         return {
             kind: "refuse",
             reason: mercator ? "not-cloud-optimized" : "too-large-to-place",
-            message: `This file covers too large an area to place on the map without conversion. ${CONVERT_HINT}`,
+            message: mercator
+                ? notCloudOptimizedMessage(facts)
+                : otherProjectionMessage(facts, true),
         };
     }
     // Web Mercator corners map to the map's own projection exactly; any other CRS is approximate.

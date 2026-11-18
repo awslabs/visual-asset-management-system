@@ -5,6 +5,7 @@
 
 import {
     APPROXIMATE_PLACEMENT_LABEL,
+    crsLabel,
     DecodePlan,
     PLACED_IMAGE_MAX_DECODE_BYTES,
     PLACED_IMAGE_MAX_DECODE_PIXELS,
@@ -65,7 +66,7 @@ describe("decideRasterDisplay", () => {
             sizeBytes: PLACED_IMAGE_MAX_FILE_BYTES + 1,
         });
         expect(big.kind).toBe("refuse");
-        expect((big as any).message).toMatch(/TIF-to-COG pipeline/);
+        expect((big as any).message).toMatch(/COG Conversion pipeline/);
     });
 
     it("places a small file in a bundled system and marks it approximate", () => {
@@ -126,6 +127,7 @@ describe("decideRasterDisplay", () => {
         const swiss = decideRasterDisplay({ georeferenced: true, crs: "EPSG:2056" });
         expect(swiss).toMatchObject({ kind: "refuse", reason: "unsupported-crs" });
         expect((swiss as any).message).toMatch(/unsupported CRS/);
+        expect((swiss as any).message).toMatch(/EPSG:2056/);
     });
 });
 
@@ -207,6 +209,81 @@ describe("the placed path fails closed (D2)", () => {
     });
 });
 
+describe("messages say what is wrong (item 3)", () => {
+    const message = (facts: any) => (decideRasterDisplay(facts) as any).message as string;
+    const big = PLACED_IMAGE_MAX_FILE_BYTES + 1;
+
+    it("(b) names a COG in UTM as a COG in that projection, not as 'not a COG'", () => {
+        const text = message({ ...placeable, crs: "EPSG:32610", isCog: true, sizeBytes: big });
+        expect(text).toMatch(/^This COG is in EPSG:32610 \(UTM zone 10N\)\./);
+        expect(text).toMatch(/draws EPSG:3857 COGs exactly/);
+        expect(text).toMatch(
+            /COG Conversion pipeline, which writes <file>\.cog\.tif beside it in EPSG:3857/
+        );
+        expect(text).not.toMatch(/not (a )?cloud|not a COG/i);
+    });
+
+    it("(b) calls a non-cloud-optimized file in another projection a TIFF, by size and by area", () => {
+        const bySize = message({ ...placeable, crs: "EPSG:4326", isCog: false, sizeBytes: big });
+        expect(bySize).toMatch(/^This TIFF is in EPSG:4326 \(WGS 84, longitude\/latitude\)\./);
+        expect(bySize).toMatch(/this one is too large for that/);
+        const byArea = message({
+            ...placeable,
+            crs: "EPSG:4326",
+            isCog: true,
+            bboxWgs84: [10, 50, 12, 52],
+        });
+        expect(byArea).toMatch(/^This COG is in EPSG:4326/);
+        expect(byArea).toMatch(/covers too large an area for that/);
+    });
+
+    it("(b) names the CRS of a file in one the viewer does not bundle", () => {
+        const text = message({ georeferenced: true, crs: "EPSG:2056", isCog: true });
+        expect(text).toMatch(/^This COG is in EPSG:2056, which the map viewer does not support/);
+        expect(text).toMatch(/COG Conversion pipeline/);
+    });
+
+    it("(a) says a large EPSG:3857 file that is not a COG is not cloud-optimized", () => {
+        const text = message({ ...placeable, crs: "EPSG:3857", isCog: false, sizeBytes: big });
+        expect(text).toMatch(/is in EPSG:3857 but is not a Cloud Optimized GeoTIFF/);
+        expect(text).toMatch(/no tiling or overviews/);
+        expect(text).toMatch(/COG Conversion pipeline/);
+    });
+
+    it("(c) says an image with too many pixels is too large to draw as an image", () => {
+        const text = message({
+            ...placeable,
+            crs: "EPSG:4326",
+            decode: { width: 60000, height: 60000, bands: 3, bytesPerSample: 1, fetchBytes: 1000 },
+        });
+        expect(text).toMatch(/60,000 x 60,000 pixels with no smaller overview/);
+        expect(text).toMatch(/too large to draw in the browser as an image/);
+    });
+
+    it("(d) says a file with no georeferencing carries none, and does not offer conversion", () => {
+        const text = message({ georeferenced: false });
+        expect(text).toMatch(/no georeferencing/);
+        expect(text).not.toMatch(/COG Conversion pipeline/);
+    });
+
+    it("(e) keeps the antimeridian wording, with no conversion offered", () => {
+        const text = message({
+            ...placeable,
+            crs: "EPSG:4326",
+            bboxWgs84: [179.9, 10, 180.2, 10.1],
+        });
+        expect(text).toMatch(/crosses longitude 180/);
+        expect(text).not.toMatch(/COG Conversion pipeline/);
+    });
+
+    it("names the CRS in the projection family people know, and falls back to the text", () => {
+        expect(crsLabel("EPSG:32633")).toBe("EPSG:32633 (UTM zone 33N)");
+        expect(crsLabel("EPSG:32755")).toBe("EPSG:32755 (UTM zone 55S)");
+        expect(crsLabel("EPSG:2154")).toBe("EPSG:2154");
+        expect(crsLabel(null)).toBe("an unknown coordinate system");
+    });
+});
+
 describe("antimeridian (D3)", () => {
     it("says the raster crosses longitude 180 and cannot be shown or converted, not 'convert it'", () => {
         const decision = decideRasterDisplay({
@@ -217,7 +294,7 @@ describe("antimeridian (D3)", () => {
         expect(decision).toMatchObject({ kind: "refuse", reason: "crosses-antimeridian" });
         expect((decision as any).message).toMatch(/crosses longitude 180/);
         expect((decision as any).message).toMatch(/cannot be shown on the map or converted/);
-        expect((decision as any).message).not.toMatch(/TIF-to-COG pipeline/);
+        expect((decision as any).message).not.toMatch(/COG Conversion pipeline/);
         expect(
             decideRasterDisplay({
                 ...placeable,
