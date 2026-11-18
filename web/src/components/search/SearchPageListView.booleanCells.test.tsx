@@ -107,8 +107,7 @@ describe("Search results boolean cells", () => {
         );
     });
 
-    // Only the yes/no column checkboxes: the row-selection checkboxes are named by #906, which this
-    // branch does not carry.
+    // Only the checkboxes in the yes/no columns; the row-selection checkboxes are outside this test.
     it("leaves no yes/no column checkbox without a name", () => {
         const { container } = mount();
         const table = createWrapper(container).findTable();
