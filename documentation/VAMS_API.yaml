@@ -8258,7 +8258,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/completeUploadResponse"
                 "400":
-                    description: "Invalid parameters. A missing upload also answers 400, and so does a second completion of an upload whose record is kept for its asynchronously processed files ('Upload has already been completed.')."
+                    description: "Invalid parameters. A missing upload also answers 400, and so does a second completion of an upload whose record is kept for its asynchronously processed files ('VAMS General Error: Upload has already been completed.')."
                     content:
                         application/json:
                             schema:

@@ -684,11 +684,11 @@ A file over 1 GiB is processed asynchronously: its result has `success: true` an
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                   |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid upload ID, upload not found, missing parts, or `Upload has already been completed.` (a completed upload whose record is kept for its asynchronously processed files). |
-| `403`  | Not authorized to upload files to this asset.                                                                                                                                 |
-| `500`  | Internal server error.                                                                                                                                                        |
+| Status | Description                                                                                                                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid upload ID, upload not found, missing parts, or `VAMS General Error: Upload has already been completed.` (a completed upload whose record is kept for its asynchronously processed files). |
+| `403`  | Not authorized to upload files to this asset.                                                                                                                                                     |
+| `500`  | Internal server error.                                                                                                                                                                            |
 
 ---
 
