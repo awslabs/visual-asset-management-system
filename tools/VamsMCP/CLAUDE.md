@@ -502,6 +502,14 @@ asymmetry other callers rely on):
       state written per request (stdio's `_SIGN_IN_FAILURE` is not touched in remote mode), and the
       only shared cache is the deployment's feature switches (`FeatureSwitchCache`), which are not
       per user. Mixing remote mode with `VAMS_PROFILE` is refused at start.
+    - **The token is forwarded, by design.** `TokenVamsClient` sends the request's own access token
+      to the auth file's `apiUrl` and nothing exchanges it. This departs from the MCP authorization
+      spec's token-passthrough rule on purpose; the reasons are in the docs site's Remote MCP Server
+      page ("Token forwarding"). Keep the controls that make it safe: only the auth file's audiences
+      are accepted, the web application's client is refused at load (`webAppClientId`) and in
+      `setup-remote`, the token goes only to `apiUrl` for the request it arrived with, and the API
+      audits its audience (`token_audience_for_audit`). Never send it to another host or keep it past
+      its request.
     - **No token in logs, errors, metrics or results.** `VerifiedIdentity` hides its token from
       `repr`; remote tool errors pass through `vamscli`'s `scrub_text`; the CLI's shared request log
       is silenced (`silence_cli_request_log`). Log the user, client, tool, outcome and duration
