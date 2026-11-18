@@ -22,6 +22,11 @@ import {
 import { API_KEY_LISTING_PAGE_SIZE } from "../../common/constants/apiKeys";
 import ApiKeys, { apiKeyStatus, requestedApiKeyMode, resolveApiKeyMode } from "./ApiKeys";
 import { ActiveNavHrefProvider } from "../../layout/activeNavHref";
+import {
+    ADMIN_ROUTES,
+    DATABASE_READONLY_ROUTES,
+    DATABASE_USER_ROUTES,
+} from "../../features/orchestration/permissions/templateRoleRoutes.testdata";
 
 const mockFetchApiKeys = jest.fn();
 const mockFetchUserApiKeys = jest.fn();
@@ -464,5 +469,88 @@ describe("ApiKeys side-navigation highlight", () => {
 
         unmount();
         expect(last()).toBeNull();
+    });
+});
+
+/**
+ * Create, Edit and Delete are offered only for the methods the allowed-routes listing reports on the
+ * shown mode's routes. Roles come from the shipped database-readonly and database-user templates
+ * (their listings are in templateRoleRoutes.testdata.ts).
+ */
+describe("ApiKeys actions by role", () => {
+    const CREATE_REASON = "Your role does not allow creating API keys.";
+    const EDIT_REASON = "Your role does not allow editing API keys.";
+    const DELETE_REASON = "Your role does not allow deleting API keys.";
+    const ownKey = { apiKeyId: "k1", apiKeyName: "own-key", userId: "u1", isActive: "true" }; // pragma: allowlist secret
+
+    const cacheListing = (routes: { path: string; methods: string[] }[]) =>
+        appCache.setItemWithExpiry(
+            ALLOWED_API_ROUTES_CACHE_KEY,
+            { userId: "u1", routes },
+            ALLOWED_API_ROUTES_CACHE_TTL_MILLIS
+        );
+
+    const createButton = () => screen.getByTestId("create-api-key-button");
+    // The delete dialog's own Delete button is in the document too; the header's comes first.
+    const button = (name: string) => screen.getAllByRole("button", { name })[0];
+
+    async function selectOwnKey() {
+        await screen.findByText("own-key");
+        await userEvent.click(screen.getAllByRole("radio")[0]);
+    }
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        mockFetchApiKeys.mockResolvedValue({ Items: [] });
+        mockFetchUserApiKeys.mockResolvedValue({ Items: [ownKey] });
+    });
+
+    it("a database-readonly role may list its keys but is offered no create, edit or delete", async () => {
+        cacheListing(DATABASE_READONLY_ROUTES);
+        renderApiKeys("/auth/api-keys/?mode=user");
+
+        await selectOwnKey();
+        expect(createButton()).toHaveAttribute("aria-disabled", "true");
+        expect(createButton()).toHaveAccessibleDescription(CREATE_REASON);
+        expect(button("Edit")).toHaveAttribute("aria-disabled", "true");
+        expect(button("Edit")).toHaveAccessibleDescription(EDIT_REASON);
+        expect(button("Delete")).toHaveAttribute("aria-disabled", "true");
+        expect(button("Delete")).toHaveAccessibleDescription(DELETE_REASON);
+    });
+
+    it("a database-user role is offered create, edit and delete on its own keys", async () => {
+        cacheListing(DATABASE_USER_ROUTES);
+        renderApiKeys("/auth/api-keys/?mode=user");
+
+        await selectOwnKey();
+        expect(createButton()).not.toHaveAttribute("aria-disabled");
+        expect(createButton()).not.toBeDisabled();
+        expect(button("Edit")).not.toBeDisabled();
+        expect(button("Edit")).not.toHaveAttribute("aria-disabled");
+        expect(button("Delete")).not.toBeDisabled();
+        expect(button("Delete")).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("the administrator is offered every action on all keys", async () => {
+        cacheListing(ADMIN_ROUTES);
+        mockFetchApiKeys.mockResolvedValue({ Items: [ownKey] });
+        renderApiKeys("/auth/api-keys/?mode=admin");
+
+        await selectOwnKey();
+        expect(createButton()).not.toHaveAttribute("aria-disabled");
+        expect(button("Edit")).not.toHaveAttribute("aria-disabled");
+        expect(button("Delete")).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("keeps every action when the backend serves no allowed-routes listing (404)", async () => {
+        mockFetchAllowedApiRoutes.mockResolvedValue([false, "Not Found", 404]);
+        mockFetchApiKeys.mockResolvedValue({ Items: [ownKey] });
+        renderApiKeys();
+
+        await selectOwnKey();
+        expect(createButton()).not.toHaveAttribute("aria-disabled");
+        expect(button("Edit")).not.toHaveAttribute("aria-disabled");
+        expect(button("Delete")).not.toHaveAttribute("aria-disabled");
     });
 });
