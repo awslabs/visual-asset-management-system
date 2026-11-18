@@ -381,6 +381,7 @@ class TestRegisterAndUpdate:
                                 tokens=("SYSTEM_USER",), schema_rows=[schema_row(is_system=True)])
         assert response["statusCode"] == 200
         assert put_items(tables["schema"])[0]["isSystem"] is True
+
     @pytest.mark.parametrize("method", ["POST", "PUT"])
     def test_a_save_that_loses_the_version_to_a_concurrent_save_is_refused(self, method):
         # The concurrent save wrote v2 after this save read v1 as the latest version.

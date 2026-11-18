@@ -613,6 +613,7 @@ def save_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
         logger.exception(f"Error saving asset file versions: {e}")
         return False
 
+
 def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
                             raise_errors: bool = False) -> Optional[Dict]:
     """Get file versions for a specific asset version
@@ -1054,6 +1055,7 @@ def get_all_asset_versions(databaseId: str, assetId: str) -> List[Dict]:
     except Exception as e:
         logger.exception(f"Error getting all asset versions: {e}")
         raise
+
 
 def update_asset_current_version_reference(asset: Dict, new_assetVersionId: str) -> bool:
     """Record new_assetVersionId as the asset's current version, together with the version

@@ -301,7 +301,8 @@ class TestAdminRecipes:
         body = {**RECIPE_BODY, "recipeId": "names-prefix",
                 "components": [RECIPE_BODY["components"][0], {"name": "big", "data": data}]}
         monkeypatch.setenv("EDH_SESSION_SECRET_PREFIX", "")
-        with pytest.raises(recipes.RecipeConflict, match="^a component document names a placeholder the recipe does not declare$"):
+        unresolved = "^a component document names a placeholder the recipe does not declare$"
+        with pytest.raises(recipes.RecipeConflict, match=unresolved):
             recipes.create_admin_recipe(AmiRecipeRequestModel(**body), "carol")
         assert store.get_recipe("names-prefix") is None
         # A value as long as its token keeps the document at 16000 characters; one more is refused.

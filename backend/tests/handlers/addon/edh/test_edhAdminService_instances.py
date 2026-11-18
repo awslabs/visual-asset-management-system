@@ -478,7 +478,8 @@ class TestStopAndDeactivate:
     def test_a_caller_limited_to_one_os_family_gets_one_answer_for_an_unknown_and_a_refused_session(
             self, monkeypatch, action):
         # The role may act on Windows workstations only; s-1 is a Linux one.
-        windows_only = lambda obj, act: obj.get("edhOsFamily") == "windows"
+        def windows_only(obj, act):
+            return obj.get("edhOsFamily") == "windows"
         answers = []
         for identifier in ("s-1", "nope"):
             fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=_rows(), enforce=windows_only)

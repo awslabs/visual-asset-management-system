@@ -127,7 +127,8 @@ class TestRecipes:
     def test_a_caller_limited_to_one_os_family_gets_one_answer_for_a_missing_and_a_refused_recipe(
             self, monkeypatch, method, action):
         # The role may act on Linux recipes only; the stored recipe is a Windows one.
-        linux_only = lambda obj, act: obj.get("edhOsFamily") == "linux"
+        def linux_only(obj, act):
+            return obj.get("edhOsFamily") == "linux"
         body = {**RECIPE_BODY, "recipeId": "ignored"} if method == "PUT" else None
         answers = []
         for stored in ({**RECIPE, "osFamily": "windows"}, None):
@@ -245,7 +246,8 @@ class TestDuplicate:
 
     def test_a_caller_who_may_not_read_the_source_gets_one_answer_whether_or_not_it_exists(self, monkeypatch):
         # POST on the new (Linux) recipe; GET on Linux recipes only. The stored source is a Windows one.
-        enforce = lambda obj, act: obj.get("edhOsFamily") == "linux"
+        def enforce(obj, act):
+            return obj.get("edhOsFamily") == "linux"
         answers = []
         for stored in (SOURCE_RECIPE, None):
             fakes = install(monkeypatch, recipe=stored, enforce=enforce)
