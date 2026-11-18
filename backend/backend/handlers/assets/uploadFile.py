@@ -2953,23 +2953,24 @@ def get_upload_status(event):
     """GET /uploads/{uploadId}?assetId=&databaseId=: the upload's status and the outcome of each file
     it accepted for asynchronous ingestion.
 
-    Tier 1 (the route) and Tier 2 (GET on the upload's asset) are decided before the record is read.
-    A missing record, a record of another database, a missing asset and a refused asset all answer
-    the same 404, so the route cannot tell an upload that does not exist from one the caller may not
-    see. One GetItem on the asset and one on the upload record."""
-    params = event.get('queryStringParameters') or {}
-    request_model = parse({
-        'uploadId': (event.get('pathParameters') or {}).get('uploadId', ''),
-        'assetId': params.get('assetId', ''),
-        'databaseId': params.get('databaseId', ''),
-    }, model=GetUploadStatusRequestModel)
-
+    Tier 1 (the route) is decided before the parameters are validated, and Tier 2 (GET on the
+    upload's asset) before the record is read. A missing record, a record of another database, a
+    missing asset and a refused asset all answer the same 404, so the route cannot tell an upload
+    that does not exist from one the caller may not see. One GetItem on the asset and one on the
+    upload record."""
     # Fail closed: with no authenticated identity no authorization can be evaluated.
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
     if not casbin_enforcer.enforceAPI(event):
         return authorization_error()
+
+    params = event.get('queryStringParameters') or {}
+    request_model = parse({
+        'uploadId': (event.get('pathParameters') or {}).get('uploadId', ''),
+        'assetId': params.get('assetId', ''),
+        'databaseId': params.get('databaseId', ''),
+    }, model=GetUploadStatusRequestModel)
 
     not_found = general_error(status_code=404, body={'message': UPLOAD_NOT_FOUND_MESSAGE}, event=event)
     asset = get_asset_details(request_model.databaseId, request_model.assetId)
